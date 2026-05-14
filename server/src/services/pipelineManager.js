@@ -205,9 +205,8 @@ class PipelineManager {
 
   _updateCameraStatus(cameraId, status) {
     try {
-      this._db
-        .prepare('UPDATE cameras SET status = ? WHERE id = ?')
-        .run(status, cameraId);
+      this._db.update('cameras', cameraId, { status });
+      this._io.to(cameraId).emit('camera:status', { cameraId, status });
     } catch (_) {}
   }
 }

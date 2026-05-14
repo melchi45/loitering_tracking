@@ -48,8 +48,8 @@ export default function App() {
   useEffect(() => {
     fetch('/api/cameras')
       .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data)) setCameras(data);
+      .then((res) => {
+        if (res.success && Array.isArray(res.data)) setCameras(res.data);
       })
       .catch(() => {
         // Backend not available yet — start with empty list

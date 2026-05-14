@@ -4,51 +4,35 @@ const { Router } = require('express');
 const fs   = require('fs');
 const path = require('path');
 
-/**
- * @param {import('better-sqlite3').Database} db
- * @param {import('../services/alertService')} alertService
- * @returns {{ eventsRouter: Router, alertsRouter: Router }}
- */
 function buildRouters(db, alertService) {
   const eventsRouter = Router();
   const alertsRouter = Router();
 
   // ─── Events ────────────────────────────────────────────────────────────────
 
-  /**
-   * GET /api/events
-   * Query loitering events with optional filters.
-   * Query params: cameraId, from (ISO date), to (ISO date), limit (default 100)
-   */
   eventsRouter.get('/', (req, res) => {
     try {
       const { cameraId, from, to, limit = 100 } = req.query;
+      const lim = parseInt(limit) || 100;
 
-      let sql = 'SELECT * FROM events WHERE 1=1';
-      const params = [];
+      let events = db.all('events');
 
-      if (cameraId) { sql += ' AND cameraId = ?'; params.push(cameraId); }
-      if (from)     { sql += ' AND startTime >= ?'; params.push(from); }
-      if (to)       { sql += ' AND startTime <= ?'; params.push(to); }
+      if (cameraId) events = events.filter(e => e.cameraId === cameraId);
+      if (from)     events = events.filter(e => e.startTime >= from);
+      if (to)       events = events.filter(e => e.startTime <= to);
 
-      sql += ' ORDER BY startTime DESC LIMIT ?';
-      params.push(parseInt(limit) || 100);
+      events.sort((a, b) => (b.startTime || '').localeCompare(a.startTime || ''));
+      events = events.slice(0, lim);
 
-      const events = db.prepare(sql).all(...params);
       res.json({ success: true, data: events, count: events.length });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  /**
-   * GET /api/events/:id/clip
-   * Stream the video clip associated with an event.
-   * Must be defined BEFORE /:id to avoid shadowing.
-   */
   eventsRouter.get('/:id/clip', (req, res) => {
     try {
-      const event = db.prepare('SELECT * FROM events WHERE id = ?').get(req.params.id);
+      const event = db.findOne('events', { id: req.params.id });
       if (!event) return res.status(404).json({ success: false, error: 'Event not found' });
       if (!event.clipPath) return res.status(404).json({ success: false, error: 'No clip available' });
 
@@ -86,13 +70,9 @@ function buildRouters(db, alertService) {
     }
   });
 
-  /**
-   * GET /api/events/:id
-   * Get a single event by ID.
-   */
   eventsRouter.get('/:id', (req, res) => {
     try {
-      const event = db.prepare('SELECT * FROM events WHERE id = ?').get(req.params.id);
+      const event = db.findOne('events', { id: req.params.id });
       if (!event) return res.status(404).json({ success: false, error: 'Event not found' });
       res.json({ success: true, data: event });
     } catch (err) {
@@ -102,38 +82,28 @@ function buildRouters(db, alertService) {
 
   // ─── Alerts ─────────────────────────────────────────────────────────────────
 
-  /**
-   * GET /api/alerts
-   * List alerts with optional filter.
-   * Query params: acknowledged (true/false), cameraId, limit
-   */
   alertsRouter.get('/', (req, res) => {
     try {
       const { acknowledged, cameraId, limit = 100 } = req.query;
+      const lim = parseInt(limit) || 100;
 
-      let sql = 'SELECT * FROM alerts WHERE 1=1';
-      const params = [];
+      let alerts = db.all('alerts');
 
       if (acknowledged !== undefined) {
-        sql += ' AND acknowledged = ?';
-        params.push(acknowledged === 'true' || acknowledged === '1' ? 1 : 0);
+        const ackBool = acknowledged === 'true' || acknowledged === '1';
+        alerts = alerts.filter(a => Boolean(a.acknowledged) === ackBool);
       }
-      if (cameraId) { sql += ' AND cameraId = ?'; params.push(cameraId); }
+      if (cameraId) alerts = alerts.filter(a => a.cameraId === cameraId);
 
-      sql += ' ORDER BY timestamp DESC LIMIT ?';
-      params.push(parseInt(limit) || 100);
+      alerts.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+      alerts = alerts.slice(0, lim);
 
-      const alerts = db.prepare(sql).all(...params);
       res.json({ success: true, data: alerts, count: alerts.length });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
   });
 
-  /**
-   * POST /api/alerts/:id/acknowledge
-   * Mark an alert as acknowledged.
-   */
   alertsRouter.post('/:id/acknowledge', (req, res) => {
     try {
       const changed = alertService.acknowledgeAlert(req.params.id);

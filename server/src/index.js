@@ -109,8 +109,8 @@ async function main() {
   // ── Auto-restart cameras that were streaming before a potential crash ─────
   try {
     const streamingCameras = db
-      .prepare("SELECT * FROM cameras WHERE status = 'streaming' OR status = 'connecting'")
-      .all();
+      .find('cameras', {})
+      .filter(c => c.status === 'streaming' || c.status === 'connecting');
     if (streamingCameras.length > 0) {
       console.log(`[Server] Restarting ${streamingCameras.length} previously-active pipeline(s)`);
       for (const cam of streamingCameras) {

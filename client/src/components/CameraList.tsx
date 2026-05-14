@@ -82,8 +82,8 @@ export default function CameraList() {
         }),
       });
       if (!res.ok) throw new Error('Failed to add camera');
-      const created: Camera = await res.json();
-      addCamera(created);
+      const result = await res.json();
+      if (result.success && result.data) addCamera(result.data);
       setDiscovered((prev) => prev.filter((c) => c.id !== cam.id));
     } catch (err) {
       console.error('Add discovered camera error:', err);
@@ -117,8 +117,8 @@ export default function CameraList() {
         const msg = await res.text();
         throw new Error(msg || 'Failed to add camera');
       }
-      const created: Camera = await res.json();
-      addCamera(created);
+      const result = await res.json();
+      if (result.success && result.data) addCamera(result.data);
       setShowAddModal(false);
       setForm(DEFAULT_FORM);
     } catch (err) {

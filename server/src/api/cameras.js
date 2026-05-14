@@ -17,7 +17,8 @@ function camerasRouter(db, pipelineManager) {
    */
   router.get('/', (req, res) => {
     try {
-      const cameras = db.prepare('SELECT * FROM cameras ORDER BY createdAt DESC').all();
+      const cameras = db.all('cameras').sort((a, b) =>
+        (b.createdAt || '').localeCompare(a.createdAt || ''));
       const result = cameras.map((cam) => {
         const pipelineStatus = pipelineManager.getCameraStatus(cam.id);
         return {
@@ -65,19 +66,17 @@ function camerasRouter(db, pipelineManager) {
       }
 
       const id = uuidv4();
-      db.prepare(`
-        INSERT INTO cameras (id, name, rtspUrl, username, password, ip, mac, httpPort, status)
-        VALUES (@id, @name, @rtspUrl, @username, @password, @ip, @mac, @httpPort, 'offline')
-      `).run({
+      db.insert('cameras', {
         id, name, rtspUrl,
         username:  username  || process.env.RTSP_DEFAULT_USERNAME || null,
         password:  password  || process.env.RTSP_DEFAULT_PASSWORD || null,
         ip:        ip        || null,
         mac:       mac       || null,
         httpPort:  httpPort  || null,
+        status:    'offline',
       });
 
-      const camera = db.prepare('SELECT * FROM cameras WHERE id = ?').get(id);
+      const camera = db.findOne('cameras', { id });
       res.status(201).json({ success: true, data: { ...camera, password: undefined } });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -90,7 +89,7 @@ function camerasRouter(db, pipelineManager) {
    */
   router.get('/:id', (req, res) => {
     try {
-      const camera = db.prepare('SELECT * FROM cameras WHERE id = ?').get(req.params.id);
+      const camera = db.findOne('cameras', { id: req.params.id });
       if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
 
       const pipelineStatus = pipelineManager.getCameraStatus(camera.id);
@@ -109,11 +108,11 @@ function camerasRouter(db, pipelineManager) {
    */
   router.delete('/:id', async (req, res) => {
     try {
-      const camera = db.prepare('SELECT * FROM cameras WHERE id = ?').get(req.params.id);
+      const camera = db.findOne('cameras', { id: req.params.id });
       if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
 
       await pipelineManager.stopCamera(camera.id);
-      db.prepare('DELETE FROM cameras WHERE id = ?').run(camera.id);
+      db.delete('cameras', camera.id);
 
       res.json({ success: true, message: 'Camera removed' });
     } catch (err) {
@@ -127,7 +126,7 @@ function camerasRouter(db, pipelineManager) {
    */
   router.post('/:id/stream/start', async (req, res) => {
     try {
-      const camera = db.prepare('SELECT * FROM cameras WHERE id = ?').get(req.params.id);
+      const camera = db.findOne('cameras', { id: req.params.id });
       if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
 
       await pipelineManager.startCamera(camera);
@@ -143,7 +142,7 @@ function camerasRouter(db, pipelineManager) {
    */
   router.post('/:id/stream/stop', async (req, res) => {
     try {
-      const camera = db.prepare('SELECT * FROM cameras WHERE id = ?').get(req.params.id);
+      const camera = db.findOne('cameras', { id: req.params.id });
       if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
 
       await pipelineManager.stopCamera(camera.id);
