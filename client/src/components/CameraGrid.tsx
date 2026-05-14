@@ -1,4 +1,3 @@
-import React from 'react';
 import { useCameraStore } from '../stores/cameraStore';
 import CameraView from './CameraView';
 

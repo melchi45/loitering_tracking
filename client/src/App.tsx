@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { useSocket } from './hooks/useSocket';
 import { useCameraStore } from './stores/cameraStore';
 import { useAlertStore } from './stores/alertStore';

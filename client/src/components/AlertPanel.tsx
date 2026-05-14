@@ -1,4 +1,3 @@
-import React from 'react';
 import { useAlertStore } from '../stores/alertStore';
 import { useCameraStore } from '../stores/cameraStore';
 import type { Alert } from '../types';

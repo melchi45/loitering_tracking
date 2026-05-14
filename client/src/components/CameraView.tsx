@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from 'react';
+import { useRef, useEffect } from 'react';
 import { useCamera } from '../hooks/useCamera';
 import { useCameraStore } from '../stores/cameraStore';
 import type { Detection } from '../types';
