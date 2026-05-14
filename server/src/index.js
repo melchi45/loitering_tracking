@@ -71,10 +71,24 @@ async function main() {
     });
   });
 
-  // 404 fallback
-  app.use((req, res) => {
-    res.status(404).json({ success: false, error: `Cannot ${req.method} ${req.path}` });
-  });
+  // ── Serve React static build ──────────────────────────────────────────────
+  const clientBuildPath = path.resolve(__dirname, '..', '..', 'client', 'dist');
+  if (require('fs').existsSync(clientBuildPath)) {
+    app.use(express.static(clientBuildPath));
+    // SPA fallback: all non-API routes serve index.html
+    app.get(/^(?!\/api|\/health|\/socket\.io).*/, (req, res) => {
+      res.sendFile(path.join(clientBuildPath, 'index.html'));
+    });
+    console.log(`[Server] Serving React UI from ${clientBuildPath}`);
+  } else {
+    // 404 fallback for API-only mode (before client is built)
+    app.use('/api/*', (req, res) => {
+      res.status(404).json({ success: false, error: `Cannot ${req.method} ${req.path}` });
+    });
+    app.get('/', (req, res) => {
+      res.send('<h2>LTS Backend running. Build the client: <code>cd client && npm run build</code></h2>');
+    });
+  }
 
   // Global error handler
   app.use((err, req, res, next) => {

@@ -1,0 +1,13 @@
+{
+  "name": "loitering-tracking-system",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "install:all": "cd server && npm install && cd ../client && npm install",
+    "build:client": "cd client && npm run build",
+    "start": "cd server && npm start",
+    "dev:server": "cd server && npm run dev",
+    "setup": "npm run install:all && npm run build:client",
+    "clean": "rm -rf server/node_modules client/node_modules client/dist"
+  }
+}
