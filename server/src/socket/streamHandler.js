@@ -51,7 +51,20 @@ function registerStreamHandlers(io, socket, db) {
     const discovery = new UDPDiscovery({ timeout });
     _discoveryInstance = discovery;
 
-    discovery.on('device', (device) => {
+    discovery.on('device', (raw) => {
+      // Map WiseNet binary fields to DiscoveredCamera schema
+      const name = (raw.chDeviceNameNew || raw.chDeviceName || raw.chIP || 'WiseNet Camera').trim();
+      const device = {
+        id:      raw.chMac || raw.chIP,
+        name,
+        ip:      raw.chIP,
+        mac:     raw.chMac || undefined,
+        rtspUrl: raw.rtspUrl,
+        url:     raw.url,
+        model:   raw.modelType,
+        httpPort: raw.nHttpPort,
+        httpsPort: raw.nHttpsPort,
+      };
       socket.emit('discovery:result', { device });
     });
 

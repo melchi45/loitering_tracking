@@ -49,15 +49,22 @@ export default function CameraList() {
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoveredCamera[]>([]);
 
-  // Listen for discovery results
+  // Listen for discovery results — server emits one device at a time
   useEffect(() => {
-    const handleDiscovery = (data: { cameras: DiscoveredCamera[] }) => {
-      setDiscovered(data.cameras ?? []);
-      setDiscovering(false);
+    const handleDevice = (data: { device: DiscoveredCamera }) => {
+      if (!data?.device) return;
+      setDiscovered((prev) => {
+        if (prev.find((c) => c.id === data.device.id)) return prev;
+        return [...prev, data.device];
+      });
     };
-    socket.on('discovery:result', handleDiscovery);
+    const handleDone = () => setDiscovering(false);
+
+    socket.on('discovery:result', handleDevice);
+    socket.on('discovery:done', handleDone);
     return () => {
-      socket.off('discovery:result', handleDiscovery);
+      socket.off('discovery:result', handleDevice);
+      socket.off('discovery:done', handleDone);
     };
   }, [socket]);
 
