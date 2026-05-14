@@ -1,7 +1,8 @@
 import { useEffect, useState, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
 
-const SOCKET_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+// Use same origin so port-forwarding / reverse-proxy setups work correctly
+const SOCKET_URL = import.meta.env.VITE_API_URL || window.location.origin;
 
 // Singleton socket instance
 let socketInstance: Socket | null = null;

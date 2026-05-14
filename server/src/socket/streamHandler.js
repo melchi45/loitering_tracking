@@ -52,18 +52,35 @@ function registerStreamHandlers(io, socket, db) {
     _discoveryInstance = discovery;
 
     discovery.on('device', (raw) => {
-      // Map WiseNet binary fields to DiscoveredCamera schema
-      const name = (raw.chDeviceNameNew || raw.chDeviceName || raw.chIP || 'WiseNet Camera').trim();
+      // Map raw WiseNet binary fields exactly as the Chrome extension does
+      const strMacAddress = (raw.chMac  || '').replace(/\xff/g, '').trim();
+      const strIpAddress  = (raw.chIP   || '').replace(/\xff/g, '').trim();
+      const strModel      = (raw.chDeviceNameNew && raw.chDeviceNameNew !== '')
+                              ? raw.chDeviceNameNew
+                              : (raw.chDeviceName || '');
+      const numHttpPort   = (!raw.nHttpPort  || raw.nHttpPort  === 0) ? 80  : raw.nHttpPort;
+      const numHttpsPort  = (!raw.nHttpsPort || raw.nHttpsPort === 0) ? 443 : raw.nHttpsPort;
+      const httpType      = (raw.httpType != null) ? (raw.httpType !== 0) : false;
+
       const device = {
-        id:      raw.chMac || raw.chIP,
-        name,
-        ip:      raw.chIP,
-        mac:     raw.chMac || undefined,
-        rtspUrl: raw.rtspUrl,
-        url:     raw.url,
-        model:   raw.modelType,
-        httpPort: raw.nHttpPort,
-        httpsPort: raw.nHttpsPort,
+        id:           `${strMacAddress}_${strIpAddress}`,
+        Model:        strModel,
+        Type:         raw.modelType,
+        Username:     '',
+        Password:     '',
+        IPAddress:    strIpAddress,
+        MACAddress:   strMacAddress,
+        Port:         raw.nPort,
+        Channel:      1,
+        MaxChannel:   1,
+        HttpType:     httpType,
+        HttpPort:     numHttpPort,
+        HttpsPort:    numHttpsPort,
+        Gateway:      (raw.chGateway    || '').replace(/\xff/g, '').trim(),
+        SubnetMask:   (raw.chSubnetMask || '').replace(/\xff/g, '').trim(),
+        SupportSunapi: raw.isSupportSunapi === 1,
+        URL:          raw.DDNSURL || '',
+        rtspUrl:      raw.rtspUrl,
       };
       socket.emit('discovery:result', { device });
     });

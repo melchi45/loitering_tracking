@@ -41,11 +41,24 @@ export interface Alert {
 }
 
 export interface DiscoveredCamera {
-  id: string;
-  name: string;
-  ip: string;
-  mac?: string;
-  rtspUrl: string;
+  id: string;          // MACAddress_IPAddress
+  Model: string;
+  Type?: number;
+  IPAddress: string;
+  MACAddress?: string;
+  Port?: number;
+  Channel?: number;
+  MaxChannel?: number;
+  HttpType?: boolean;  // false=http, true=https
+  HttpPort?: number;
+  HttpsPort?: number;
+  Gateway?: string;
+  SubnetMask?: string;
+  SupportSunapi?: boolean;
+  URL?: string;        // DDNS URL
+  rtspUrl?: string;
+  Username?: string;
+  Password?: string;
 }
 
 export interface Zone {

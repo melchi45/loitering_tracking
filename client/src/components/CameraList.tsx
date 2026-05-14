@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { useSocket } from '../hooks/useSocket';
 import { useCameraStore } from '../stores/cameraStore';
 import type { Camera, DiscoveredCamera } from '../types';
@@ -10,28 +10,23 @@ interface AddCameraForm {
   password: string;
 }
 
-const DEFAULT_FORM: AddCameraForm = {
-  name: '',
-  rtspUrl: '',
-  username: '',
-  password: '',
-};
+const DEFAULT_FORM: AddCameraForm = { name: '', rtspUrl: '', username: '', password: '' };
 
 function StatusDot({ status }: { status: Camera['status'] }) {
   const color =
-    status === 'live'
-      ? 'bg-green-500'
-      : status === 'error'
-      ? 'bg-red-500'
-      : status === 'offline'
-      ? 'bg-gray-500'
-      : 'bg-yellow-500';
+    status === 'live'    ? 'bg-green-500' :
+    status === 'error'   ? 'bg-red-500'   :
+    status === 'offline' ? 'bg-gray-500'  : 'bg-yellow-500';
+  return <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${color}`} title={status} />;
+}
 
+function Field({ label, value }: { label: string; value?: string | number | boolean }) {
+  if (value === undefined || value === null || value === '') return null;
   return (
-    <span
-      className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${color}`}
-      title={status}
-    />
+    <div className="flex gap-1 text-[10px]">
+      <span className="text-gray-500 flex-shrink-0">{label}:</span>
+      <span className="text-gray-300 truncate">{String(value)}</span>
+    </div>
   );
 }
 
@@ -48,8 +43,8 @@ export default function CameraList() {
 
   const [discovering, setDiscovering] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoveredCamera[]>([]);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
-  // Listen for discovery results — server emits one device at a time
   useEffect(() => {
     const handleDevice = (data: { device: DiscoveredCamera }) => {
       if (!data?.device) return;
@@ -61,31 +56,39 @@ export default function CameraList() {
     const handleDone = () => setDiscovering(false);
 
     socket.on('discovery:result', handleDevice);
-    socket.on('discovery:done', handleDone);
+    socket.on('discovery:done',   handleDone);
     return () => {
       socket.off('discovery:result', handleDevice);
-      socket.off('discovery:done', handleDone);
+      socket.off('discovery:done',   handleDone);
     };
   }, [socket]);
 
   const handleDiscover = () => {
     setDiscovering(true);
     setDiscovered([]);
-    socket.emit('discovery:start');
-    // Timeout fallback after 15s
-    setTimeout(() => setDiscovering(false), 15000);
+    setExpandedId(null);
+    socket.emit('discovery:start', { timeout: 8000 });
+    // Fallback: clear scanning state after 10s if done event never arrives
+    setTimeout(() => setDiscovering(false), 10000);
+  };
+
+  const buildRtspUrl = (cam: DiscoveredCamera) => {
+    if (cam.rtspUrl) return cam.rtspUrl;
+    return `rtsp://${cam.IPAddress}:${cam.Port || 554}/profile1/media.smp`;
   };
 
   const handleAddDiscovered = async (cam: DiscoveredCamera) => {
     try {
+      const port = cam.HttpType ? cam.HttpsPort : cam.HttpPort;
       const res = await fetch('/api/cameras', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name: cam.name,
-          rtspUrl: cam.rtspUrl,
-          ip: cam.ip,
-          mac: cam.mac,
+          name:     cam.Model || cam.IPAddress,
+          rtspUrl:  buildRtspUrl(cam),
+          ip:       cam.IPAddress,
+          mac:      cam.MACAddress,
+          httpPort: port,
         }),
       });
       if (!res.ok) throw new Error('Failed to add camera');
@@ -137,11 +140,7 @@ export default function CameraList() {
 
   const handleRemove = async (id: string) => {
     if (!confirm('Remove this camera?')) return;
-    try {
-      await fetch(`/api/cameras/${id}`, { method: 'DELETE' });
-    } catch {
-      // Remove locally even on error
-    }
+    try { await fetch(`/api/cameras/${id}`, { method: 'DELETE' }); } catch { /* ignore */ }
     removeCamera(id);
   };
 
@@ -151,23 +150,25 @@ export default function CameraList() {
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 flex-shrink-0">
         <div className="flex items-center gap-2">
           <span className="text-sm font-bold text-white">Cameras</span>
-          <span className="text-[10px] text-gray-400">
-            ({cameras.length})
-          </span>
-          {/* Connection status */}
+          <span className="text-[10px] text-gray-400">({cameras.length})</span>
           <span
-            className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500' : 'bg-red-500'}`}
-            title={connected ? 'Connected' : 'Disconnected'}
+            className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`}
+            title={connected ? 'Connected' : 'Disconnected — waiting for server'}
           />
         </div>
         <div className="flex gap-1.5">
           <button
             onClick={handleDiscover}
             disabled={!connected || discovering}
-            className="text-[11px] px-2 py-0.5 rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white transition-colors"
-            title="Auto-discover cameras on the network"
+            className="text-[11px] px-2 py-0.5 rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white transition-colors"
+            title={!connected ? 'Waiting for server connection…' : 'Discover WiseNet cameras on the network'}
           >
-            {discovering ? 'Scanning…' : 'Discover'}
+            {discovering ? (
+              <span className="flex items-center gap-1">
+                <span className="w-2 h-2 rounded-full bg-blue-300 animate-ping inline-block" />
+                Scanning…
+              </span>
+            ) : 'Discover'}
           </button>
           <button
             onClick={() => setShowAddModal(true)}
@@ -181,9 +182,9 @@ export default function CameraList() {
 
       {/* Camera list */}
       <div className="flex-1 overflow-y-auto p-2 space-y-1">
-        {cameras.length === 0 && (
+        {cameras.length === 0 && !discovering && discovered.length === 0 && (
           <p className="text-xs text-gray-500 text-center mt-4">
-            No cameras added yet.
+            No cameras yet. Use <strong>Discover</strong> or <strong>+ Add</strong>.
           </p>
         )}
         {cameras.map((cam) => (
@@ -193,12 +194,8 @@ export default function CameraList() {
           >
             <StatusDot status={cam.status} />
             <div className="flex-1 min-w-0">
-              <div className="text-xs font-semibold text-white truncate">
-                {cam.name}
-              </div>
-              {cam.ip && (
-                <div className="text-[10px] text-gray-400 truncate">{cam.ip}</div>
-              )}
+              <div className="text-xs font-semibold text-white truncate">{cam.name}</div>
+              {cam.ip && <div className="text-[10px] text-gray-400 truncate">{cam.ip}</div>}
             </div>
             <button
               onClick={() => handleRemove(cam.id)}
@@ -212,29 +209,83 @@ export default function CameraList() {
       </div>
 
       {/* Discovered cameras */}
-      {discovered.length > 0 && (
-        <div className="border-t border-gray-700 p-2">
-          <div className="text-[11px] font-semibold text-blue-400 mb-1.5 uppercase tracking-wide">
-            Discovered ({discovered.length})
-          </div>
-          <div className="space-y-1 max-h-40 overflow-y-auto">
-            {discovered.map((cam) => (
-              <div
-                key={cam.id}
-                className="flex items-center gap-2 px-2 py-1 rounded bg-gray-800 text-xs"
+      {(discovering || discovered.length > 0) && (
+        <div className="border-t border-gray-700 flex-shrink-0">
+          <div className="flex items-center justify-between px-3 py-1.5">
+            <span className="text-[11px] font-semibold text-blue-400 uppercase tracking-wide">
+              {discovering ? 'Scanning…' : `Found (${discovered.length})`}
+            </span>
+            {discovered.length > 0 && (
+              <button
+                onClick={() => setDiscovered([])}
+                className="text-[10px] text-gray-500 hover:text-gray-300"
               >
-                <div className="flex-1 min-w-0">
-                  <div className="text-white truncate">{cam.name || cam.ip}</div>
-                  <div className="text-gray-400 text-[10px]">{cam.ip}</div>
+                clear
+              </button>
+            )}
+          </div>
+
+          <div className="max-h-64 overflow-y-auto space-y-1 px-2 pb-2">
+            {discovered.map((cam) => {
+              const isExpanded = expandedId === cam.id;
+              const scheme = cam.HttpType ? 'https' : 'http';
+              const webPort = cam.HttpType ? cam.HttpsPort : cam.HttpPort;
+              return (
+                <div key={cam.id} className="rounded bg-gray-800 border border-gray-700 overflow-hidden">
+                  {/* Summary row */}
+                  <div className="flex items-center gap-2 px-2 py-1.5">
+                    <div className="w-1.5 h-1.5 rounded-full bg-blue-400 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <div className="text-xs font-semibold text-white truncate">
+                        {cam.Model || cam.IPAddress}
+                      </div>
+                      <div className="text-[10px] text-gray-400">{cam.IPAddress}</div>
+                    </div>
+                    <button
+                      onClick={() => setExpandedId(isExpanded ? null : cam.id)}
+                      className="text-[10px] text-gray-500 hover:text-gray-300 px-1 flex-shrink-0"
+                      title="Show details"
+                    >
+                      {isExpanded ? '▲' : '▼'}
+                    </button>
+                    <button
+                      onClick={() => handleAddDiscovered(cam)}
+                      className="px-2 py-0.5 text-[11px] bg-blue-700 hover:bg-blue-600 text-white rounded transition-colors flex-shrink-0"
+                    >
+                      Add
+                    </button>
+                  </div>
+
+                  {/* Expanded detail */}
+                  {isExpanded && (
+                    <div className="px-3 py-2 border-t border-gray-700 bg-gray-900 space-y-0.5">
+                      <Field label="MAC"        value={cam.MACAddress} />
+                      <Field label="IP"         value={cam.IPAddress} />
+                      <Field label="Gateway"    value={cam.Gateway} />
+                      <Field label="Subnet"     value={cam.SubnetMask} />
+                      <Field label="Model"      value={cam.Model} />
+                      <Field label="Type"       value={cam.Type} />
+                      <Field label="Protocol"   value={scheme.toUpperCase()} />
+                      <Field label="HTTP Port"  value={cam.HttpPort} />
+                      <Field label="HTTPS Port" value={cam.HttpsPort} />
+                      <Field label="RTSP Port"  value={cam.Port} />
+                      <Field label="SUNAPI"     value={cam.SupportSunapi ? 'Yes' : 'No'} />
+                      {cam.URL && <Field label="DDNS" value={cam.URL} />}
+                      <div className="mt-1.5 pt-1 border-t border-gray-700 space-y-0.5">
+                        <div className="text-[10px] text-gray-500">Web URL:</div>
+                        <div className="text-[10px] text-blue-400 break-all">
+                          {scheme}://{cam.IPAddress}:{webPort}
+                        </div>
+                        <div className="text-[10px] text-gray-500 mt-0.5">RTSP URL:</div>
+                        <div className="text-[10px] text-green-400 break-all">
+                          {buildRtspUrl(cam)}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
-                <button
-                  onClick={() => handleAddDiscovered(cam)}
-                  className="px-2 py-0.5 text-[11px] bg-blue-700 hover:bg-blue-600 text-white rounded transition-colors"
-                >
-                  Add
-                </button>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       )}
@@ -245,71 +296,31 @@ export default function CameraList() {
           <div className="bg-gray-800 rounded-lg shadow-xl w-80 p-5 border border-gray-700">
             <h3 className="text-sm font-bold text-white mb-4">Add Camera</h3>
             <form onSubmit={handleFormSubmit} className="space-y-3">
-              <div>
-                <label className="block text-[11px] text-gray-400 mb-1">
-                  Camera Name *
-                </label>
-                <input
-                  type="text"
-                  name="name"
-                  value={form.name}
-                  onChange={handleFormChange}
-                  placeholder="Front Door"
-                  className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] text-gray-400 mb-1">
-                  RTSP URL *
-                </label>
-                <input
-                  type="text"
-                  name="rtspUrl"
-                  value={form.rtspUrl}
-                  onChange={handleFormChange}
-                  placeholder="rtsp://192.168.1.100:554/stream"
-                  className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] text-gray-400 mb-1">
-                  Username
-                </label>
-                <input
-                  type="text"
-                  name="username"
-                  value={form.username}
-                  onChange={handleFormChange}
-                  placeholder="admin"
-                  className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-[11px] text-gray-400 mb-1">
-                  Password
-                </label>
-                <input
-                  type="password"
-                  name="password"
-                  value={form.password}
-                  onChange={handleFormChange}
-                  placeholder="••••••••"
-                  className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                />
-              </div>
-
-              {formError && (
-                <p className="text-xs text-red-400">{formError}</p>
-              )}
-
+              {(['name', 'rtspUrl', 'username', 'password'] as const).map((field) => (
+                <div key={field}>
+                  <label className="block text-[11px] text-gray-400 mb-1 capitalize">
+                    {field === 'rtspUrl' ? 'RTSP URL' : field}
+                    {(field === 'name' || field === 'rtspUrl') && ' *'}
+                  </label>
+                  <input
+                    type={field === 'password' ? 'password' : 'text'}
+                    name={field}
+                    value={form[field]}
+                    onChange={handleFormChange}
+                    placeholder={
+                      field === 'name'     ? 'Front Door' :
+                      field === 'rtspUrl'  ? 'rtsp://192.168.1.100:554/stream' :
+                      field === 'username' ? 'admin' : '••••••••'
+                    }
+                    className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              ))}
+              {formError && <p className="text-xs text-red-400">{formError}</p>}
               <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => {
-                    setShowAddModal(false);
-                    setForm(DEFAULT_FORM);
-                    setFormError('');
-                  }}
+                  onClick={() => { setShowAddModal(false); setForm(DEFAULT_FORM); setFormError(''); }}
                   className="px-3 py-1.5 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
                 >
                   Cancel
