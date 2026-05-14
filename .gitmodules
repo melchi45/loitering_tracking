@@ -1,0 +1,4 @@
+[submodule "submodules/WiseNetChromeIPInstaller"]
+	path = submodules/WiseNetChromeIPInstaller
+	url = https://github.com/melchi45/WiseNetChromeIPInstaller.git
+	branch = nodejs-udp-discovery
