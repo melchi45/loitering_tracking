@@ -26,6 +26,16 @@ function getJpegSize(buf) {
   }
   return null;
 }
+function _pointInPolygon(pt, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const xi = poly[i].x, yi = poly[i].y, xj = poly[j].x, yj = poly[j].y;
+    if ((yi > pt.y) !== (yj > pt.y) && pt.x < ((xj - xi) * (pt.y - yi)) / (yj - yi) + xi)
+      inside = !inside;
+  }
+  return inside;
+}
+
 const RTSPCapture      = require('./rtspCapture');
 const DetectionService = require('./detection');
 const { ByteTracker }  = require('./tracking');
@@ -33,6 +43,7 @@ const BehaviorEngine   = require('./behaviorEngine');
 const ZoneManager      = require('./zoneManager');
 const AlertService     = require('./alertService');
 const AttributePipeline = require('./attributePipeline');
+const FireSmokeService  = require('./fireSmokeService');
 
 /**
  * Orchestrates the full camera processing pipeline:
@@ -46,11 +57,13 @@ class PipelineManager {
   constructor(io, db) {
     this._io             = io;
     this._db             = db;
-    this._pipelines      = new Map(); // cameraId → PipelineContext
-    this._zoneManager    = new ZoneManager(db);
-    this._alertService   = new AlertService(db);
-    this._detector       = null;  // Shared YOLOv8n instance
-    this._attrPipeline   = null;  // Shared attribute pipeline
+    this._pipelines       = new Map(); // cameraId → PipelineContext
+    this._zoneManager     = new ZoneManager(db);
+    this._alertService    = new AlertService(db);
+    this._detector        = null;  // Shared YOLOv8n instance
+    this._attrPipeline    = null;  // Shared attribute pipeline
+    this._fireSmokeService = null; // Shared fire/smoke detector
+    this._fireAlertCooldown = new Map(); // `${cameraId}:${zoneName}:${cls}` → lastAlertTs
 
     // Single listener — broadcast saved alerts to all connected clients
     this._alertService.on('alert', (alert) => {
@@ -82,6 +95,14 @@ class PipelineManager {
       this._attrPipeline = new AttributePipeline();
       await this._attrPipeline.load().catch((err) => {
         console.warn('[PipelineManager] AttributePipeline load warn:', err.message);
+      });
+    }
+
+    // Lazy-load fire/smoke service
+    if (!this._fireSmokeService) {
+      this._fireSmokeService = new FireSmokeService();
+      await this._fireSmokeService.load().catch((err) => {
+        console.warn('[PipelineManager] FireSmokeService load warn:', err.message);
       });
     }
 
@@ -173,12 +194,60 @@ class PipelineManager {
           }
         }
 
-        // 6. Emit detections + tracking results (include frame dimensions for UI scaling)
+        // 6. Fire/smoke detection — full-frame, independent of person tracking
+        let fireSmokeObjects = [];
+        if (this._fireSmokeService && this._fireSmokeService.ready) {
+          const zones = this._zoneManager.getActiveZones(camera.id);
+          const needFS = zones.some(z =>
+            z.targetClasses?.some(c => c === 'fire' || c === 'smoke')
+          );
+          if (needFS) {
+            try {
+              const raw = await this._fireSmokeService.detect(jpegBuffer, frameWidth, frameHeight);
+              fireSmokeObjects = raw.map((d, i) => ({
+                ...d,
+                objectId:    80000 + (currentFrameId % 1000) * 10 + i,
+                isLoitering: false,
+                dwellTime:   0,
+              }));
+              // Emit fire:alert for detections intersecting a MONITOR zone
+              for (const det of fireSmokeObjects) {
+                const center = {
+                  x: det.bbox.x + det.bbox.width  / 2,
+                  y: det.bbox.y + det.bbox.height / 2,
+                };
+                for (const zone of zones) {
+                  if (zone.type !== 'MONITOR') continue;
+                  if (!zone.targetClasses?.includes(det.className)) continue;
+                  if (zone.polygon.length < 3) continue;
+                  if (!_pointInPolygon(center, zone.polygon)) continue;
+                  // Cooldown: same camera+zone+class → at most once per 10 s
+                  const key = `${camera.id}:${zone.name}:${det.className}`;
+                  const last = this._fireAlertCooldown.get(key) || 0;
+                  if (timestamp - last < 10000) continue;
+                  this._fireAlertCooldown.set(key, timestamp);
+                  this._io.to(camera.id).emit('fire:alert', {
+                    cameraId:   camera.id,
+                    className:  det.className,
+                    confidence: det.confidence,
+                    zone:       zone.name,
+                    timestamp,
+                  });
+                  console.warn(`[PipelineManager][${camera.id}] ${det.className.toUpperCase()} detected in zone "${zone.name}" (${(det.confidence * 100).toFixed(0)}%)`);
+                }
+              }
+            } catch (err) {
+              console.error(`[PipelineManager][${camera.id}] FireSmoke error:`, err.message);
+            }
+          }
+        }
+
+        // 7. Emit combined detections (person/vehicle + fire/smoke)
         this._io.to(camera.id).emit('detections', {
           cameraId:    camera.id,
           frameId:     currentFrameId,
           timestamp,
-          detections:  enrichedObjects,
+          detections:  [...enrichedObjects, ...fireSmokeObjects],
           frameWidth,
           frameHeight,
         });

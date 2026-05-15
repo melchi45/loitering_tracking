@@ -31,11 +31,17 @@ function DetectionRow({ det }: { det: Detection }) {
     className === 'motorcycle' ? 'text-orange-400' :
     className === 'bus'      ? 'text-purple-400' :
     className === 'truck'    ? 'text-teal-400'   :
+    className === 'fire'     ? 'text-orange-500' :
+    className === 'smoke'    ? 'text-slate-400'  :
     className === 'backpack' || className === 'handbag' || className === 'suitcase'
                              ? 'text-amber-400'  : 'text-gray-400';
 
   return (
-    <div className={`px-3 py-2 border-b border-gray-700/60 ${isLoitering ? 'bg-red-900/20' : ''}`}>
+    <div className={`px-3 py-2 border-b border-gray-700/60 ${
+      isLoitering ? 'bg-red-900/20' :
+      className === 'fire'  ? 'bg-orange-900/25' :
+      className === 'smoke' ? 'bg-slate-800/40'  : ''
+    }`}>
       {/* Header row */}
       <div className="flex items-center justify-between mb-1">
         <span className={`text-xs font-bold uppercase ${clsColor}`}>{className || 'obj'}</span>
@@ -43,6 +49,16 @@ function DetectionRow({ det }: { det: Detection }) {
           {isLoitering && (
             <span className="text-[9px] font-bold bg-red-600 text-white rounded px-1 py-0.5 uppercase">
               LOITER
+            </span>
+          )}
+          {className === 'fire' && (
+            <span className="text-[9px] font-bold bg-orange-600 text-white rounded px-1 py-0.5 uppercase animate-pulse">
+              FIRE
+            </span>
+          )}
+          {className === 'smoke' && (
+            <span className="text-[9px] font-bold bg-slate-600 text-white rounded px-1 py-0.5 uppercase">
+              SMOKE
             </span>
           )}
           {mask && (
@@ -145,6 +161,8 @@ function DetectionPanel({ cameraId }: { cameraId: string }) {
           <span className="text-orange-400">■ motorcycle</span>
           <span className="text-purple-400">■ bus</span>
           <span className="text-teal-400">■ truck</span>
+          <span className="text-orange-500">■ fire</span>
+          <span className="text-slate-400">■ smoke</span>
         </div>
       </div>
     </div>

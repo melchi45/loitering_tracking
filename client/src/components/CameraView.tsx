@@ -77,6 +77,8 @@ function drawOverlay(
     const h = bbox.height * sy;
 
     // Loitering always red; otherwise color by class
+    const isFire  = className === 'fire';
+    const isSmoke = className === 'smoke';
     const color = isLoitering ? 'rgba(239,68,68,0.9)' : (() => {
       switch (className) {
         case 'person':     return 'rgba(34,197,94,0.9)';   // green
@@ -85,12 +87,23 @@ function drawOverlay(
         case 'motorcycle': return 'rgba(249,115,22,0.9)';  // orange
         case 'bus':        return 'rgba(168,85,247,0.9)';  // purple
         case 'truck':      return 'rgba(20,184,166,0.9)';  // teal
+        case 'fire':       return 'rgba(255,80,0,1.0)';    // orange-red
+        case 'smoke':      return 'rgba(100,116,139,0.9)'; // slate gray
         default:           return 'rgba(156,163,175,0.9)'; // gray
       }
     })();
 
+    // Fire: semi-transparent orange fill; Smoke: semi-transparent gray fill
+    if (isFire) {
+      ctx.fillStyle = 'rgba(255,80,0,0.18)';
+      ctx.fillRect(x, y, w, h);
+    } else if (isSmoke) {
+      ctx.fillStyle = 'rgba(100,116,139,0.15)';
+      ctx.fillRect(x, y, w, h);
+    }
+
     ctx.strokeStyle = color;
-    ctx.lineWidth   = 2;
+    ctx.lineWidth   = isFire || isSmoke ? 3 : 2;
     ctx.strokeRect(x, y, w, h);
 
     // Label: "person #3  94%" or "car #7  82%"

@@ -30,6 +30,8 @@ const AI_ATTRIBUTE_DEFS: AiAttr[] = [
   { id: 'cloth',       label: 'Cloth',        labelKo: '의류'   },
   { id: 'hat',         label: 'Hat',          labelKo: '모자'   },
   { id: 'accessories', label: 'Accessories',  labelKo: '소품'   },
+  { id: 'fire',        label: 'Fire',         labelKo: '화재'   },
+  { id: 'smoke',       label: 'Smoke',        labelKo: '연기'   },
 ];
 
 const VERTEX_R   = 6;

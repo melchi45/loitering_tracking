@@ -73,9 +73,11 @@ async function main() {
         face:        has('scrfd_2.5g.onnx'),
         mask:        has('yolov8m_ppe.onnx'),
         hat:         has('yolov8m_ppe.onnx'),
-        color:       true,                   // Phase-1 pixel averaging — no model needed
+        color:       true,                          // Phase-1 pixel averaging — no model needed
         cloth:       has('openpar.onnx'),
-        accessories: has('yolov8n.onnx'),    // COCO accessory classes from primary detector
+        accessories: has('yolov8n.onnx'),           // COCO accessory classes from primary detector
+        fire:        has('yolov8s_fire_smoke.onnx'),
+        smoke:       has('yolov8s_fire_smoke.onnx'),
       },
     });
   });

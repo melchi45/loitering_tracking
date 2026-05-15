@@ -422,6 +422,8 @@ Each camera zone can independently activate one or more AI analysis modules via 
 | 6 | ☐ **Cloth** | `cloth` | [AI-06](RFP_AI_Cloth_Analysis.md) | 🔲 준비중 | 의류 유형 분류 — OpenPAR (openpar.onnx 미설치) |
 | 7 | ☑ **Hat** | `hat` | [AI-07](RFP_AI_Hat_Detection.md) | ✅ 구현 완료 | 헬멧/모자 감지 — YOLOv8m PPE (99MB), hardhat/no_hardhat 분류 |
 | 8 | ☑ **Accessories** | `accessories` | [AI-08](RFP_AI_Accessories_Detection.md) | ✅ 구현 완료 | 소품 감지 — YOLOv8n COCO (backpack/umbrella/handbag/tie/suitcase) |
+| 9 | ☐ **Fire** | `fire` | [AI-09](RFP_AI_Fire_Smoke_Detection.md) | 🔲 준비중 | 화재 감지 — YOLOv8s fire/smoke (yolov8s_fire_smoke.onnx 미설치) |
+| 10 | ☐ **Smoke** | `smoke` | [AI-09](RFP_AI_Fire_Smoke_Detection.md) | 🔲 준비중 | 연기 감지 — YOLOv8s fire/smoke (yolov8s_fire_smoke.onnx 미설치) |
 
 > **구현 완료** 모듈은 Zone 편집 시 체크박스가 활성화됩니다. **준비중** 모듈은 체크박스가 회색으로 표시되며 해당 ONNX 모델 파일이 `server/models/`에 배치되면 자동 활성화됩니다.
 >
@@ -438,7 +440,8 @@ Zone 편집 화면 하단의 **"AI 감지 대상"** 섹션에서 해당 Zone에 
 │ ☑ 사람         │ ☑ 차량         │
 │ ☑ 얼굴         │ ☑ 마스크        │
 │ ☑ 색상         │ ☐ 의류   준비중 │
-│ ☑ 모자         │ ☑ 소품          │  ← 모두 활성 (의류만 준비중)
+│ ☑ 모자         │ ☑ 소품          │
+│ ☐ 화재  준비중 │ ☐ 연기   준비중 │  ← 모델 설치 시 활성화
 └────────────────┴────────────────┘
 ```
 
@@ -446,6 +449,7 @@ Zone 편집 화면 하단의 **"AI 감지 대상"** 섹션에서 해당 Zone에 
 - **미선택 시**: `targetClasses: []` → 모든 활성 클래스 감지 (기본 동작)
 - **준비중 항목**: 비활성(회색), "준비중" 뱃지 표시, 클릭 불가
 - **가용성 동적 조회**: Zone Editor 열릴 때 `/api/capabilities` 호출 → 모델 파일 존재 여부 반영
+- **화재/연기 경보**: Zone에 fire/smoke 체크 후 탐지 시 `fire:alert` Socket 이벤트 발생 (10초 쿨다운)
 
 ### 7.3 `targetClasses` 동작 규칙
 

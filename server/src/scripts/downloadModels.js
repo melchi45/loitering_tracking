@@ -61,6 +61,31 @@ const PYTHON_EXPORT_INSTRUCTIONS = `
 │  print("Saved:", dest)                                                      │
 │  PYEOF                                                                      │
 ├─────────────────────────────────────────────────────────────────────────────┤
+│  AI-09 Fire & Smoke Detection                                               │
+│  Source: https://huggingface.co/keremberke/yolov8m-fire-and-smoke-detection │
+│                                                                             │
+│  pip install ultralytics huggingface_hub                                    │
+│                                                                             │
+│  python3 << 'PYEOF'                                                         │
+│  from ultralytics import YOLO                                               │
+│  from huggingface_hub import hf_hub_download                                │
+│  import shutil, os                                                          │
+│                                                                             │
+│  pt = hf_hub_download(                                                      │
+│      repo_id="keremberke/yolov8m-fire-and-smoke-detection",                 │
+│      filename="best.pt")                                                    │
+│  YOLO(pt).export(format="onnx", imgsz=640, simplify=True)                  │
+│  onnx = pt.replace(".pt", ".onnx")                                          │
+│  dest = os.path.join("server/models", "yolov8s_fire_smoke.onnx")           │
+│  shutil.copy(onnx, dest)                                                    │
+│  print("Saved:", dest)                                                      │
+│  PYEOF                                                                      │
+│                                                                             │
+│  Alternative (GitHub YOLOv8n — lighter):                                    │
+│    https://github.com/Abonia1/YOLOv8-Fire-and-Smoke-Detection               │
+│    Download best.pt, export same way                                        │
+│    Dataset: https://github.com/gaiasd/DFireDataset (21,000+ images)        │
+├─────────────────────────────────────────────────────────────────────────────┤
 │  AI-05 Color + AI-06 Cloth (PAR multi-label attributes)                     │
 │  Source: https://github.com/Event-AHU/OpenPAR                               │
 │                                                                             │
@@ -140,6 +165,7 @@ function printStatus() {
     { file: 'arcface_w600k_r50.onnx',  module: 'AI-03 Face Recognition' },
     { file: 'yolov8m_ppe.onnx',        module: 'AI-04 Mask + AI-07 Helmet' },
     { file: 'openpar.onnx',            module: 'AI-05 Color + AI-06 Cloth' },
+    { file: 'yolov8s_fire_smoke.onnx', module: 'AI-09 Fire & Smoke Detection' },
   ];
   console.log('\n=== Model Status ===');
   for (const m of ALL) {
