@@ -46,15 +46,19 @@ export interface ClothAttribute {
 }
 
 export interface Detection {
-  objectId:    number;
-  confidence:  number;
-  bbox:        BBox;
-  class:       string;
-  className:   string;
-  isLoitering: boolean;
-  dwellTime:   number;
-  // Attribute enrichment (optional — only present when relevant model is loaded
-  // and the camera zone has matching targetClasses)
+  objectId:      number;
+  confidence:    number;
+  bbox:          BBox;
+  class:         string;
+  className:     string;
+  isLoitering:   boolean;
+  dwellTime:     number;
+  // Adaptive Multi-Feature Tracking metrics (present only for zone-matched objects)
+  revisitCount?: number;   // times re-entered zone within reentryWindow
+  velocity?:     number;   // average speed in px/s over last 10 frames
+  circularScore?: number;  // 0–1 circular/loop motion indicator
+  riskScore?:    number;   // 0–1 composite loitering priority score
+  // Attribute enrichment (optional — only present when relevant model is loaded)
   face?:  FaceAttribute;
   mask?:  MaskAttribute;
   hat?:   HatAttribute;

@@ -78,6 +78,21 @@ async function main() {
         accessories: has('yolov8n.onnx'),           // COCO accessory classes from primary detector
         fire:        has('yolov8s_fire_smoke.onnx'),
         smoke:       has('yolov8s_fire_smoke.onnx'),
+        // Indoor / office objects — all from YOLOv8n COCO 80-class
+        chair:       has('yolov8n.onnx'),
+        couch:       has('yolov8n.onnx'),
+        diningtable: has('yolov8n.onnx'),
+        furniture:   has('yolov8n.onnx'),
+        laptop:      has('yolov8n.onnx'),
+        tv:          has('yolov8n.onnx'),
+        keyboard:    has('yolov8n.onnx'),
+        mouse:       has('yolov8n.onnx'),
+        cellphone:   has('yolov8n.onnx'),
+        computer:    has('yolov8n.onnx'),
+        clock:       has('yolov8n.onnx'),
+        cup:         has('yolov8n.onnx'),
+        bottle:      has('yolov8n.onnx'),
+        book:        has('yolov8n.onnx'),
       },
     });
   });

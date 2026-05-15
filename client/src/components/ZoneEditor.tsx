@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { useI18n } from '../i18n';
+import type { Translations } from '../i18n/translations/en';
 import type { Zone } from '../types';
 
 interface Point { x: number; y: number; }
@@ -21,17 +23,49 @@ const ZONE_COLORS: Record<string, { stroke: string; fill: string; selFill: strin
 };
 
 interface AiAttr { id: string; label: string; labelKo: string; }
-const AI_ATTRIBUTE_DEFS: AiAttr[] = [
-  { id: 'human',       label: 'Human',       labelKo: '사람'   },
-  { id: 'vehicle',     label: 'Vehicle',      labelKo: '차량'   },
-  { id: 'face',        label: 'Face',         labelKo: '얼굴'   },
-  { id: 'mask',        label: 'Mask',         labelKo: '마스크' },
-  { id: 'color',       label: 'Color',        labelKo: '색상'   },
-  { id: 'cloth',       label: 'Cloth',        labelKo: '의류'   },
-  { id: 'hat',         label: 'Hat',          labelKo: '모자'   },
-  { id: 'accessories', label: 'Accessories',  labelKo: '소품'   },
-  { id: 'fire',        label: 'Fire',         labelKo: '화재'   },
-  { id: 'smoke',       label: 'Smoke',        labelKo: '연기'   },
+interface AiAttrGroup { groupKey: keyof Translations; items: AiAttr[]; }
+const AI_ATTRIBUTE_GROUPS: AiAttrGroup[] = [
+  {
+    groupKey: 'zoneGroupPeopleVehicles',
+    items: [
+      { id: 'human',       label: 'Human',      labelKo: '사람'   },
+      { id: 'vehicle',     label: 'Vehicle',    labelKo: '차량'   },
+      { id: 'accessories', label: 'Accessories',labelKo: '소품'   },
+    ],
+  },
+  {
+    label: 'AI 속성',
+    items: [
+      { id: 'face',  label: 'Face',  labelKo: '얼굴'   },
+      { id: 'mask',  label: 'Mask',  labelKo: '마스크' },
+      { id: 'color', label: 'Color', labelKo: '색상'   },
+      { id: 'cloth', label: 'Cloth', labelKo: '의류'   },
+      { id: 'hat',   label: 'Hat',   labelKo: '모자'   },
+    ],
+  },
+  {
+    label: '위험물',
+    items: [
+      { id: 'fire',  label: 'Fire',  labelKo: '화재' },
+      { id: 'smoke', label: 'Smoke', labelKo: '연기' },
+    ],
+  },
+  {
+    label: '실내 / 사무 객체',
+    items: [
+      { id: 'chair',       label: 'Chair',      labelKo: '의자'      },
+      { id: 'diningtable', label: 'Desk/Table', labelKo: '책상/탁자' },
+      { id: 'laptop',      label: 'Laptop',     labelKo: '노트북'    },
+      { id: 'tv',          label: 'TV/Monitor', labelKo: 'TV/모니터' },
+      { id: 'keyboard',    label: 'Keyboard',   labelKo: '키보드'    },
+      { id: 'mouse',       label: 'Mouse',      labelKo: '마우스'    },
+      { id: 'cellphone',   label: 'Phone',      labelKo: '휴대폰'    },
+      { id: 'clock',       label: 'Clock',      labelKo: '시계'      },
+      { id: 'cup',         label: 'Cup',        labelKo: '컵'        },
+      { id: 'bottle',      label: 'Bottle',     labelKo: '병'        },
+      { id: 'book',        label: 'Book',       labelKo: '책'        },
+    ],
+  },
 ];
 
 const VERTEX_R   = 6;
@@ -103,6 +137,9 @@ export default function ZoneEditor({
     human: true, vehicle: true, face: false, mask: false,
     color: false, cloth: false, hat: false, accessories: false,
     fire: false, smoke: false,
+    chair: false, couch: false, diningtable: false, furniture: false,
+    laptop: false, tv: false, keyboard: false, mouse: false, cellphone: false, computer: false,
+    clock: false, cup: false, bottle: false, book: false,
   });
   useEffect(() => {
     fetch('/api/capabilities')
@@ -743,34 +780,41 @@ export default function ZoneEditor({
                     선택 시 해당 객체만 체류 시간 집계 · 경보 발생.<br/>
                     미선택 = 전체. 속성 분석(얼굴·마스크·색상)은 모델 설치 시 자동 실행.
                   </p>
-                  <div className="grid grid-cols-2 gap-1">
-                    {AI_ATTRIBUTE_DEFS.map((attr) => {
-                      const available = aiCaps[attr.id] ?? false;
-                      const checked   = targetClasses.includes(attr.id);
-                      return (
-                        <button
-                          key={attr.id}
-                          onClick={() => available && handleTargetClassToggle(attr.id)}
-                          disabled={!available}
-                          title={available ? '' : '모델 미설치 (서버/models/ 디렉토리 확인)'}
-                          className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] text-left transition-colors ${
-                            !available
-                              ? 'opacity-35 cursor-not-allowed bg-gray-800 text-gray-500'
-                              : checked
-                              ? 'bg-blue-700/70 text-white border border-blue-500'
-                              : 'bg-gray-800 text-gray-400 hover:bg-gray-700 border border-transparent'
-                          }`}
-                        >
-                          <span className={`w-3 h-3 rounded-sm border flex-shrink-0 flex items-center justify-center ${
-                            checked ? 'bg-blue-500 border-blue-400' : 'border-gray-600'
-                          }`}>
-                            {checked && <span className="text-white text-[8px] leading-none">✓</span>}
-                          </span>
-                          <span className="truncate">{attr.labelKo}</span>
-                          {!available && <span className="ml-auto text-[8px] text-gray-600">준비중</span>}
-                        </button>
-                      );
-                    })}
+                  <div className="space-y-2">
+                    {AI_ATTRIBUTE_GROUPS.map((group) => (
+                      <div key={group.label}>
+                        <div className="text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1">{group.label}</div>
+                        <div className="grid grid-cols-2 gap-1">
+                          {group.items.map((attr) => {
+                            const available = aiCaps[attr.id] ?? false;
+                            const checked   = targetClasses.includes(attr.id);
+                            return (
+                              <button
+                                key={attr.id}
+                                onClick={() => available && handleTargetClassToggle(attr.id)}
+                                disabled={!available}
+                                title={available ? '' : '모델 미설치 (서버/models/ 디렉토리 확인)'}
+                                className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] text-left transition-colors ${
+                                  !available
+                                    ? 'opacity-35 cursor-not-allowed bg-gray-800 text-gray-500'
+                                    : checked
+                                    ? 'bg-blue-700/70 text-white border border-blue-500'
+                                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700 border border-transparent'
+                                }`}
+                              >
+                                <span className={`w-3 h-3 rounded-sm border flex-shrink-0 flex items-center justify-center ${
+                                  checked ? 'bg-blue-500 border-blue-400' : 'border-gray-600'
+                                }`}>
+                                  {checked && <span className="text-white text-[8px] leading-none">✓</span>}
+                                </span>
+                                <span className="truncate">{attr.labelKo}</span>
+                                {!available && <span className="ml-auto text-[8px] text-gray-600">준비중</span>}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
 

@@ -5,21 +5,41 @@ const sharp = require('sharp');
 const path = require('path');
 
 const INPUT_SIZE = 640;
-const NUM_CLASSES = 80;
 
-// COCO classes enabled for detection (person + vehicles + accessories)
+// COCO 80-class map: all classes eligible for detection
 const ENABLED_CLASSES = {
+  // People
   0:  'person',
+  // Vehicles
   1:  'bicycle',
   2:  'car',
   3:  'motorcycle',
   5:  'bus',
   7:  'truck',
+  // Accessories / carried items
   24: 'backpack',
   25: 'umbrella',
   26: 'handbag',
   27: 'tie',
   28: 'suitcase',
+  // Food / drink items
+  39: 'bottle',
+  40: 'wine glass',
+  41: 'cup',
+  // Indoor / office objects
+  56: 'chair',
+  57: 'couch',
+  59: 'bed',
+  60: 'dining table',
+  62: 'tv',
+  63: 'laptop',
+  64: 'mouse',
+  65: 'remote',
+  66: 'keyboard',
+  67: 'cell phone',
+  73: 'book',
+  74: 'clock',
+  75: 'vase',
 };
 
 /**
@@ -36,11 +56,12 @@ class DetectionService {
     this.modelPath = options.modelPath
       || path.resolve(__dirname, '..', '..', process.env.YOLO_MODEL || 'models/yolov8n.onnx');
     this.confidenceThreshold = options.confidenceThreshold
-      || parseFloat(process.env.CONFIDENCE_THRESHOLD || '0.45');
+      || parseFloat(process.env.CONFIDENCE_THRESHOLD || '0.30');
     this.iouThreshold = options.iouThreshold
       || parseFloat(process.env.NMS_IOU_THRESHOLD || '0.5');
-    this._session = null;
-    this._loading = null;
+    this._session     = null;
+    this._loading     = null;
+    this._numClasses  = null; // inferred from first inference output dims
   }
 
   /**
@@ -146,8 +167,18 @@ class DetectionService {
    * @returns {Array}
    */
   _postprocess(data, dims, scaledW, scaledH, padLeft, padTop, origW, origH) {
-    const numBoxes = dims[2];         // 8400
-    const stride   = numBoxes;       // stride between attributes in flat array
+    const numBoxes  = dims[2];           // 8400 anchors
+    const stride    = numBoxes;
+
+    // Infer numClasses from output shape dims[1] = 4 (bbox) + numClasses
+    const numClasses = dims[1] - 4;
+    if (this._numClasses === null) {
+      this._numClasses = numClasses;
+      console.log(`[Detection] model output: [${dims.join(', ')}] — ${numClasses} classes, conf≥${this.confidenceThreshold}`);
+      if (numClasses < 10) {
+        console.warn(`[Detection] Only ${numClasses} class(es) detected — model may be a single-class fine-tune. Vehicles require a full COCO model.`);
+      }
+    }
 
     const candidates = [];
 
@@ -160,7 +191,7 @@ class DetectionService {
       // Class scores start at index 4
       let maxScore = 0;
       let maxClass = -1;
-      for (let c = 0; c < NUM_CLASSES; c++) {
+      for (let c = 0; c < numClasses; c++) {
         const score = data[(4 + c) * stride + b];
         if (score > maxScore) { maxScore = score; maxClass = c; }
       }

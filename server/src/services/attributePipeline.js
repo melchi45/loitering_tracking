@@ -27,7 +27,8 @@ class AttributePipeline {
   }
 
   async load() {
-    await Promise.all([
+    // Load each service independently — a failure in one must not block others
+    await Promise.allSettled([
       this._face.load(),
       this._ppe.load(),
       this._color.load(),
@@ -52,27 +53,30 @@ class AttributePipeline {
    * @param {Array}    zones           Active zone configs for this camera
    * @returns {Promise<Array>}         trackedObjects augmented with attribute fields
    */
+  /**
+   * Enrich tracked objects with face, PPE, and color attributes.
+   * @returns {{ enrichedObjects: Array, detectedFaces: Array }}
+   *   detectedFaces — raw SCRFD results for ALL faces in frame (frame coords),
+   *   used by pipelineManager to emit face as a separate detection class.
+   */
   async enrich(jpegBuffer, origW, origH, trackedObjects, zones) {
-    if (!this._loaded || !trackedObjects.length) return trackedObjects;
+    if (!this._loaded) return { enrichedObjects: trackedObjects, detectedFaces: [] };
 
-    // Run attribute analysis whenever the model is ready — zone targetClasses control
-    // only loitering alerts (in behaviorEngine), not attribute enrichment.
-    // Exception: if ANY zone explicitly opts out by listing only non-person classes
-    // (e.g. ['vehicle']), still run face/PPE/color since other persons may be present.
     const needFace  = this._face.ready;
     const needPPE   = this._ppe.ready;
     const needColor = this._color.ready;
 
-    if (!needFace && !needPPE && !needColor) return trackedObjects;
+    if (!needFace && !needPPE && !needColor) return { enrichedObjects: trackedObjects, detectedFaces: [] };
 
+    // SCRFD runs on the full frame independently — does not require person detections.
+    // This ensures face bboxes are emitted even when YOLOv8 misses the person bbox.
+    const faces = needFace ? await this._face.detectFaces(jpegBuffer, origW, origH) : [];
+
+    // PPE / color enrichment is person-crop based — skip when no persons.
     const persons = trackedObjects.filter(o => o.className === 'person');
-    if (!persons.length) return trackedObjects;
+    if (!persons.length) return { enrichedObjects: trackedObjects, detectedFaces: faces };
 
-    // Run all required services in parallel on this frame
-    const [faces, ppeItems] = await Promise.all([
-      needFace ? this._face.detectFaces(jpegBuffer, origW, origH) : [],
-      needPPE  ? this._ppe.detect(jpegBuffer, origW, origH)       : [],
-    ]);
+    const ppeItems = needPPE ? await this._ppe.detect(jpegBuffer, origW, origH) : [];
 
     // Color analysis is per-person (crop-based), run in parallel per person
     const colorMap = new Map();
@@ -83,14 +87,16 @@ class AttributePipeline {
       }));
     }
 
-    return trackedObjects.map(obj => {
+    const enrichedObjects = trackedObjects.map(obj => {
       if (obj.className !== 'person') return obj;
 
       const enriched = { ...obj };
       const headRoi  = _headRoi(obj.bbox);
 
       if (needFace) {
-        const matched = _bestMatch(obj.bbox, faces.map(f => ({ bbox: f.bbox, score: f.score })));
+        // Use headRoi (top 35% of person bbox) for face matching — more accurate than
+        // full-body bbox which gives IoU < 0.05 for a typical face-to-body size ratio
+        const matched = _bestMatch(headRoi, faces.map(f => ({ bbox: f.bbox, score: f.score })));
         if (matched) enriched.face = { bbox: matched.bbox, score: matched.score };
       }
 
@@ -126,6 +132,8 @@ class AttributePipeline {
 
       return enriched;
     });
+
+    return { enrichedObjects, detectedFaces: faces };
   }
 }
 

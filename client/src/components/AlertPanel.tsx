@@ -1,5 +1,6 @@
 import { useAlertStore } from '../stores/alertStore';
 import { useCameraStore } from '../stores/cameraStore';
+import { useI18n } from '../i18n';
 import type { Alert } from '../types';
 
 const MAX_VISIBLE = 20;
@@ -89,6 +90,7 @@ function AlertRow({ alert }: { alert: Alert }) {
 export default function AlertPanel() {
   const alerts = useAlertStore((s) => s.alerts);
   const clearAlerts = useAlertStore((s) => s.clearAlerts);
+  const { t } = useI18n();
 
   const visible = alerts.slice(0, MAX_VISIBLE);
   const unacknowledgedCount = alerts.filter((a) => !a.acknowledged).length;
@@ -98,7 +100,7 @@ export default function AlertPanel() {
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 flex-shrink-0">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-bold text-white">Alerts</span>
+          <span className="text-sm font-bold text-white">{t.alertTitle}</span>
           {unacknowledgedCount > 0 && (
             <span className="text-[10px] font-bold bg-red-600 text-white rounded-full px-1.5 py-0.5 min-w-[20px] text-center">
               {unacknowledgedCount}
@@ -110,7 +112,7 @@ export default function AlertPanel() {
             onClick={clearAlerts}
             className="text-[11px] text-gray-400 hover:text-red-400 transition-colors"
           >
-            Clear All
+            {t.alertAckAll}
           </button>
         )}
       </div>
@@ -133,7 +135,7 @@ export default function AlertPanel() {
                 d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"
               />
             </svg>
-            <span>No alerts</span>
+            <span>{t.noAlerts}</span>
           </div>
         ) : (
           visible.map((alert) => <AlertRow key={alert.id} alert={alert} />)

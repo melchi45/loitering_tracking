@@ -196,7 +196,13 @@ class Track {
   }
 
   predict() {
-    // Use last known position — Kalman prediction removed (NaN instability)
+    // TODO(adaptive-kalman): Replace static position hold with KalmanFilter.predict()
+    //   and adjust process noise Q dynamically:
+    //     - high velocity  → Q *= 4  (trust motion model less)
+    //     - stationary     → Q *= 0.5 (trust position more)
+    //     - occlusion      → increase covariance (prediction weight up)
+    //   Blocked by: _inv4 near-singular matrix NaN instability for small bboxes.
+    //   Reference: adaptive_loitering_detection_rfp.md §6 Adaptive Kalman Filter
     this.age++;
     this.framesWithoutHit++;
     if (this.framesWithoutHit > 0) this.state = TrackState.Lost;
@@ -240,7 +246,10 @@ class ByteTracker {
   constructor(options = {}) {
     this.maxAge           = options.maxAge           || parseInt(process.env.MAX_TRACK_AGE_FRAMES || '30');
     this.minHits          = options.minHits          || 1;
-    this.highConfThreshold = options.highConfThreshold || 0.6;
+    // highConfThreshold must be ≤ detection confidenceThreshold so new tracks
+    // are created for vehicles/accessories which often score 0.25–0.50
+    this.highConfThreshold = options.highConfThreshold
+      || parseFloat(process.env.CONFIDENCE_THRESHOLD || '0.30');
     this.lowConfThreshold  = options.lowConfThreshold  || 0.1;
     this.iouThreshold     = options.iouThreshold     || 0.3;
     this._tracks = [];  // Array of Track
@@ -308,9 +317,21 @@ class ByteTracker {
       };
     }
 
-    // Build IoU cost matrix
+    // TODO(multi-cue-reid): Extend cost matrix beyond IoU to include appearance similarity:
+    //   Score = 0.4×IoU + 0.4×AppearanceSim + 0.2×AttributeSim
+    //   AppearanceSim: cosine similarity of ArcFace 512-dim embeddings stored per track
+    //   AttributeSim:  color (upper/lower) match from colorClothService
+    //   Blocked by: embeddings are computed in attributePipeline (post-tracking step).
+    //   Fix: feed enriched object embeddings back into ByteTracker after each frame.
+    //   Reference: adaptive_loitering_detection_rfp.md §7 Multi-Cue Association
+
+    // Build IoU cost matrix — class must match to associate
+    // This prevents car detections from stealing person track IDs when bboxes overlap
     const iouMatrix = detections.map(det =>
-      tracks.map(track => this._iou(det.bbox, track.bbox))
+      tracks.map(track => {
+        if (track.className !== det.className) return 0;
+        return this._iou(det.bbox, track.bbox);
+      })
     );
 
     // Greedy matching (highest IoU first)

@@ -163,69 +163,63 @@ class FaceService {
   // ─── Private ──────────────────────────────────────────────────────────────
 
   _postprocess(outs, scaledW, scaledH, padL, padT, origW, origH) {
-    const outNames = Object.keys(outs);
-    const faces    = [];
+    const faces = [];
     const sx = origW / scaledW;
     const sy = origH / scaledH;
 
-    // InsightFace SCRFD outputs per stride: score_8/16/32, bbox_8/16/32, kps_8/16/32
-    for (const stride of STRIDES) {
-      const scoreName = outNames.find(n => n.includes('score') && n.includes(String(stride)));
-      const bboxName  = outNames.find(n => n.includes('bbox')  && n.includes(String(stride)));
-      const kpsName   = outNames.find(n => n.includes('kps')   && n.includes(String(stride)));
+    // SCRFD outputs may use numeric names (e.g. '446','449',...) when exported via
+    // PyTorch — match by tensor shape instead of name strings.
+    //   cols == 1  → confidence scores  [N, 1]
+    //   cols == 4  → bbox distances     [N, 4]  (l, t, r, b) × stride
+    //   cols == 10 → keypoints          [N, 10] (5 pts × xy)
+    const scoreTs = [], bboxTs = [], kpsTs = [];
+    for (const t of Object.values(outs)) {
+      const cols = t.dims[1];
+      if (cols === 1)  scoreTs.push(t);
+      else if (cols === 4)  bboxTs.push(t);
+      else if (cols === 10) kpsTs.push(t);
+    }
+    // Sort descending by row count: stride-8 (largest feature map) first
+    const byRows = (a, b) => b.dims[0] - a.dims[0];
+    scoreTs.sort(byRows); bboxTs.sort(byRows); kpsTs.sort(byRows);
 
-      if (!scoreName || !bboxName) continue;
+    const nStrides = Math.min(scoreTs.length, bboxTs.length, STRIDES.length);
+    for (let si = 0; si < nStrides; si++) {
+      const stride   = STRIDES[si];
+      const scores   = scoreTs[si].data;
+      const bboxes   = bboxTs[si].data;
+      const kps      = kpsTs[si]?.data ?? null;
+      const fmW      = Math.ceil(SCRFD_SIZE / stride);
+      const nAnchors = scoreTs[si].dims[0]; // 12800, 3200, 800
 
-      const scores = outs[scoreName].data;
-      const bboxes = outs[bboxName].data;
-      const kps    = kpsName ? outs[kpsName].data : null;
-      const fmH    = Math.ceil(SCRFD_SIZE / stride);
-      const fmW    = Math.ceil(SCRFD_SIZE / stride);
+      for (let idx = 0; idx < nAnchors; idx++) {
+        const score = scores[idx];
+        if (score < this.confThresh) continue;
 
-      let idx = 0;
-      for (let row = 0; row < fmH; row++) {
-        for (let col = 0; col < fmW; col++) {
-          for (let a = 0; a < NUM_ANCHORS; a++, idx++) {
-            const score = scores[idx];
-            if (score < this.confThresh) continue;
+        const locIdx = Math.floor(idx / NUM_ANCHORS);
+        const col    = locIdx % fmW;
+        const row    = Math.floor(locIdx / fmW);
+        const cx     = (col + 0.5) * stride;
+        const cy     = (row + 0.5) * stride;
 
-            const cx = (col + 0.5) * stride;
-            const cy = (row + 0.5) * stride;
-            // SCRFD bbox: (left, top, right, bottom) offsets × stride
-            const x1 = Math.max(0, (cx - bboxes[idx * 4 + 0] * stride - padL) * sx);
-            const y1 = Math.max(0, (cy - bboxes[idx * 4 + 1] * stride - padT) * sy);
-            const x2 = Math.min(origW, (cx + bboxes[idx * 4 + 2] * stride - padL) * sx);
-            const y2 = Math.min(origH, (cy + bboxes[idx * 4 + 3] * stride - padT) * sy);
+        // SCRFD bbox: distance offsets × stride → (left, top, right, bottom)
+        const x1 = Math.max(0,     (cx - bboxes[idx * 4 + 0] * stride - padL) * sx);
+        const y1 = Math.max(0,     (cy - bboxes[idx * 4 + 1] * stride - padT) * sy);
+        const x2 = Math.min(origW, (cx + bboxes[idx * 4 + 2] * stride - padL) * sx);
+        const y2 = Math.min(origH, (cy + bboxes[idx * 4 + 3] * stride - padT) * sy);
 
-            if (x2 <= x1 || y2 <= y1) continue;
+        if (x2 <= x1 || y2 <= y1) continue;
 
-            const landmarks = [];
-            if (kps) {
-              for (let p = 0; p < 5; p++) {
-                landmarks.push([
-                  (kps[idx * 10 + p * 2]     * stride - padL) * sx,
-                  (kps[idx * 10 + p * 2 + 1] * stride - padT) * sy,
-                ]);
-              }
-            }
-            faces.push({ score, bbox: { x: x1, y: y1, width: x2 - x1, height: y2 - y1 }, landmarks });
+        const landmarks = [];
+        if (kps) {
+          for (let p = 0; p < 5; p++) {
+            landmarks.push([
+              (kps[idx * 10 + p * 2]     * stride - padL) * sx,
+              (kps[idx * 10 + p * 2 + 1] * stride - padT) * sy,
+            ]);
           }
         }
-      }
-    }
-
-    // Fallback for single-output converted models (all anchors concatenated)
-    if (faces.length === 0 && outNames.length >= 2) {
-      const scores = outs[outNames[0]].data;
-      const bboxes = outs[outNames[1]].data;
-      for (let i = 0; i < scores.length; i++) {
-        if (scores[i] < this.confThresh) continue;
-        const x1 = Math.max(0, (bboxes[i * 4 + 0] - padL) * sx);
-        const y1 = Math.max(0, (bboxes[i * 4 + 1] - padT) * sy);
-        const x2 = Math.min(origW, (bboxes[i * 4 + 2] - padL) * sx);
-        const y2 = Math.min(origH, (bboxes[i * 4 + 3] - padT) * sy);
-        if (x2 > x1 && y2 > y1)
-          faces.push({ score: scores[i], bbox: { x: x1, y: y1, width: x2 - x1, height: y2 - y1 }, landmarks: [] });
+        faces.push({ score, bbox: { x: x1, y: y1, width: x2 - x1, height: y2 - y1 }, landmarks });
       }
     }
 

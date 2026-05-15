@@ -81,7 +81,19 @@ The system shall incorporate a state-of-the-art object detection pipeline meetin
 - Track lifecycle management: initiation, maintenance, occlusion recovery, termination
 - Tracking accuracy: **HOTA >= 60**, **MOTA >= 70** on MOT17 benchmark
 - Trajectory smoothing and prediction using Kalman Filter or similar
-- Cross-camera tracking support for overlapping FOV scenarios
+- **Class-aware association**: IoU matching constrained to same object class — prevents ID theft between vehicles and persons ✅ *Implemented*
+- Cross-camera tracking support for overlapping FOV scenarios *(TODO — Phase 3)*
+
+#### 2.3.1 Current Implementation Status
+
+| Feature | Status | Notes |
+|---|:---:|---|
+| ByteTrack (IoU-based) | ✅ | `server/src/services/tracking.js` |
+| Class-aware IoU matching | ✅ | Same class required for association |
+| 8-dim Kalman Filter | ✅ | [x,y,w,h,vx,vy,vw,vh] state vector |
+| Adaptive Kalman (dynamic Q/R) | 🔲 TODO | NaN instability in near-singular matrix inversion |
+| Multi-cue association (IoU + Appearance) | 🔲 TODO | Requires ArcFace embedding feedback loop into tracker |
+| Cross-camera Re-ID | 🔲 TODO | Requires shared embedding store (Redis/Qdrant) |
 
 ### 2.4 Loitering Detection Logic
 
@@ -89,10 +101,108 @@ The loitering detection engine shall implement configurable behavioral analysis:
 
 - **Dwell time threshold**: configurable per zone (default: 30 seconds, range: 5s–600s)
 - **Spatial clustering**: detect stationary or low-displacement tracks
-- **Speed and displacement analysis**: flag individuals with velocity < threshold in defined zones
-- **Re-entry detection**: count and flag repeated entries within a time window
-- **Crowd density filtering**: adjust sensitivity based on scene density
-- **False alarm suppression**: ignore transient stops (traffic lights, phone use patterns)
+- **Speed and displacement analysis**: flag individuals with velocity < threshold in defined zones ✅ *Implemented*
+- **Re-entry detection**: count and flag repeated entries within a time window ✅ *Implemented*
+- **Revisit count**: increment counter each time object re-enters zone within `reentryWindow` ✅ *Implemented*
+- **Circular motion pattern**: detect repetitive loop trajectories ✅ *Implemented*
+- **Composite risk score**: weighted combination of dwell/revisit/velocity/circular ✅ *Implemented*
+- **Crowd density filtering**: adjust sensitivity based on scene density *(TODO — Phase 3)*
+- **False alarm suppression**: ignore transient stops *(TODO — configurable via minDisplacement)*
+
+#### 2.4.1 Composite Risk Score Formula
+
+```
+riskScore = min(1,
+  (dwellTime / dwellThreshold)     × 0.40   // how long vs. threshold
+  + min(revisitCount / 5, 1)       × 0.30   // repeated zone entries (saturates at 5)
+  + max(0, 1 − velocity / 80)      × 0.20   // low speed = high risk (80 px/s reference)
+  + circularScore                  × 0.10   // loop / repetitive path indicator
+)
+```
+
+Risk score thresholds (recommended):
+
+| Score | Level | Suggested Action |
+|:---:|---|---|
+| 0.0 – 0.39 | Low | Log only |
+| 0.40 – 0.69 | Medium | Visual alert in dashboard |
+| 0.70 – 1.00 | High | Push notification + audio alert |
+
+#### 2.4.2 Circular Motion Score
+
+```
+circularScore = max(0, 1 − straightLineDisplacement / totalPathLength)
+```
+
+A score > 0.4 indicates repetitive/loop movement. Computed over the full position history buffer (up to 300 frames ≈ 30 seconds at 10 FPS).
+
+### 2.4a Adaptive Multi-Feature Tracking *(from Adaptive Loitering Detection RFP)*
+
+Based on the limitations of pure position-based tracking, the following improvements are planned:
+
+#### 2.4a.1 Problem Statement
+
+| Issue | Impact |
+|---|---|
+| Detection jitter | False dwell-time accumulation |
+| Tracking ID switch | Person lost → re-counted as new entry |
+| Occlusion | Track lost during brief obstruction |
+| Re-appearance | Same person counted as new person |
+| Slow movement ambiguity | Overly sensitive loitering trigger |
+| Fixed Kalman noise | Under/over-reaction to motion changes |
+
+#### 2.4a.2 Implementation Roadmap
+
+| Feature | Priority | Status | Effort |
+|---|:---:|:---:|---|
+| Class-aware IoU matching | P0 | ✅ Done | 1 line |
+| Revisit count + re-entry window | P0 | ✅ Done | BehaviorEngine |
+| Velocity + circular motion analysis | P0 | ✅ Done | BehaviorEngine |
+| Composite risk score | P0 | ✅ Done | BehaviorEngine |
+| Adaptive Kalman (motion-based Q/R) | P1 | 🔲 TODO | tracking.js — fix NaN in _inv4 |
+| Multi-cue matching (IoU + appearance) | P1 | 🔲 TODO | Embed ArcFace into tracker feedback loop |
+| Body-level ReID embedding (not face) | P2 | 🔲 TODO | FastReID or TorchReID (Python worker needed) |
+| Human segmentation mask | P3 | 🔲 TODO | SAM/NanoSAM — GPU required for real-time |
+| Cross-camera Re-ID | P3 | 🔲 TODO | Shared Redis/Qdrant embedding store |
+| Heatmap visualization | P2 | 🔲 TODO | Canvas overlay, /api/cameras/:id/heatmap |
+| Suspicious score threshold per zone | P1 | 🔲 TODO | Zone schema: `minRiskScore` field |
+
+#### 2.4a.3 Adaptive Kalman Filter Specification *(TODO — P1)*
+
+> **Status**: Blocked by near-singular matrix inversion NaN in `_inv4()` for small bboxes.  
+> See `server/src/services/tracking.js` Track.predict() TODO comment.
+
+Dynamic process noise Q adjustment:
+
+```
+if (velocity > 30 px/s):   Q *= 4    // fast moving — trust model less
+if (velocity < 5 px/s):    Q *= 0.5  // stationary — tighten prediction
+if (occluded):             covariance *= 3  // prediction dominant during occlusion
+if (appearanceConf < 0.5): covariance *= 2  // weak appearance match
+```
+
+#### 2.4a.4 Multi-Cue Association Specification *(TODO — P1)*
+
+> **Status**: Blocked by architecture — ArcFace embeddings computed post-tracking.  
+> Fix: feed enriched object embeddings back into ByteTracker via `tracker.updateEmbeddings(enrichedObjects)`.
+
+```
+associationScore = 0.40 × IoU
+                 + 0.40 × cosine_similarity(arcface_embedding_A, arcface_embedding_B)
+                 + 0.20 × attribute_similarity(color_A, color_B)
+```
+
+#### 2.4a.5 Out-of-Scope Items *(Current Architecture)*
+
+The following items from the Adaptive Loitering Detection RFP are **not feasible** within the current Node.js/ONNX single-server architecture:
+
+| Item | Reason | Alternative |
+|---|---|---|
+| Human Segmentation (SAM, Mask2Former) | ~500ms/frame CPU — blocks 10 FPS pipeline | Use bbox ROI; consider NanoSAM on GPU Phase-3 |
+| Python AI Worker | Major rewrite; IPC overhead | Current ONNX Runtime in Node.js sufficient |
+| PostgreSQL + Redis + Milvus | Over-engineered for ≤ 16 cameras | SQLite (current) → PostgreSQL at 100+ cameras |
+| YOLOv11 / RT-DETR | ONNX stability unverified | YOLOv8n COCO (current) performs well |
+| Body-level FastReID / TorchReID | PyTorch-only Python libs | ArcFace via ONNX covers face-based Re-ID |
 
 ### 2.5 Zone Management
 
@@ -179,6 +289,54 @@ Alert / Loitering Event
 - **Backward compatibility**: zones without `targetClasses` (or with an empty array) monitor all supported classes
 - **Planned model indicators**: unavailable models shown as greyed-out in the UI with a "준비중" (in preparation) badge
 - **Real-time filter**: the behavior engine applies `targetClasses` filter each frame — no restart required
+
+#### 2.6.6 Indoor / Office Object Detection ✅ *Implemented*
+
+YOLOv8n COCO 80-class 모델은 사람·차량 외에 사무 환경의 다양한 실내 객체를 즉시 감지할 수 있습니다. 추가 모델 설치 없이 활성화됩니다.
+
+**지원 실내 / 사무 객체 클래스**
+
+| 한국어 | COCO 클래스명 | targetClass ID | 색상 코드 | 상태 |
+|---|---|---|---|:---:|
+| 의자 | `chair` | `chair` | violet `#8b5cf6` | ✅ |
+| 소파 | `couch` | `couch` | violet-400 `#a78bfa` | ✅ |
+| 책상/탁자 | `dining table` | `diningtable` | emerald `#10b981` | ✅ |
+| 침대 | `bed` | (furniture 그룹) | indigo `#6366f1` | ✅ |
+| TV/모니터 | `tv` | `tv` | sky `#0ea5e9` | ✅ |
+| 노트북 | `laptop` | `laptop` | cyan `#06b6d4` | ✅ |
+| 마우스 | `mouse` | `mouse` | amber-300 `#fbbf24` | ✅ |
+| 키보드 | `keyboard` | `keyboard` | pink `#ec4899` | ✅ |
+| 휴대폰 | `cell phone` | `cellphone` | red-400 `#f87171` | ✅ |
+| 시계 | `clock` | `clock` | emerald-400 `#34d399` | ✅ |
+| 컵 | `cup` | `cup` | orange `#fb923c` | ✅ |
+| 병 | `bottle` | `bottle` | lime `#a3e635` | ✅ |
+| 책 | `book` | `book` | violet-300 `#c4b5fd` | ✅ |
+| 화병 | `vase` | (default) | pink-400 `#f472b6` | ✅ |
+| 리모컨 | `remote` | (default) | gray-300 `#d1d5db` | ✅ |
+
+**그룹 targetClass 매핑**
+
+```
+furniture  → chair, couch, dining table, bed
+computer   → laptop, tv, keyboard, mouse, cell phone
+```
+
+**활용 시나리오**
+
+| 시나리오 | Zone 설정 | 설명 |
+|---|---|---|
+| 자산 도난 방지 | `laptop`, `keyboard`, `clock` | 사무기기 구역 내 미등록 반출 감지 |
+| 책상 점유 감지 | `diningtable`, `chair` | 회의실·카페 내 장시간 점유 체류 경보 |
+| 분실물 탐지 | `bottle`, `cup`, `book` | 지정 구역 내 물건 장시간 정치 감지 |
+| 컴퓨터 보안 구역 | `computer` | 컴퓨터 주변 비인가 접근 감지 |
+| 스마트폰 반입 금지 구역 | `cellphone` | 보안 구역 내 휴대폰 소지 감지 |
+
+**시각적 표현 사양**
+
+- Bounding box: 각 클래스별 고유 색상 (위 표 참조), 실선 2px
+- 라벨: `className #objectId  confidence%` 형식
+- Detection 패널: 클래스별 색상 코드 표시
+- Zone 편집기: "실내/사무 객체" 그룹으로 분류하여 표시
 
 ---
 

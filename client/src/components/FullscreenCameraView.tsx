@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { useCamera } from '../hooks/useCamera';
+import { useI18n } from '../i18n';
 import CameraView from './CameraView';
 import type { Detection } from '../types';
 
@@ -21,26 +22,44 @@ const MASK_COLOR: Record<string, string> = {
 };
 
 function DetectionRow({ det }: { det: Detection }) {
-  const { objectId, className, confidence, dwellTime, isLoitering, bbox, face, mask, hat, color } = det;
+  const { objectId, className, confidence, dwellTime, isLoitering, bbox, face, mask, hat, color,
+          riskScore, revisitCount, velocity, circularScore } = det;
 
   const clsColor =
-    isLoitering              ? 'text-red-400'    :
-    className === 'person'   ? 'text-green-400'  :
-    className === 'bicycle'  ? 'text-yellow-400' :
-    className === 'car'      ? 'text-blue-400'   :
-    className === 'motorcycle' ? 'text-orange-400' :
-    className === 'bus'      ? 'text-purple-400' :
-    className === 'truck'    ? 'text-teal-400'   :
-    className === 'fire'     ? 'text-orange-500' :
-    className === 'smoke'    ? 'text-slate-400'  :
+    isLoitering                ? 'text-red-400'     :
+    className === 'person'     ? 'text-green-400'   :
+    className === 'bicycle'    ? 'text-yellow-400'  :
+    className === 'car'        ? 'text-blue-400'    :
+    className === 'motorcycle' ? 'text-orange-400'  :
+    className === 'bus'        ? 'text-purple-400'  :
+    className === 'truck'      ? 'text-teal-400'    :
+    className === 'fire'       ? 'text-orange-500'  :
+    className === 'smoke'      ? 'text-slate-400'   :
+    className === 'face'       ? 'text-blue-300'    :
     className === 'backpack' || className === 'handbag' || className === 'suitcase'
-                             ? 'text-amber-400'  : 'text-gray-400';
+                               ? 'text-amber-400'   :
+    // Indoor / office objects
+    className === 'chair'        ? 'text-violet-400'  :
+    className === 'couch'        ? 'text-violet-300'  :
+    className === 'dining table' ? 'text-emerald-400' :
+    className === 'bed'          ? 'text-indigo-400'  :
+    className === 'tv'           ? 'text-sky-400'     :
+    className === 'laptop'       ? 'text-cyan-400'    :
+    className === 'mouse'        ? 'text-amber-300'   :
+    className === 'keyboard'     ? 'text-pink-400'    :
+    className === 'cell phone'   ? 'text-red-300'     :
+    className === 'clock'        ? 'text-emerald-300' :
+    className === 'cup'          ? 'text-orange-300'  :
+    className === 'bottle'       ? 'text-lime-400'    :
+    className === 'book'         ? 'text-violet-200'  :
+    className === 'vase'         ? 'text-pink-300'    : 'text-gray-400';
 
   return (
     <div className={`px-3 py-2 border-b border-gray-700/60 ${
       isLoitering ? 'bg-red-900/20' :
       className === 'fire'  ? 'bg-orange-900/25' :
-      className === 'smoke' ? 'bg-slate-800/40'  : ''
+      className === 'smoke' ? 'bg-slate-800/40'  :
+      className === 'face'  ? 'bg-blue-900/15'   : ''
     }`}>
       {/* Header row */}
       <div className="flex items-center justify-between mb-1">
@@ -85,6 +104,36 @@ function DetectionRow({ det }: { det: Detection }) {
         <span>h <span className="text-gray-200">{bbox.height.toFixed(0)}</span></span>
       </div>
 
+      {/* Adaptive multi-feature metrics (zone-matched objects only) */}
+      {(riskScore != null || revisitCount != null) && (
+        <div className="mt-1 grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] font-mono">
+          {riskScore != null && (
+            <span className="text-gray-400">
+              risk{' '}
+              <span className={
+                riskScore >= 0.7 ? 'text-red-400 font-bold' :
+                riskScore >= 0.4 ? 'text-yellow-300' : 'text-gray-300'
+              }>
+                {(riskScore * 100).toFixed(0)}%
+              </span>
+            </span>
+          )}
+          {revisitCount != null && revisitCount > 0 && (
+            <span className="text-gray-400">
+              revisit <span className="text-orange-300">{revisitCount}×</span>
+            </span>
+          )}
+          {velocity != null && (
+            <span className="text-gray-400">
+              vel <span className={velocity < 20 ? 'text-red-300' : 'text-gray-300'}>{velocity.toFixed(0)}px/s</span>
+            </span>
+          )}
+          {circularScore != null && circularScore > 0.4 && (
+            <span className="text-orange-400 font-bold">↻ circular</span>
+          )}
+        </div>
+      )}
+
       {/* Color attributes */}
       {color && (
         <div className="mt-1 flex items-center gap-2 text-[10px] text-gray-400 font-mono">
@@ -110,6 +159,7 @@ function DetectionRow({ det }: { det: Detection }) {
 function DetectionPanel({ cameraId }: { cameraId: string }) {
   const { detections } = useCamera(cameraId);
   const listRef = useRef<HTMLDivElement>(null);
+  const { t } = useI18n();
 
   const sorted = [...detections].sort((a, b) => {
     if (a.isLoitering !== b.isLoitering) return a.isLoitering ? -1 : 1;
@@ -120,14 +170,12 @@ function DetectionPanel({ cameraId }: { cameraId: string }) {
     <div className="flex flex-col h-full">
       {/* Panel header */}
       <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700 flex-shrink-0">
-        <span className="text-xs font-bold text-gray-200 uppercase tracking-wide">Detections</span>
+        <span className="text-xs font-bold text-gray-200 uppercase tracking-wide">{t.detections}</span>
         <div className="flex items-center gap-2">
-          <span className="text-[10px] text-gray-400">
-            {detections.length} obj
-          </span>
+          <span className="text-[10px] text-gray-400">{t.objCount(detections.length)}</span>
           {detections.filter(d => d.isLoitering).length > 0 && (
             <span className="text-[10px] font-bold text-red-400">
-              {detections.filter(d => d.isLoitering).length} loiter
+              {t.loiterCount(detections.filter(d => d.isLoitering).length)}
             </span>
           )}
         </div>
@@ -143,7 +191,7 @@ function DetectionPanel({ cameraId }: { cameraId: string }) {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
                 d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
             </svg>
-            <span className="text-xs">No detections</span>
+            <span className="text-xs">{t.noDetections}</span>
           </div>
         ) : (
           sorted.map((det) => (
@@ -153,9 +201,13 @@ function DetectionPanel({ cameraId }: { cameraId: string }) {
       </div>
 
       {/* Legend */}
-      <div className="px-3 py-2 border-t border-gray-700 flex-shrink-0">
+      <div className="px-3 py-2 border-t border-gray-700 flex-shrink-0 space-y-1.5">
+        {/* People & vehicles */}
+        <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold">{t.legendPeopleVehicles}</div>
         <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
           <span className="text-green-400">■ person</span>
+          <span className="text-red-400">■ loitering</span>
+          <span className="text-blue-300">■ face</span>
           <span className="text-yellow-400">■ bicycle</span>
           <span className="text-blue-400">■ car</span>
           <span className="text-orange-400">■ motorcycle</span>
@@ -163,6 +215,36 @@ function DetectionPanel({ cameraId }: { cameraId: string }) {
           <span className="text-teal-400">■ truck</span>
           <span className="text-orange-500">■ fire</span>
           <span className="text-slate-400">■ smoke</span>
+          <span className="text-amber-400">■ {t.legendBaggage}</span>
+        </div>
+        <div className="text-[8px] text-gray-600 pl-2">backpack · umbrella · handbag · tie · suitcase</div>
+        {/* Indoor / office objects */}
+        <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendIndoor}</div>
+        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
+          <span className="text-violet-400">■ chair</span>
+          <span className="text-violet-300">■ couch</span>
+          <span className="text-emerald-400">■ dining table</span>
+          <span className="text-indigo-400">■ bed</span>
+          <span className="text-sky-400">■ tv</span>
+          <span className="text-cyan-400">■ laptop</span>
+          <span className="text-pink-400">■ keyboard</span>
+          <span className="text-amber-300">■ mouse</span>
+          <span className="text-red-300">■ cell phone</span>
+          <span className="text-emerald-300">■ clock</span>
+          <span className="text-orange-300">■ cup</span>
+          <span className="text-lime-400">■ bottle</span>
+          <span className="text-violet-200">■ book</span>
+          <span className="text-pink-300">■ vase</span>
+        </div>
+        {/* AI attribute badges */}
+        <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendAiBadges}</div>
+        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[8px]">
+          <span className="bg-green-700/70 text-green-100 rounded px-1">MASK OK</span>
+          <span className="bg-red-700/70 text-red-100 rounded px-1">NO MASK</span>
+          <span className="bg-blue-700/70 text-blue-100 rounded px-1">HELMET</span>
+          <span className="bg-gray-600/70 text-gray-200 rounded px-1">HAT</span>
+          <span className="text-blue-400">⬚ face bbox</span>
+          <span className="text-gray-400">↑↓ color</span>
         </div>
       </div>
     </div>

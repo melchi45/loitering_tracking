@@ -183,12 +183,28 @@ class PipelineManager {
 
         // 5. Attribute enrichment (face / PPE / color) — only when models are loaded
         let enrichedObjects = behaviorObjects;
+        let faceDetObjects  = [];
         if (this._attrPipeline && this._attrPipeline.anyReady) {
           try {
             const zones = this._zoneManager.getActiveZones(camera.id);
-            enrichedObjects = await this._attrPipeline.enrich(
-              jpegBuffer, frameWidth, frameHeight, behaviorObjects, zones
-            );
+            const { enrichedObjects: enriched, detectedFaces } =
+              await this._attrPipeline.enrich(
+                jpegBuffer, frameWidth, frameHeight, behaviorObjects, zones
+              );
+            enrichedObjects = enriched;
+
+            // Emit face detections as a separate object class so they appear
+            // in the Detection panel with their own bounding box (light-blue)
+            if (detectedFaces.length > 0) {
+              faceDetObjects = detectedFaces.map((f, i) => ({
+                objectId:    90000 + (currentFrameId % 1000) * 10 + i,
+                className:   'face',
+                confidence:  f.score,
+                bbox:        f.bbox,
+                isLoitering: false,
+                dwellTime:   0,
+              }));
+            }
           } catch (err) {
             console.error(`[PipelineManager][${camera.id}] Attribute pipeline error:`, err.message);
           }
@@ -240,12 +256,16 @@ class PipelineManager {
           }
         }
 
-        // 7. Emit combined detections (person/vehicle + fire/smoke)
+        // 7. Emit combined detections (person/vehicle + face + fire/smoke)
+        const _allDets = [...enrichedObjects, ...faceDetObjects, ...fireSmokeObjects];
+        if (currentFrameId % 50 === 1 || _allDets.length > 0 && currentFrameId % 10 === 1) {
+          console.log(`[PM][${camera.id.slice(0,8)}] fid=${currentFrameId} yolo=${detections.length} tracked=${trackedObjects.length} total=${_allDets.length}`);
+        }
         this._io.to(camera.id).emit('detections', {
           cameraId:    camera.id,
           frameId:     currentFrameId,
           timestamp,
-          detections:  [...enrichedObjects, ...fireSmokeObjects],
+          detections:  _allDets,
           frameWidth,
           frameHeight,
         });

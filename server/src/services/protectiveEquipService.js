@@ -44,7 +44,7 @@ const NUM_PPE_CLASSES = Object.keys(PPE_CLASSES).length;
 class ProtectiveEquipService {
   constructor(options = {}) {
     this.modelPath  = options.modelPath  || path.resolve(__dirname, '..', '..', 'models', 'yolov8m_ppe.onnx');
-    this.confThresh = options.confThresh ?? 0.4;
+    this.confThresh = options.confThresh ?? 0.30;
     this.nmsThresh  = options.nmsThresh  ?? 0.5;
     this._session   = null;
     this._ready     = false;

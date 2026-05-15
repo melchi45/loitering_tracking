@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCamera } from '../hooks/useCamera';
 import { useCameraStore } from '../stores/cameraStore';
+import { useI18n } from '../i18n';
 import ZoneEditor from './ZoneEditor';
 import type { Detection, Zone } from '../types';
 
@@ -87,24 +88,55 @@ function drawOverlay(
         case 'motorcycle': return 'rgba(249,115,22,0.9)';  // orange
         case 'bus':        return 'rgba(168,85,247,0.9)';  // purple
         case 'truck':      return 'rgba(20,184,166,0.9)';  // teal
-        case 'fire':       return 'rgba(255,80,0,1.0)';    // orange-red
-        case 'smoke':      return 'rgba(100,116,139,0.9)'; // slate gray
-        default:           return 'rgba(156,163,175,0.9)'; // gray
+        case 'fire':       return 'rgba(255,80,0,1.0)';     // orange-red
+        case 'smoke':      return 'rgba(100,116,139,0.9)';  // slate gray
+        case 'face':       return 'rgba(147,197,253,0.95)'; // light blue
+        case 'backpack':
+        case 'umbrella':
+        case 'handbag':
+        case 'tie':
+        case 'suitcase':     return 'rgba(245,158,11,0.9)';   // amber
+        // Indoor / office objects (COCO 80-class)
+        case 'chair':        return 'rgba(139,92,246,0.9)';   // violet
+        case 'couch':        return 'rgba(167,139,250,0.9)';  // violet-400
+        case 'dining table': return 'rgba(16,185,129,0.9)';   // emerald
+        case 'bed':          return 'rgba(99,102,241,0.9)';   // indigo
+        case 'tv':           return 'rgba(14,165,233,0.9)';   // sky
+        case 'laptop':       return 'rgba(6,182,212,0.9)';    // cyan
+        case 'mouse':        return 'rgba(251,191,36,0.9)';   // amber-300
+        case 'keyboard':     return 'rgba(236,72,153,0.9)';   // pink
+        case 'cell phone':   return 'rgba(248,113,113,0.9)';  // red-400
+        case 'clock':        return 'rgba(52,211,153,0.9)';   // emerald-400
+        case 'cup':          return 'rgba(251,146,60,0.9)';   // orange
+        case 'bottle':       return 'rgba(163,230,53,0.9)';   // lime
+        case 'book':         return 'rgba(196,181,253,0.9)';  // violet-300
+        case 'remote':       return 'rgba(209,213,219,0.9)';  // gray-300
+        case 'vase':         return 'rgba(244,114,182,0.9)';  // pink-400
+        default:             return 'rgba(156,163,175,0.9)';  // gray
       }
     })();
 
-    // Fire: semi-transparent orange fill; Smoke: semi-transparent gray fill
+    const isFace  = className === 'face';
+
+    // Fire/smoke: filled background; face: thin solid; others: standard
     if (isFire) {
       ctx.fillStyle = 'rgba(255,80,0,0.18)';
       ctx.fillRect(x, y, w, h);
     } else if (isSmoke) {
       ctx.fillStyle = 'rgba(100,116,139,0.15)';
       ctx.fillRect(x, y, w, h);
+    } else if (isFace) {
+      ctx.fillStyle = 'rgba(147,197,253,0.08)';
+      ctx.fillRect(x, y, w, h);
     }
 
     ctx.strokeStyle = color;
-    ctx.lineWidth   = isFire || isSmoke ? 3 : 2;
+    ctx.lineWidth   = isFire || isSmoke ? 3 : isFace ? 1.5 : 2;
+    if (isFace) {
+      ctx.setLineDash([4, 3]);
+    }
     ctx.strokeRect(x, y, w, h);
+    ctx.setLineDash([]);
 
     // Label: "person #3  94%" or "car #7  82%"
     const clsLabel = (className || 'obj').slice(0, 10);
@@ -166,15 +198,6 @@ function drawOverlay(
       ctx.fillText(txt, x + 3, y + h - 5);
     }
 
-    // ── Face inner bbox — dashed light-blue rect ─────────────────────────
-    if (det.face) {
-      const fb = det.face.bbox;
-      ctx.strokeStyle = 'rgba(147,197,253,0.9)';
-      ctx.lineWidth   = 1.5;
-      ctx.setLineDash([3, 2]);
-      ctx.strokeRect(ox + fb.x * sx, oy + fb.y * sy, fb.width * sx, fb.height * sy);
-      ctx.setLineDash([]);
-    }
   }
 }
 
@@ -185,6 +208,7 @@ export default function CameraView({ cameraId, cameraName }: Props) {
   const cameras   = useCameraStore((s) => s.cameras);
   const camera    = cameras.find((c) => c.id === cameraId);
   const status    = camera?.status ?? 'idle';
+  const { t }     = useI18n();
 
   const [zones,      setZones]      = useState<Zone[]>([]);
   const [editZones,  setEditZones]  = useState(false);
@@ -204,16 +228,12 @@ export default function CameraView({ cameraId, cameraName }: Props) {
   // Redraw overlay whenever detections, zones, or frame changes
   useEffect(() => {
     const canvas = canvasRef.current;
-    const img    = imgRef.current;
     if (!canvas || !frame) return;
-
-    const draw = () => drawOverlay(canvas, detections, zones, frameWidth, frameHeight);
-
-    if (img && (!img.complete || img.naturalWidth === 0)) {
-      img.addEventListener('load', draw, { once: true });
-      return () => img.removeEventListener('load', draw);
-    }
-    draw();
+    // Use rAF so layout is settled and clientWidth/Height are non-zero
+    const raf = requestAnimationFrame(() => {
+      drawOverlay(canvas, detections, zones, frameWidth, frameHeight);
+    });
+    return () => cancelAnimationFrame(raf);
   }, [detections, zones, frame, frameWidth, frameHeight]);
 
   const statusColor =
@@ -222,11 +242,11 @@ export default function CameraView({ cameraId, cameraName }: Props) {
     status === 'offline'                        ? 'bg-gray-500'  : 'bg-yellow-500';
 
   const statusLabel =
-    status === 'live' || status === 'streaming' ? 'LIVE'  :
-    status === 'connecting'                     ? 'CONN'  :
-    status === 'reconnecting'                   ? 'RETRY' :
-    status === 'error'                          ? 'ERR'   :
-    status === 'offline'                        ? 'OFF'   : 'IDLE';
+    status === 'live' || status === 'streaming' ? t.statusLive  :
+    status === 'connecting'                     ? t.statusConn  :
+    status === 'reconnecting'                   ? t.statusRetry :
+    status === 'error'                          ? t.statusErr   :
+    status === 'offline'                        ? t.statusOff   : t.statusIdle;
 
   return (
     <div className="relative w-full h-full bg-gray-900 overflow-hidden rounded-lg">
@@ -254,7 +274,7 @@ export default function CameraView({ cameraId, cameraName }: Props) {
               />
             </svg>
           </div>
-          <span className="text-xs text-gray-500">No signal</span>
+          <span className="text-xs text-gray-500">{t.noSignal}</span>
         </div>
       )}
 
@@ -285,9 +305,9 @@ export default function CameraView({ cameraId, cameraName }: Props) {
         <button
           onClick={() => setEditZones(true)}
           className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 rounded px-2 py-1 text-[10px] text-gray-300 hover:text-white transition-colors"
-          title="Zone 편집"
+          title={t.zoneEdit}
         >
-          {zones.length > 0 ? `Zone ${zones.length}` : '+ Zone'}
+          {zones.length > 0 ? `Zone ${zones.length}` : t.zoneAdd}
         </button>
       )}
 
@@ -295,10 +315,10 @@ export default function CameraView({ cameraId, cameraName }: Props) {
       {detections.length > 0 && !editZones && (
         <div className="absolute bottom-2 right-2 bg-black/60 rounded px-2 py-1">
           <span className="text-xs text-white">
-            {detections.length} obj
+            {t.objCount(detections.length)}
             {detections.filter(d => d.isLoitering).length > 0 && (
               <span className="text-red-400 ml-1">
-                ({detections.filter(d => d.isLoitering).length} loiter)
+                ({t.loiterCount(detections.filter(d => d.isLoitering).length)})
               </span>
             )}
           </span>

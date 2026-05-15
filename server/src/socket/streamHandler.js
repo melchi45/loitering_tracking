@@ -21,6 +21,7 @@ function registerStreamHandlers(io, socket, db) {
   socket.on('camera:subscribe', ({ cameraId } = {}) => {
     if (!cameraId) return;
     socket.join(cameraId);
+    console.log(`[Socket.IO] ${socket.id.slice(0,8)} subscribed to camera ${cameraId.slice(0,8)}`);
     socket.emit('camera:subscribed', { cameraId });
   });
 

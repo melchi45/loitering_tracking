@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useSocket } from './useSocket';
 import type { Detection } from '../types';
 
@@ -32,8 +32,6 @@ export function useCamera(cameraId: string) {
   const [frameHeight, setFrameHeight] = useState<number>(640);
   const [subscribed,  setSubscribed]  = useState(false);
 
-  const lastDetFrameId = useRef<number>(0);
-
   useEffect(() => {
     if (!cameraId) return;
 
@@ -41,7 +39,11 @@ export function useCamera(cameraId: string) {
     if (count === 0) socket.emit('camera:subscribe', { cameraId });
     subscriptionCounts.set(cameraId, count + 1);
     setSubscribed(true);
-    lastDetFrameId.current = 0;
+
+    // Re-subscribe after server restart / socket reconnect (rooms are cleared on server restart)
+    const handleReconnect = () => {
+      socket.emit('camera:subscribe', { cameraId });
+    };
 
     const handleFrame = (event: FrameEvent) => {
       if (event.cameraId !== cameraId) return;
@@ -52,17 +54,17 @@ export function useCamera(cameraId: string) {
 
     const handleDetections = (event: DetectionsEvent) => {
       if (event.cameraId !== cameraId) return;
-      if (event.frameId < lastDetFrameId.current) return;
-      lastDetFrameId.current = event.frameId;
       setDetections(event.detections);
       if (event.frameWidth)  setFrameWidth(event.frameWidth);
       if (event.frameHeight) setFrameHeight(event.frameHeight);
     };
 
+    socket.on('connect', handleReconnect);
     socket.on('frame', handleFrame);
     socket.on('detections', handleDetections);
 
     return () => {
+      socket.off('connect', handleReconnect);
       socket.off('frame', handleFrame);
       socket.off('detections', handleDetections);
       const current = subscriptionCounts.get(cameraId) ?? 0;
