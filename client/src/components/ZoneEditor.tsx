@@ -102,11 +102,12 @@ export default function ZoneEditor({
   const [aiCaps, setAiCaps] = useState<Record<string, boolean>>({
     human: true, vehicle: true, face: false, mask: false,
     color: false, cloth: false, hat: false, accessories: false,
+    fire: false, smoke: false,
   });
   useEffect(() => {
     fetch('/api/capabilities')
       .then(r => r.json())
-      .then(d => { if (d.ai) setAiCaps(d.ai); })
+      .then(d => { if (d.ai) setAiCaps(prev => ({ ...prev, ...d.ai })); })
       .catch(() => {});
   }, []);
 
@@ -735,10 +736,13 @@ export default function ZoneEditor({
 
                 {/* AI 감지 대상 선택 */}
                 <div>
-                  <label className="block text-[10px] text-gray-400 mb-1.5 font-semibold uppercase tracking-wide">
-                    AI 감지 대상
-                    <span className="ml-1 text-gray-600 normal-case font-normal">(미선택 시 전체)</span>
+                  <label className="block text-[10px] text-gray-400 mb-0.5 font-semibold uppercase tracking-wide">
+                    Loitering 감시 대상
                   </label>
+                  <p className="text-[9px] text-gray-600 mb-1.5">
+                    선택 시 해당 객체만 체류 시간 집계 · 경보 발생.<br/>
+                    미선택 = 전체. 속성 분석(얼굴·마스크·색상)은 모델 설치 시 자동 실행.
+                  </p>
                   <div className="grid grid-cols-2 gap-1">
                     {AI_ATTRIBUTE_DEFS.map((attr) => {
                       const available = aiCaps[attr.id] ?? false;

@@ -194,23 +194,21 @@ class PipelineManager {
           }
         }
 
-        // 6. Fire/smoke detection — full-frame, independent of person tracking
+        // 6. Fire/smoke detection — full-frame, runs whenever model is loaded.
+        //    Zone targetClasses (fire/smoke) control ALERTS only, not whether
+        //    detections are shown in the overlay.
         let fireSmokeObjects = [];
         if (this._fireSmokeService && this._fireSmokeService.ready) {
-          const zones = this._zoneManager.getActiveZones(camera.id);
-          const needFS = zones.some(z =>
-            z.targetClasses?.some(c => c === 'fire' || c === 'smoke')
-          );
-          if (needFS) {
-            try {
-              const raw = await this._fireSmokeService.detect(jpegBuffer, frameWidth, frameHeight);
-              fireSmokeObjects = raw.map((d, i) => ({
-                ...d,
-                objectId:    80000 + (currentFrameId % 1000) * 10 + i,
-                isLoitering: false,
-                dwellTime:   0,
-              }));
-              // Emit fire:alert for detections intersecting a MONITOR zone
+          try {
+            const raw = await this._fireSmokeService.detect(jpegBuffer, frameWidth, frameHeight);
+            fireSmokeObjects = raw.map((d, i) => ({
+              ...d,
+              objectId:    80000 + (currentFrameId % 1000) * 10 + i,
+              isLoitering: false,
+              dwellTime:   0,
+            }));
+            if (fireSmokeObjects.length > 0) {
+              const zones = this._zoneManager.getActiveZones(camera.id);
               for (const det of fireSmokeObjects) {
                 const center = {
                   x: det.bbox.x + det.bbox.width  / 2,
@@ -218,10 +216,10 @@ class PipelineManager {
                 };
                 for (const zone of zones) {
                   if (zone.type !== 'MONITOR') continue;
-                  if (!zone.targetClasses?.includes(det.className)) continue;
                   if (zone.polygon.length < 3) continue;
                   if (!_pointInPolygon(center, zone.polygon)) continue;
-                  // Cooldown: same camera+zone+class → at most once per 10 s
+                  // Alert only when zone explicitly targets this class, with cooldown
+                  if (!zone.targetClasses?.includes(det.className)) continue;
                   const key = `${camera.id}:${zone.name}:${det.className}`;
                   const last = this._fireAlertCooldown.get(key) || 0;
                   if (timestamp - last < 10000) continue;
@@ -233,12 +231,12 @@ class PipelineManager {
                     zone:       zone.name,
                     timestamp,
                   });
-                  console.warn(`[PipelineManager][${camera.id}] ${det.className.toUpperCase()} detected in zone "${zone.name}" (${(det.confidence * 100).toFixed(0)}%)`);
+                  console.warn(`[PipelineManager][${camera.id}] ${det.className.toUpperCase()} in zone "${zone.name}" (${(det.confidence * 100).toFixed(0)}%)`);
                 }
               }
-            } catch (err) {
-              console.error(`[PipelineManager][${camera.id}] FireSmoke error:`, err.message);
             }
+          } catch (err) {
+            console.error(`[PipelineManager][${camera.id}] FireSmoke error:`, err.message);
           }
         }
 

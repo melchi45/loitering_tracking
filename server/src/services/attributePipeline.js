@@ -55,15 +55,13 @@ class AttributePipeline {
   async enrich(jpegBuffer, origW, origH, trackedObjects, zones) {
     if (!this._loaded || !trackedObjects.length) return trackedObjects;
 
-    // Collect all targetClasses active across zones
-    const active = new Set();
-    for (const z of zones) {
-      for (const c of (z.targetClasses || [])) active.add(c);
-    }
-
-    const needFace  = this._face.ready  && [...active].some(c => FACE_TRIGGERS.has(c));
-    const needPPE   = this._ppe.ready   && [...active].some(c => PPE_TRIGGERS.has(c));
-    const needColor = this._color.ready && [...active].some(c => COLOR_TRIGGERS.has(c));
+    // Run attribute analysis whenever the model is ready — zone targetClasses control
+    // only loitering alerts (in behaviorEngine), not attribute enrichment.
+    // Exception: if ANY zone explicitly opts out by listing only non-person classes
+    // (e.g. ['vehicle']), still run face/PPE/color since other persons may be present.
+    const needFace  = this._face.ready;
+    const needPPE   = this._ppe.ready;
+    const needColor = this._color.ready;
 
     if (!needFace && !needPPE && !needColor) return trackedObjects;
 
