@@ -6,8 +6,7 @@ const { EventEmitter } = require('events');
 const JPEG_SOI = Buffer.from([0xff, 0xd8, 0xff]);
 const JPEG_EOI = Buffer.from([0xff, 0xd9]);
 
-const MAX_RETRIES       = 5;
-const BASE_RETRY_DELAY  = 1000; // ms
+const RETRY_DELAY = 1000; // ms — fixed 1-second retry interval, unlimited attempts
 
 /**
  * Captures JPEG frames from an RTSP stream using a direct ffmpeg child process.
@@ -41,6 +40,7 @@ class RTSPCapture extends EventEmitter {
     this._frameCount  = 0;
     this._retryCount  = 0;
     this._retryTimer  = null;
+    this._connected   = false;
   }
 
   /** Start capturing. Idempotent. */
@@ -48,6 +48,7 @@ class RTSPCapture extends EventEmitter {
     if (this._running) return;
     this._running    = true;
     this._retryCount = 0;
+    this._connected  = false;
     this._spawn();
   }
 
@@ -136,6 +137,10 @@ class RTSPCapture extends EventEmitter {
   }
 
   _onData(chunk) {
+    if (!this._connected) {
+      this._connected  = true;
+      this._retryCount = 0;   // reset counter on successful connection
+    }
     this._frameBuf = Buffer.concat([this._frameBuf, chunk]);
     this._extractFrames();
   }
@@ -179,21 +184,14 @@ class RTSPCapture extends EventEmitter {
 
   _scheduleRetry() {
     if (!this._running) return;
-    if (this._retryCount >= MAX_RETRIES) {
-      this._running = false;
-      this.emit('error', new Error(
-        `RTSPCapture(${this.cameraId}): max retries (${MAX_RETRIES}) exceeded`
-      ));
-      return;
-    }
-    const delay = BASE_RETRY_DELAY * Math.pow(2, this._retryCount);
     this._retryCount++;
-    this.emit('reconnecting', { cameraId: this.cameraId, attempt: this._retryCount, delay });
+    this._connected = false;
+    this.emit('reconnecting', { cameraId: this.cameraId, attempt: this._retryCount, delay: RETRY_DELAY });
     this._retryTimer = setTimeout(() => {
       this._retryTimer = null;
       this._frameBuf   = Buffer.alloc(0);
       this._spawn();
-    }, delay);
+    }, RETRY_DELAY);
   }
 }
 

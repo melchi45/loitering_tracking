@@ -189,22 +189,41 @@ class PipelineManager {
 
     capture.on('started', ({ cmdline }) => {
       console.log(`[PipelineManager][${camera.id}] FFmpeg started: ${cmdline}`);
-      this._updateCameraStatus(camera.id, 'streaming');
     });
+
+    capture.on('frame', (() => {
+      let firstFrame = true;
+      return () => {
+        if (firstFrame) {
+          firstFrame = false;
+          console.log(`[PipelineManager][${camera.id}] Stream connected — receiving frames`);
+          this._updateCameraStatus(camera.id, 'streaming');
+        }
+      };
+    })());
 
     capture.on('warn', ({ message }) => {
       console.warn(`[RTSPCapture][${camera.id}] ${message}`);
     });
 
     capture.on('reconnecting', ({ attempt, delay }) => {
-      console.warn(`[PipelineManager][${camera.id}] Reconnecting (attempt ${attempt}, delay ${delay}ms)`);
+      // Log every 10th attempt to avoid log flooding (retrying every 1 second)
+      if (attempt === 1 || attempt % 10 === 0) {
+        console.warn(`[PipelineManager][${camera.id}] Reconnecting... attempt ${attempt}`);
+      }
       this._updateCameraStatus(camera.id, 'reconnecting');
     });
 
     capture.on('error', (err) => {
       console.error(`[PipelineManager][${camera.id}] Fatal error:`, err.message);
-      this._updateCameraStatus(camera.id, 'error');
+      this._updateCameraStatus(camera.id, 'reconnecting');
       this._io.to(camera.id).emit('camera:error', { cameraId: camera.id, message: err.message });
+      // Restart the entire pipeline after 1 second (spawn-level failure recovery)
+      if (ctx.running) {
+        setTimeout(() => {
+          if (ctx.running) this.startCamera(camera).catch(() => {});
+        }, 1000);
+      }
     });
 
     capture.on('stats', ({ frameCount }) => {

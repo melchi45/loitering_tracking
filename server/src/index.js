@@ -114,21 +114,19 @@ async function main() {
   // Start background continuous discovery
   discoverySvc.start();
 
-  // ── Auto-restart cameras that were streaming before a potential crash ─────
+  // ── Auto-start all registered cameras on startup ─────────────────────────
   try {
-    const streamingCameras = db
-      .find('cameras', {})
-      .filter(c => c.status === 'streaming' || c.status === 'connecting');
-    if (streamingCameras.length > 0) {
-      console.log(`[Server] Restarting ${streamingCameras.length} previously-active pipeline(s)`);
-      for (const cam of streamingCameras) {
+    const allCameras = db.find('cameras', {});
+    if (allCameras.length > 0) {
+      console.log(`[Server] Starting ${allCameras.length} registered camera pipeline(s)`);
+      for (const cam of allCameras) {
         pipelineManager.startCamera(cam).catch((err) => {
-          console.error(`[Server] Auto-restart failed for camera ${cam.id}:`, err.message);
+          console.error(`[Server] Auto-start failed for camera ${cam.id}:`, err.message);
         });
       }
     }
   } catch (err) {
-    console.warn('[Server] Could not auto-restart cameras:', err.message);
+    console.warn('[Server] Could not auto-start cameras:', err.message);
   }
 
   // ── Start listening ───────────────────────────────────────────────────────
