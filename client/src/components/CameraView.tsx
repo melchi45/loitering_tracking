@@ -112,6 +112,56 @@ function drawOverlay(
       ctx.fillStyle = '#fff';
       ctx.fillText(dt, x + w - dw + 4, y + h + 11);
     }
+
+    // ── Attribute badges (mask / hat) — inside bbox, top-left ────────────
+    if (det.mask || det.hat) {
+      ctx.font = 'bold 9px monospace';
+      let bx = x + 2;
+      const by = y + 2;
+      if (det.mask) {
+        const txt = det.mask.status === 'mask_correct' ? 'MASK OK' :
+                    det.mask.status === 'no_mask'       ? 'NO MASK' : 'MASK?';
+        const bg  = det.mask.status === 'mask_correct' ? 'rgba(34,197,94,0.85)' :
+                    det.mask.status === 'no_mask'       ? 'rgba(239,68,68,0.85)' :
+                                                          'rgba(234,179,8,0.85)';
+        const bw  = ctx.measureText(txt).width + 6;
+        ctx.fillStyle = bg;
+        ctx.fillRect(bx, by, bw, 14);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(txt, bx + 3, by + 10);
+        bx += bw + 2;
+      }
+      if (det.hat) {
+        const txt = det.hat.isHelmet ? 'HELMET' : 'HAT';
+        const bg  = det.hat.isHelmet ? 'rgba(59,130,246,0.85)' : 'rgba(107,114,128,0.85)';
+        const bw  = ctx.measureText(txt).width + 6;
+        ctx.fillStyle = bg;
+        ctx.fillRect(bx, by, bw, 14);
+        ctx.fillStyle = '#fff';
+        ctx.fillText(txt, bx + 3, by + 10);
+      }
+    }
+
+    // ── Color info — inside bbox, bottom-left ────────────────────────────
+    if (det.color) {
+      const txt = `↑${det.color.upper} ↓${det.color.lower}`;
+      ctx.font = '9px monospace';
+      const tw2 = ctx.measureText(txt).width + 6;
+      ctx.fillStyle = 'rgba(0,0,0,0.72)';
+      ctx.fillRect(x, y + h - 15, tw2, 13);
+      ctx.fillStyle = '#d1d5db';
+      ctx.fillText(txt, x + 3, y + h - 5);
+    }
+
+    // ── Face inner bbox — dashed light-blue rect ─────────────────────────
+    if (det.face) {
+      const fb = det.face.bbox;
+      ctx.strokeStyle = 'rgba(147,197,253,0.9)';
+      ctx.lineWidth   = 1.5;
+      ctx.setLineDash([3, 2]);
+      ctx.strokeRect(ox + fb.x * sx, oy + fb.y * sy, fb.width * sx, fb.height * sy);
+      ctx.setLineDash([]);
+    }
   }
 }
 

@@ -416,14 +416,16 @@ Each camera zone can independently activate one or more AI analysis modules via 
 |:---:|---|---|---|:---:|---|
 | 1 | ☑ **Human** | `human` | [AI-01](RFP_AI_Human_Detection.md) | ✅ 구현 완료 | 사람 감지 — YOLOv8n COCO class 0 (person) |
 | 2 | ☑ **Vehicle** | `vehicle` | [AI-02](RFP_AI_Vehicle_Detection.md) | ✅ 구현 완료 | 차량 감지 — bicycle/car/motorcycle/bus/truck |
-| 3 | ☐ **Face** | `face` | [AI-03](RFP_AI_Face_Recognition.md) | 🔲 준비중 | 얼굴 인식 — RetinaFace/SCRFD + ArcFace Re-ID |
-| 4 | ☐ **Mask** | `mask` | [AI-04](RFP_AI_Mask_Detection.md) | 🔲 준비중 | 마스크 착용 감지 — EfficientNet-B0 2-class |
-| 5 | ☐ **Color** | `color` | [AI-05](RFP_AI_Color_Analysis.md) | 🔲 준비중 | 상/하의 색상 분석 — 11색 분류 |
-| 6 | ☐ **Cloth** | `cloth` | [AI-06](RFP_AI_Cloth_Analysis.md) | 🔲 준비중 | 의류 유형 분류 — 상의 8종 / 하의 6종 |
-| 7 | ☐ **Hat** | `hat` | [AI-07](RFP_AI_Hat_Detection.md) | 🔲 준비중 | 모자/헬멧 감지 — 8종 분류 + 안전모 컴플라이언스 |
-| 8 | ☐ **Accessories** | `accessories` | [AI-08](RFP_AI_Accessories_Detection.md) | 🔲 준비중 | 가방/안경/우산 등 소품 감지 |
+| 3 | ☑ **Face** | `face` | [AI-03](RFP_AI_Face_Recognition.md) | ✅ 구현 완료 | 얼굴 감지 — SCRFD-2.5G (3.2MB) + ArcFace ResNet50 Re-ID (249MB) |
+| 4 | ☑ **Mask** | `mask` | [AI-04](RFP_AI_Mask_Detection.md) | ✅ 구현 완료 | 마스크 착용 감지 — YOLOv8m PPE (99MB), mask/no_mask 2-class |
+| 5 | ☑ **Color** | `color` | [AI-05](RFP_AI_Color_Analysis.md) | ✅ 구현 완료 | 상/하의 색상 분석 — Phase-1 픽셀 평균, 11색 분류 (모델 불필요) |
+| 6 | ☐ **Cloth** | `cloth` | [AI-06](RFP_AI_Cloth_Analysis.md) | 🔲 준비중 | 의류 유형 분류 — OpenPAR (openpar.onnx 미설치) |
+| 7 | ☑ **Hat** | `hat` | [AI-07](RFP_AI_Hat_Detection.md) | ✅ 구현 완료 | 헬멧/모자 감지 — YOLOv8m PPE (99MB), hardhat/no_hardhat 분류 |
+| 8 | ☑ **Accessories** | `accessories` | [AI-08](RFP_AI_Accessories_Detection.md) | ✅ 구현 완료 | 소품 감지 — YOLOv8n COCO (backpack/umbrella/handbag/tie/suitcase) |
 
-> **구현 완료** 모듈은 Zone 편집 시 체크박스가 활성화됩니다. **준비중** 모듈은 체크박스가 회색으로 표시되며 해당 ONNX 모델 파일이 배치되면 활성화됩니다.
+> **구현 완료** 모듈은 Zone 편집 시 체크박스가 활성화됩니다. **준비중** 모듈은 체크박스가 회색으로 표시되며 해당 ONNX 모델 파일이 `server/models/`에 배치되면 자동 활성화됩니다.
+>
+> 체크박스 가용성은 서버 `/api/capabilities` 엔드포인트에서 실시간으로 조회됩니다.
 
 ### 7.2 Zone Editor UI — AI 감지 대상 체크박스
 
@@ -433,16 +435,17 @@ Zone 편집 화면 하단의 **"AI 감지 대상"** 섹션에서 해당 Zone에 
 ┌─────────────────────────────────┐
 │ AI 감지 대상  (미선택 시 전체)   │
 ├────────────────┬────────────────┤
-│ ☑ 사람         │ ☑ 차량         │  ← 활성 (구현 완료)
-│ ☐ 얼굴  준비중 │ ☐ 마스크 준비중 │
-│ ☐ 색상  준비중 │ ☐ 의류   준비중 │
-│ ☐ 모자  준비중 │ ☐ 소품   준비중 │  ← 비활성 (준비중)
+│ ☑ 사람         │ ☑ 차량         │
+│ ☑ 얼굴         │ ☑ 마스크        │
+│ ☑ 색상         │ ☐ 의류   준비중 │
+│ ☑ 모자         │ ☑ 소품          │  ← 모두 활성 (의류만 준비중)
 └────────────────┴────────────────┘
 ```
 
 - **체크 선택**: 파란색 배경 + 체크 아이콘, 즉시 API 저장 (PUT `/api/cameras/:id/zones/:zoneId`)
 - **미선택 시**: `targetClasses: []` → 모든 활성 클래스 감지 (기본 동작)
 - **준비중 항목**: 비활성(회색), "준비중" 뱃지 표시, 클릭 불가
+- **가용성 동적 조회**: Zone Editor 열릴 때 `/api/capabilities` 호출 → 모델 파일 존재 여부 반영
 
 ### 7.3 `targetClasses` 동작 규칙
 

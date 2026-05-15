@@ -62,6 +62,24 @@ async function main() {
   app.use('/api/events', eRouter);
   app.use('/api/alerts', aRouter);
 
+  // AI module capabilities — returns which attribute models are available on disk
+  app.get('/api/capabilities', (req, res) => {
+    const modelsDir = path.resolve(__dirname, '..', 'models');
+    const has = (f) => require('fs').existsSync(path.join(modelsDir, f));
+    res.json({
+      ai: {
+        human:       true,                   // YOLOv8n COCO always available
+        vehicle:     true,                   // YOLOv8n COCO always available
+        face:        has('scrfd_2.5g.onnx'),
+        mask:        has('yolov8m_ppe.onnx'),
+        hat:         has('yolov8m_ppe.onnx'),
+        color:       true,                   // Phase-1 pixel averaging — no model needed
+        cloth:       has('openpar.onnx'),
+        accessories: has('yolov8n.onnx'),    // COCO accessory classes from primary detector
+      },
+    });
+  });
+
   // Health check
   app.get('/health', (req, res) => {
     res.json({

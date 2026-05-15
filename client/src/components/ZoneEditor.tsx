@@ -20,16 +20,16 @@ const ZONE_COLORS: Record<string, { stroke: string; fill: string; selFill: strin
   EXCLUDE: { stroke: '#f59e0b', fill: 'rgba(245,158,11,0.15)', selFill: 'rgba(245,158,11,0.32)' },
 };
 
-interface AiAttr { id: string; label: string; labelKo: string; available: boolean; }
-const AI_ATTRIBUTES: AiAttr[] = [
-  { id: 'human',       label: 'Human',       labelKo: '사람',   available: true  },
-  { id: 'vehicle',     label: 'Vehicle',      labelKo: '차량',   available: true  },
-  { id: 'face',        label: 'Face',         labelKo: '얼굴',   available: false },
-  { id: 'mask',        label: 'Mask',         labelKo: '마스크', available: false },
-  { id: 'color',       label: 'Color',        labelKo: '색상',   available: false },
-  { id: 'cloth',       label: 'Cloth',        labelKo: '의류',   available: false },
-  { id: 'hat',         label: 'Hat',          labelKo: '모자',   available: false },
-  { id: 'accessories', label: 'Accessories',  labelKo: '소품',   available: false },
+interface AiAttr { id: string; label: string; labelKo: string; }
+const AI_ATTRIBUTE_DEFS: AiAttr[] = [
+  { id: 'human',       label: 'Human',       labelKo: '사람'   },
+  { id: 'vehicle',     label: 'Vehicle',      labelKo: '차량'   },
+  { id: 'face',        label: 'Face',         labelKo: '얼굴'   },
+  { id: 'mask',        label: 'Mask',         labelKo: '마스크' },
+  { id: 'color',       label: 'Color',        labelKo: '색상'   },
+  { id: 'cloth',       label: 'Cloth',        labelKo: '의류'   },
+  { id: 'hat',         label: 'Hat',          labelKo: '모자'   },
+  { id: 'accessories', label: 'Accessories',  labelKo: '소품'   },
 ];
 
 const VERTEX_R   = 6;
@@ -95,6 +95,18 @@ export default function ZoneEditor({
 
   const [saving, setSaving] = useState(false);
   const [error,  setError]  = useState('');
+
+  // AI module availability — loaded from server /api/capabilities on mount
+  const [aiCaps, setAiCaps] = useState<Record<string, boolean>>({
+    human: true, vehicle: true, face: false, mask: false,
+    color: false, cloth: false, hat: false, accessories: false,
+  });
+  useEffect(() => {
+    fetch('/api/capabilities')
+      .then(r => r.json())
+      .then(d => { if (d.ai) setAiCaps(d.ai); })
+      .catch(() => {});
+  }, []);
 
   // ── Refs — always current, read from event handlers ──────────────────────
   const selIdRef        = useRef<string | null>(null);
@@ -726,16 +738,17 @@ export default function ZoneEditor({
                     <span className="ml-1 text-gray-600 normal-case font-normal">(미선택 시 전체)</span>
                   </label>
                   <div className="grid grid-cols-2 gap-1">
-                    {AI_ATTRIBUTES.map((attr) => {
-                      const checked = targetClasses.includes(attr.id);
+                    {AI_ATTRIBUTE_DEFS.map((attr) => {
+                      const available = aiCaps[attr.id] ?? false;
+                      const checked   = targetClasses.includes(attr.id);
                       return (
                         <button
                           key={attr.id}
-                          onClick={() => attr.available && handleTargetClassToggle(attr.id)}
-                          disabled={!attr.available}
-                          title={attr.available ? '' : '추후 지원 예정 모델'}
+                          onClick={() => available && handleTargetClassToggle(attr.id)}
+                          disabled={!available}
+                          title={available ? '' : '모델 미설치 (서버/models/ 디렉토리 확인)'}
                           className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] text-left transition-colors ${
-                            !attr.available
+                            !available
                               ? 'opacity-35 cursor-not-allowed bg-gray-800 text-gray-500'
                               : checked
                               ? 'bg-blue-700/70 text-white border border-blue-500'
@@ -748,7 +761,7 @@ export default function ZoneEditor({
                             {checked && <span className="text-white text-[8px] leading-none">✓</span>}
                           </span>
                           <span className="truncate">{attr.labelKo}</span>
-                          {!attr.available && <span className="ml-auto text-[8px] text-gray-600">준비중</span>}
+                          {!available && <span className="ml-auto text-[8px] text-gray-600">준비중</span>}
                         </button>
                       );
                     })}
