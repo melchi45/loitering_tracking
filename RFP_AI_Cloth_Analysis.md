@@ -8,7 +8,7 @@
 | **Issue Date** | May 15, 2026 |
 | **Proposal Deadline** | June 30, 2026 |
 | **Zone Target Key** | `cloth` |
-| **Status** | Planned (not yet implemented) |
+| **Status** | **Phase-1 구현 완료 (색상 공유) / Phase-2 PAR 준비중** |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -404,6 +404,33 @@ For sites requiring uniform compliance monitoring:
     }
   ]
 }
+```
+
+### Appendix E: Open Source Model Research (2026-05)
+
+#### PAR Framework (Phase-2)
+
+| Source | URL | Notes |
+|---|---|---|
+| Event-AHU/OpenPAR (GH) | https://github.com/Event-AHU/OpenPAR | **Selected** — 40+ 속성 포함 (의류유형+색상+모자+가방) |
+| valencebond/Rethinking_of_PAR (GH) | https://github.com/valencebond/Rethinking_of_PAR | PA100K multi-label |
+| UPAR Dataset (GH) | https://github.com/speckean/upar_dataset | 4개 데이터셋 통합 40속성 |
+| EventPAR | https://arxiv.org/abs/2408.09720 | RGB+Event 100K 샘플 |
+
+#### Implementation Notes
+
+```
+서비스 파일: server/src/services/colorClothService.js
+Phase-1:    colorClothService._colorReady = true (즉시 동작)
+            → 상체/하체 RGB 평균으로 color.upper, color.lower 제공
+Phase-2:    server/models/openpar.onnx 필요
+            → Input: [1, 3, 256, 128] person crop
+            → Output: multi-label cloth type + color attributes
+            → colorClothService._runPAR() 구현 예정
+
+Zone targetClasses에 'cloth' 포함 시 자동 활성화
+출력: detection.cloth.upper (예: 'T-shirt') / detection.cloth.lower (예: 'jeans')
+     Phase-1에서는 null (PAR 모델 필요)
 ```
 
 ### Appendix D: Related RFP Documents

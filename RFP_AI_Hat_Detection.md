@@ -8,7 +8,7 @@
 | **Issue Date** | May 15, 2026 |
 | **Proposal Deadline** | June 30, 2026 |
 | **Zone Target Key** | `hat` |
-| **Status** | Planned (not yet implemented) |
+| **Status** | **Implementation in Progress** |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -430,6 +430,30 @@ server/models/
 | [RFP_AI_Face_Recognition.md](RFP_AI_Face_Recognition.md) | Face detection (shares head ROI) |
 | [RFP_AI_Color_Analysis.md](RFP_AI_Color_Analysis.md) | Color analysis (hat color) |
 | [RFP_LTS2026_Loitering_Tracking_System.md](RFP_LTS2026_Loitering_Tracking_System.md) | Parent system RFP |
+
+### Appendix E: Open Source Model Research (2026-05)
+
+#### Helmet/Hat Detection Models
+
+| Source | URL | Size | Notes |
+|---|---|---|---|
+| keremberke/yolov8m-protective-equipment-detection (HF) | https://huggingface.co/keremberke/yolov8m-protective-equipment-detection | ~50 MB | **Selected** — AI-04(Mask)와 동일 모델 공유 |
+| sharathhhhh/safetyHelmet-detection-yolov8 (HF) | https://huggingface.co/sharathhhhh/safetyHelmet-detection-yolov8 | — | helmet/no-helmet 전용 |
+| jomarkow/Safety-Helmet-Detection (GH) | https://github.com/jomarkow/Safety-Helmet-Detection | — | 공사현장 특화 |
+
+#### Implementation Notes
+
+```
+서비스 파일: server/src/services/protectiveEquipService.js (AI-04와 공유)
+모델 경로:   server/models/yolov8m_ppe.onnx
+
+PPE 모델 클래스 매핑:
+  0: hardhat    → hat.isHelmet = true
+  2: no_hardhat → hat.isHelmet = false (helmets required alert)
+  
+Zone targetClasses에 'hat' 또는 'helmet' 포함 시 자동 활성화
+출력: detection.hat.className / detection.hat.isHelmet / detection.hat.confidence
+```
 
 ---
 

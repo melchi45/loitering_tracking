@@ -7,8 +7,17 @@ const FPS = 10;
 
 // Maps zone targetClass keys to detection className values
 const TARGET_CLASS_MAP = {
-  human:   ['person'],
-  vehicle: ['bicycle', 'car', 'motorcycle', 'bus', 'truck'],
+  human:       ['person'],
+  vehicle:     ['bicycle', 'car', 'motorcycle', 'bus', 'truck'],
+  // Accessories: always detected by yolov8n.onnx (COCO classes 24-28)
+  accessories: ['backpack', 'umbrella', 'handbag', 'tie', 'suitcase'],
+  // Attribute-based: require additional ONNX models (see attributePipeline.js)
+  face:        ['person'],  // triggers faceService face detection sub-pipeline
+  mask:        ['person'],  // triggers protectiveEquipService mask classification
+  hat:         ['person'],  // triggers protectiveEquipService helmet/hat classification
+  helmet:      ['person'],  // alias for hat/hardhat
+  color:       ['person'],  // triggers colorClothService upper/lower color analysis
+  cloth:       ['person'],  // triggers colorClothService clothing type (PAR model)
 };
 
 function classMatchesZone(className, targetClasses) {

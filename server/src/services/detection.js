@@ -7,14 +7,19 @@ const path = require('path');
 const INPUT_SIZE = 640;
 const NUM_CLASSES = 80;
 
-// COCO classes enabled for detection (person + vehicles)
+// COCO classes enabled for detection (person + vehicles + accessories)
 const ENABLED_CLASSES = {
-  0: 'person',
-  1: 'bicycle',
-  2: 'car',
-  3: 'motorcycle',
-  5: 'bus',
-  7: 'truck',
+  0:  'person',
+  1:  'bicycle',
+  2:  'car',
+  3:  'motorcycle',
+  5:  'bus',
+  7:  'truck',
+  24: 'backpack',
+  25: 'umbrella',
+  26: 'handbag',
+  27: 'tie',
+  28: 'suitcase',
 };
 
 /**

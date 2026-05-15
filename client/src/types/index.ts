@@ -14,14 +14,52 @@ export interface BBox {
   height: number;
 }
 
-export interface Detection {
-  objectId: number;
+export interface FaceAttribute {
+  bbox:       BBox;
+  score:      number;
+  faceId?:    string;
+  identity?:  string;
+  matchScore?: number;
+}
+
+export interface MaskAttribute {
+  status:     'mask_correct' | 'mask_incorrect' | 'no_mask';
   confidence: number;
-  bbox: BBox;
-  class: string;
-  className: string;
+}
+
+export interface HatAttribute {
+  className:  string;
+  confidence: number;
+  isHelmet:   boolean;
+}
+
+export interface ColorAttribute {
+  upper:    string;
+  lower:    string;
+  upperRgb?: [number, number, number];
+  lowerRgb?: [number, number, number];
+}
+
+export interface ClothAttribute {
+  upper?: string;
+  lower?: string;
+}
+
+export interface Detection {
+  objectId:    number;
+  confidence:  number;
+  bbox:        BBox;
+  class:       string;
+  className:   string;
   isLoitering: boolean;
-  dwellTime: number;
+  dwellTime:   number;
+  // Attribute enrichment (optional — only present when relevant model is loaded
+  // and the camera zone has matching targetClasses)
+  face?:  FaceAttribute;
+  mask?:  MaskAttribute;
+  hat?:   HatAttribute;
+  color?: ColorAttribute;
+  cloth?: ClothAttribute;
 }
 
 export interface DetectionFrame {

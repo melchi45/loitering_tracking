@@ -8,7 +8,7 @@
 | **Issue Date** | May 15, 2026 |
 | **Proposal Deadline** | June 30, 2026 |
 | **Zone Target Key** | `color` |
-| **Status** | Planned (not yet implemented) |
+| **Status** | **Phase-1 구현 완료 (RGB 색상 추출) / Phase-2 PAR 준비중** |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -401,6 +401,44 @@ server/models/
 | Any | < 0.15 | ≥ 0.75 | white |
 | Any | < 0.25 | 0.25–0.75 | gray |
 | 16–45 | ≥ 0.3 | 0.3–0.6 | brown |
+
+### Appendix E: Open Source Model Research (2026-05)
+
+#### Phase-1: RGB 색상 추출 (즉시 사용 가능, 모델 불필요)
+
+```
+구현: colorClothService.js — avgColor() + rgbToColorName()
+방법: sharp로 상체/하체 ROI를 8×8로 축소 → RGB 평균 → 11색 분류
+정확도: 단순 heuristic (90%+ 일반 의류)
+지연:   < 2ms per person
+```
+
+11색 분류표: `black, white, gray, red, orange, yellow, green, cyan, blue, purple, brown`
+
+#### Phase-2: PAR 모델 (ML 기반 다중 속성)
+
+| Source | URL | Notes |
+|---|---|---|
+| Event-AHU/OpenPAR (GH) | https://github.com/Event-AHU/OpenPAR | **Selected** — 40+ 속성 (색상+의류+모자+가방) |
+| valencebond/Rethinking_of_PAR (GH) | https://github.com/valencebond/Rethinking_of_PAR | PA100K baseline |
+| UPAR Dataset (GH) | https://github.com/speckean/upar_dataset | PA100K+PETA+RAP2 통합 40속성 |
+
+#### Implementation Notes
+
+```
+서비스 파일: server/src/services/colorClothService.js
+Phase-1:    즉시 동작 (모델 불필요)
+Phase-2:    server/models/openpar.onnx 필요 (PyTorch → ONNX 변환 필요)
+
+PyTorch → ONNX 변환:
+  git clone https://github.com/Event-AHU/OpenPAR
+  # 학습 후:
+  torch.onnx.export(model, dummy_input_256x128, "openpar.onnx",
+      input_names=["input"], output_names=["output"], opset_version=11)
+
+Zone targetClasses에 'color' 또는 'cloth' 포함 시 자동 활성화
+출력: detection.color.upper / detection.color.lower (색상명)
+```
 
 ### Appendix D: Related RFP Documents
 

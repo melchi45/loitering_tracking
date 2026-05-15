@@ -8,7 +8,7 @@
 | **Issue Date** | May 15, 2026 |
 | **Proposal Deadline** | June 30, 2026 |
 | **Zone Target Key** | `mask` |
-| **Status** | Planned (not yet implemented) |
+| **Status** | **Implementation in Progress** |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -368,6 +368,47 @@ server/models/
 | `"mandatory"` | Only `mask_correct` is compliant |
 | `"recommended"` | `mask_correct` or `mask_incorrect` are compliant |
 | `"none"` | Monitoring only, no alerts |
+
+### Appendix E: Open Source Model Research (2026-05)
+
+#### Mask Detection Models
+
+| Source | URL | Size | Format | Notes |
+|---|---|---|---|---|
+| keremberke/yolov8m-protective-equipment-detection (HF) | https://huggingface.co/keremberke/yolov8m-protective-equipment-detection | ~50 MB | .pt → ONNX | **Selected** — Mask + Hardhat + Safety Vest 동시 감지 |
+| ZainebBaber/Real-Time-Face-Mask-Detection (GH) | https://github.com/ZainebBaber/Real-Time-Face-Mask-Detection | — | YOLOv8 + ONNX | FastAPI + WebSocket 지원 |
+| mendez-luisjose/Face-Mask-Detection-with-YOLOv8 (GH) | https://github.com/mendez-luisjose/Face-Mask-Detection-with-YOLOv8-OpenCV-and-Streamlit | — | YOLOv8 .pt | 2,600장 학습 데이터 |
+
+#### PPE Model Classes (keremberke)
+
+```
+0: Hardhat       1: Mask         2: NO-Hardhat
+3: NO-Mask       4: NO-Safety-Vest  5: Person
+6: Safety-Cone   7: Safety-Vest  8: machinery  9: vehicle
+→ AI-04 Mask: class 1(Mask) + class 3(NO-Mask)
+→ AI-07 Hat:  class 0(Hardhat) + class 2(NO-Hardhat)
+```
+
+#### Implementation Notes
+
+```
+서비스 파일: server/src/services/protectiveEquipService.js
+모델 경로:   server/models/yolov8m_ppe.onnx
+내보내기:    node server/src/scripts/downloadModels.js (Python export 지침 포함)
+
+Python 내보내기 명령:
+  from ultralytics import YOLO
+  from huggingface_hub import hf_hub_download
+  pt = hf_hub_download("keremberke/yolov8m-protective-equipment-detection", "best.pt")
+  YOLO(pt).export(format="onnx", imgsz=640, simplify=True)
+
+구현 내용:
+  - YOLOv8 [1, 14, 8400] 출력 파싱 (4 bbox + 10 class)
+  - Head ROI 추출로 person bbox 내 마스크/헬멧 매핑
+  - Zone targetClasses에 'mask' 또는 'hat' 포함 시 자동 활성화
+  - mask.status: 'mask_correct' | 'no_mask'
+  - hat.isHelmet: true (hardhat) | false (no_hardhat)
+```
 
 ### Appendix D: Related RFP Documents
 

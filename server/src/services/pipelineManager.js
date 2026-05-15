@@ -26,12 +26,13 @@ function getJpegSize(buf) {
   }
   return null;
 }
-const RTSPCapture     = require('./rtspCapture');
+const RTSPCapture      = require('./rtspCapture');
 const DetectionService = require('./detection');
-const { ByteTracker } = require('./tracking');
-const BehaviorEngine  = require('./behaviorEngine');
-const ZoneManager     = require('./zoneManager');
-const AlertService    = require('./alertService');
+const { ByteTracker }  = require('./tracking');
+const BehaviorEngine   = require('./behaviorEngine');
+const ZoneManager      = require('./zoneManager');
+const AlertService     = require('./alertService');
+const AttributePipeline = require('./attributePipeline');
 
 /**
  * Orchestrates the full camera processing pipeline:
@@ -43,12 +44,13 @@ class PipelineManager {
    * @param {import('better-sqlite3').Database} db
    */
   constructor(io, db) {
-    this._io          = io;
-    this._db          = db;
-    this._pipelines   = new Map(); // cameraId → PipelineContext
-    this._zoneManager = new ZoneManager(db);
-    this._alertService = new AlertService(db);
-    this._detector    = null;  // Shared single model instance
+    this._io             = io;
+    this._db             = db;
+    this._pipelines      = new Map(); // cameraId → PipelineContext
+    this._zoneManager    = new ZoneManager(db);
+    this._alertService   = new AlertService(db);
+    this._detector       = null;  // Shared YOLOv8n instance
+    this._attrPipeline   = null;  // Shared attribute pipeline
 
     // Single listener — broadcast saved alerts to all connected clients
     this._alertService.on('alert', (alert) => {
@@ -72,6 +74,14 @@ class PipelineManager {
       await this._detector.load().catch((err) => {
         console.warn('[PipelineManager] ONNX model not loaded — detection disabled:', err.message);
         this._detector = null;
+      });
+    }
+
+    // Lazy-load attribute pipeline (face / PPE / color)
+    if (!this._attrPipeline) {
+      this._attrPipeline = new AttributePipeline();
+      await this._attrPipeline.load().catch((err) => {
+        console.warn('[PipelineManager] AttributePipeline load warn:', err.message);
       });
     }
 
@@ -148,9 +158,22 @@ class PipelineManager {
         const trackedObjects = tracker.update(detections);
 
         // 4. Run behavior analysis
-        const enrichedObjects = behavior.update(camera.id, trackedObjects, timestamp);
+        const behaviorObjects = behavior.update(camera.id, trackedObjects, timestamp);
 
-        // 5. Emit detections + tracking results (include frame dimensions for UI scaling)
+        // 5. Attribute enrichment (face / PPE / color) — only when models are loaded
+        let enrichedObjects = behaviorObjects;
+        if (this._attrPipeline && this._attrPipeline.anyReady) {
+          try {
+            const zones = this._zoneManager.getActiveZones(camera.id);
+            enrichedObjects = await this._attrPipeline.enrich(
+              jpegBuffer, frameWidth, frameHeight, behaviorObjects, zones
+            );
+          } catch (err) {
+            console.error(`[PipelineManager][${camera.id}] Attribute pipeline error:`, err.message);
+          }
+        }
+
+        // 6. Emit detections + tracking results (include frame dimensions for UI scaling)
         this._io.to(camera.id).emit('detections', {
           cameraId:    camera.id,
           frameId:     currentFrameId,

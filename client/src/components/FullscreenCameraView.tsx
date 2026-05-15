@@ -9,41 +9,84 @@ interface Props {
   onClose: () => void;
 }
 
+const MASK_LABEL: Record<string, string> = {
+  mask_correct:   'MASK OK',
+  mask_incorrect: 'MASK BAD',
+  no_mask:        'NO MASK',
+};
+const MASK_COLOR: Record<string, string> = {
+  mask_correct:   'bg-green-700 text-green-100',
+  mask_incorrect: 'bg-yellow-700 text-yellow-100',
+  no_mask:        'bg-red-700 text-red-100',
+};
+
 function DetectionRow({ det }: { det: Detection }) {
-  const { objectId, className, confidence, dwellTime, isLoitering, bbox } = det;
+  const { objectId, className, confidence, dwellTime, isLoitering, bbox, face, mask, hat, color } = det;
 
   const clsColor =
-    isLoitering         ? 'text-red-400'    :
-    className === 'person'     ? 'text-green-400'  :
-    className === 'bicycle'    ? 'text-yellow-400' :
-    className === 'car'        ? 'text-blue-400'   :
+    isLoitering              ? 'text-red-400'    :
+    className === 'person'   ? 'text-green-400'  :
+    className === 'bicycle'  ? 'text-yellow-400' :
+    className === 'car'      ? 'text-blue-400'   :
     className === 'motorcycle' ? 'text-orange-400' :
-    className === 'bus'        ? 'text-purple-400' :
-    className === 'truck'      ? 'text-teal-400'   : 'text-gray-400';
+    className === 'bus'      ? 'text-purple-400' :
+    className === 'truck'    ? 'text-teal-400'   :
+    className === 'backpack' || className === 'handbag' || className === 'suitcase'
+                             ? 'text-amber-400'  : 'text-gray-400';
 
   return (
     <div className={`px-3 py-2 border-b border-gray-700/60 ${isLoitering ? 'bg-red-900/20' : ''}`}>
+      {/* Header row */}
       <div className="flex items-center justify-between mb-1">
         <span className={`text-xs font-bold uppercase ${clsColor}`}>{className || 'obj'}</span>
-        <div className="flex items-center gap-1.5">
+        <div className="flex items-center gap-1 flex-wrap justify-end">
           {isLoitering && (
             <span className="text-[9px] font-bold bg-red-600 text-white rounded px-1 py-0.5 uppercase">
               LOITER
             </span>
           )}
-          <span className="text-[10px] text-gray-400 font-mono">
-            #{String(objectId).slice(0, 8)}
-          </span>
+          {mask && (
+            <span className={`text-[9px] font-bold rounded px-1 py-0.5 uppercase ${MASK_COLOR[mask.status] ?? 'bg-gray-600 text-white'}`}>
+              {MASK_LABEL[mask.status] ?? mask.status}
+            </span>
+          )}
+          {hat && (
+            <span className={`text-[9px] font-bold rounded px-1 py-0.5 uppercase ${hat.isHelmet ? 'bg-blue-700 text-blue-100' : 'bg-gray-600 text-gray-200'}`}>
+              {hat.isHelmet ? 'HELMET' : 'HAT'}
+            </span>
+          )}
+          <span className="text-[10px] text-gray-400 font-mono">#{String(objectId).slice(0, 8)}</span>
         </div>
       </div>
+
+      {/* Core metrics */}
       <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-gray-400 font-mono">
-        <span>conf <span className="text-gray-200">{(confidence * 100).toFixed(0)}%</span></span>
+        <span>conf  <span className="text-gray-200">{(confidence * 100).toFixed(0)}%</span></span>
         <span>dwell <span className={dwellTime > 5 ? 'text-yellow-300' : 'text-gray-200'}>{dwellTime.toFixed(1)}s</span></span>
         <span>x <span className="text-gray-200">{bbox.x.toFixed(0)}</span></span>
         <span>y <span className="text-gray-200">{bbox.y.toFixed(0)}</span></span>
         <span>w <span className="text-gray-200">{bbox.width.toFixed(0)}</span></span>
         <span>h <span className="text-gray-200">{bbox.height.toFixed(0)}</span></span>
       </div>
+
+      {/* Color attributes */}
+      {color && (
+        <div className="mt-1 flex items-center gap-2 text-[10px] text-gray-400 font-mono">
+          <span>upper</span>
+          <span className="text-gray-200 font-semibold">{color.upper}</span>
+          <span className="text-gray-600">|</span>
+          <span>lower</span>
+          <span className="text-gray-200 font-semibold">{color.lower}</span>
+        </div>
+      )}
+
+      {/* Face detection indicator */}
+      {face && (
+        <div className="mt-0.5 text-[10px] text-blue-400 font-mono">
+          face {(face.score * 100).toFixed(0)}%
+          {face.identity && <span className="ml-1 text-blue-300">{face.identity}</span>}
+        </div>
+      )}
     </div>
   );
 }

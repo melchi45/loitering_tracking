@@ -8,7 +8,7 @@
 | **Issue Date** | May 15, 2026 |
 | **Proposal Deadline** | June 30, 2026 |
 | **Zone Target Key** | `accessories` |
-| **Status** | Planned (not yet implemented) |
+| **Status** | **✅ Phase-1 구현 완료 (COCO yolov8n 즉시 동작)** |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -499,6 +499,40 @@ This enables accessories zone filtering immediately with zero model changes.
 | [RFP_AI_Cloth_Analysis.md](RFP_AI_Cloth_Analysis.md) | Clothing analysis (complementary) |
 | [RFP_AI_Hat_Detection.md](RFP_AI_Hat_Detection.md) | Hat detection (head accessory) |
 | [RFP_LTS2026_Loitering_Tracking_System.md](RFP_LTS2026_Loitering_Tracking_System.md) | Parent system RFP |
+
+### Appendix E: Open Source Model Research (2026-05)
+
+#### ✅ Phase-1: COCO yolov8n.onnx로 즉시 구현 완료
+
+기존 `yolov8n.onnx` (COCO 80클래스)는 이미 accessories 클래스를 포함합니다.
+`server/src/services/detection.js`의 `ENABLED_CLASSES`에 추가함으로써 **모델 추가 없이 즉시 동작**합니다.
+
+| COCO Class ID | className | 설명 |
+|---|---|---|
+| 24 | `backpack` | 백팩/배낭 |
+| 25 | `umbrella` | 우산 |
+| 26 | `handbag` | 핸드백/숄더백 |
+| 27 | `tie` | 넥타이 |
+| 28 | `suitcase` | 여행가방/캐리어 |
+
+#### Phase-2: 정밀 accessories 감지 (선택적)
+
+| Source | URL | Notes |
+|---|---|---|
+| xxnw/Vehicle-attribute-recognition (GH) | https://github.com/xxnw/Vehicle-attribute-recognition | 차량 속성 |
+| Event-AHU/OpenPAR (GH) | https://github.com/Event-AHU/OpenPAR | 가방/안경 포함 40+ 속성 |
+
+#### Implementation Notes
+
+```
+서비스 파일: server/src/services/detection.js (수정 완료)
+수정 내용:   ENABLED_CLASSES에 24(backpack), 25(umbrella), 26(handbag),
+             27(tie), 28(suitcase) 추가
+
+Zone targetClasses에 'accessories' 포함 시 behaviorEngine의
+TARGET_CLASS_MAP['accessories']가 매핑하여 로이터링 로직 적용
+출력: className: 'backpack' | 'umbrella' | 'handbag' | 'tie' | 'suitcase'
+```
 
 ---
 
