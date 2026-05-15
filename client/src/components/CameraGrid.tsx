@@ -3,6 +3,7 @@ import CameraView from './CameraView';
 
 interface Props {
   layout: 1 | 4 | 9 | 16;
+  onCameraDoubleClick?: (cameraId: string) => void;
 }
 
 const GRID_COLS: Record<number, string> = {
@@ -12,7 +13,7 @@ const GRID_COLS: Record<number, string> = {
   16: 'grid-cols-4',
 };
 
-export default function CameraGrid({ layout }: Props) {
+export default function CameraGrid({ layout, onCameraDoubleClick }: Props) {
   const cameras    = useCameraStore((s) => s.cameras);
   const selectedId = useCameraStore((s) => s.selectedId);
 
@@ -28,9 +29,11 @@ export default function CameraGrid({ layout }: Props) {
           return (
             <div
               key={camera.id}
-              className={`relative bg-gray-900 rounded overflow-hidden aspect-video transition-all ${
+              onDoubleClick={() => onCameraDoubleClick?.(camera.id)}
+              className={`relative bg-gray-900 rounded overflow-hidden aspect-video transition-all cursor-pointer ${
                 isSelected ? 'ring-2 ring-blue-500 ring-offset-1 ring-offset-gray-900' : ''
               }`}
+              title="더블클릭: 전체화면"
             >
               <CameraView cameraId={camera.id} cameraName={camera.name} />
             </div>

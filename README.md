@@ -17,16 +17,17 @@
 4. [IP Camera Discovery (UDP Broadcast)](#4-ip-camera-discovery-udp-broadcast)
 5. [RTSP Video Ingestion & Frame Capture](#5-rtsp-video-ingestion--frame-capture)
 6. [AI Models & Inference Pipeline](#6-ai-models--inference-pipeline)
-7. [Loitering Detection Logic](#7-loitering-detection-logic)
-8. [React Web UI](#8-react-web-ui)
-9. [Submodules](#9-submodules)
-10. [Technical Requirements](#10-technical-requirements)
-11. [Functional Requirements](#11-functional-requirements)
-12. [Non-Functional Requirements](#12-non-functional-requirements)
-13. [Project Milestones & Deliverables](#13-project-milestones--deliverables)
-14. [Getting Started](#14-getting-started)
-15. [API Reference](#15-api-reference)
-16. [Appendix](#16-appendix)
+7. [Per-Channel AI Module Selection](#7-per-channel-ai-module-selection)
+8. [Loitering Detection Logic](#8-loitering-detection-logic)
+9. [React Web UI](#9-react-web-ui)
+10. [Submodules](#10-submodules)
+11. [Technical Requirements](#11-technical-requirements)
+12. [Functional Requirements](#12-functional-requirements)
+13. [Non-Functional Requirements](#13-non-functional-requirements)
+14. [Project Milestones & Deliverables](#14-project-milestones--deliverables)
+15. [Getting Started](#15-getting-started)
+16. [API Reference](#16-api-reference)
+17. [Appendix](#17-appendix)
 
 ---
 
@@ -405,7 +406,102 @@ dwellTime > threshold  AND  displacement < minDisplacement
 
 ---
 
-## 7. Loitering Detection Logic
+## 7. Per-Channel AI Module Selection
+
+Each camera zone can independently activate one or more AI analysis modules via the `targetClasses` checkbox array in the Zone Editor. Modules are applied only to objects detected within that zone.
+
+### 7.1 Available AI Modules (per Zone)
+
+| # | Checkbox | Zone Key | RFP | Status | Description |
+|:---:|---|---|---|:---:|---|
+| 1 | ☑ **Human** | `human` | [AI-01](RFP_AI_Human_Detection.md) | ✅ 구현 완료 | 사람 감지 — YOLOv8n COCO class 0 (person) |
+| 2 | ☑ **Vehicle** | `vehicle` | [AI-02](RFP_AI_Vehicle_Detection.md) | ✅ 구현 완료 | 차량 감지 — bicycle/car/motorcycle/bus/truck |
+| 3 | ☐ **Face** | `face` | [AI-03](RFP_AI_Face_Recognition.md) | 🔲 준비중 | 얼굴 인식 — RetinaFace/SCRFD + ArcFace Re-ID |
+| 4 | ☐ **Mask** | `mask` | [AI-04](RFP_AI_Mask_Detection.md) | 🔲 준비중 | 마스크 착용 감지 — EfficientNet-B0 2-class |
+| 5 | ☐ **Color** | `color` | [AI-05](RFP_AI_Color_Analysis.md) | 🔲 준비중 | 상/하의 색상 분석 — 11색 분류 |
+| 6 | ☐ **Cloth** | `cloth` | [AI-06](RFP_AI_Cloth_Analysis.md) | 🔲 준비중 | 의류 유형 분류 — 상의 8종 / 하의 6종 |
+| 7 | ☐ **Hat** | `hat` | [AI-07](RFP_AI_Hat_Detection.md) | 🔲 준비중 | 모자/헬멧 감지 — 8종 분류 + 안전모 컴플라이언스 |
+| 8 | ☐ **Accessories** | `accessories` | [AI-08](RFP_AI_Accessories_Detection.md) | 🔲 준비중 | 가방/안경/우산 등 소품 감지 |
+
+> **구현 완료** 모듈은 Zone 편집 시 체크박스가 활성화됩니다. **준비중** 모듈은 체크박스가 회색으로 표시되며 해당 ONNX 모델 파일이 배치되면 활성화됩니다.
+
+### 7.2 Zone Editor UI — AI 감지 대상 체크박스
+
+Zone 편집 화면 하단의 **"AI 감지 대상"** 섹션에서 해당 Zone에 적용할 AI 모듈을 선택합니다.
+
+```
+┌─────────────────────────────────┐
+│ AI 감지 대상  (미선택 시 전체)   │
+├────────────────┬────────────────┤
+│ ☑ 사람         │ ☑ 차량         │  ← 활성 (구현 완료)
+│ ☐ 얼굴  준비중 │ ☐ 마스크 준비중 │
+│ ☐ 색상  준비중 │ ☐ 의류   준비중 │
+│ ☐ 모자  준비중 │ ☐ 소품   준비중 │  ← 비활성 (준비중)
+└────────────────┴────────────────┘
+```
+
+- **체크 선택**: 파란색 배경 + 체크 아이콘, 즉시 API 저장 (PUT `/api/cameras/:id/zones/:zoneId`)
+- **미선택 시**: `targetClasses: []` → 모든 활성 클래스 감지 (기본 동작)
+- **준비중 항목**: 비활성(회색), "준비중" 뱃지 표시, 클릭 불가
+
+### 7.3 `targetClasses` 동작 규칙
+
+```javascript
+// behaviorEngine.js — classMatchesZone()
+const TARGET_CLASS_MAP = {
+  human:   ['person'],
+  vehicle: ['bicycle', 'car', 'motorcycle', 'bus', 'truck'],
+  // 향후 추가: face, mask, color, cloth, hat, accessories
+};
+
+// targetClasses가 비어있으면 모든 클래스 허용
+if (!targetClasses || targetClasses.length === 0) return true;
+```
+
+| `targetClasses` 설정 | 감지 대상 | 사용 사례 |
+|---|---|---|
+| `[]` (기본) | 모든 활성 클래스 | 일반 감시 |
+| `["human"]` | 사람만 | 출입 통제 구역 |
+| `["vehicle"]` | 차량만 | 주차장 관리 |
+| `["human", "vehicle"]` | 사람 + 차량 | 혼합 구역 |
+| `["human", "hat"]` | 사람 + 안전모 검사 | 건설 현장 컴플라이언스 *(준비중)* |
+| `["human", "mask"]` | 사람 + 마스크 | 방역 구역 *(준비중)* |
+
+### 7.4 Bounding Box 색상 코드 (화면 표시)
+
+| 클래스 | 정상 색상 | Loitering 색상 |
+|---|---|---|
+| person | 🟢 녹색 `rgba(34,197,94)` | 🔴 빨간색 `rgba(239,68,68)` |
+| bicycle | 🟡 노란색 `rgba(250,204,21)` | 🔴 빨간색 |
+| car | 🔵 파란색 `rgba(59,130,246)` | 🔴 빨간색 |
+| motorcycle | 🟠 주황색 `rgba(249,115,22)` | 🔴 빨간색 |
+| bus | 🟣 보라색 `rgba(168,85,247)` | 🔴 빨간색 |
+| truck | 🩵 청록색 `rgba(20,184,166)` | 🔴 빨간색 |
+
+라벨 형식: `person #3  94%` (className + objectId + confidence)
+
+### 7.5 향후 AI 모듈 활성화 절차
+
+준비중 모듈은 해당 ONNX 모델 파일을 `server/models/`에 배치하면 자동 활성화됩니다:
+
+```
+server/models/
+├── yolov8n.onnx                     # ✅ 현재 사용 중
+├── scrfd_500m.onnx                  # Face/Head 감지 (AI-03, AI-07 공유)
+├── arcface_r18.onnx                 # 얼굴 인식 Re-ID (AI-03)
+├── mask_classifier_effb0.onnx       # 마스크 분류 (AI-04)
+├── color_upper_efficientb0.onnx     # 상의 색상 (AI-05)
+├── color_lower_efficientb0.onnx     # 하의 색상 (AI-05)
+├── cloth_classifier_efficientb0.onnx # 의류 유형 (AI-06)
+├── hat_classifier.onnx              # 모자/헬멧 분류 (AI-07)
+└── accessories_yolov8n.onnx         # 소품 감지 (AI-08)
+```
+
+각 AI 모듈 상세 사양: `RFP_AI_Human_Detection.md` ~ `RFP_AI_Accessories_Detection.md` 참고.
+
+---
+
+## 8. Loitering Detection Logic
 
 ### 7.1 Behavioral Analysis Engine
 
@@ -437,7 +533,7 @@ For each tracked object per frame:
 
 ---
 
-## 8. React Web UI
+## 9. React Web UI
 
 ### 8.1 Live Video with Bounding Box Overlay
 
@@ -503,9 +599,62 @@ The Zone Editor opens as a full-viewport overlay when the **+ Zone** button is c
 - Manual RTSP URL entry
 - Per-camera: start/stop stream, zone configuration, sensitivity settings
 
+### 8.5 Fullscreen Camera View with Real-Time Detection Panel
+
+Double-clicking any camera cell in the grid opens a fullscreen overlay with a dedicated left-side detection panel.
+
+**Trigger:** Double-click on any camera cell in the multi-camera grid  
+**Exit:** Click the × button, press `Escape`, or click the dimmed background
+
+**Layout:**
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│                         [Camera Name]                     [✕]   │
+├─────────────────┬────────────────────────────────────────────────┤
+│  Detections  3  │                                                │
+│  1 loiter       │                                                │
+├─────────────────┤                                                │
+│ PERSON  #a3b2c1 │         Live Video (fullscreen)               │
+│ [LOITER]        │         <img> + <canvas> overlay               │
+│ conf  89%       │                                                │
+│ dwell  42.3s    │         Bounding boxes drawn with              │
+│ x 320  y 180    │         class colors + loitering               │
+│ w  65  h 190    │         highlight (same as grid view)          │
+├─────────────────┤                                                │
+│ CAR     #f1e2d3 │                                                │
+│ conf  74%       │                                                │
+│ dwell   2.1s    │                                                │
+│ x 800  y 400    │                                                │
+│ w 120  h  80    │                                                │
+├─────────────────┤                                                │
+│ ■ person  ■ car │                                                │
+│ ■ bicycle ■ bus │                                                │
+└─────────────────┴────────────────────────────────────────────────┘
+```
+
+**Detection Panel fields (per object):**
+
+| Field | Description |
+|---|---|
+| `className` | Object class (person, car, bicycle, …) — color-coded |
+| `objectId` | Persistent track ID (8-char hex prefix) |
+| `[LOITER]` badge | Shown in red when `isLoitering = true` |
+| `conf` | Detection confidence (%) |
+| `dwell` | Seconds the object has been in a monitored zone; yellow when > 5 s |
+| `x, y` | Bounding box top-left in frame pixel coordinates |
+| `w, h` | Bounding box width / height in pixels |
+
+Objects are sorted: loitering first, then by descending dwell time.
+
+**Socket.IO subscription reference counting:**
+
+The fullscreen view renders an additional `useCamera(cameraId)` hook for the same camera.  
+A module-level `subscriptionCounts` map ensures `camera:subscribe` is emitted only on the **first** subscriber and `camera:unsubscribe` only when the **last** subscriber unmounts — preventing the grid cell from losing its stream when the fullscreen modal closes.
+
 ---
 
-## 9. Submodules
+## 10. Submodules
 
 ### 9.1 WiseNetChromeIPInstaller (Node.js UDP branch)
 
@@ -526,7 +675,7 @@ The `nodejs-udp-discovery` branch adds:
 
 ---
 
-## 10. Technical Requirements
+## 11. Technical Requirements
 
 ### 10.1 Video Input & Ingestion
 
@@ -561,7 +710,7 @@ The `nodejs-udp-discovery` branch adds:
 
 ---
 
-## 11. Functional Requirements
+## 12. Functional Requirements
 
 ### 11.1 Dashboard & UI
 
@@ -595,7 +744,7 @@ The `nodejs-udp-discovery` branch adds:
 
 ---
 
-## 12. Non-Functional Requirements
+## 13. Non-Functional Requirements
 
 ### 12.1 Security
 
@@ -620,7 +769,7 @@ The `nodejs-udp-discovery` branch adds:
 
 ---
 
-## 13. Project Milestones & Deliverables
+## 14. Project Milestones & Deliverables
 
 | Phase | Milestone | Deliverables | Target |
 |:---:|---|---|:---:|
@@ -638,7 +787,7 @@ The `nodejs-udp-discovery` branch adds:
 
 ---
 
-## 14. Getting Started
+## 15. Getting Started
 
 ### 14.1 Prerequisites
 
@@ -701,7 +850,7 @@ docker-compose up -d
 
 ---
 
-## 15. API Reference
+## 16. API Reference
 
 ### 15.1 REST Endpoints
 
@@ -755,7 +904,7 @@ docker-compose up -d
 
 ---
 
-## 16. Appendix
+## 17. Appendix
 
 ### Appendix A: Glossary
 

@@ -89,6 +89,7 @@ class PipelineManager {
       running: true,
       frameCount: 0,
       lastFrameAt: null,
+      _inferring: false,  // frame-drop guard: skip inference when previous is still running
     };
 
     // ── Listen for loitering events ──────────────────────────────────────
@@ -115,7 +116,7 @@ class PipelineManager {
       let frameWidth  = jpegSize?.width  ?? 640;
       let frameHeight = jpegSize?.height ?? 640;
 
-      // Emit raw frame with correct dimensions so the UI can scale immediately
+      // Emit raw frame immediately so the UI can display it without waiting for inference
       this._io.to(camera.id).emit('frame', {
         cameraId:    camera.id,
         frameId:     currentFrameId,
@@ -125,34 +126,42 @@ class PipelineManager {
         frameHeight,
       });
 
-      // 2. Run detection (if model is loaded)
-      let detections = [];
-      if (this._detector) {
-        try {
-          const result = await this._detector.detect(jpegBuffer);
-          detections  = result.detections;
-          frameWidth  = result.frameWidth;
-          frameHeight = result.frameHeight;
-        } catch (err) {
-          console.error(`[PipelineManager][${camera.id}] Detection error:`, err.message);
+      // Skip inference if previous frame is still being processed (frame-drop)
+      if (ctx._inferring) return;
+      ctx._inferring = true;
+
+      try {
+        // 2. Run detection (if model is loaded)
+        let detections = [];
+        if (this._detector) {
+          try {
+            const result = await this._detector.detect(jpegBuffer);
+            detections  = result.detections;
+            frameWidth  = result.frameWidth;
+            frameHeight = result.frameHeight;
+          } catch (err) {
+            console.error(`[PipelineManager][${camera.id}] Detection error:`, err.message);
+          }
         }
+
+        // 3. Update tracker
+        const trackedObjects = tracker.update(detections);
+
+        // 4. Run behavior analysis
+        const enrichedObjects = behavior.update(camera.id, trackedObjects, timestamp);
+
+        // 5. Emit detections + tracking results (include frame dimensions for UI scaling)
+        this._io.to(camera.id).emit('detections', {
+          cameraId:    camera.id,
+          frameId:     currentFrameId,
+          timestamp,
+          detections:  enrichedObjects,
+          frameWidth,
+          frameHeight,
+        });
+      } finally {
+        ctx._inferring = false;
       }
-
-      // 3. Update tracker
-      const trackedObjects = tracker.update(detections);
-
-      // 4. Run behavior analysis
-      const enrichedObjects = behavior.update(camera.id, trackedObjects, timestamp);
-
-      // 5. Emit detections + tracking results (include frame dimensions for UI scaling)
-      this._io.to(camera.id).emit('detections', {
-        cameraId:    camera.id,
-        frameId:     currentFrameId,
-        timestamp,
-        detections:  enrichedObjects,
-        frameWidth,
-        frameHeight,
-      });
     });
 
     capture.on('started', ({ cmdline }) => {

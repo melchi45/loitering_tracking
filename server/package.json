@@ -5,7 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon src/index.js",
+    "dev": "nodemon --exec /usr/bin/node src/index.js",
     "test": "jest",
     "discover": "node src/scripts/discoverCameras.js"
   },

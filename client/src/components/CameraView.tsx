@@ -69,33 +69,47 @@ function drawOverlay(
 
   // ── Detection BBoxes ─────────────────────────────────────────────────────
   for (const det of detections) {
-    const { bbox, objectId, confidence, isLoitering, dwellTime } = det;
+    const { bbox, objectId, confidence, isLoitering, dwellTime, className } = det;
 
     const x = ox + bbox.x * sx;
     const y = oy + bbox.y * sy;
     const w = bbox.width  * sx;
     const h = bbox.height * sy;
 
-    const color = isLoitering ? 'rgba(239,68,68,0.9)' : 'rgba(34,197,94,0.9)';
+    // Loitering always red; otherwise color by class
+    const color = isLoitering ? 'rgba(239,68,68,0.9)' : (() => {
+      switch (className) {
+        case 'person':     return 'rgba(34,197,94,0.9)';   // green
+        case 'bicycle':    return 'rgba(250,204,21,0.9)';  // yellow
+        case 'car':        return 'rgba(59,130,246,0.9)';  // blue
+        case 'motorcycle': return 'rgba(249,115,22,0.9)';  // orange
+        case 'bus':        return 'rgba(168,85,247,0.9)';  // purple
+        case 'truck':      return 'rgba(20,184,166,0.9)';  // teal
+        default:           return 'rgba(156,163,175,0.9)'; // gray
+      }
+    })();
+
     ctx.strokeStyle = color;
     ctx.lineWidth   = 2;
     ctx.strokeRect(x, y, w, h);
 
-    const label = `ID:${objectId}  ${(confidence * 100).toFixed(0)}%`;
+    // Label: "person #3  94%" or "car #7  82%"
+    const clsLabel = (className || 'obj').slice(0, 10);
+    const label = `${clsLabel} #${objectId}  ${(confidence * 100).toFixed(0)}%`;
     ctx.font = 'bold 12px monospace';
     const textW = ctx.measureText(label).width + 8;
-    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+    ctx.fillStyle = 'rgba(0,0,0,0.7)';
     ctx.fillRect(x, y - 20, textW, 18);
-    ctx.fillStyle = '#ffffff';
+    ctx.fillStyle = color;
     ctx.fillText(label, x + 4, y - 6);
 
     if (isLoitering || dwellTime > 5) {
       const dt = `${dwellTime.toFixed(1)}s`;
+      ctx.font = 'bold 10px monospace';
       const dw = ctx.measureText(dt).width + 8;
       ctx.fillStyle = isLoitering ? 'rgba(239,68,68,0.85)' : 'rgba(0,0,0,0.6)';
       ctx.fillRect(x + w - dw, y + h, dw, 16);
       ctx.fillStyle = '#fff';
-      ctx.font = 'bold 10px monospace';
       ctx.fillText(dt, x + w - dw + 4, y + h + 11);
     }
   }

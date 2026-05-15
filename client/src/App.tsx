@@ -7,6 +7,7 @@ import CameraGrid from './components/CameraGrid';
 import CameraList from './components/CameraList';
 import AlertPanel from './components/AlertPanel';
 import DiscoveredCameraPanel from './components/DiscoveredCameraPanel';
+import FullscreenCameraView from './components/FullscreenCameraView';
 import type { Alert } from './types';
 
 type Layout = 1 | 4 | 9 | 16;
@@ -35,6 +36,7 @@ function LayoutButton({ value, current, onClick }: { value: Layout; current: Lay
 export default function App() {
   const [layout, setLayout] = useState<Layout>(4);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('cameras');
+  const [fullscreenCameraId, setFullscreenCameraId] = useState<string | null>(null);
 
   const { socket, connected } = useSocket();
   const updateCameraStatus = useCameraStore((s) => s.updateCameraStatus);
@@ -142,7 +144,7 @@ export default function App() {
       <div className="flex flex-1 overflow-hidden">
         {/* Camera grid - main area */}
         <main className="flex-1 overflow-hidden p-2 relative">
-          <CameraGrid layout={layout} />
+          <CameraGrid layout={layout} onCameraDoubleClick={setFullscreenCameraId} />
           {selectedDiscovered && (
             <DiscoveredCameraPanel
               camera={selectedDiscovered}
@@ -199,6 +201,18 @@ export default function App() {
           </div>
         </aside>
       </div>
+
+      {/* Fullscreen camera overlay */}
+      {fullscreenCameraId && (() => {
+        const cam = cameras.find(c => c.id === fullscreenCameraId);
+        return cam ? (
+          <FullscreenCameraView
+            cameraId={cam.id}
+            cameraName={cam.name}
+            onClose={() => setFullscreenCameraId(null)}
+          />
+        ) : null;
+      })()}
     </div>
   );
 }

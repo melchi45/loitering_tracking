@@ -186,8 +186,6 @@ const TrackState = Object.freeze({ Tracked: 'Tracked', Lost: 'Lost', Removed: 'R
 class Track {
   constructor(detection) {
     this.id = uuidv4();
-    this.kalman = new KalmanFilter();
-    this.kalman.init(detection.bbox);
     this.state = TrackState.Tracked;
     this.age = 1;
     this.hitStreak = 1;
@@ -198,14 +196,14 @@ class Track {
   }
 
   predict() {
-    this.bbox = this.kalman.predict();
+    // Use last known position — Kalman prediction removed (NaN instability)
     this.age++;
     this.framesWithoutHit++;
     if (this.framesWithoutHit > 0) this.state = TrackState.Lost;
   }
 
   update(detection) {
-    this.bbox = this.kalman.update(detection.bbox);
+    this.bbox = { ...detection.bbox };
     this.confidence = detection.confidence;
     this.className = detection.className || this.className;
     this.hitStreak++;
@@ -234,14 +232,14 @@ class ByteTracker {
   /**
    * @param {object} [options]
    * @param {number} [options.maxAge=30]          Frames to keep a lost track before removal
-   * @param {number} [options.minHits=3]          Frames a track must be seen before confirmed
+   * @param {number} [options.minHits=1]          Frames a track must be seen before confirmed
    * @param {number} [options.highConfThreshold=0.6]
    * @param {number} [options.lowConfThreshold=0.1]
    * @param {number} [options.iouThreshold=0.3]
    */
   constructor(options = {}) {
     this.maxAge           = options.maxAge           || parseInt(process.env.MAX_TRACK_AGE_FRAMES || '30');
-    this.minHits          = options.minHits          || 3;
+    this.minHits          = options.minHits          || 1;
     this.highConfThreshold = options.highConfThreshold || 0.6;
     this.lowConfThreshold  = options.lowConfThreshold  || 0.1;
     this.iouThreshold     = options.iouThreshold     || 0.3;
