@@ -12,7 +12,8 @@ const SUBMODULE_PATH = path.resolve(
 
 let _SubmoduleDiscovery = null;
 try {
-  _SubmoduleDiscovery = require(SUBMODULE_PATH);
+  const mod = require(SUBMODULE_PATH);
+  _SubmoduleDiscovery = mod.UDPDiscovery || mod.default || mod;
 } catch (_) {
   // Submodule not initialised — use inline fallback
 }

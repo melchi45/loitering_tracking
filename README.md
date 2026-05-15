@@ -148,14 +148,31 @@ Traditional CCTV monitoring is reactive and prone to human error. This system au
 
 ### 3.3 AI Models
 
-| Model | Format | Task | Size | Latency* |
-|---|---|---|---|---|
-| YOLOv8n | ONNX | Person detection (primary) | ~6MB | ~15ms |
-| YOLOv8s | ONNX | Person detection (higher accuracy) | ~22MB | ~30ms |
-| ByteTrack | JS implementation | Multi-object tracking | — | ~5ms |
-| MobileNetV2 Re-ID | ONNX | Person re-identification | ~14MB | ~10ms |
+| Model | Format | Task | Classes | Size | Latency* |
+|---|---|---|---|---|---|
+| YOLOv8n | ONNX | Multi-class detection (primary) | person, bicycle, car, motorcycle, bus, truck | ~6MB | ~15ms |
+| YOLOv8s | ONNX | Multi-class detection (higher accuracy) | same as above | ~22MB | ~30ms |
+| ByteTrack | JS implementation | Multi-object tracking | — | — | ~5ms |
+| MobileNetV2 Re-ID | ONNX | Person re-identification | — | ~14MB | ~10ms |
+| RetinaFace *(planned)* | ONNX | Face detection | face | ~4MB | ~20ms |
+| Attribute classifier *(planned)* | ONNX | Mask / Color / Cloth / Hat / Accessories | 8 attribute types | ~8MB | ~5–15ms/crop |
 
 > \* Latency measured on Intel Core i7 CPU. GPU via NVIDIA CUDA reduces by 3–5×.
+
+#### Enabled COCO Classes (YOLOv8n)
+
+The detection service detects the following COCO classes by default:
+
+| COCO ID | Class Name | Zone Target Key |
+|---|---|---|
+| 0 | person | `human` |
+| 1 | bicycle | `vehicle` |
+| 2 | car | `vehicle` |
+| 3 | motorcycle | `vehicle` |
+| 5 | bus | `vehicle` |
+| 7 | truck | `vehicle` |
+
+Zones with `targetClasses: ['human']` only trigger loitering logic for persons; `['vehicle']` for all vehicle types; `[]` (empty) monitors all enabled classes.
 
 #### Required AI Model Files
 
@@ -163,7 +180,7 @@ Place model files in `server/models/`:
 
 ```
 server/models/
-├── yolov8n.onnx          # Primary detection model
+├── yolov8n.onnx          # Primary detection model (person + vehicles)
 ├── yolov8s.onnx          # High-accuracy detection model (optional)
 └── reid_mobilenetv2.onnx # Re-ID model for persistent tracking
 ```
@@ -321,10 +338,11 @@ RTSP Stream (H.264/H.265)
 
 - Input: 640×640 normalized RGB tensor `[1, 3, 640, 640]`
 - Output: `[1, 84, 8400]` — 4 bbox coords + 80 class scores per anchor
-- Person class ID: **0** (COCO dataset)
-- Confidence threshold: **0.45** (configurable)
-- NMS IoU threshold: **0.5** (configurable)
-- Post-processing: NMS → filter person class → scale boxes to frame size
+- Enabled classes: **person (0)**, bicycle (1), car (2), motorcycle (3), bus (5), truck (7)
+- Confidence threshold: **0.45** (configurable via `CONFIDENCE_THRESHOLD` env)
+- NMS IoU threshold: **0.5** (configurable via `NMS_IOU_THRESHOLD` env)
+- Post-processing: NMS → filter enabled classes → scale boxes to actual JPEG frame size
+- Frame dimensions: parsed from JPEG SOF marker (`getJpegSize`) — no full decode required; fallback to 640×640
 
 ### 6.2 Multi-Object Tracking: ByteTrack
 
@@ -345,19 +363,26 @@ Each frame produces a JSON array of detections:
   "frameId": 12345,
   "timestamp": 1715678901234,
   "cameraId": "cam-01",
+  "frameWidth": 1920,
+  "frameHeight": 1080,
   "detections": [
     {
       "objectId": 7,
       "confidence": 0.891,
-      "bbox": {
-        "x": 120,
-        "y": 85,
-        "width": 65,
-        "height": 190
-      },
-      "class": "person",
+      "bbox": { "x": 120, "y": 85, "width": 65, "height": 190 },
+      "className": "person",
       "isLoitering": false,
-      "dwellTime": 12.4
+      "dwellTime": 12.4,
+      "zoneId": "zone-uuid-or-null"
+    },
+    {
+      "objectId": 12,
+      "confidence": 0.762,
+      "bbox": { "x": 400, "y": 200, "width": 180, "height": 120 },
+      "className": "car",
+      "isLoitering": false,
+      "dwellTime": 0,
+      "zoneId": null
     }
   ]
 }
@@ -398,11 +423,17 @@ For each tracked object per frame:
 
 ### 7.2 Zone-Based Analysis
 
-- Zones defined as GeoJSON polygons in pixel coordinates
+- Zones defined as polygons in pixel coordinates (actual JPEG frame space)
 - Point-in-polygon test (ray casting) per detection per frame
 - Up to **50 zones** per camera feed
 - Zone types: `MONITOR` (trigger alerts), `EXCLUDE` (suppress alerts)
 - Time-based activation: cron-style schedule per zone
+- **Per-zone AI target class filtering** via `targetClasses` field:
+  - `[]` or omitted → monitor all enabled detection classes
+  - `['human']` → monitor persons only
+  - `['vehicle']` → monitor bicycle/car/motorcycle/bus/truck
+  - `['human', 'vehicle']` → monitor both
+- Filter is applied per frame in the behavior engine — no restart required
 
 ---
 
@@ -450,7 +481,23 @@ Each detection renders:
 └──────────────────────────────┴──────────────────────┘
 ```
 
-### 8.3 Camera Management
+### 8.3 Zone Editor
+
+The Zone Editor opens as a full-viewport overlay when the **+ Zone** button is clicked on any camera view.
+
+**Key implementation details:**
+
+| Feature | Implementation |
+|---|---|
+| Full-screen vertex drag | Global `document.addEventListener('mousemove/mouseup')` — drag works even when cursor leaves the canvas |
+| Coordinate system | All hit-testing uses frame pixel space; hit radius dynamically converted from screen pixels via `fwEff/fhEff` |
+| Frame dimensions | Background image `naturalWidth/naturalHeight` (read via `onLoad`) replaces JPEG SOF defaults — matches `<img object-contain>` layout exactly |
+| Vertex delete | Right-click on vertex → context menu shows "꼭짓점 N 삭제"; auto-saves after deletion; minimum 3 vertices enforced |
+| AI target classes | Checkbox grid (Human, Vehicle, + 6 planned attributes) auto-saves per toggle via PUT API |
+
+**Zone polygon storage:** coordinates are in actual JPEG frame pixel space (e.g. 1920×1080), not normalized. The ZoneEditor reads `img.naturalWidth/naturalHeight` so the canvas overlay always aligns with the displayed video regardless of container size.
+
+### 8.4 Camera Management
 
 - Auto-populate discovered cameras from UDP broadcast
 - Manual RTSP URL entry
@@ -668,11 +715,32 @@ docker-compose up -d
 | `POST` | `/api/cameras/:id/stream/start` | Start RTSP capture |
 | `POST` | `/api/cameras/:id/stream/stop` | Stop RTSP capture |
 | `GET` | `/api/cameras/:id/zones` | Get zones for camera |
-| `PUT` | `/api/cameras/:id/zones` | Update zones |
+| `POST` | `/api/cameras/:id/zones` | Create zone |
+| `PUT` | `/api/cameras/:id/zones/:zoneId` | Update zone (polygon, name, targetClasses, etc.) |
+| `DELETE` | `/api/cameras/:id/zones/:zoneId` | Delete zone |
 | `GET` | `/api/events` | List loitering events |
 | `GET` | `/api/events/:id/clip` | Download event video clip |
 
-### 15.2 Socket.IO Events
+### 15.2 Zone Schema
+
+```json
+{
+  "id": "uuid",
+  "cameraId": "cam-01",
+  "name": "Entry Zone",
+  "type": "MONITOR",
+  "polygon": [{"x": 100, "y": 150}, {"x": 400, "y": 150}, {"x": 400, "y": 500}, {"x": 100, "y": 500}],
+  "dwellThreshold": 30,
+  "minDisplacement": 50,
+  "reentryWindow": 120,
+  "targetClasses": ["human"],
+  "active": true
+}
+```
+
+`targetClasses` values: `"human"` (person), `"vehicle"` (bicycle/car/motorcycle/bus/truck). Empty array `[]` = all classes.
+
+### 15.3 Socket.IO Events
 
 | Event | Direction | Payload | Description |
 |---|---|---|---|
@@ -694,18 +762,21 @@ docker-compose up -d
 | Term | Definition |
 |---|---|
 | **Loitering** | Remaining in a location longer than a configured threshold without apparent purpose |
-| **ObjectId** | Persistent integer ID assigned to a tracked person across frames by ByteTrack |
+| **ObjectId** | Persistent UUID assigned to a tracked object across frames by ByteTrack |
 | **Confidence** | Detection confidence score (0.0–1.0) from YOLOv8n for each bounding box |
-| **Bounding Box** | Rectangle `{x, y, width, height}` in pixel coordinates enclosing a detected person |
+| **Bounding Box** | Rectangle `{x, y, width, height}` in pixel coordinates enclosing a detected object |
 | **ByteTrack** | Multi-object tracking algorithm using low-confidence detections for occlusion recovery |
 | **RTSP** | Real Time Streaming Protocol — standard for IP camera video streaming |
 | **ONVIF** | Open Network Video Interface Forum — IP camera interoperability standard |
 | **WiseNet** | Hanwha Vision brand for IP cameras and surveillance equipment |
 | **SUNAPI** | Samsung/Hanwha camera HTTP API for camera control |
 | **UDP Broadcast** | Network broadcast to 255.255.255.255 for device discovery on LAN |
-| **MOT** | Multi-Object Tracking — tracking multiple persons simultaneously across frames |
+| **MOT** | Multi-Object Tracking — tracking multiple objects simultaneously across frames |
 | **NMS** | Non-Maximum Suppression — removes duplicate detection boxes |
 | **ONNX** | Open Neural Network Exchange — cross-platform AI model format |
+| **targetClasses** | Per-zone array of AI detection targets: `human`, `vehicle`, and planned attributes |
+| **JPEG SOF** | Start-of-Frame JPEG marker — used to extract image dimensions without full decode |
+| **fwEff / fhEff** | Effective frame width/height in ZoneEditor — read from `img.naturalWidth/Height` to match `object-contain` layout |
 
 ### Appendix B: Directory Structure
 

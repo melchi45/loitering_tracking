@@ -103,6 +103,47 @@ function camerasRouter(db, pipelineManager) {
   });
 
   /**
+   * PUT /api/cameras/:id
+   * Update camera config (name, rtspUrl, username, password).
+   */
+  router.put('/:id', async (req, res) => {
+    try {
+      const camera = db.findOne('cameras', { id: req.params.id });
+      if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
+
+      const { name, rtspUrl, username, password } = req.body;
+      const updates = {};
+      if (name     !== undefined) updates.name     = name;
+      if (rtspUrl  !== undefined) updates.rtspUrl  = rtspUrl;
+      if (username !== undefined) updates.username = username || null;
+      if (password !== undefined) updates.password = password || null;
+
+      db.update('cameras', camera.id, updates);
+      const updated = db.findOne('cameras', { id: camera.id });
+      res.json({ success: true, data: { ...updated, password: undefined } });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * POST /api/cameras/:id/stream/reconnect
+   * Stop the current pipeline and start fresh (double-click or post-edit reconnect).
+   */
+  router.post('/:id/stream/reconnect', async (req, res) => {
+    try {
+      const camera = db.findOne('cameras', { id: req.params.id });
+      if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
+
+      await pipelineManager.stopCamera(camera.id);
+      await pipelineManager.startCamera(camera);
+      res.json({ success: true, message: 'Reconnecting', cameraId: camera.id });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
    * DELETE /api/cameras/:id
    * Remove a camera and stop its stream.
    */

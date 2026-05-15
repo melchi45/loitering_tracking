@@ -6,7 +6,16 @@ const path = require('path');
 
 const INPUT_SIZE = 640;
 const NUM_CLASSES = 80;
-const PERSON_CLASS_ID = 0;
+
+// COCO classes enabled for detection (person + vehicles)
+const ENABLED_CLASSES = {
+  0: 'person',
+  1: 'bicycle',
+  2: 'car',
+  3: 'motorcycle',
+  5: 'bus',
+  7: 'truck',
+};
 
 /**
  * YOLOv8n ONNX inference service for person detection.
@@ -55,11 +64,12 @@ class DetectionService {
   async detect(jpegBuffer, originalSize = null) {
     if (!this._session) await this.load();
 
-    const origW = originalSize ? originalSize.width  : INPUT_SIZE;
-    const origH = originalSize ? originalSize.height : INPUT_SIZE;
-
-    const { tensor, scaledW, scaledH, padLeft, padTop } =
+    const { tensor, scaledW, scaledH, padLeft, padTop, srcW, srcH } =
       await this._preprocess(jpegBuffer);
+
+    // Output bboxes in actual JPEG frame coordinates (e.g. 640×480), not model input space
+    const origW = originalSize ? originalSize.width  : srcW;
+    const origH = originalSize ? originalSize.height : srcH;
 
     const feeds = { [this._session.inputNames[0]]: tensor };
     const results = await this._session.run(feeds);
@@ -72,7 +82,7 @@ class DetectionService {
       origW, origH
     );
 
-    return detections;
+    return { detections, frameWidth: origW, frameHeight: origH };
   }
 
   // ─── Private ──────────────────────────────────────────────────────────────
@@ -115,11 +125,11 @@ class DetectionService {
     }
 
     const tensor = new ort.Tensor('float32', float32, [1, 3, INPUT_SIZE, INPUT_SIZE]);
-    return { tensor, scaledW, scaledH, padLeft, padTop };
+    return { tensor, scaledW, scaledH, padLeft, padTop, srcW, srcH };
   }
 
   /**
-   * Parse YOLOv8 output [1, 84, 8400] and return person detections.
+   * Parse YOLOv8 output [1, 84, 8400] and return enabled-class detections.
    * @param {Float32Array} data
    * @param {number[]}     dims      [1, 84, 8400]
    * @param {number} scaledW
@@ -150,7 +160,7 @@ class DetectionService {
         if (score > maxScore) { maxScore = score; maxClass = c; }
       }
 
-      if (maxClass !== PERSON_CLASS_ID) continue;
+      if (!ENABLED_CLASSES[maxClass]) continue;
       if (maxScore < this.confidenceThreshold) continue;
 
       // Convert cx,cy,w,h (relative to INPUT_SIZE) to xyxy (relative to INPUT_SIZE)
@@ -173,8 +183,8 @@ class DetectionService {
       candidates.push({
         bbox: { x: ox1, y: oy1, width: ox2 - ox1, height: oy2 - oy1 },
         confidence: maxScore,
-        classId: PERSON_CLASS_ID,
-        className: 'person',
+        classId: maxClass,
+        className: ENABLED_CLASSES[maxClass],
       });
     }
 

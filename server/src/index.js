@@ -13,6 +13,7 @@ const { initDB }          = require('./db');
 const PipelineManager     = require('./services/pipelineManager');
 const ZoneManager         = require('./services/zoneManager');
 const AlertService        = require('./services/alertService');
+const { getDiscoveryService } = require('./services/discoveryService');
 const camerasRouter       = require('./api/cameras');
 const zonesRouter         = require('./api/zones');
 const buildEventsRouters  = require('./api/events');
@@ -97,14 +98,21 @@ async function main() {
   });
 
   // ── Socket.IO Handlers ────────────────────────────────────────────────────
+  const discoverySvc = getDiscoveryService(io);
+
   io.on('connection', (socket) => {
     console.log(`[Socket.IO] Client connected: ${socket.id}`);
     registerStreamHandlers(io, socket, db);
+    // Hydrate newly connected client with all known discovered devices
+    discoverySvc.hydrate(socket);
 
     socket.on('disconnect', (reason) => {
       console.log(`[Socket.IO] Client disconnected: ${socket.id} (${reason})`);
     });
   });
+
+  // Start background continuous discovery
+  discoverySvc.start();
 
   // ── Auto-restart cameras that were streaming before a potential crash ─────
   try {

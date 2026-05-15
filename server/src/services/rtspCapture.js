@@ -1,171 +1,164 @@
 'use strict';
 
-const ffmpeg = require('fluent-ffmpeg');
+const { spawn }       = require('child_process');
 const { EventEmitter } = require('events');
 
 const JPEG_SOI = Buffer.from([0xff, 0xd8, 0xff]);
 const JPEG_EOI = Buffer.from([0xff, 0xd9]);
 
-const MAX_RETRIES = 5;
-const BASE_RETRY_DELAY_MS = 1000;
+const MAX_RETRIES       = 5;
+const BASE_RETRY_DELAY  = 1000; // ms
 
 /**
- * Captures frames from an RTSP stream using FFmpeg.
- * Emits 'frame' with a JPEG Buffer for each decoded frame,
- * 'error' on unrecoverable failures, and 'stats' every 100 frames.
+ * Captures JPEG frames from an RTSP stream using a direct ffmpeg child process.
+ *
+ * Events:
+ *   'frame'        (jpegBuffer: Buffer)
+ *   'started'      ({ cameraId, cmdline })
+ *   'reconnecting' ({ cameraId, attempt, delay })
+ *   'stats'        ({ cameraId, frameCount })
+ *   'warn'         ({ cameraId, message })
+ *   'error'        (Error)  — unrecoverable, max retries exceeded
  */
 class RTSPCapture extends EventEmitter {
   /**
-   * @param {string} cameraId  Unique camera identifier
-   * @param {string} rtspUrl   Full RTSP URL
-   * @param {object} [options]
-   * @param {number} [options.fps=10]
-   * @param {number} [options.width=640]
-   * @param {number} [options.height=640]
+   * @param {string} cameraId
+   * @param {string} rtspUrl  Full RTSP URL (credentials already embedded if needed)
+   * @param {object} [opts]
+   * @param {number} [opts.fps=10]
+   * @param {number} [opts.width=640]
    */
-  constructor(cameraId, rtspUrl, options = {}) {
+  constructor(cameraId, rtspUrl, opts = {}) {
     super();
     this.cameraId = cameraId;
-    this.rtspUrl = rtspUrl;
-    this.fps = options.fps || 10;
-    this.width = options.width || 640;
-    this.height = options.height || 640;
-    this._process = null;
-    this._running = false;
-    this._frameBuffer = Buffer.alloc(0);
-    this._frameCount = 0;
-    this._retryCount = 0;
-    this._retryTimer = null;
+    this.rtspUrl  = rtspUrl;
+    this.fps      = opts.fps   || 10;
+    this.width    = opts.width || 640;
+
+    this._proc        = null;
+    this._running     = false;
+    this._frameBuf    = Buffer.alloc(0);
+    this._frameCount  = 0;
+    this._retryCount  = 0;
+    this._retryTimer  = null;
   }
 
-  /** Start capturing frames. Idempotent — does nothing if already running. */
+  /** Start capturing. Idempotent. */
   start() {
     if (this._running) return;
-    this._running = true;
+    this._running    = true;
     this._retryCount = 0;
-    this._spawnProcess();
+    this._spawn();
   }
 
-  /** Stop capturing and clean up resources. */
+  /** Stop capturing and kill the ffmpeg process. */
   stop() {
     this._running = false;
-    if (this._retryTimer) {
-      clearTimeout(this._retryTimer);
-      this._retryTimer = null;
-    }
-    if (this._process) {
-      try {
-        this._process.kill('SIGKILL');
-      } catch (_) {}
-      this._process = null;
-    }
-    this._frameBuffer = Buffer.alloc(0);
+    if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; }
+    this._kill();
+    this._frameBuf = Buffer.alloc(0);
   }
 
-  // ─── Private ──────────────────────────────────────────────────────────────
+  // ── Private ────────────────────────────────────────────────────────────────
 
-  _spawnProcess() {
+  _buildArgs() {
+    return [
+      // Input options
+      '-rtsp_transport', 'tcp',
+      '-stimeout',       '5000000',   // 5 s socket timeout (µs)
+      '-analyzeduration','1000000',
+      '-probesize',      '1000000',
+      '-i',              this.rtspUrl,
+      // Video filter: limit fps + scale to width, preserve aspect ratio
+      '-vf',             `fps=${this.fps},scale=${this.width}:-2`,
+      // Output: raw JPEG stream to stdout
+      '-f',              'image2pipe',
+      '-vcodec',         'mjpeg',
+      '-q:v',            '5',
+      'pipe:1',
+    ];
+  }
+
+  _spawn() {
     if (!this._running) return;
 
-    const cmd = this._buildFFmpegCommand();
+    const args    = this._buildArgs();
+    const cmdline = `ffmpeg ${args.join(' ')}`;
+    this.emit('started', { cameraId: this.cameraId, cmdline });
 
-    cmd.on('start', (cmdline) => {
-      this.emit('started', { cameraId: this.cameraId, cmdline });
+    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
+    this._proc = proc;
+
+    // ── stdout → JPEG frame extraction ──────────────────────────────────────
+    proc.stdout.on('data', (chunk) => this._onData(chunk));
+    proc.stdout.on('error', () => {});   // pipe closed during kill — suppress
+
+    // ── stderr → log lines ──────────────────────────────────────────────────
+    let stderrTail = '';
+    proc.stderr.on('data', (chunk) => {
+      stderrTail += chunk.toString();
+      const lines  = stderrTail.split('\n');
+      stderrTail   = lines.pop();      // hold incomplete line
+      for (const line of lines) {
+        const t = line.trim();
+        if (!t) continue;
+        // Emit progress and errors; suppress routine codec/format spam
+        if (/frame=|fps=|Error|error|No such|Invalid|Unable|Connection refused|Authentication|401/.test(t)) {
+          this.emit('warn', { cameraId: this.cameraId, message: t });
+        }
+      }
     });
 
-    // Capture raw process stdout for JPEG extraction
-    cmd.on('error', (err) => {
+    // ── process exit ────────────────────────────────────────────────────────
+    proc.on('close', (code, signal) => {
+      this._proc = null;
       if (!this._running) return;
-      this.emit('warn', { cameraId: this.cameraId, message: err.message });
+      this.emit('warn', {
+        cameraId: this.cameraId,
+        message: `ffmpeg exited (code=${code} signal=${signal})`,
+      });
       this._scheduleRetry();
-    });
-
-    cmd.on('end', () => {
-      if (!this._running) return;
-      this._scheduleRetry();
-    });
-
-    // fluent-ffmpeg exposes the underlying ChildProcess via _ffmpegProc
-    // We pipe raw output manually by accessing the stdio stream
-    const proc = cmd.pipe(); // returns a PassThrough stream with stdout data
-
-    if (!proc) {
-      // Fallback: spawn via ffmpeg directly
-      this._spawnViaNativeStream(cmd);
-      return;
-    }
-
-    this._process = { kill: (sig) => cmd.kill(sig) };
-
-    proc.on('data', (chunk) => {
-      this._onData(chunk);
     });
 
     proc.on('error', (err) => {
+      this._proc = null;
       if (!this._running) return;
-      this.emit('warn', { cameraId: this.cameraId, message: err.message });
+      this.emit('warn', { cameraId: this.cameraId, message: `spawn error: ${err.message}` });
+      this._scheduleRetry();
     });
   }
 
-  _spawnViaNativeStream(cmd) {
-    // fluent-ffmpeg internal: access _ffmpegProc after running
-    cmd.on('start', () => {
-      // _ffmpegProc is set internally; capture it right after spawn
-      setImmediate(() => {
-        const proc = cmd._ffmpegProc;
-        if (!proc || !proc.stdout) return;
-        this._process = proc;
-        proc.stdout.on('data', (chunk) => this._onData(chunk));
-        proc.stdout.on('error', () => {});
-      });
-    });
-    cmd.run();
-  }
-
-  _buildFFmpegCommand() {
-    return ffmpeg(this.rtspUrl)
-      .inputOptions([
-        '-rtsp_transport', 'tcp',
-        '-stimeout', '5000000',
-        '-analyzeduration', '1000000',
-        '-probesize', '1000000',
-      ])
-      .videoFilters(`fps=${this.fps},scale=${this.width}:${this.height}`)
-      .outputOptions([
-        '-f', 'image2pipe',
-        '-vcodec', 'mjpeg',
-        '-q:v', '5',
-      ])
-      .noAudio();
+  _kill() {
+    if (this._proc) {
+      try { this._proc.kill('SIGKILL'); } catch (_) {}
+      this._proc = null;
+    }
   }
 
   _onData(chunk) {
-    this._frameBuffer = Buffer.concat([this._frameBuffer, chunk]);
+    this._frameBuf = Buffer.concat([this._frameBuf, chunk]);
     this._extractFrames();
   }
 
   _extractFrames() {
     while (true) {
-      // Find SOI marker
-      const soiIdx = this._indexOfBuffer(this._frameBuffer, JPEG_SOI, 0);
+      const soiIdx = this._indexOf(this._frameBuf, JPEG_SOI, 0);
       if (soiIdx === -1) {
-        // No SOI found — discard everything except last 2 bytes (partial marker)
-        if (this._frameBuffer.length > 2) {
-          this._frameBuffer = this._frameBuffer.slice(this._frameBuffer.length - 2);
+        if (this._frameBuf.length > 2) {
+          this._frameBuf = this._frameBuf.slice(this._frameBuf.length - 2);
         }
         break;
       }
 
-      // Find EOI marker after SOI
-      const eoiIdx = this._indexOfBuffer(this._frameBuffer, JPEG_EOI, soiIdx + 2);
-      if (eoiIdx === -1) break; // Wait for more data
+      const eoiIdx = this._indexOf(this._frameBuf, JPEG_EOI, soiIdx + 2);
+      if (eoiIdx === -1) break;
 
-      const frameEnd = eoiIdx + 2;
-      const jpegFrame = Buffer.from(this._frameBuffer.slice(soiIdx, frameEnd));
-      this._frameBuffer = this._frameBuffer.slice(frameEnd);
+      const end   = eoiIdx + 2;
+      const frame = Buffer.from(this._frameBuf.slice(soiIdx, end));
+      this._frameBuf = this._frameBuf.slice(end);
 
       this._frameCount++;
-      this.emit('frame', jpegFrame);
+      this.emit('frame', frame);
 
       if (this._frameCount % 100 === 0) {
         this.emit('stats', { cameraId: this.cameraId, frameCount: this._frameCount });
@@ -173,13 +166,13 @@ class RTSPCapture extends EventEmitter {
     }
   }
 
-  _indexOfBuffer(haystack, needle, offset = 0) {
-    for (let i = offset; i <= haystack.length - needle.length; i++) {
-      let found = true;
+  _indexOf(haystack, needle, offset) {
+    const limit = haystack.length - needle.length;
+    outer: for (let i = offset; i <= limit; i++) {
       for (let j = 0; j < needle.length; j++) {
-        if (haystack[i + j] !== needle[j]) { found = false; break; }
+        if (haystack[i + j] !== needle[j]) continue outer;
       }
-      if (found) return i;
+      return i;
     }
     return -1;
   }
@@ -193,13 +186,13 @@ class RTSPCapture extends EventEmitter {
       ));
       return;
     }
-    const delay = BASE_RETRY_DELAY_MS * Math.pow(2, this._retryCount);
+    const delay = BASE_RETRY_DELAY * Math.pow(2, this._retryCount);
     this._retryCount++;
     this.emit('reconnecting', { cameraId: this.cameraId, attempt: this._retryCount, delay });
     this._retryTimer = setTimeout(() => {
       this._retryTimer = null;
-      this._frameBuffer = Buffer.alloc(0);
-      this._spawnProcess();
+      this._frameBuf   = Buffer.alloc(0);
+      this._spawn();
     }, delay);
   }
 }

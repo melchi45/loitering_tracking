@@ -1,11 +1,12 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect } from 'react';
 import { useSocket } from './hooks/useSocket';
 import { useCameraStore } from './stores/cameraStore';
 import { useAlertStore } from './stores/alertStore';
+import { useDiscoveryStore } from './stores/discoveryStore';
 import CameraGrid from './components/CameraGrid';
 import CameraList from './components/CameraList';
 import AlertPanel from './components/AlertPanel';
-import ZoneEditor from './components/ZoneEditor';
+import DiscoveredCameraPanel from './components/DiscoveredCameraPanel';
 import type { Alert } from './types';
 
 type Layout = 1 | 4 | 9 | 16;
@@ -34,8 +35,6 @@ function LayoutButton({ value, current, onClick }: { value: Layout; current: Lay
 export default function App() {
   const [layout, setLayout] = useState<Layout>(4);
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('cameras');
-  const [zoneEditorCameraId, setZoneEditorCameraId] = useState<string | null>(null);
-  const [zoneEditorSnapshot, setZoneEditorSnapshot] = useState<string | null>(null);
 
   const { socket, connected } = useSocket();
   const updateCameraStatus = useCameraStore((s) => s.updateCameraStatus);
@@ -43,6 +42,8 @@ export default function App() {
   const cameras = useCameraStore((s) => s.cameras);
   const addAlert = useAlertStore((s) => s.addAlert);
   const unreadAlerts = useAlertStore((s) => s.alerts.filter((a) => !a.acknowledged).length);
+  const selectedDiscovered = useDiscoveryStore((s) => s.selected);
+  const selectDiscovered   = useDiscoveryStore((s) => s.select);
 
   // Fetch existing cameras from backend on mount
   useEffect(() => {
@@ -90,14 +91,6 @@ export default function App() {
     };
   }, [socket, updateCameraStatus, addAlert]);
 
-  const handleOpenZoneEditor = useCallback(
-    (cameraId: string, snapshot: string | null) => {
-      setZoneEditorCameraId(cameraId);
-      setZoneEditorSnapshot(snapshot);
-      setSidebarTab('zones');
-    },
-    []
-  );
 
   return (
     <div className="flex flex-col h-screen bg-gray-900 overflow-hidden">
@@ -143,23 +136,19 @@ export default function App() {
           ))}
         </div>
 
-        {/* Zone editor shortcut */}
-        {cameras.length > 0 && (
-          <button
-            onClick={() => handleOpenZoneEditor(cameras[0].id, null)}
-            className="px-3 py-1 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors"
-            title="Open zone editor for first camera"
-          >
-            Zones
-          </button>
-        )}
       </header>
 
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden">
         {/* Camera grid - main area */}
-        <main className="flex-1 overflow-hidden p-2">
+        <main className="flex-1 overflow-hidden p-2 relative">
           <CameraGrid layout={layout} />
+          {selectedDiscovered && (
+            <DiscoveredCameraPanel
+              camera={selectedDiscovered}
+              onClose={() => selectDiscovered(null)}
+            />
+          )}
         </main>
 
         {/* Sidebar */}
@@ -191,55 +180,19 @@ export default function App() {
             {sidebarTab === 'cameras' && <CameraList />}
             {sidebarTab === 'alerts' && <AlertPanel />}
             {sidebarTab === 'zones' && (
-              <div className="h-full overflow-y-auto p-3">
-                {zoneEditorCameraId ? (
-                  <>
-                    <div className="flex items-center gap-2 mb-3">
-                      <span className="text-xs text-gray-400">Camera:</span>
-                      <select
-                        value={zoneEditorCameraId}
-                        onChange={(e) => {
-                          setZoneEditorCameraId(e.target.value);
-                          setZoneEditorSnapshot(null);
-                        }}
-                        className="flex-1 bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs text-white focus:outline-none"
-                      >
-                        {cameras.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <ZoneEditor
-                      cameraId={zoneEditorCameraId}
-                      frameSnapshot={zoneEditorSnapshot}
-                    />
-                  </>
-                ) : cameras.length > 0 ? (
-                  <div className="flex flex-col items-center justify-center h-full gap-3 text-center">
-                    <p className="text-xs text-gray-400">
-                      Select a camera to edit detection zones
-                    </p>
-                    <select
-                      onChange={(e) => setZoneEditorCameraId(e.target.value)}
-                      defaultValue=""
-                      className="bg-gray-900 border border-gray-600 rounded px-2 py-1 text-xs text-white focus:outline-none"
-                    >
-                      <option value="" disabled>
-                        -- Select Camera --
-                      </option>
-                      {cameras.map((c) => (
-                        <option key={c.id} value={c.id}>
-                          {c.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                ) : (
-                  <p className="text-xs text-gray-500 text-center mt-8">
-                    Add a camera first to configure zones.
-                  </p>
+              <div className="flex flex-col items-center justify-center h-full gap-3 px-4 text-center">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                    d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"
+                  />
+                </svg>
+                <p className="text-xs text-gray-400 leading-relaxed">
+                  각 카메라 화면 우측 상단의<br />
+                  <span className="text-blue-400 font-semibold">+ Zone</span> 버튼을 클릭하여<br />
+                  Zone을 편집하세요.
+                </p>
+                {cameras.length === 0 && (
+                  <p className="text-[10px] text-gray-600">카메라를 먼저 추가하세요.</p>
                 )}
               </div>
             )}

@@ -13,7 +13,8 @@ const GRID_COLS: Record<number, string> = {
 };
 
 export default function CameraGrid({ layout }: Props) {
-  const cameras = useCameraStore((s) => s.cameras);
+  const cameras    = useCameraStore((s) => s.cameras);
+  const selectedId = useCameraStore((s) => s.selectedId);
 
   const cols = GRID_COLS[layout] ?? 'grid-cols-2';
   const cells = Array.from({ length: layout });
@@ -23,8 +24,14 @@ export default function CameraGrid({ layout }: Props) {
       {cells.map((_, idx) => {
         const camera = cameras[idx];
         if (camera) {
+          const isSelected = camera.id === selectedId;
           return (
-            <div key={camera.id} className="relative bg-gray-900 rounded overflow-hidden aspect-video">
+            <div
+              key={camera.id}
+              className={`relative bg-gray-900 rounded overflow-hidden aspect-video transition-all ${
+                isSelected ? 'ring-2 ring-blue-500 ring-offset-1 ring-offset-gray-900' : ''
+              }`}
+            >
               <CameraView cameraId={camera.id} cameraName={camera.name} />
             </div>
           );

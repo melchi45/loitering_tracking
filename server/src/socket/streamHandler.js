@@ -1,6 +1,7 @@
 'use strict';
 
-const { getUDPDiscovery } = require('../utils/udpDiscovery');
+const { getUDPDiscovery }    = require('../utils/udpDiscovery');
+const { getDiscoveryService } = require('../services/discoveryService');
 
 /**
  * Register Socket.IO event handlers for streaming and discovery.
@@ -102,6 +103,14 @@ function registerStreamHandlers(io, socket, db) {
       socket.emit('discovery:error', { message: err.message });
       _discoveryInstance = null;
     }
+  });
+
+  /**
+   * Clear known devices and restart discovery from scratch (triggered by client "Clean").
+   */
+  socket.on('discovery:rescan', () => {
+    const svc = getDiscoveryService();
+    if (svc) svc.rescan();
   });
 
   /**

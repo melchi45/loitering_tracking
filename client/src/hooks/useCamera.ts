@@ -14,18 +14,21 @@ interface DetectionsEvent {
   frameId: number;
   timestamp: number;
   detections: Detection[];
+  frameWidth?: number;
+  frameHeight?: number;
 }
 
 export function useCamera(cameraId: string) {
   const { socket } = useSocket();
-  const [frame, setFrame] = useState<string | null>(null);
-  const [detections, setDetections] = useState<Detection[]>([]);
-  const [subscribed, setSubscribed] = useState(false);
+  const [frame,       setFrame]       = useState<string | null>(null);
+  const [detections,  setDetections]  = useState<Detection[]>([]);
+  const [frameWidth,  setFrameWidth]  = useState<number>(640);
+  const [frameHeight, setFrameHeight] = useState<number>(640);
+  const [subscribed,  setSubscribed]  = useState(false);
 
   useEffect(() => {
     if (!cameraId) return;
 
-    // Subscribe to camera stream
     socket.emit('camera:subscribe', { cameraId });
     setSubscribed(true);
 
@@ -38,6 +41,8 @@ export function useCamera(cameraId: string) {
     const handleDetections = (event: DetectionsEvent) => {
       if (event.cameraId === cameraId) {
         setDetections(event.detections);
+        if (event.frameWidth)  setFrameWidth(event.frameWidth);
+        if (event.frameHeight) setFrameHeight(event.frameHeight);
       }
     };
 
@@ -54,5 +59,5 @@ export function useCamera(cameraId: string) {
     };
   }, [cameraId, socket]);
 
-  return { frame, detections, subscribed };
+  return { frame, detections, frameWidth, frameHeight, subscribed };
 }

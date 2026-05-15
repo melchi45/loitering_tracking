@@ -17,6 +17,7 @@
 3. [Software Architecture Requirements](#3-software-architecture-requirements)
 4. [Functional Requirements](#4-functional-requirements)
 5. [Non-Functional Requirements](#5-non-functional-requirements)
+   - 2.6 [Per-Zone AI Attribute Detection](#26-per-zone-ai-attribute-detection)
 6. [Project Milestones & Deliverables](#6-project-milestones--deliverables)
 7. [Proposal Evaluation Criteria](#7-proposal-evaluation-criteria)
 8. [Proposal Submission Requirements](#8-proposal-submission-requirements)
@@ -101,7 +102,87 @@ The loitering detection engine shall implement configurable behavioral analysis:
 - Per-zone sensitivity and threshold configuration
 - Minimum **50 configurable zones** per camera feed
 
-### 2.6 Hardware & Deployment
+### 2.6 Per-Zone AI Attribute Detection
+
+The system shall support per-zone AI attribute-based object filtering, allowing operators to designate which categories of objects trigger loitering analysis within each zone.
+
+#### 2.6.1 Supported Detection Targets
+
+Each zone must independently configure which AI detection targets are active. When no targets are selected, all supported classes are monitored (backward-compatible default).
+
+| Target Class | Label | Detection Model | Status |
+|---|---|---|:---:|
+| Human | `human` | YOLOv8n ONNX (COCO class 0: person) | **Available** |
+| Vehicle | `vehicle` | YOLOv8n ONNX (COCO classes: bicycle/1, car/2, motorcycle/3, bus/5, truck/7) | **Available** |
+| Face | `face` | Dedicated face detection model (e.g., RetinaFace / YOLOv8-face) | Planned |
+| Mask | `mask` | Attribute classifier (head-crop ROI → mask/no-mask) | Planned |
+| Color | `color` | Appearance attribute model (upper/lower body color) | Planned |
+| Cloth | `cloth` | Clothing type/style attribute model | Planned |
+| Hat | `hat` | Head-accessory attribute model | Planned |
+| Accessories | `accessories` | General accessory attribute model | Planned |
+
+#### 2.6.2 AI Model Pipeline for Each Attribute
+
+```
+Frame Buffer
+    │
+    ▼
+Primary Detection (YOLOv8n)
+    │  person / vehicle bboxes
+    ├──────────────────────────────────────────────────────────────┐
+    ▼                                                              ▼
+Human/Vehicle tracking                                     ROI Crop per bbox
+(ByteTrack)                                                        │
+    │                                                     ┌────────▼────────────────┐
+    ▼                                                     │   Attribute Inference   │
+Per-Zone Class Filter                                     │  (face / mask / color / │
+    │  targetClasses: ['human', 'vehicle']                │   cloth / hat / access) │
+    ▼                                                     └────────────────────────-┘
+Behavior Engine                                                    │
+    │                                                     Attribute tags attached
+    ▼                                                     to tracked object
+Alert / Loitering Event
+```
+
+#### 2.6.3 Model Specifications for Planned Attribute Models
+
+| Model | Input | Architecture | Output | Latency Target |
+|---|---|---|---|---|
+| Face Detection | Full frame | RetinaFace / YOLOv8-face ONNX | Face bboxes + landmarks | ≤ 20ms |
+| Mask Detection | Cropped head ROI (112×112) | MobileNetV2 binary classifier | mask / no-mask + confidence | ≤ 5ms/crop |
+| Color Analysis | Cropped body ROI (64×128) | ResNet-18 multi-label | upper/lower body color (11 classes) | ≤ 8ms/crop |
+| Clothing Type | Cropped body ROI (128×256) | EfficientNet-B0 | clothing category (12 classes) | ≤ 10ms/crop |
+| Hat Detection | Cropped head ROI (64×64) | MobileNetV3-small | hat / no-hat + hat type (8 classes) | ≤ 4ms/crop |
+| Accessories | Cropped upper-body ROI | YOLOv8n-pose + classifier | bag / glasses / jewelry / etc. | ≤ 15ms/crop |
+
+#### 2.6.4 Zone Configuration Schema (Extended)
+
+```json
+{
+  "zoneId": "zone-uuid",
+  "cameraId": "cam-01",
+  "name": "Entrance A",
+  "type": "MONITOR",
+  "polygon": [{"x": 100, "y": 150}, {"x": 400, "y": 150}, {"x": 400, "y": 500}, {"x": 100, "y": 500}],
+  "dwellThreshold": 30,
+  "minDisplacement": 50,
+  "reentryWindow": 120,
+  "targetClasses": ["human", "vehicle"],
+  "active": true
+}
+```
+
+#### 2.6.5 Functional Requirements for AI Attribute Selection
+
+- **Zone Editor UI**: Per-zone checkbox grid to select/deselect each AI attribute target
+- **Immediate persistence**: toggling a checkbox auto-saves to the backend without requiring a manual save action
+- **Backward compatibility**: zones without `targetClasses` (or with an empty array) monitor all supported classes
+- **Planned model indicators**: unavailable models shown as greyed-out in the UI with a "준비중" (in preparation) badge
+- **Real-time filter**: the behavior engine applies `targetClasses` filter each frame — no restart required
+
+---
+
+### 2.7 Hardware & Deployment
 
 The system shall support flexible deployment topologies:
 
@@ -197,7 +278,8 @@ The system shall follow a modular microservices-inspired architecture:
 
 - Live multi-camera grid view with overlaid bounding boxes and tracks
 - Real-time loitering event log with thumbnail snapshots
-- Zone drawing and configuration interface
+- Zone drawing and configuration interface (polygon canvas editor with full-viewport vertex drag)
+- **Per-zone AI attribute target selection**: checkbox panel for Human, Vehicle, Face, Mask, Color, Cloth, Hat, Accessories
 - Alert history search with filter by camera, zone, time, severity
 - Heatmap visualization of dwell-time across scene
 - User management with RBAC (Admin, Operator, Viewer roles)

@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node src/index.js",
     "dev": "nodemon src/index.js",
-    "test": "jest"
+    "test": "jest",
+    "discover": "node src/scripts/discoverCameras.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

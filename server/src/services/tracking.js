@@ -194,6 +194,7 @@ class Track {
     this.framesWithoutHit = 0;
     this.bbox = { ...detection.bbox };
     this.confidence = detection.confidence;
+    this.className = detection.className || 'person';
   }
 
   predict() {
@@ -206,6 +207,7 @@ class Track {
   update(detection) {
     this.bbox = this.kalman.update(detection.bbox);
     this.confidence = detection.confidence;
+    this.className = detection.className || this.className;
     this.hitStreak++;
     this.framesWithoutHit = 0;
     this.state = TrackState.Tracked;
@@ -217,6 +219,7 @@ class Track {
       bbox:       { ...this.bbox },
       confidence: this.confidence,
       state:      this.state,
+      className:  this.className,
     };
   }
 }

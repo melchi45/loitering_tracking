@@ -4,7 +4,7 @@ export interface Camera {
   rtspUrl: string;
   ip?: string;
   mac?: string;
-  status: 'live' | 'offline' | 'error' | 'idle';
+  status: 'live' | 'streaming' | 'connecting' | 'reconnecting' | 'offline' | 'error' | 'idle';
 }
 
 export interface BBox {
@@ -19,6 +19,7 @@ export interface Detection {
   confidence: number;
   bbox: BBox;
   class: string;
+  className: string;
   isLoitering: boolean;
   dwellTime: number;
 }
@@ -67,4 +68,9 @@ export interface Zone {
   name: string;
   type: 'MONITOR' | 'EXCLUDE';
   polygon: Array<{ x: number; y: number }>;
+  dwellThreshold?: number;
+  minDisplacement?: number;
+  reentryWindow?: number;
+  active?: boolean;
+  targetClasses?: string[];
 }

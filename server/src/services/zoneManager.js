@@ -43,6 +43,7 @@ class ZoneManager {
 
   addZone(cameraId, zoneData) {
     const id = uuidv4();
+    const targetClasses = Array.isArray(zoneData.targetClasses) ? zoneData.targetClasses : [];
     const zone = {
       id,
       cameraId,
@@ -53,6 +54,7 @@ class ZoneManager {
       minDisplacement: zoneData.minDisplacement  ?? parseInt(process.env.MIN_DISPLACEMENT_PX     || '50'),
       reentryWindow:   zoneData.reentryWindow    ?? parseInt(process.env.REENTRY_WINDOW_SEC       || '120'),
       schedule:        zoneData.schedule         || null,
+      targetClasses,
       active:          true,
     };
 
@@ -86,6 +88,12 @@ class ZoneManager {
   // ─── Private ──────────────────────────────────────────────────────────────
 
   _rowToZone(row) {
+    let targetClasses = [];
+    if (Array.isArray(row.targetClasses)) {
+      targetClasses = row.targetClasses;
+    } else if (typeof row.targetClasses === 'string' && row.targetClasses) {
+      try { targetClasses = JSON.parse(row.targetClasses); } catch (_) {}
+    }
     return {
       id:              row.id,
       cameraId:        row.cameraId,
@@ -98,6 +106,7 @@ class ZoneManager {
       schedule:        row.schedule && typeof row.schedule === 'string'
                          ? JSON.parse(row.schedule)
                          : (row.schedule || null),
+      targetClasses,
       active:          row.active === 1 || row.active === true,
     };
   }

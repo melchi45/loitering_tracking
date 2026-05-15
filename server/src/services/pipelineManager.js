@@ -1,6 +1,31 @@
 'use strict';
 
 const { v4: uuidv4 } = require('uuid');
+
+/**
+ * Parse width/height from JPEG SOF marker — no full decode, reads ~100 bytes.
+ * @param {Buffer} buf
+ * @returns {{ width: number, height: number } | null}
+ */
+function getJpegSize(buf) {
+  if (!buf || buf.length < 4 || buf[0] !== 0xFF || buf[1] !== 0xD8) return null;
+  let i = 2;
+  while (i + 3 < buf.length) {
+    if (buf[i] !== 0xFF) break;
+    const marker = buf[i + 1];
+    if (marker === 0xC0 || marker === 0xC1 || marker === 0xC2) {
+      if (i + 8 < buf.length) {
+        return { height: buf.readUInt16BE(i + 5), width: buf.readUInt16BE(i + 7) };
+      }
+      break;
+    }
+    if (i + 3 >= buf.length) break;
+    const segLen = buf.readUInt16BE(i + 2);
+    if (segLen < 2) break;
+    i += 2 + segLen;
+  }
+  return null;
+}
 const RTSPCapture     = require('./rtspCapture');
 const DetectionService = require('./detection');
 const { ByteTracker } = require('./tracking');
@@ -24,6 +49,11 @@ class PipelineManager {
     this._zoneManager = new ZoneManager(db);
     this._alertService = new AlertService(db);
     this._detector    = null;  // Shared single model instance
+
+    // Single listener — broadcast saved alerts to all connected clients
+    this._alertService.on('alert', (alert) => {
+      this._io.emit('alert:new', alert);
+    });
   }
 
   /**
@@ -46,7 +76,7 @@ class PipelineManager {
     }
 
     const rtspUrl = this._buildRtspUrl(camera);
-    const capture = new RTSPCapture(camera.id, rtspUrl, { fps: 10, width: 640, height: 640 });
+    const capture = new RTSPCapture(camera.id, rtspUrl, { fps: 10, width: 640 });
     const tracker = new ByteTracker();
     const behavior = new BehaviorEngine(this._zoneManager);
 
@@ -71,10 +101,6 @@ class PipelineManager {
       }
     });
 
-    this._alertService.on('alert', (alert) => {
-      this._io.emit('alert:new', alert);
-    });
-
     // ── Frame processing ──────────────────────────────────────────────────
     capture.on('frame', async (jpegBuffer) => {
       if (!ctx.running) return;
@@ -84,19 +110,29 @@ class PipelineManager {
       ctx.frameCount++;
       ctx.lastFrameAt = timestamp;
 
-      // 1. Emit raw frame (base64 JPEG)
+      // 1. Parse actual JPEG dimensions from buffer header (fast — no full decode)
+      const jpegSize  = getJpegSize(jpegBuffer);
+      let frameWidth  = jpegSize?.width  ?? 640;
+      let frameHeight = jpegSize?.height ?? 640;
+
+      // Emit raw frame with correct dimensions so the UI can scale immediately
       this._io.to(camera.id).emit('frame', {
-        cameraId:  camera.id,
-        frameId:   currentFrameId,
+        cameraId:    camera.id,
+        frameId:     currentFrameId,
         timestamp,
-        data:      jpegBuffer.toString('base64'),
+        data:        jpegBuffer.toString('base64'),
+        frameWidth,
+        frameHeight,
       });
 
       // 2. Run detection (if model is loaded)
       let detections = [];
       if (this._detector) {
         try {
-          detections = await this._detector.detect(jpegBuffer);
+          const result = await this._detector.detect(jpegBuffer);
+          detections  = result.detections;
+          frameWidth  = result.frameWidth;
+          frameHeight = result.frameHeight;
         } catch (err) {
           console.error(`[PipelineManager][${camera.id}] Detection error:`, err.message);
         }
@@ -108,18 +144,24 @@ class PipelineManager {
       // 4. Run behavior analysis
       const enrichedObjects = behavior.update(camera.id, trackedObjects, timestamp);
 
-      // 5. Emit detections + tracking results
+      // 5. Emit detections + tracking results (include frame dimensions for UI scaling)
       this._io.to(camera.id).emit('detections', {
-        cameraId:   camera.id,
-        frameId:    currentFrameId,
+        cameraId:    camera.id,
+        frameId:     currentFrameId,
         timestamp,
-        detections: enrichedObjects,
+        detections:  enrichedObjects,
+        frameWidth,
+        frameHeight,
       });
     });
 
     capture.on('started', ({ cmdline }) => {
-      console.log(`[PipelineManager][${camera.id}] FFmpeg started`);
+      console.log(`[PipelineManager][${camera.id}] FFmpeg started: ${cmdline}`);
       this._updateCameraStatus(camera.id, 'streaming');
+    });
+
+    capture.on('warn', ({ message }) => {
+      console.warn(`[RTSPCapture][${camera.id}] ${message}`);
     });
 
     capture.on('reconnecting', ({ attempt, delay }) => {

@@ -5,6 +5,21 @@ const { EventEmitter } = require('events');
 const HISTORY_CAPACITY = 300;  // ~30 seconds at 10 FPS
 const FPS = 10;
 
+// Maps zone targetClass keys to detection className values
+const TARGET_CLASS_MAP = {
+  human:   ['person'],
+  vehicle: ['bicycle', 'car', 'motorcycle', 'bus', 'truck'],
+};
+
+function classMatchesZone(className, targetClasses) {
+  if (!targetClasses || targetClasses.length === 0) return true;
+  for (const tc of targetClasses) {
+    const allowed = TARGET_CLASS_MAP[tc] || [tc];
+    if (allowed.includes(className)) return true;
+  }
+  return false;
+}
+
 /**
  * Detects loitering behavior from tracked objects within defined zones.
  * Emits 'loitering' when a person exceeds dwellThreshold with low displacement.
@@ -36,11 +51,15 @@ class BehaviorEngine extends EventEmitter {
       const cx = bbox.x + bbox.width  / 2;
       const cy = bbox.y + bbox.height / 2;
 
-      // Determine which MONITOR zone (if any) the object is in
+      const objClass = obj.className || 'person';
+
+      // Determine which MONITOR zone (if any) the object is in and class is targeted
       let matchedZone = null;
       for (const zone of zones) {
         if (zone.type === 'MONITOR' && this._zoneManager.isPointInZone(cx, cy, zone)) {
-          matchedZone = zone;
+          if (classMatchesZone(objClass, zone.targetClasses)) {
+            matchedZone = zone;
+          }
           break;
         }
       }
