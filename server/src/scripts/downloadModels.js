@@ -93,7 +93,11 @@ function download(url, destPath) {
 
     function get(u) {
       const proto = u.startsWith('https') ? https : http;
-      proto.get(u, { headers: { 'User-Agent': 'LTS-ModelDownloader/1.0' } }, (res) => {
+      const opts = {
+        headers: { 'User-Agent': 'LTS-ModelDownloader/1.0' },
+        rejectUnauthorized: false,
+      };
+      proto.get(u, opts, (res) => {
         if (res.statusCode === 301 || res.statusCode === 302) {
           return get(res.headers.location);
         }
