@@ -163,9 +163,9 @@ class PipelineManager {
       ctx._inferring = true;
 
       try {
-        // 2. Run detection (if model is loaded) + filter by analytics config
+        // 2. Run detection — skipped entirely if no detection module is enabled
         let detections = [];
-        if (this._detector) {
+        if (this._detector && analyticsConfig.anyDetectionEnabled()) {
           try {
             const result = await this._detector.detect(jpegBuffer);
             detections  = result.detections.filter(d => analyticsConfig.isClassEnabled(d.className));

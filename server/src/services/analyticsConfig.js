@@ -102,4 +102,15 @@ function isClassEnabled(className) {
   return true; // unknown class → allow
 }
 
-module.exports = { getConfig, setConfig, isEnabled, isClassEnabled, DEFAULT_CONFIG };
+/**
+ * Returns true if at least one YOLO-detectable class module is enabled.
+ * When false, running YOLO inference produces no useful output — skip it.
+ */
+function anyDetectionEnabled() {
+  for (const mod of Object.keys(MODULE_CLASSES)) {
+    if (_config[mod] !== false) return true;
+  }
+  return false;
+}
+
+module.exports = { getConfig, setConfig, isEnabled, isClassEnabled, anyDetectionEnabled, DEFAULT_CONFIG };
