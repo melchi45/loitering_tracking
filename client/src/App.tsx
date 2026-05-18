@@ -7,12 +7,13 @@ import { useI18n, LANGUAGES, type LangCode } from './i18n';
 import CameraGrid from './components/CameraGrid';
 import CameraList from './components/CameraList';
 import AlertPanel from './components/AlertPanel';
+import VideoAnalyticsTab from './components/VideoAnalyticsTab';
 import DiscoveredCameraPanel from './components/DiscoveredCameraPanel';
 import FullscreenCameraView from './components/FullscreenCameraView';
 import type { Alert } from './types';
 
 type Layout = 1 | 4 | 9 | 16;
-type SidebarTab = 'cameras' | 'alerts' | 'zones';
+type SidebarTab = 'cameras' | 'alerts' | 'zones' | 'analytics';
 
 const LAYOUT_OPTIONS: Layout[] = [1, 4, 9, 16];
 
@@ -233,17 +234,19 @@ export default function App() {
         <aside className="w-72 flex flex-col bg-gray-800 border-l border-gray-700 flex-shrink-0 overflow-hidden">
           {/* Sidebar tabs */}
           <div className="flex border-b border-gray-700 flex-shrink-0">
-            {(['cameras', 'alerts', 'zones'] as SidebarTab[]).map((tab) => (
+            {(['cameras', 'alerts', 'zones', 'analytics'] as SidebarTab[]).map((tab) => (
               <button
                 key={tab}
                 onClick={() => setSidebarTab(tab)}
-                className={`flex-1 py-2 text-xs font-semibold uppercase tracking-wide transition-colors relative ${
+                className={`flex-1 py-2 text-[10px] font-semibold uppercase tracking-wide transition-colors relative ${
                   sidebarTab === tab
                     ? 'text-blue-400 border-b-2 border-blue-400'
                     : 'text-gray-500 hover:text-gray-300'
                 }`}
               >
-                {tab === 'cameras' ? t.tabCameras : tab === 'alerts' ? t.tabAlerts : t.tabZones}
+                {tab === 'cameras'   ? t.tabCameras :
+                 tab === 'alerts'    ? t.tabAlerts  :
+                 tab === 'zones'     ? t.tabZones   : t.tabVideoAnalytics}
                 {tab === 'alerts' && unreadAlerts > 0 && (
                   <span className="absolute top-1 right-1 w-4 h-4 text-[9px] font-bold bg-red-600 text-white rounded-full flex items-center justify-center">
                     {unreadAlerts > 9 ? '9+' : unreadAlerts}
@@ -255,8 +258,9 @@ export default function App() {
 
           {/* Sidebar content */}
           <div className="flex-1 overflow-hidden">
-            {sidebarTab === 'cameras' && <CameraList />}
-            {sidebarTab === 'alerts' && <AlertPanel />}
+            {sidebarTab === 'cameras'   && <CameraList />}
+            {sidebarTab === 'alerts'    && <AlertPanel />}
+            {sidebarTab === 'analytics' && <VideoAnalyticsTab />}
             {sidebarTab === 'zones' && (
               <div className="flex flex-col items-center justify-center h-full gap-3 px-4 text-center">
                 <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 text-gray-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">

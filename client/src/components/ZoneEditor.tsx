@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useI18n } from '../i18n';
-import type { Translations } from '../i18n/translations/en';
 import type { Zone } from '../types';
 
 interface Point { x: number; y: number; }
@@ -22,51 +21,6 @@ const ZONE_COLORS: Record<string, { stroke: string; fill: string; selFill: strin
   EXCLUDE: { stroke: '#f59e0b', fill: 'rgba(245,158,11,0.15)', selFill: 'rgba(245,158,11,0.32)' },
 };
 
-interface AiAttr { id: string; label: string; labelKo: string; }
-interface AiAttrGroup { groupKey: keyof Translations; items: AiAttr[]; }
-const AI_ATTRIBUTE_GROUPS: AiAttrGroup[] = [
-  {
-    groupKey: 'zoneGroupPeopleVehicles',
-    items: [
-      { id: 'human',       label: 'Human',      labelKo: '사람'   },
-      { id: 'vehicle',     label: 'Vehicle',    labelKo: '차량'   },
-      { id: 'accessories', label: 'Accessories',labelKo: '소품'   },
-    ],
-  },
-  {
-    groupKey: 'zoneGroupAiAttributes',
-    items: [
-      { id: 'face',  label: 'Face',  labelKo: '얼굴'   },
-      { id: 'mask',  label: 'Mask',  labelKo: '마스크' },
-      { id: 'color', label: 'Color', labelKo: '색상'   },
-      { id: 'cloth', label: 'Cloth', labelKo: '의류'   },
-      { id: 'hat',   label: 'Hat',   labelKo: '모자'   },
-    ],
-  },
-  {
-    groupKey: 'zoneGroupHazards',
-    items: [
-      { id: 'fire',  label: 'Fire',  labelKo: '화재' },
-      { id: 'smoke', label: 'Smoke', labelKo: '연기' },
-    ],
-  },
-  {
-    groupKey: 'zoneGroupIndoor',
-    items: [
-      { id: 'chair',       label: 'Chair',      labelKo: '의자'      },
-      { id: 'diningtable', label: 'Desk/Table', labelKo: '책상/탁자' },
-      { id: 'laptop',      label: 'Laptop',     labelKo: '노트북'    },
-      { id: 'tv',          label: 'TV/Monitor', labelKo: 'TV/모니터' },
-      { id: 'keyboard',    label: 'Keyboard',   labelKo: '키보드'    },
-      { id: 'mouse',       label: 'Mouse',      labelKo: '마우스'    },
-      { id: 'cellphone',   label: 'Phone',      labelKo: '휴대폰'    },
-      { id: 'clock',       label: 'Clock',      labelKo: '시계'      },
-      { id: 'cup',         label: 'Cup',        labelKo: '컵'        },
-      { id: 'bottle',      label: 'Bottle',     labelKo: '병'        },
-      { id: 'book',        label: 'Book',       labelKo: '책'        },
-    ],
-  },
-];
 
 const VERTEX_R   = 6;
 // Hit test radius in canvas CSS pixels — converted to frame coords inside hitVertex
@@ -93,7 +47,7 @@ export default function ZoneEditor({
   cameraId, frame, frameWidth, frameHeight, zones,
   onZoneAdded, onZoneUpdated, onZoneDeleted, onClose,
 }: Props) {
-  const { t, lang } = useI18n();
+  const { t } = useI18n();
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -128,26 +82,9 @@ export default function ZoneEditor({
   const [contextMenu,     setContextMenu]     = useState<{ x: number; y: number } | null>(null);
   const [ctxVertexIdx,    setCtxVertexIdx]    = useState<number | null>(null);
   const [editName,        setEditName]        = useState('');
-  const [targetClasses,   setTargetClasses]   = useState<string[]>([]);
 
   const [saving, setSaving] = useState(false);
   const [error,  setError]  = useState('');
-
-  // AI module availability — loaded from server /api/capabilities on mount
-  const [aiCaps, setAiCaps] = useState<Record<string, boolean>>({
-    human: true, vehicle: true, face: false, mask: false,
-    color: false, cloth: false, hat: false, accessories: false,
-    fire: false, smoke: false,
-    chair: false, couch: false, diningtable: false, furniture: false,
-    laptop: false, tv: false, keyboard: false, mouse: false, cellphone: false, computer: false,
-    clock: false, cup: false, bottle: false, book: false,
-  });
-  useEffect(() => {
-    fetch('/api/capabilities')
-      .then(r => r.json())
-      .then(d => { if (d.ai) setAiCaps(prev => ({ ...prev, ...d.ai })); })
-      .catch(() => {});
-  }, []);
 
   // ── Refs — always current, read from event handlers ──────────────────────
   const selIdRef        = useRef<string | null>(null);
@@ -185,12 +122,11 @@ export default function ZoneEditor({
   }, []);
 
   useEffect(() => {
-    if (!selectedZoneId) { setEditName(''); setTargetClasses([]); return; }
+    if (!selectedZoneId) { setEditName(''); return; }
     const z = zones.find(z => z.id === selectedZoneId);
     if (z) {
       setEditName(z.name);
       editNameRef.current = z.name;
-      setTargetClasses(z.targetClasses ?? []);
     }
   }, [selectedZoneId, zones]);
 
@@ -262,7 +198,6 @@ export default function ZoneEditor({
     setActiveVertexIdx(null);
     setEditName(z.name);
     editNameRef.current = z.name;
-    setTargetClasses(z.targetClasses ?? []);
   }, []);
 
   const clearSelection = useCallback(() => {
@@ -584,22 +519,6 @@ export default function ZoneEditor({
     }
   };
 
-  const handleTargetClassToggle = async (cls: string) => {
-    const selId = selIdRef.current;
-    if (!selId) return;
-    const next = targetClasses.includes(cls)
-      ? targetClasses.filter(c => c !== cls)
-      : [...targetClasses, cls];
-    setTargetClasses(next);
-    try {
-      const data = await apiPut(selId, { targetClasses: next });
-      if (data) onZoneUpdated(data);
-    } catch (err) {
-      setTargetClasses(targetClasses); // rollback
-      setError(err instanceof Error ? err.message : 'Update failed');
-    }
-  };
-
   const handleDeleteZone = async (zoneId: string) => {
     try {
       const res = await fetch(`/api/cameras/${cameraId}/zones/${zoneId}`, { method: 'DELETE' });
@@ -770,51 +689,6 @@ export default function ZoneEditor({
                   <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${selectedZone.type === 'MONITOR' ? 'bg-blue-500' : 'bg-yellow-500'}`} />
                   <span className="text-[10px] text-gray-400">{selectedZone.type}</span>
                   <span className="text-[10px] text-gray-500 ml-auto">{(editPolygon ?? selectedZone.polygon).length} vertices</span>
-                </div>
-
-                <div>
-                  <label className="block text-[10px] text-gray-400 mb-0.5 font-semibold uppercase tracking-wide">
-                    {t.zoneLoiteringTarget}
-                  </label>
-                  <p className="text-[9px] text-gray-600 mb-1.5">
-                    {t.zoneLoiteringTargetHint}
-                  </p>
-                  <div className="space-y-2">
-                    {AI_ATTRIBUTE_GROUPS.map((group) => (
-                      <div key={group.groupKey}>
-                        <div className="text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1">{String(t[group.groupKey])}</div>
-                        <div className="grid grid-cols-2 gap-1">
-                          {group.items.map((attr) => {
-                            const available = aiCaps[attr.id] ?? false;
-                            const checked   = targetClasses.includes(attr.id);
-                            return (
-                              <button
-                                key={attr.id}
-                                onClick={() => available && handleTargetClassToggle(attr.id)}
-                                disabled={!available}
-                                title={available ? '' : '모델 미설치 (서버/models/ 디렉토리 확인)'}
-                                className={`flex items-center gap-1.5 px-2 py-1 rounded text-[10px] text-left transition-colors ${
-                                  !available
-                                    ? 'opacity-35 cursor-not-allowed bg-gray-800 text-gray-500'
-                                    : checked
-                                    ? 'bg-blue-700/70 text-white border border-blue-500'
-                                    : 'bg-gray-800 text-gray-400 hover:bg-gray-700 border border-transparent'
-                                }`}
-                              >
-                                <span className={`w-3 h-3 rounded-sm border flex-shrink-0 flex items-center justify-center ${
-                                  checked ? 'bg-blue-500 border-blue-400' : 'border-gray-600'
-                                }`}>
-                                  {checked && <span className="text-white text-[8px] leading-none">✓</span>}
-                                </span>
-                                <span className="truncate">{lang === 'ko' ? attr.labelKo : attr.label}</span>
-                                {!available && <span className="ml-auto text-[8px] text-gray-600">N/A</span>}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
                 </div>
 
                 <div className="bg-blue-900/30 rounded p-2 text-[10px] text-blue-300 leading-relaxed">

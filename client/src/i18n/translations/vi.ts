@@ -11,6 +11,9 @@ export const vi: Translations = {
   tabCameras: 'Camera',
   tabAlerts: 'Cảnh báo',
   tabZones: 'Vùng',
+  tabVideoAnalytics: 'Phân tích',
+  videoAnalyticsHint: 'Bật hoặc tắt từng mô-đun AI cho tất cả camera trên toàn cục.',
+  videoAnalyticsFooter: 'Các mô-đun bị tắt sẽ dừng xử lý ngay lập tức. Thay đổi có hiệu lực từ khung hình tiếp theo.',
 
   noCameras: 'Chưa có camera nào được thêm.',
   addCamera: 'Thêm Camera',

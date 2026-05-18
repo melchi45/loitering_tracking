@@ -11,6 +11,9 @@ export const zhTW: Translations = {
   tabCameras: '攝影機',
   tabAlerts: '警報',
   tabZones: '區域',
+  tabVideoAnalytics: '分析',
+  videoAnalyticsHint: '全局啟用或停用每個AI模組（對所有攝影機生效）。',
+  videoAnalyticsFooter: '停用的模組將立即停止處理。變更將於下一幀生效。',
 
   noCameras: '尚未新增攝影機。',
   addCamera: '新增攝影機',

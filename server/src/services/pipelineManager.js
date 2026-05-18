@@ -44,6 +44,7 @@ const ZoneManager      = require('./zoneManager');
 const AlertService     = require('./alertService');
 const AttributePipeline = require('./attributePipeline');
 const FireSmokeService  = require('./fireSmokeService');
+const analyticsConfig  = require('./analyticsConfig');
 
 /**
  * Orchestrates the full camera processing pipeline:
@@ -162,12 +163,12 @@ class PipelineManager {
       ctx._inferring = true;
 
       try {
-        // 2. Run detection (if model is loaded)
+        // 2. Run detection (if model is loaded) + filter by analytics config
         let detections = [];
         if (this._detector) {
           try {
             const result = await this._detector.detect(jpegBuffer);
-            detections  = result.detections;
+            detections  = result.detections.filter(d => analyticsConfig.isClassEnabled(d.className));
             frameWidth  = result.frameWidth;
             frameHeight = result.frameHeight;
           } catch (err) {
@@ -181,21 +182,26 @@ class PipelineManager {
         // 4. Run behavior analysis
         const behaviorObjects = behavior.update(camera.id, trackedObjects, timestamp);
 
-        // 5. Attribute enrichment (face / PPE / color) — only when models are loaded
+        // 5. Attribute enrichment (face / PPE / color) — gated by analytics config
         let enrichedObjects = behaviorObjects;
         let faceDetObjects  = [];
-        if (this._attrPipeline && this._attrPipeline.anyReady) {
+        const anyAttrEnabled = analyticsConfig.isEnabled('face') ||
+                               analyticsConfig.isEnabled('mask') ||
+                               analyticsConfig.isEnabled('hat')  ||
+                               analyticsConfig.isEnabled('color') ||
+                               analyticsConfig.isEnabled('cloth');
+        if (anyAttrEnabled && this._attrPipeline && this._attrPipeline.anyReady) {
           try {
             const zones = this._zoneManager.getActiveZones(camera.id);
             const { enrichedObjects: enriched, detectedFaces } =
               await this._attrPipeline.enrich(
-                jpegBuffer, frameWidth, frameHeight, behaviorObjects, zones
+                jpegBuffer, frameWidth, frameHeight, behaviorObjects, zones,
+                analyticsConfig.getConfig()
               );
             enrichedObjects = enriched;
 
-            // Emit face detections as a separate object class so they appear
-            // in the Detection panel with their own bounding box (light-blue)
-            if (detectedFaces.length > 0) {
+            // Emit face detections as separate objects — only if face module enabled
+            if (analyticsConfig.isEnabled('face') && detectedFaces.length > 0) {
               faceDetObjects = detectedFaces.map((f, i) => ({
                 objectId:    90000 + (currentFrameId % 1000) * 10 + i,
                 className:   'face',
@@ -210,11 +216,11 @@ class PipelineManager {
           }
         }
 
-        // 6. Fire/smoke detection — full-frame, runs whenever model is loaded.
-        //    Zone targetClasses (fire/smoke) control ALERTS only, not whether
-        //    detections are shown in the overlay.
+        // 6. Fire/smoke detection — gated by analytics config
         let fireSmokeObjects = [];
-        if (this._fireSmokeService && this._fireSmokeService.ready) {
+        const fireEnabled  = analyticsConfig.isEnabled('fire');
+        const smokeEnabled = analyticsConfig.isEnabled('smoke');
+        if ((fireEnabled || smokeEnabled) && this._fireSmokeService && this._fireSmokeService.ready) {
           try {
             const raw = await this._fireSmokeService.detect(jpegBuffer, frameWidth, frameHeight);
             fireSmokeObjects = raw.map((d, i) => ({
@@ -223,6 +229,11 @@ class PipelineManager {
               isLoitering: false,
               dwellTime:   0,
             }));
+            // Filter fire/smoke by module enable state
+            fireSmokeObjects = fireSmokeObjects.filter(d =>
+              (d.className === 'fire' && fireEnabled) ||
+              (d.className === 'smoke' && smokeEnabled)
+            );
             if (fireSmokeObjects.length > 0) {
               const zones = this._zoneManager.getActiveZones(camera.id);
               for (const det of fireSmokeObjects) {
@@ -234,8 +245,6 @@ class PipelineManager {
                   if (zone.type !== 'MONITOR') continue;
                   if (zone.polygon.length < 3) continue;
                   if (!_pointInPolygon(center, zone.polygon)) continue;
-                  // Alert only when zone explicitly targets this class, with cooldown
-                  if (!zone.targetClasses?.includes(det.className)) continue;
                   const key = `${camera.id}:${zone.name}:${det.className}`;
                   const last = this._fireAlertCooldown.get(key) || 0;
                   if (timestamp - last < 10000) continue;

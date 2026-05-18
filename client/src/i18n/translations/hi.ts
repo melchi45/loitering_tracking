@@ -11,6 +11,9 @@ export const hi: Translations = {
   tabCameras: 'कैमरे',
   tabAlerts: 'अलर्ट',
   tabZones: 'ज़ोन',
+  tabVideoAnalytics: 'विश्लेषण',
+  videoAnalyticsHint: 'सभी कैमरों के लिए प्रत्येक AI मॉड्यूल को विश्व स्तर पर सक्षम या अक्षम करें।',
+  videoAnalyticsFooter: 'अक्षम मॉड्यूल तुरंत प्रसंस्करण रोक देते हैं। परिवर्तन अगले फ्रेम से लागू होते हैं।',
 
   noCameras: 'कोई कैमरा नहीं जोड़ा गया।',
   addCamera: 'कैमरा जोड़ें',

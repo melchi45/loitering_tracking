@@ -11,6 +11,9 @@ export const zhCN: Translations = {
   tabCameras: '摄像头',
   tabAlerts: '警报',
   tabZones: '区域',
+  tabVideoAnalytics: '分析',
+  videoAnalyticsHint: '全局启用或禁用每个AI模块（对所有摄像头生效）。',
+  videoAnalyticsFooter: '禁用的模块将立即停止处理。更改将在下一帧生效。',
 
   noCameras: '尚未添加摄像头。',
   addCamera: '添加摄像头',

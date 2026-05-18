@@ -11,6 +11,9 @@ export const tr: Translations = {
   tabCameras: 'Kameralar',
   tabAlerts: 'Uyarılar',
   tabZones: 'Bölgeler',
+  tabVideoAnalytics: 'Analitik',
+  videoAnalyticsHint: 'Her AI modülünü tüm kameralar için global olarak etkinleştirin veya devre dışı bırakın.',
+  videoAnalyticsFooter: 'Devre dışı bırakılan modüller işlemeyi hemen durdurur. Değişiklikler bir sonraki karede geçerli olur.',
 
   noCameras: 'Henüz kamera eklenmedi.',
   addCamera: 'Kamera Ekle',

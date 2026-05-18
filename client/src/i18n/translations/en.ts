@@ -11,6 +11,11 @@ export const en = {
   tabCameras: 'Cameras',
   tabAlerts: 'Alerts',
   tabZones: 'Zones',
+  tabVideoAnalytics: 'Analytics',
+
+  // Video Analytics tab
+  videoAnalyticsHint: 'Enable or disable each AI module globally for all cameras.',
+  videoAnalyticsFooter: 'Disabled modules stop processing immediately. Changes take effect on the next video frame.',
 
   // Camera list
   noCameras: 'No cameras added yet.',

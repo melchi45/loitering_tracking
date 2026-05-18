@@ -11,6 +11,9 @@ export const es: Translations = {
   tabCameras: 'Cámaras',
   tabAlerts: 'Alertas',
   tabZones: 'Zonas',
+  tabVideoAnalytics: 'Analítica',
+  videoAnalyticsHint: 'Habilita o deshabilita cada módulo de IA globalmente para todas las cámaras.',
+  videoAnalyticsFooter: 'Los módulos deshabilitados detienen el procesamiento inmediatamente. Los cambios surten efecto en el siguiente fotograma.',
 
   noCameras: 'No se han añadido cámaras.',
   addCamera: 'Añadir Cámara',

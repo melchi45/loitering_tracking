@@ -11,6 +11,9 @@ export const ja: Translations = {
   tabCameras: 'カメラ',
   tabAlerts: 'アラート',
   tabZones: 'ゾーン',
+  tabVideoAnalytics: '分析',
+  videoAnalyticsHint: '各AIモジュールをすべてのカメラでグローバルに有効/無効にします。',
+  videoAnalyticsFooter: '無効なモジュールは直ちに処理を停止します。変更は次のフレームから有効になります。',
 
   noCameras: 'カメラが追加されていません。',
   addCamera: 'カメラを追加',

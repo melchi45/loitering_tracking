@@ -11,6 +11,9 @@ export const ko: Translations = {
   tabCameras: '카메라',
   tabAlerts: '알림',
   tabZones: '구역',
+  tabVideoAnalytics: '분석',
+  videoAnalyticsHint: '각 AI 모듈을 전체 카메라에 대해 전역으로 활성화/비활성화합니다.',
+  videoAnalyticsFooter: '비활성화된 모듈은 즉시 처리를 중지합니다. 변경 사항은 다음 비디오 프레임부터 적용됩니다.',
 
   noCameras: '추가된 카메라가 없습니다.',
   addCamera: '카메라 추가',

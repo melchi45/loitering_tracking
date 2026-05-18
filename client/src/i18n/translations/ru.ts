@@ -11,6 +11,9 @@ export const ru: Translations = {
   tabCameras: 'Камеры',
   tabAlerts: 'Оповещения',
   tabZones: 'Зоны',
+  tabVideoAnalytics: 'Аналитика',
+  videoAnalyticsHint: 'Включите или отключите каждый модуль ИИ глобально для всех камер.',
+  videoAnalyticsFooter: 'Отключённые модули сразу прекращают обработку. Изменения вступают в силу на следующем кадре.',
 
   noCameras: 'Камеры не добавлены.',
   addCamera: 'Добавить камеру',

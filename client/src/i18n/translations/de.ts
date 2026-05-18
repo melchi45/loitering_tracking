@@ -11,6 +11,9 @@ export const de: Translations = {
   tabCameras: 'Kameras',
   tabAlerts: 'Alarme',
   tabZones: 'Zonen',
+  tabVideoAnalytics: 'Analytik',
+  videoAnalyticsHint: 'Aktivieren oder deaktivieren Sie jedes KI-Modul global für alle Kameras.',
+  videoAnalyticsFooter: 'Deaktivierte Module stoppen die Verarbeitung sofort. Änderungen gelten ab dem nächsten Bild.',
 
   noCameras: 'Keine Kameras hinzugefügt.',
   addCamera: 'Kamera hinzufügen',

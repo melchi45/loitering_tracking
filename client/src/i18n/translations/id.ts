@@ -11,6 +11,9 @@ export const id: Translations = {
   tabCameras: 'Kamera',
   tabAlerts: 'Peringatan',
   tabZones: 'Zona',
+  tabVideoAnalytics: 'Analitik',
+  videoAnalyticsHint: 'Aktifkan atau nonaktifkan setiap modul AI secara global untuk semua kamera.',
+  videoAnalyticsFooter: 'Modul yang dinonaktifkan segera berhenti memproses. Perubahan berlaku pada frame berikutnya.',
 
   noCameras: 'Belum ada kamera yang ditambahkan.',
   addCamera: 'Tambah Kamera',

@@ -17,6 +17,7 @@ const { getDiscoveryService } = require('./services/discoveryService');
 const camerasRouter       = require('./api/cameras');
 const zonesRouter         = require('./api/zones');
 const buildEventsRouters  = require('./api/events');
+const analyticsRouter     = require('./api/analytics');
 const registerStreamHandlers = require('./socket/streamHandler');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -61,6 +62,7 @@ async function main() {
   const { eventsRouter: eRouter, alertsRouter: aRouter } = buildEventsRouters(db, alertService);
   app.use('/api/events', eRouter);
   app.use('/api/alerts', aRouter);
+  app.use('/api/analytics', analyticsRouter);
 
   // AI module capabilities — returns which attribute models are available on disk
   app.get('/api/capabilities', (req, res) => {

@@ -11,6 +11,9 @@ export const ar: Translations = {
   tabCameras: 'الكاميرات',
   tabAlerts: 'التنبيهات',
   tabZones: 'المناطق',
+  tabVideoAnalytics: 'تحليلات',
+  videoAnalyticsHint: 'تمكين أو تعطيل كل وحدة ذكاء اصطناعي عالميًا لجميع الكاميرات.',
+  videoAnalyticsFooter: 'تتوقف الوحدات المعطلة عن المعالجة فورًا. تسري التغييرات على الإطار التالي.',
 
   noCameras: 'لم تُضف أي كاميرات بعد.',
   addCamera: 'إضافة كاميرا',
