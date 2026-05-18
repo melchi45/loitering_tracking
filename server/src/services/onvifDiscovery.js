@@ -276,6 +276,7 @@ class ONVIFDiscovery extends EventEmitter {
 
       if (this._seen.has(ip)) return;
       this._seen.add(ip);
+      console.log(`[ONVIFDiscovery] Found: ${ip} (${xaddr})`);
 
       // Derive MAC from EndpointReference if present (format: urn:uuid:... or similar)
       const epRef = extractTag(xml, 'Address') || '';
@@ -292,9 +293,12 @@ class ONVIFDiscovery extends EventEmitter {
         .catch(() => {});
     });
 
-    socket.bind({ address: '0.0.0.0', port: 0 }, () => {
+    socket.bind({ address: '0.0.0.0', port: ONVIF_MULTICAST_PORT }, () => {
       try {
+        // Join multicast group so we receive ProbeMatch responses sent to 239.255.255.250:3702
+        socket.addMembership(ONVIF_MULTICAST_ADDR);
         socket.setMulticastTTL(4);
+        socket.setMulticastLoopback(false);
         socket.send(probe, 0, probe.length, ONVIF_MULTICAST_PORT, ONVIF_MULTICAST_ADDR);
         console.log('[ONVIFDiscovery] Probe sent to', ONVIF_MULTICAST_ADDR);
       } catch (err) {

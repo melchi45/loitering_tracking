@@ -444,7 +444,7 @@ export default function CameraList() {
                             SUNAPI
                           </span>
                         )}
-                        {(src === 'onvif' || src === 'both') && (
+                        {(src === 'onvif' || src === 'both' || !!cam.SupportOnvif) && (
                           <span className="text-[9px] px-1 py-0.5 rounded bg-purple-900 text-purple-300">
                             ONVIF
                           </span>

@@ -20,14 +20,16 @@ function Badge({ ok, label }: { ok: boolean; label: string }) {
   );
 }
 
-function SourceBadge({ source }: { source?: string }) {
-  if (!source) return null;
+function SourceBadge({ source, supportOnvif }: { source?: string; supportOnvif?: boolean }) {
+  const showWiseNet = source === 'udp' || source === 'both';
+  const showOnvif   = source === 'onvif' || source === 'both' || !!supportOnvif;
+  if (!showWiseNet && !showOnvif) return null;
   return (
     <div className="flex gap-1 mt-1">
-      {(source === 'udp' || source === 'both') && (
+      {showWiseNet && (
         <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-900 text-blue-300">WiseNet</span>
       )}
-      {(source === 'onvif' || source === 'both') && (
+      {showOnvif && (
         <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-900 text-purple-300">ONVIF</span>
       )}
     </div>
@@ -98,7 +100,7 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
             <div className="text-[11px] text-gray-400 truncate">{camera.Manufacturer}</div>
           )}
           <div className="text-[11px] text-blue-400 font-mono mt-0.5">{camera.IPAddress}</div>
-          <SourceBadge source={camera.source} />
+          <SourceBadge source={camera.source} supportOnvif={camera.SupportOnvif} />
         </div>
         <button
           onClick={onClose}
