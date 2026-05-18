@@ -34,6 +34,7 @@ const GROUPS: AttrGroup[] = [
     groupKey: 'zoneGroupIndoor',
     items: [
       { id: 'chair',       label: 'Chair',      labelKo: '의자'      },
+      { id: 'couch',       label: 'Couch/Sofa', labelKo: '소파'      },
       { id: 'diningtable', label: 'Desk/Table', labelKo: '책상/탁자' },
       { id: 'laptop',      label: 'Laptop',     labelKo: '노트북'    },
       { id: 'tv',          label: 'TV/Monitor', labelKo: 'TV/모니터' },

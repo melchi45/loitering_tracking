@@ -158,6 +158,9 @@ class PipelineManager {
         frameHeight,
       });
 
+      // Skip all inference when every analytics module is disabled
+      if (!analyticsConfig.anyModuleEnabled()) return;
+
       // Skip inference if previous frame is still being processed (frame-drop)
       if (ctx._inferring) return;
       ctx._inferring = true;

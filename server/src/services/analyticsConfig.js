@@ -113,4 +113,15 @@ function anyDetectionEnabled() {
   return false;
 }
 
-module.exports = { getConfig, setConfig, isEnabled, isClassEnabled, anyDetectionEnabled, DEFAULT_CONFIG };
+/**
+ * Returns true if ANY analytics module is enabled (YOLO classes + attribute + fire/smoke).
+ * When false, the entire inference path (tracker, behavior, attributes) can be skipped.
+ */
+function anyModuleEnabled() {
+  for (const key of Object.keys(DEFAULT_CONFIG)) {
+    if (_config[key] !== false) return true;
+  }
+  return false;
+}
+
+module.exports = { getConfig, setConfig, isEnabled, isClassEnabled, anyDetectionEnabled, anyModuleEnabled, DEFAULT_CONFIG };
