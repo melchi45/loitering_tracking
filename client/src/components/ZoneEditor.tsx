@@ -34,7 +34,7 @@ const AI_ATTRIBUTE_GROUPS: AiAttrGroup[] = [
     ],
   },
   {
-    label: 'AI 속성',
+    groupKey: 'zoneGroupAiAttributes',
     items: [
       { id: 'face',  label: 'Face',  labelKo: '얼굴'   },
       { id: 'mask',  label: 'Mask',  labelKo: '마스크' },
@@ -44,14 +44,14 @@ const AI_ATTRIBUTE_GROUPS: AiAttrGroup[] = [
     ],
   },
   {
-    label: '위험물',
+    groupKey: 'zoneGroupHazards',
     items: [
       { id: 'fire',  label: 'Fire',  labelKo: '화재' },
       { id: 'smoke', label: 'Smoke', labelKo: '연기' },
     ],
   },
   {
-    label: '실내 / 사무 객체',
+    groupKey: 'zoneGroupIndoor',
     items: [
       { id: 'chair',       label: 'Chair',      labelKo: '의자'      },
       { id: 'diningtable', label: 'Desk/Table', labelKo: '책상/탁자' },
@@ -93,6 +93,7 @@ export default function ZoneEditor({
   cameraId, frame, frameWidth, frameHeight, zones,
   onZoneAdded, onZoneUpdated, onZoneDeleted, onClose,
 }: Props) {
+  const { t, lang } = useI18n();
   const canvasRef    = useRef<HTMLCanvasElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -360,10 +361,10 @@ export default function ZoneEditor({
         ctx.font = 'bold 11px sans-serif';
         if (activeVertexIdx !== null) {
           ctx.fillStyle = 'rgba(255,245,150,0.95)';
-          ctx.fillText(`꼭짓점 ${activeVertexIdx + 1} — 드래그하거나 이동 위치 클릭`, 12, 24);
+          ctx.fillText(`Vertex ${activeVertexIdx + 1} — ${t.zoneDrawVertexHint}`, 12, 24);
         } else {
           ctx.fillStyle = 'rgba(180,200,255,0.88)';
-          ctx.fillText('꼭짓점 드래그로 이동  /  꼭짓점 위 우클릭 → 꼭짓점 삭제  /  빈 곳 우클릭 → 저장·Zone 삭제', 12, 24);
+          ctx.fillText(t.zoneVertexHint, 12, 24);
         }
       }
     }
@@ -394,10 +395,10 @@ export default function ZoneEditor({
         const fp0 = frameToCanvas(drawPoints[0].x, drawPoints[0].y);
         ctx.fillStyle = 'rgba(255,255,255,0.88)';
         ctx.font      = '11px sans-serif';
-        ctx.fillText('더블클릭으로 완성', fp0.x + 10, fp0.y - 8);
+        ctx.fillText(t.zoneDrawHint, fp0.x + 10, fp0.y - 8);
       }
     }
-  }, [drawPoints, zones, zoneType, mode, selectedZoneId, editPolygon, activeVertexIdx, frameToCanvas]);
+  }, [drawPoints, zones, zoneType, mode, selectedZoneId, editPolygon, activeVertexIdx, frameToCanvas, t]);
 
   // ── Mouse events ─────────────────────────────────────────────────────────
 
@@ -532,8 +533,8 @@ export default function ZoneEditor({
   };
 
   const handleSaveNew = async () => {
-    if (drawPoints.length < 3) { setError('최소 3개 꼭짓점이 필요합니다.'); return; }
-    if (!zoneName.trim())       { setError('Zone 이름을 입력하세요.'); return; }
+    if (drawPoints.length < 3) { setError(t.zoneVertexDeleteMin); return; }
+    if (!zoneName.trim())       { setError(t.zoneEnterName); return; }
     setError('');
     setSaving(true);
     try {
@@ -618,7 +619,7 @@ export default function ZoneEditor({
     const vi       = ctxVertexIdxRef.current;
     if (!selId || !editPoly || vi === null) return;
     if (editPoly.length <= 3) {
-      setError('꼭짓점이 3개이면 더 이상 삭제할 수 없습니다. Zone 전체를 삭제하려면 "Zone 삭제"를 사용하세요.');
+      setError(t.zoneVertexDeleteMin);
       ctxMenuRef.current = null; setContextMenu(null);
       return;
     }
@@ -682,7 +683,7 @@ export default function ZoneEditor({
           <div className="px-3 py-1 text-[10px] text-gray-400 border-b border-gray-700 mb-0.5 font-semibold truncate">
             {selectedZone?.name ?? 'Zone'}
             {ctxVertexIdx !== null && (
-              <span className="text-yellow-400 ml-1">— 꼭짓점 {ctxVertexIdx + 1}</span>
+              <span className="text-yellow-400 ml-1">— Vertex {ctxVertexIdx + 1}</span>
             )}
           </div>
 
@@ -691,10 +692,10 @@ export default function ZoneEditor({
             <button
               onClick={handleDeleteVertex}
               disabled={saving || (editPolygon?.length ?? 0) <= 3}
-              title={(editPolygon?.length ?? 0) <= 3 ? '최소 3개 꼭짓점 필요' : '이 꼭짓점을 삭제하고 자동 저장'}
+              title={(editPolygon?.length ?? 0) <= 3 ? t.zoneVertexDeleteMin : `Delete Vertex ${ctxVertexIdx + 1}`}
               className="w-full text-left px-3 py-1.5 text-orange-400 hover:bg-orange-900/50 disabled:opacity-40 transition-colors"
             >
-              꼭짓점 {ctxVertexIdx + 1} 삭제
+              Delete Vertex {ctxVertexIdx + 1}
             </button>
           )}
 
@@ -703,20 +704,20 @@ export default function ZoneEditor({
             disabled={saving}
             className="w-full text-left px-3 py-1.5 text-blue-300 hover:bg-blue-800/60 disabled:opacity-40 transition-colors"
           >
-            {saving ? '저장 중…' : '꼭짓점 변경 저장'}
+            {saving ? t.zoneSaveVertexing : t.zoneSaveVertex}
           </button>
           <button
             onClick={() => selectedZoneId && handleDeleteZone(selectedZoneId)}
             className="w-full text-left px-3 py-1.5 text-red-400 hover:bg-red-900/50 transition-colors"
           >
-            Zone 삭제
+            {t.zoneDeleteZone}
           </button>
           <div className="border-t border-gray-700 my-0.5" />
           <button
             onClick={() => { ctxMenuRef.current = null; setContextMenu(null); }}
             className="w-full text-left px-3 py-1.5 text-gray-400 hover:bg-gray-700 transition-colors"
           >
-            닫기
+            {t.zoneCancel}
           </button>
         </div>
       )}
@@ -725,8 +726,8 @@ export default function ZoneEditor({
       <div className="absolute top-0 right-0 h-full w-64 bg-gray-900/95 border-l border-gray-700 flex flex-col text-xs z-[105]">
 
         <div className="flex items-center justify-between px-3 py-2.5 bg-gray-800 border-b border-gray-700 flex-shrink-0">
-          <span className="font-bold text-sm text-white">Zone 편집</span>
-          <button onClick={onClose} className="text-gray-400 hover:text-white text-lg leading-none px-1" title="닫기">×</button>
+          <span className="font-bold text-sm text-white">{t.zoneEdit}</span>
+          <button onClick={onClose} className="text-gray-400 hover:text-white text-lg leading-none px-1" title={t.zoneCancel}>×</button>
         </div>
 
         <div className="flex border-b border-gray-700 flex-shrink-0">
@@ -734,13 +735,13 @@ export default function ZoneEditor({
             onClick={() => { setMode('idle'); modeRef.current = 'idle'; setDrawPoints([]); setError(''); }}
             className={`flex-1 py-2 text-[10px] font-bold transition-colors ${mode === 'idle' ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}
           >
-            선택·편집
+            Select / Edit
           </button>
           <button
             onClick={() => { setMode('draw'); modeRef.current = 'draw'; clearSelection(); ctxMenuRef.current = null; setContextMenu(null); setError(''); }}
             className={`flex-1 py-2 text-[10px] font-bold transition-colors ${mode === 'draw' ? 'bg-blue-800 text-white' : 'text-gray-500 hover:text-gray-300'}`}
           >
-            + 그리기
+            {t.zoneAdd}
           </button>
         </div>
 
@@ -751,7 +752,7 @@ export default function ZoneEditor({
               <div className="space-y-2.5">
 
                 <div>
-                  <label className="block text-[10px] text-gray-400 mb-1 font-semibold uppercase tracking-wide">Zone 이름</label>
+                  <label className="block text-[10px] text-gray-400 mb-1 font-semibold uppercase tracking-wide">{t.zoneName}</label>
                   <div className="flex gap-1">
                     <input
                       value={editName}
@@ -759,31 +760,29 @@ export default function ZoneEditor({
                       onBlur={handleSaveName}
                       onKeyDown={(e) => { if (e.key === 'Enter') { handleSaveName(); e.currentTarget.blur(); } }}
                       className="flex-1 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500"
-                      placeholder="Zone 이름"
+                      placeholder={t.zoneName}
                     />
-                    <button onClick={handleSaveName} className="px-2 py-1 text-[10px] rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors" title="이름 저장">✓</button>
+                    <button onClick={handleSaveName} className="px-2 py-1 text-[10px] rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors" title={t.zoneSave}>✓</button>
                   </div>
                 </div>
 
                 <div className="bg-gray-800 rounded p-2 flex items-center gap-2">
                   <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${selectedZone.type === 'MONITOR' ? 'bg-blue-500' : 'bg-yellow-500'}`} />
                   <span className="text-[10px] text-gray-400">{selectedZone.type}</span>
-                  <span className="text-[10px] text-gray-500 ml-auto">{(editPolygon ?? selectedZone.polygon).length}개 꼭짓점</span>
+                  <span className="text-[10px] text-gray-500 ml-auto">{(editPolygon ?? selectedZone.polygon).length} vertices</span>
                 </div>
 
-                {/* AI 감지 대상 선택 */}
                 <div>
                   <label className="block text-[10px] text-gray-400 mb-0.5 font-semibold uppercase tracking-wide">
-                    Loitering 감시 대상
+                    {t.zoneLoiteringTarget}
                   </label>
                   <p className="text-[9px] text-gray-600 mb-1.5">
-                    선택 시 해당 객체만 체류 시간 집계 · 경보 발생.<br/>
-                    미선택 = 전체. 속성 분석(얼굴·마스크·색상)은 모델 설치 시 자동 실행.
+                    {t.zoneLoiteringTargetHint}
                   </p>
                   <div className="space-y-2">
                     {AI_ATTRIBUTE_GROUPS.map((group) => (
-                      <div key={group.label}>
-                        <div className="text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1">{group.label}</div>
+                      <div key={group.groupKey}>
+                        <div className="text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1">{String(t[group.groupKey])}</div>
                         <div className="grid grid-cols-2 gap-1">
                           {group.items.map((attr) => {
                             const available = aiCaps[attr.id] ?? false;
@@ -807,8 +806,8 @@ export default function ZoneEditor({
                                 }`}>
                                   {checked && <span className="text-white text-[8px] leading-none">✓</span>}
                                 </span>
-                                <span className="truncate">{attr.labelKo}</span>
-                                {!available && <span className="ml-auto text-[8px] text-gray-600">준비중</span>}
+                                <span className="truncate">{lang === 'ko' ? attr.labelKo : attr.label}</span>
+                                {!available && <span className="ml-auto text-[8px] text-gray-600">N/A</span>}
                               </button>
                             );
                           })}
@@ -818,35 +817,32 @@ export default function ZoneEditor({
                   </div>
                 </div>
 
-                <div className="bg-blue-900/30 rounded p-2 text-[10px] text-blue-300 leading-relaxed space-y-0.5">
-                  <p>• 꼭짓점 <strong>드래그</strong> → 실시간 이동 (전체 영역)</p>
-                  <p>• 꼭짓점 위 <strong>우클릭</strong> → 꼭짓점 삭제</p>
-                  <p>• 빈 곳 <strong>우클릭</strong> → 변경 저장 / Zone 삭제</p>
+                <div className="bg-blue-900/30 rounded p-2 text-[10px] text-blue-300 leading-relaxed">
+                  {t.zoneVertexHint}
                 </div>
 
                 {activeVertexIdx !== null && (
                   <div className="bg-yellow-900/40 rounded p-2 text-[10px] text-yellow-300">
-                    꼭짓점 {activeVertexIdx + 1} 선택됨<br />
-                    <span className="text-yellow-200">드래그하거나 이동할 위치를 클릭하세요</span>
+                    Vertex {activeVertexIdx + 1} selected<br />
+                    <span className="text-yellow-200">{t.zoneDrawVertexHint}</span>
                   </div>
                 )}
 
                 <div className="flex gap-1">
-                  <button onClick={clearSelection} className="flex-1 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-[10px] transition-colors">선택 해제</button>
+                  <button onClick={clearSelection} className="flex-1 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-[10px] transition-colors">Deselect</button>
                   <button
                     onClick={handleSavePolygon}
                     disabled={saving || !editPolygon}
                     className="flex-1 py-1.5 rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white text-[10px] font-bold transition-colors"
                   >
-                    {saving ? '저장…' : '꼭짓점 저장'}
+                    {saving ? t.zoneSaveVertexing : t.zoneSaveVertex}
                   </button>
                 </div>
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center h-24 text-center">
                 <p className="text-[10px] text-gray-400 leading-relaxed">
-                  Zone을 클릭하여 선택하세요<br />
-                  꼭짓점 드래그 이동 / 우클릭 저장·삭제
+                  {t.zoneClickToSelect}
                 </p>
               </div>
             )
@@ -854,9 +850,9 @@ export default function ZoneEditor({
 
           {mode === 'draw' && (
             <div className="space-y-2 text-gray-200">
-              <div className="bg-blue-900/30 rounded p-2 text-[10px] text-blue-300">클릭 → 꼭짓점 추가 / 더블클릭 → 완성</div>
+              <div className="bg-blue-900/30 rounded p-2 text-[10px] text-blue-300">{t.zoneDrawHint}</div>
               <div>
-                <label className="block text-[10px] text-gray-400 mb-1">Zone 이름</label>
+                <label className="block text-[10px] text-gray-400 mb-1">{t.zoneName}</label>
                 <input
                   value={zoneName}
                   onChange={(e) => setZoneName(e.target.value)}
@@ -864,13 +860,13 @@ export default function ZoneEditor({
                 />
               </div>
               <div>
-                <label className="block text-[10px] text-gray-400 mb-1">유형</label>
+                <label className="block text-[10px] text-gray-400 mb-1">{t.zoneType}</label>
                 <div className="flex gap-1">
-                  {(['MONITOR', 'EXCLUDE'] as const).map((t) => (
-                    <button key={t} onClick={() => setZoneType(t)}
-                      className={`flex-1 py-1 rounded text-[10px] font-bold transition-colors ${zoneType === t ? (t === 'MONITOR' ? 'bg-blue-700 text-white' : 'bg-yellow-700 text-white') : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
+                  {(['MONITOR', 'EXCLUDE'] as const).map((typ) => (
+                    <button key={typ} onClick={() => setZoneType(typ)}
+                      className={`flex-1 py-1 rounded text-[10px] font-bold transition-colors ${zoneType === typ ? (typ === 'MONITOR' ? 'bg-blue-700 text-white' : 'bg-yellow-700 text-white') : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
                     >
-                      {t === 'MONITOR' ? '감시' : '제외'}
+                      {typ === 'MONITOR' ? t.zoneTypeMonitor : t.zoneTypeExclude}
                     </button>
                   ))}
                 </div>
@@ -878,22 +874,22 @@ export default function ZoneEditor({
               {zoneType === 'MONITOR' && (
                 <>
                   <div>
-                    <label className="block text-[10px] text-gray-400 mb-1">체류 임계값&nbsp;<span className="text-white font-semibold">{dwellThreshold}초</span></label>
+                    <label className="block text-[10px] text-gray-400 mb-1">{t.zoneDwellLabel}&nbsp;<span className="text-white font-semibold">{dwellThreshold}{t.zoneSeconds}</span></label>
                     <input type="range" min={5} max={300} value={dwellThreshold} onChange={(e) => setDwellThreshold(Number(e.target.value))} className="w-full accent-blue-500" />
                   </div>
                   <div>
-                    <label className="block text-[10px] text-gray-400 mb-1">최소 이동거리&nbsp;<span className="text-white font-semibold">{minDisplacement}px</span></label>
+                    <label className="block text-[10px] text-gray-400 mb-1">Min Displacement&nbsp;<span className="text-white font-semibold">{minDisplacement}px</span></label>
                     <input type="range" min={10} max={200} value={minDisplacement} onChange={(e) => setMinDisplacement(Number(e.target.value))} className="w-full accent-blue-500" />
                   </div>
                 </>
               )}
               <div className="text-[10px] text-gray-400">
-                꼭짓점&nbsp;<span className="text-white font-bold">{drawPoints.length}</span>개
-                {drawPoints.length >= 3 && <span className="text-green-400 ml-1">✓ 저장 가능</span>}
+                Vertices&nbsp;<span className="text-white font-bold">{drawPoints.length}</span>
+                {drawPoints.length >= 3 && <span className="text-green-400 ml-1">{t.zoneCanSave}</span>}
               </div>
               <div className="flex gap-1">
-                <button onClick={() => { setDrawPoints([]); setError(''); }} className="flex-1 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-[10px]">초기화</button>
-                <button onClick={handleSaveNew} disabled={saving || drawPoints.length < 3} className="flex-1 py-1.5 rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white font-bold text-[10px]">{saving ? '저장…' : '저장'}</button>
+                <button onClick={() => { setDrawPoints([]); setError(''); }} className="flex-1 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-[10px]">{t.zoneReset}</button>
+                <button onClick={handleSaveNew} disabled={saving || drawPoints.length < 3} className="flex-1 py-1.5 rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white font-bold text-[10px]">{saving ? t.zoneSaveVertexing : t.zoneSave}</button>
               </div>
             </div>
           )}
@@ -902,7 +898,7 @@ export default function ZoneEditor({
 
           {zones.length > 0 && (
             <div className="border-t border-gray-700 pt-2 space-y-1">
-              <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wide mb-1">저장된 Zone ({zones.length})</p>
+              <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wide mb-1">Saved Zones ({zones.length})</p>
               {zones.map((z) => (
                 <div
                   key={z.id}
@@ -912,7 +908,7 @@ export default function ZoneEditor({
                   <span className={`w-2 h-2 rounded-full flex-shrink-0 ${z.type === 'MONITOR' ? 'bg-blue-500' : 'bg-yellow-500'}`} />
                   <span className="flex-1 truncate text-white text-[10px]">{z.name}</span>
                   <span className="text-[9px] text-gray-500 flex-shrink-0">
-                    {z.type === 'MONITOR' ? `${z.dwellThreshold ?? 30}s` : '제외'}
+                    {z.type === 'MONITOR' ? `${z.dwellThreshold ?? 30}${t.zoneSeconds}` : t.zoneTypeExclude}
                     {z.targetClasses && z.targetClasses.length > 0 && (
                       <span className="ml-1 text-blue-500">{z.targetClasses.map(c => c[0].toUpperCase()).join('')}</span>
                     )}

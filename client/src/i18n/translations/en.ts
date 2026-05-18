@@ -97,7 +97,7 @@ export const en = {
   zoneDeleteZone: 'Delete Zone',
   zoneReset: 'Reset',
   zoneCanSave: '✓ Ready to save',
-  zoneVertexDeleteMin: 'Minimum 3 vertices required. Use "Delete Zone" to remove the zone.',
+  zoneVertexDeleteMin: 'Minimum 3 vertices required.',
   zoneEnterName: 'Enter zone name.',
 
   // Camera edit modal
@@ -107,6 +107,6 @@ export const en = {
   cameraCancel: 'Cancel',
   cameraAdd: 'Add Camera',
   cameraEdit: 'Edit Camera',
-} as const;
+};
 
 export type Translations = typeof en;
