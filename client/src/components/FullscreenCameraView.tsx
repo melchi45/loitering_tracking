@@ -1,7 +1,8 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useCamera } from '../hooks/useCamera';
 import { useI18n } from '../i18n';
 import CameraView from './CameraView';
+import VideoAnalyticsTab from './VideoAnalyticsTab';
 import type { Detection } from '../types';
 
 interface Props {
@@ -252,6 +253,9 @@ function DetectionPanel({ cameraId }: { cameraId: string }) {
 }
 
 export default function FullscreenCameraView({ cameraId, cameraName, onClose }: Props) {
+  const [leftTab, setLeftTab] = useState<'detections' | 'analytics'>('detections');
+  const { t } = useI18n();
+
   // Close on Escape key
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -264,9 +268,37 @@ export default function FullscreenCameraView({ cameraId, cameraName, onClose }: 
       className="fixed inset-0 z-50 flex bg-black/90"
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      {/* Left detection panel */}
-      <div className="w-56 flex-shrink-0 bg-gray-800 border-r border-gray-700 flex flex-col overflow-hidden">
-        <DetectionPanel cameraId={cameraId} />
+      {/* Left panel — Detection / Video Analytics tabs */}
+      <div className="w-64 flex-shrink-0 bg-gray-800 border-r border-gray-700 flex flex-col overflow-hidden">
+        {/* Tab bar */}
+        <div className="flex border-b border-gray-700 flex-shrink-0">
+          <button
+            onClick={() => setLeftTab('detections')}
+            className={`flex-1 py-2 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
+              leftTab === 'detections'
+                ? 'text-blue-400 border-b-2 border-blue-400'
+                : 'text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            {t.detections}
+          </button>
+          <button
+            onClick={() => setLeftTab('analytics')}
+            className={`flex-1 py-2 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
+              leftTab === 'analytics'
+                ? 'text-blue-400 border-b-2 border-blue-400'
+                : 'text-gray-500 hover:text-gray-300'
+            }`}
+          >
+            {t.tabVideoAnalytics}
+          </button>
+        </div>
+
+        {/* Tab content */}
+        <div className="flex-1 overflow-hidden">
+          {leftTab === 'detections' && <DetectionPanel cameraId={cameraId} />}
+          {leftTab === 'analytics'  && <VideoAnalyticsTab />}
+        </div>
       </div>
 
       {/* Main video area */}
