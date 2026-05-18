@@ -74,6 +74,15 @@ The system shall incorporate a state-of-the-art object detection pipeline meetin
 | False Positive Rate | <= 5% | <= 2% |
 | Occlusion Handling | Partial (>40% visible) | Heavy (>20% visible) |
 
+#### 2.2.1 Inference Pre-processing
+
+To ensure consistent inference performance regardless of source resolution, all frames are downscaled before being passed to the AI model:
+
+- **Input downscaling**: Each frame is resized to **width = 640 px** (aspect ratio preserved; e.g., a 2560×1920 source becomes 640×480) before any AI inference.
+- **Letterbox padding**: The downscaled frame is padded to a square **640×640** tensor (grey border) to satisfy fixed-size model input requirements.
+- **Output coordinate remapping**: Bounding box coordinates produced by the model are inversely transformed — letterbox padding is removed and coordinates are scaled back to the original frame resolution — so that all reported positions are proportionally correct relative to the source video.
+- **Selective inference gating**: Each AI module (person, vehicle, face, PPE, fire/smoke, etc.) can be individually enabled or disabled at runtime. When a module is disabled, the corresponding inference step is skipped entirely rather than filtered post-hoc, eliminating unnecessary GPU/CPU cycles. ✅ *Implemented*
+
 ### 2.3 Multi-Object Tracking (MOT)
 
 - Support state-of-the-art tracking algorithms: **ByteTrack**, **StrongSORT**, **DeepSORT**, **BoT-SORT**
