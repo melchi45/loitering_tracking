@@ -1,11 +1,14 @@
 'use strict';
 
-const { getUDPDiscovery } = require('../utils/udpDiscovery');
+const { getUDPDiscovery }  = require('../utils/udpDiscovery');
+const { ONVIFDiscovery }   = require('./onvifDiscovery');
 
 const SCAN_TIMEOUT  = 8000;  // each scan duration (ms)
 const SCAN_INTERVAL = 2000;  // brief pause between scans → effectively continuous
 
-function mapDevice(raw) {
+// ─── UDP device mapper ────────────────────────────────────────────────────────
+
+function mapUDPDevice(raw) {
   const mac = (raw.chMac || '').replace(/\xff/g, '').trim();
   const ip  = (raw.chIP  || '').replace(/\xff/g, '').trim();
   if (!ip) return null;
@@ -15,59 +18,104 @@ function mapDevice(raw) {
   const httpPort  = (!raw.nHttpPort  || raw.nHttpPort  === 0) ? 80  : raw.nHttpPort;
   const httpsPort = (!raw.nHttpsPort || raw.nHttpsPort === 0) ? 443 : raw.nHttpsPort;
   const httpType  = raw.httpType != null ? raw.httpType !== 0 : false;
-
-  // Strip non-printable / non-ASCII bytes (fixes garbage after 0.0.0.0\0 in fixed-length fields)
-  const clean = (s) => (s || '').replace(/[^\x20-\x7E]/g, '').trim();
+  const clean     = (s) => (s || '').replace(/[^\x20-\x7E]/g, '').trim();
 
   return {
-    id:          `${mac}_${ip}`,
-    Model:       model,
-    Type:        raw.modelType,
-    IPAddress:   ip,
-    MACAddress:  mac,
-    Port:        raw.nPort,
-    Channel:     1,
-    MaxChannel:  1,
-    HttpType:    httpType,
-    HttpPort:    httpPort,
-    HttpsPort:   httpsPort,
-    Gateway:     clean(raw.chGateway),
-    SubnetMask:  clean(raw.chSubnetMask),
+    id:           `${mac}_${ip}`,
+    source:       'udp',
+    Model:        model,
+    Manufacturer: 'Hanwha Vision',
+    Type:         raw.modelType,
+    IPAddress:    ip,
+    MACAddress:   mac,
+    Port:         raw.nPort,
+    Channel:      1,
+    MaxChannel:   1,
+    HttpType:     httpType,
+    HttpPort:     httpPort,
+    HttpsPort:    httpsPort,
+    Gateway:      clean(raw.chGateway),
+    SubnetMask:   clean(raw.chSubnetMask),
     SupportSunapi: raw.isSupportSunapi === 1,
-    URL:         raw.DDNSURL || '',
-    rtspUrl:     raw.rtspUrl,
+    SupportOnvif:  true,   // Hanwha cameras support ONVIF
+    URL:          raw.DDNSURL || '',
+    rtspUrl:      raw.rtspUrl,
+    profiles:     [],
   };
 }
 
+// ─── Merge helpers ────────────────────────────────────────────────────────────
+
+/** Return the registry key for a device — prefers MAC, falls back to IP. */
+function deviceKey(dev) {
+  if (dev.MACAddress && dev.MACAddress.length > 5) return `mac_${dev.MACAddress}`;
+  return `ip_${dev.IPAddress}`;
+}
+
+/**
+ * Merge an incoming device into an existing one.
+ * UDP result wins for Hanwha-specific fields; ONVIF wins for
+ * Manufacturer/FirmwareVersion/SerialNumber/profiles.
+ */
+function mergeDevices(existing, incoming) {
+  const merged = { ...existing };
+
+  // Source badge
+  if (existing.source !== incoming.source) merged.source = 'both';
+
+  // Prefer non-empty values
+  for (const key of ['Model', 'Manufacturer', 'MACAddress', 'FirmwareVersion',
+                      'SerialNumber', 'rtspUrl', 'Gateway', 'SubnetMask', 'URL']) {
+    if (!merged[key] && incoming[key]) merged[key] = incoming[key];
+  }
+
+  // Capabilities: OR them together
+  if (incoming.SupportSunapi) merged.SupportSunapi = true;
+  if (incoming.SupportOnvif)  merged.SupportOnvif  = true;
+
+  // ONVIF profiles: prefer richer list
+  if (!merged.profiles?.length && incoming.profiles?.length) {
+    merged.profiles = incoming.profiles;
+  }
+
+  return merged;
+}
+
+// ─── DiscoveryService ─────────────────────────────────────────────────────────
+
 class DiscoveryService {
   constructor(io) {
-    this._io    = io;
-    this._timer = null;
-    this._disc  = null;
-    this._known = new Map(); // id → device (persists across scans)
+    this._io       = io;
+    this._timer    = null;
+    this._udpDisc  = null;
+    this._onvifDisc = null;
+    this._known    = new Map();   // deviceKey → device
+    this._ipIndex  = new Map();   // IPAddress → deviceKey  (for cross-protocol dedup)
     this._scanning = false;
+    this._pendingDone = 0;        // counts how many protocols are still running
   }
 
   start() {
-    console.log('[Discovery] Background discovery service started');
+    console.log('[Discovery] Background discovery started (UDP + ONVIF)');
     this._runScan();
   }
 
   stop() {
-    if (this._timer) { clearTimeout(this._timer); this._timer = null; }
-    if (this._disc)  { try { this._disc.stop(); } catch (_) {} this._disc = null; }
-    this._scanning = false;
+    if (this._timer)     { clearTimeout(this._timer); this._timer = null; }
+    if (this._udpDisc)   { try { this._udpDisc.stop();   } catch (_) {} this._udpDisc   = null; }
+    if (this._onvifDisc) { try { this._onvifDisc.stop(); } catch (_) {} this._onvifDisc = null; }
+    this._scanning    = false;
+    this._pendingDone = 0;
   }
 
-  /** Stop current scan, clear all known devices, restart fresh */
   rescan() {
     this.stop();
     this._known.clear();
+    this._ipIndex.clear();
     this._io.emit('discovery:cleared');
     this._runScan();
   }
 
-  /** Send all currently-known devices to a newly connected socket */
   hydrate(socket) {
     for (const device of this._known.values()) {
       socket.emit('discovery:result', { device });
@@ -80,53 +128,96 @@ class DiscoveryService {
 
   get knownCount() { return this._known.size; }
 
-  _runScan() {
-    const UDPDiscovery = getUDPDiscovery();
-    let disc;
-    try {
-      disc = new UDPDiscovery({ timeout: SCAN_TIMEOUT });
-    } catch (err) {
-      console.error('[Discovery] Failed to create UDPDiscovery:', err.message);
-      this._timer = setTimeout(() => this._runScan(), SCAN_INTERVAL);
-      return;
+  // ── Internal ────────────────────────────────────────────────────────────────
+
+  _upsert(device) {
+    // Check if we already know this IP under a different key (cross-protocol merge)
+    let key = deviceKey(device);
+    const existingKeyByIp = this._ipIndex.get(device.IPAddress);
+
+    if (existingKeyByIp && existingKeyByIp !== key) {
+      // Same camera discovered by both protocols — merge under existing key
+      const existing = this._known.get(existingKeyByIp);
+      const merged   = mergeDevices(existing, device);
+      this._known.set(existingKeyByIp, merged);
+      if (device.MACAddress) this._ipIndex.set(device.IPAddress, existingKeyByIp);
+      return merged;
     }
-    this._disc = disc;
-    this._scanning = true;
+
+    // New or same-protocol update
+    const prev   = this._known.get(key);
+    const merged = prev ? mergeDevices(prev, device) : device;
+    this._known.set(key, merged);
+    this._ipIndex.set(device.IPAddress, key);
+    return merged;
+  }
+
+  _emit(device) {
+    this._io.emit('discovery:result', { device });
+  }
+
+  _onProtocolDone() {
+    this._pendingDone--;
+    if (this._pendingDone <= 0) {
+      this._pendingDone = 0;
+      this._scanning    = false;
+      this._io.emit('discovery:scanning', { scanning: false, count: this._known.size });
+      this._timer = setTimeout(() => this._runScan(), SCAN_INTERVAL);
+    }
+  }
+
+  _runScan() {
+    this._scanning    = true;
+    this._pendingDone = 2;   // UDP + ONVIF
     this._io.emit('discovery:scanning', { scanning: true });
 
-    disc.on('device', (raw) => {
-      const device = mapDevice(raw);
-      if (!device) return;
-      const prev = this._known.get(device.id);
-      this._known.set(device.id, device);
-      // Emit to all clients (new device or updated info)
-      if (!prev || JSON.stringify(prev) !== JSON.stringify(device)) {
-        this._io.emit('discovery:result', { device });
-      }
-    });
-
-    disc.on('done', () => {
-      this._disc = null;
-      this._scanning = false;
-      this._io.emit('discovery:scanning', { scanning: false, count: this._known.size });
-      this._timer = setTimeout(() => this._runScan(), SCAN_INTERVAL);
-    });
-
-    disc.on('error', (err) => {
-      console.error('[Discovery]', err.message);
-      this._disc = null;
-      this._scanning = false;
-      this._io.emit('discovery:scanning', { scanning: false, count: this._known.size });
-      this._timer = setTimeout(() => this._runScan(), SCAN_INTERVAL);
-    });
-
+    // ── UDP (WiseNet) ──────────────────────────────────────────────────────
+    const UDPDiscovery = getUDPDiscovery();
     try {
-      disc.start();
+      const udp = new UDPDiscovery({ timeout: SCAN_TIMEOUT });
+      this._udpDisc = udp;
+
+      udp.on('device', (raw) => {
+        const device = mapUDPDevice(raw);
+        if (!device) return;
+        const merged = this._upsert(device);
+        this._emit(merged);
+      });
+
+      udp.on('done',  () => { this._udpDisc = null;  this._onProtocolDone(); });
+      udp.on('error', (err) => {
+        console.warn('[Discovery][UDP]', err.message);
+        this._udpDisc = null;
+        this._onProtocolDone();
+      });
+
+      udp.start();
     } catch (err) {
-      console.error('[Discovery] start failed:', err.message);
-      this._disc = null;
-      this._scanning = false;
-      this._timer = setTimeout(() => this._runScan(), SCAN_INTERVAL);
+      console.error('[Discovery][UDP] failed to start:', err.message);
+      this._onProtocolDone();
+    }
+
+    // ── ONVIF ──────────────────────────────────────────────────────────────
+    try {
+      const onvif = new ONVIFDiscovery({ timeout: SCAN_TIMEOUT });
+      this._onvifDisc = onvif;
+
+      onvif.on('device', (device) => {
+        const merged = this._upsert(device);
+        this._emit(merged);
+      });
+
+      onvif.on('done',  () => { this._onvifDisc = null; this._onProtocolDone(); });
+      onvif.on('error', (err) => {
+        console.warn('[Discovery][ONVIF]', err.message);
+        this._onvifDisc = null;
+        this._onProtocolDone();
+      });
+
+      onvif.start();
+    } catch (err) {
+      console.error('[Discovery][ONVIF] failed to start:', err.message);
+      this._onProtocolDone();
     }
   }
 }

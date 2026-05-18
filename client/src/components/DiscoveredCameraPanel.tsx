@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useCameraStore } from '../stores/cameraStore';
-import type { DiscoveredCamera } from '../types';
+import type { DiscoveredCamera, OnvifProfile } from '../types';
 
 function Row({ label, value }: { label: string; value?: string | number | boolean | null }) {
   if (value === undefined || value === null || value === '') return null;
@@ -12,11 +12,25 @@ function Row({ label, value }: { label: string; value?: string | number | boolea
   );
 }
 
-function Badge({ ok }: { ok: boolean }) {
+function Badge({ ok, label }: { ok: boolean; label: string }) {
   return (
     <span className={`px-1.5 py-0.5 rounded text-[10px] font-semibold ${ok ? 'bg-green-800 text-green-300' : 'bg-gray-700 text-gray-400'}`}>
-      {ok ? 'Yes' : 'No'}
+      {ok ? label : 'No'}
     </span>
+  );
+}
+
+function SourceBadge({ source }: { source?: string }) {
+  if (!source) return null;
+  return (
+    <div className="flex gap-1 mt-1">
+      {(source === 'udp' || source === 'both') && (
+        <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-blue-900 text-blue-300">WiseNet</span>
+      )}
+      {(source === 'onvif' || source === 'both') && (
+        <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-purple-900 text-purple-300">ONVIF</span>
+      )}
+    </div>
   );
 }
 
@@ -27,13 +41,21 @@ interface Props {
 
 export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
   const addCamera = useCameraStore((s) => s.addCamera);
-  const [adding, setAdding] = useState(false);
-  const [added, setAdded]   = useState(false);
-  const [error, setError]   = useState('');
+  const [adding, setAdding]     = useState(false);
+  const [added, setAdded]       = useState(false);
+  const [error, setError]       = useState('');
+  const [selectedProfile, setSelectedProfile] = useState<OnvifProfile | null>(
+    camera.profiles?.find((p) => p.rtspUrl) ?? null
+  );
 
   const scheme  = camera.HttpType ? 'https' : 'http';
   const webPort = camera.HttpType ? camera.HttpsPort : camera.HttpPort;
-  const rtspUrl = camera.rtspUrl || `rtsp://${camera.IPAddress}:${camera.Port || 554}/profile1/media.smp`;
+
+  // Prefer selected ONVIF profile URL, then camera.rtspUrl, then fallback
+  const rtspUrl =
+    selectedProfile?.rtspUrl ||
+    camera.rtspUrl ||
+    `rtsp://${camera.IPAddress}:${camera.Port || 554}/profile1/media.smp`;
 
   const handleAdd = async () => {
     setAdding(true);
@@ -62,22 +84,21 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
     }
   };
 
+  const hasProfiles = (camera.profiles?.length ?? 0) > 0;
+
   return (
     <div className="absolute right-0 top-0 h-full w-80 bg-gray-800 border-l border-gray-600 flex flex-col z-20 shadow-2xl">
       {/* Header */}
-      <div className="flex items-start justify-between px-4 py-3 border-b border-gray-700 bg-gray-750 flex-shrink-0">
+      <div className="flex items-start justify-between px-4 py-3 border-b border-gray-700 flex-shrink-0">
         <div className="min-w-0">
           <div className="text-sm font-bold text-white truncate">
             {camera.Model || 'Unknown Device'}
           </div>
+          {camera.Manufacturer && (
+            <div className="text-[11px] text-gray-400 truncate">{camera.Manufacturer}</div>
+          )}
           <div className="text-[11px] text-blue-400 font-mono mt-0.5">{camera.IPAddress}</div>
-          <div className="flex items-center gap-2 mt-1">
-            <span className="text-[10px] text-gray-500">SUNAPI</span>
-            <Badge ok={!!camera.SupportSunapi} />
-            {camera.Type !== undefined && (
-              <span className="text-[10px] text-gray-500">Type {camera.Type}</span>
-            )}
-          </div>
+          <SourceBadge source={camera.source} />
         </div>
         <button
           onClick={onClose}
@@ -89,46 +110,104 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
       </div>
 
       {/* Details */}
-      <div className="flex-1 overflow-y-auto px-4 py-3">
-        <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-2">
-          Network
-        </div>
-        <Row label="MAC"        value={camera.MACAddress} />
-        <Row label="IP Address" value={camera.IPAddress} />
-        <Row label="Gateway"    value={camera.Gateway} />
-        <Row label="Subnet"     value={camera.SubnetMask} />
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-3">
 
-        <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mt-4 mb-2">
-          Ports
+        {/* Device info */}
+        <div>
+          <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Device</div>
+          <Row label="Manufacturer"    value={camera.Manufacturer} />
+          <Row label="Model"           value={camera.Model} />
+          <Row label="Firmware"        value={camera.FirmwareVersion} />
+          <Row label="Serial"          value={camera.SerialNumber} />
+          <div className="flex items-start gap-2 py-1 border-b border-gray-700/50">
+            <span className="text-[11px] text-gray-500 w-24 flex-shrink-0">SUNAPI</span>
+            <Badge ok={!!camera.SupportSunapi} label="Yes" />
+          </div>
+          <div className="flex items-start gap-2 py-1 border-b border-gray-700/50">
+            <span className="text-[11px] text-gray-500 w-24 flex-shrink-0">ONVIF</span>
+            <Badge ok={!!camera.SupportOnvif} label="Yes" />
+          </div>
         </div>
-        <Row label="HTTP Port"  value={camera.HttpPort} />
-        <Row label="HTTPS Port" value={camera.HttpsPort} />
-        <Row label="RTSP Port"  value={camera.Port} />
 
-        <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mt-4 mb-2">
-          URLs
+        {/* Network */}
+        <div>
+          <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Network</div>
+          <Row label="MAC"        value={camera.MACAddress} />
+          <Row label="Gateway"    value={camera.Gateway} />
+          <Row label="Subnet"     value={camera.SubnetMask} />
+          <Row label="HTTP Port"  value={camera.HttpPort} />
+          <Row label="HTTPS Port" value={camera.HttpsPort} />
+          <Row label="RTSP Port"  value={camera.Port} />
         </div>
-        <div className="py-1 border-b border-gray-700/50">
-          <div className="text-[10px] text-gray-500 mb-0.5">Web</div>
-          <a
-            href={`${scheme}://${camera.IPAddress}:${webPort}`}
-            target="_blank"
-            rel="noreferrer"
-            className="text-[11px] text-blue-400 hover:text-blue-300 break-all"
-          >
-            {scheme}://{camera.IPAddress}:{webPort}
-          </a>
-        </div>
-        <div className="py-1 border-b border-gray-700/50">
-          <div className="text-[10px] text-gray-500 mb-0.5">RTSP</div>
-          <span className="text-[11px] text-green-400 break-all font-mono">{rtspUrl}</span>
-        </div>
-        {camera.URL && (
-          <div className="py-1 border-b border-gray-700/50">
-            <div className="text-[10px] text-gray-500 mb-0.5">DDNS</div>
-            <span className="text-[11px] text-gray-300 break-all">{camera.URL}</span>
+
+        {/* ONVIF Stream Profiles */}
+        {hasProfiles && (
+          <div>
+            <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+              ONVIF Profiles
+            </div>
+            <div className="space-y-1">
+              {camera.profiles!.map((p) => {
+                const isSelected = selectedProfile?.token === p.token;
+                const res = p.width && p.height ? `${p.width}×${p.height}` : '';
+                const label = [p.name || p.token, res, p.encoding, p.fps ? `${p.fps}fps` : '']
+                  .filter(Boolean).join(' · ');
+                return (
+                  <button
+                    key={p.token}
+                    onClick={() => setSelectedProfile(p)}
+                    disabled={!p.rtspUrl}
+                    className={`w-full text-left px-2 py-1.5 rounded border text-[11px] transition-all ${
+                      !p.rtspUrl
+                        ? 'border-gray-700 bg-gray-900 text-gray-600 cursor-not-allowed'
+                        : isSelected
+                        ? 'border-purple-500 bg-purple-900/40 text-white'
+                        : 'border-gray-700 bg-gray-900 text-gray-300 hover:border-gray-500'
+                    }`}
+                  >
+                    <div className="flex items-center gap-1">
+                      {isSelected && <span className="text-purple-400">✓</span>}
+                      <span className="truncate">{label}</span>
+                    </div>
+                    {p.rtspUrl && (
+                      <div className="text-[9px] text-gray-500 font-mono truncate mt-0.5">{p.rtspUrl}</div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
           </div>
         )}
+
+        {/* URLs */}
+        <div>
+          <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">URLs</div>
+          {webPort && (
+            <div className="py-1 border-b border-gray-700/50">
+              <div className="text-[10px] text-gray-500 mb-0.5">Web</div>
+              <a
+                href={`${scheme}://${camera.IPAddress}:${webPort}`}
+                target="_blank"
+                rel="noreferrer"
+                className="text-[11px] text-blue-400 hover:text-blue-300 break-all"
+              >
+                {scheme}://{camera.IPAddress}:{webPort}
+              </a>
+            </div>
+          )}
+          <div className="py-1 border-b border-gray-700/50">
+            <div className="text-[10px] text-gray-500 mb-0.5">
+              RTSP{selectedProfile ? ` (${selectedProfile.name || selectedProfile.token})` : ''}
+            </div>
+            <span className="text-[11px] text-green-400 break-all font-mono">{rtspUrl}</span>
+          </div>
+          {camera.URL && (
+            <div className="py-1 border-b border-gray-700/50">
+              <div className="text-[10px] text-gray-500 mb-0.5">DDNS</div>
+              <span className="text-[11px] text-gray-300 break-all">{camera.URL}</span>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Actions */}

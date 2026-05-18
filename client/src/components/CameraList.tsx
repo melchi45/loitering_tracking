@@ -354,7 +354,7 @@ export default function CameraList() {
                 if (discovered.length === 0) {
                   return (
                     <p className="text-xs text-gray-500 text-center mt-6">
-                      {scanning ? 'Scanning for WiseNet cameras…' : 'No devices found.'}
+                      {scanning ? 'Scanning (WiseNet UDP + ONVIF)…' : 'No devices found.'}
                     </p>
                   );
                 }
@@ -367,8 +367,9 @@ export default function CameraList() {
                 }
 
                 return filtered.map((cam) => {
-                  const isSelected = selected?.id === cam.id;
+                  const isSelected    = selected?.id === cam.id;
                   const matchedFields = getMatchedFields(cam, searchQuery);
+                  const src           = cam.source || 'udp';
                   return (
                     <button
                       key={cam.id}
@@ -384,7 +385,9 @@ export default function CameraList() {
                         <div className="text-xs font-semibold text-white truncate">
                           {cam.Model || cam.IPAddress}
                         </div>
-                        <div className="text-[10px] text-gray-400 truncate">{cam.IPAddress}</div>
+                        <div className="text-[10px] text-gray-400 truncate">
+                          {cam.Manufacturer ? `${cam.Manufacturer} · ` : ''}{cam.IPAddress}
+                        </div>
                         {matchedFields.length > 0 && (
                           <div className="flex flex-wrap gap-0.5 mt-0.5">
                             {matchedFields.map((f) => (
@@ -398,11 +401,18 @@ export default function CameraList() {
                           </div>
                         )}
                       </div>
-                      {cam.SupportSunapi && (
-                        <span className="text-[9px] px-1 py-0.5 rounded bg-green-900 text-green-400 flex-shrink-0 mt-0.5">
-                          SUNAPI
-                        </span>
-                      )}
+                      <div className="flex flex-col items-end gap-0.5 flex-shrink-0 mt-0.5">
+                        {(src === 'udp' || src === 'both') && cam.SupportSunapi && (
+                          <span className="text-[9px] px-1 py-0.5 rounded bg-green-900 text-green-400">
+                            SUNAPI
+                          </span>
+                        )}
+                        {(src === 'onvif' || src === 'both') && (
+                          <span className="text-[9px] px-1 py-0.5 rounded bg-purple-900 text-purple-300">
+                            ONVIF
+                          </span>
+                        )}
+                      </div>
                     </button>
                   );
                 });

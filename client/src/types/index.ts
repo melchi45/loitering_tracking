@@ -83,9 +83,23 @@ export interface Alert {
   acknowledged: boolean;
 }
 
+export interface OnvifProfile {
+  token:    string;
+  name:     string;
+  encoding: string;
+  width:    number;
+  height:   number;
+  fps:      number;
+  rtspUrl:  string;
+}
+
 export interface DiscoveredCamera {
-  id: string;          // MACAddress_IPAddress
+  id: string;          // MACAddress_IPAddress or onvif_IP
+  source?: 'udp' | 'onvif' | 'both';
   Model: string;
+  Manufacturer?: string;
+  FirmwareVersion?: string;
+  SerialNumber?: string;
   Type?: number;
   IPAddress: string;
   MACAddress?: string;
@@ -98,8 +112,10 @@ export interface DiscoveredCamera {
   Gateway?: string;
   SubnetMask?: string;
   SupportSunapi?: boolean;
+  SupportOnvif?: boolean;
   URL?: string;        // DDNS URL
   rtspUrl?: string;
+  profiles?: OnvifProfile[];
   Username?: string;
   Password?: string;
 }
