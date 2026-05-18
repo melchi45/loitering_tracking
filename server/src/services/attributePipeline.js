@@ -59,12 +59,13 @@ class AttributePipeline {
    *   detectedFaces — raw SCRFD results for ALL faces in frame (frame coords),
    *   used by pipelineManager to emit face as a separate detection class.
    */
-  async enrich(jpegBuffer, origW, origH, trackedObjects, zones) {
+  async enrich(jpegBuffer, origW, origH, trackedObjects, zones, config = {}) {
     if (!this._loaded) return { enrichedObjects: trackedObjects, detectedFaces: [] };
 
-    const needFace  = this._face.ready;
-    const needPPE   = this._ppe.ready;
-    const needColor = this._color.ready;
+    // Gate each service by BOTH model availability AND analytics config toggle
+    const needFace  = this._face.ready  && (config.face  !== false);
+    const needPPE   = this._ppe.ready   && (config.mask  !== false || config.hat !== false);
+    const needColor = this._color.ready && (config.color !== false || config.cloth !== false);
 
     if (!needFace && !needPPE && !needColor) return { enrichedObjects: trackedObjects, detectedFaces: [] };
 
@@ -101,33 +102,37 @@ class AttributePipeline {
       }
 
       if (needPPE) {
-        const maskDet = _bestMatch(
-          headRoi,
-          ppeItems.filter(p => p.className === 'mask' || p.className === 'no_mask')
-        );
-        const hatDet = _bestMatch(
-          headRoi,
-          ppeItems.filter(p => p.className === 'hardhat' || p.className === 'no_hardhat')
-        );
-        if (maskDet) {
-          enriched.mask = {
-            status:     maskDet.className === 'mask' ? 'mask_correct' : 'no_mask',
-            confidence: maskDet.confidence,
-          };
+        if (config.mask !== false) {
+          const maskDet = _bestMatch(
+            headRoi,
+            ppeItems.filter(p => p.className === 'mask' || p.className === 'no_mask')
+          );
+          if (maskDet) {
+            enriched.mask = {
+              status:     maskDet.className === 'mask' ? 'mask_correct' : 'no_mask',
+              confidence: maskDet.confidence,
+            };
+          }
         }
-        if (hatDet) {
-          enriched.hat = {
-            className:  hatDet.className,
-            confidence: hatDet.confidence,
-            isHelmet:   hatDet.className === 'hardhat',
-          };
+        if (config.hat !== false) {
+          const hatDet = _bestMatch(
+            headRoi,
+            ppeItems.filter(p => p.className === 'hardhat' || p.className === 'no_hardhat')
+          );
+          if (hatDet) {
+            enriched.hat = {
+              className:  hatDet.className,
+              confidence: hatDet.confidence,
+              isHelmet:   hatDet.className === 'hardhat',
+            };
+          }
         }
       }
 
       if (needColor && colorMap.has(obj.objectId)) {
         const { color, cloth } = colorMap.get(obj.objectId);
-        enriched.color = color;
-        if (cloth) enriched.cloth = cloth;
+        if (config.color !== false) enriched.color = color;
+        if (config.cloth !== false && cloth) enriched.cloth = cloth;
       }
 
       return enriched;
