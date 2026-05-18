@@ -25,24 +25,61 @@ function StatusDot({ status }: { status: Camera['status'] }) {
 type Tab = 'added' | 'found';
 
 const SEARCH_FIELDS: Array<{ key: keyof DiscoveredCamera; label: string }> = [
-  { key: 'Model',       label: 'Model'      },
-  { key: 'IPAddress',   label: 'IP'         },
-  { key: 'MACAddress',  label: 'MAC'        },
-  { key: 'Gateway',     label: 'Gateway'    },
-  { key: 'SubnetMask',  label: 'Subnet'     },
-  { key: 'HttpPort',    label: 'HTTP'       },
-  { key: 'HttpsPort',   label: 'HTTPS'      },
-  { key: 'Port',        label: 'RTSP Port'  },
-  { key: 'URL',         label: 'DDNS'       },
-  { key: 'rtspUrl',     label: 'RTSP URL'   },
+  { key: 'Model',        label: 'Model'       },
+  { key: 'Manufacturer', label: 'Manufacturer'},
+  { key: 'IPAddress',    label: 'IP'          },
+  { key: 'MACAddress',   label: 'MAC'         },
+  { key: 'Gateway',      label: 'Gateway'     },
+  { key: 'SubnetMask',   label: 'Subnet'      },
+  { key: 'HttpPort',     label: 'HTTP'        },
+  { key: 'HttpsPort',    label: 'HTTPS'       },
+  { key: 'Port',         label: 'RTSP Port'   },
+  { key: 'URL',          label: 'DDNS'        },
+  { key: 'rtspUrl',      label: 'RTSP URL'    },
+];
+
+// Virtual category keywords — boolean/enum fields not matched by string comparison
+const CATEGORY_MATCHERS: Array<{
+  keywords: string[];
+  label: string;
+  match: (cam: DiscoveredCamera) => boolean;
+}> = [
+  {
+    keywords: ['onvif'],
+    label: 'ONVIF',
+    match: (cam) => !!(cam.SupportOnvif || cam.source === 'onvif' || cam.source === 'both'),
+  },
+  {
+    keywords: ['sunapi', 'wisenet', 'hanwha'],
+    label: 'SUNAPI',
+    match: (cam) => !!cam.SupportSunapi,
+  },
+  {
+    keywords: ['udp', 'wisenet', 'hanwha'],
+    label: 'WiseNet',
+    match: (cam) => cam.source === 'udp' || cam.source === 'both',
+  },
 ];
 
 function getMatchedFields(cam: DiscoveredCamera, query: string): string[] {
   if (!query.trim()) return [];
-  const q = query.toLowerCase();
-  return SEARCH_FIELDS
-    .filter(({ key }) => String(cam[key] ?? '').toLowerCase().includes(q))
-    .map(({ label }) => label);
+  const q = query.toLowerCase().trim();
+
+  const matched: string[] = [];
+
+  // Standard string fields
+  for (const { key, label } of SEARCH_FIELDS) {
+    if (String(cam[key] ?? '').toLowerCase().includes(q)) matched.push(label);
+  }
+
+  // Virtual category fields (ONVIF, SUNAPI, WiseNet…)
+  for (const { keywords, label, match } of CATEGORY_MATCHERS) {
+    if (keywords.some((kw) => kw.includes(q) || q.includes(kw)) && match(cam)) {
+      if (!matched.includes(label)) matched.push(label);
+    }
+  }
+
+  return matched;
 }
 
 export default function CameraList() {
