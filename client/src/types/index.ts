@@ -23,14 +23,18 @@ export interface FaceAttribute {
 }
 
 export interface MaskAttribute {
-  status:     'mask_correct' | 'mask_incorrect' | 'no_mask';
+  /** uncertain = PPE model running but could not classify this person (head occluded, too small, etc.) */
+  status:     'mask_correct' | 'mask_incorrect' | 'no_mask' | 'uncertain';
   confidence: number;
 }
 
 export interface HatAttribute {
-  className:  string;
-  confidence: number;
-  isHelmet:   boolean;
+  className:        string;
+  confidence:       number;
+  /** null = PPE model running but could not classify this person */
+  isHelmet:         boolean | null;
+  /** true = hardhat detected (compliant), false = no_hardhat (non-compliant), null = uncertain */
+  safetyCompliant?: boolean | null;
 }
 
 export interface ColorAttribute {
@@ -45,6 +49,14 @@ export interface ClothAttribute {
   lower?: string;
 }
 
+export interface CrossCameraReIdEvent {
+  faceId:       string;
+  prevCameraId: string;
+  newCameraId:  string;
+  similarity:   number;
+  timestamp:    number;
+}
+
 export interface Detection {
   objectId:      number;
   confidence:    number;
@@ -53,11 +65,16 @@ export interface Detection {
   className:     string;
   isLoitering:   boolean;
   dwellTime:     number;
+  // Face recognition (for className='face' detection objects)
+  faceId?:       string;   // stable ID assigned by cosine-similarity gallery
+  matchScore?:   number;   // cosine similarity vs. previous gallery entry (0–1)
+  crossCamera?:  { prevCameraId: string };  // present when face matched across cameras
   // Adaptive Multi-Feature Tracking metrics (present only for zone-matched objects)
-  revisitCount?: number;   // times re-entered zone within reentryWindow
-  velocity?:     number;   // average speed in px/s over last 10 frames
-  circularScore?: number;  // 0–1 circular/loop motion indicator
-  riskScore?:    number;   // 0–1 composite loitering priority score
+  revisitCount?: number;
+  velocity?:     number;
+  pacingScore?:  number;
+  circularScore?: number;
+  riskScore?:    number;
   // Attribute enrichment (optional — only present when relevant model is loaded)
   face?:  FaceAttribute;
   mask?:  MaskAttribute;
@@ -129,6 +146,7 @@ export interface Zone {
   dwellThreshold?: number;
   minDisplacement?: number;
   reentryWindow?: number;
+  minRiskScore?: number;
   active?: boolean;
   targetClasses?: string[];
 }

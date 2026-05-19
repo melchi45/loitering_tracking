@@ -39,9 +39,9 @@ class AttributePipeline {
     );
   }
 
-  get anyReady() {
-    return this._face.ready || this._ppe.ready || this._color.ready;
-  }
+  get anyReady()   { return this._face.ready || this._ppe.ready || this._color.ready; }
+  get ppeStatus()  { return this._ppe.status;   }
+  get faceStatus() { return this._face.status;  }
 
   /**
    * Enrich tracked detections with face, PPE, and color/cloth attributes.
@@ -71,7 +71,15 @@ class AttributePipeline {
 
     // SCRFD runs on the full frame independently — does not require person detections.
     // This ensures face bboxes are emitted even when YOLOv8 misses the person bbox.
-    const faces = needFace ? await this._face.detectFaces(jpegBuffer, origW, origH) : [];
+    let faces = needFace ? await this._face.detectFaces(jpegBuffer, origW, origH) : [];
+
+    // ArcFace embedding extraction — runs in parallel for all detected faces
+    if (needFace && faces.length > 0) {
+      const embeddings = await Promise.all(
+        faces.map(f => this._face.getEmbedding(jpegBuffer, f.bbox))
+      );
+      faces = faces.map((f, i) => ({ ...f, embedding: embeddings[i] }));
+    }
 
     // PPE / color enrichment is person-crop based — skip when no persons.
     const persons = trackedObjects.filter(o => o.className === 'person');
@@ -83,7 +91,7 @@ class AttributePipeline {
     const colorMap = new Map();
     if (needColor) {
       await Promise.all(persons.map(async (p) => {
-        const attrs = await this._color.analyze(jpegBuffer, p.bbox);
+        const attrs = await this._color.analyze(jpegBuffer, p.bbox, origW, origH);
         colorMap.set(p.objectId, attrs);
       }));
     }
@@ -107,23 +115,36 @@ class AttributePipeline {
             headRoi,
             ppeItems.filter(p => p.className === 'mask' || p.className === 'no_mask')
           );
-          if (maskDet) {
-            enriched.mask = {
-              status:     maskDet.className === 'mask' ? 'mask_correct' : 'no_mask',
-              confidence: maskDet.confidence,
-            };
-          }
+          // Always emit mask attribute when PPE model is running so the UI can
+          // distinguish "model running, no result" (uncertain) from "model off".
+          enriched.mask = maskDet ? {
+            status:     maskDet.className === 'mask' ? 'mask_correct' : 'no_mask',
+            confidence: maskDet.confidence,
+          } : {
+            status:     'uncertain',
+            confidence: 0,
+          };
         }
         if (config.hat !== false) {
           const hatDet = _bestMatch(
             headRoi,
             ppeItems.filter(p => p.className === 'hardhat' || p.className === 'no_hardhat')
           );
+          // Always emit hat attribute when PPE model is running — null isHelmet = uncertain.
           if (hatDet) {
+            const isHelmet = hatDet.className === 'hardhat';
             enriched.hat = {
-              className:  hatDet.className,
-              confidence: hatDet.confidence,
-              isHelmet:   hatDet.className === 'hardhat',
+              className:       hatDet.className,
+              confidence:      hatDet.confidence,
+              isHelmet,
+              safetyCompliant: isHelmet ? true : false,
+            };
+          } else {
+            enriched.hat = {
+              className:       'uncertain',
+              confidence:      0,
+              isHelmet:        null,
+              safetyCompliant: null,
             };
           }
         }

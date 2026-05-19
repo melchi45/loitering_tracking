@@ -83,6 +83,8 @@ Zones configured with `"targetClasses": ["mask"]` activate mask compliance monit
 
 ### 3.3 Output Specifications
 
+The `mask` attribute is **always emitted** when the PPE model is running and the mask module is enabled. The `status` field distinguishes three possible outcomes:
+
 ```json
 {
   "objectId": "track-uuid",
@@ -91,13 +93,20 @@ Zones configured with `"targetClasses": ["mask"]` activate mask compliance monit
   "confidence": 0.89,
   "mask": {
     "status": "no_mask",
-    "confidence": 0.962,
-    "headBbox": { "x": 110, "y": 52, "width": 40, "height": 48 }
+    "confidence": 0.962
   },
   "isLoitering": false,
   "dwellTime": 8.3
 }
 ```
+
+| `mask.status` | Meaning | confidence | UI badge |
+|---|---|---|---|
+| `mask_correct` | Mask detected and correctly worn | model score | MASK OK (green) |
+| `no_mask`      | Person is not wearing a mask | model score | NO MASK (red) |
+| `uncertain`    | Model running, no classification for this person (occluded, too small, turned away) | 0 | MASK? (gray) |
+
+When `mask` is `undefined`, the PPE model is **not running** (module disabled or model not loaded).
 
 ---
 
@@ -138,13 +147,15 @@ A single-stage model detects and classifies masks directly on the full frame (no
 
 ## 5. Detection Classes
 
-### 5.1 Three-Class Classification
+### 5.1 Classification Output States
 
-| Class ID | Class Name | Description | Alert |
+| Status | Source | Description | Alert |
 |---|---|---|---|
-| 0 | `mask_correct` | Mask covering nose and mouth | None |
-| 1 | `mask_incorrect` | Mask worn below nose, chin mask, etc. | Warning |
-| 2 | `no_mask` | No face covering | Alert |
+| `mask_correct` | PPE model class 1 (Mask) | Mask detected, correctly worn | None |
+| `no_mask`      | PPE model class 3 (NO-Mask) | No mask detected on person | Alert |
+| `uncertain`    | No PPE match in head ROI | Model running, could not classify (occluded, small, rotated) | None |
+
+> **Note**: `mask_incorrect` (chin mask, below-nose mask) is defined for future use. The current PPE model (keremberke/yolov8m-protective-equipment-detection) classifies mask presence as binary (`Mask` / `NO-Mask`). A dedicated 3-class mask classifier is required for Phase-2 incorrect-wearing detection.
 
 ### 5.2 Extended Classification (Optional)
 
@@ -373,11 +384,11 @@ server/models/
 
 #### Mask Detection Models
 
-| Source | URL | Size | Format | Notes |
-|---|---|---|---|---|
-| keremberke/yolov8m-protective-equipment-detection (HF) | https://huggingface.co/keremberke/yolov8m-protective-equipment-detection | ~50 MB | .pt → ONNX | **Selected** — Mask + Hardhat + Safety Vest 동시 감지 |
-| ZainebBaber/Real-Time-Face-Mask-Detection (GH) | https://github.com/ZainebBaber/Real-Time-Face-Mask-Detection | — | YOLOv8 + ONNX | FastAPI + WebSocket 지원 |
-| mendez-luisjose/Face-Mask-Detection-with-YOLOv8 (GH) | https://github.com/mendez-luisjose/Face-Mask-Detection-with-YOLOv8-OpenCV-and-Streamlit | — | YOLOv8 .pt | 2,600장 학습 데이터 |
+| Source | Size | Format | Notes |
+|---|---|---|---|
+| keremberke/yolov8m-protective-equipment-detection (HF) | ~50 MB | .pt → ONNX | **Selected** — Detects Mask + Hardhat + Safety Vest in a single pass |
+| ZainebBaber/Real-Time-Face-Mask-Detection (GH) | — | YOLOv8 + ONNX | FastAPI + WebSocket compatible |
+| mendez-luisjose/Face-Mask-Detection-with-YOLOv8 (GH) | — | YOLOv8 .pt | ~2,600 training images |
 
 #### PPE Model Classes (keremberke)
 
@@ -385,30 +396,55 @@ server/models/
 0: Hardhat       1: Mask         2: NO-Hardhat
 3: NO-Mask       4: NO-Safety-Vest  5: Person
 6: Safety-Cone   7: Safety-Vest  8: machinery  9: vehicle
-→ AI-04 Mask: class 1(Mask) + class 3(NO-Mask)
-→ AI-07 Hat:  class 0(Hardhat) + class 2(NO-Hardhat)
+→ AI-04 Mask: class 1 (Mask) + class 3 (NO-Mask)
+→ AI-07 Hat:  class 0 (Hardhat) + class 2 (NO-Hardhat)
 ```
 
-#### Implementation Notes
+#### Implementation Notes (Phase-1 Complete — May 18, 2026)
 
 ```
-서비스 파일: server/src/services/protectiveEquipService.js
-모델 경로:   server/models/yolov8m_ppe.onnx
-내보내기:    node server/src/scripts/downloadModels.js (Python export 지침 포함)
+Service file:   server/src/services/protectiveEquipService.js
+Model path:     server/models/yolov8m_ppe.onnx
+Export script:  node server/src/scripts/downloadModels.js
 
-Python 내보내기 명령:
+Python export command:
   from ultralytics import YOLO
   from huggingface_hub import hf_hub_download
   pt = hf_hub_download("keremberke/yolov8m-protective-equipment-detection", "best.pt")
   YOLO(pt).export(format="onnx", imgsz=640, simplify=True)
 
-구현 내용:
-  - YOLOv8 [1, 14, 8400] 출력 파싱 (4 bbox + 10 class)
-  - Head ROI 추출로 person bbox 내 마스크/헬멧 매핑
-  - Zone targetClasses에 'mask' 또는 'hat' 포함 시 자동 활성화
-  - mask.status: 'mask_correct' | 'no_mask'
-  - hat.isHelmet: true (hardhat) | false (no_hardhat)
+Implemented:
+  - YOLOv8 [1, 14, 8400] output parsing (4 bbox + 10 classes)
+  - Head ROI extraction (top 35% of person bbox) for mask/helmet IoU matching
+  - Auto-activation when zone targetClasses includes 'mask' or 'hat'
+  - mask.status: 'mask_correct' | 'no_mask' | 'uncertain'
+    - 'uncertain' is emitted when the PPE model is running but no mask/no_mask
+      detection overlaps the person's head ROI (occluded, too small, turned away)
+    - UI displays: MASK OK (green) | NO MASK (red) | MASK? (gray)
+  - hat.isHelmet: true (hardhat) | false (no_hardhat) | null (uncertain)
+    - UI displays: HELMET (blue) | NO HELMET (red) | HAT? (gray)
 ```
+
+#### AI Module Status Reporting
+
+The `/api/capabilities` endpoint returns both a boolean `ai` map and a detailed `status` map:
+
+```json
+{
+  "ai":     { "mask": true, "hat": true },
+  "status": { "mask": "loaded", "hat": "loaded" }
+}
+```
+
+Status values:
+| Value | Meaning | UI Label |
+|---|---|---|
+| `builtin`   | Always available, no model file needed | — |
+| `available` | Model file present, not yet loaded (loads on first camera start) | 대기 |
+| `loaded`    | Model actively running in memory | 활성 |
+| `failed`    | Model file found but loading failed (OOM, corrupt file) | 로드실패 |
+| `missing`   | Model file not on disk — run `npm run download-models` | 미설치 |
+| `pending`   | Phase-2 feature, not yet implemented | Phase-2 |
 
 ### Appendix D: Related RFP Documents
 

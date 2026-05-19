@@ -1,33 +1,107 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useI18n } from '../i18n';
 
-interface AttrItem  { id: string; label: string; labelKo: string; }
+interface AttrItem  { id: string; label: string; labelKo: string; model?: string; pending?: boolean; }
 interface AttrGroup { groupKey: string; items: AttrItem[]; }
+
+interface KalmanConfig {
+  maxAge:             number;
+  iouThreshold:       number;
+  fastSpeedThreshold: number;
+  fastQScale:         number;
+  slowSpeedThreshold: number;
+  slowQScale:         number;
+  occlusionQScale:    number;
+  measurementNoise:   number;
+  iouWeight:          number;
+  appWeight:          number;
+}
+
+const KALMAN_DEFAULTS: KalmanConfig = {
+  maxAge:             90,
+  iouThreshold:       0.25,
+  fastSpeedThreshold: 30,
+  fastQScale:         4.0,
+  slowSpeedThreshold: 5,
+  slowQScale:         0.5,
+  occlusionQScale:    3.0,
+  measurementNoise:   10,
+  iouWeight:          0.7,
+  appWeight:          0.3,
+};
+
+const KALMAN_SLIDERS: Array<{
+  key: keyof KalmanConfig;
+  label: string;
+  hint: string;
+  min: number; max: number; step: number; unit: string;
+}> = [
+  { key: 'maxAge',             label: 'Track Max Age',           hint: 'Frames before lost track is deleted (90=9s @ 10fps)', min: 10,  max: 300, step: 10,   unit: ' fr'   },
+  { key: 'iouThreshold',       label: 'IoU Match Threshold',     hint: 'Min overlap score for re-association (lower = more stable IDs)', min: 0.1, max: 0.6, step: 0.05, unit: '' },
+  { key: 'fastSpeedThreshold', label: 'Fast Speed Threshold',    hint: 'Speed above = fast motion',                           min: 5,   max: 100, step: 1,    unit: ' px/f' },
+  { key: 'fastQScale',         label: 'Fast Q Scale',            hint: 'Q × when fast (trust meas.)',                         min: 1.0, max: 10,  step: 0.5,  unit: '×'     },
+  { key: 'slowSpeedThreshold', label: 'Slow Speed Threshold',    hint: 'Speed below = stationary',                           min: 1,   max: 20,  step: 1,    unit: ' px/f' },
+  { key: 'slowQScale',         label: 'Slow Q Scale',            hint: 'Q × when still (tighten)',                            min: 0.1, max: 1.0, step: 0.05, unit: '×'     },
+  { key: 'occlusionQScale',    label: 'Occlusion Q Scale',       hint: 'Q × during occlusion',                               min: 1.0, max: 10,  step: 0.5,  unit: '×'     },
+  { key: 'measurementNoise',   label: 'Measurement Noise (R)',   hint: 'R↑ = trust prediction more',                         min: 1,   max: 50,  step: 1,    unit: ''      },
+  { key: 'iouWeight',          label: 'IoU Weight (λ_iou)',      hint: 'Higher = rely more on position overlap',              min: 0.0, max: 1.0, step: 0.05, unit: ''      },
+  { key: 'appWeight',          label: 'Appearance Weight (λ_app)', hint: 'Higher = rely more on face similarity (ArcFace)', min: 0.0, max: 1.0, step: 0.05, unit: ''      },
+];
 
 const GROUPS: AttrGroup[] = [
   {
     groupKey: 'zoneGroupPeopleVehicles',
     items: [
-      { id: 'human',       label: 'Human',       labelKo: '사람'   },
-      { id: 'vehicle',     label: 'Vehicle',     labelKo: '차량'   },
-      { id: 'accessories', label: 'Accessories', labelKo: '소품'   },
+      { id: 'human',   label: 'Human',   labelKo: '사람' },
+      { id: 'vehicle', label: 'Vehicle', labelKo: '차량' },
+    ],
+  },
+  {
+    groupKey: 'zoneGroupAccessories',
+    items: [
+      // Phase-1: COCO yolov8n — no extra model required
+      { id: 'backpack',      label: 'Backpack',        labelKo: '배낭'        },
+      { id: 'handbag',       label: 'Handbag',         labelKo: '핸드백'      },
+      { id: 'suitcase',      label: 'Suitcase',        labelKo: '여행가방'    },
+      { id: 'umbrella',      label: 'Umbrella',        labelKo: '우산'        },
+      { id: 'tie',           label: 'Tie',             labelKo: '넥타이'      },
+      // Sports & outdoor equipment (COCO yolov8n)
+      { id: 'sportsball',    label: 'Sports Ball',     labelKo: '공'          },
+      { id: 'frisbee',       label: 'Frisbee',         labelKo: '프리즈비'    },
+      { id: 'skis',          label: 'Skis',            labelKo: '스키'        },
+      { id: 'snowboard',     label: 'Snowboard',       labelKo: '스노보드'    },
+      { id: 'baseballbat',   label: 'Baseball Bat',    labelKo: '야구 방망이' },
+      { id: 'baseballglove', label: 'Baseball Glove',  labelKo: '야구 글러브' },
+      { id: 'skateboard',    label: 'Skateboard',      labelKo: '스케이트보드'},
+      { id: 'surfboard',     label: 'Surfboard',       labelKo: '서핑보드'    },
+      { id: 'tennisracket',  label: 'Tennis Racket',   labelKo: '테니스 라켓' },
+      { id: 'kite',          label: 'Kite',            labelKo: '연'          },
+      // Personal tools / items (COCO yolov8n)
+      { id: 'remote',        label: 'Remote',          labelKo: '리모컨'      },
+      { id: 'scissors',      label: 'Scissors',        labelKo: '가위'        },
+      { id: 'fork',          label: 'Fork',            labelKo: '포크'        },
+      { id: 'knife',         label: 'Knife',           labelKo: '칼'          },
+      { id: 'spoon',         label: 'Spoon',           labelKo: '숟가락'      },
+      // Phase-2: worn accessories — dedicated classifier model required
+      { id: 'glasses',       label: 'Glasses',         labelKo: '안경',       pending: true },
+      { id: 'sunglasses',    label: 'Sunglasses',      labelKo: '선글라스',   pending: true },
     ],
   },
   {
     groupKey: 'zoneGroupAiAttributes',
     items: [
-      { id: 'face',  label: 'Face',  labelKo: '얼굴'   },
-      { id: 'mask',  label: 'Mask',  labelKo: '마스크' },
+      { id: 'face',  label: 'Face Recognition', labelKo: '얼굴 인식', model: 'scrfd_2.5g.onnx + arcface_w600k_r50.onnx' },
+      { id: 'mask',  label: 'Mask',  labelKo: '마스크', model: 'yolov8m_ppe.onnx' },
       { id: 'color', label: 'Color', labelKo: '색상'   },
-      { id: 'cloth', label: 'Cloth', labelKo: '의류'   },
-      { id: 'hat',   label: 'Hat',   labelKo: '모자'   },
+      { id: 'cloth', label: 'Cloth', labelKo: '의류',   pending: true             },
+      { id: 'hat',   label: 'Hat',   labelKo: '헬멧/안전모', model: 'yolov8m_ppe.onnx' },
     ],
   },
   {
     groupKey: 'zoneGroupHazards',
     items: [
-      { id: 'fire',  label: 'Fire',  labelKo: '화재' },
-      { id: 'smoke', label: 'Smoke', labelKo: '연기' },
+      { id: 'fire',  label: 'Fire',  labelKo: '화재', model: 'yolov8s_fire_smoke.onnx' },
+      { id: 'smoke', label: 'Smoke', labelKo: '연기', model: 'yolov8s_fire_smoke.onnx' },
     ],
   },
   {
@@ -47,6 +121,67 @@ const GROUPS: AttrGroup[] = [
       { id: 'book',        label: 'Book',       labelKo: '책'        },
     ],
   },
+  {
+    groupKey: 'zoneGroupAnimals',
+    items: [
+      { id: 'bird',     label: 'Bird',     labelKo: '새'       },
+      { id: 'cat',      label: 'Cat',      labelKo: '고양이'   },
+      { id: 'dog',      label: 'Dog',      labelKo: '개'       },
+      { id: 'horse',    label: 'Horse',    labelKo: '말'       },
+      { id: 'sheep',    label: 'Sheep',    labelKo: '양'       },
+      { id: 'cow',      label: 'Cow',      labelKo: '소'       },
+      { id: 'elephant', label: 'Elephant', labelKo: '코끼리'   },
+      { id: 'bear',     label: 'Bear',     labelKo: '곰'       },
+      { id: 'zebra',    label: 'Zebra',    labelKo: '얼룩말'   },
+      { id: 'giraffe',  label: 'Giraffe',  labelKo: '기린'     },
+    ],
+  },
+  {
+    groupKey: 'zoneGroupOutdoor',
+    items: [
+      { id: 'bench',        label: 'Bench',         labelKo: '벤치'         },
+      { id: 'trafficlight', label: 'Traffic Light',  labelKo: '신호등'       },
+      { id: 'firehydrant',  label: 'Fire Hydrant',   labelKo: '소화전'       },
+      { id: 'stopsign',     label: 'Stop Sign',      labelKo: '정지 표지판'  },
+      { id: 'parkingmeter', label: 'Parking Meter',  labelKo: '주차 미터기'  },
+      { id: 'airplane',     label: 'Airplane',       labelKo: '비행기'       },
+      { id: 'boat',         label: 'Boat',           labelKo: '보트'         },
+      { id: 'train',        label: 'Train',          labelKo: '기차'         },
+    ],
+  },
+  {
+    groupKey: 'zoneGroupFood',
+    items: [
+      { id: 'bowl',      label: 'Bowl',       labelKo: '그릇'    },
+      { id: 'wineglass', label: 'Wine Glass', labelKo: '와인잔'  },
+      { id: 'banana',    label: 'Banana',     labelKo: '바나나'  },
+      { id: 'apple',     label: 'Apple',      labelKo: '사과'    },
+      { id: 'sandwich',  label: 'Sandwich',   labelKo: '샌드위치'},
+      { id: 'orange',    label: 'Orange',     labelKo: '오렌지'  },
+      { id: 'broccoli',  label: 'Broccoli',   labelKo: '브로콜리'},
+      { id: 'carrot',    label: 'Carrot',     labelKo: '당근'    },
+      { id: 'hotdog',    label: 'Hot Dog',    labelKo: '핫도그'  },
+      { id: 'pizza',     label: 'Pizza',      labelKo: '피자'    },
+      { id: 'donut',     label: 'Donut',      labelKo: '도넛'    },
+      { id: 'cake',      label: 'Cake',       labelKo: '케이크'  },
+    ],
+  },
+  {
+    groupKey: 'zoneGroupHomeAppliances',
+    items: [
+      { id: 'bed',          label: 'Bed',           labelKo: '침대'      },
+      { id: 'toilet',       label: 'Toilet',        labelKo: '변기'      },
+      { id: 'sink',         label: 'Sink',          labelKo: '세면대'    },
+      { id: 'microwave',    label: 'Microwave',     labelKo: '전자레인지'},
+      { id: 'oven',         label: 'Oven',          labelKo: '오븐'      },
+      { id: 'toaster',      label: 'Toaster',       labelKo: '토스터'    },
+      { id: 'refrigerator', label: 'Refrigerator',  labelKo: '냉장고'    },
+      { id: 'pottedplant',  label: 'Potted Plant',  labelKo: '화분'      },
+      { id: 'teddybear',    label: 'Teddy Bear',    labelKo: '곰인형'    },
+      { id: 'hairdrier',    label: 'Hair Drier',    labelKo: '헤어드라이어'},
+      { id: 'toothbrush',   label: 'Toothbrush',    labelKo: '칫솔'      },
+    ],
+  },
 ];
 
 export default function VideoAnalyticsTab() {
@@ -54,19 +189,30 @@ export default function VideoAnalyticsTab() {
 
   // enabled: current module on/off state
   const [enabled, setEnabled]   = useState<Record<string, boolean>>({});
-  // caps: which modules have a model available
+  // caps: which modules are available (boolean, backward-compat)
   const [caps, setCaps]         = useState<Record<string, boolean>>({});
+  // capStatus: detailed status per module ('builtin'|'available'|'loaded'|'failed'|'missing'|'pending')
+  const [capStatus, setCapStatus] = useState<Record<string, string>>({});
   const [saving, setSaving]     = useState<string | null>(null);
   const [loadError, setLoadError] = useState(false);
+
+  // Kalman / Tracker settings
+  const [kalman, setKalman]           = useState<KalmanConfig>({ ...KALMAN_DEFAULTS });
+  const [kalmanOpen, setKalmanOpen]   = useState(false);
+  const [kalmanSaving, setKalmanSaving] = useState(false);
+  const kalmanDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     Promise.all([
       fetch('/api/analytics/config').then(r => r.json()),
       fetch('/api/capabilities').then(r => r.json()),
+      fetch('/api/tracker/config').then(r => r.json()),
     ])
-      .then(([cfg, cap]) => {
+      .then(([cfg, cap, kfg]) => {
         if (cfg.success) setEnabled(cfg.data);
         if (cap.ai)      setCaps(cap.ai);
+        if (cap.status)  setCapStatus(cap.status);
+        if (kfg.success) setKalman(prev => ({ ...prev, ...kfg.data }));
       })
       .catch(() => setLoadError(true));
   }, []);
@@ -86,6 +232,35 @@ export default function VideoAnalyticsTab() {
       setEnabled(prev => ({ ...prev, [id]: !next }));
     } finally {
       setSaving(null);
+    }
+  };
+
+  const handleKalmanChange = (key: keyof KalmanConfig, value: number) => {
+    const next = { ...kalman, [key]: value };
+    setKalman(next);
+    if (kalmanDebounce.current) clearTimeout(kalmanDebounce.current);
+    kalmanDebounce.current = setTimeout(async () => {
+      setKalmanSaving(true);
+      try {
+        await fetch('/api/tracker/config', {
+          method:  'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ [key]: value }),
+        });
+      } finally {
+        setKalmanSaving(false);
+      }
+    }, 300);
+  };
+
+  const resetKalman = async () => {
+    setKalmanSaving(true);
+    try {
+      const res = await fetch('/api/tracker/config/reset', { method: 'POST' });
+      const { data } = await res.json();
+      setKalman(data);
+    } finally {
+      setKalmanSaving(false);
     }
   };
 
@@ -119,8 +294,30 @@ export default function VideoAnalyticsTab() {
             <div className="grid grid-cols-2 gap-1">
               {group.items.map((item) => {
                 const available  = caps[item.id] !== false;
-                const isEnabled  = enabled[item.id] !== false;
+                const isEnabled  = enabled[item.id] === true;
                 const isSaving   = saving === item.id;
+                const st         = capStatus[item.id] ?? (item.pending ? 'pending' : '');
+                const isFailed   = st === 'failed';
+
+                const statusTag =
+                  st === 'pending'   ? 'Phase-2'   :
+                  st === 'missing'   ? '미설치'    :
+                  st === 'failed'    ? '로드실패'   :
+                  st === 'loaded'    ? '활성'       :
+                  st === 'available' ? '대기'       : '';
+
+                const tooltipText = !available
+                  ? st === 'pending'
+                    ? '구현 예정 기능 (Phase-2)'
+                    : st === 'failed'
+                    ? `모델 로드 실패 — 파일이 손상되었거나 메모리가 부족합니다\n경로: server/models/${item.model ?? ''}`
+                    : item.model
+                    ? `모델 파일 필요: ${item.model}\n설치: cd server && npm run download-models`
+                    : '모델 미설치'
+                  : isEnabled
+                  ? 'Click to disable'
+                  : 'Click to enable';
+
                 return (
                   <button
                     key={item.id}
@@ -128,16 +325,18 @@ export default function VideoAnalyticsTab() {
                     disabled={!available || isSaving}
                     className={`flex items-center gap-1.5 px-2 py-1.5 rounded text-[10px] text-left transition-colors border ${
                       !available
-                        ? 'opacity-35 cursor-not-allowed bg-gray-800 border-transparent text-gray-500'
+                        ? isFailed
+                          ? 'opacity-50 cursor-not-allowed bg-gray-800 border-red-900/50 text-gray-500'
+                          : 'opacity-35 cursor-not-allowed bg-gray-800 border-transparent text-gray-500'
                         : isEnabled
                         ? 'bg-blue-700/70 border-blue-500 text-white'
                         : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
                     }`}
-                    title={!available ? 'Model not installed' : isEnabled ? 'Click to disable' : 'Click to enable'}
+                    title={tooltipText}
                   >
                     {/* Toggle indicator */}
                     <span className={`w-7 h-3.5 rounded-full flex-shrink-0 relative transition-colors ${
-                      !available ? 'bg-gray-700' : isEnabled ? 'bg-blue-500' : 'bg-gray-600'
+                      !available ? (isFailed ? 'bg-red-900/60' : 'bg-gray-700') : isEnabled ? 'bg-blue-500' : 'bg-gray-600'
                     }`}>
                       <span className={`absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white shadow transition-all ${
                         isEnabled ? 'left-3.5' : 'left-0.5'
@@ -147,18 +346,86 @@ export default function VideoAnalyticsTab() {
                       {lang === 'ko' ? item.labelKo : item.label}
                     </span>
                     {isSaving && <span className="ml-auto text-[8px] text-blue-300 animate-pulse">…</span>}
-                    {!available && <span className="ml-auto text-[8px] text-gray-600">N/A</span>}
+                    {statusTag && !isSaving && (
+                      <span className={`ml-auto text-[8px] shrink-0 ${
+                        st === 'failed'  ? 'text-red-500'   :
+                        st === 'loaded'  ? 'text-green-500' :
+                        st === 'pending' ? 'text-gray-600'  : 'text-gray-600'
+                      }`}>
+                        {statusTag}
+                      </span>
+                    )}
                   </button>
                 );
               })}
             </div>
           </div>
         ))}
+
+        {/* Kalman / Tracker Settings */}
+        <div className="border-t border-gray-700/50 pt-3">
+          <button
+            onClick={() => setKalmanOpen(prev => !prev)}
+            className="flex items-center justify-between w-full text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1.5 hover:text-gray-400"
+          >
+            <span>⚙ Tracker / Kalman Settings</span>
+            <span className="text-[10px]">{kalmanOpen ? '▲' : '▼'}</span>
+          </button>
+
+          {kalmanOpen && (
+            <div className="bg-gray-900/70 rounded-md p-2 space-y-2.5">
+              {KALMAN_SLIDERS.map(s => (
+                <div key={s.key}>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <label className="text-[10px] text-gray-400">{s.label}</label>
+                    <span className="text-[10px] text-white font-semibold font-mono">
+                      {typeof kalman[s.key] === 'number'
+                        ? s.step < 1 ? kalman[s.key].toFixed(2) : kalman[s.key]
+                        : kalman[s.key]
+                      }{s.unit}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={s.min} max={s.max} step={s.step}
+                    value={kalman[s.key]}
+                    onChange={(e) => handleKalmanChange(s.key, Number(e.target.value))}
+                    className="w-full accent-purple-500 h-1"
+                  />
+                  <p className="text-[9px] text-gray-600 mt-0.5">{s.hint}</p>
+                </div>
+              ))}
+
+              <div className="flex gap-1 pt-1 border-t border-gray-700/50">
+                <button
+                  onClick={resetKalman}
+                  disabled={kalmanSaving}
+                  className="flex-1 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-[10px] text-gray-400"
+                >
+                  Reset Defaults
+                </button>
+                {kalmanSaving && (
+                  <span className="text-[9px] text-purple-400 animate-pulse self-center">saving…</span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Footer hint */}
-      <div className="px-3 py-2 border-t border-gray-700 flex-shrink-0">
+      <div className="px-3 py-2 border-t border-gray-700 flex-shrink-0 space-y-1">
         <p className="text-[9px] text-gray-600 leading-relaxed">{t.videoAnalyticsFooter}</p>
+        {GROUPS.flatMap(g => g.items).some(i => capStatus[i.id] === 'missing') && (
+          <p className="text-[9px] text-yellow-700 leading-relaxed">
+            미설치 모듈: <code className="text-yellow-600">cd server && npm run download-models</code>
+          </p>
+        )}
+        {GROUPS.flatMap(g => g.items).some(i => capStatus[i.id] === 'failed') && (
+          <p className="text-[9px] text-red-700 leading-relaxed">
+            로드 실패 모듈이 있습니다. 메모리 부족 또는 모델 파일 손상을 확인하세요.
+          </p>
+        )}
       </div>
     </div>
   );

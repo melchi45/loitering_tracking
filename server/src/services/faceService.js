@@ -43,20 +43,25 @@ class FaceService {
     this._scrfd    = null;
     this._arcface  = null;
     this._ready    = false;
+    // 'not_started' | 'missing' | 'loaded' | 'failed'
+    this._status   = 'not_started';
   }
 
   async load() {
     if (!fs.existsSync(this.scrfdPath)) {
       console.warn('[FaceService] scrfd_2.5g.onnx not found — run: node server/src/scripts/downloadModels.js');
+      this._status = 'missing';
       return;
     }
     try {
       this._scrfd = await ort.InferenceSession.create(this.scrfdPath, {
         executionProviders: ['cpu'], graphOptimizationLevel: 'all',
       });
-      this._ready = true;
+      this._ready  = true;
+      this._status = 'loaded';
       console.log('[FaceService] SCRFD loaded:', path.basename(this.scrfdPath));
     } catch (e) {
+      this._status = 'failed';
       console.warn('[FaceService] SCRFD load failed:', e.message);
       return;
     }
@@ -75,7 +80,8 @@ class FaceService {
     }
   }
 
-  get ready() { return this._ready; }
+  get ready()  { return this._ready;  }
+  get status() { return this._status; }
 
   /**
    * Detect faces in a JPEG frame.

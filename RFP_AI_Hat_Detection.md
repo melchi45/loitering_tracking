@@ -8,7 +8,8 @@
 | **Issue Date** | May 15, 2026 |
 | **Proposal Deadline** | June 30, 2026 |
 | **Zone Target Key** | `hat` |
-| **Status** | **Implementation in Progress** |
+| **Status** | **Phase-1 Complete — Phase-2 Pending** |
+| **Phase-1 Completed** | May 18, 2026 |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -25,6 +26,70 @@
 8. [Performance Requirements](#8-performance-requirements)
 9. [Evaluation Criteria](#9-evaluation-criteria)
 10. [Appendix](#10-appendix)
+
+---
+
+## Implementation Status
+
+### Phase-1 — Complete (May 18, 2026)
+
+Phase-1 delivers end-to-end hardhat/no-hardhat detection using the shared `yolov8m_ppe.onnx` model (PPE model, classes 0 and 2). All pipeline components are implemented and verified.
+
+| Component | File | Status |
+|---|---|---|
+| PPE inference service | `server/src/services/protectiveEquipService.js` | Done |
+| Attribute pipeline (hat block) | `server/src/services/attributePipeline.js` | Done |
+| Analytics config (`hat` key) | `server/src/services/analyticsConfig.js` | Done |
+| Capabilities endpoint (`hat: true`) | `server/src/index.js` | Done |
+| UI toggle (Video Analytics tab) | `client/src/components/VideoAnalyticsTab.tsx` | Done |
+| Detection badge (HELMET / NO HELMET) | `client/src/components/FullscreenCameraView.tsx` | Done |
+| Canvas overlay badge | `client/src/components/CameraView.tsx` | Done |
+| TypeScript types (`HatAttribute`) | `client/src/types/index.ts` | Done |
+
+**What Phase-1 implements:**
+
+- `hat` module toggle in `/api/analytics/config` (PUT/GET)
+- `/api/capabilities` returns `hat: true` when `yolov8m_ppe.onnx` is present
+- The `yolov8m_ppe.onnx` PPE model (keremberke/yolov8m-protective-equipment-detection) is used for both mask (AI-04) and hat/helmet (AI-07) detection — no additional model is required
+- PPE model classes used: `hardhat` (class 0) → `isHelmet: true`, `no_hardhat` (class 2) → `isHelmet: false`
+- Head ROI is extracted as the top 35% of each tracked person bounding box (heuristic, Method A from Section 6.1)
+- Hat detection is IoU-matched to the person head ROI using the `_bestMatch` helper (IoU ≥ 0.1)
+- `hat` attribute is attached to person detection objects and emitted via Socket.IO `detections` event
+- Output schema per person:
+  ```json
+  "hat": {
+    "className":       "hardhat",
+    "confidence":      0.91,
+    "isHelmet":        true,
+    "safetyCompliant": true
+  }
+  ```
+- `safetyCompliant: true` when hardhat detected; `false` when no_hardhat detected; `null` when uncertain
+- Canvas overlay and detection panel display:
+  - `HELMET` (blue) when hardhat confirmed
+  - `NO HELMET` (red) when no_hardhat confirmed
+  - `HAT?` (gray) when PPE model is running but could not classify this person (head occluded, too small, turned away)
+- Hat detection is gated by both `config.hat !== false` (user toggle) and PPE model availability
+- When both `mask` and `hat` are enabled, a single PPE inference pass serves both modules (shared inference)
+- `/api/capabilities` returns both `ai.hat` (boolean) and `status.hat` (`'loaded'|'available'|'missing'|'failed'`) for precise UI feedback
+
+**Phase-1 limitations (not blocking for release):**
+
+- Hat type is binary: `hardhat` / `no_hardhat` only — 8-class taxonomy (Section 4.1) requires `hat_classifier.onnx` (Phase-2)
+- Safety policy alerting (`safety_violation` Socket.IO event) is not implemented — detection data is available for downstream alerting (Phase-2)
+- Hat color is not implemented (Phase-2)
+- No temporal smoothing / majority vote over frames (Section 6.1) — classification result changes frame-by-frame
+
+### Phase-2 — Pending
+
+| Feature | Description | Dependency |
+|---|---|---|
+| 8-class hat taxonomy | `baseball_cap`, `beanie`, `hood_up`, `hat_wide`, `hair_net`, etc. | `hat_classifier.onnx` (MobileNetV3-Small) — model not yet available |
+| Safety policy alerting | `safety_violation` Socket.IO event when `no_hardhat` in a zone with `hatRequired: "helmet_hard"` | Zone schema extension + alert service |
+| Hat color | Per-hat color using head crop color classifier | Color classifier on head ROI |
+| Temporal smoothing | Majority-vote over 10 frames for stable type output | Per-track hat history buffer |
+| Suspicious pattern alerts | Hood-up at night, cap facing away, etc. (Section 4.4) | Time-of-day metadata + hat type taxonomy |
+| Zone `safetyPolicy` config | `dwellThreshold`, `graceperiodSec`, `hatRequired` fields in zone JSON | Zone API schema extension |
 
 ---
 
@@ -87,23 +152,33 @@ Zones configured with `"targetClasses": ["hat"]` activate head accessory detecti
 
 ### 3.3 Output Specifications
 
+The `hat` attribute is **always emitted** when the PPE model is running and the hat module is enabled. The `isHelmet` field distinguishes three possible outcomes:
+
 ```json
 {
   "objectId": "track-uuid",
   "className": "person",
   "bbox": { "x": 100, "y": 50, "width": 60, "height": 180 },
   "hat": {
-    "worn": true,
-    "type": "baseball_cap",
-    "confidence": 0.91,
-    "color": "red",
-    "headBbox": { "x": 108, "y": 52, "width": 44, "height": 42 },
-    "safetyCompliant": null
+    "className":       "hardhat",
+    "confidence":      0.91,
+    "isHelmet":        true,
+    "safetyCompliant": true
   },
   "isLoitering": false,
   "dwellTime": 12.5
 }
 ```
+
+| `hat.isHelmet` | `hat.safetyCompliant` | Source | UI badge |
+|---|---|---|---|
+| `true`  | `true`  | PPE model class 0 (Hardhat) detected | HELMET (blue) |
+| `false` | `false` | PPE model class 2 (NO-Hardhat) detected | NO HELMET (red) |
+| `null`  | `null`  | Model running, no PPE match in head ROI | HAT? (gray) |
+
+When `hat` is `undefined`, the PPE model is **not running** (module disabled or model not loaded).
+
+> **Phase-2 note**: `hat.className` will carry the 8-class taxonomy values (`baseball_cap`, `beanie`, `hood_up`, etc.) once `hat_classifier.onnx` is available. In Phase-1, only `'hardhat'`, `'no_hardhat'`, and `'uncertain'` are used.
 
 ---
 
@@ -437,22 +512,43 @@ server/models/
 
 | Source | URL | Size | Notes |
 |---|---|---|---|
-| keremberke/yolov8m-protective-equipment-detection (HF) | https://huggingface.co/keremberke/yolov8m-protective-equipment-detection | ~50 MB | **Selected** — AI-04(Mask)와 동일 모델 공유 |
-| sharathhhhh/safetyHelmet-detection-yolov8 (HF) | https://huggingface.co/sharathhhhh/safetyHelmet-detection-yolov8 | — | helmet/no-helmet 전용 |
-| jomarkow/Safety-Helmet-Detection (GH) | https://github.com/jomarkow/Safety-Helmet-Detection | — | 공사현장 특화 |
+| keremberke/yolov8m-protective-equipment-detection (HF) | https://huggingface.co/keremberke/yolov8m-protective-equipment-detection | ~50 MB | **Selected (Phase-1)** — shared with AI-04 (Mask Detection) |
+| sharathhhhh/safetyHelmet-detection-yolov8 (HF) | https://huggingface.co/sharathhhhh/safetyHelmet-detection-yolov8 | — | helmet/no-helmet only — alternative single-purpose model |
+| jomarkow/Safety-Helmet-Detection (GH) | https://github.com/jomarkow/Safety-Helmet-Detection | — | construction site specialised |
 
-#### Implementation Notes
+#### Phase-1 Implementation Notes (implemented — May 18, 2026)
 
 ```
-서비스 파일: server/src/services/protectiveEquipService.js (AI-04와 공유)
-모델 경로:   server/models/yolov8m_ppe.onnx
+Service file:  server/src/services/protectiveEquipService.js  (shared with AI-04 Mask)
+Model path:    server/models/yolov8m_ppe.onnx
 
-PPE 모델 클래스 매핑:
-  0: hardhat    → hat.isHelmet = true
-  2: no_hardhat → hat.isHelmet = false (helmets required alert)
-  
-Zone targetClasses에 'hat' 또는 'helmet' 포함 시 자동 활성화
-출력: detection.hat.className / detection.hat.isHelmet / detection.hat.confidence
+PPE model class mapping for hat module:
+  0: hardhat    → hat.isHelmet = true,  safetyCompliant = true
+  2: no_hardhat → hat.isHelmet = false, safetyCompliant = false
+  (no match)   → hat.isHelmet = null,  safetyCompliant = null,  className = 'uncertain'
+
+Activation: analytics config `hat: true` (toggled via VideoAnalyticsTab UI or PUT /api/analytics/config)
+Output fields: detection.hat.className / detection.hat.isHelmet / detection.hat.confidence / detection.hat.safetyCompliant
+
+'uncertain' is always emitted (not undefined) when the PPE model is running — this allows the
+UI to distinguish "model off" (hat = undefined) from "model on, no result" (hat.isHelmet = null).
+
+/api/capabilities:
+  ai.hat     = true  when model file present AND not failed
+  status.hat = 'loaded'    — model loaded and actively running
+             = 'available' — file present, not yet loaded (loads on first camera start)
+             = 'missing'   — yolov8m_ppe.onnx not on disk
+             = 'failed'    — file found but load threw (OOM, corrupt, etc.)
+```
+
+#### Phase-2 Model Candidates (not yet implemented)
+
+```
+Target model:  hat_classifier.onnx (MobileNetV3-Small, 8-class hat taxonomy)
+Model path:    server/models/hat_classifier.onnx
+Input size:    96×96 px (head ROI crop)
+Classes:       no_hat, baseball_cap, beanie, helmet_hard, helmet_bike, hood_up, hat_wide, hair_net
+Training data: HAT-1K + SHWD + HardHat Dataset (see Appendix A)
 ```
 
 ---

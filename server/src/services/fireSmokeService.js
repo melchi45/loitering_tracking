@@ -8,13 +8,20 @@ const sharp = require('sharp');
 const MODEL_SIZE     = 640;
 const CONF_THRESHOLD = 0.35;
 const NMS_THRESHOLD  = 0.45;
-const CLASS_NAMES    = ['fire', 'smoke'];
+
+// Model classes from Abonia1/YOLOv8-Fire-and-Smoke-Detection (3-class output [1,7,8400])
+// Index 1 ('default') is ignored — only fire and smoke are reported.
+const CLASS_NAMES    = ['fire', 'default', 'smoke'];
+const SKIP_CLASSES   = new Set(['default']);
+// Normalise class names to lowercase for downstream consumers
+const NORMALISE      = { Fire: 'fire', fire: 'fire', smoke: 'smoke', default: 'default' };
 
 /**
  * Fire and Smoke detector using a YOLOv8s model fine-tuned on D-Fire / similar datasets.
  *
  * Model file: server/models/yolov8s_fire_smoke.onnx
- * Output shape: [1, 6, 8400]  (4 bbox + 2 class scores, 8400 anchors)
+ * Source: github.com/Abonia1/YOLOv8-Fire-and-Smoke-Detection (runs/detect/train/weights/best.pt)
+ * Output shape: [1, 7, 8400]  (4 bbox + 3 class scores: Fire / default / smoke)
  *
  * Download / export:
  *   python3 -c "
@@ -32,11 +39,14 @@ class FireSmokeService {
     this.modelPath    = options.modelPath || path.join(modelsDir, 'yolov8s_fire_smoke.onnx');
     this._session     = null;
     this._ready       = false;
+    // 'not_started' | 'missing' | 'loaded' | 'failed'
+    this._status      = 'not_started';
   }
 
   async load() {
     if (!fs.existsSync(this.modelPath)) {
       console.log('[FireSmokeService] yolov8s_fire_smoke.onnx not found — fire/smoke detection disabled');
+      this._status = 'missing';
       return;
     }
     try {
@@ -44,14 +54,17 @@ class FireSmokeService {
         executionProviders: ['cpu'],
         graphOptimizationLevel: 'all',
       });
-      this._ready = true;
+      this._ready  = true;
+      this._status = 'loaded';
       console.log('[FireSmokeService] yolov8s_fire_smoke.onnx loaded');
     } catch (err) {
+      this._status = 'failed';
       console.warn('[FireSmokeService] Failed to load model:', err.message);
     }
   }
 
-  get ready() { return this._ready; }
+  get ready()  { return this._ready;  }
+  get status() { return this._status; }
 
   /**
    * Detect fire and smoke in a JPEG frame.
@@ -116,6 +129,9 @@ function _postprocess(data, dims, origW, origH, scale, padL, padT) {
     }
     if (maxScore < CONF_THRESHOLD) continue;
 
+    const rawName = CLASS_NAMES[classIdx];
+    if (SKIP_CLASSES.has(rawName)) continue;  // skip 'default' class
+
     const cx = data[0 * numBoxes + i];
     const cy = data[1 * numBoxes + i];
     const bw = data[2 * numBoxes + i];
@@ -127,7 +143,7 @@ function _postprocess(data, dims, origW, origH, scale, padL, padT) {
     const y2 = (cy + bh / 2 - padT) / scale;
 
     boxes.push({
-      className:  CLASS_NAMES[classIdx],
+      className:  NORMALISE[rawName] || rawName,
       confidence: maxScore,
       bbox: {
         x:      Math.max(0, x1),

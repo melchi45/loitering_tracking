@@ -75,6 +75,7 @@ export default function ZoneEditor({
   const [zoneType,   setZoneType]   = useState<'MONITOR' | 'EXCLUDE'>('MONITOR');
   const [dwellThreshold,  setDwellThreshold]  = useState(30);
   const [minDisplacement, setMinDisplacement] = useState(50);
+  const [minRiskScore,    setMinRiskScore]    = useState(0.0);
 
   const [selectedZoneId,  setSelectedZoneId]  = useState<string | null>(null);
   const [editPolygon,     setEditPolygon]     = useState<Point[] | null>(null);
@@ -476,7 +477,7 @@ export default function ZoneEditor({
       const res = await fetch(`/api/cameras/${cameraId}/zones`, {
         method:  'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ name: zoneName, type: zoneType, polygon: drawPoints, dwellThreshold, minDisplacement }),
+        body:    JSON.stringify({ name: zoneName, type: zoneType, polygon: drawPoints, dwellThreshold, minDisplacement, minRiskScore }),
       });
       if (!res.ok) throw new Error(await res.text() || 'Save failed');
       const { data } = await res.json();
@@ -754,6 +755,10 @@ export default function ZoneEditor({
                   <div>
                     <label className="block text-[10px] text-gray-400 mb-1">Min Displacement&nbsp;<span className="text-white font-semibold">{minDisplacement}px</span></label>
                     <input type="range" min={10} max={200} value={minDisplacement} onChange={(e) => setMinDisplacement(Number(e.target.value))} className="w-full accent-blue-500" />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-gray-400 mb-1">Min Risk Score&nbsp;<span className="text-white font-semibold">{minRiskScore.toFixed(2)}</span><span className="text-gray-500 ml-1">(alert threshold)</span></label>
+                    <input type="range" min={0} max={1} step={0.05} value={minRiskScore} onChange={(e) => setMinRiskScore(Number(e.target.value))} className="w-full accent-orange-500" />
                   </div>
                 </>
               )}

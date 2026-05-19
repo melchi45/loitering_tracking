@@ -7,7 +7,8 @@
     "start": "node src/index.js",
     "dev": "nodemon --exec /usr/bin/node src/index.js",
     "test": "jest",
-    "discover": "node src/scripts/discoverCameras.js"
+    "discover": "node src/scripts/discoverCameras.js",
+    "download-models": "node src/scripts/downloadModels.js"
   },
   "dependencies": {
     "cors": "^2.8.5",

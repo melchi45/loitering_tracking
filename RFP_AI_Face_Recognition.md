@@ -8,7 +8,7 @@
 | **Issue Date** | May 15, 2026 |
 | **Proposal Deadline** | June 30, 2026 |
 | **Zone Target Key** | `face` |
-| **Status** | **Implementation in Progress** |
+| **Status** | **✅ Phase-1 Complete — SCRFD detection + ArcFace recognition + face ID tracking active** |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -379,44 +379,65 @@ Face quality score should consider:
 | IJB-C | Face recognition at scale | 138,000 faces, 3,531 subjects |
 | AgeDB | Age-invariant recognition | 16,488 faces |
 
-### Appendix E: Open Source Model Research (2026-05)
+### Appendix E: Implementation History (2026-05)
 
-#### Face Detection — SCRFD (InsightFace)
+#### ✅ Phase-1 Complete — Two-Stage Pipeline (SCRFD + ArcFace)
 
-| Source | URL | Size | Format | Notes |
-|---|---|---|---|---|
-| JackCui/facefusion (HF) | https://huggingface.co/JackCui/facefusion/blob/main/scrfd_2.5g.onnx | 3.3 MB | ONNX ready | **Selected — download via downloadModels.js** |
-| immich-app/antelopev2 (HF) | https://huggingface.co/immich-app/antelopev2 | 17 MB | ONNX ready | `scrfd_10g_bnkps.onnx` — higher accuracy |
-| immich-app/buffalo_l (HF) | https://huggingface.co/immich-app/buffalo_l | 17 MB | ONNX ready | `det_10g.onnx` — recommended production |
-| deepinsight/insightface (GH) | https://github.com/deepinsight/insightface/tree/master/detection/scrfd | — | PyTorch | Official SCRFD repo |
+Both models are installed and active. The face recognition toggle in the VideoAnalytics tab enables the full pipeline.
 
-#### Face Recognition — ArcFace
+**Installed models:**
 
-| Source | URL | Size | Format | Notes |
-|---|---|---|---|---|
-| FoivosPar/Arc2Face (HF) | https://huggingface.co/FoivosPar/Arc2Face | 166 MB | ONNX ready | **Selected — ArcFace ResNet50 w600k** |
-| onnx-community/arcface-onnx (HF) | https://huggingface.co/onnx-community/arcface-onnx | ~250 MB | ONNX ready | Community export |
-| onnxmodelzoo/arcfaceresnet100-8 (HF) | https://huggingface.co/onnxmodelzoo/arcfaceresnet100-8 | ~250 MB | ONNX ready | ONNX Model Zoo official |
+| Model | File | Size | Role |
+|---|---|---|---|
+| SCRFD-2.5GF | `server/models/scrfd_2.5g.onnx` | 3.3 MB | Stage 1 — face detection |
+| ArcFace ResNet-50 w600k | `server/models/arcface_w600k_r50.onnx` | 166 MB | Stage 2 — 512-D L2 embedding |
 
-#### Implementation Notes
+**Files changed (Phase-1):**
+
+| File | Change |
+|---|---|
+| `server/src/services/faceService.js` | `detectFaces()` (SCRFD, NMS) + `getEmbedding()` (ArcFace 112×112 crop) |
+| `server/src/services/attributePipeline.js` | Calls `getEmbedding()` in parallel for all detected faces; returns embeddings in `detectedFaces` |
+| `server/src/services/pipelineManager.js` | `_assignFaceIds()` — cosine-similarity gallery per camera (threshold 0.35, 30s expiry); emits `faceId` + `matchScore` on face detection objects |
+| `server/src/index.js` | `/api/capabilities` — `face: has('scrfd_2.5g.onnx') && has('arcface_w600k_r50.onnx')` |
+| `client/src/components/VideoAnalyticsTab.tsx` | Face item label updated to "Face Recognition"; model field shows both models |
+| `client/src/components/FullscreenCameraView.tsx` | DetectionRow shows `[faceId]` and cosine similarity score for face detections |
+| `client/src/components/CameraView.tsx` | Canvas bbox label shows `face [F3]  87%` instead of `face #90001  87%` |
+| `client/src/types/index.ts` | `Detection` interface — added `faceId?: string`, `matchScore?: number` |
+
+**Pipeline flow (when `face` module is enabled):**
 
 ```
-서비스 파일: server/src/services/faceService.js
-모델 경로:   server/models/scrfd_2.5g.onnx
-             server/models/arcface_w600k_r50.onnx
-다운로드:    node server/src/scripts/downloadModels.js
-
-구현 내용:
-  - SCRFD FPN 후처리 (stride 8/16/32, 앵커 2개/위치)
-  - NMS (IoU threshold 0.4)
-  - ArcFace 얼굴 crop → 112×112 정규화 → 512-D L2 임베딩
-  - 모델 파일 없을 때 graceful fallback (경고만 출력, 시스템 계속 동작)
-
-연동 방법:
-  - Zone targetClasses에 'face' 포함 시 자동 활성화
-  - attributePipeline.js 가 orchestrate
-  - pipelineManager.js step 5에서 호출
+Frame
+  ├─ SCRFD-2.5GF (full frame, 640×640 letterbox)
+  │    → [{bbox, score, landmarks}]
+  ├─ ArcFace ResNet-50 (per-face 112×112 crop, parallel)
+  │    → [512-D L2-normalised embedding]
+  ├─ Cosine-similarity gallery (per camera, in-memory)
+  │    similarity = dot(emb_a, emb_b)  [L2-normalised → cosine == dot]
+  │    threshold  = 0.35
+  │    expiry     = 30 s
+  │    → faceId  ('F1', 'F2', …)
+  │    → matchScore (cosine similarity vs. previous sighting)
+  └─ Emitted as className='face' detection objects with faceId + matchScore
 ```
+
+**Phase-2 items (not yet implemented):**
+
+| Feature | Notes |
+|---|---|
+| Persistent face gallery (SQLite) | Survive server restarts; enroll named persons |
+| 1:N gallery search API | `GET /api/galleries/:id/search` |
+| VIP / blocklist alerts | Alert on matched identity |
+| Face blur / anonymization | Privacy mode — Gaussian blur on face region before streaming |
+| Face attribute analysis | Age range, gender estimation (separate model) |
+
+**Source models researched:**
+
+| Source | Notes |
+|---|---|
+| JackCui/facefusion (HF) `scrfd_2.5g.onnx` | Selected for detection — 3.3 MB, ONNX ready |
+| FoivosPar/Arc2Face (HF) `arcface_w600k_r50.onnx` | Selected for recognition — ArcFace ResNet-50 w600k |
 
 ### Appendix D: Related RFP Documents
 

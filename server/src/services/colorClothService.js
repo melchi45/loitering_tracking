@@ -20,55 +20,65 @@ const fs    = require('fs');
  * AI-06 Cloth Analysis:  targetClass 'cloth'
  */
 
-// 11-color taxonomy (RGB centroid matching)
-const COLOR_TABLE = [
-  { name: 'black',   r: [0,   60],  g: [0,   60],  b: [0,   60]  },
-  { name: 'white',   r: [190, 255], g: [190, 255], b: [190, 255] },
-  { name: 'gray',    r: [60,  190], g: [60,  190], b: [60,  190] },
-  { name: 'red',     r: [140, 255], g: [0,   100], b: [0,   100] },
-  { name: 'orange',  r: [180, 255], g: [80,  170], b: [0,   80]  },
-  { name: 'yellow',  r: [180, 255], g: [170, 255], b: [0,   100] },
-  { name: 'green',   r: [0,   120], g: [100, 255], b: [0,   120] },
-  { name: 'cyan',    r: [0,   100], g: [150, 255], b: [150, 255] },
-  { name: 'blue',    r: [0,   100], g: [0,   120], b: [130, 255] },
-  { name: 'purple',  r: [80,  200], g: [0,   100], b: [100, 220] },
-  { name: 'brown',   r: [80,  180], g: [40,  110], b: [0,   80]  },
-];
-
+/**
+ * Map an average RGB value to one of 11 color names using HSV color space.
+ *
+ * HSV-based classification is far more reliable than RGB range-matching because
+ * the old range-based approach had gray defined as [60,190]×[60,190]×[60,190],
+ * which swallowed all mid-tone colors (beige, tan, khaki, muted blue, etc.).
+ *
+ * Classification logic:
+ *   1. Saturation < 15% → achromatic (black / white / gray by value)
+ *   2. Otherwise → chromatic, classify by hue angle with a brown exception
+ */
 function rgbToColorName(r, g, b) {
-  // Find best matching color: smallest Euclidean distance to centroid
-  let best = 'unknown', bestDist = Infinity;
-  for (const c of COLOR_TABLE) {
-    const inRange = (v, [lo, hi]) => v >= lo && v <= hi;
-    if (inRange(r, c.r) && inRange(g, c.g) && inRange(b, c.b)) {
-      const cr = (c.r[0] + c.r[1]) / 2;
-      const cg = (c.g[0] + c.g[1]) / 2;
-      const cb = (c.b[0] + c.b[1]) / 2;
-      const dist = Math.sqrt((r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2);
-      if (dist < bestDist) { bestDist = dist; best = c.name; }
-    }
+  const rn = r / 255, gn = g / 255, bn = b / 255;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const delta = max - min;
+  const v = max;
+  const s = max === 0 ? 0 : delta / max;
+
+  // Achromatic: low saturation → black / white / gray
+  if (s < 0.15) {
+    if (v < 0.25) return 'black';
+    if (v > 0.80) return 'white';
+    return 'gray';
   }
-  if (best === 'unknown') {
-    // fallback: nearest centroid by distance only
-    for (const c of COLOR_TABLE) {
-      const cr = (c.r[0] + c.r[1]) / 2;
-      const cg = (c.g[0] + c.g[1]) / 2;
-      const cb = (c.b[0] + c.b[1]) / 2;
-      const dist = Math.sqrt((r - cr) ** 2 + (g - cg) ** 2 + (b - cb) ** 2);
-      if (dist < bestDist) { bestDist = dist; best = c.name; }
-    }
-  }
-  return best;
+
+  // Chromatic: compute hue (0–360°)
+  let h = 0;
+  if (max === rn)      h = 60 * (((gn - bn) / delta) % 6);
+  else if (max === gn) h = 60 * ((bn - rn) / delta + 2);
+  else                 h = 60 * ((rn - gn) / delta + 4);
+  if (h < 0) h += 360;
+
+  // Brown: dark orange (low value, orange hue)
+  if (h >= 10 && h < 50 && v < 0.55) return 'brown';
+
+  if (h < 15 || h >= 345) return 'red';
+  if (h <  50) return 'orange';
+  if (h <  75) return 'yellow';
+  if (h < 150) return 'green';
+  if (h < 195) return 'cyan';
+  if (h < 260) return 'blue';
+  if (h < 320) return 'purple';
+  return 'red';
 }
 
-async function avgColor(jpegBuffer, roi) {
+async function avgColor(jpegBuffer, roi, imgW, imgH) {
   try {
     const { x, y, w, h } = roi;
+    const left   = Math.max(0, Math.round(x));
+    const top    = Math.max(0, Math.round(y));
+    // Clamp right/bottom edges to image bounds (prevents sharp extract error → gray fallback)
+    const right  = imgW ? Math.min(imgW, Math.round(x + w)) : Math.round(x + w);
+    const bottom = imgH ? Math.min(imgH, Math.round(y + h)) : Math.round(y + h);
     const safe = {
-      left:   Math.max(0, Math.round(x)),
-      top:    Math.max(0, Math.round(y)),
-      width:  Math.max(1, Math.round(w)),
-      height: Math.max(1, Math.round(h)),
+      left,
+      top,
+      width:  Math.max(1, right  - left),
+      height: Math.max(1, bottom - top),
     };
     // Resize to tiny patch for fast average
     const raw = await sharp(jpegBuffer)
@@ -128,9 +138,11 @@ class ColorClothService {
    * Extract color & clothing attributes from a person bounding box.
    * @param {Buffer} jpegBuffer
    * @param {{x,y,width,height}} personBbox
+   * @param {number} [imgW]  Frame width in pixels (used to clamp ROI)
+   * @param {number} [imgH]  Frame height in pixels (used to clamp ROI)
    * @returns {Promise<{color: {upper:string, lower:string}, cloth: {upper:string, lower:string}|null}>}
    */
-  async analyze(jpegBuffer, personBbox) {
+  async analyze(jpegBuffer, personBbox, imgW, imgH) {
     const { x, y, width, height } = personBbox;
 
     // Upper torso ROI: 25%–55% of bbox height, inner 70% width
@@ -149,8 +161,8 @@ class ColorClothService {
     };
 
     const [upperRgb, lowerRgb] = await Promise.all([
-      avgColor(jpegBuffer, upperRoi),
-      avgColor(jpegBuffer, lowerRoi),
+      avgColor(jpegBuffer, upperRoi, imgW, imgH),
+      avgColor(jpegBuffer, lowerRoi, imgW, imgH),
     ]);
 
     const color = {

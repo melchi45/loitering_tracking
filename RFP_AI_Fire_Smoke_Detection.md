@@ -1,9 +1,10 @@
 # RFP AI-09: Fire & Smoke Detection (화재/연기 감지)
 
 **문서 ID**: LTS-2026-AI-09  
-**버전**: 1.0  
+**버전**: 1.1  
 **작성일**: 2026-05-15  
-**상태**: 🔲 준비중 (모델 다운로드 필요)
+**수정일**: 2026-05-18  
+**상태**: ✅ 구현 완료 (yolov8s_fire_smoke.onnx 설치됨)
 
 ---
 
@@ -70,9 +71,12 @@ CCTV 영상에서 실시간으로 화재(Fire) 및 연기(Smoke)를 감지하여
 
 ```
 입력: JPEG 프레임 (640×640 letter-box 전처리)
-모델: YOLOv8s (small) — fire/smoke 2-class fine-tuned
-출력: [1, 6, 8400]  (4 bbox coords + 2 class scores × 8400 anchors)
-클래스: fire=0, smoke=1
+모델: YOLOv8s (small) — 3-class fine-tuned
+출처: github.com/Abonia1/YOLOv8-Fire-and-Smoke-Detection
+      (runs/detect/train/weights/best.pt → ONNX export)
+파일: server/models/yolov8s_fire_smoke.onnx  (43MB)
+출력: [1, 7, 8400]  (4 bbox coords + 3 class scores × 8400 anchors)
+클래스: Fire=0, default=1 (무시), smoke=2
 ```
 
 ### 3.2 후처리 파이프라인
@@ -84,34 +88,39 @@ JPEG Buffer
   640×640 letterbox (fill=gray114, normalize /255)
     │
     ▼ ONNX 추론
-  [1, 6, 8400] raw output
+  [1, 7, 8400] raw output
     │
     ▼ 후처리
   confidence filtering (>0.35)
+  'default' 클래스 제거 (classIdx=1 skip)
+  소문자 정규화 ('Fire' → 'fire')
   NMS (IoU>0.45)
     │
     ▼
-  [{className, confidence, bbox(frame coords)}]
+  [{className:'fire'|'smoke', confidence, bbox(frame coords)}]
 ```
 
 ### 3.3 클래스 정의
 
-| Index | 클래스 | 설명 | 표시 색상 |
-|:---:|---|---|---|
-| 0 | `fire` | 화염 (불꽃, 화재) | 🔴 주황-빨간 `rgba(255,80,0)` |
-| 1 | `smoke` | 연기 (회색, 흑색 연기) | ⬜ 어두운 회색 `rgba(75,85,99)` |
+| Index | 원본 클래스명 | 내부 매핑 | 설명 | 표시 색상 |
+|:---:|---|---|---|---|
+| 0 | `Fire` | `fire` | 화염 (불꽃, 화재) | 🔴 주황-빨간 `rgba(255,80,0)` |
+| 1 | `default` | *(skip)* | 미분류 — 후처리에서 제외 | — |
+| 2 | `smoke` | `smoke` | 연기 (회색, 흑색 연기) | ⬜ 어두운 회색 `rgba(75,85,99)` |
 
 ---
 
 ## 4. 공개 모델 소스
 
-### 4.1 즉시 사용 가능한 모델 (추천 순서)
+### 4.1 사용 모델 (현재 설치 기준)
 
-| 순위 | 모델 | 소스 | 크기 | 클래스 | 비고 |
+| 순위 | 모델 | 소스 | ONNX 크기 | 클래스 | 비고 |
 |:---:|---|---|---|---|---|
-| 1 | YOLOv8m fire/smoke | keremberke/yolov8m-fire-and-smoke-detection (HuggingFace) | ~52MB | fire, smoke | **추천** |
-| 2 | YOLOv8n fire/smoke | Abonia1/YOLOv8-Fire-and-Smoke-Detection (GitHub) | ~6MB | fire, smoke | 경량 |
-| 3 | YOLOv10 fire/smoke | TommyNgx/YOLOv10-Fire-and-Smoke-Detection (HuggingFace) | ~30MB | fire, smoke | YOLOv10 기반 |
+| ✅ **채택** | YOLOv8s fire/smoke | Abonia1/YOLOv8-Fire-and-Smoke-Detection (GitHub) | 43MB | Fire, default, smoke | **현재 설치됨** |
+| — | YOLOv8m fire/smoke | keremberke/yolov8m-fire-and-smoke-detection (HuggingFace) | ~52MB | fire, smoke | 저장소 비공개로 다운로드 불가 |
+| — | YOLOv10 fire/smoke | TommyNgx/YOLOv10-Fire-and-Smoke-Detection (HuggingFace) | ~30MB | fire, smoke | 대안 후보 |
+
+> **비고**: `keremberke` HuggingFace 저장소가 비공개(401 Unauthorized)로 전환됨. `Abonia1` GitHub 저장소의 학습 완료 가중치(`runs/detect/train/weights/best.pt`)를 ONNX 변환하여 적용.
 
 ### 4.2 학습 데이터셋
 
@@ -171,25 +180,32 @@ class FireSmokeService {
 - **FullscreenView DetectionPanel**: fire/smoke 항목 적색/회색 강조
 - **범례**: ■ fire (주황), ■ smoke (회색) 추가
 
-### 5.4 모델 다운로드 스크립트
+### 5.4 모델 설치 절차 (완료)
+
+현재 `server/models/yolov8s_fire_smoke.onnx` (43MB)가 설치되어 있습니다.
+
+재설치가 필요한 경우 아래 스크립트를 실행합니다 (Python 3.7+, ultralytics 필요):
 
 ```bash
-# Python export (ultralytics 필요)
+# 1. GitHub에서 학습 완료 가중치 다운로드
+wget --no-check-certificate \
+  "https://raw.githubusercontent.com/Abonia1/YOLOv8-Fire-and-Smoke-Detection/main/runs/detect/train/weights/best.pt" \
+  -O /tmp/fire_smoke_best.pt
+
+# 2. ONNX 변환 (Python 3.7 + ultralytics 8.x)
 python3 << 'PYEOF'
 from ultralytics import YOLO
-from huggingface_hub import hf_hub_download
-import shutil, os
+import shutil
 
-pt = hf_hub_download(
-    repo_id="keremberke/yolov8m-fire-and-smoke-detection",
-    filename="best.pt")
-YOLO(pt).export(format="onnx", imgsz=640, simplify=True)
-onnx = pt.replace(".pt", ".onnx")
-dest = os.path.join("server/models", "yolov8s_fire_smoke.onnx")
-shutil.copy(onnx, dest)
-print("Saved:", dest)
+model = YOLO('/tmp/fire_smoke_best.pt')
+# 클래스: {0: 'Fire', 1: 'default', 2: 'smoke'}
+exported = model.export(format='onnx', imgsz=640, simplify=True)
+shutil.copy(exported, 'server/models/yolov8s_fire_smoke.onnx')
+print("Saved: server/models/yolov8s_fire_smoke.onnx")
 PYEOF
 ```
+
+> **주의**: 모델 출력이 `[1, 7, 8400]` (3-class)이므로 `fireSmokeService.js`의 `CLASS_NAMES = ['fire', 'default', 'smoke']`와 `SKIP_CLASSES`가 맞춰져 있어야 합니다.
 
 ---
 
@@ -216,20 +232,31 @@ PYEOF
 |---|---|
 | 프레임 스킵 | 기존 `_inferring` guard와 동일한 frame-drop 처리 |
 | Zone 필터링 | `targetClasses`에 fire/smoke 없으면 탐지 건너뜀 |
-| 모델 크기 | YOLOv8s(~52MB) 기본, YOLOv8n(~6MB) 경량 옵션 |
+| 모델 크기 | YOLOv8s 43MB (ONNX 설치 완료) |
 | 알림 쿨다운 | 동일 Zone 동일 클래스 경보는 10초 간격으로 제한 (중복 방지) |
+| default 클래스 스킵 | 후처리에서 classIdx=1 제외 — 불필요한 감지 억제 |
 
 ---
 
-## 8. 테스트 계획
+## 8. 구현 이력
 
-| 테스트 | 방법 | 합격 기준 |
-|---|---|---|
-| 기능 | 화재 영상 재생 → fire:alert 발생 확인 | 10초 내 경보 |
-| 정밀도 | D-Fire test set 추론 | mAP@0.5 ≥ 0.80 |
-| 성능 | CPU 단독 640×640 추론 속도 | ≥ 10 FPS |
-| 오탐 | 일반 실내/외 영상 24시간 | FPR ≤ 5% |
-| 통합 | 로이터링 감지와 동시 동작 | 파이프라인 지연 ≤ 50ms |
+| 날짜 | 내용 |
+|---|---|
+| 2026-05-18 | `fireSmokeService.js` 구현 완료 |
+| 2026-05-18 | `yolov8s_fire_smoke.onnx` (43MB) 설치 — Abonia1/GitHub |
+| 2026-05-18 | 3-class 모델 대응: `CLASS_NAMES`, `SKIP_CLASSES`, `NORMALISE` 추가 |
+| 2026-05-18 | 서버 재시작 후 `[FireSmokeService] yolov8s_fire_smoke.onnx loaded` 확인 |
+
+## 9. 테스트 계획
+
+| 테스트 | 방법 | 합격 기준 | 상태 |
+|---|---|---|:---:|
+| 모델 로드 | 서버 시작 로그 확인 | `loaded` 메시지 출력 | ✅ |
+| 기능 | 화재 영상 재생 → fire:alert 발생 확인 | 10초 내 경보 | 🔲 |
+| 정밀도 | D-Fire test set 추론 | mAP@0.5 ≥ 0.80 | 🔲 |
+| 성능 | CPU 단독 640×640 추론 속도 | ≥ 10 FPS | 🔲 |
+| 오탐 | 일반 실내/외 영상 24시간 | FPR ≤ 5% | 🔲 |
+| 통합 | 로이터링 감지와 동시 동작 | 파이프라인 지연 ≤ 50ms | 🔲 |
 
 ---
 

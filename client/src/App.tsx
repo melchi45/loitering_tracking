@@ -3,13 +3,14 @@ import { useSocket } from './hooks/useSocket';
 import { useCameraStore } from './stores/cameraStore';
 import { useAlertStore } from './stores/alertStore';
 import { useDiscoveryStore } from './stores/discoveryStore';
+import { useCrossCameraStore } from './stores/crossCameraStore';
 import { useI18n, LANGUAGES, type LangCode } from './i18n';
 import CameraGrid from './components/CameraGrid';
 import CameraList from './components/CameraList';
 import AlertPanel from './components/AlertPanel';
 import DiscoveredCameraPanel from './components/DiscoveredCameraPanel';
 import FullscreenCameraView from './components/FullscreenCameraView';
-import type { Alert } from './types';
+import type { Alert, CrossCameraReIdEvent } from './types';
 
 type Layout = 1 | 4 | 9 | 16;
 type SidebarTab = 'cameras' | 'alerts' | 'zones';
@@ -112,6 +113,7 @@ export default function App() {
   const unreadAlerts = useAlertStore((s) => s.alerts.filter((a) => !a.acknowledged).length);
   const selectedDiscovered = useDiscoveryStore((s) => s.selected);
   const selectDiscovered   = useDiscoveryStore((s) => s.select);
+  const addCrossCameraEvent = useCrossCameraStore((s) => s.addEvent);
   const { t } = useI18n();
 
   // Fetch existing cameras from backend on mount
@@ -149,14 +151,20 @@ export default function App() {
       addAlert(alert);
     };
 
+    const handleFaceReidentified = (event: CrossCameraReIdEvent) => {
+      addCrossCameraEvent(event);
+    };
+
     socket.on('camera:status', handleCameraStatus);
     socket.on('alert', handleAlert);
+    socket.on('face:reidentified', handleFaceReidentified);
 
     return () => {
       socket.off('camera:status', handleCameraStatus);
       socket.off('alert', handleAlert);
+      socket.off('face:reidentified', handleFaceReidentified);
     };
-  }, [socket, updateCameraStatus, addAlert]);
+  }, [socket, updateCameraStatus, addAlert, addCrossCameraEvent]);
 
 
   return (

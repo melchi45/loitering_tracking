@@ -7,8 +7,8 @@
 | **Parent System** | LTS-2026-001 Loitering Detection & Tracking System |
 | **Issue Date** | May 15, 2026 |
 | **Proposal Deadline** | June 30, 2026 |
-| **Zone Target Key** | `accessories` |
-| **Status** | **✅ Phase-1 구현 완료 (COCO yolov8n 즉시 동작)** |
+| **Zone Target Key** | `accessories` (and individual keys) |
+| **Status** | **✅ Phase-1 Complete — individual per-item on/off toggles in UI, COCO yolov8n detection active** |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -117,23 +117,24 @@ Zones configured with `"targetClasses": ["accessories"]` activate accessory dete
 
 ### 4.1 Carried Item Categories
 
-| ID | Class | Korean | COCO ID | Notes |
-|---|---|---|---|---|
-| 0 | `backpack` | 배낭/백팩 | 24 | Standard backpack, school bag |
-| 1 | `handbag` | 핸드백 | 26 | Purse, clutch, small bag |
-| 2 | `suitcase` | 여행가방 | 28 | Rolling luggage, hard/soft case |
-| 3 | `umbrella` | 우산 | 25 | Open or closed umbrella |
-| 4 | `briefcase` | 서류가방 | — | Business case (COCO: handbag subset) |
+| ID | Class | COCO ID | Phase | Status | Notes |
+|---|---|---|---|---|---|
+| 0 | `backpack` | 24 | Phase-1 | ✅ Implemented | Standard backpack, school bag |
+| 1 | `handbag` | 26 | Phase-1 | ✅ Implemented | Purse, clutch, small bag |
+| 2 | `suitcase` | 28 | Phase-1 | ✅ Implemented | Rolling luggage, hard/soft case |
+| 3 | `umbrella` | 25 | Phase-1 | ✅ Implemented | Open or closed umbrella |
+| 4 | `tie` | 27 | Phase-1 | ✅ Implemented | Necktie (bonus COCO class) |
+| 5 | `briefcase` | — | Phase-2 | 🔲 Pending | Business case (COCO: handbag subset) |
 
 ### 4.2 Worn Accessory Categories
 
-| ID | Class | Korean | COCO ID | Notes |
-|---|---|---|---|---|
-| 5 | `glasses` | 안경 | — | Eyeglasses, sunglasses |
-| 6 | `sunglasses` | 선글라스 | — | Tinted/sports sunglasses |
-| 7 | `jewelry` | 액세서리 | — | Necklace, earrings, watch (visible) |
-| 8 | `gloves` | 장갑 | — | Winter gloves, work gloves |
-| 9 | `scarf` | 스카프/목도리 | — | Scarf, neck wrap |
+| ID | Class | COCO ID | Phase | Status | Notes |
+|---|---|---|---|---|---|
+| 6 | `glasses` | — | Phase-2 | 🔲 Pending (UI placeholder) | Eyeglasses — requires dedicated classifier |
+| 7 | `sunglasses` | — | Phase-2 | 🔲 Pending (UI placeholder) | Tinted/sports sunglasses |
+| 8 | `jewelry` | — | Phase-2 | 🔲 Pending | Necklace, earrings, watch (visible) |
+| 9 | `gloves` | — | Phase-2 | 🔲 Pending | Winter gloves, work gloves |
+| 10 | `scarf` | — | Phase-2 | 🔲 Pending | Scarf, neck wrap |
 
 ### 4.3 Extended Categories (Optional)
 
@@ -446,7 +447,7 @@ GET /api/events?abandonedItem=suitcase&fromTime=2026-05-01
 | 27 | tie | Yes |
 | 28 | suitcase | Yes |
 
-**Action**: Add COCO classes 24/25/26/27/28 to `ENABLED_CLASSES` in `detection.js` — no new model required for baseline implementation.
+**Status**: ✅ All five classes enabled in `detection.js`. Each has an individual on/off toggle in the VideoAnalytics UI (Phase-1 complete).
 
 ### Appendix B: Model File Placement
 
@@ -470,15 +471,20 @@ const ENABLED_CLASSES = {
   24: 'backpack', 25: 'umbrella', 26: 'handbag', 27: 'tie', 28: 'suitcase',
 };
 
-// server/src/services/behaviorEngine.js
+// server/src/services/behaviorEngine.js — Phase-1 implementation
 const TARGET_CLASS_MAP = {
   human:       ['person'],
   vehicle:     ['bicycle', 'car', 'motorcycle', 'bus', 'truck'],
-  accessories: ['backpack', 'umbrella', 'handbag', 'tie', 'suitcase'],
+  accessories: ['backpack', 'umbrella', 'handbag', 'tie', 'suitcase'], // backward-compat alias
+  backpack:    ['backpack'],
+  handbag:     ['handbag'],
+  suitcase:    ['suitcase'],
+  umbrella:    ['umbrella'],
+  tie:         ['tie'],
 };
 ```
 
-This enables accessories zone filtering immediately with zero model changes.
+Phase-1 is implemented and functional. Each accessory type has an independent toggle in the VideoAnalytics UI, with per-item enable/disable propagated through the analytics pipeline.
 
 ### Appendix D: Benchmark Datasets
 
@@ -500,39 +506,65 @@ This enables accessories zone filtering immediately with zero model changes.
 | [RFP_AI_Hat_Detection.md](RFP_AI_Hat_Detection.md) | Hat detection (head accessory) |
 | [RFP_LTS2026_Loitering_Tracking_System.md](RFP_LTS2026_Loitering_Tracking_System.md) | Parent system RFP |
 
-### Appendix E: Open Source Model Research (2026-05)
+### Appendix E: Implementation History (2026-05)
 
-#### ✅ Phase-1: COCO yolov8n.onnx로 즉시 구현 완료
+#### ✅ Phase-1 Complete — COCO yolov8n.onnx (no additional model required)
 
-기존 `yolov8n.onnx` (COCO 80클래스)는 이미 accessories 클래스를 포함합니다.
-`server/src/services/detection.js`의 `ENABLED_CLASSES`에 추가함으로써 **모델 추가 없이 즉시 동작**합니다.
+The existing `yolov8n.onnx` (COCO 80-class) already detects the following accessory classes. Phase-1 implementation enables them with individual per-item on/off toggles in the VideoAnalytics UI.
 
-| COCO Class ID | className | 설명 |
+| COCO Class ID | `className` | Analytics Module Key |
 |---|---|---|
-| 24 | `backpack` | 백팩/배낭 |
-| 25 | `umbrella` | 우산 |
-| 26 | `handbag` | 핸드백/숄더백 |
-| 27 | `tie` | 넥타이 |
-| 28 | `suitcase` | 여행가방/캐리어 |
+| 24 | `backpack` | `backpack` |
+| 25 | `umbrella` | `umbrella` |
+| 26 | `handbag` | `handbag` |
+| 27 | `tie` | `tie` |
+| 28 | `suitcase` | `suitcase` |
 
-#### Phase-2: 정밀 accessories 감지 (선택적)
+**Files changed (Phase-1):**
 
-| Source | URL | Notes |
-|---|---|---|
-| xxnw/Vehicle-attribute-recognition (GH) | https://github.com/xxnw/Vehicle-attribute-recognition | 차량 속성 |
-| Event-AHU/OpenPAR (GH) | https://github.com/Event-AHU/OpenPAR | 가방/안경 포함 40+ 속성 |
+| File | Change |
+|---|---|
+| `server/src/services/analyticsConfig.js` | Replaced single `accessories` key with individual `backpack`, `handbag`, `suitcase`, `umbrella`, `tie`, `glasses`, `sunglasses` keys in DEFAULT_CONFIG and MODULE_CLASSES |
+| `server/src/services/behaviorEngine.js` | Added individual TARGET_CLASS_MAP entries for each accessory; kept `accessories` alias for backward zone compatibility |
+| `server/src/index.js` | `/api/capabilities` now returns per-item capability flags |
+| `client/src/components/VideoAnalyticsTab.tsx` | New "Accessories" group with individual toggle per item; `glasses`/`sunglasses` shown as pending |
+| `client/src/components/FullscreenCameraView.tsx` | Accessory detections colored amber in detection panel and legend |
+| `server/storage/analytics.json` | Migrated from `accessories: false` to individual keys |
 
-#### Implementation Notes
+**analyticsConfig.js — individual module keys (Phase-1):**
 
+```javascript
+// DEFAULT_CONFIG
+backpack: false, handbag: false, suitcase: false, umbrella: false, tie: false,
+glasses: false, sunglasses: false,  // Phase-2 pending (UI placeholder only)
+
+// MODULE_CLASSES
+backpack:  ['backpack'],
+handbag:   ['handbag'],
+suitcase:  ['suitcase'],
+umbrella:  ['umbrella'],
+tie:       ['tie'],
+// glasses/sunglasses: not in MODULE_CLASSES until Phase-2 model available
 ```
-서비스 파일: server/src/services/detection.js (수정 완료)
-수정 내용:   ENABLED_CLASSES에 24(backpack), 25(umbrella), 26(handbag),
-             27(tie), 28(suitcase) 추가
 
-Zone targetClasses에 'accessories' 포함 시 behaviorEngine의
-TARGET_CLASS_MAP['accessories']가 매핑하여 로이터링 로직 적용
-출력: className: 'backpack' | 'umbrella' | 'handbag' | 'tie' | 'suitcase'
+**behaviorEngine.js — TARGET_CLASS_MAP:**
+
+```javascript
+accessories: ['backpack', 'umbrella', 'handbag', 'tie', 'suitcase'], // backward-compat zone alias
+backpack:    ['backpack'],
+handbag:     ['handbag'],
+suitcase:    ['suitcase'],
+umbrella:    ['umbrella'],
+tie:         ['tie'],
 ```
+
+#### Phase-2: Precision Accessory Detection (Planned)
+
+| Source | Notes |
+|---|---|
+| Event-AHU/OpenPAR | 40+ person attributes including bags and glasses; requires custom ONNX export |
+| Glasses classifier (MobileNetV3) | 3-class: `no_glasses` / `glasses` / `sunglasses` from face crop |
+| Fine-tuned YOLOv8n-accessories | 10-class model for all taxonomy items including jewelry, gloves, scarf |
 
 ---
 

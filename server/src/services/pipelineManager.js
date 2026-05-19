@@ -46,6 +46,18 @@ const AttributePipeline = require('./attributePipeline');
 const FireSmokeService  = require('./fireSmokeService');
 const analyticsConfig  = require('./analyticsConfig');
 
+// ─── Face gallery helpers ─────────────────────────────────────────────────────
+
+// Dot product of two L2-normalised ArcFace embeddings == cosine similarity
+function _cosineSim(a, b) {
+  let dot = 0;
+  for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
+  return dot;
+}
+
+const FACE_MATCH_THRESH = 0.35;  // cosine similarity threshold for same-person
+const FACE_EXPIRY_MS    = 30000; // forget a face after 30s of absence
+
 /**
  * Orchestrates the full camera processing pipeline:
  * RTSPCapture → Detection → Tracking → BehaviorEngine → Socket.IO emission
@@ -65,6 +77,16 @@ class PipelineManager {
     this._attrPipeline    = null;  // Shared attribute pipeline
     this._fireSmokeService = null; // Shared fire/smoke detector
     this._fireAlertCooldown = new Map(); // `${cameraId}:${zoneName}:${cls}` → lastAlertTs
+    // Shared face gallery across all cameras — enables cross-camera Re-ID.
+    // Each entry: { faceId, embedding, lastSeenAt, lastCameraId }
+    // When a face matches an entry whose lastCameraId differs from the current
+    // camera, a `face:reidentified` Socket.IO event is emitted to all clients.
+    this._sharedFaceGallery = [];
+    this._faceCounter       = 1;
+
+    // Cross-camera Re-ID statistics for the current server session
+    // Map: faceId → { faceId, firstCameraId, lastCameraId, transitionCount, lastSeenAt }
+    this._crossCameraStats  = new Map();
 
     // Single listener — broadcast saved alerts to all connected clients
     this._alertService.on('alert', (alert) => {
@@ -182,12 +204,11 @@ class PipelineManager {
         // 3. Update tracker
         const trackedObjects = tracker.update(detections);
 
-        // 4. Run behavior analysis
-        const behaviorObjects = behavior.update(camera.id, trackedObjects, timestamp);
-
-        // 5. Attribute enrichment (face / PPE / color) — gated by analytics config
-        let enrichedObjects = behaviorObjects;
-        let faceDetObjects  = [];
+        // 4. Attribute enrichment (face / PPE / color) — runs BEFORE behavior so that
+        //    face embeddings, mask/hat status, and clothing color are available for
+        //    appearance-based revisit detection and risk scoring in the behavior engine.
+        let attrObjects    = trackedObjects;
+        let faceDetObjects = [];
         const anyAttrEnabled = analyticsConfig.isEnabled('face') ||
                                analyticsConfig.isEnabled('mask') ||
                                analyticsConfig.isEnabled('hat')  ||
@@ -198,18 +219,21 @@ class PipelineManager {
             const zones = this._zoneManager.getActiveZones(camera.id);
             const { enrichedObjects: enriched, detectedFaces } =
               await this._attrPipeline.enrich(
-                jpegBuffer, frameWidth, frameHeight, behaviorObjects, zones,
+                jpegBuffer, frameWidth, frameHeight, trackedObjects, zones,
                 analyticsConfig.getConfig()
               );
-            enrichedObjects = enriched;
+            attrObjects = enriched;
 
             // Emit face detections as separate objects — only if face module enabled
             if (analyticsConfig.isEnabled('face') && detectedFaces.length > 0) {
-              faceDetObjects = detectedFaces.map((f, i) => ({
+              const namedFaces = this._assignFaceIds(camera.id, detectedFaces, timestamp);
+              faceDetObjects = namedFaces.map((f, i) => ({
                 objectId:    90000 + (currentFrameId % 1000) * 10 + i,
                 className:   'face',
                 confidence:  f.score,
                 bbox:        f.bbox,
+                faceId:      f.faceId,
+                matchScore:  f.matchScore,
                 isLoitering: false,
                 dwellTime:   0,
               }));
@@ -217,7 +241,21 @@ class PipelineManager {
           } catch (err) {
             console.error(`[PipelineManager][${camera.id}] Attribute pipeline error:`, err.message);
           }
+
+          // Feed ArcFace embeddings back into the tracker for multi-cue matching.
+          // One-frame-delayed feedback loop: embeddings computed above are stored
+          // on each Track and used during the NEXT frame's association step.
+          for (const obj of attrObjects) {
+            if (obj.className === 'person' && obj.face?.embedding) {
+              tracker.updateAppearance(obj.objectId, obj.face.embedding);
+            }
+          }
         }
+
+        // 5. Run behavior analysis on attribute-enriched objects so that face embeddings,
+        //    mask/hat status, and clothing color are available for appearance-based
+        //    revisit detection and composite risk scoring.
+        const enrichedObjects = behavior.update(camera.id, attrObjects, timestamp);
 
         // 6. Fire/smoke detection — gated by analytics config
         let fireSmokeObjects = [];
@@ -377,7 +415,130 @@ class PipelineManager {
     await Promise.all(ids.map(id => this.stopCamera(id)));
   }
 
+  /**
+   * Returns the actual runtime load status of each AI service.
+   * 'not_started' = pipeline never started (no camera active yet).
+   * 'missing'     = model file not on disk.
+   * 'loaded'      = model loaded and ready.
+   * 'failed'      = model file found but loading failed.
+   */
+  getServiceStatus() {
+    return {
+      ppe:       this._attrPipeline    ? this._attrPipeline.ppeStatus  : 'not_started',
+      face:      this._attrPipeline    ? this._attrPipeline.faceStatus : 'not_started',
+      firesmoke: this._fireSmokeService ? this._fireSmokeService.status : 'not_started',
+    };
+  }
+
   // ─── Private ──────────────────────────────────────────────────────────────
+
+  /**
+   * Assign stable face IDs to detected faces using cosine similarity of ArcFace embeddings.
+   * Uses a single shared gallery across all cameras to enable cross-camera Re-ID.
+   *
+   * When a face matches a gallery entry that was last seen on a DIFFERENT camera,
+   * a `face:reidentified` Socket.IO event is broadcast to all connected clients:
+   *   { faceId, prevCameraId, newCameraId, similarity, timestamp }
+   *
+   * Faces without embeddings get a transient per-frame ID (not enrolled in gallery).
+   * Expired gallery entries (>FACE_EXPIRY_MS since last seen) are pruned each call.
+   *
+   * @param {string} cameraId      - ID of the camera that captured these faces
+   * @param {Array}  detectedFaces - Output from attributePipeline (each may have .embedding)
+   * @param {number} timestamp     - Current frame timestamp (ms since epoch)
+   * @returns {Array} detectedFaces with faceId, matchScore, and crossCamera fields added
+   */
+  _assignFaceIds(cameraId, detectedFaces, timestamp) {
+    // Prune stale entries from the shared gallery (in-place replacement)
+    this._sharedFaceGallery = this._sharedFaceGallery.filter(
+      g => timestamp - g.lastSeenAt < FACE_EXPIRY_MS
+    );
+
+    const usedGalleryIds = new Set();
+    const result = detectedFaces.map(face => {
+      if (!face.embedding) {
+        // No embedding — assign transient ID, skip gallery enrollment
+        return { ...face, faceId: `F${this._faceCounter++}` };
+      }
+
+      // Find best matching gallery entry across ALL cameras by cosine similarity
+      let bestEntry = null, bestScore = FACE_MATCH_THRESH;
+      for (const g of this._sharedFaceGallery) {
+        if (usedGalleryIds.has(g.faceId)) continue;
+        const sim = _cosineSim(face.embedding, g.embedding);
+        if (sim > bestScore) { bestScore = sim; bestEntry = g; }
+      }
+
+      if (bestEntry) {
+        const prevCameraId = bestEntry.lastCameraId;
+
+        // Cross-camera Re-ID: same face seen on a different camera
+        if (prevCameraId !== cameraId) {
+          // Update per-face cross-camera stats
+          const stats = this._crossCameraStats.get(bestEntry.faceId) || {
+            faceId:          bestEntry.faceId,
+            firstCameraId:   prevCameraId,
+            lastCameraId:    prevCameraId,
+            transitionCount: 0,
+            lastSeenAt:      bestEntry.lastSeenAt,
+          };
+          stats.transitionCount++;
+          stats.lastCameraId = cameraId;
+          stats.lastSeenAt   = timestamp;
+          this._crossCameraStats.set(bestEntry.faceId, stats);
+
+          // Broadcast cross-camera Re-ID event to ALL connected clients
+          this._io.emit('face:reidentified', {
+            faceId:      bestEntry.faceId,
+            prevCameraId,
+            newCameraId: cameraId,
+            similarity:  bestScore,
+            timestamp,
+          });
+
+          console.log(
+            `[PipelineManager] Cross-camera Re-ID: face ${bestEntry.faceId} ` +
+            `transitioned from camera ${prevCameraId.slice(0, 8)} ` +
+            `→ ${cameraId.slice(0, 8)} (sim=${bestScore.toFixed(3)})`
+          );
+        }
+
+        // Update gallery entry with current camera and timestamp
+        bestEntry.lastSeenAt   = timestamp;
+        bestEntry.lastCameraId = cameraId;
+        usedGalleryIds.add(bestEntry.faceId);
+
+        return {
+          ...face,
+          faceId:      bestEntry.faceId,
+          matchScore:  bestScore,
+          crossCamera: prevCameraId !== cameraId ? { prevCameraId } : undefined,
+        };
+      }
+
+      // New face — enroll in shared gallery with current camera
+      const newId = `F${this._faceCounter++}`;
+      this._sharedFaceGallery.push({
+        faceId:       newId,
+        embedding:    face.embedding,
+        lastSeenAt:   timestamp,
+        lastCameraId: cameraId,
+      });
+      return { ...face, faceId: newId };
+    });
+
+    return result;
+  }
+
+  /**
+   * Return cross-camera Re-ID statistics for the current server session.
+   * Each entry describes a face that has been seen on more than one camera.
+   *
+   * @returns {Array<{ faceId, firstCameraId, lastCameraId, transitionCount, lastSeenAt }>}
+   */
+  getCrossCameraReIdStats() {
+    return [...this._crossCameraStats.values()];
+  }
 
   _buildRtspUrl(camera) {
     if (camera.rtspUrl) {

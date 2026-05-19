@@ -43,29 +43,63 @@ function _circularScore(frames, minFrames = 20) {
  * Composite risk score (0–1) for prioritising alerts.
  *
  * Weights:
- *   40% — dwell ratio (dwellTime / dwellThreshold)
- *   30% — revisit count (saturates at 5 revisits)
- *   20% — low velocity (stationary = 1, fast = 0; normalised at 80 px/s)
- *   10% — circular motion score
+ *   35% — dwell ratio (dwellTime / dwellThreshold)
+ *   30% — revisit count (saturates at 5; includes appearance-based cross-ID revisits)
+ *   15% — low velocity (stationary = 1, fast = 0; normalised at 80 px/s)
+ *   12% — pacing score (x-direction reversal rate)
+ *    8% — circular motion score
  */
-function _riskScore(dwellTime, threshold, revisitCount, velocityPxPerSec, circScore) {
-  const dwellRatio   = Math.min(dwellTime / Math.max(threshold, 1), 2) / 2; // 0–1
+function _riskScore(dwellTime, threshold, revisitCount, velocityPxPerSec, circScore, pacingScore) {
+  const dwellRatio   = Math.min(dwellTime / Math.max(threshold, 1), 2) / 2;
   const revisitRatio = Math.min(revisitCount / 5, 1);
   const lowVeloRatio = Math.max(0, 1 - velocityPxPerSec / 80);
   return Math.min(1,
-    dwellRatio   * 0.40 +
+    dwellRatio   * 0.35 +
     revisitRatio * 0.30 +
-    lowVeloRatio * 0.20 +
-    circScore    * 0.10
+    lowVeloRatio * 0.15 +
+    pacingScore  * 0.12 +
+    circScore    * 0.08
   );
+}
+
+/** Cosine similarity of two L2-normalised ArcFace embeddings (dot product). */
+function _cosine(a, b) {
+  let dot = 0;
+  for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
+  return dot;
+}
+
+/**
+ * Pacing score: ratio of x-direction reversals to total movement steps.
+ * A person pacing back and forth generates many direction changes.
+ * Returns 0–1 (saturates at 10 reversals ≈ 5 pacing cycles at 10 FPS).
+ */
+function _pacingScore(frames, minFrames = 10) {
+  if (frames.length < minFrames) return 0;
+  let reversals = 0;
+  let prevSign  = 0;
+  for (let i = 1; i < frames.length; i++) {
+    const dx = frames[i].x - frames[i - 1].x;
+    if (Math.abs(dx) < 2) continue;
+    const sign = Math.sign(dx);
+    if (prevSign !== 0 && sign !== prevSign) reversals++;
+    prevSign = sign;
+  }
+  return Math.min(1, reversals / 10);
 }
 
 // Maps zone targetClass keys to detection className values
 const TARGET_CLASS_MAP = {
   human:       ['person'],
   vehicle:     ['bicycle', 'car', 'motorcycle', 'bus', 'truck'],
-  // Accessories: always detected by yolov8n.onnx (COCO classes 24-28)
+  // Accessories group alias (for zone targetClasses backward-compat)
   accessories: ['backpack', 'umbrella', 'handbag', 'tie', 'suitcase'],
+  // Individual accessory keys (Phase-1: COCO yolov8n, zero extra cost)
+  backpack:    ['backpack'],
+  handbag:     ['handbag'],
+  suitcase:    ['suitcase'],
+  umbrella:    ['umbrella'],
+  tie:         ['tie'],
   // Attribute-based: require additional ONNX models (see attributePipeline.js)
   face:        ['person'],  // triggers faceService face detection sub-pipeline
   mask:        ['person'],  // triggers protectiveEquipService mask classification
@@ -121,10 +155,16 @@ function classMatchesZone(className, targetClasses) {
  * Emits 'loitering' when a person exceeds dwellThreshold with low displacement.
  *
  * Per-track metrics added (Adaptive Multi-Feature Tracking):
- *   - revisitCount: how many times this object re-entered the zone within reentryWindow
- *   - velocity: average speed (px/s) over last 10 frames
+ *   - revisitCount:  how many times this object re-entered the zone, including
+ *                    cross-ID revisits detected via ArcFace embedding or clothing colour
+ *   - velocity:      average speed (px/s) over last 10 frames
+ *   - pacingScore:   0–1 x-direction reversal rate (back-and-forth movement)
  *   - circularScore: 0–1 indicating repetitive/loop movement pattern
- *   - riskScore: composite 0–1 priority score (dwell 40% + revisit 30% + velocity 20% + circular 10%)
+ *   - riskScore:     composite 0–1 priority score
+ *                    (dwell 35% + revisit 30% + velocity 15% + pacing 12% + circular 8%)
+ *
+ * Displacement check uses a 10-second sliding window so pacing persons who
+ * return near their starting position also trigger the loitering condition.
  */
 class BehaviorEngine extends EventEmitter {
   /** @param {import('./zoneManager')} zoneManager */
@@ -133,6 +173,9 @@ class BehaviorEngine extends EventEmitter {
     this._zoneManager = zoneManager;
     // objectId → { frames: [{x,y,timestamp}], enteredAt, zoneId, lastLoiteringEmit, reentryData }
     this._state = new Map();
+    // Per-zone appearance gallery for cross-ID revisit detection.
+    // zoneId → [{ objectId, embedding, upperColor, lowerColor, lastSeenAt }]
+    this._zoneGallery = new Map();
   }
 
   /**
@@ -161,8 +204,9 @@ class BehaviorEngine extends EventEmitter {
         if (zone.type === 'MONITOR' && this._zoneManager.isPointInZone(cx, cy, zone)) {
           if (classMatchesZone(objClass, zone.targetClasses)) {
             matchedZone = zone;
+            break;
           }
-          break;
+          // Class didn't match this zone — keep searching for a zone that targets this class
         }
       }
 
@@ -191,16 +235,36 @@ class BehaviorEngine extends EventEmitter {
       let state = this._state.get(objectId);
 
       if (!state) {
-        // Brand-new track entering zone
-        state = {
-          frames:            [],
-          enteredAt:         now,
-          zoneId:            matchedZone.id,
-          lastLoiteringEmit: 0,
-          reentryData:       null,
-          leftAt:            null,
-          revisitCount:      0,  // number of times this object re-entered the zone
-        };
+        // Brand-new tracker ID — check if the same person was previously seen in this zone
+        // via ArcFace embedding similarity or clothing colour match.
+        const prevObjectId = this._checkAndEnrollAppearance(matchedZone.id, objectId, obj, now);
+
+        if (prevObjectId) {
+          // Cross-ID re-association: same person, new tracker ID.
+          // Transfer the previous state so dwell time, trajectory, and revisit count
+          // are fully preserved — loitering detection continues seamlessly.
+          const prevState = this._state.get(prevObjectId);
+          if (prevState) {
+            state = { ...prevState, leftAt: null };  // resume; clear leftAt so re-entry gate won't fire
+            this._state.delete(prevObjectId);
+            const dwellSoFar = ((now - prevState.enteredAt) / 1000).toFixed(1);
+            console.log(`[BehaviorEngine] Cross-ID resume: ${String(prevObjectId).slice(0,8)} → ${String(objectId).slice(0,8)} (dwell=${dwellSoFar}s revisit=${prevState.revisitCount})`);
+          }
+        }
+
+        if (!state) {
+          // Genuinely new appearance (no prior state found)
+          state = {
+            frames:            [],
+            enteredAt:         now,
+            zoneId:            matchedZone.id,
+            lastLoiteringEmit: 0,
+            reentryData:       null,
+            leftAt:            null,
+            revisitCount:      prevObjectId ? 1 : 0,  // appearance matched but state expired → mark as revisit
+          };
+        }
+
         this._state.set(objectId, state);
       } else if (state.zoneId !== matchedZone.id) {
         // Switched zones — reset position history, keep revisit count
@@ -221,6 +285,9 @@ class BehaviorEngine extends EventEmitter {
         state.leftAt = null;
       }
 
+      // Refresh appearance gallery entry (updates embedding and colour for later revisit matching).
+      this._checkAndEnrollAppearance(matchedZone.id, objectId, obj, now);
+
       // Push position to circular buffer
       state.frames.push({ x: cx, y: cy, timestamp: now });
       if (state.frames.length > HISTORY_CAPACITY) {
@@ -230,17 +297,23 @@ class BehaviorEngine extends EventEmitter {
       // Calculate dwellTime in seconds
       const dwellTime = (now - state.enteredAt) / 1000;
 
-      // Calculate max displacement from initial position
-      const origin = state.frames[0];
+      // Sliding-window displacement: max distance moved in the last 10 seconds.
+      // Using a rolling window catches pacing persons who return near their start
+      // but haven't moved far recently — the critical fix for pacing loiterers.
+      const WIN_MS       = 10000;
+      const recentFrames = state.frames.filter(f => f.timestamp > now - WIN_MS);
+      const winFrames    = recentFrames.length > 1 ? recentFrames : state.frames;
+      const winOrigin    = winFrames[0];
       let maxDisp = 0;
-      for (const f of state.frames) {
-        const d = Math.sqrt((f.x - origin.x) ** 2 + (f.y - origin.y) ** 2);
+      for (const f of winFrames) {
+        const d = _dist(f, winOrigin);
         if (d > maxDisp) maxDisp = d;
       }
 
-      // Velocity, circular motion, and risk score
+      // Velocity, pacing, circular motion, and composite risk score
       const velocity     = _computeVelocity(state.frames);
       const circScore    = _circularScore(state.frames);
+      const pacingScore  = _pacingScore(state.frames);
       const revisitCount = state.revisitCount || 0;
 
       const isLoitering =
@@ -248,17 +321,15 @@ class BehaviorEngine extends EventEmitter {
         maxDisp  <= matchedZone.minDisplacement;
 
       const risk = _riskScore(
-        dwellTime, effectiveThreshold, revisitCount, velocity, circScore
+        dwellTime, effectiveThreshold, revisitCount, velocity, circScore, pacingScore
       );
 
-      // TODO(suspicious-score): Surface riskScore in alert payload and
-      //   allow per-zone minimum riskScore threshold (e.g. only alert if risk > 0.6).
-      //   Reference: adaptive_loitering_detection_rfp.md §8 Suspicious Score
-
-      // Throttle emissions: emit at most once per dwellThreshold seconds
+      // Throttle emissions: emit at most once per dwellThreshold seconds.
+      // minRiskScore gates alert generation — badge still shown for all isLoitering objects.
       if (isLoitering) {
         const cooldown = effectiveThreshold * 1000;
-        if (now - state.lastLoiteringEmit >= cooldown) {
+        const minRisk  = matchedZone.minRiskScore ?? 0;
+        if (risk >= minRisk && now - state.lastLoiteringEmit >= cooldown) {
           state.lastLoiteringEmit = now;
           this.emit('loitering', {
             cameraId,
@@ -284,6 +355,7 @@ class BehaviorEngine extends EventEmitter {
         zoneId:        matchedZone.id,
         revisitCount,
         velocity,
+        pacingScore,
         circularScore: circScore,
         riskScore:     risk,
       });
@@ -313,6 +385,63 @@ class BehaviorEngine extends EventEmitter {
   /** Reset all state (e.g. when camera stops). */
   reset() {
     this._state.clear();
+    this._zoneGallery.clear();
+  }
+
+  /**
+   * Check whether an appearance matching this object already exists in the zone gallery.
+   * Matches via ArcFace cosine similarity (primary) or clothing colour (fallback).
+   * Returns true when a match is found under a DIFFERENT objectId (cross-ID revisit).
+   * Always upserts the current appearance into the gallery.
+   *
+   * @param {string} zoneId
+   * @param {number} objectId  Current tracker ID
+   * @param {object} obj       Detection (may carry obj.face.embedding and obj.color)
+   * @param {number} now       Current timestamp (ms)
+   * @returns {string|null}  Previous objectId if same person matched under a different tracker ID,
+   *                         null if this is the first appearance or same ID as before.
+   */
+  _checkAndEnrollAppearance(zoneId, objectId, obj, now) {
+    const EXPIRY_MS   = 120000; // 2-minute appearance memory per zone
+    const FACE_THRESH = 0.45;   // cosine similarity threshold for same-person
+
+    let gallery = this._zoneGallery.get(zoneId);
+    if (!gallery) { gallery = []; this._zoneGallery.set(zoneId, gallery); }
+
+    // Prune stale entries
+    const active = gallery.filter(e => now - e.lastSeenAt < EXPIRY_MS);
+    this._zoneGallery.set(zoneId, active);
+
+    const embedding  = obj.face?.embedding ?? null;
+    const upperColor = obj.color?.upper    ?? null;
+    const lowerColor = obj.color?.lower    ?? null;
+
+    let matchIdx     = -1;
+    let prevObjectId = null;
+    for (let i = 0; i < active.length; i++) {
+      const e = active[i];
+      if (e.objectId === objectId) { matchIdx = i; break; }  // same tracker — refresh, no cross-ID
+      // Skip entries enrolled THIS frame — prevents same-frame false cross-ID matches where
+      // one person's newly-added gallery entry gets matched by another person in the same batch.
+      if (e.lastSeenAt >= now) continue;
+      if (embedding && e.embedding && _cosine(embedding, e.embedding) > FACE_THRESH) {
+        matchIdx = i; prevObjectId = e.objectId; break;
+      }
+      if (!embedding && upperColor && lowerColor &&
+          e.upperColor === upperColor && e.lowerColor === lowerColor) {
+        matchIdx = i; prevObjectId = e.objectId; break;
+      }
+    }
+
+    if (matchIdx >= 0) {
+      active[matchIdx].objectId  = objectId;
+      active[matchIdx].lastSeenAt = now;
+      if (embedding) active[matchIdx].embedding = embedding;  // refresh embedding EMA
+    } else {
+      active.push({ objectId, embedding, upperColor, lowerColor, lastSeenAt: now });
+    }
+
+    return prevObjectId;  // null = no prior match; non-null = previous tracker ID for same person
   }
 }
 

@@ -112,6 +112,66 @@ function drawOverlay(
         case 'book':         return 'rgba(196,181,253,0.9)';  // violet-300
         case 'remote':       return 'rgba(209,213,219,0.9)';  // gray-300
         case 'vase':         return 'rgba(244,114,182,0.9)';  // pink-400
+        // Accessories — sports equipment (amber-toned)
+        case 'sports ball':    return 'rgba(251,146,60,0.9)';   // orange-400
+        case 'frisbee':        return 'rgba(253,186,116,0.9)';  // orange-300
+        case 'skis':           return 'rgba(14,165,233,0.9)';   // sky-500
+        case 'snowboard':      return 'rgba(56,189,248,0.9)';   // sky-400
+        case 'baseball bat':   return 'rgba(234,179,8,0.9)';    // yellow-500
+        case 'baseball glove': return 'rgba(202,138,4,0.9)';    // yellow-600
+        case 'skateboard':     return 'rgba(249,115,22,0.9)';   // orange-500
+        case 'surfboard':      return 'rgba(6,182,212,0.9)';    // cyan-500
+        case 'tennis racket':  return 'rgba(163,230,53,0.9)';   // lime-400
+        case 'kite':           return 'rgba(192,132,252,0.9)';  // violet-400
+        case 'scissors':       return 'rgba(148,163,184,0.9)';  // slate-400
+        case 'fork':           return 'rgba(209,213,219,0.9)';  // gray-300
+        case 'knife':          return 'rgba(156,163,175,0.9)';  // gray-400
+        case 'spoon':          return 'rgba(229,231,235,0.9)';  // gray-200
+        // Animals — warm tones
+        case 'bird':       return 'rgba(251,207,232,0.9)';  // pink-200
+        case 'cat':        return 'rgba(253,164,175,0.9)';  // rose-300
+        case 'dog':        return 'rgba(251,113,133,0.9)';  // rose-400
+        case 'horse':      return 'rgba(194,65,12,0.9)';    // orange-800
+        case 'sheep':      return 'rgba(243,244,246,0.9)';  // gray-100
+        case 'cow':        return 'rgba(120,53,15,0.9)';    // amber-900
+        case 'elephant':   return 'rgba(107,114,128,0.9)';  // gray-500
+        case 'bear':       return 'rgba(92,51,23,0.9)';     // brown-ish
+        case 'zebra':      return 'rgba(17,24,39,0.9)';     // gray-900
+        case 'giraffe':    return 'rgba(217,119,6,0.9)';    // amber-600
+        // Outdoor / Infrastructure — blue/green civic tones
+        case 'bench':         return 'rgba(52,211,153,0.9)';   // emerald-400
+        case 'traffic light': return 'rgba(250,204,21,0.9)';   // yellow-400
+        case 'fire hydrant':  return 'rgba(239,68,68,0.9)';    // red-500
+        case 'stop sign':     return 'rgba(185,28,28,0.9)';    // red-700
+        case 'parking meter': return 'rgba(75,85,99,0.9)';     // gray-600
+        case 'airplane':      return 'rgba(99,102,241,0.9)';   // indigo-500
+        case 'boat':          return 'rgba(59,130,246,0.9)';   // blue-500
+        case 'train':         return 'rgba(16,185,129,0.9)';   // emerald-500
+        // Food / Kitchen — warm orange/yellow tones
+        case 'bowl':      return 'rgba(251,191,36,0.9)';   // amber-400
+        case 'wine glass': return 'rgba(196,181,253,0.9)'; // violet-300
+        case 'banana':    return 'rgba(253,224,71,0.9)';   // yellow-300
+        case 'apple':     return 'rgba(220,38,38,0.9)';    // red-600
+        case 'sandwich':  return 'rgba(234,179,8,0.9)';    // yellow-500
+        case 'orange':    return 'rgba(249,115,22,0.9)';   // orange-500
+        case 'broccoli':  return 'rgba(21,128,61,0.9)';    // green-700
+        case 'carrot':    return 'rgba(234,88,12,0.9)';    // orange-700
+        case 'hot dog':   return 'rgba(202,138,4,0.9)';    // yellow-600
+        case 'pizza':     return 'rgba(251,146,60,0.9)';   // orange-400
+        case 'donut':     return 'rgba(244,114,182,0.9)';  // pink-400
+        case 'cake':      return 'rgba(251,207,232,0.9)';  // pink-200
+        // Home Appliances — cool neutral tones
+        case 'bed':          return 'rgba(99,102,241,0.9)';   // indigo-500
+        case 'toilet':       return 'rgba(226,232,240,0.9)';  // slate-200
+        case 'sink':         return 'rgba(148,163,184,0.9)';  // slate-400
+        case 'microwave':    return 'rgba(71,85,105,0.9)';    // slate-600
+        case 'oven':         return 'rgba(51,65,85,0.9)';     // slate-700
+        case 'toaster':      return 'rgba(100,116,139,0.9)';  // slate-500
+        case 'refrigerator': return 'rgba(186,230,253,0.9)';  // sky-200
+        case 'potted plant': return 'rgba(134,239,172,0.9)';  // green-300
+        case 'teddy bear':   return 'rgba(253,186,116,0.9)';  // orange-300
+        case 'hair drier':   return 'rgba(253,164,175,0.9)';  // rose-300
+        case 'toothbrush':   return 'rgba(167,243,208,0.9)';  // emerald-200
         default:             return 'rgba(156,163,175,0.9)';  // gray
       }
     })();
@@ -138,9 +198,10 @@ function drawOverlay(
     ctx.strokeRect(x, y, w, h);
     ctx.setLineDash([]);
 
-    // Label: "person #3  94%" or "car #7  82%"
+    // Label: "face [F3]  87%" or "person #7  94%"
     const clsLabel = (className || 'obj').slice(0, 10);
-    const label = `${clsLabel} #${objectId}  ${(confidence * 100).toFixed(0)}%`;
+    const faceTag  = className === 'face' && det.faceId ? ` [${det.faceId}]` : ` #${objectId}`;
+    const label = `${clsLabel}${faceTag}  ${(confidence * 100).toFixed(0)}%`;
     ctx.font = 'bold 12px monospace';
     const textW = ctx.measureText(label).width + 8;
     ctx.fillStyle = 'rgba(0,0,0,0.7)';
@@ -164,11 +225,13 @@ function drawOverlay(
       let bx = x + 2;
       const by = y + 2;
       if (det.mask) {
-        const txt = det.mask.status === 'mask_correct' ? 'MASK OK' :
-                    det.mask.status === 'no_mask'       ? 'NO MASK' : 'MASK?';
-        const bg  = det.mask.status === 'mask_correct' ? 'rgba(34,197,94,0.85)' :
+        const txt = det.mask.status === 'mask_correct' ? 'MASK OK'  :
+                    det.mask.status === 'no_mask'       ? 'NO MASK'  :
+                    det.mask.status === 'uncertain'     ? 'MASK?'    : 'MASK?';
+        // green = wearing; red = not wearing; gray = uncertain (model running, no result)
+        const bg  = det.mask.status === 'mask_correct' ? 'rgba(34,197,94,0.85)'  :
                     det.mask.status === 'no_mask'       ? 'rgba(239,68,68,0.85)' :
-                                                          'rgba(234,179,8,0.85)';
+                                                          'rgba(107,114,128,0.85)';
         const bw  = ctx.measureText(txt).width + 6;
         ctx.fillStyle = bg;
         ctx.fillRect(bx, by, bw, 14);
@@ -177,8 +240,12 @@ function drawOverlay(
         bx += bw + 2;
       }
       if (det.hat) {
-        const txt = det.hat.isHelmet ? 'HELMET' : 'HAT';
-        const bg  = det.hat.isHelmet ? 'rgba(59,130,246,0.85)' : 'rgba(107,114,128,0.85)';
+        const txt = det.hat.isHelmet === true  ? 'HELMET'    :
+                    det.hat.isHelmet === false  ? 'NO HELMET' : 'HAT?';
+        // blue = compliant hardhat; red = no hardhat; gray = uncertain
+        const bg  = det.hat.safetyCompliant === true  ? 'rgba(59,130,246,0.85)'  :
+                    det.hat.safetyCompliant === false   ? 'rgba(239,68,68,0.85)'  :
+                                                          'rgba(107,114,128,0.85)';
         const bw  = ctx.measureText(txt).width + 6;
         ctx.fillStyle = bg;
         ctx.fillRect(bx, by, bw, 14);

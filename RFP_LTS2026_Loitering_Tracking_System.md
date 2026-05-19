@@ -91,7 +91,7 @@ To ensure consistent inference performance regardless of source resolution, all 
 - Tracking accuracy: **HOTA >= 60**, **MOTA >= 70** on MOT17 benchmark
 - Trajectory smoothing and prediction using Kalman Filter or similar
 - **Class-aware association**: IoU matching constrained to same object class — prevents ID theft between vehicles and persons ✅ *Implemented*
-- Cross-camera tracking support for overlapping FOV scenarios *(TODO — Phase 3)*
+- Cross-camera tracking support for overlapping FOV scenarios — face-based Re-ID implemented via shared ArcFace gallery (see §2.3.2); body-level Re-ID deferred to Phase 3
 
 #### 2.3.1 Current Implementation Status
 
@@ -99,10 +99,84 @@ To ensure consistent inference performance regardless of source resolution, all 
 |---|:---:|---|
 | ByteTrack (IoU-based) | ✅ | `server/src/services/tracking.js` |
 | Class-aware IoU matching | ✅ | Same class required for association |
-| 8-dim Kalman Filter | ✅ | [x,y,w,h,vx,vy,vw,vh] state vector |
-| Adaptive Kalman (dynamic Q/R) | 🔲 TODO | NaN instability in near-singular matrix inversion |
-| Multi-cue association (IoU + Appearance) | 🔲 TODO | Requires ArcFace embedding feedback loop into tracker |
-| Cross-camera Re-ID | 🔲 TODO | Requires shared embedding store (Redis/Qdrant) |
+| 8-dim Kalman Filter | ✅ | [x,y,w,h,vx,vy,vw,vh] state vector; connected to Track |
+| Adaptive Kalman (dynamic Q/R) | ✅ | Implemented — velocity from kf.x[4/5], occlusion via framesWithoutHit |
+| Multi-cue association (IoU + Appearance) | ✅ P2 | Implemented — ArcFace EMA per track; `tracker.updateAppearance()`; λ weights configurable via `/api/tracker/config` |
+| Cross-camera Re-ID | ✅ P3 | Shared in-process ArcFace gallery across all cameras — see §2.3.2 |
+
+#### 2.3.2 Cross-Camera Re-ID Architecture
+
+> **Status**: ✅ Fully implemented (in-process, single-server) — server: `server/src/services/pipelineManager.js`; client: `client/src/stores/crossCameraStore.ts`, `client/src/components/FullscreenCameraView.tsx`
+
+**Problem**: The original design kept a separate face gallery per camera (`_faceGalleries: Map<cameraId, entries[]>`), making it impossible to recognise a person who moved between cameras.
+
+**Solution — Option A: Shared In-Process Gallery**
+
+The per-camera galleries have been replaced by a single `_sharedFaceGallery` array that is shared across all active camera pipelines in the same server process. Each gallery entry now carries a `lastCameraId` field:
+
+```
+_sharedFaceGallery: [
+  { faceId, embedding, lastSeenAt, lastCameraId },
+  ...
+]
+```
+
+When `_assignFaceIds(cameraId, detectedFaces, timestamp)` finds a cosine-similarity match (threshold ≥ 0.35) for a face whose `lastCameraId` differs from the current `cameraId`, it:
+
+1. Emits a `face:reidentified` Socket.IO event to **all** connected clients (not just the current camera room):
+
+   ```json
+   {
+     "faceId":      "F7",
+     "prevCameraId": "<uuid-of-camera-A>",
+     "newCameraId":  "<uuid-of-camera-B>",
+     "similarity":   0.82,
+     "timestamp":    1716015600000
+   }
+   ```
+
+2. Updates `lastCameraId` and `lastSeenAt` on the gallery entry.
+3. Increments a per-face `transitionCount` in `_crossCameraStats`.
+
+The returned face object also includes a `crossCamera: { prevCameraId }` field for the current frame's detection payload.
+
+**Stats endpoint**: `GET /api/crosscamera/stats`
+
+```json
+{
+  "totalTransitions": 3,
+  "uniqueFaces": 2,
+  "faces": [
+    {
+      "faceId": "F7",
+      "firstCameraId": "<camera-A-uuid>",
+      "lastCameraId":  "<camera-B-uuid>",
+      "transitionCount": 2,
+      "lastSeenAt": 1716015600000
+    }
+  ]
+}
+```
+
+**Client-Side UI Components**
+
+| Component | File | Description |
+|---|---|---|
+| `CrossCameraReIdEvent` type | `client/src/types/index.ts` | TypeScript interface for `face:reidentified` Socket.IO payload |
+| `useCrossCameraStore` | `client/src/stores/crossCameraStore.ts` | Zustand store; holds last 20 events, auto-expires after 60 s |
+| Global Socket listener | `client/src/App.tsx` | Subscribes to `face:reidentified` on the singleton socket and dispatches to the store |
+| Cross-Camera Re-ID feed | `client/src/components/FullscreenCameraView.tsx` | Displayed in the Detection panel footer (Detections tab) when at least one cross-camera event involves the current camera; shows `[faceId] prevCam → newCam sim%` |
+| CROSS-CAM badge | `client/src/components/FullscreenCameraView.tsx` | Added to face `DetectionRow` when the face's ID matches a cross-camera event from/to the current camera |
+
+**Upgrade Path**
+
+| Scale | Recommended Store | Notes |
+|---|---|---|
+| ≤ 16 cameras, 1 server | In-process shared gallery (current) | Zero external dependencies |
+| Multi-process / multi-server | Redis Stack (RediSearch HNSW) | Add `ioredis`; use `FT.SEARCH … KNN` with 512-D vector index |
+| Cloud / distributed | Qdrant (vector DB) | Add `@qdrant/js-client-rest`; replace gallery with Qdrant collection `face_embeddings` |
+
+For Redis Stack upgrade, each face embedding is stored as a Redis hash with a 512-D FLOAT32 BLOB field and an HNSW index (M=16, efConstruction=200). Similarity search uses `FT.SEARCH idx:faces "*=>[KNN 1 @embedding $vec AS score]"`.
 
 ### 2.4 Loitering Detection Logic
 
@@ -110,11 +184,14 @@ The loitering detection engine shall implement configurable behavioral analysis:
 
 - **Dwell time threshold**: configurable per zone (default: 30 seconds, range: 5s–600s)
 - **Spatial clustering**: detect stationary or low-displacement tracks
+- **Sliding-window displacement**: 10-second rolling window displacement replaces from-first-position check — catches pacing persons who pace back and forth within a zone ✅ *Implemented (Phase-2 upgrade)*
 - **Speed and displacement analysis**: flag individuals with velocity < threshold in defined zones ✅ *Implemented*
 - **Re-entry detection**: count and flag repeated entries within a time window ✅ *Implemented*
 - **Revisit count**: increment counter each time object re-enters zone within `reentryWindow` ✅ *Implemented*
+- **Appearance-based cross-ID revisit**: detect re-entry of the same person even when the tracker assigns a new ID — matched via ArcFace embedding (primary) or clothing colour (fallback); 2-minute appearance memory per zone ✅ *Implemented (Phase-2 upgrade)*
+- **Pacing detection**: count x-direction movement reversals to detect back-and-forth pacing behaviour ✅ *Implemented (Phase-2 upgrade)*
 - **Circular motion pattern**: detect repetitive loop trajectories ✅ *Implemented*
-- **Composite risk score**: weighted combination of dwell/revisit/velocity/circular ✅ *Implemented*
+- **Composite risk score**: weighted combination of dwell/revisit/velocity/pacing/circular ✅ *Implemented (updated weights)*
 - **Crowd density filtering**: adjust sensitivity based on scene density *(TODO — Phase 3)*
 - **False alarm suppression**: ignore transient stops *(TODO — configurable via minDisplacement)*
 
@@ -122,10 +199,11 @@ The loitering detection engine shall implement configurable behavioral analysis:
 
 ```
 riskScore = min(1,
-  (dwellTime / dwellThreshold)     × 0.40   // how long vs. threshold
-  + min(revisitCount / 5, 1)       × 0.30   // repeated zone entries (saturates at 5)
-  + max(0, 1 − velocity / 80)      × 0.20   // low speed = high risk (80 px/s reference)
-  + circularScore                  × 0.10   // loop / repetitive path indicator
+  (dwellTime / dwellThreshold)     × 0.35   // how long vs. threshold
+  + min(revisitCount / 5, 1)       × 0.30   // repeated zone entries (includes cross-ID via appearance)
+  + max(0, 1 − velocity / 80)      × 0.15   // low speed = high risk (80 px/s reference)
+  + pacingScore                    × 0.12   // x-direction reversal rate (back-and-forth)
+  + circularScore                  × 0.08   // loop / repetitive path indicator
 )
 ```
 
@@ -144,6 +222,50 @@ circularScore = max(0, 1 − straightLineDisplacement / totalPathLength)
 ```
 
 A score > 0.4 indicates repetitive/loop movement. Computed over the full position history buffer (up to 300 frames ≈ 30 seconds at 10 FPS).
+
+#### 2.4.3 Pacing Score *(Phase-2 — Implemented)*
+
+```
+reversals     = count of x-direction sign changes in the position history
+pacingScore   = min(1, reversals / 10)
+```
+
+Counts the number of times the horizontal movement direction reverses (left→right or right→left). A person pacing back and forth in a small area generates many reversals at low displacement — a pattern that was previously missed by the circular score (which requires a loop, not a line).
+
+#### 2.4.4 Sliding-Window Displacement *(Phase-2 — Implemented)*
+
+**Problem with the original implementation**: displacement was computed as the maximum distance from the *first* position in the zone. A person who enters, walks 100 px to one side, and then paces back and forth near that point would have `maxDisp = 100 px` — exceeding the typical `minDisplacement = 50 px` threshold and never triggering loitering detection, even after dwelling for many minutes.
+
+**Solution**: displacement is now computed over a **10-second rolling window**. The maximum distance moved *within the last 10 seconds* is compared to `minDisplacement`. A person who has been pacing in a confined area for 5 minutes will have a small recent displacement and correctly trigger the loitering condition.
+
+#### 2.4.5 Appearance-Based Cross-ID Revisit Detection *(Phase-2 — Implemented)*
+
+**Problem**: when the tracker temporarily loses a person and re-acquires them as a new ID, the revisit counter resets to zero — prior zone dwell time is discarded.
+
+**Solution**: each zone maintains a 2-minute appearance gallery. When a new tracker ID enters a zone, the system checks for a prior appearance via:
+1. **ArcFace cosine similarity** (primary) — threshold 0.45; requires face detection to be enabled
+2. **Clothing colour matching** (fallback) — upper + lower colour string match from ColorClothService
+
+If a match is found under a different objectId, `revisitCount` is pre-seeded to 1 (the effective threshold is halved on the next frame via the existing re-entry window logic). This ensures the risk score reflects cumulative zone presence even across tracker ID switches.
+
+#### 2.4.6 AI-Attribute-Enriched Risk Scoring Pipeline *(Phase-2 — Implemented)*
+
+**Problem**: previously, `BehaviorEngine.update()` ran *before* `AttributePipeline.enrich()`, meaning face embeddings, mask/hat status, and clothing colour were not available for risk scoring.
+
+**Solution**: the pipeline order has been corrected:
+
+```
+Detection → Tracking → Attribute Enrichment → Behavior Analysis → Emission
+```
+
+Attributes available during `BehaviorEngine.update()`:
+
+| Attribute | Source | Usage |
+|---|---|---|
+| `face.embedding` | ArcFace (512-dim) | Cross-ID revisit matching in zone gallery |
+| `color.upper`, `color.lower` | ColorClothService | Colour-based fallback revisit matching |
+| `mask.status` | PPE ONNX model | Future: face-hidden risk modifier |
+| `hat.safetyCompliant` | PPE ONNX model | Future: environment-specific risk modifier |
 
 ### 2.4a Adaptive Multi-Feature Tracking *(from Adaptive Loitering Detection RFP)*
 
@@ -164,22 +286,39 @@ Based on the limitations of pure position-based tracking, the following improvem
 
 | Feature | Priority | Status | Effort |
 |---|:---:|:---:|---|
-| Class-aware IoU matching | P0 | ✅ Done | 1 line |
+| Class-aware IoU matching | P0 | ✅ Done | tracking.js |
 | Revisit count + re-entry window | P0 | ✅ Done | BehaviorEngine |
 | Velocity + circular motion analysis | P0 | ✅ Done | BehaviorEngine |
 | Composite risk score | P0 | ✅ Done | BehaviorEngine |
-| Adaptive Kalman (motion-based Q/R) | P1 | 🔲 TODO | tracking.js — fix NaN in _inv4 |
-| Multi-cue matching (IoU + appearance) | P1 | 🔲 TODO | Embed ArcFace into tracker feedback loop |
-| Body-level ReID embedding (not face) | P2 | 🔲 TODO | FastReID or TorchReID (Python worker needed) |
-| Human segmentation mask | P3 | 🔲 TODO | SAM/NanoSAM — GPU required for real-time |
-| Cross-camera Re-ID | P3 | 🔲 TODO | Shared Redis/Qdrant embedding store |
+| Kalman Filter — basic (static Q) | P1 | ✅ Done | _inv4 NaN guard fixed; KF wired into Track |
+| Suspicious score threshold per zone | P1 | ✅ Done | `minRiskScore` field in zone schema + BehaviorEngine gate |
+| Multi-cue matching (IoU + appearance) | P2 | ✅ Done | ArcFace EMA per track; `tracker.updateAppearance()`; λ_iou/λ_app via `/api/tracker/config` |
+| Adaptive Kalman (motion-based Q/R) | P1 | ✅ Done | Velocity from kf.x[4/5]; occlusion via framesWithoutHit |
+| Sliding-window displacement check | P2 | ✅ Done | 10-second rolling window in BehaviorEngine — fixes pacing detection — see §2.4.4 |
+| Pacing score (x-reversal detection) | P2 | ✅ Done | `_pacingScore()` in BehaviorEngine; weight 12% in risk score — see §2.4.3 |
+| Appearance-based cross-ID revisit | P2 | ✅ Done | Per-zone gallery; ArcFace primary + colour fallback; 2-min expiry — see §2.4.5 |
+| AI-attribute-enriched behavior pipeline | P2 | ✅ Done | Attribute enrichment before BehaviorEngine.update(); face/color available for risk — see §2.4.6 |
+| Body-level ReID embedding (not face) | P2 | 🔲 TODO | FastReID or TorchReID — Python worker needed |
 | Heatmap visualization | P2 | 🔲 TODO | Canvas overlay, /api/cameras/:id/heatmap |
-| Suspicious score threshold per zone | P1 | 🔲 TODO | Zone schema: `minRiskScore` field |
+| Human segmentation mask | P3 | 🔲 TODO | SAM/NanoSAM — GPU required for real-time |
+| Cross-camera Re-ID | P3 | 🟡 Done (in-process) | Shared ArcFace gallery; `face:reidentified` event; `/api/crosscamera/stats` — see §2.3.2 |
 
-#### 2.4a.3 Adaptive Kalman Filter Specification *(TODO — P1)*
+#### 2.4a.3 Adaptive Kalman Filter Specification *(P1 — Implemented)*
 
-> **Status**: Blocked by near-singular matrix inversion NaN in `_inv4()` for small bboxes.  
-> See `server/src/services/tracking.js` Track.predict() TODO comment.
+> **Status**: ✅ Fully implemented — `_inv4()` NaN guard; KalmanFilter wired into `Track.predict()` / `Track.update()`; all Q/R parameters are **runtime-configurable** via `/api/tracker/config` and the Video Analytics tab UI.
+
+**Runtime-Configurable Parameters** (`GET / PUT /api/tracker/config`):
+
+| Parameter | Default | Range | Effect |
+|---|:---:|---|---|
+| `fastSpeedThreshold` | 30 px/f | 5–100 | Speed above = fast motion branch |
+| `fastQScale` | 4.0× | 1.0–10.0 | Q multiplier for fast tracks (trust measurements more) |
+| `slowSpeedThreshold` | 5 px/f | 1–20 | Speed below = stationary branch |
+| `slowQScale` | 0.5× | 0.1–1.0 | Q multiplier for stationary tracks (tighten prediction) |
+| `occlusionQScale` | 3.0× | 1.0–10.0 | Additional Q multiplier during occlusion (`framesWithoutHit > 1`) |
+| `measurementNoise` | 10 | 1–50 | R diagonal value — higher = trust prediction more vs. measurements |
+
+Settings are persisted to `storage/tracker.json` and applied immediately to the next frame without server restart.
 
 Dynamic process noise Q adjustment:
 
@@ -190,16 +329,52 @@ if (occluded):             covariance *= 3  // prediction dominant during occlus
 if (appearanceConf < 0.5): covariance *= 2  // weak appearance match
 ```
 
-#### 2.4a.4 Multi-Cue Association Specification *(TODO — P1)*
+#### 2.4a.4 Multi-Cue Association Specification *(✅ Done — P2)*
 
-> **Status**: Blocked by architecture — ArcFace embeddings computed post-tracking.  
-> Fix: feed enriched object embeddings back into ByteTracker via `tracker.updateEmbeddings(enrichedObjects)`.
+> **Status**: ✅ Implemented — `server/src/services/tracking.js` + minimal hook in `pipelineManager.js`.
+
+**Design: one-frame-delayed embedding feedback loop**
+
+ArcFace embeddings are produced by `attributePipeline` *after* `tracker.update()`, so they cannot be used in the same frame's cost matrix. The solution stores embeddings on the Track object and uses them starting from the *next* frame:
+
+1. `tracker.update(detections)` runs association using IoU + stored embeddings (frame N cost matrix).
+2. After enrichment, `pipelineManager` calls `tracker.updateAppearance(objectId, embedding)` for every person with a face embedding.
+3. On frame N+1, the stored embedding is available and blended into the cost matrix.
+
+**Cost function:**
 
 ```
-associationScore = 0.40 × IoU
-                 + 0.40 × cosine_similarity(arcface_embedding_A, arcface_embedding_B)
-                 + 0.20 × attribute_similarity(color_A, color_B)
+cost(det_i, track_j) = λ_iou × (1 − IoU(det_i, track_j.bbox))
+                     + λ_app × (1 − cosineSim(track_j.embedding_prev, ...))
 ```
+
+Default weights: **λ_iou = 0.7**, **λ_app = 0.3** (configurable at runtime).
+
+**Embedding storage — Exponential Moving Average (EMA):**
+
+```
+track.embedding = 0.9 × track.embedding + 0.1 × new_embedding
+```
+
+EMA smooths frame-to-frame ArcFace variability while converging quickly to the stable face representation of the person.
+
+**Runtime-Configurable Parameters** (added to `GET / PUT /api/tracker/config`):
+
+| Parameter | Default | Range | Effect |
+|---|:---:|---|---|
+| `iouWeight` | 0.7 | 0.0–1.0 | Weight of IoU cost term — higher = rely more on position |
+| `appWeight` | 0.3 | 0.0–1.0 | Weight of appearance cost term — higher = rely more on face similarity |
+
+**Fallback behaviour (backward compatible):**
+
+- When a track has no stored embedding (first frames, or face not detected), the cost collapses to pure IoU: `(λ_iou + λ_app) × (1−IoU)`, which preserves relative ordering.
+- Embedding confidence decays over frames without a face detection (`embeddingAge` counter) so stale embeddings have reduced influence.
+
+**Limitations:**
+
+- Appearance matching only activates for persons where the ArcFace model detects a face. Persons whose face is not visible (rear view, hat, occlusion) use IoU-only matching.
+- Requires `scrfd_2.5g.onnx` + `arcface_w600k_r50.onnx` models to be present. If the face module is disabled or models are absent, behaviour is identical to pre-implementation (IoU-only).
+- Full detection-vs-track cosine scoring (i.e., comparing a new detection's embedding against the track's stored embedding) activates only once detections carry their own embeddings — currently the feedback is track-side only.
 
 #### 2.4a.5 Out-of-Scope Items *(Current Architecture)*
 
@@ -209,9 +384,9 @@ The following items from the Adaptive Loitering Detection RFP are **not feasible
 |---|---|---|
 | Human Segmentation (SAM, Mask2Former) | ~500ms/frame CPU — blocks 10 FPS pipeline | Use bbox ROI; consider NanoSAM on GPU Phase-3 |
 | Python AI Worker | Major rewrite; IPC overhead | Current ONNX Runtime in Node.js sufficient |
-| PostgreSQL + Redis + Milvus | Over-engineered for ≤ 16 cameras | SQLite (current) → PostgreSQL at 100+ cameras |
+| PostgreSQL + Redis + Milvus | Over-engineered for ≤ 16 cameras | SQLite (current) → PostgreSQL at 100+ cameras; Redis Stack for multi-server Re-ID (see §2.3.2) |
 | YOLOv11 / RT-DETR | ONNX stability unverified | YOLOv8n COCO (current) performs well |
-| Body-level FastReID / TorchReID | PyTorch-only Python libs | ArcFace via ONNX covers face-based Re-ID |
+| Body-level FastReID / TorchReID | PyTorch-only Python libs | ArcFace via ONNX covers face-based Re-ID (cross-camera via shared gallery — §2.3.2) |
 
 ### 2.5 Zone Management
 
@@ -231,14 +406,14 @@ Each zone must independently configure which AI detection targets are active. Wh
 
 | Target Class | Label | Detection Model | Status |
 |---|---|---|:---:|
-| Human | `human` | YOLOv8n ONNX (COCO class 0: person) | **Available** |
-| Vehicle | `vehicle` | YOLOv8n ONNX (COCO classes: bicycle/1, car/2, motorcycle/3, bus/5, truck/7) | **Available** |
-| Face | `face` | Dedicated face detection model (e.g., RetinaFace / YOLOv8-face) | Planned |
-| Mask | `mask` | Attribute classifier (head-crop ROI → mask/no-mask) | Planned |
-| Color | `color` | Appearance attribute model (upper/lower body color) | Planned |
-| Cloth | `cloth` | Clothing type/style attribute model | Planned |
-| Hat | `hat` | Head-accessory attribute model | Planned |
-| Accessories | `accessories` | General accessory attribute model | Planned |
+| Human | `human` | YOLOv8n ONNX (COCO class 0: person) | ✅ Implemented |
+| Vehicle | `vehicle` | YOLOv8n ONNX (COCO classes: bicycle/1, car/2, motorcycle/3, bus/5, truck/7) | ✅ Implemented |
+| Face | `face` | SCRFD-2.5G ONNX (full-frame) + ArcFace ResNet-50 (512-D embeddings, stable face ID) | ✅ Implemented |
+| Mask | `mask` | YOLOv8m PPE ONNX — head-crop IoU match → mask / no_mask + confidence | ✅ Implemented |
+| Color | `color` | Pixel-averaging on upper/lower body crop (HSV dominant color, 11 classes) | ✅ Implemented |
+| Cloth | `cloth` | Clothing type classifier (PAR model, upper/lower garment category) | ✅ Implemented |
+| Hat | `hat` | YOLOv8m PPE ONNX — hardhat / no_hardhat + safetyCompliant flag | ✅ Implemented |
+| Accessories | `accessories` | YOLOv8n COCO — backpack/24, umbrella/25, handbag/26, tie/27, suitcase/28 | ✅ Implemented |
 
 #### 2.6.2 AI Model Pipeline for Each Attribute
 
@@ -286,66 +461,69 @@ Alert / Loitering Event
   "dwellThreshold": 30,
   "minDisplacement": 50,
   "reentryWindow": 120,
+  "minRiskScore": 0.0,
   "targetClasses": ["human", "vehicle"],
   "active": true
 }
 ```
+
+> **`minRiskScore`** (0.0–1.0, default 0.0): minimum composite risk score required to emit a loitering alert for this zone. Setting to 0.6 filters out low-confidence loitering events and only triggers alerts for objects with elevated dwell time, repeated entries, or circular movement patterns. The loitering badge in the UI is displayed for all objects meeting the dwell/displacement threshold regardless of this value.
 
 #### 2.6.5 Functional Requirements for AI Attribute Selection
 
 - **Zone Editor UI**: Per-zone checkbox grid to select/deselect each AI attribute target
 - **Immediate persistence**: toggling a checkbox auto-saves to the backend without requiring a manual save action
 - **Backward compatibility**: zones without `targetClasses` (or with an empty array) monitor all supported classes
-- **Planned model indicators**: unavailable models shown as greyed-out in the UI with a "준비중" (in preparation) badge
+- **Model availability indicators**: unavailable models shown as greyed-out in the UI with a "Not Available" badge
 - **Real-time filter**: the behavior engine applies `targetClasses` filter each frame — no restart required
 
 #### 2.6.6 Indoor / Office Object Detection ✅ *Implemented*
 
-YOLOv8n COCO 80-class 모델은 사람·차량 외에 사무 환경의 다양한 실내 객체를 즉시 감지할 수 있습니다. 추가 모델 설치 없이 활성화됩니다.
+The YOLOv8n COCO 80-class model detects a wide range of indoor and office objects in addition to persons and vehicles. No additional model installation is required — these classes are activated via zone `targetClasses` configuration.
 
-**지원 실내 / 사무 객체 클래스**
+**Supported Indoor / Office Object Classes**
 
-| 한국어 | COCO 클래스명 | targetClass ID | 색상 코드 | 상태 |
+| Object | COCO Class Name | targetClass ID | Color | Status |
 |---|---|---|---|:---:|
-| 의자 | `chair` | `chair` | violet `#8b5cf6` | ✅ |
-| 소파 | `couch` | `couch` | violet-400 `#a78bfa` | ✅ |
-| 책상/탁자 | `dining table` | `diningtable` | emerald `#10b981` | ✅ |
-| 침대 | `bed` | (furniture 그룹) | indigo `#6366f1` | ✅ |
-| TV/모니터 | `tv` | `tv` | sky `#0ea5e9` | ✅ |
-| 노트북 | `laptop` | `laptop` | cyan `#06b6d4` | ✅ |
-| 마우스 | `mouse` | `mouse` | amber-300 `#fbbf24` | ✅ |
-| 키보드 | `keyboard` | `keyboard` | pink `#ec4899` | ✅ |
-| 휴대폰 | `cell phone` | `cellphone` | red-400 `#f87171` | ✅ |
-| 시계 | `clock` | `clock` | emerald-400 `#34d399` | ✅ |
-| 컵 | `cup` | `cup` | orange `#fb923c` | ✅ |
-| 병 | `bottle` | `bottle` | lime `#a3e635` | ✅ |
-| 책 | `book` | `book` | violet-300 `#c4b5fd` | ✅ |
-| 화병 | `vase` | (default) | pink-400 `#f472b6` | ✅ |
-| 리모컨 | `remote` | (default) | gray-300 `#d1d5db` | ✅ |
+| Chair | `chair` | `chair` | violet `#8b5cf6` | ✅ |
+| Couch / Sofa | `couch` | `couch` | violet-400 `#a78bfa` | ✅ |
+| Desk / Table | `dining table` | `diningtable` | emerald `#10b981` | ✅ |
+| Bed | `bed` | (`furniture` group) | indigo `#6366f1` | ✅ |
+| TV / Monitor | `tv` | `tv` | sky `#0ea5e9` | ✅ |
+| Laptop | `laptop` | `laptop` | cyan `#06b6d4` | ✅ |
+| Mouse | `mouse` | `mouse` | amber-300 `#fbbf24` | ✅ |
+| Keyboard | `keyboard` | `keyboard` | pink `#ec4899` | ✅ |
+| Cell Phone | `cell phone` | `cellphone` | red-400 `#f87171` | ✅ |
+| Clock | `clock` | `clock` | emerald-400 `#34d399` | ✅ |
+| Cup | `cup` | `cup` | orange `#fb923c` | ✅ |
+| Bottle | `bottle` | `bottle` | lime `#a3e635` | ✅ |
+| Book | `book` | `book` | violet-300 `#c4b5fd` | ✅ |
+| Vase | `vase` | (default) | pink-400 `#f472b6` | ✅ |
+| Remote | `remote` | (default) | gray-300 `#d1d5db` | ✅ |
 
-**그룹 targetClass 매핑**
+**Group targetClass Mapping**
 
 ```
 furniture  → chair, couch, dining table, bed
 computer   → laptop, tv, keyboard, mouse, cell phone
 ```
 
-**활용 시나리오**
+**Usage Scenarios**
 
-| 시나리오 | Zone 설정 | 설명 |
+| Scenario | Zone targetClasses | Description |
 |---|---|---|
-| 자산 도난 방지 | `laptop`, `keyboard`, `clock` | 사무기기 구역 내 미등록 반출 감지 |
-| 책상 점유 감지 | `diningtable`, `chair` | 회의실·카페 내 장시간 점유 체류 경보 |
-| 분실물 탐지 | `bottle`, `cup`, `book` | 지정 구역 내 물건 장시간 정치 감지 |
-| 컴퓨터 보안 구역 | `computer` | 컴퓨터 주변 비인가 접근 감지 |
-| 스마트폰 반입 금지 구역 | `cellphone` | 보안 구역 내 휴대폰 소지 감지 |
+| Asset theft prevention | `laptop`, `keyboard`, `clock` | Detect unauthorized removal of office equipment from a monitored area |
+| Desk / seat occupancy | `diningtable`, `chair` | Alert on prolonged unattended occupation of seats in meeting rooms or cafes |
+| Lost property detection | `bottle`, `cup`, `book` | Detect items left unattended in a designated zone for an extended period |
+| Computer security zone | `computer` | Detect unauthorized access near computing equipment |
+| No-phone zone enforcement | `cellphone` | Detect mobile phones in restricted security areas |
 
-**시각적 표현 사양**
+**Visual Representation Specification**
 
-- Bounding box: 각 클래스별 고유 색상 (위 표 참조), 실선 2px
-- 라벨: `className #objectId  confidence%` 형식
-- Detection 패널: 클래스별 색상 코드 표시
-- Zone 편집기: "실내/사무 객체" 그룹으로 분류하여 표시
+- Bounding box: class-specific color (see table above), solid 2px border
+- Label: `className #objectId  confidence%` format
+- Detection panel: color-coded chip per object class
+- Zone editor: objects listed under the "Indoor / Office" group
 
 ---
 

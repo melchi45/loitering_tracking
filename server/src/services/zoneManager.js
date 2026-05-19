@@ -53,6 +53,7 @@ class ZoneManager {
       dwellThreshold:  zoneData.dwellThreshold   ?? parseInt(process.env.LOITERING_THRESHOLD_SEC || '30'),
       minDisplacement: zoneData.minDisplacement  ?? parseInt(process.env.MIN_DISPLACEMENT_PX     || '50'),
       reentryWindow:   zoneData.reentryWindow    ?? parseInt(process.env.REENTRY_WINDOW_SEC       || '120'),
+      minRiskScore:    zoneData.minRiskScore     ?? 0.0,
       schedule:        zoneData.schedule         || null,
       targetClasses,
       active:          true,
@@ -103,6 +104,7 @@ class ZoneManager {
       dwellThreshold:  row.dwellThreshold,
       minDisplacement: row.minDisplacement,
       reentryWindow:   row.reentryWindow,
+      minRiskScore:    row.minRiskScore ?? 0.0,
       schedule:        row.schedule && typeof row.schedule === 'string'
                          ? JSON.parse(row.schedule)
                          : (row.schedule || null),

@@ -151,29 +151,32 @@ Traditional CCTV monitoring is reactive and prone to human error. This system au
 
 | Model | Format | Task | Classes | Size | Latency* |
 |---|---|---|---|---|---|
-| YOLOv8n | ONNX | Multi-class detection (primary) | person, bicycle, car, motorcycle, bus, truck | ~6MB | ~15ms |
+| YOLOv8n | ONNX | Multi-class detection (primary) | COCO 80-class (person, vehicle, indoor, accessories, …) | 13MB | ~15ms |
 | YOLOv8s | ONNX | Multi-class detection (higher accuracy) | same as above | ~22MB | ~30ms |
-| ByteTrack | JS implementation | Multi-object tracking | — | — | ~5ms |
-| MobileNetV2 Re-ID | ONNX | Person re-identification | — | ~14MB | ~10ms |
-| RetinaFace *(planned)* | ONNX | Face detection | face | ~4MB | ~20ms |
-| Attribute classifier *(planned)* | ONNX | Mask / Color / Cloth / Hat / Accessories | 8 attribute types | ~8MB | ~5–15ms/crop |
+| ByteTrack | JS implementation | Multi-object tracking (8-dim KF + multi-cue) | — | — | ~5ms |
+| SCRFD-2.5G | ONNX | Face detection | face | 3.2MB | ~10ms |
+| ArcFace ResNet50 | ONNX | Face Re-ID / appearance embedding (512-dim) | — | 249MB | ~15ms/crop |
+| YOLOv8m PPE | ONNX | Mask / Helmet / PPE detection | mask, hardhat | 99MB | ~30ms |
+| YOLOv8s Fire/Smoke | ONNX | Fire and smoke detection | fire, smoke, both | 43MB | ~25ms |
+| OpenPAR *(planned)* | ONNX | Clothing type classification | cloth types | TBD | TBD |
 
 > \* Latency measured on Intel Core i7 CPU. GPU via NVIDIA CUDA reduces by 3–5×.
 
 #### Enabled COCO Classes (YOLOv8n)
 
-The detection service detects the following COCO classes by default:
+The detection service supports all **80 COCO class IDs** in `ENABLED_CLASSES`. Class-level filtering is applied by `analyticsConfig.isClassEnabled()` — not at the detection layer. Zones with `targetClasses: []` (empty) monitor all enabled classes.
 
-| COCO ID | Class Name | Zone Target Key |
-|---|---|---|
-| 0 | person | `human` |
-| 1 | bicycle | `vehicle` |
-| 2 | car | `vehicle` |
-| 3 | motorcycle | `vehicle` |
-| 5 | bus | `vehicle` |
-| 7 | truck | `vehicle` |
+| Zone Target Key | Mapped COCO Classes |
+|---|---|
+| `human` | person (0) |
+| `vehicle` | bicycle (1), car (2), motorcycle (3), bus (5), truck (7) |
+| `face` | detected via SCRFD face model (not YOLO class) |
+| `accessories` | backpack (24), umbrella (25), handbag (26), tie (27), suitcase (28) |
+| `furniture` | chair (56), couch (57), dining table (60), bed (59) |
+| `computer` | laptop (63), tv (62), keyboard (66), mouse (64), cell phone (67) |
+| `fire` / `smoke` | detected via YOLOv8s fire/smoke model (not YOLO 80-class) |
 
-Zones with `targetClasses: ['human']` only trigger loitering logic for persons; `['vehicle']` for all vehicle types; `[]` (empty) monitors all enabled classes.
+Full 80-class breakdown: see **Section 7** and `RFP_Object_Tracking.md §3.2.2`.
 
 #### Required AI Model Files
 
@@ -181,17 +184,25 @@ Place model files in `server/models/`:
 
 ```
 server/models/
-├── yolov8n.onnx          # Primary detection model (person + vehicles)
-├── yolov8s.onnx          # High-accuracy detection model (optional)
-└── reid_mobilenetv2.onnx # Re-ID model for persistent tracking
+├── yolov8n.onnx                # 13MB  — Primary COCO 80-class detection (required)
+├── yolov8s.onnx                # ~22MB — Higher accuracy detection (optional)
+├── scrfd_2.5g.onnx             # 3.2MB — Face detection SCRFD-2.5G (AI-03)
+├── arcface_w600k_r50.onnx      # 249MB — Face Re-ID ArcFace ResNet50 (AI-03)
+├── yolov8m_ppe.onnx            # 99MB  — Mask / helmet PPE (AI-04/07)
+├── yolov8s_fire_smoke.onnx     # 43MB  — Fire & smoke detection (AI-09)
+└── [openpar.onnx]              # TBD   — Cloth type classifier (AI-06, planned)
 ```
 
 **Download commands:**
 ```bash
-# YOLOv8n ONNX (Ultralytics)
+# YOLOv8n ONNX (Ultralytics — ONNX IR v9, requires onnxruntime-node ≥ 1.16)
 python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt').export(format='onnx')"
-# Or download directly:
-wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.onnx -O server/models/yolov8n.onnx
+
+# SCRFD face detection (JackCui/facefusion via HuggingFace)
+# ArcFace ResNet50 (FoivosPar/Arc2Face via HuggingFace)
+# YOLOv8m PPE (keremberke/yolov8m-protective-equipment-detection)
+# YOLOv8s Fire/Smoke (Abonia1/YOLOv8-Fire-and-Smoke-Detection)
+# Download details: see Section 7.5 (installed model status table)
 ```
 
 ---
@@ -337,23 +348,27 @@ RTSP Stream (H.264/H.265)
 
 ### 6.1 Detection: YOLOv8n (ONNX)
 
-- Input: 640×640 normalized RGB tensor `[1, 3, 640, 640]`
+- Input: 640×640 normalized RGB tensor `[1, 3, 640, 640]` (letterbox padding, grey border)
 - Output: `[1, 84, 8400]` — 4 bbox coords + 80 class scores per anchor
-- Enabled classes: **person (0)**, bicycle (1), car (2), motorcycle (3), bus (5), truck (7)
-- Confidence threshold: **0.45** (configurable via `CONFIDENCE_THRESHOLD` env)
+- Enabled classes: **all 80 COCO classes** (class-level gating via `analyticsConfig.isClassEnabled()`)
+- Confidence threshold: **0.30** (configurable via `CONFIDENCE_THRESHOLD` env)
 - NMS IoU threshold: **0.5** (configurable via `NMS_IOU_THRESHOLD` env)
-- Post-processing: NMS → filter enabled classes → scale boxes to actual JPEG frame size
-- Frame dimensions: parsed from JPEG SOF marker (`getJpegSize`) — no full decode required; fallback to 640×640
+- Post-processing: NMS → filter enabled classes → scale boxes back to original frame coordinates
+- Pre-processing: letterbox resize with sharp; coordinate unpadding in `_postprocess()`
 
 ### 6.2 Multi-Object Tracking: ByteTrack
 
 ByteTrack operates on detection outputs and maintains persistent `objectId` across frames:
 
-- **High-confidence tracks** (conf ≥ 0.6): matched via IoU
-- **Low-confidence tracks** (0.1 ≤ conf < 0.6): used for occlusion recovery
-- **Track states**: `Tracked` → `Lost` (30 frames) → `Removed`
-- **Max track age**: 30 frames (configurable)
-- **Re-ID distance**: Kalman filter predicted position IoU
+- **8-dim Kalman Filter**: state = `[x, y, w, h, vx, vy, vw, vh]`; adaptive process noise Q (stationary / normal / fast)
+- **High-confidence detections**: matched to all tracks via multi-cue score
+- **Low-confidence detections**: matched to unmatched Lost tracks via IoU-only (occlusion recovery)
+- **Multi-cue association**: `λ_iou × IoU + λ_app × IoU × appConf`; λ_iou=0.7, λ_app=0.3
+- **Track states**: `Tracked` → `Lost` → `Removed`; score threshold = 0.25
+- **Max track age**: **90 frames** (9 seconds at 10 FPS; was 30 frames)
+- **KF predict freeze**: `framesWithoutHit > 1` skips predict to prevent P-matrix covariance blowup
+- **NaN guard**: non-finite KF output falls back to YOLO bbox; P matrix reset on blowup
+- **Appearance Re-ID**: ArcFace 512-dim embedding per track with EMA update (α = 0.9)
 
 ### 6.3 Detection Output Schema
 
@@ -422,8 +437,8 @@ Each camera zone can independently activate one or more AI analysis modules via 
 | 6 | ☐ **Cloth** | `cloth` | [AI-06](RFP_AI_Cloth_Analysis.md) | 🔲 준비중 | 의류 유형 분류 — OpenPAR (openpar.onnx 미설치) |
 | 7 | ☑ **Hat** | `hat` | [AI-07](RFP_AI_Hat_Detection.md) | ✅ 구현 완료 | 헬멧/모자 감지 — YOLOv8m PPE (99MB), hardhat/no_hardhat 분류 |
 | 8 | ☑ **Accessories** | `accessories` | [AI-08](RFP_AI_Accessories_Detection.md) | ✅ 구현 완료 | 소품 감지 — YOLOv8n COCO (backpack/umbrella/handbag/tie/suitcase) |
-| 9 | ☐ **Fire** | `fire` | [AI-09](RFP_AI_Fire_Smoke_Detection.md) | 🔲 준비중 | 화재 감지 — YOLOv8s fire/smoke (yolov8s_fire_smoke.onnx 미설치) |
-| 10 | ☐ **Smoke** | `smoke` | [AI-09](RFP_AI_Fire_Smoke_Detection.md) | 🔲 준비중 | 연기 감지 — YOLOv8s fire/smoke (yolov8s_fire_smoke.onnx 미설치) |
+| 9 | ☑ **Fire** | `fire` | [AI-09](RFP_AI_Fire_Smoke_Detection.md) | ✅ 구현 완료 | 화재 감지 — YOLOv8s 3-class (yolov8s_fire_smoke.onnx 43MB, Abonia1/GitHub) |
+| 10 | ☑ **Smoke** | `smoke` | [AI-09](RFP_AI_Fire_Smoke_Detection.md) | ✅ 구현 완료 | 연기 감지 — YOLOv8s 3-class (yolov8s_fire_smoke.onnx 43MB, Abonia1/GitHub) |
 
 > **구현 완료** 모듈은 Zone 편집 시 체크박스가 활성화됩니다. **준비중** 모듈은 체크박스가 회색으로 표시되며 해당 ONNX 모델 파일이 `server/models/`에 배치되면 자동 활성화됩니다.
 >
@@ -441,7 +456,7 @@ Zone 편집 화면 하단의 **"AI 감지 대상"** 섹션에서 해당 Zone에 
 │ ☑ 얼굴         │ ☑ 마스크        │
 │ ☑ 색상         │ ☐ 의류   준비중 │
 │ ☑ 모자         │ ☑ 소품          │
-│ ☐ 화재  준비중 │ ☐ 연기   준비중 │  ← 모델 설치 시 활성화
+│ ☑ 화재          │ ☑ 연기          │
 └────────────────┴────────────────┘
 ```
 
@@ -487,44 +502,68 @@ if (!targetClasses || targetClasses.length === 0) return true;
 
 라벨 형식: `person #3  94%` (className + objectId + confidence)
 
-### 7.5 향후 AI 모듈 활성화 절차
+### 7.5 설치된 AI 모델 파일 현황
 
-준비중 모듈은 해당 ONNX 모델 파일을 `server/models/`에 배치하면 자동 활성화됩니다:
+> 검증 환경: **onnxruntime-node 1.26.0** (Node.js, 2026-05-18)  
+> Python onnxruntime 1.14.1은 `yolov8n.onnx` (ONNX IR v9) 미지원 — Node.js 런타임에서만 동작
+
+| 파일 | 크기 | Node.js 로드 | 담당 AI 모듈 | 출처 |
+|---|---:|:---:|---|---|
+| `yolov8n.onnx` | 13 MB | ✅ 동작 | AI-01 Human · AI-02 Vehicle · AI-08 Accessories · Indoor 객체 전체 | Ultralytics YOLOv8n COCO (ONNX IR v9) |
+| `scrfd_2.5g.onnx` | 3.2 MB | ✅ 동작 | AI-03 Face Detection (얼굴 감지) | JackCui/facefusion @ HuggingFace |
+| `arcface_w600k_r50.onnx` | 249 MB | ✅ 동작 | AI-03 Face Re-ID (얼굴 재식별) | FoivosPar/Arc2Face @ HuggingFace |
+| `yolov8m_ppe.onnx` | 99 MB | ✅ 동작 | AI-04 Mask Detection · AI-07 Helmet Detection | keremberke/yolov8m-protective-equipment-detection |
+| `yolov8s_fire_smoke.onnx` | 43 MB | ✅ 동작 | AI-09 Fire & Smoke Detection (화재·연기 3-class) | Abonia1/YOLOv8-Fire-and-Smoke-Detection @ GitHub |
+| `openpar.onnx` | — | 🔲 미설치 | AI-06 Cloth Analysis Phase-2 (의류 유형 분류) | Event-AHU/OpenPAR (연구 프레임워크 — 별도 학습 필요) |
+
+**모델 합계**: 설치 완료 5개 · 총 약 407 MB  
+**미설치**: 1개 (`openpar.onnx`) — Phase-2 구현 대기 (추론 코드 미완성)
 
 ```
-server/models/
-├── yolov8n.onnx                     # ✅ 현재 사용 중
-├── scrfd_500m.onnx                  # Face/Head 감지 (AI-03, AI-07 공유)
-├── arcface_r18.onnx                 # 얼굴 인식 Re-ID (AI-03)
-├── mask_classifier_effb0.onnx       # 마스크 분류 (AI-04)
-├── color_upper_efficientb0.onnx     # 상의 색상 (AI-05)
-├── color_lower_efficientb0.onnx     # 하의 색상 (AI-05)
-├── cloth_classifier_efficientb0.onnx # 의류 유형 (AI-06)
-├── hat_classifier.onnx              # 모자/헬멧 분류 (AI-07)
-└── accessories_yolov8n.onnx         # 소품 감지 (AI-08)
+server/models/                       크기    상태   모듈
+├── yolov8n.onnx                     13 MB  ✅     Human/Vehicle/Indoor/Accessories (COCO 80-class)
+├── scrfd_2.5g.onnx                 3.2 MB  ✅     얼굴 감지 SCRFD-2.5G (AI-03)
+├── arcface_w600k_r50.onnx          249 MB  ✅     얼굴 Re-ID ArcFace ResNet50 (AI-03)
+├── yolov8m_ppe.onnx                 99 MB  ✅     마스크/헬멧 YOLOv8m PPE (AI-04/07)
+└── yolov8s_fire_smoke.onnx          43 MB  ✅     화재/연기 YOLOv8s 3-class (AI-09)
+                                              출처: Abonia1/YOLOv8-Fire-and-Smoke-Detection
+[미설치]
+└── openpar.onnx                      — MB  🔲     의류 유형 PAR (AI-06 Phase-2)
+                                              출처: Event-AHU/OpenPAR (학습 완료 후 ONNX 변환 필요)
+                                              ※ colorClothService._runPAR() 추론 구현 병행 필요
 ```
 
-각 AI 모듈 상세 사양: `RFP_AI_Human_Detection.md` ~ `RFP_AI_Accessories_Detection.md` 참고.
+> **AI-06 Cloth Phase-2 설치 조건** (현재 미완):  
+> 1. Event-AHU/OpenPAR 사전 학습 가중치 다운로드 및 ONNX 변환  
+> 2. `server/src/services/colorClothService.js` → `_runPAR()` 추론 코드 구현  
+> 3. 완료 후 `/api/capabilities` → `cloth: true` 자동 전환  
+> Phase-1 (상체·하체 색상 추출)은 모델 없이 즉시 동작 중.
+
+각 AI 모듈 상세 사양: `RFP_AI_Human_Detection.md` ~ `RFP_AI_Fire_Smoke_Detection.md` 참고.
 
 ---
 
 ## 8. Loitering Detection Logic
 
-### 7.1 Behavioral Analysis Engine
+### 8.1 Behavioral Analysis Engine
 
 ```
 For each tracked object per frame:
   1. Update position history (circular buffer, 300 frames)
-  2. Calculate displacement: max(bbox_center) over last N frames
-  3. Calculate dwell time: frames_in_zone × (1/fps)
-  4. If dwell_time > threshold AND displacement < min_displacement:
-     → emit LOITERING_ALERT event
-  5. On re-entry within re_entry_window:
-     → increment re_entry_count
-     → reduce dwell_time threshold by 50%
+  2. Zone entry/exit: point-in-polygon test (ray casting)
+  3. Cross-ID state transfer: zone appearance gallery match
+     → ArcFace cosine ≥ 0.45 OR clothing colour (upper+lower both match)
+     → dwell time, trajectory, revisit count transferred to new ID
+  4. Sliding-window displacement: max bbox-center distance over last 10 s
+  5. Pacing score: x-direction reversal count (saturates at 10 reversals)
+  6. Composite risk score (5-factor):
+     dwellRatio×0.35 + revisitRatio×0.30 + lowVeloRatio×0.15
+     + pacingScore×0.12 + circScore×0.08
+  7. Loitering declared: dwellTime ≥ threshold AND displacement < minDisplacement
+     → emit LOITERING_ALERT event if riskScore ≥ minRiskScore (per zone)
 ```
 
-### 7.2 Zone-Based Analysis
+### 8.2 Zone-Based Analysis
 
 - Zones defined as polygons in pixel coordinates (actual JPEG frame space)
 - Point-in-polygon test (ray casting) per detection per frame
@@ -542,7 +581,7 @@ For each tracked object per frame:
 
 ## 9. React Web UI
 
-### 8.1 Live Video with Bounding Box Overlay
+### 9.1 Live Video with Bounding Box Overlay
 
 The React UI receives annotated data from the Node.js server via Socket.IO:
 
@@ -565,7 +604,7 @@ Each detection renders:
 - **Label**: `ID:7  0.89` (objectId + confidence, top-left of bbox)
 - **Dwell timer**: seconds counter (bottom-right, appears when dwell > 5s)
 
-### 8.2 Dashboard Layout
+### 9.2 Dashboard Layout
 
 ```
 ┌─────────────────────────────────────────────────────┐
@@ -584,7 +623,7 @@ Each detection renders:
 └──────────────────────────────┴──────────────────────┘
 ```
 
-### 8.3 Zone Editor
+### 9.3 Zone Editor
 
 The Zone Editor opens as a full-viewport overlay when the **+ Zone** button is clicked on any camera view.
 
@@ -600,13 +639,13 @@ The Zone Editor opens as a full-viewport overlay when the **+ Zone** button is c
 
 **Zone polygon storage:** coordinates are in actual JPEG frame pixel space (e.g. 1920×1080), not normalized. The ZoneEditor reads `img.naturalWidth/naturalHeight` so the canvas overlay always aligns with the displayed video regardless of container size.
 
-### 8.4 Camera Management
+### 9.4 Camera Management
 
 - Auto-populate discovered cameras from UDP broadcast
 - Manual RTSP URL entry
 - Per-camera: start/stop stream, zone configuration, sensitivity settings
 
-### 8.5 Fullscreen Camera View with Real-Time Detection Panel
+### 9.5 Fullscreen Camera View with Real-Time Detection Panel
 
 Double-clicking any camera cell in the grid opens a fullscreen overlay with a dedicated left-side detection panel.
 
@@ -663,7 +702,7 @@ A module-level `subscriptionCounts` map ensures `camera:subscribe` is emitted on
 
 ## 10. Submodules
 
-### 9.1 WiseNetChromeIPInstaller (Node.js UDP branch)
+### 10.1 WiseNetChromeIPInstaller (Node.js UDP branch)
 
 ```bash
 # Initialize after cloning loitering_tracking
@@ -684,7 +723,7 @@ The `nodejs-udp-discovery` branch adds:
 
 ## 11. Technical Requirements
 
-### 10.1 Video Input & Ingestion
+### 11.1 Video Input & Ingestion
 
 - Support RTSP, RTMP, HTTP(S) input via FFmpeg
 - Compatible with ONVIF-compliant IP cameras (WiseNet/Hanwha)
@@ -692,7 +731,7 @@ The `nodejs-udp-discovery` branch adds:
 - Resolution support: 720p, 1080p (inference at 640×640)
 - Hardware-accelerated decoding: NVDEC (NVIDIA), QSV (Intel), VA-API
 
-### 10.2 Object Detection
+### 11.2 Object Detection
 
 | Metric | Minimum | Target |
 |---|---|---|
@@ -701,14 +740,14 @@ The `nodejs-udp-discovery` branch adds:
 | Inference Latency | ≤ 50ms/frame (CPU) | ≤ 15ms/frame (GPU) |
 | False Positive Rate | ≤ 5% | ≤ 2% |
 
-### 10.3 Multi-Object Tracking
+### 11.3 Multi-Object Tracking
 
-- Algorithm: ByteTrack (primary), DeepSORT (alternative)
-- Persistent `objectId` assignment across frames
-- Track re-identification after occlusion (up to 30 frames)
-- Tracking accuracy: HOTA ≥ 60, MOTA ≥ 70 on MOT17
+- Algorithm: ByteTrack (JS implementation) with 8-dim Kalman Filter + ArcFace multi-cue association
+- Persistent `objectId` assignment across frames; class hard-reject prevents cross-class ID inheritance
+- Track re-identification after occlusion (up to **90 frames** = 9 s at 10 FPS)
+- Tracking accuracy target: HOTA ≥ 60, MOTA ≥ 70 on MOT17 (benchmark pending)
 
-### 10.4 WebSocket Streaming
+### 11.4 WebSocket Streaming
 
 - Protocol: Socket.IO over WebSocket
 - Frame delivery: JPEG base64, target ≤ 100KB/frame at 10 FPS
@@ -719,7 +758,7 @@ The `nodejs-udp-discovery` branch adds:
 
 ## 12. Functional Requirements
 
-### 11.1 Dashboard & UI
+### 12.1 Dashboard & UI
 
 - Live multi-camera grid view (1/4/9/16 layout)
 - Per-frame bounding boxes with `objectId` and `confidence` score
@@ -729,21 +768,21 @@ The `nodejs-udp-discovery` branch adds:
 - Alert history: filterable by camera, zone, time, severity
 - Heatmap: dwell-time visualization per zone
 
-### 11.2 Alerting & Notifications
+### 12.2 Alerting & Notifications
 
 - In-app alert with visual highlight and audio cue
 - Webhook POST to configurable endpoint
 - Email notification (nodemailer)
 - Alert cool-down: configurable per zone (default 60s)
 
-### 11.3 Camera Discovery & Management
+### 12.3 Camera Discovery & Management
 
 - **UDP broadcast discovery** of WiseNet cameras on LAN (one-click scan)
 - Manual camera entry: RTSP URL, credentials
 - Per-camera: stream start/stop, resolution, FPS override
 - Connection status indicator (live/offline/error)
 
-### 11.4 Video Evidence
+### 12.4 Video Evidence
 
 - Automatic clip save on loitering event (±30s buffer)
 - H.264 MP4 stored in `storage/clips/`
@@ -753,21 +792,21 @@ The `nodejs-udp-discovery` branch adds:
 
 ## 13. Non-Functional Requirements
 
-### 12.1 Security
+### 13.1 Security
 
 - TLS 1.3 for all WebSocket and REST connections in production
 - OWASP Top 10 compliance for web interface
 - JWT Bearer token authentication for API and Socket.IO
 - GDPR/PDPA: video retention policy, right-to-erasure API
 
-### 12.2 Scalability & Reliability
+### 13.2 Scalability & Reliability
 
 - Minimum 4 concurrent channels on CPU-only server
 - Minimum 16 concurrent channels with NVIDIA GPU
 - Graceful degradation: alerting continues if UI disconnects
 - Health check endpoint: `GET /api/health`
 
-### 12.3 Maintainability
+### 13.3 Maintainability
 
 - ESLint + Prettier code style enforcement
 - Jest unit tests (≥ 70% coverage for core pipeline)
@@ -778,25 +817,25 @@ The `nodejs-udp-discovery` branch adds:
 
 ## 14. Project Milestones & Deliverables
 
-| Phase | Milestone | Deliverables | Target |
-|:---:|---|---|:---:|
-| 1 | Project Setup | Repo structure, submodule, Docker Compose, CI | Week 1 |
-| 2 | UDP Discovery | Node.js UDP discovery module, camera list UI | Week 2 |
-| 3 | RTSP Capture | FFmpeg ingestion, 10 FPS frame pipeline | Week 3 |
-| 4 | AI Detection | YOLOv8n ONNX inference, NMS, bounding boxes | Week 5 |
-| 5 | MOT Tracking | ByteTrack integration, persistent objectId | Week 6 |
-| 6 | React UI | Live video + bbox overlay, camera grid | Week 8 |
-| 7 | Loitering Logic | Dwell time engine, zone manager, alerts | Week 10 |
-| 8 | Alert Service | In-app + webhook + email notifications | Week 11 |
-| 9 | Integration | Full pipeline E2E, performance tuning | Week 13 |
-| 10 | UAT & QA | Performance tests, security audit, bug fixes | Week 15 |
-| 11 | Deployment | Docker image, docs, production deployment | Week 16 |
+| Phase | Milestone | Deliverables | Status | Date |
+|:---:|---|---|:---:|:---:|
+| 1 | Project Setup | Repo structure, submodule (WiseNetChromeIPInstaller), Docker Compose skeleton, CI | ✅ Done | Mar 31, 2026 |
+| 2 | UDP Discovery | Node.js UDP/ONVIF discovery, WS-Discovery, camera list UI | ✅ Done | Apr 7, 2026 |
+| 3 | RTSP Capture | FFmpeg RTSP ingestion, 10 FPS frame pipeline, JPEG buffer | ✅ Done | Apr 14, 2026 |
+| 4 | AI Detection | YOLOv8n ONNX, letterbox pre-process, NMS, COCO 80-class support | ✅ Done | Apr 28, 2026 |
+| 5 | MOT Tracking | ByteTracker (8-dim KF, adaptive Q, NaN guard, maxAge=90, ArcFace EMA) | ✅ Done | May 5, 2026 |
+| 6 | React UI | Live video + bbox overlay, fullscreen view, zone editor, detection panel | ✅ Done | May 12, 2026 |
+| 7 | Loitering Logic | Sliding-window displacement, pacing score, 5-factor risk score, cross-ID transfer | ✅ Done | May 19, 2026 |
+| 8 | Attribute Pipeline | SCRFD face, ArcFace Re-ID, PPE (mask/hat), HSV colour, fire/smoke | ✅ Done | May 19, 2026 |
+| 9 | Integration | Full E2E pipeline, ONVIF discovery, runtime tracker config API, perf tuning | 🔲 Target | Jun 2, 2026 |
+| 10 | UAT & QA | HOTA/MOTA benchmarks, regression tests (KF/IoU/NaN), security audit | 🔲 Target | Jun 16, 2026 |
+| 11 | Deployment | Docker Compose image, OpenAPI docs, Prometheus metrics, production SLA | 🔲 Target | Jun 30, 2026 |
 
 ---
 
 ## 15. Getting Started
 
-### 14.1 Prerequisites
+### 15.1 Prerequisites
 
 ```bash
 # System
@@ -808,7 +847,7 @@ Python 3.10+ (for ONNX model export only)
 NVIDIA GPU + CUDA 12.x + cuDNN 8.x
 ```
 
-### 14.2 Installation
+### 15.2 Installation
 
 ```bash
 # Clone with submodules
@@ -828,7 +867,7 @@ wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.onnx
      -O models/yolov8n.onnx
 ```
 
-### 14.3 Configuration
+### 15.3 Configuration
 
 ```bash
 cp server/.env.example server/.env
@@ -837,12 +876,12 @@ cp server/.env.example server/.env
 # RTSP_DEFAULT_USERNAME=admin
 # RTSP_DEFAULT_PASSWORD=
 # YOLO_MODEL=models/yolov8n.onnx
-# CONFIDENCE_THRESHOLD=0.45
+# CONFIDENCE_THRESHOLD=0.30
 # LOITERING_THRESHOLD_SEC=30
 # JWT_SECRET=your-secret-key
 ```
 
-### 14.4 Running
+### 15.4 Running
 
 ```bash
 # Development
@@ -859,7 +898,7 @@ docker-compose up -d
 
 ## 16. API Reference
 
-### 15.1 REST Endpoints
+### 16.1 REST Endpoints
 
 | Method | Path | Description |
 |---|---|---|
@@ -877,7 +916,7 @@ docker-compose up -d
 | `GET` | `/api/events` | List loitering events |
 | `GET` | `/api/events/:id/clip` | Download event video clip |
 
-### 15.2 Zone Schema
+### 16.2 Zone Schema
 
 ```json
 {
@@ -896,7 +935,7 @@ docker-compose up -d
 
 `targetClasses` values: `"human"` (person), `"vehicle"` (bicycle/car/motorcycle/bus/truck). Empty array `[]` = all classes.
 
-### 15.3 Socket.IO Events
+### 16.3 Socket.IO Events
 
 | Event | Direction | Payload | Description |
 |---|---|---|---|
@@ -966,8 +1005,12 @@ loitering_tracking/
 │   │   └── socket/
 │   │       └── streamHandler.js     # Socket.IO frame/detection push
 │   ├── models/                      # ONNX model files (gitignored)
-│   │   ├── yolov8n.onnx
-│   │   └── reid_mobilenetv2.onnx
+│   │   ├── yolov8n.onnx             # 13MB  — COCO 80-class detection (AI-01/02/08)
+│   │   ├── scrfd_2.5g.onnx          # 3.2MB — face detection SCRFD-2.5G (AI-03)
+│   │   ├── arcface_w600k_r50.onnx   # 249MB — face Re-ID ArcFace ResNet50 (AI-03)
+│   │   ├── yolov8m_ppe.onnx         # 99MB  — mask/helmet PPE (AI-04/07)
+│   │   ├── yolov8s_fire_smoke.onnx  # 43MB  — fire/smoke 3-class (AI-09)
+│   │   └── [openpar.onnx]           # TBD   — cloth type PAR (AI-06 Phase-2, planned)
 │   └── storage/                     # Event clips + DB (gitignored)
 │       ├── events.db
 │       └── clips/
@@ -994,9 +1037,14 @@ loitering_tracking/
         └── ci.yml                   # Lint + test + build
 ```
 
-### Appendix C: Original RFP
+### Appendix C: Related RFP Documents
 
-Original RFP document: `RFP_LTS2026_Loitering_Tracking_System.md`
+| Document | Reference | Description |
+|---|---|---|
+| `RFP_LTS2026_Loitering_Tracking_System.md` | LTS-2026-001 | System-level RFP: full loitering detection system |
+| `RFP_Object_Tracking.md` | OTS-2026-001 | Object tracking sub-RFP: ID stability, KF, multi-cue association |
+| `RFP_LTS2026_Camera_Discovery.md` | LTS-2026-002 | Camera discovery: UDP broadcast + ONVIF WS-Discovery |
+| `RFP_AI_Human_Detection.md` ~ `RFP_AI_Fire_Smoke_Detection.md` | AI-01–09 | Per-module AI specification documents |
 
 > **END OF DOCUMENT — LTS-2026-001**
 >

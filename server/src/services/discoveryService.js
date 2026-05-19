@@ -3,8 +3,8 @@
 const { getUDPDiscovery }  = require('../utils/udpDiscovery');
 const { ONVIFDiscovery }   = require('./onvifDiscovery');
 
-const SCAN_TIMEOUT  = 8000;  // each scan duration (ms)
-const SCAN_INTERVAL = 2000;  // brief pause between scans → effectively continuous
+const SCAN_TIMEOUT  = 10000; // each scan duration (ms)
+const SCAN_INTERVAL = 15000; // pause between scans — long enough for cameras to reset rate limits
 
 // ─── UDP device mapper ────────────────────────────────────────────────────────
 
@@ -54,8 +54,8 @@ function deviceKey(dev) {
 
 /**
  * Merge an incoming device into an existing one.
- * UDP result wins for Hanwha-specific fields; ONVIF wins for
- * Manufacturer/FirmwareVersion/SerialNumber/profiles.
+ * UDP result wins for Hanwha-specific fields; ONVIF enrichment wins for
+ * Manufacturer/FirmwareVersion/SerialNumber/profiles/rtspUrl.
  */
 function mergeDevices(existing, incoming) {
   const merged = { ...existing };
@@ -63,18 +63,26 @@ function mergeDevices(existing, incoming) {
   // Source badge
   if (existing.source !== incoming.source) merged.source = 'both';
 
-  // Prefer non-empty values
+  // Fill in empty basic fields (never overwrite existing data)
   for (const key of ['Model', 'Manufacturer', 'MACAddress', 'FirmwareVersion',
-                      'SerialNumber', 'rtspUrl', 'Gateway', 'SubnetMask', 'URL']) {
+                      'SerialNumber', 'Gateway', 'SubnetMask', 'URL']) {
     if (!merged[key] && incoming[key]) merged[key] = incoming[key];
+  }
+
+  // rtspUrl: prefer a real GetStreamUri URL over the fallback 'rtsp://ip:554/'
+  if (incoming.rtspUrl) {
+    const fallback = `rtsp://${incoming.IPAddress || existing.IPAddress}:554/`;
+    if (!merged.rtspUrl || incoming.rtspUrl !== fallback) {
+      merged.rtspUrl = incoming.rtspUrl;
+    }
   }
 
   // Capabilities: OR them together
   if (incoming.SupportSunapi) merged.SupportSunapi = true;
   if (incoming.SupportOnvif)  merged.SupportOnvif  = true;
 
-  // ONVIF profiles: prefer richer list
-  if (!merged.profiles?.length && incoming.profiles?.length) {
+  // ONVIF profiles: take the richer list
+  if ((incoming.profiles?.length || 0) > (merged.profiles?.length || 0)) {
     merged.profiles = incoming.profiles;
   }
 
@@ -101,11 +109,12 @@ class DiscoveryService {
   }
 
   stop() {
+    // Set these first — _onProtocolDone() checks _scanning to skip stray callbacks
+    this._scanning    = false;
+    this._pendingDone = 0;
     if (this._timer)     { clearTimeout(this._timer); this._timer = null; }
     if (this._udpDisc)   { try { this._udpDisc.stop();   } catch (_) {} this._udpDisc   = null; }
     if (this._onvifDisc) { try { this._onvifDisc.stop(); } catch (_) {} this._onvifDisc = null; }
-    this._scanning    = false;
-    this._pendingDone = 0;
   }
 
   rescan() {
@@ -120,7 +129,7 @@ class DiscoveryService {
     for (const device of this._known.values()) {
       socket.emit('discovery:result', { device });
     }
-    socket.emit('discovery:status', {
+    socket.emit('discovery:scanning', {
       scanning: this._scanning,
       count: this._known.size,
     });
@@ -157,6 +166,7 @@ class DiscoveryService {
   }
 
   _onProtocolDone() {
+    if (!this._scanning) return;  // stop() was called — ignore stray done events
     this._pendingDone--;
     if (this._pendingDone <= 0) {
       this._pendingDone = 0;

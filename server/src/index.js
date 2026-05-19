@@ -18,6 +18,7 @@ const camerasRouter       = require('./api/cameras');
 const zonesRouter         = require('./api/zones');
 const buildEventsRouters  = require('./api/events');
 const analyticsRouter     = require('./api/analytics');
+const trackerRouter       = require('./api/tracker');
 const registerStreamHandlers = require('./socket/streamHandler');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
@@ -63,40 +64,98 @@ async function main() {
   app.use('/api/events', eRouter);
   app.use('/api/alerts', aRouter);
   app.use('/api/analytics', analyticsRouter);
+  app.use('/api/tracker',   trackerRouter);
 
-  // AI module capabilities — returns which attribute models are available on disk
-  app.get('/api/capabilities', (req, res) => {
-    const modelsDir = path.resolve(__dirname, '..', 'models');
-    const has = (f) => require('fs').existsSync(path.join(modelsDir, f));
+  // ── Cross-camera Re-ID stats ──────────────────────────────────────────────────
+  // Returns all faces that have been seen on more than one camera in the current session.
+  // Each entry: { faceId, firstCameraId, lastCameraId, transitionCount, lastSeenAt }
+  app.get('/api/crosscamera/stats', (req, res) => {
+    const allStats = pipelineManager.getCrossCameraReIdStats();
+    // Only return faces that actually crossed cameras (transitionCount > 0)
+    const crossed = allStats.filter(s => s.transitionCount > 0);
     res.json({
-      ai: {
-        human:       true,                   // YOLOv8n COCO always available
-        vehicle:     true,                   // YOLOv8n COCO always available
-        face:        has('scrfd_2.5g.onnx'),
-        mask:        has('yolov8m_ppe.onnx'),
-        hat:         has('yolov8m_ppe.onnx'),
-        color:       true,                          // Phase-1 pixel averaging — no model needed
-        cloth:       has('openpar.onnx'),
-        accessories: has('yolov8n.onnx'),           // COCO accessory classes from primary detector
-        fire:        has('yolov8s_fire_smoke.onnx'),
-        smoke:       has('yolov8s_fire_smoke.onnx'),
-        // Indoor / office objects — all from YOLOv8n COCO 80-class
-        chair:       has('yolov8n.onnx'),
-        couch:       has('yolov8n.onnx'),
-        diningtable: has('yolov8n.onnx'),
-        furniture:   has('yolov8n.onnx'),
-        laptop:      has('yolov8n.onnx'),
-        tv:          has('yolov8n.onnx'),
-        keyboard:    has('yolov8n.onnx'),
-        mouse:       has('yolov8n.onnx'),
-        cellphone:   has('yolov8n.onnx'),
-        computer:    has('yolov8n.onnx'),
-        clock:       has('yolov8n.onnx'),
-        cup:         has('yolov8n.onnx'),
-        bottle:      has('yolov8n.onnx'),
-        book:        has('yolov8n.onnx'),
-      },
+      totalTransitions: crossed.reduce((sum, s) => sum + s.transitionCount, 0),
+      uniqueFaces:      crossed.length,
+      faces:            crossed,
     });
+  });
+
+  // AI module capabilities — returns availability (boolean) and detailed status per module.
+  // status values: 'builtin' | 'available' | 'loaded' | 'failed' | 'missing' | 'pending'
+  //   builtin   = always available, no model file needed
+  //   available = model file present, not yet loaded (loads on first camera start)
+  //   loaded    = model actively running in memory
+  //   failed    = model file found but loading failed (OOM, corrupted, etc.)
+  //   missing   = model file not on disk (run: cd server && npm run download-models)
+  //   pending   = Phase-2 feature, not yet implemented
+  app.get('/api/capabilities', (req, res) => {
+    const fs2     = require('fs');
+    const modelsDir = path.resolve(__dirname, '..', 'models');
+    const has = (f) => fs2.existsSync(path.join(modelsDir, f));
+
+    // Map runtime service status to capability status string
+    const svcStatus = pipelineManager.getServiceStatus();
+    const toStatus = (svcKey, fileExists, pending = false) => {
+      if (pending)    return 'pending';
+      if (!fileExists) return 'missing';
+      const s = svcStatus[svcKey];
+      if (s === 'loaded')  return 'loaded';
+      if (s === 'failed')  return 'failed';
+      return 'available'; // not_started or any unknown → file present, not yet loaded
+    };
+
+    const ppeFile  = has('yolov8m_ppe.onnx');
+    const yoloFile = has('yolov8n.onnx');
+    const faceFile = has('scrfd_2.5g.onnx') && has('arcface_w600k_r50.onnx');
+    const fsFile   = has('yolov8s_fire_smoke.onnx');
+
+    const ppeStatus  = toStatus('ppe',       ppeFile);
+    const faceStatus = toStatus('face',      faceFile);
+    const fsStatus   = toStatus('firesmoke', fsFile);
+
+    // available = module can be enabled (not failed/missing/pending)
+    const avail = (st) => st === 'loaded' || st === 'available' || st === 'builtin';
+
+    const yoloStatus = yoloFile ? 'available' : 'missing';
+
+    const statusMap = {
+      human:       'builtin',
+      vehicle:     'builtin',
+      face:        faceStatus,
+      mask:        ppeStatus,
+      hat:         ppeStatus,
+      color:       'builtin',
+      cloth:       'pending',
+      backpack:    yoloStatus,
+      handbag:     yoloStatus,
+      suitcase:    yoloStatus,
+      umbrella:    yoloStatus,
+      tie:         yoloStatus,
+      glasses:     'pending',
+      sunglasses:  'pending',
+      fire:        fsStatus,
+      smoke:       fsStatus,
+      chair:       yoloStatus,
+      couch:       yoloStatus,
+      diningtable: yoloStatus,
+      furniture:   yoloStatus,
+      laptop:      yoloStatus,
+      tv:          yoloStatus,
+      keyboard:    yoloStatus,
+      mouse:       yoloStatus,
+      cellphone:   yoloStatus,
+      computer:    yoloStatus,
+      clock:       yoloStatus,
+      cup:         yoloStatus,
+      bottle:      yoloStatus,
+      book:        yoloStatus,
+    };
+
+    // Build boolean availability map (backward-compatible)
+    const aiMap = {};
+    for (const [k, st] of Object.entries(statusMap)) aiMap[k] = avail(st);
+
+    res.json({ ai: aiMap, status: statusMap });
   });
 
   // Health check

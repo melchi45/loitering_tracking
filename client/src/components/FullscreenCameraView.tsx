@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useCamera } from '../hooks/useCamera';
+import { useCrossCameraStore } from '../stores/crossCameraStore';
 import { useI18n } from '../i18n';
 import CameraView from './CameraView';
 import VideoAnalyticsTab from './VideoAnalyticsTab';
@@ -15,15 +16,18 @@ const MASK_LABEL: Record<string, string> = {
   mask_correct:   'MASK OK',
   mask_incorrect: 'MASK BAD',
   no_mask:        'NO MASK',
+  uncertain:      'MASK?',
 };
 const MASK_COLOR: Record<string, string> = {
   mask_correct:   'bg-green-700 text-green-100',
   mask_incorrect: 'bg-yellow-700 text-yellow-100',
   no_mask:        'bg-red-700 text-red-100',
+  uncertain:      'bg-gray-600 text-gray-200',
 };
 
-function DetectionRow({ det }: { det: Detection }) {
+function DetectionRow({ det, isCrossCamera }: { det: Detection; isCrossCamera?: boolean }) {
   const { objectId, className, confidence, dwellTime, isLoitering, bbox, face, mask, hat, color,
+          faceId, matchScore,
           riskScore, revisitCount, velocity, circularScore } = det;
 
   const clsColor =
@@ -37,7 +41,8 @@ function DetectionRow({ det }: { det: Detection }) {
     className === 'fire'       ? 'text-orange-500'  :
     className === 'smoke'      ? 'text-slate-400'   :
     className === 'face'       ? 'text-blue-300'    :
-    className === 'backpack' || className === 'handbag' || className === 'suitcase'
+    className === 'backpack' || className === 'handbag' || className === 'suitcase' ||
+    className === 'umbrella' || className === 'tie'
                                ? 'text-amber-400'   :
     // Indoor / office objects
     className === 'chair'        ? 'text-violet-400'  :
@@ -53,7 +58,67 @@ function DetectionRow({ det }: { det: Detection }) {
     className === 'cup'          ? 'text-orange-300'  :
     className === 'bottle'       ? 'text-lime-400'    :
     className === 'book'         ? 'text-violet-200'  :
-    className === 'vase'         ? 'text-pink-300'    : 'text-gray-400';
+    className === 'vase'         ? 'text-pink-300'    :
+    // Accessories — sports equipment
+    className === 'sports ball'    ? 'text-orange-400'  :
+    className === 'frisbee'        ? 'text-orange-300'  :
+    className === 'skis'           ? 'text-sky-500'     :
+    className === 'snowboard'      ? 'text-sky-400'     :
+    className === 'baseball bat'   ? 'text-yellow-500'  :
+    className === 'baseball glove' ? 'text-yellow-600'  :
+    className === 'skateboard'     ? 'text-orange-500'  :
+    className === 'surfboard'      ? 'text-cyan-500'    :
+    className === 'tennis racket'  ? 'text-lime-400'    :
+    className === 'kite'           ? 'text-violet-400'  :
+    className === 'scissors'       ? 'text-slate-400'   :
+    className === 'fork'           ? 'text-gray-300'    :
+    className === 'knife'          ? 'text-gray-400'    :
+    className === 'spoon'          ? 'text-gray-200'    :
+    // Animals — warm tones
+    className === 'bird'       ? 'text-pink-200'    :
+    className === 'cat'        ? 'text-rose-300'    :
+    className === 'dog'        ? 'text-rose-400'    :
+    className === 'horse'      ? 'text-orange-800'  :
+    className === 'sheep'      ? 'text-gray-100'    :
+    className === 'cow'        ? 'text-amber-900'   :
+    className === 'elephant'   ? 'text-gray-500'    :
+    className === 'bear'       ? 'text-amber-800'   :
+    className === 'zebra'      ? 'text-gray-100'    :
+    className === 'giraffe'    ? 'text-amber-600'   :
+    // Outdoor / Infrastructure — civic tones
+    className === 'bench'         ? 'text-emerald-400' :
+    className === 'traffic light' ? 'text-yellow-400'  :
+    className === 'fire hydrant'  ? 'text-red-500'     :
+    className === 'stop sign'     ? 'text-red-700'     :
+    className === 'parking meter' ? 'text-gray-600'    :
+    className === 'airplane'      ? 'text-indigo-400'  :
+    className === 'boat'          ? 'text-blue-400'    :
+    className === 'train'         ? 'text-emerald-500' :
+    // Food / Kitchen — warm tones
+    className === 'bowl'       ? 'text-amber-400'   :
+    className === 'wine glass' ? 'text-violet-300'  :
+    className === 'banana'     ? 'text-yellow-300'  :
+    className === 'apple'      ? 'text-red-500'     :
+    className === 'sandwich'   ? 'text-yellow-500'  :
+    className === 'orange'     ? 'text-orange-500'  :
+    className === 'broccoli'   ? 'text-green-600'   :
+    className === 'carrot'     ? 'text-orange-600'  :
+    className === 'hot dog'    ? 'text-yellow-600'  :
+    className === 'pizza'      ? 'text-orange-400'  :
+    className === 'donut'      ? 'text-pink-400'    :
+    className === 'cake'       ? 'text-pink-200'    :
+    // Home Appliances — cool neutral tones
+    className === 'bed'          ? 'text-indigo-400' :
+    className === 'toilet'       ? 'text-slate-200'  :
+    className === 'sink'         ? 'text-slate-400'  :
+    className === 'microwave'    ? 'text-slate-500'  :
+    className === 'oven'         ? 'text-slate-600'  :
+    className === 'toaster'      ? 'text-slate-400'  :
+    className === 'refrigerator' ? 'text-sky-200'    :
+    className === 'potted plant' ? 'text-green-300'  :
+    className === 'teddy bear'   ? 'text-orange-200' :
+    className === 'hair drier'   ? 'text-rose-300'   :
+    className === 'toothbrush'   ? 'text-emerald-200': 'text-gray-400';
 
   return (
     <div className={`px-3 py-2 border-b border-gray-700/60 ${
@@ -87,8 +152,13 @@ function DetectionRow({ det }: { det: Detection }) {
             </span>
           )}
           {hat && (
-            <span className={`text-[9px] font-bold rounded px-1 py-0.5 uppercase ${hat.isHelmet ? 'bg-blue-700 text-blue-100' : 'bg-gray-600 text-gray-200'}`}>
-              {hat.isHelmet ? 'HELMET' : 'HAT'}
+            <span className={`text-[9px] font-bold rounded px-1 py-0.5 uppercase ${
+              hat.safetyCompliant === true  ? 'bg-blue-700 text-blue-100'  :
+              hat.safetyCompliant === false  ? 'bg-red-700 text-red-100'   :
+                                              'bg-gray-600 text-gray-200'
+            }`}>
+              {hat.isHelmet === true  ? 'HELMET'    :
+               hat.isHelmet === false ? 'NO HELMET' : 'HAT?'}
             </span>
           )}
           <span className="text-[10px] text-gray-400 font-mono">#{String(objectId).slice(0, 8)}</span>
@@ -146,11 +216,31 @@ function DetectionRow({ det }: { det: Detection }) {
         </div>
       )}
 
-      {/* Face detection indicator */}
+      {/* Face recognition info — on person objects (face attribute) */}
       {face && (
         <div className="mt-0.5 text-[10px] text-blue-400 font-mono">
           face {(face.score * 100).toFixed(0)}%
-          {face.identity && <span className="ml-1 text-blue-300">{face.identity}</span>}
+          {face.faceId && <span className="ml-1 text-blue-300 font-bold">[{face.faceId}]</span>}
+          {face.identity && <span className="ml-1 text-blue-200">{face.identity}</span>}
+        </div>
+      )}
+
+      {/* Face recognition info — on standalone face detection objects */}
+      {className === 'face' && faceId && (
+        <div className="mt-0.5 flex items-center gap-2 flex-wrap text-[10px] font-mono">
+          <span className="text-blue-300 font-bold">[{faceId}]</span>
+          {matchScore != null && (
+            <span className="text-gray-500">
+              sim <span className={matchScore >= 0.6 ? 'text-green-400' : matchScore >= 0.4 ? 'text-yellow-400' : 'text-gray-400'}>
+                {(matchScore * 100).toFixed(0)}%
+              </span>
+            </span>
+          )}
+          {isCrossCamera && (
+            <span className="text-[8px] font-bold bg-blue-700/70 text-blue-100 rounded px-1 py-0.5 uppercase">
+              &#8596; CROSS-CAM
+            </span>
+          )}
         </div>
       )}
     </div>
@@ -159,6 +249,7 @@ function DetectionRow({ det }: { det: Detection }) {
 
 function DetectionPanel({ cameraId }: { cameraId: string }) {
   const { detections } = useCamera(cameraId);
+  const crossCameraEvents = useCrossCameraStore((s) => s.events);
   const listRef = useRef<HTMLDivElement>(null);
   const { t } = useI18n();
 
@@ -166,6 +257,18 @@ function DetectionPanel({ cameraId }: { cameraId: string }) {
     if (a.isLoitering !== b.isLoitering) return a.isLoitering ? -1 : 1;
     return b.dwellTime - a.dwellTime;
   });
+
+  // Set of faceIds that appeared in a cross-camera event involving this camera
+  const crossCamFaceIds = new Set(
+    crossCameraEvents
+      .filter((ev) => ev.prevCameraId === cameraId || ev.newCameraId === cameraId)
+      .map((ev) => ev.faceId)
+  );
+
+  // Recent cross-camera events where this camera is involved (as source or destination)
+  const localEvents = crossCameraEvents.filter(
+    (ev) => ev.prevCameraId === cameraId || ev.newCameraId === cameraId
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -196,10 +299,32 @@ function DetectionPanel({ cameraId }: { cameraId: string }) {
           </div>
         ) : (
           sorted.map((det) => (
-            <DetectionRow key={det.objectId} det={det} />
+            <DetectionRow
+              key={det.objectId}
+              det={det}
+              isCrossCamera={det.className === 'face' && det.faceId != null && crossCamFaceIds.has(det.faceId)}
+            />
           ))
         )}
       </div>
+
+      {/* Cross-Camera Re-ID feed */}
+      {localEvents.length > 0 && (
+        <div className="px-3 py-2 border-t border-gray-700 flex-shrink-0">
+          <div className="text-[8px] text-blue-400 uppercase tracking-wide font-bold mb-1">
+            Cross-Camera Re-ID
+          </div>
+          <div className="space-y-0.5 max-h-20 overflow-y-auto">
+            {localEvents.slice(0, 5).map((ev, i) => (
+              <div key={i} className="text-[9px] font-mono text-gray-400">
+                <span className="text-blue-300 font-bold">[{ev.faceId}]</span>
+                {' '}{ev.prevCameraId.slice(0, 8)} &#8594; {ev.newCameraId.slice(0, 8)}
+                {' '}<span className="text-gray-600">{(ev.similarity * 100).toFixed(0)}%</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Legend */}
       <div className="px-3 py-2 border-t border-gray-700 flex-shrink-0 space-y-1.5">
@@ -216,16 +341,83 @@ function DetectionPanel({ cameraId }: { cameraId: string }) {
           <span className="text-teal-400">■ truck</span>
           <span className="text-orange-500">■ fire</span>
           <span className="text-slate-400">■ smoke</span>
-          <span className="text-amber-400">■ {t.legendBaggage}</span>
         </div>
-        <div className="text-[8px] text-gray-600 pl-2">backpack · umbrella · handbag · tie · suitcase</div>
+        {/* Accessories */}
+        <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.zoneGroupAccessories}</div>
+        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
+          <span className="text-amber-400">■ backpack</span>
+          <span className="text-amber-400">■ handbag</span>
+          <span className="text-amber-400">■ suitcase</span>
+          <span className="text-amber-400">■ umbrella</span>
+          <span className="text-amber-400">■ tie</span>
+          <span className="text-orange-400">■ sports ball</span>
+          <span className="text-sky-500">■ skis</span>
+          <span className="text-yellow-500">■ baseball bat</span>
+          <span className="text-orange-500">■ skateboard</span>
+          <span className="text-cyan-500">■ surfboard</span>
+          <span className="text-lime-400">■ tennis racket</span>
+          <span className="text-violet-400">■ kite</span>
+          <span className="text-gray-300">■ scissors/fork/knife</span>
+          <span className="text-gray-400">■ remote/spoon</span>
+        </div>
+        {/* Animals */}
+        <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendAnimals}</div>
+        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
+          <span className="text-pink-200">■ bird</span>
+          <span className="text-rose-300">■ cat</span>
+          <span className="text-rose-400">■ dog</span>
+          <span className="text-amber-600">■ horse</span>
+          <span className="text-gray-400">■ sheep</span>
+          <span className="text-amber-900">■ cow</span>
+          <span className="text-gray-500">■ elephant</span>
+          <span className="text-amber-800">■ bear</span>
+          <span className="text-gray-300">■ zebra</span>
+          <span className="text-amber-600">■ giraffe</span>
+        </div>
+        {/* Outdoor / Infrastructure */}
+        <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendOutdoor}</div>
+        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
+          <span className="text-emerald-400">■ bench</span>
+          <span className="text-yellow-400">■ traffic light</span>
+          <span className="text-red-500">■ fire hydrant</span>
+          <span className="text-red-700">■ stop sign</span>
+          <span className="text-gray-600">■ parking meter</span>
+          <span className="text-indigo-400">■ airplane</span>
+          <span className="text-blue-400">■ boat</span>
+          <span className="text-emerald-500">■ train</span>
+        </div>
+        {/* Food / Kitchen */}
+        <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendFood}</div>
+        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
+          <span className="text-amber-400">■ bowl</span>
+          <span className="text-violet-300">■ wine glass</span>
+          <span className="text-yellow-300">■ banana</span>
+          <span className="text-red-500">■ apple</span>
+          <span className="text-orange-500">■ orange</span>
+          <span className="text-green-600">■ broccoli</span>
+          <span className="text-orange-400">■ pizza</span>
+          <span className="text-pink-400">■ donut</span>
+          <span className="text-pink-200">■ cake</span>
+          <span className="text-orange-400">■ sandwich/hotdog</span>
+        </div>
+        {/* Home Appliances */}
+        <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendHomeAppliances}</div>
+        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
+          <span className="text-indigo-400">■ bed</span>
+          <span className="text-slate-400">■ sink</span>
+          <span className="text-slate-500">■ microwave</span>
+          <span className="text-sky-200">■ refrigerator</span>
+          <span className="text-green-300">■ potted plant</span>
+          <span className="text-rose-300">■ hair drier</span>
+          <span className="text-emerald-200">■ toothbrush</span>
+          <span className="text-orange-200">■ teddy bear</span>
+        </div>
         {/* Indoor / office objects */}
         <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendIndoor}</div>
         <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
           <span className="text-violet-400">■ chair</span>
           <span className="text-violet-300">■ couch</span>
           <span className="text-emerald-400">■ dining table</span>
-          <span className="text-indigo-400">■ bed</span>
           <span className="text-sky-400">■ tv</span>
           <span className="text-cyan-400">■ laptop</span>
           <span className="text-pink-400">■ keyboard</span>
@@ -243,7 +435,9 @@ function DetectionPanel({ cameraId }: { cameraId: string }) {
           <span className="bg-green-700/70 text-green-100 rounded px-1">MASK OK</span>
           <span className="bg-red-700/70 text-red-100 rounded px-1">NO MASK</span>
           <span className="bg-blue-700/70 text-blue-100 rounded px-1">HELMET</span>
-          <span className="bg-gray-600/70 text-gray-200 rounded px-1">HAT</span>
+          <span className="bg-red-700/70 text-red-100 rounded px-1">NO HELMET</span>
+          <span className="bg-gray-600/70 text-gray-200 rounded px-1">MASK? / HAT?</span>
+          <span className="text-gray-500 text-[7px]">gray = AI uncertain</span>
           <span className="text-blue-400">⬚ face bbox</span>
           <span className="text-gray-400">↑↓ color</span>
         </div>

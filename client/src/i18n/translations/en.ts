@@ -61,6 +61,10 @@ export const en = {
   legendIndoor: 'Indoor / Office Objects',
   legendAiBadges: 'AI Attribute Badges',
   legendBaggage: 'baggage',
+  legendAnimals: 'Animals',
+  legendOutdoor: 'Outdoor / Infrastructure',
+  legendFood: 'Food / Kitchen',
+  legendHomeAppliances: 'Home Appliances',
 
   // Alerts
   alertTitle: 'Alerts',
@@ -86,9 +90,14 @@ export const en = {
 
   // Zone editor groups
   zoneGroupPeopleVehicles: 'People / Vehicles',
+  zoneGroupAccessories: 'Accessories / Sports',
   zoneGroupAiAttributes: 'AI Attributes',
   zoneGroupHazards: 'Hazards',
   zoneGroupIndoor: 'Indoor / Office Objects',
+  zoneGroupAnimals: 'Animals',
+  zoneGroupOutdoor: 'Outdoor / Infrastructure',
+  zoneGroupFood: 'Food / Kitchen',
+  zoneGroupHomeAppliances: 'Home Appliances',
   zoneLoiteringTarget: 'Loitering Detection Targets',
   zoneLoiteringTargetHint: 'When selected, only these objects are tracked for dwell time and alerts.',
   zoneVertexHint: 'Drag vertex to move  /  Right-click vertex → delete  /  Right-click empty → save/delete zone',

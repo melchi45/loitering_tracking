@@ -49,11 +49,14 @@ class ProtectiveEquipService {
     this._session   = null;
     this._ready     = false;
     this._numClasses = NUM_PPE_CLASSES;
+    // 'not_started' | 'missing' | 'loaded' | 'failed'
+    this._status    = 'not_started';
   }
 
   async load() {
     if (!fs.existsSync(this.modelPath)) {
       console.warn('[PPEService] yolov8m_ppe.onnx not found — run: node server/src/scripts/downloadModels.js');
+      this._status = 'missing';
       return;
     }
     try {
@@ -61,14 +64,17 @@ class ProtectiveEquipService {
         executionProviders: ['cpu'], graphOptimizationLevel: 'all',
       });
       // Infer actual num classes from model output dims at first run
-      this._ready = true;
+      this._ready  = true;
+      this._status = 'loaded';
       console.log('[PPEService] Protective equipment model loaded');
     } catch (e) {
+      this._status = 'failed';
       console.warn('[PPEService] Load failed:', e.message);
     }
   }
 
-  get ready() { return this._ready; }
+  get ready()  { return this._ready;  }
+  get status() { return this._status; }
 
   /**
    * Detect PPE items in a JPEG frame.

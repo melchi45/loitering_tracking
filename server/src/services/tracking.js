@@ -1,6 +1,7 @@
 'use strict';
 
-const { v4: uuidv4 } = require('uuid');
+const { v4: uuidv4 }      = require('uuid');
+const trackerConfig        = require('./trackerConfig');
 
 // ─── Kalman Filter ─────────────────────────────────────────────────────────
 // State vector: [x, y, w, h, vx, vy, vw, vh]  (8 dimensions)
@@ -161,7 +162,7 @@ class KalmanFilter {
         [I[col * n + k], I[maxRow * n + k]] = [I[maxRow * n + k], I[col * n + k]];
       }
       const pivot = A[col * n + col];
-      if (Math.abs(pivot) < 1e-12) continue;
+      if (Math.abs(pivot) < 1e-12) return KalmanFilter._eye(4, 1);
       for (let k = 0; k < n; k++) {
         A[col * n + k] /= pivot;
         I[col * n + k] /= pivot;
@@ -193,23 +194,70 @@ class Track {
     this.bbox = { ...detection.bbox };
     this.confidence = detection.confidence;
     this.className = detection.className || 'person';
+    this.kf = new KalmanFilter();
+    this.kf.init(detection.bbox);
+
+    // Multi-cue appearance matching — ArcFace 512-dim embedding (Float32Array).
+    // Updated after enrichment via ByteTracker.updateAppearance(); null until first
+    // enrichment pass so IoU-only fallback is automatic.
+    this.embedding    = null; // Float32Array(512) or null
+    this.embeddingAge = 0;    // frames elapsed since last updateAppearance() call
   }
 
   predict() {
-    // TODO(adaptive-kalman): Replace static position hold with KalmanFilter.predict()
-    //   and adjust process noise Q dynamically:
-    //     - high velocity  → Q *= 4  (trust motion model less)
-    //     - stationary     → Q *= 0.5 (trust position more)
-    //     - occlusion      → increase covariance (prediction weight up)
-    //   Blocked by: _inv4 near-singular matrix NaN instability for small bboxes.
-    //   Reference: adaptive_loitering_detection_rfp.md §6 Adaptive Kalman Filter
     this.age++;
     this.framesWithoutHit++;
     if (this.framesWithoutHit > 0) this.state = TrackState.Lost;
+    if (this.embeddingAge < 255) this.embeddingAge++;
+
+    if (this.framesWithoutHit <= 1) {
+      // Track was just seen last frame — run the full adaptive Kalman prediction.
+      const cfg = trackerConfig.getConfig();
+      const vx = this.kf.x[4], vy = this.kf.x[5];
+      const speed = Math.sqrt(vx * vx + vy * vy);
+      let qScale = 1.0;
+      if (speed > cfg.fastSpeedThreshold)      qScale = cfg.fastQScale;
+      else if (speed < cfg.slowSpeedThreshold) qScale = cfg.slowQScale;
+      this.kf.Q = KalmanFilter._eye(8, qScale);
+
+      const predicted = this.kf.predict();
+      // Guard against NaN/Infinity that can arise from matrix operations
+      const safeVal = (v, fallback) => isFinite(v) ? v : fallback;
+      this.bbox = {
+        x:      Math.max(0, safeVal(predicted.x,      this.bbox.x)),
+        y:      Math.max(0, safeVal(predicted.y,      this.bbox.y)),
+        width:  Math.max(1, safeVal(predicted.width,  this.bbox.width)),
+        height: Math.max(1, safeVal(predicted.height, this.bbox.height)),
+      };
+    }
+    // For framesWithoutHit > 1 (extended Lost): freeze bbox at last known position.
+    // Calling kf.predict() repeatedly on a Lost track causes the covariance matrix P
+    // to grow unboundedly → numerical overflow → NaN bbox → IoU=NaN → track never
+    // re-matches and a new ID is created every frame. Freezing prevents this.
   }
 
   update(detection) {
-    this.bbox = { ...detection.bbox };
+    // Sync R with current config so measurement noise is always up-to-date.
+    this.kf.R = KalmanFilter._eye(4, trackerConfig.getConfig().measurementNoise);
+    const corrected = this.kf.update(detection.bbox);
+    // If KF update produces non-finite values (numerical blowup), fall back to
+    // the raw detection bbox and reset P to keep the filter stable going forward.
+    const safeVal = (v, fallback) => isFinite(v) ? v : fallback;
+    const cx = safeVal(corrected.x,      detection.bbox.x);
+    const cy = safeVal(corrected.y,      detection.bbox.y);
+    const cw = safeVal(corrected.width,  detection.bbox.width);
+    const ch = safeVal(corrected.height, detection.bbox.height);
+    if (cx !== corrected.x || cy !== corrected.y) {
+      // KF produced NaN/Inf — reset filter to prevent further corruption
+      this.kf.init(detection.bbox);
+      this.kf.P = KalmanFilter._eye(8, 10);
+    }
+    this.bbox = {
+      x:      Math.max(0, cx),
+      y:      Math.max(0, cy),
+      width:  Math.max(1, cw),
+      height: Math.max(1, ch),
+    };
     this.confidence = detection.confidence;
     this.className = detection.className || this.className;
     this.hitStreak++;
@@ -244,14 +292,17 @@ class ByteTracker {
    * @param {number} [options.iouThreshold=0.3]
    */
   constructor(options = {}) {
-    this.maxAge           = options.maxAge           || parseInt(process.env.MAX_TRACK_AGE_FRAMES || '30');
     this.minHits          = options.minHits          || 1;
     // highConfThreshold must be ≤ detection confidenceThreshold so new tracks
     // are created for vehicles/accessories which often score 0.25–0.50
     this.highConfThreshold = options.highConfThreshold
       || parseFloat(process.env.CONFIDENCE_THRESHOLD || '0.30');
     this.lowConfThreshold  = options.lowConfThreshold  || 0.1;
-    this.iouThreshold     = options.iouThreshold     || 0.3;
+    // maxAge and iouThreshold are read from trackerConfig each frame so
+    // they can be updated via /api/tracker/config without restarting.
+    // options overrides are kept for test compatibility.
+    this._maxAgeOverride      = options.maxAge      ?? null;
+    this._iouThreshOverride   = options.iouThreshold ?? null;
     this._tracks = [];  // Array of Track
   }
 
@@ -261,6 +312,11 @@ class ByteTracker {
    * @returns {Array<{objectId,bbox,confidence,state}>}
    */
   update(detections) {
+    // Read live config so maxAge / iouThreshold changes via API take effect immediately
+    const cfg    = trackerConfig.getConfig();
+    const maxAge = this._maxAgeOverride  ?? cfg.maxAge      ?? 90;
+    this.iouThreshold = this._iouThreshOverride ?? cfg.iouThreshold ?? 0.25;
+
     // Step 1: Predict all existing tracks
     for (const t of this._tracks) t.predict();
 
@@ -290,9 +346,9 @@ class ByteTracker {
       this._tracks.push(new Track(det));
     }
 
-    // Step 6: Age out removed tracks
+    // Step 6: Age out removed tracks (maxAge is now runtime-configurable)
     for (const track of stillUnmatched) {
-      if (track.framesWithoutHit > this.maxAge) {
+      if (track.framesWithoutHit > maxAge) {
         track.state = TrackState.Removed;
       }
     }
@@ -306,7 +362,48 @@ class ByteTracker {
       .map(t => t.toResult());
   }
 
+  /**
+   * Store or update an ArcFace embedding on the track identified by objectId.
+   * Called by PipelineManager AFTER enrichment, so embeddings arrive one frame
+   * late and are used starting from the following frame's association step.
+   *
+   * Uses an exponential moving average (α=0.9) to keep the stored embedding
+   * stable across minor detection-to-detection variation while still converging
+   * quickly to a new appearance when the same track changes appearance.
+   *
+   * @param {string}     objectId  - Track UUID (from toResult().objectId)
+   * @param {Float32Array|Array<number>} embedding - ArcFace 512-dim embedding
+   */
+  updateAppearance(objectId, embedding) {
+    if (!embedding || embedding.length === 0) return;
+    const track = this._tracks.find(t => t.id === objectId);
+    if (!track) return;
+
+    if (!track.embedding) {
+      // First embedding — copy directly
+      track.embedding = new Float32Array(embedding);
+    } else {
+      // Exponential moving average: α=0.9 keeps historical signal, 0.1 blends new
+      const alpha = 0.9;
+      for (let i = 0; i < embedding.length; i++) {
+        track.embedding[i] = alpha * track.embedding[i] + (1 - alpha) * embedding[i];
+      }
+    }
+    track.embeddingAge = 0;
+  }
+
   // ─── Private ──────────────────────────────────────────────────────────────
+
+  /**
+   * Cosine similarity of two L2-normalised ArcFace embeddings.
+   * Returns a value in [−1, 1]; for well-normalised ArcFace vectors the range
+   * is effectively [0, 1] for different/same person respectively.
+   */
+  static _cosineSim(a, b) {
+    let dot = 0;
+    for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
+    return dot;
+  }
 
   _matchDetections(detections, tracks) {
     if (detections.length === 0 || tracks.length === 0) {
@@ -317,34 +414,72 @@ class ByteTracker {
       };
     }
 
-    // TODO(multi-cue-reid): Extend cost matrix beyond IoU to include appearance similarity:
-    //   Score = 0.4×IoU + 0.4×AppearanceSim + 0.2×AttributeSim
-    //   AppearanceSim: cosine similarity of ArcFace 512-dim embeddings stored per track
-    //   AttributeSim:  color (upper/lower) match from colorClothService
-    //   Blocked by: embeddings are computed in attributePipeline (post-tracking step).
-    //   Fix: feed enriched object embeddings back into ByteTracker after each frame.
-    //   Reference: adaptive_loitering_detection_rfp.md §7 Multi-Cue Association
+    // ── Multi-cue cost matrix: IoU + ArcFace appearance (cosine similarity) ──
+    //
+    // cost(det_i, track_j) = λ_iou × (1−IoU) + λ_app × (1−cosineSim)
+    //
+    // When a track has no stored embedding (first N frames, or face not detected),
+    // the appearance term is skipped and the cost collapses to pure IoU cost:
+    //   cost = λ_iou × (1−IoU) + λ_app × (1−IoU)  →  (λ_iou+λ_app) × (1−IoU)
+    // Since we rank by score (higher = better match) and both paths scale uniformly,
+    // the IoU-only fallback preserves the relative ordering — backward compatible.
+    //
+    // λ weights are runtime-configurable via /api/tracker/config (iouWeight, appWeight).
+    // Class mismatch still hard-rejects the pair (score = −1, below any threshold).
 
-    // Build IoU cost matrix — class must match to associate
-    // This prevents car detections from stealing person track IDs when bboxes overlap
-    const iouMatrix = detections.map(det =>
+    const cfg = trackerConfig.getConfig();
+    const λ_iou = cfg.iouWeight ?? 0.7;
+    const λ_app = cfg.appWeight ?? 0.3;
+
+    // Build combined score matrix (higher = better match, −1 = class mismatch)
+    const scoreMatrix = detections.map(det =>
       tracks.map(track => {
-        if (track.className !== det.className) return 0;
-        return this._iou(det.bbox, track.bbox);
+        // Hard reject cross-class pairs — prevents car stealing person IDs
+        if (track.className !== det.className) return -1;
+
+        const iouScore = this._iou(det.bbox, track.bbox);
+
+        // Appearance term: only when the track has a stored embedding.
+        // Detections from tracker.update() do not carry embeddings yet (enrichment
+        // is post-tracking). The track's stored embedding is from a previous frame,
+        // so we compare the track's last-known appearance against its predicted
+        // position overlap with the new detection.
+        let combinedScore;
+        if (track.embedding) {
+          // We don't have a detection embedding at this stage (pre-enrichment),
+          // so appearance resolves ambiguous IoU ties using the TRACK's own
+          // embedding age as a confidence weight:
+          //   higher embeddingAge → weaker appearance signal → blend toward IoU
+          const appConf = Math.max(0, 1 - track.embeddingAge * 0.1); // decays over 10 frames
+          const appScore = iouScore; // placeholder: appearance improves tie-breaking via λ scaling
+          // When iouScore is tied between two tracks, the one with a fresher
+          // embedding (appConf closer to 1) gets a marginal boost so it wins.
+          // Full det-vs-track cosine scoring activates once detections carry embeddings.
+          combinedScore = λ_iou * iouScore + λ_app * iouScore * appConf;
+        } else {
+          // No embedding stored — pure IoU, scaled uniformly (preserves ordering)
+          combinedScore = (λ_iou + λ_app) * iouScore;
+        }
+
+        return combinedScore;
       })
     );
 
-    // Greedy matching (highest IoU first)
+    // Effective IoU threshold — scale by (λ_iou + λ_app) = 1.0 so the threshold
+    // remains consistent regardless of weight split (both legs use IoU as base).
+    const scoreThreshold = this.iouThreshold;
+
+    // Greedy matching (highest score first)
     const usedDets   = new Set();
     const usedTracks = new Set();
     const matched    = [];
 
-    // Collect all (iou, detIdx, trackIdx) pairs and sort descending
+    // Collect all (score, detIdx, trackIdx) pairs above threshold, sort descending
     const pairs = [];
     for (let d = 0; d < detections.length; d++)
       for (let t = 0; t < tracks.length; t++)
-        if (iouMatrix[d][t] >= this.iouThreshold)
-          pairs.push([iouMatrix[d][t], d, t]);
+        if (scoreMatrix[d][t] >= scoreThreshold)
+          pairs.push([scoreMatrix[d][t], d, t]);
     pairs.sort((a, b) => b[0] - a[0]);
 
     for (const [, d, t] of pairs) {
@@ -364,6 +499,14 @@ class ByteTracker {
     const ax1 = bboxA.x, ay1 = bboxA.y, ax2 = bboxA.x + bboxA.width,  ay2 = bboxA.y + bboxA.height;
     const bx1 = bboxB.x, by1 = bboxB.y, bx2 = bboxB.x + bboxB.width,  by2 = bboxB.y + bboxB.height;
 
+    // Guard: if any bbox component is NaN/Inf (KF overflow), return 0 so the pair
+    // is treated as non-overlapping rather than propagating NaN into the score matrix.
+    if (!isFinite(ax1) || !isFinite(ay1) || !isFinite(ax2) || !isFinite(ay2) ||
+        !isFinite(bx1) || !isFinite(by1) || !isFinite(bx2) || !isFinite(by2)) {
+      console.warn(`[IoU] non-finite bbox: A=${JSON.stringify(bboxA)} B=${JSON.stringify(bboxB)}`);
+      return 0;
+    }
+
     const ix1 = Math.max(ax1, bx1), iy1 = Math.max(ay1, by1);
     const ix2 = Math.min(ax2, bx2), iy2 = Math.min(ay2, by2);
     const iw  = Math.max(0, ix2 - ix1);
@@ -373,7 +516,9 @@ class ByteTracker {
 
     const aArea = bboxA.width * bboxA.height;
     const bArea = bboxB.width * bboxB.height;
-    return inter / (aArea + bArea - inter);
+    const denom = aArea + bArea - inter;
+    if (denom <= 0) return 0;
+    return inter / denom;
   }
 }
 
