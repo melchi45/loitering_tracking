@@ -1,153 +1,148 @@
-# RFP: STUN / TURN / ICE 기반 WebRTC 연결 및 ICE 자동화 테스트
+# RFP: WebRTC Connection Based on STUN / TURN / ICE and ICE Automated Testing
 
 **Document No.**: LTS-2026-007
 **Version**: 1.0
 **Date**: 2026-05-20
 **Classification**: Technical Requirements Specification (RFP)
-**Status**: Phase-1 Complete — Socket.IO 트리거 방식 ice-test 구현 완료
+**Status**: Phase-1 Complete — Socket.IO trigger-based ice-test implementation complete
 
 ---
 
-## 1. 개요
+## 1. Overview
 
-### 1.1 목적
+### 1.1 Purpose
 
-이 문서는 LTS(Loitering Tracking System)의 WebRTC 영상 스트리밍에서 사용하는
-**STUN / TURN / ICE** 프로토콜 기반 연결 아키텍처와, 연결 상태를 자동화 검증하는
-`npm run ice-test` 도구의 설계·구현 사양을 정의한다.
+This document defines the **STUN / TURN / ICE** protocol-based connection architecture used in WebRTC video streaming for the LTS (Loitering Tracking System), and specifies the design and implementation of the `npm run ice-test` tool that automates connection state verification.
 
-### 1.2 범위
+### 1.2 Scope
 
-- STUN / TURN / ICE 프로토콜 기본 개념 및 역할
-- LTS 시스템의 ICE 서버 설정 구조
-- `ice-test` 자동화 도구 (3-Phase 테스트)
-- Socket.IO 기반 적응형 WebRTC 테스트 트리거 방식
+- STUN / TURN / ICE protocol fundamentals and roles
+- ICE server configuration structure for the LTS system
+- `ice-test` automation tool (3-Phase test)
+- Socket.IO-based adaptive WebRTC test trigger approach
 
 ---
 
-## 2. STUN / TURN / ICE 프로토콜 기초
+## 2. STUN / TURN / ICE Protocol Fundamentals
 
 ### 2.1 ICE (Interactive Connectivity Establishment) — RFC 8445
 
-ICE는 두 피어(브라우저 ↔ 미디어 서버) 사이에서 **최적의 네트워크 경로**를 자동으로
-찾는 프레임워크이다. WebRTC의 RTCPeerConnection이 ICE를 사용한다.
+ICE is a framework that automatically finds the **optimal network path** between two peers (browser ↔ media server). WebRTC's RTCPeerConnection uses ICE.
 
-#### ICE 동작 단계
+#### ICE Operation Phases
 
 ```
-[1] Gathering  — 각 피어가 자신의 IP/포트 후보(Candidate)를 수집
-                   host candidate  : 로컬 NIC 주소 (LAN 직접)
-                   srflx candidate : STUN 서버를 통해 확인된 공인 IP
-                   relay candidate : TURN 서버가 제공하는 릴레이 주소
+[1] Gathering  — Each peer collects its own IP/port candidates
+                   host candidate  : Local NIC address (direct LAN)
+                   srflx candidate : Public IP confirmed via STUN server
+                   relay candidate : Relay address provided by TURN server
 
-[2] Signaling  — SDP(Offer/Answer)를 통해 상대방과 후보 교환
-                   LTS에서는 Socket.IO를 시그널링 채널로 사용
+[2] Signaling  — Exchange candidates with the remote peer via SDP (Offer/Answer)
+                   LTS uses Socket.IO as the signaling channel
 
-[3] Checking   — 수집된 후보 쌍(pair)을 우선순위 순으로 연결성 점검
-                   host > srflx > relay 순서로 시도
+[3] Checking   — Check connectivity of collected candidate pairs in priority order
+                   Attempted in order: host > srflx > relay
 
-[4] Connected  — 가장 먼저 성공한 후보 쌍을 선택(Nomination)
-                   이후 해당 경로로 DTLS 핸드셰이크 → RTP/RTCP 전송 시작
+[4] Connected  — Select (Nominate) the first successfully connected candidate pair
+                   Then begin DTLS handshake → RTP/RTCP transmission on that path
 ```
 
-#### ICE Candidate 종류
+#### ICE Candidate Types
 
-| 타입 | 설명 | 경로 | 지연 |
+| Type | Description | Path | Latency |
 |------|------|------|------|
-| `host` | 로컬 NIC 주소 (LAN) | 직접 | 최저 |
-| `srflx` (server reflexive) | STUN 서버가 알려준 공인 IP:포트 | NAT 통과 | 중간 |
-| `relay` | TURN 서버를 거치는 릴레이 | TURN 경유 | 높음 |
+| `host` | Local NIC address (LAN) | Direct | Lowest |
+| `srflx` (server reflexive) | Public IP:port reported by STUN server | NAT traversal | Medium |
+| `relay` | Relay via TURN server | Via TURN | High |
 
 ---
 
 ### 2.2 STUN (Session Traversal Utilities for NAT) — RFC 5389 / RFC 8489
 
-STUN은 NAT(공유기) 뒤에 있는 클라이언트가 **자신의 공인 IP:포트를 확인**하기 위한
-경량 UDP 프로토콜이다. 
+STUN is a lightweight UDP protocol that allows a client behind a NAT (router) to **confirm its own public IP:port**.
 
-#### 동작 원리
+#### How It Works
 
 ```
-Client (NAT 뒤)           NAT              STUN Server
+Client (behind NAT)       NAT              STUN Server
      │                    │                     │
      │──── Binding Req ───►──── Binding Req ───►│
-     │     src: 10.0.0.5  │     src: 1.2.3.4    │  ← NAT가 src IP를 변환
+     │     src: 10.0.0.5  │     src: 1.2.3.4    │  ← NAT translates src IP
      │                    │                     │
      │◄─── Binding Res ───◄──── Binding Res ───◄│
-     │     XOR-MAPPED: 1.2.3.4:54321           │  ← 공인 IP 알림
+     │     XOR-MAPPED: 1.2.3.4:54321           │  ← Notifies public IP
 ```
 
-- STUN 서버는 **IP 알림만** 담당하며 미디어를 중계하지 않는다
-- 대부분의 Symmetric NAT는 STUN만으로 연결되지 않으며 TURN이 필요하다
-- Google 공개 STUN: `stun:stun.l.google.com:19302` (ICE 실패 시 TURN으로 폴백)
+- The STUN server is responsible **only for IP notification** and does not relay media
+- Most Symmetric NATs cannot connect with STUN alone and require TURN
+- Google public STUN: `stun:stun.l.google.com:19302` (falls back to TURN on ICE failure)
 
-#### LTS STUN 설정 (`server/.env`)
+#### LTS STUN Configuration (`server/.env`)
 
 ```ini
 STUN_URLS=stun:stun.l.google.com:19302
-# LAN 내부 전용 STUN (coturn 설치 시):
+# LAN-internal-only STUN (when coturn is installed):
 # STUN_URLS=stun:192.168.1.100:3478
 ```
 
-여러 서버 쉼표 구분: `STUN_URLS=stun:stun.l.google.com:19302,stun:192.168.1.100:3478`
+Multiple servers separated by comma: `STUN_URLS=stun:stun.l.google.com:19302,stun:192.168.1.100:3478`
 
 ---
 
 ### 2.3 TURN (Traversal Using Relays around NAT) — RFC 5766 / RFC 8656
 
-TURN은 두 피어가 직접 연결할 수 없는 환경(Symmetric NAT, 기업 방화벽 등)에서
-**TURN 서버가 미디어 패킷을 중계**하는 프로토콜이다.
+TURN is a protocol where the **TURN server relays media packets** in environments where two peers cannot connect directly (Symmetric NAT, corporate firewall, etc.).
 
-#### 동작 원리
+#### How It Works
 
 ```
-Browser (회사 방화벽)    TURN Server        mediasoup (서버)
+Browser (corporate firewall)    TURN Server        mediasoup (server)
         │                   │                    │
         │──── ALLOCATE ─────►│                    │
         │◄─── RELAYED ADDR ──│ (x.x.x.x:5000)    │
         │                   │◄──────────────────►│
-        │                   │  미디어 중계         │
+        │                   │  Media relay        │
 ```
 
-- TURN 서버는 미디어를 직접 처리하므로 **대역폭 비용 발생**
-- 직접 연결 가능하면 ICE는 host/srflx 후보를 먼저 선택하고 TURN은 사용 안 함
-- 프로토콜: UDP (기본), TCP (방화벽 우회), TLS/TCP (HTTPS 443포트 통과)
+- The TURN server processes media directly, so **bandwidth costs are incurred**
+- If direct connection is possible, ICE selects host/srflx candidates first and TURN is not used
+- Protocols: UDP (default), TCP (firewall bypass), TLS/TCP (passes through HTTPS port 443)
 
-#### LTS TURN 설정 (`server/.env`)
+#### LTS TURN Configuration (`server/.env`)
 
 ```ini
-# TURN 서버 1
+# TURN server 1
 TURN_URL=turn:192.168.214.100:3478
 TURN_USERNAME=lts-user
 TURN_CREDENTIAL=secret
 
-# TURN 서버 2 (복수 지원: _2, _3, ...)
+# TURN server 2 (multiple supported: _2, _3, ...)
 TURN_URL_2=turns:my-turn.example.com:443
 TURN_USERNAME_2=lts
 TURN_CREDENTIAL_2=secret2
 ```
 
-`GET /api/webrtc/ice-config` 엔드포인트가 브라우저에 ICE 서버 설정을 제공하며,
-credentials는 서버 측에서만 보관된다.
+The `GET /api/webrtc/ice-config` endpoint provides ICE server configuration to the browser,
+and credentials are stored only on the server side.
 
 ---
 
-### 2.4 ICE Candidate 선택 기준
+### 2.4 ICE Candidate Selection Criteria
 
-WebRTC는 ICE 후보 쌍을 **우선순위 공식**으로 정렬한다:
+WebRTC sorts ICE candidate pairs using a **priority formula**:
 
 ```
 priority = (2^24 × type_pref) + (2^8 × local_pref) + (256 − component)
 ```
 
-| 후보 타입 | type_pref | 선택 조건 |
+| Candidate Type | type_pref | Selection Condition |
 |----------|-----------|---------|
-| host     | 126       | LAN 직접 통신 가능 — 항상 우선 |
-| srflx    | 100       | NAT 통과 가능 |
-| relay    | 0         | 위 둘 다 실패 시 최후 수단 |
+| host     | 126       | Direct LAN communication possible — always preferred |
+| srflx    | 100       | NAT traversal possible |
+| relay    | 0         | Last resort when both of the above fail |
 
-LTS의 mediasoup 서버는 `SERVER_IP` 환경 변수로 LAN IP를 명시해야
-브라우저가 host 후보를 올바르게 선택한다:
+The LTS mediasoup server must specify the LAN IP via the `SERVER_IP` environment variable
+so that the browser correctly selects the host candidate:
 
 ```ini
 # server/.env
@@ -156,9 +151,9 @@ SERVER_IP=192.168.214.3
 
 ---
 
-## 3. LTS ICE 서버 설정 구조
+## 3. LTS ICE Server Configuration Structure
 
-### 3.1 서버 측 (`GET /api/webrtc/ice-config`)
+### 3.1 Server Side (`GET /api/webrtc/ice-config`)
 
 ```javascript
 // server/src/index.js
@@ -181,9 +176,9 @@ app.get('/api/webrtc/ice-config', (_req, res) => {
 });
 ```
 
-### 3.2 클라이언트 측 (`useWebRTCConfigStore`)
+### 3.2 Client Side (`useWebRTCConfigStore`)
 
-브라우저는 `useWebRTC` 훅에서 `getIceServers()`를 호출해 RTCPeerConnection에 주입한다:
+The browser calls `getIceServers()` in the `useWebRTC` hook and injects the result into RTCPeerConnection:
 
 ```typescript
 // client/src/hooks/useWebRTC.ts
@@ -194,7 +189,7 @@ const transport = device.createRecvTransport({
 });
 ```
 
-`iceServers` 배열 형식:
+`iceServers` array format:
 ```json
 [
   { "urls": ["stun:stun.l.google.com:19302"] },
@@ -204,67 +199,66 @@ const transport = device.createRecvTransport({
 
 ---
 
-## 4. `npm run ice-test` — ICE 자동화 테스트 도구
+## 4. `npm run ice-test` — ICE Automation Test Tool
 
-### 4.1 개요
+### 4.1 Overview
 
-`ice-test`는 Playwright 브라우저 자동화를 이용해 실제 WebRTC ICE 연결을 검증하는
-3단계 자동화 테스트 도구이다.
+`ice-test` is a 3-phase automated testing tool that verifies real WebRTC ICE connections using Playwright browser automation.
 
 ```
-cd server && npm run ice-test              # headed (브라우저 창 표시)
-cd server && npm run ice-test:headless     # headless (SSH/CI 환경)
+cd server && npm run ice-test              # headed (shows browser window)
+cd server && npm run ice-test:headless     # headless (SSH/CI environment)
 node src/scripts/iceTest.js http://192.168.214.3:3001 http://192.168.214.3:5173
 ```
 
-### 4.2 아키텍처: Socket.IO 트리거 방식 (v2.0)
+### 4.2 Architecture: Socket.IO Trigger Approach (v2.0)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │  iceTest.js (Node.js)          Socket.IO over WebSocket         │
 │                                                                 │
-│  Phase 1: 서버 점검 ─────► GET /api/cameras                    │
-│           STUN UDP ping ──► STUN 서버 직접 확인                  │
-│           WebRTC 활성화 ──► PUT /api/cameras/:id                │
+│  Phase 1: Server check ──────► GET /api/cameras                 │
+│           STUN UDP ping ──────► Direct STUN server check        │
+│           Enable WebRTC ──────► PUT /api/cameras/:id            │
 │                                                                 │
 │  Phase 2: ─────────────────────────────────────────────────────│
 │                                                                 │
 │  ┌─────────────────┐   webrtc:ice-test-start   ┌────────────┐  │
 │  │  Playwright      │──────────────────────────►│  Backend   │  │
-│  │  브라우저 오픈    │                           │  (3001)    │  │
+│  │  Open browser    │                           │  (3001)    │  │
 │  │                 │◄──────────────────────────│  Socket.IO │  │
 │  │  IceTestTrigger  │   webrtc:ice-test-trigger │            │  │
-│  │  컴포넌트 활성화  │                           └────────────┘  │
+│  │  Component active│                           └────────────┘  │
 │  │                 │                                           │
-│  │  RTCPeerConn    │─── ICE Gathering ──► STUN/TURN 서버     │
-│  │  생성 감지       │─── ICE Checking ──► mediasoup 서버      │
-│  │  (적응형 대기)   │─── ICE Connected ─► getStats() 수집    │
+│  │  RTCPeerConn    │─── ICE Gathering ──► STUN/TURN server   │
+│  │  creation detect│─── ICE Checking ──► mediasoup server    │
+│  │  (adaptive wait)│─── ICE Connected ─► getStats() collect  │
 │  └─────────────────┘                                           │
 │                                                                 │
-│  Phase 3: ICE 후보 타입 / 경로 / 처리량 리포트 출력              │
+│  Phase 3: ICE candidate type / path / throughput report output  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 4.3 Socket.IO 트리거 프로토콜
+### 4.3 Socket.IO Trigger Protocol
 
-#### iceTest.js → 서버 (Engine.IO v4 raw WebSocket)
+#### iceTest.js → Server (Engine.IO v4 raw WebSocket)
 
-`socket.io-client` 패키지 없이 `ws` 모듈로 직접 구현:
+Implemented directly with the `ws` module without the `socket.io-client` package:
 
 ```
-WS 연결: ws://SERVER:3001/socket.io/?EIO=4&transport=websocket
+WS connection: ws://SERVER:3001/socket.io/?EIO=4&transport=websocket
          ↓
-서버: '0{"sid":"...","pingInterval":25000,...}'  (EIO OPEN)
-클: '40'                                         (SIO CONNECT)
-서버: '40{"sid":"..."}'                           (SIO CONNECT ACK)
-클: '42["webrtc:ice-test-start",{"cameraId":"..."}]' (SIO EVENT emit)
+Server: '0{"sid":"...","pingInterval":25000,...}'  (EIO OPEN)
+Client: '40'                                       (SIO CONNECT)
+Server: '40{"sid":"..."}'                          (SIO CONNECT ACK)
+Client: '42["webrtc:ice-test-start",{"cameraId":"..."}]' (SIO EVENT emit)
          ↓
-서버: io.emit('webrtc:ice-test-trigger', { cameraId })
+Server: io.emit('webrtc:ice-test-trigger', { cameraId })
          ↓
-브라우저: socket.on('webrtc:ice-test-trigger') → IceTestTrigger 활성화
+Browser: socket.on('webrtc:ice-test-trigger') → IceTestTrigger activated
 ```
 
-#### 서버 핸들러 (`server/src/index.js`)
+#### Server Handler (`server/src/index.js`)
 
 ```javascript
 socket.on('webrtc:ice-test-start', ({ cameraId } = {}) => {
@@ -275,63 +269,62 @@ socket.on('webrtc:ice-test-done', () => {
 });
 ```
 
-#### 클라이언트 핸들러 (`client/src/App.tsx`)
+#### Client Handler (`client/src/App.tsx`)
 
 ```typescript
 socket.on('webrtc:ice-test-trigger', ({ cameraId }) => setIceTestCameraId(cameraId));
 socket.on('webrtc:ice-test-stop',    ()              => setIceTestCameraId(null));
 ```
 
-`IceTestTrigger` 컴포넌트가 활성화되면 `useWebRTC(cameraId, true)` 훅이 호출되어
-실제 mediasoup WebRTC 연결을 시작하고, 이 연결의 RTCPeerConnection을 Playwright가 감지한다.
+When the `IceTestTrigger` component is activated, the `useWebRTC(cameraId, true)` hook is called to start the actual mediasoup WebRTC connection, and Playwright detects the RTCPeerConnection of this connection.
 
 ---
 
-### 4.4 Phase 별 상세 사양
+### 4.4 Detailed Specification per Phase
 
-#### Phase 1 — 서버 사전 점검
+#### Phase 1 — Server Pre-check
 
-| 점검 항목 | 방법 | 성공 기준 |
+| Check Item | Method | Success Criteria |
 |----------|------|---------|
-| 서버 응답 | `GET /api/cameras` (HTTP) | HTTP 200 |
-| WebRTC 카메라 확인 | cameras 목록 필터 | `webrtcEnabled: true` 카메라 존재 |
-| WebRTC 자동 활성화 | `PUT /api/cameras/:id` | 없으면 첫 번째 카메라 임시 활성화 |
-| 파이프라인 준비 대기 | `GET /api/cameras/:id` 폴링 (15s) | `pipelineStatus.running: true` |
-| ICE 서버 설정 확인 | `GET /api/webrtc/ice-config` | STUN/TURN 수 출력 |
-| STUN UDP ping | `dgram` socket + STUN Binding Request (RFC 5389) | STUN 응답 수신 |
+| Server response | `GET /api/cameras` (HTTP) | HTTP 200 |
+| WebRTC camera check | Filter cameras list | Camera with `webrtcEnabled: true` exists |
+| Auto-enable WebRTC | `PUT /api/cameras/:id` | Temporarily enables first camera if none found |
+| Wait for pipeline ready | Poll `GET /api/cameras/:id` (15s) | `pipelineStatus.running: true` |
+| ICE server config check | `GET /api/webrtc/ice-config` | Print STUN/TURN count |
+| STUN UDP ping | `dgram` socket + STUN Binding Request (RFC 5389) | STUN response received |
 
-STUN UDP ping은 LAN STUN 서버만 대상으로 하며, Google 공개 STUN은 스킵한다.
+STUN UDP ping targets only LAN STUN servers; Google public STUN is skipped.
 
-**STUN Binding Request 패킷 구조:**
+**STUN Binding Request Packet Structure:**
 
 ```
 Byte 0-1:  0x0001      — STUN Message Type: Binding Request
 Byte 2-3:  0x0000      — Message Length (0 bytes, no attributes)
-Byte 4-7:  0x2112A442  — Magic Cookie (RFC 5389 고정값)
+Byte 4-7:  0x2112A442  — Magic Cookie (RFC 5389 fixed value)
 Byte 8-19: Transaction ID (12 bytes, random)
 ```
 
-#### Phase 2 — 브라우저 자동화 (적응형 대기)
+#### Phase 2 — Browser Automation (Adaptive Wait)
 
-v2.0에서 **고정 35초 대기 방식을 폐기**하고 다음 2단계 적응형 방식으로 교체:
+v2.0 **discards the fixed 35-second wait** and replaces it with the following 2-step adaptive approach:
 
-| 단계 | 대기 조건 | 최대 시간 | 조기 종료 |
+| Step | Wait Condition | Max Time | Early Exit |
 |------|----------|---------|---------|
-| **Loopback 주입** | `page.evaluate()`로 PC × 2 생성 + SDP 교환 | 즉시 (동기) | mediasoup-client 불필요 |
-| **Phase A** | RTCPeerConnection 생성 확인 | 3초 | 생성 확인 즉시 Phase B 진입 |
-| **Phase B** | ICE `connectionState === 'connected'` 대기 | 30초 | 연결 즉시 종료 |
+| **Loopback injection** | Create PC × 2 + SDP exchange via `page.evaluate()` | Immediate (synchronous) | mediasoup-client not needed |
+| **Phase A** | Confirm RTCPeerConnection creation | 3 seconds | Proceed to Phase B immediately upon confirmation |
+| **Phase B** | Wait for ICE `connectionState === 'connected'` | 30 seconds | Exit immediately upon connection |
 
-**Loopback ICE 주입 (기본 경로):**
-`page.evaluate()`로 브라우저 페이지에 직접 두 개의 `RTCPeerConnection`을 생성하고 로컬 SDP를 교환한다. `/api/webrtc/ice-config`의 STUN/TURN 서버 설정을 그대로 사용한다. mediasoup-client를 전혀 사용하지 않으므로 headless Chrome의 `UnsupportedError: device not supported` 코덱 감지 문제를 우회한다. Socket.IO 트리거(IceTestTrigger)는 병렬로 실행되며 실패해도 테스트에 영향 없다.
+**Loopback ICE Injection (default path):**
+Two `RTCPeerConnection` instances are created directly in the browser page via `page.evaluate()` and local SDP is exchanged. The STUN/TURN server configuration from `/api/webrtc/ice-config` is used as-is. Since mediasoup-client is not used at all, the headless Chrome `UnsupportedError: device not supported` codec detection issue is bypassed. The Socket.IO trigger (IceTestTrigger) runs in parallel and test results are unaffected if it fails.
 
-Phase A에서 3초 내 PC가 생성되지 않으면:
-- Loopback 주입 실패 및 IceTestTrigger 모두 동작하지 않음 — 즉시 실패
-- 스크린샷 저장: `/tmp/lts-ice-test-fail.png`
-- (기존: 35초를 무조건 기다린 뒤 실패)
+If no PC is created within 3 seconds in Phase A:
+- Both loopback injection failure and IceTestTrigger not working — fail immediately
+- Save screenshot: `/tmp/lts-ice-test-fail.png`
+- (Previously: waited unconditionally for 35 seconds before failing)
 
-Phase B에서 `connectionState === 'failed'` / `'closed'`가 감지되면 30초를 기다리지 않고 즉시 실패 처리.
+If `connectionState === 'failed'` / `'closed'` is detected in Phase B, fail immediately without waiting 30 seconds.
 
-**RTCPeerConnection 인터셉터 (Playwright addInitScript):**
+**RTCPeerConnection Interceptor (Playwright addInitScript):**
 
 ```javascript
 window.__lts_rtcPCs = [];
@@ -343,49 +336,49 @@ window.RTCPeerConnection = new Proxy(_Native, {
     const pc = Reflect.construct(Target, args);
     window.__lts_rtcPCs.push(pc);
     // connectionstatechange, iceconnectionstatechange, icegatheringstatechange,
-    // icecandidate 이벤트를 __lts_rtcEvents에 기록
+    // icecandidate events are recorded in __lts_rtcEvents
     return pc;
   },
 });
 ```
 
-#### Phase 3 — ICE Candidate 리포트
+#### Phase 3 — ICE Candidate Report
 
-| 항목 | 내용 |
+| Item | Content |
 |------|------|
-| Local Candidate | 타입 (host/srflx/relay) + 프로토콜 + IP:Port |
-| Remote Candidate | 타입 + IP:Port |
-| 경로 판정 | host=LAN 직접, srflx=STUN NAT 통과, relay=TURN 릴레이 |
-| 트래픽 측정 | `getStats()` 5회 × 2초 간격 → 수신 누적 + 속도(kbps) |
-| 수신 추이 | ASCII 바 차트 |
+| Local Candidate | Type (host/srflx/relay) + protocol + IP:Port |
+| Remote Candidate | Type + IP:Port |
+| Path determination | host=Direct LAN, srflx=STUN NAT traversal, relay=TURN relay |
+| Traffic measurement | `getStats()` 5 times × 2-second intervals → cumulative received + speed (kbps) |
+| Receive trend | ASCII bar chart |
 
 ---
 
-### 4.5 테스트 결과 해석
+### 4.5 Test Result Interpretation
 
-#### 성공 케이스
+#### Success Cases
 
-| 결과 | Local Type | 의미 |
+| Result | Local Type | Meaning |
 |------|-----------|------|
-| `PASS` — LAN 직접 | `host` | 최적 경로. 서버와 클라이언트가 같은 LAN |
-| `PASS` — STUN NAT 통과 | `srflx` | NAT 통과 성공. LAN 직접보다 지연 약간 높음 |
-| `PASS` — TURN 릴레이 | `relay` | 작동하지만 비효율적. host 연결 안 되는 원인 조사 권장 |
+| `PASS` — Direct LAN | `host` | Optimal path. Server and client are on the same LAN |
+| `PASS` — STUN NAT traversal | `srflx` | NAT traversal succeeded. Slightly higher latency than direct LAN |
+| `PASS` — TURN relay | `relay` | Working but inefficient. Recommended to investigate why host connection is unavailable |
 
-#### 실패 케이스 및 조치
+#### Failure Cases and Actions
 
-| 오류 메시지 | 원인 | 조치 |
+| Error Message | Cause | Action |
 |-----------|------|------|
-| `서버 응답 없음` | 백엔드 미실행 | `cd server && npm run dev` |
-| `RTCPeerConnection이 생성되지 않음` | IceTestTrigger 미설치 또는 파이프라인 미실행 | App.tsx IceTestTrigger 확인, 카메라 RTSP URL 점검 |
-| `ICE 상태: failed` | STUN/TURN 도달 불가 또는 방화벽 | UFW 포트 오픈: `sudo ufw allow 40000:49999/udp` |
-| `ICE 연결 실패 (30초 초과)` | mediasoup WebRTC 포트 미오픈 | `server/.env → SERVER_IP=<LAN IP>` 확인 |
-| `TURN 릴레이 경로` | `SERVER_IP` 미설정 | `server/.env → SERVER_IP=192.168.x.x` 설정 |
+| `No server response` | Backend not running | `cd server && npm run dev` |
+| `RTCPeerConnection not created` | IceTestTrigger not installed or pipeline not running | Check App.tsx IceTestTrigger, inspect camera RTSP URL |
+| `ICE state: failed` | STUN/TURN unreachable or firewall | Open UFW port: `sudo ufw allow 40000:49999/udp` |
+| `ICE connection failed (30s timeout)` | mediasoup WebRTC port not open | Check `server/.env → SERVER_IP=<LAN IP>` |
+| `TURN relay path` | `SERVER_IP` not set | Set `server/.env → SERVER_IP=192.168.x.x` |
 
 ---
 
-## 5. mediasoup WebRTC 포트 설정
+## 5. mediasoup WebRTC Port Configuration
 
-mediasoup는 미디어 전송에 UDP 포트 범위를 사용한다:
+mediasoup uses a UDP port range for media transmission:
 
 ```ini
 # server/.env
@@ -393,69 +386,69 @@ MEDIASOUP_RTC_MIN_PORT=40000
 MEDIASOUP_RTC_MAX_PORT=49999
 ```
 
-방화벽 오픈 (LAN 내부):
+Open firewall (within LAN):
 ```bash
 sudo ufw allow 40000:49999/udp
 ```
 
 ---
 
-## 6. 환경 변수 전체 목록
+## 6. Full List of Environment Variables
 
-| 변수 | 기본값 | 설명 |
+| Variable | Default | Description |
 |------|--------|------|
-| `SERVER_IP` | `localhost` | 서버 LAN IP (host ICE 후보에 포함) |
-| `PORT` | `3001` | 백엔드 HTTP/Socket.IO 포트 |
-| `VITE_PORT` | `5173` | Vite 개발서버 포트 |
-| `STUN_URLS` | `stun:stun.l.google.com:19302` | 쉼표로 복수 STUN 서버 지정 |
-| `TURN_URL` | (없음) | TURN 서버 URL (turn: 또는 turns:) |
-| `TURN_USERNAME` | (없음) | TURN 인증 사용자명 |
-| `TURN_CREDENTIAL` | (없음) | TURN 인증 비밀번호 |
-| `TURN_URL_2`, `_3`, … | (없음) | 두 번째 이후 TURN 서버 (번호 연속) |
-| `MEDIASOUP_RTC_MIN_PORT` | `40000` | mediasoup RTP/RTCP 최소 포트 |
-| `MEDIASOUP_RTC_MAX_PORT` | `49999` | mediasoup RTP/RTCP 최대 포트 |
+| `SERVER_IP` | `localhost` | Server LAN IP (included in host ICE candidates) |
+| `PORT` | `3001` | Backend HTTP/Socket.IO port |
+| `VITE_PORT` | `5173` | Vite development server port |
+| `STUN_URLS` | `stun:stun.l.google.com:19302` | Specify multiple STUN servers separated by comma |
+| `TURN_URL` | (none) | TURN server URL (turn: or turns:) |
+| `TURN_USERNAME` | (none) | TURN authentication username |
+| `TURN_CREDENTIAL` | (none) | TURN authentication password |
+| `TURN_URL_2`, `_3`, … | (none) | Second and subsequent TURN servers (sequential numbers) |
+| `MEDIASOUP_RTC_MIN_PORT` | `40000` | mediasoup RTP/RTCP minimum port |
+| `MEDIASOUP_RTC_MAX_PORT` | `49999` | mediasoup RTP/RTCP maximum port |
 
 ---
 
-## 7. 구현 체크리스트
+## 7. Implementation Checklist
 
-### 7.1 서버
+### 7.1 Server
 
-| 기능 | 상태 | 파일 |
+| Feature | Status | File |
 |------|------|------|
-| `GET /api/webrtc/ice-config` — STUN/TURN 설정 제공 | ✅ Complete | `server/src/index.js` |
-| `webrtc:ice-test-start` Socket.IO 핸들러 | ✅ Complete | `server/src/index.js` |
-| `webrtc:ice-test-done` Socket.IO 핸들러 | ✅ Complete | `server/src/index.js` |
-| mediasoup WebRTC 게이트웨이 | ✅ Complete | `server/src/services/webrtcGateway.js` |
+| `GET /api/webrtc/ice-config` — Provide STUN/TURN configuration | ✅ Complete | `server/src/index.js` |
+| `webrtc:ice-test-start` Socket.IO handler | ✅ Complete | `server/src/index.js` |
+| `webrtc:ice-test-done` Socket.IO handler | ✅ Complete | `server/src/index.js` |
+| mediasoup WebRTC gateway | ✅ Complete | `server/src/services/webrtcGateway.js` |
 
-### 7.2 클라이언트
+### 7.2 Client
 
-| 기능 | 상태 | 파일 |
+| Feature | Status | File |
 |------|------|------|
-| `useWebRTCConfigStore` — ICE 서버 설정 저장소 | ✅ Complete | `client/src/stores/webrtcConfigStore.ts` |
-| `useWebRTC` 훅 — mediasoup-client 연결 | ✅ Complete | `client/src/hooks/useWebRTC.ts` |
-| `IceTestTrigger` 컴포넌트 | ✅ Complete | `client/src/App.tsx` |
-| `webrtc:ice-test-trigger` Socket.IO 수신 | ✅ Complete | `client/src/App.tsx` |
-| `webrtc:ice-test-stop` Socket.IO 수신 (정리) | ✅ Complete | `client/src/App.tsx` |
+| `useWebRTCConfigStore` — ICE server configuration store | ✅ Complete | `client/src/stores/webrtcConfigStore.ts` |
+| `useWebRTC` hook — mediasoup-client connection | ✅ Complete | `client/src/hooks/useWebRTC.ts` |
+| `IceTestTrigger` component | ✅ Complete | `client/src/App.tsx` |
+| `webrtc:ice-test-trigger` Socket.IO receive | ✅ Complete | `client/src/App.tsx` |
+| `webrtc:ice-test-stop` Socket.IO receive (cleanup) | ✅ Complete | `client/src/App.tsx` |
 
-### 7.3 ice-test 스크립트
+### 7.3 ice-test Script
 
-| 기능 | 상태 | 비고 |
+| Feature | Status | Notes |
 |------|------|------|
-| Phase 1: 서버 점검 + STUN UDP ping | ✅ Complete | `server/src/scripts/iceTest.js` |
-| Phase 1: WebRTC 카메라 자동 활성화 | ✅ Complete | |
-| Phase 2: Playwright 브라우저 자동화 | ✅ Complete | |
-| Phase 2: RTCPeerConnection 인터셉터 주입 | ✅ Complete | addInitScript |
-| Phase 2: Socket.IO 트리거 (Engine.IO v4 raw ws) | ✅ Complete | socket.io-client 불필요 |
-| Phase 2: 적응형 대기 (PC 생성 8초 + ICE 연결 30초) | ✅ Complete | 기존 고정 35초 폐기 |
-| Phase 2: ICE failed/closed 즉시 종료 | ✅ Complete | |
-| Phase 3: ICE 후보 타입 분석 + 경로 판정 | ✅ Complete | |
-| Phase 3: getStats() 처리량 측정 | ✅ Complete | 5회 × 2s |
-| 테스트 완료 후 webrtc:ice-test-done 전송 | ✅ Complete | App 정리 트리거 |
+| Phase 1: Server check + STUN UDP ping | ✅ Complete | `server/src/scripts/iceTest.js` |
+| Phase 1: Auto-enable WebRTC camera | ✅ Complete | |
+| Phase 2: Playwright browser automation | ✅ Complete | |
+| Phase 2: RTCPeerConnection interceptor injection | ✅ Complete | addInitScript |
+| Phase 2: Socket.IO trigger (Engine.IO v4 raw ws) | ✅ Complete | socket.io-client not required |
+| Phase 2: Adaptive wait (PC creation 8s + ICE connection 30s) | ✅ Complete | Replaced old fixed 35s |
+| Phase 2: ICE failed/closed immediate exit | ✅ Complete | |
+| Phase 3: ICE candidate type analysis + path determination | ✅ Complete | |
+| Phase 3: getStats() throughput measurement | ✅ Complete | 5 times × 2s |
+| Send webrtc:ice-test-done after test completion | ✅ Complete | App cleanup trigger |
 
 ---
 
-## 8. 관련 문서
+## 8. Related Documents
 
-- [RFP_LTS2026_WebRTC_Media_Gateway.md](./RFP_LTS2026_WebRTC_Media_Gateway.md) — mediasoup 게이트웨이 설계
-- [README.md](./README.md) — 시스템 전체 설정 가이드
+- [RFP_LTS2026_WebRTC_Media_Gateway.md](./RFP_LTS2026_WebRTC_Media_Gateway.md) — mediasoup gateway design
+- [README.md](./README.md) — System-wide configuration guide

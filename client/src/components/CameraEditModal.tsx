@@ -99,8 +99,8 @@ export default function CameraEditModal({ camera, onClose }: Props) {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         const msg =
-          body.code === 'INVALID_YOUTUBE_URL' ? '유효하지 않은 YouTube URL입니다.' :
-          body.code === 'NOT_FOUND'            ? '스트림을 찾을 수 없습니다.' :
+          body.code === 'INVALID_YOUTUBE_URL' ? 'Invalid YouTube URL.' :
+          body.code === 'NOT_FOUND'            ? 'Stream not found.' :
           body.error || 'Save failed';
         throw new Error(msg);
       }
@@ -114,7 +114,7 @@ export default function CameraEditModal({ camera, onClose }: Props) {
           repeatPlayback: result.camera.repeatPlayback,
         });
       }
-      setSuccess('저장되었습니다. URL/해상도 변경 시 스트림이 재시작됩니다.');
+      setSuccess('Saved. The stream will restart if URL or resolution is changed.');
       setTimeout(onClose, 1200);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error');
@@ -149,7 +149,7 @@ export default function CameraEditModal({ camera, onClose }: Props) {
             <div className="p-4 space-y-3">
               {/* Restart notice */}
               <div className="text-[10px] text-yellow-500 bg-yellow-900/20 border border-yellow-700/40 rounded px-2 py-1.5">
-                ⚠ URL·해상도·비트레이트를 변경하면 스트림이 자동으로 재시작됩니다.
+                ⚠ Changing the URL, resolution, or bitrate will automatically restart the stream.
               </div>
 
               {/* Name */}
@@ -178,7 +178,7 @@ export default function CameraEditModal({ camera, onClose }: Props) {
               {/* Resolution + Bitrate */}
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-[11px] text-gray-400 mb-1">해상도</label>
+                  <label className="block text-[11px] text-gray-400 mb-1">Resolution</label>
                   <select
                     name="resolution"
                     value={ytForm.resolution}
@@ -191,7 +191,7 @@ export default function CameraEditModal({ camera, onClose }: Props) {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-[11px] text-gray-400 mb-1">비트레이트 (kbps)</label>
+                  <label className="block text-[11px] text-gray-400 mb-1">Bitrate (kbps)</label>
                   <input
                     name="bitrate"
                     type="number"
@@ -213,12 +213,12 @@ export default function CameraEditModal({ camera, onClose }: Props) {
                   onChange={(e) => setYtForm((p) => ({ ...p, repeatPlayback: e.target.checked }))}
                   className="w-3.5 h-3.5 rounded accent-red-500"
                 />
-                <span>반복 재생 — 영상 종료 시 자동 재시작</span>
+                <span>Repeat Playback — auto-restart when video ends</span>
               </label>
 
               {/* Internal RTSP URL (read-only) */}
               <div>
-                <label className="block text-[11px] text-gray-400 mb-1">내부 RTSP URL</label>
+                <label className="block text-[11px] text-gray-400 mb-1">Internal RTSP URL</label>
                 <p
                   className="w-full bg-gray-900/50 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-500 font-mono truncate select-all"
                   title={camera.rtspUrl}
@@ -244,7 +244,7 @@ export default function CameraEditModal({ camera, onClose }: Props) {
                 disabled={saving}
                 className="px-3 py-1.5 text-xs rounded bg-red-700 hover:bg-red-600 disabled:opacity-50 text-white font-semibold transition-colors"
               >
-                {saving ? '저장 중…' : '저장'}
+                {saving ? 'Saving…' : 'Save'}
               </button>
             </div>
           </>

@@ -136,13 +136,13 @@ function classMatchesZone(className, targetClasses) {
 // TODO(heatmap): Accumulate per-zone dwell-time grid and expose via /api/cameras/:id/heatmap.
 //   Each cell = cumulative dwell seconds over a configurable rolling window (1h/24h/7d).
 //   Render as a canvas overlay in CameraView.
-//   Reference: adaptive_loitering_detection_rfp.md §추가 권장 기능 Heatmap
+//   Reference: adaptive_loitering_detection_rfp.md §Additional Recommended Features — Heatmap
 
 // TODO(cross-camera-reid): When the same person leaves camera A and appears in camera B,
 //   correlate using ArcFace 512-dim embeddings stored per track (faceService already
 //   extracts them). Requires a shared embedding store (Redis or Qdrant) and a
 //   cross-camera event bus. Out of scope for single-server Node.js deployment.
-//   Reference: adaptive_loitering_detection_rfp.md §추가 권장 기능 Cross-Camera ReID
+//   Reference: adaptive_loitering_detection_rfp.md §Additional Recommended Features — Cross-Camera ReID
 
 // TODO(human-segmentation): Replace full-frame bbox with person mask from a lightweight
 //   segmentation model (e.g. YOLO-SAM or NanoSAM) to improve cloth/color analysis accuracy

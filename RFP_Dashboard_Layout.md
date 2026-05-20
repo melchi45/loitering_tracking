@@ -195,7 +195,7 @@ Places 1 main camera (large) on the left and N sub cameras (small grid) on the r
 ### 4.2 Equal Grid Rendering
 
 ```
-컨테이너: display:grid
+Container: display:grid
   gridTemplateColumns: repeat(cols, 1fr)
   gridTemplateRows:    repeat(rows, 1fr)
   gap: 4px (gap-1)
@@ -208,7 +208,7 @@ Places 1 main camera (large) on the left and N sub cameras (small grid) on the r
 ### 4.3 Featured (1 Main + Sub) Rendering
 
 ```
-컨테이너: display:flex, gap:4px
+Container: display:flex, gap:4px
   ┌─── Main cell (flex: mainFlex) ────┬── Sub panel (flex: subFlex) ──┐
   │                                  │  display:grid                 │
   │   CameraCell (cameras[0])        │  gridTemplateColumns:         │
@@ -312,50 +312,50 @@ When a camera is connected via WebRTC, an **[ICE]** button appears in the top-ri
 - Hook: `client/src/hooks/useWebRTC.ts` — `iceStats` field
 - Type: `IceStats` — `{ localType, localProtocol, localAddress, localPort, remoteType, remoteAddress, remotePort, bytesSent, bytesReceived }`
 
-### 4.9 채널 페이지 네비게이션 (Desktop)
+### 4.9 Channel Page Navigation (Desktop)
 
-카메라 등록 수가 레이아웃 채널 수를 초과할 경우, 카메라 그리드 좌/우에 페이지 이동 버튼(`‹` / `›`)이 오버레이된다.
+When the number of registered cameras exceeds the layout channel count, page navigation buttons (`‹` / `›`) are overlaid on the left/right sides of the camera grid.
 
-#### 4.9.1 버튼 표시 조건
+#### 4.9.1 Button Display Conditions
 
-| 버튼 | 표시 조건 | 클릭 동작 |
+| Button | Display Condition | Click Behavior |
 |------|----------|-----------|
-| **이전 `‹`** | `channelOffset > 0` | `channelOffset -= def.channels` (min 0) |
-| **다음 `›`** | `channelOffset + def.channels < cameras.length` | `channelOffset += def.channels` (max `cameras.length - def.channels`) |
+| **Previous `‹`** | `channelOffset > 0` | `channelOffset -= def.channels` (min 0) |
+| **Next `›`** | `channelOffset + def.channels < cameras.length` | `channelOffset += def.channels` (max `cameras.length - def.channels`) |
 
-#### 4.9.2 이동 단위
+#### 4.9.2 Navigation Unit
 
-- 이동 단위: 현재 레이아웃의 채널 수(`def.channels`)
-- 예: 레이아웃 `4`이면 4채널씩 이동, 레이아웃 `9`이면 9채널씩 이동
+- Navigation unit: number of channels in the current layout (`def.channels`)
+- Example: layout `4` moves 4 channels at a time, layout `9` moves 9 channels at a time
 
-#### 4.9.3 상태 관리
+#### 4.9.3 State Management
 
-| 상태 | 초기값 | 리셋 조건 |
+| State | Initial Value | Reset Condition |
 |------|--------|----------|
-| `channelOffset` | `0` | 레이아웃 변경 시 자동 리셋 |
+| `channelOffset` | `0` | Auto-reset on layout change |
 
-- 모바일의 스와이프 오프셋과 동일한 `channelOffset` 상태를 공유
+- Shares the same `channelOffset` state as the mobile swipe offset
 
-#### 4.9.4 버튼 스타일
+#### 4.9.4 Button Styles
 
-| 버튼 | 위치 | CSS |
+| Button | Position | CSS |
 |------|------|-----|
-| 이전 `‹` | `absolute left-3 top-1/2 -translate-y-1/2` | `bg-black/60 hover:bg-black/80 text-white w-8 h-14 rounded-r-lg` |
-| 다음 `›` | `absolute right-3 top-1/2 -translate-y-1/2` | `bg-black/60 hover:bg-black/80 text-white w-8 h-14 rounded-l-lg` |
+| Previous `‹` | `absolute left-3 top-1/2 -translate-y-1/2` | `bg-black/60 hover:bg-black/80 text-white w-8 h-14 rounded-r-lg` |
+| Next `›` | `absolute right-3 top-1/2 -translate-y-1/2` | `bg-black/60 hover:bg-black/80 text-white w-8 h-14 rounded-l-lg` |
 
-#### 4.9.5 동작 예시
+#### 4.9.5 Behavior Example
 
-카메라 10개 등록, 레이아웃 `4` (4채널):
+10 cameras registered, layout `4` (4 channels):
 ```
-초기 상태:  [CAM1][CAM2][CAM3][CAM4]  offset=0   › 표시
-› 클릭:     [CAM5][CAM6][CAM7][CAM8]  offset=4  ‹ › 표시
-› 클릭:     [CAM9][CAM10][  ][  ]     offset=8   ‹ 표시
+Initial state:  [CAM1][CAM2][CAM3][CAM4]  offset=0   › shown
+› click:        [CAM5][CAM6][CAM7][CAM8]  offset=4  ‹ › shown
+› click:        [CAM9][CAM10][  ][  ]     offset=8   ‹ shown
 ```
 
-#### 4.9.6 구현 파일
+#### 4.9.6 Implementation Files
 
-- `client/src/App.tsx` — `channelOffset` state, `‹`/`›` button 렌더링
-- `client/src/components/CameraGrid.tsx` — `startIndex` prop으로 오프셋 적용
+- `client/src/App.tsx` — `channelOffset` state, `‹`/`›` button rendering
+- `client/src/components/CameraGrid.tsx` — offset applied via `startIndex` prop
 
 ---
 
@@ -423,7 +423,7 @@ Double-clicking a camera cell renders the full-screen overlay (`FullscreenCamera
 │  │    CameraView (flex-1)          │  RIGHT PANEL (w-72)       ││
 │  │    (WebRTC video or JPEG img)   │  ┌────────────────────┐  ││
 │  │                                 │  │  Detection List     │  ││
-│  │  ┌──────────────────────┐       │  │  (객체 목록 + 속성) │  ││
+│  │  ┌──────────────────────┐       │  │  (object list + attributes) │  ││
 │  │  │  Canvas Overlay      │       │  ├────────────────────┤  ││
 │  │  │  (bbox, labels)      │       │  │  Cross-Camera       │  ││
 │  │  └──────────────────────┘       │  │  Re-ID feed        │  ││
@@ -491,15 +491,15 @@ Clicking the Settings icon (⚙) in the Top Bar renders `SettingsModal` as a Mod
 | Max height | `max-h-[88vh]` |
 | Background overlay | `bg-black/60` |
 | Overlay click | Close modal |
-| 폼 submit 방지 | `onSubmit={e => e.preventDefault()}` |
+| Prevent form submit | `onSubmit={e => e.preventDefault()}` |
 
 ### 7.4 Language Selection Section
 
 - Supported languages: 15 (ko, en, zh-CN, zh-TW, ja, es, fr, de, pt, ru, ar, hi, id, tr, vi)
-- **UI: `<select>` 드롭다운** (기존 버튼 목록 → 드롭다운으로 변경)
-- 각 옵션: `flag emoji + 언어명` (예: `🇰🇷 한국어`)
-- 선택 즉시 적용 (`onChange` → `setLang`)
-- 스타일: `bg-gray-700 border-gray-600`, 커스텀 chevron 아이콘 오버레이
+- **UI: `<select>` dropdown** (changed from previous button list → dropdown)
+- Each option: `flag emoji + language name` (e.g., `🇰🇷 Korean`)
+- Applied immediately on selection (`onChange` → `setLang`)
+- Style: `bg-gray-700 border-gray-600`, custom chevron icon overlay
 
 ```tsx
 <select value={lang} onChange={(e) => setLang(e.target.value as LangCode)}
@@ -610,7 +610,7 @@ Clicking the Settings icon (⚙) in the Top Bar renders `SettingsModal` as a Mod
 | `useCrossCameraStore` | `stores/crossCameraStore.ts` | `events[]` |
 | `useWebRTCConfigStore` | `stores/webrtcConfigStore.ts` | `enabled`, `stunUrls[]`, `turns[]` |
 
-> **Detections 탭**: `selectedId`(선택된 카메라)를 `useCameraStore`에서 구독 — 카메라 선택 시 해당 카메라의 DetectionPanel이 사이드바에 표시됩니다.
+> **Detections tab**: subscribes to `selectedId` (selected camera) from `useCameraStore` — when a camera is selected, that camera's DetectionPanel is displayed in the sidebar.
 
 ### 10.2 Socket.IO Events (Dashboard level)
 

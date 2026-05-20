@@ -344,7 +344,7 @@ class AbandonedItemTracker {
       { "type": "backpack", "color": "black", "confidence": 0.92 },
       { "type": "suitcase", "color": "gray", "confidence": 0.88 }
     ],
-    "description": "검정 배낭, 회색 캐리어"
+    "description": "black backpack, gray suitcase"
   },
   "timestamp": 1715678901234
 }

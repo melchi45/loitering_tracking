@@ -139,7 +139,7 @@ JPEG Buffer
 **File**: `server/src/services/fireSmokeService.js`
 
 ```javascript
-// 핵심 인터페이스
+// Core interface
 class FireSmokeService {
   async load()                         // Load model (graceful skip if file missing)
   get ready()                          // → boolean

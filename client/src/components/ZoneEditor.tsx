@@ -690,7 +690,7 @@ export default function ZoneEditor({
 
           {mode === 'idle' && (
             <>
-              {/* Saved Zones 목록 — 항상 상단에 표시 */}
+              {/* Saved Zones list — always shown at top */}
               {zones.length > 0 ? (
                 <div className="space-y-1">
                   <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wide mb-1">Saved Zones ({zones.length})</p>
@@ -718,7 +718,7 @@ export default function ZoneEditor({
                 </div>
               )}
 
-              {/* 선택된 zone 편집 폼 — 목록 바로 아래 */}
+              {/* Selected zone edit form — directly below list */}
               {selectedZone ? (
                 <div className="space-y-2.5 border-t border-gray-700 pt-2.5">
 

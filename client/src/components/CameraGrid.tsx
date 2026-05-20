@@ -166,7 +166,7 @@ function CameraCell({ camera, idx, compact, isSelected, onDoubleClick, onSelect 
       }`}
       onClick={() => onSelect(camera.id)}
       onDoubleClick={() => onDoubleClick(camera.id)}
-      title={`${camera.name} — 클릭: 선택 / 더블클릭: 전체화면`}
+      title={`${camera.name} — click: select / double-click: fullscreen`}
     >
       {/* YouTube badge */}
       {camera.type === 'youtube' && (
@@ -178,7 +178,7 @@ function CameraCell({ camera, idx, compact, isSelected, onDoubleClick, onSelect 
       {/* YouTube error overlay */}
       {camera.type === 'youtube' && camera.status === 'error' && (
         <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center z-20 gap-1">
-          <span className="text-red-400 text-[10px] font-bold">⚠ 오류</span>
+          <span className="text-red-400 text-[10px] font-bold">⚠ Error</span>
           {!compact && (
             <button
               onClick={async (e) => {
@@ -189,7 +189,7 @@ function CameraCell({ camera, idx, compact, isSelected, onDoubleClick, onSelect 
               }}
               className="px-2 py-0.5 text-[9px] rounded bg-red-700 hover:bg-red-600 text-white transition-colors"
             >
-              재시작
+              Restart
             </button>
           )}
         </div>

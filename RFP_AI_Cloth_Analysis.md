@@ -239,7 +239,7 @@ RTSP Frame (JPEG Buffer)
     │  → Prevent garment type flickering
     │
     ▼ Natural language description generation
-    │  { upper: 'hoodie', lower: 'jeans' } → "후드티, 청바지"
+    │  { upper: 'hoodie', lower: 'jeans' } → "hoodie, jeans"
     │
     ▼ Attach to tracked object and emit
 ```
@@ -249,13 +249,13 @@ RTSP Frame (JPEG Buffer)
 ```javascript
 const clothDescriptions = {
   upper: {
-    't-shirt': '티셔츠', 'shirt': '셔츠', 'hoodie': '후드티',
-    'sweater': '스웨터', 'jacket': '재킷', 'coat': '코트',
-    'vest': '조끼', 'uniform_top': '유니폼 상의',
+    't-shirt': 't-shirt', 'shirt': 'shirt', 'hoodie': 'hoodie',
+    'sweater': 'sweater', 'jacket': 'jacket', 'coat': 'coat',
+    'vest': 'vest', 'uniform_top': 'uniform top',
   },
   lower: {
-    'jeans': '청바지', 'trousers': '바지', 'shorts': '반바지',
-    'skirt': '치마', 'leggings': '레깅스', 'uniform_bottom': '유니폼 하의',
+    'jeans': 'jeans', 'trousers': 'trousers', 'shorts': 'shorts',
+    'skirt': 'skirt', 'leggings': 'leggings', 'uniform_bottom': 'uniform bottom',
   },
 };
 
@@ -266,7 +266,7 @@ function generateDescription(cloth, color) {
   if (color?.lowerBody?.primary) parts.push(colorKo[color.lowerBody.primary]);
   if (cloth.lowerGarment) parts.push(clothDescriptions.lower[cloth.lowerGarment.type]);
   return parts.join(' ');
-  // → "빨간 후드티, 파란 청바지"
+  // → "red hoodie, blue jeans"
 }
 ```
 
@@ -420,17 +420,17 @@ For sites requiring uniform compliance monitoring:
 #### Implementation Notes
 
 ```
-서비스 파일: server/src/services/colorClothService.js
-Phase-1:    colorClothService._colorReady = true (즉시 동작)
-            → 상체/하체 RGB 평균으로 color.upper, color.lower 제공
-Phase-2:    server/models/openpar.onnx 필요
+Service file: server/src/services/colorClothService.js
+Phase-1:    colorClothService._colorReady = true (works immediately)
+            → provides color.upper, color.lower via upper/lower body RGB average
+Phase-2:    server/models/openpar.onnx required
             → Input: [1, 3, 256, 128] person crop
             → Output: multi-label cloth type + color attributes
-            → colorClothService._runPAR() 구현 예정
+            → colorClothService._runPAR() implementation planned
 
-Zone targetClasses에 'cloth' 포함 시 자동 활성화
-출력: detection.cloth.upper (예: 'T-shirt') / detection.cloth.lower (예: 'jeans')
-     Phase-1에서는 null (PAR 모델 필요)
+Auto-activated when 'cloth' is included in Zone targetClasses
+Output: detection.cloth.upper (e.g., 'T-shirt') / detection.cloth.lower (e.g., 'jeans')
+     null in Phase-1 (PAR model required)
 ```
 
 ### Appendix D: Related RFP Documents

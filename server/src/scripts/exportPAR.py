@@ -50,7 +50,7 @@ except ImportError as e:
     print('  pip3 install torch torchvision onnx')
     sys.exit(1)
 
-# ── SSL 인증서 검증 우회 (사설망 / 자체 서명 인증서 환경) ─────────────────────
+# ── Bypass SSL certificate verification (private network / self-signed cert) ────────────────
 import ssl
 import urllib.request
 ssl._create_default_https_context = ssl._create_unverified_context

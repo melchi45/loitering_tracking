@@ -38,7 +38,7 @@ function LayoutPicker({ current, onChange }: { current: LayoutId; onChange: (id:
       <button
         onClick={() => setOpen((v) => !v)}
         className="flex items-center gap-1.5 px-2 py-1 rounded bg-gray-700 hover:bg-gray-600 text-gray-200 text-xs font-medium transition-colors"
-        title="레이아웃 선택"
+        title="Select layout"
       >
         <span className="text-gray-300"><LayoutIcon id={current} size={16} /></span>
         <span className="font-bold">{current}</span>
@@ -61,7 +61,7 @@ function LayoutPicker({ current, onChange }: { current: LayoutId; onChange: (id:
                     <button
                       key={id}
                       onClick={() => { onChange(id); setOpen(false); }}
-                      title={`${id} — ${def.channels}채널`}
+                      title={`${id} — ${def.channels} channels`}
                       className={`flex flex-col items-center gap-0.5 px-2 py-1.5 rounded transition-colors min-w-[44px] ${
                         isActive
                           ? 'bg-blue-600 text-white'
@@ -710,7 +710,7 @@ export default function App() {
                   <button
                     className="absolute left-3 top-1/2 -translate-y-1/2 z-20 bg-black/60 hover:bg-black/80 text-white w-8 h-14 flex items-center justify-center rounded-r-lg transition-colors shadow-lg"
                     onClick={() => setChannelOffset((o) => Math.max(0, o - pageSize))}
-                    title="이전 채널 페이지"
+                    title="Previous channel page"
                   >
                     <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
                       <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
@@ -722,7 +722,7 @@ export default function App() {
                   <button
                     className="absolute right-3 top-1/2 -translate-y-1/2 z-20 bg-black/60 hover:bg-black/80 text-white w-8 h-14 flex items-center justify-center rounded-l-lg transition-colors shadow-lg"
                     onClick={() => setChannelOffset((o) => Math.min(cameras.length - pageSize, o + pageSize))}
-                    title="다음 채널 페이지"
+                    title="Next channel page"
                   >
                     <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
                       <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />

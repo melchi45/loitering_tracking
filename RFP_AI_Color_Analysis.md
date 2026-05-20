@@ -305,7 +305,7 @@ function smoothColorHistory(history, newLabel, alpha = 0.3) {
   "appearance": {
     "upperBody": { "primary": "red", "pattern": "solid" },
     "lowerBody": { "primary": "blue", "pattern": "solid" },
-    "description": "빨간 상의, 파란 하의"
+    "description": "red top, blue bottom"
   },
   "timestamp": 1715678901234
 }
@@ -407,10 +407,10 @@ server/models/
 #### Phase-1: RGB Color Extraction (immediately usable, no model required)
 
 ```
-구현: colorClothService.js — avgColor() + rgbToColorName()
-방법: sharp로 상체/하체 ROI를 8×8로 축소 → RGB 평균 → 11색 분류
-정확도: 단순 heuristic (90%+ 일반 의류)
-지연:   < 2ms per person
+Implementation: colorClothService.js — avgColor() + rgbToColorName()
+Method: shrink upper/lower body ROI to 8×8 with sharp → RGB average → 11-color classification
+Accuracy: simple heuristic (90%+ for common clothing)
+Latency: < 2ms per person
 ```
 
 11-color classification table: `black, white, gray, red, orange, yellow, green, cyan, blue, purple, brown`
@@ -426,18 +426,18 @@ server/models/
 #### Implementation Notes
 
 ```
-서비스 파일: server/src/services/colorClothService.js
-Phase-1:    즉시 동작 (모델 불필요)
-Phase-2:    server/models/openpar.onnx 필요 (PyTorch → ONNX 변환 필요)
+Service file: server/src/services/colorClothService.js
+Phase-1:    works immediately (no model required)
+Phase-2:    server/models/openpar.onnx required (PyTorch → ONNX conversion needed)
 
-PyTorch → ONNX 변환:
+PyTorch → ONNX conversion:
   git clone https://github.com/Event-AHU/OpenPAR
-  # 학습 후:
+  # After training:
   torch.onnx.export(model, dummy_input_256x128, "openpar.onnx",
       input_names=["input"], output_names=["output"], opset_version=11)
 
-Zone targetClasses에 'color' 또는 'cloth' 포함 시 자동 활성화
-출력: detection.color.upper / detection.color.lower (색상명)
+Auto-activated when 'color' or 'cloth' is included in Zone targetClasses
+Output: detection.color.upper / detection.color.lower (color name)
 ```
 
 ### Appendix D: Related RFP Documents

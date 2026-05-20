@@ -249,11 +249,11 @@ export default function CameraList() {
         } else if (data.status === 'error') {
           stopYtPoll();
           setYtStarting(false);
-          setFormError('스트림 시작에 실패했습니다. 다시 시도해주세요.');
+          setFormError('Failed to start stream. Please try again.');
         } else if (ytElapsedRef.current >= 30) {
           stopYtPoll();
           setYtStarting(false);
-          setFormError('스트림 시작 시간이 초과되었습니다 (30s).');
+          setFormError('Stream start timed out (30s).');
         }
       } catch { /* network error — keep polling */ }
     }, 2000);
@@ -276,8 +276,8 @@ export default function CameraList() {
 
   const handleYtFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!ytForm.name.trim()) { setFormError('채널 이름을 입력해주세요.'); return; }
-    if (!ytForm.youtubeUrl.trim()) { setFormError('YouTube URL을 입력해주세요.'); return; }
+    if (!ytForm.name.trim()) { setFormError('Please enter a channel name.'); return; }
+    if (!ytForm.youtubeUrl.trim()) { setFormError('Please enter a YouTube URL.'); return; }
     setFormError('');
     setYtStarting(true);
     try {
@@ -296,10 +296,10 @@ export default function CameraList() {
       if (!res.ok) {
         setYtStarting(false);
         const msg =
-          result.code === 'INVALID_YOUTUBE_URL' ? '유효하지 않은 YouTube URL입니다.' :
-          result.code === 'YT_DLP_FAILED'       ? '영상을 가져올 수 없습니다. 비공개 또는 삭제된 영상일 수 있습니다.' :
-          result.code === 'MAX_STREAMS_REACHED'  ? 'YouTube 스트림 최대 개수에 도달했습니다.' :
-          result.code === 'STREAM_TIMEOUT'       ? '스트림 시작 시간이 초과되었습니다. 다시 시도하세요.' :
+          result.code === 'INVALID_YOUTUBE_URL' ? 'Invalid YouTube URL.' :
+          result.code === 'YT_DLP_FAILED'       ? 'Cannot retrieve video. It may be private or deleted.' :
+          result.code === 'MAX_STREAMS_REACHED'  ? 'Maximum number of YouTube streams reached.' :
+          result.code === 'STREAM_TIMEOUT'       ? 'Stream start timed out. Please try again.' :
           result.error || 'Unknown error';
         setFormError(msg);
         return;
@@ -774,16 +774,16 @@ export default function CameraList() {
               <div className="p-4">
                 {/* ToS warning */}
                 <div className="mb-3 text-[10px] text-yellow-500 bg-yellow-900/20 border border-yellow-700/40 rounded px-2 py-1.5">
-                  ⚠ YouTube 콘텐츠 스트리밍은 YouTube 이용 약관(Section 5.B)에 위반될 수 있습니다.
-                  자신의 채널 영상이나 적절한 라이선스가 있는 영상에만 사용하세요.
+                  ⚠ Streaming YouTube content may violate YouTube's Terms of Service (Section 5.B).
+                  Only use with your own channel videos or videos with appropriate licensing.
                 </div>
 
                 {ytStarting ? (
                   /* Loading state */
                   <div className="py-6 text-center space-y-3">
                     <div className="text-2xl animate-pulse">⏳</div>
-                    <p className="text-xs text-gray-300">YouTube URL 해석 중…</p>
-                    <p className="text-[11px] text-gray-500">경과: {ytElapsed}s / 30s</p>
+                    <p className="text-xs text-gray-300">Resolving YouTube URL…</p>
+                    <p className="text-[11px] text-gray-500">Elapsed: {ytElapsed}s / 30s</p>
                     <div className="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
                       <div
                         className="bg-red-500 h-1.5 rounded-full transition-all duration-1000"
@@ -802,18 +802,18 @@ export default function CameraList() {
                       }}
                       className="text-xs text-gray-400 hover:text-gray-200 underline"
                     >
-                      취소
+                      Cancel
                     </button>
                   </div>
                 ) : (
                   <form onSubmit={handleYtFormSubmit} className="space-y-3">
                     <div>
-                      <label className="block text-[11px] text-gray-400 mb-1">채널 이름 *</label>
+                      <label className="block text-[11px] text-gray-400 mb-1">Channel Name *</label>
                       <input
                         name="name"
                         value={ytForm.name}
                         onChange={handleYtFormChange}
-                        placeholder="군중 테스트 영상"
+                        placeholder="Crowd test video"
                         className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-red-500"
                       />
                     </div>
@@ -829,7 +829,7 @@ export default function CameraList() {
                     </div>
                     <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <label className="block text-[11px] text-gray-400 mb-1">해상도</label>
+                        <label className="block text-[11px] text-gray-400 mb-1">Resolution</label>
                         <select
                           name="resolution"
                           value={ytForm.resolution}
@@ -842,7 +842,7 @@ export default function CameraList() {
                         </select>
                       </div>
                       <div>
-                        <label className="block text-[11px] text-gray-400 mb-1">비트레이트 (kbps)</label>
+                        <label className="block text-[11px] text-gray-400 mb-1">Bitrate (kbps)</label>
                         <input
                           name="bitrate"
                           type="number"
@@ -863,7 +863,7 @@ export default function CameraList() {
                         onChange={(e) => setYtForm((prev) => ({ ...prev, repeatPlayback: e.target.checked }))}
                         className="w-3.5 h-3.5 rounded accent-red-500"
                       />
-                      <span>반복 재생 — 영상 종료 시 자동 재시작</span>
+                      <span>Repeat Playback — auto-restart when video ends</span>
                     </label>
                     {formError && <p className="text-xs text-red-400">{formError}</p>}
                     <div className="flex justify-end gap-2 pt-2">
@@ -872,13 +872,13 @@ export default function CameraList() {
                         onClick={closeAddModal}
                         className="px-3 py-1.5 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-200"
                       >
-                        취소
+                        Cancel
                       </button>
                       <button
                         type="submit"
                         className="px-3 py-1.5 text-xs rounded bg-red-700 hover:bg-red-600 text-white font-semibold"
                       >
-                        스트림 추가
+                        Add Stream
                       </button>
                     </div>
                   </form>

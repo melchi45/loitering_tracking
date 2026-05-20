@@ -49,7 +49,7 @@ This document defines the technical requirements for the **Alerts tab** panel an
 
 ```
 ┌──────────────────────────────────┐
-│  Alerts  [🔴 N]      [Clear All] │  ← 헤더
+│  Alerts  [🔴 N]      [Clear All] │  ← header
 ├──────────────────────────────────┤
 │  ┌──────────────────────────────┐│
 │  │ ⚠  CameraName      2m ago   ││  ← AlertRow (unacknowledged)
@@ -171,7 +171,7 @@ bg-gray-800 border-gray-700 opacity-60
 Displayed in the center of the panel when there are no alerts:
 
 ```
-         ✓ (체크 아이콘, 8×8 크기, 투명도 40%)
+         ✓ (check icon, 8×8 size, 40% opacity)
          
          "No alerts" (i18n: noAlerts)
 ```
@@ -209,9 +209,9 @@ interface Alert {
 ### 6.3 Socket.IO Real-time Reception
 
 ```
-이벤트: 'alert'
-페이로드: Alert 객체
-처리: AlertStore.addAlert(alert)
+Event: 'alert'
+Payload: Alert object
+Handler: AlertStore.addAlert(alert)
 ```
 
 ---
@@ -273,9 +273,9 @@ Polygons are drawn and edited directly on the Canvas layer over the camera's las
 │         Canvas layer (full)                               ├─────────────────────┤
 │                                                          │  [Select] [+ Add]   │
 │  ┌──────────────────────┐                               ├─────────────────────┤
-│  │  MONITOR 구역 (파랑)  │                               │  [선택 구역 속성]    │
-│  │  (반투명 채움)         │                               │  또는               │
-│  └──────────────────────┘                               │  [그리기 설정]       │
+│  │  MONITOR zone (blue)   │                               │  [Selected Zone Props] │
+│  │  (semi-transparent fill) │                             │  or                 │
+│  └──────────────────────┘                               │  [Drawing Settings] │
 │                                                          ├─────────────────────┤
 │  ┌──────────────────────┐                               │  Saved Zones list   │
 │  │  EXCLUDE zone (yellow) │                              └─────────────────────┘

@@ -21,9 +21,9 @@ a combined architecture is used.
 Existing structure:
 
 ```text
-위치 기반 추적
-→ 일정 시간 체류
-→ Loitering 판단
+Position-based tracking
+→ Dwell for a certain duration
+→ Loitering judgment
 ```
 
 Problems:
@@ -51,7 +51,7 @@ issues arise.
 Rather than simple position tracking:
 
 ```text
-위치 + 외형 + 행동 + 시간
+Position + Appearance + Behavior + Time
 ```
 
 are used together.
@@ -256,7 +256,7 @@ Maintain Tracking IDs stably.
 ## Existing Method
 
 ```text
-IOU 기반 매칭
+IOU-based matching
 ```
 
 ## Improved Method

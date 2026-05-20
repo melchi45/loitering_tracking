@@ -112,7 +112,7 @@ const GROUPS: AttrGroup[] = [
       { id: 'mask',  label: 'Mask',  labelKo: '마스크', model: 'yolov8m_ppe.onnx' },
       { id: 'color', label: 'Color', labelKo: '색상'   },
       { id: 'cloth', label: 'Cloth', labelKo: '의류',   model: 'openpar.onnx',
-        installHint: '모델 생성: python3 server/src/scripts/exportPAR.py' },
+        installHint: 'Generate model: python3 server/src/scripts/exportPAR.py' },
       { id: 'hat',   label: 'Hat',   labelKo: '헬멧/안전모', model: 'yolov8m_ppe.onnx' },
     ],
   },
@@ -320,22 +320,22 @@ export default function VideoAnalyticsTab() {
                 const isFailed   = st === 'failed';
 
                 const statusTag =
-                  st === 'pending'   ? 'Phase-2'   :
-                  st === 'missing'   ? '미설치'    :
-                  st === 'failed'    ? '로드실패'   :
-                  st === 'loaded'    ? '활성'       :
-                  st === 'available' ? '대기'       : '';
+                  st === 'pending'   ? 'Phase-2'      :
+                  st === 'missing'   ? 'Not Installed' :
+                  st === 'failed'    ? 'Load Failed'   :
+                  st === 'loaded'    ? 'Active'        :
+                  st === 'available' ? 'Standby'       : '';
 
                 const tooltipText = !available
                   ? st === 'pending'
-                    ? '구현 예정 기능 (Phase-2)'
+                    ? 'Planned feature (Phase-2)'
                     : st === 'failed'
-                    ? `모델 로드 실패 — 파일이 손상되었거나 메모리가 부족합니다\n경로: server/models/${item.model ?? ''}`
+                    ? `Model load failed — file may be corrupt or out of memory\nPath: server/models/${item.model ?? ''}`
                     : item.installHint
-                    ? `모델 파일 필요: ${item.model}\n${item.installHint}`
+                    ? `Model file required: ${item.model}\n${item.installHint}`
                     : item.model
-                    ? `모델 파일 필요: ${item.model}\n설치: cd server && npm run download-models`
-                    : '모델 미설치'
+                    ? `Model file required: ${item.model}\nInstall: cd server && npm run download-models`
+                    : 'Model not installed'
                   : isEnabled
                   ? 'Click to disable'
                   : 'Click to enable';
@@ -516,12 +516,12 @@ export default function VideoAnalyticsTab() {
         <p className="text-[9px] text-gray-600 leading-relaxed">{t.videoAnalyticsFooter}</p>
         {GROUPS.flatMap(g => g.items).some(i => capStatus[i.id] === 'missing') && (
           <p className="text-[9px] text-yellow-700 leading-relaxed">
-            미설치 모듈: <code className="text-yellow-600">cd server && npm run download-models</code>
+            Missing modules: <code className="text-yellow-600">cd server && npm run download-models</code>
           </p>
         )}
         {GROUPS.flatMap(g => g.items).some(i => capStatus[i.id] === 'failed') && (
           <p className="text-[9px] text-red-700 leading-relaxed">
-            로드 실패 모듈이 있습니다. 메모리 부족 또는 모델 파일 손상을 확인하세요.
+            Some modules failed to load. Check for insufficient memory or corrupt model files.
           </p>
         )}
       </div>

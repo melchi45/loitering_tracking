@@ -80,9 +80,9 @@ cd server && npm run restart
 # Stop: Ctrl+C  (when running in foreground)
 ```
 
-> **배경 실행(Background) 환경에서는** `npm stop` 또는 `fuser -k 3001/tcp` 를 사용합니다.
+> **In background execution environments**, use `npm stop` or `fuser -k 3001/tcp`.
 >
-> nodemon이 없는 환경에서는 아래 명령으로 서버를 백그라운드 실행합니다:
+> If nodemon is not available, run the server in the background with:
 > ```bash
 > cd server && nohup npm start > /tmp/server.log 2>&1 &
 > ```

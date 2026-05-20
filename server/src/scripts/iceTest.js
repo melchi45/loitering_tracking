@@ -1,11 +1,11 @@
 'use strict';
 
 /**
- * LTS ICE Candidate 자동화 테스트
+ * LTS ICE Candidate Automated Test
  *
- * Phase 1: 서버 사전 점검 (HTTP + STUN UDP)
- * Phase 2: 브라우저 자동화 — RTCPeerConnection 인터셉트 → ICE stats 수집
- * Phase 3: 리포트 출력
+ * Phase 1: Server pre-flight check (HTTP + STUN UDP)
+ * Phase 2: Browser automation — RTCPeerConnection intercept → ICE stats collection
+ * Phase 3: Report output
  *
  * Usage:
  *   node src/scripts/iceTest.js [SERVER_URL] [UI_URL] [--headless]
@@ -258,7 +258,7 @@ async function waitForICEConnected(page, maxMs) {
       if (st.conn === 'connected') { process.stdout.write('\n'); return true; }
       if (st.conn === 'failed' || st.conn === 'closed') {
         process.stdout.write('\n');
-        fail(`ICE 상태: ${st.conn} — 더 이상 복구 불가`);
+        fail(`ICE state: ${st.conn} — no longer recoverable`);
         return false;
       }
     }
@@ -306,7 +306,7 @@ function parseStats(statsObj) {
 
 // ── Phase 1: Server pre-flight ─────────────────────────────────────────────
 async function phase1() {
-  hdr('[Phase 1] 서버 사전 점검');
+  hdr('[Phase 1] Server Pre-flight Check');
 
   // Server reachability
   let cameras  = [];
@@ -320,16 +320,16 @@ async function phase1() {
     }
     cameras = data.data || [];
     const webrtcCams = cameras.filter((c) => c.webrtcEnabled);
-    ok(`카메라 ${cameras.length}개 (WebRTC 활성: ${webrtcCams.length}개)`);
+    ok(`${cameras.length} camera(s) found (WebRTC enabled: ${webrtcCams.length})`);
     for (const c of webrtcCams) {
       const running = c.pipelineStatus?.running;
       info(`  ${c.name} (${c.id.slice(0, 8)}) — ${running ? `${G}running${R}` : `${Y}stopped${R}`}`);
     }
     if (webrtcCams.length === 0) {
-      info('WebRTC 활성 카메라 없음 — 테스트용 임시 활성화를 시도합니다');
+      info('No WebRTC-enabled cameras — will attempt temporary activation for testing');
     }
   } catch (err) {
-    fail(`서버 응답 없음 (${err.message}) — 서버가 실행 중인지 확인하세요`);
+    fail(`Server not responding (${err.message}) — please check that the server is running`);
     info(`  cd server && npm run dev`);
     return { serverOk: false, cameras, iceConfig };
   }
@@ -339,7 +339,7 @@ async function phase1() {
     const { status, data } = await httpGet('/api/webrtc/ice-config');
     if (status === 200) {
       iceConfig = data;
-      ok(`STUN ${data.stunUrls?.length ?? 0}개  TURN ${data.turns?.length ?? 0}개`);
+      ok(`STUN ${data.stunUrls?.length ?? 0} server(s)  TURN ${data.turns?.length ?? 0} server(s)`);
       for (const u of (data.stunUrls || [])) info(`  STUN: ${u}`);
       for (const t of (data.turns    || [])) info(`  TURN: ${t.url}  user=${t.username}`);
     }
@@ -354,8 +354,8 @@ async function phase1() {
       if (!m || m[1].includes('google.com') || m[1].includes('stun.l.')) continue;
       const host = m[1], port = parseInt(m[2] || '3478');
       const alive = await stunPing(host, port);
-      if (alive) ok(`STUN UDP ping → ${host}:${port} 응답 있음`);
-      else        warn(`STUN UDP ping → ${host}:${port} 응답 없음`);
+      if (alive) ok(`STUN UDP ping → ${host}:${port} responded`);
+      else        warn(`STUN UDP ping → ${host}:${port} no response`);
     }
   }
 
@@ -364,41 +364,41 @@ async function phase1() {
   const webrtcCamsAfterStun = cameras.filter((c) => c.webrtcEnabled);
   if (webrtcCamsAfterStun.length === 0 && cameras.length > 0) {
     const target = cameras[0];
-    info(`WebRTC 활성 카메라 없음 — "${target.name}" 임시 활성화 중...`);
+    info(`No WebRTC-enabled cameras — temporarily enabling "${target.name}"...`);
     try {
       const { status, data } = await httpPut(`/api/cameras/${target.id}`, { webrtcEnabled: true });
       if (status === 200 && data.success) {
         autoEnabledId = target.id;
-        info('파이프라인 준비 대기 중 (최대 15초)...');
+        info('Waiting for pipeline to be ready (up to 15 seconds)...');
         const ready = await waitForPipeline(target.id, 15000);
-        if (ready) ok(`"${target.name}": WebRTC 파이프라인 준비 완료`);
-        else        warn(`"${target.name}": 파이프라인 시간 초과 — RTSP 스트림이 유효한지 확인 필요`);
+        if (ready) ok(`"${target.name}": WebRTC pipeline ready`);
+        else        warn(`"${target.name}": Pipeline timed out — please verify the RTSP stream is valid`);
       } else {
-        warn(`WebRTC 활성화 API 오류 (HTTP ${status})`);
+        warn(`WebRTC activation API error (HTTP ${status})`);
       }
     } catch (err) {
-      warn(`WebRTC 자동 활성화 실패: ${err.message}`);
+      warn(`WebRTC auto-activation failed: ${err.message}`);
     }
   }
 
   const serverOk = cameras.some((c) => c.webrtcEnabled && c.pipelineStatus?.running)
                 || autoEnabledId !== null;
   if (!serverOk) {
-    warn('WebRTC 파이프라인 실행 중인 카메라 없음 — 브라우저 테스트는 계속 진행합니다');
+    warn('No cameras with a running WebRTC pipeline — continuing with browser test anyway');
   }
   return { serverOk, cameras, iceConfig, autoEnabledId };
 }
 
 // ── Phase 2: Browser automation ────────────────────────────────────────────
 async function phase2(testCameraId, iceConfig) {
-  hdr('[Phase 2] 브라우저 자동화');
+  hdr('[Phase 2] Browser Automation');
 
   let playwright;
   try {
     playwright = require('playwright');
   } catch {
-    fail('playwright 미설치');
-    info('설치 명령: cd server && npm install --save-dev playwright');
+    fail('playwright is not installed');
+    info('Install command: cd server && npm install --save-dev playwright');
     return null;
   }
 
@@ -417,11 +417,11 @@ async function phase2(testCameraId, iceConfig) {
   // Prefer system Chrome to avoid Playwright downloading its own Chromium
   if (CHROME_PATH) {
     launchOpts.executablePath = CHROME_PATH;
-    info(`시스템 Chrome 사용: ${CHROME_PATH}`);
+    info(`Using system Chrome: ${CHROME_PATH}`);
   } else {
-    info('시스템 Chrome 없음 — Playwright 내장 Chromium 사용 (npx playwright install chromium)');
+    info('No system Chrome found — using Playwright bundled Chromium (npx playwright install chromium)');
   }
-  info(`Mode: ${HEADLESS ? 'headless' : '브라우저 창 표시 (headed)'}`);
+  info(`Mode: ${HEADLESS ? 'headless' : 'headed (browser window visible)'}`);
   info(`UI  : ${UI}`);
 
   const browser = await playwright.chromium.launch(launchOpts);
@@ -475,16 +475,16 @@ async function phase2(testCameraId, iceConfig) {
     }
   });
 
-  ok('Chromium 시작');
+  ok('Chromium launched');
   try {
     await page.goto(UI, { waitUntil: 'domcontentloaded', timeout: 15_000 });
   } catch (err) {
-    fail(`UI 로드 실패: ${err.message}`);
-    info(`  Web UI가 실행 중인지 확인: cd client && npm run dev`);
+    fail(`UI load failed: ${err.message}`);
+    info(`  Make sure the Web UI is running: cd client && npm run dev`);
     await browser.close();
     return null;
   }
-  ok(`페이지 로드 완료: ${UI}`);
+  ok(`Page loaded: ${UI}`);
 
   // ── Socket.IO trigger: tell the React app to start a WebRTC test connection ──
   // (Optional — IceTestTrigger uses mediasoup-client which may fail in headless Chrome.
@@ -494,9 +494,9 @@ async function phase2(testCameraId, iceConfig) {
     try {
       sio = await socketIOConnect(SERVER);
       sio.emit('webrtc:ice-test-start', { cameraId: testCameraId });
-      ok(`Socket.IO 트리거 전송 → webrtc:ice-test-start (camera ${testCameraId.slice(0, 8)}…)`);
+      ok(`Socket.IO trigger sent → webrtc:ice-test-start (camera ${testCameraId.slice(0, 8)}…)`);
     } catch (err) {
-      warn(`Socket.IO 연결 실패: ${err.message}`);
+      warn(`Socket.IO connection failed: ${err.message}`);
     }
   }
 
@@ -504,33 +504,33 @@ async function phase2(testCameraId, iceConfig) {
   // Creates two RTCPeerConnections inside the browser page and connects them via
   // local SDP exchange, using the server's STUN/TURN ICE servers.
   // This works reliably in headless Chrome without codec/mediasoup limitations.
-  info('Loopback ICE 테스트 주입 중…');
+  info('Injecting loopback ICE test…');
   try {
     await injectLoopbackICETest(page, iceConfig);
-    ok('RTCPeerConnection × 2 생성 (loopback SDP 교환 완료)');
+    ok('RTCPeerConnection × 2 created (loopback SDP exchange complete)');
   } catch (err) {
-    warn(`Loopback 주입 실패: ${err.message} — 기존 WebRTC 연결 감지로 대체`);
+    warn(`Loopback injection failed: ${err.message} — falling back to existing WebRTC connection detection`);
   }
 
   // ── Phase A: Verify RTCPeerConnection is present ──────────────────────────
   // Loopback PCs are injected synchronously, so we only need a short sanity check
-  info('RTCPeerConnection 생성 확인…');
+  info('Verifying RTCPeerConnection creation…');
   const pcFound = await waitForPCCreation(page, 3_000);
 
   if (!pcFound) {
-    fail('RTCPeerConnection이 생성되지 않음');
-    warn('  → Loopback 주입이 실패하고 IceTestTrigger도 동작하지 않음');
+    fail('RTCPeerConnection was not created');
+    warn('  → Loopback injection failed and IceTestTrigger also did not fire');
     const ssPath = '/tmp/lts-ice-test-fail.png';
     await page.screenshot({ path: ssPath }).catch(() => {});
-    info(`스크린샷 저장: ${ssPath}`);
+    info(`Screenshot saved: ${ssPath}`);
     if (sio) sio.close();
     await browser.close();
     return null;
   }
-  ok('RTCPeerConnection 생성 확인');
+  ok('RTCPeerConnection creation confirmed');
 
   // ── Phase B: Wait for ICE connected (adaptive — exit as soon as connected) ──
-  info(`ICE 연결 대기 중… (최대 ${ICE_CONNECT_MS / 1000}초, 연결되면 즉시 종료)`);
+  info(`Waiting for ICE connection… (max ${ICE_CONNECT_MS / 1000}s, exits immediately on success)`);
   const connected = await waitForICEConnected(page, ICE_CONNECT_MS);
 
   // Collect browser-side event log regardless of success
@@ -545,32 +545,32 @@ async function phase2(testCameraId, iceConfig) {
   ).catch(() => []);
 
   if (!connected) {
-    fail(`ICE 연결 실패 (${ICE_CONNECT_MS / 1000}초 초과)`);
+    fail(`ICE connection failed (${ICE_CONNECT_MS / 1000}s timeout exceeded)`);
     for (const s of pcStates) {
       info(`  ${s.id}: conn=${s.conn}  ice=${s.ice}  gather=${s.gather}`);
     }
     if (rtcEvents.length > 0) {
-      info('ICE 이벤트 로그:');
+      info('ICE event log:');
       for (const e of rtcEvents.slice(-15)) info(`  ${e}`);
     }
     const ssPath = '/tmp/lts-ice-test-fail.png';
     await page.screenshot({ path: ssPath }).catch(() => {});
-    info(`스크린샷 저장: ${ssPath}`);
+    info(`Screenshot saved: ${ssPath}`);
     if (sio) sio.close();
     await browser.close();
     return null;
   }
 
-  ok('ICE 연결 성공 (connectionState = connected)');
+  ok('ICE connection established (connectionState = connected)');
 
   // Print ICE event log
   if (rtcEvents.length > 0) {
-    info('ICE 이벤트 로그:');
+    info('ICE event log:');
     for (const e of rtcEvents) info(`  ${e}`);
   }
 
   // ── Poll getStats() ──
-  info(`getStats() ${POLL_COUNT}회 수집 중 (${POLL_INTERVAL / 1000}초 간격)…`);
+  info(`Collecting ${POLL_COUNT} getStats() snapshots (${POLL_INTERVAL / 1000}s interval)…`);
   const snapshots = [];
 
   for (let i = 0; i < POLL_COUNT; i++) {
@@ -593,7 +593,7 @@ async function phase2(testCameraId, iceConfig) {
   // Take a screenshot of the connected state
   const ssPath = '/tmp/lts-ice-test-ok.png';
   await page.screenshot({ path: ssPath, fullPage: false }).catch(() => {});
-  ok(`스크린샷 저장: ${ssPath}`);
+  ok(`Screenshot saved: ${ssPath}`);
 
   // Signal test completion so the React app cleans up the hidden WebRTC connection
   if (sio) {
@@ -602,7 +602,7 @@ async function phase2(testCameraId, iceConfig) {
   }
 
   await browser.close();
-  ok('브라우저 종료');
+  ok('Browser closed');
   return snapshots;
 }
 
@@ -610,7 +610,7 @@ async function phase2(testCameraId, iceConfig) {
 function phase3(snapshots) {
   if (!snapshots || snapshots.length === 0) return false;
 
-  hdr('[Phase 3] ICE Candidate 리포트');
+  hdr('[Phase 3] ICE Candidate Report');
 
   const first = snapshots[0];
   const last  = snapshots[snapshots.length - 1];
@@ -621,9 +621,9 @@ function phase3(snapshots) {
     t === 'host'   ? `${G}[host] ${R} ` : `[${t}]  `;
 
   const typeDesc = (t) =>
-    t === 'relay'  ? `${OR}TURN 릴레이${R} — 방화벽/인터넷 우회 경로` :
-    t === 'srflx'  ? `${Y}STUN mapped${R} — NAT 통과 (공인 IP 취득)` :
-    t === 'host'   ? `${G}LAN 직접${R}   — 최적 경로` : t;
+    t === 'relay'  ? `${OR}TURN relay${R}   — firewall/internet bypass path` :
+    t === 'srflx'  ? `${Y}STUN mapped${R}  — NAT traversal (public IP obtained)` :
+    t === 'host'   ? `${G}LAN direct${R}   — optimal path` : t;
 
   console.log(`\n  ${B}Local  candidate:${R} ${typeTag(last.localType)}${last.localProtocol.toUpperCase()}  ${last.localAddress}:${last.localPort}`);
   console.log(`    └ ${typeDesc(last.localType)}`);
@@ -638,14 +638,14 @@ function phase3(snapshots) {
   const dSec  = Math.max((last.timestamp - first.timestamp) / 1000, 0.001);
   const kbps  = ((dRx * 8) / dSec / 1000).toFixed(0);
 
-  console.log(`\n  ${B}트래픽:${R}`);
-  console.log(`    ↑ 송신 누적   : ${fmt(last.bytesSent)}`);
-  console.log(`    ↓ 수신 누적   : ${fmt(last.bytesReceived)}`);
-  console.log(`    ↓ 수신 속도   : ~${kbps} kbps  (${POLL_COUNT}회 × ${POLL_INTERVAL / 1000}s)`);
+  console.log(`\n  ${B}Traffic:${R}`);
+  console.log(`    ↑ Total sent    : ${fmt(last.bytesSent)}`);
+  console.log(`    ↓ Total received: ${fmt(last.bytesReceived)}`);
+  console.log(`    ↓ Receive rate  : ~${kbps} kbps  (${POLL_COUNT} samples × ${POLL_INTERVAL / 1000}s)`);
 
   // Snapshots trend
   if (snapshots.length > 1) {
-    console.log(`\n  ${B}수신 추이:${R}`);
+    console.log(`\n  ${B}Receive trend:${R}`);
     for (const s of snapshots) {
       const bar = '█'.repeat(Math.min(Math.floor(s.bytesReceived / 50000), 20));
       console.log(`    ${fmt(s.bytesReceived).padStart(10)}  ${bar}`);
@@ -658,18 +658,18 @@ function phase3(snapshots) {
   const isLoopback = last.localAddress === last.remoteAddress ||
     last.localAddress === '127.0.0.1' || last.localAddress === '::1';
   if (isLoopback) {
-    ok(`경로: Loopback 직접 (${last.localProtocol.toUpperCase()}) — STUN/TURN 설정 포함, RTCPeerConnection ✓`);
-    info('  loopback 테스트: 두 PeerConnection이 같은 브라우저 내에서 연결됨');
-    info('  STUN/TURN 서버 도달 여부는 Phase 1 UDP ping 결과로 확인하세요');
+    ok(`Path: Loopback direct (${last.localProtocol.toUpperCase()}) — STUN/TURN config included, RTCPeerConnection ✓`);
+    info('  Loopback test: two PeerConnections connected within the same browser');
+    info('  Check Phase 1 UDP ping results to confirm STUN/TURN server reachability');
   } else if (last.localType === 'host') {
-    ok(`경로: LAN 직접 (${last.localProtocol.toUpperCase()}) — 최적`);
+    ok(`Path: LAN direct (${last.localProtocol.toUpperCase()}) — optimal`);
   } else if (last.localType === 'srflx') {
-    warn(`경로: STUN NAT 통과 (${last.localProtocol.toUpperCase()}) — UDP 방화벽이 없으면 정상`);
-    info('  문제 발생 시: sudo ufw allow 40000:49999/udp');
+    warn(`Path: STUN NAT traversal (${last.localProtocol.toUpperCase()}) — normal if no UDP firewall`);
+    info('  If issues arise: sudo ufw allow 40000:49999/udp');
   } else if (last.localType === 'relay') {
-    warn(`경로: TURN 릴레이 — LAN 직접 연결(host)이 안 된 이유 확인 권장`);
-    info('  server/.env → SERVER_IP=<LAN IP> 설정 확인');
-    info('  /etc/turnserver.conf → allowed-peer-ip=<mediasoup LAN IP> 확인');
+    warn(`Path: TURN relay — recommend investigating why LAN direct (host) path is unavailable`);
+    info('  Check server/.env → SERVER_IP=<LAN IP>');
+    info('  Check /etc/turnserver.conf → allowed-peer-ip=<mediasoup LAN IP>');
   }
 
   // Loopback tests have static bytesReceived (ICE handshake only, no continuous stream).
@@ -680,16 +680,16 @@ function phase3(snapshots) {
 
 // ── Main ───────────────────────────────────────────────────────────────────
 async function main() {
-  console.log(`\n${B}=== LTS ICE Candidate 자동화 테스트 ===${R}`);
+  console.log(`\n${B}=== LTS ICE Candidate Automated Test ===${R}`);
   console.log(`  Server : ${C}${SERVER}${R}`);
   console.log(`  UI     : ${C}${UI}${R}`);
-  console.log(`  모드   : ${HEADLESS ? 'headless' : '브라우저 창 표시'}`);
+  console.log(`  Mode   : ${HEADLESS ? 'headless' : 'headed (browser window visible)'}`);
 
   const { autoEnabledId, cameras, iceConfig } = await phase1();
   // Identify the camera to use for the WebRTC test
   const webrtcCam  = (cameras || []).find((c) => c.webrtcEnabled && c.pipelineStatus?.running);
   const testCamId  = webrtcCam?.id ?? autoEnabledId ?? null;
-  if (testCamId) info(`WebRTC 테스트 대상 카메라: ${testCamId.slice(0, 8)}…`);
+  if (testCamId) info(`WebRTC test target camera: ${testCamId.slice(0, 8)}…`);
   const snapshots = await phase2(testCamId, iceConfig);
   const flowing   = phase3(snapshots);
 
@@ -697,20 +697,20 @@ async function main() {
   if (autoEnabledId) {
     try {
       await httpPut(`/api/cameras/${autoEnabledId}`, { webrtcEnabled: false });
-      info(`카메라 WebRTC 설정 원복: ${autoEnabledId.slice(0, 8)}...`);
+      info(`Camera WebRTC setting restored: ${autoEnabledId.slice(0, 8)}...`);
     } catch { /* ignore */ }
   }
 
-  hdr('=== 최종 결과 ===');
+  hdr('=== Final Result ===');
   if (flowing) {
-    console.log(`${G}${B}  PASS — ICE 연결 확인, 영상 데이터 흐름 정상${R}\n`);
+    console.log(`${G}${B}  PASS — ICE connection confirmed, video data flowing normally${R}\n`);
   } else if (snapshots && snapshots.length > 0) {
-    console.log(`${Y}${B}  WARN — ICE 연결됨, 데이터 흐름 미확인 (카메라 스트림 점검 필요)${R}\n`);
+    console.log(`${Y}${B}  WARN — ICE connected, data flow unconfirmed (please check the camera stream)${R}\n`);
     process.exitCode = 1;
   } else {
-    console.log(`${RE}${B}  FAIL — ICE 연결 불가 (위 로그 확인)${R}\n`);
-    info('  /tmp/lts-ice-test-fail.png — 실패 시 스크린샷');
-    info('  cd server && npm run health — 서버 상태 전체 점검');
+    console.log(`${RE}${B}  FAIL — ICE connection unavailable (check the logs above)${R}\n`);
+    info('  /tmp/lts-ice-test-fail.png — failure screenshot');
+    info('  cd server && npm run health — full server health check');
     process.exitCode = 1;
   }
 }

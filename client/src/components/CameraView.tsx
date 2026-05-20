@@ -378,19 +378,19 @@ export default function CameraView({ cameraId, cameraName }: Props) {
               </div>
               {webrtcState === 'failed' ? (
                 <>
-                  <span className="text-xs text-red-400 font-semibold">WebRTC 연결 실패</span>
+                  <span className="text-xs text-red-400 font-semibold">WebRTC connection failed</span>
                   <span className="text-[10px] text-gray-500 text-center px-4">
-                    서버에서 SERVER_IP 환경변수를 확인하세요<br/>(server/.env → SERVER_IP=서버IP)
+                    Check SERVER_IP env var on the server<br/>(server/.env → SERVER_IP=&lt;server-ip&gt;)
                   </span>
                   <button
                     onClick={retryWebRTC}
                     className="mt-1 px-3 py-1 text-[11px] rounded bg-blue-700 hover:bg-blue-600 text-white transition-colors"
                   >
-                    재연결
+                    Reconnect
                   </button>
                 </>
               ) : (
-                <span className="text-xs text-gray-500">WebRTC 연결 중…</span>
+                <span className="text-xs text-gray-500">WebRTC connecting…</span>
               )}
             </div>
           )}
@@ -420,7 +420,7 @@ export default function CameraView({ cameraId, cameraName }: Props) {
             {webrtcState === 'connected' && (
               <button
                 onClick={() => setShowIcePanel((v) => !v)}
-                title="ICE candidate 정보"
+                title="ICE candidate info"
                 className={`rounded px-1.5 py-0.5 text-[9px] font-bold transition-colors ${
                   showIcePanel
                     ? 'bg-cyan-600/80 text-white'
@@ -466,7 +466,7 @@ export default function CameraView({ cameraId, cameraName }: Props) {
                   </>
                 );
               })() : (
-                <span className="text-gray-500">stats 수집 중…</span>
+                <span className="text-gray-500">Collecting stats…</span>
               )}
             </div>
           )}

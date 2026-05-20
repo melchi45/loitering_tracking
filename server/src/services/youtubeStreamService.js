@@ -33,15 +33,15 @@ const MAX_RESTARTS    = parseInt(process.env.YOUTUBE_MAX_RESTARTS || '5', 10);
 const RESTART_DELAY   = parseInt(process.env.YOUTUBE_RESTART_DELAY_MS || '5000', 10);
 const START_TIMEOUT   = parseInt(process.env.YOUTUBE_START_TIMEOUT_MS || '30000', 10);
 const FFMPEG_BIN      = process.env.FFMPEG_BIN  || 'ffmpeg';
-// SSL 인증서 검증 우회 (회사 네트워크 자체 서명 인증서 환경)
+// Bypass SSL certificate verification (corporate networks with self-signed certs)
 const YTDLP_NO_CHECK_CERT = process.env.YTDLP_NO_CHECK_CERT !== 'false';
 
-// yt-dlp 바이너리 경로 — 환경변수 > known paths > PATH 순서로 탐지
+// yt-dlp binary path — detected in order: env var > known paths > PATH
 const { execFileSync } = require('child_process');
 const os = require('os');
 const path = require('path');
 
-// yt-dlp JS 런타임용 실제 node 바이너리 탐지 (symlink/wrapper 제외)
+// Detect real node binary for yt-dlp JS runtime (excluding symlinks/wrappers)
 function findNodeBin() {
   if (process.env.YTDLP_NODE_BIN) return process.env.YTDLP_NODE_BIN;
   const candidates = [

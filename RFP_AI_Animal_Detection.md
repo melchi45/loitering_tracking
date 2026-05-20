@@ -94,16 +94,16 @@ The ByteTracker and behavior analysis modules treat animal tracks identically to
 
 | COCO ID | Class | Korean | Detection Text Color |
 |---------|-------|--------|---------------------|
-| 14 | bird | 새 | `text-pink-200` |
-| 15 | cat | 고양이 | `text-rose-300` |
-| 16 | dog | 개 | `text-rose-400` |
-| 17 | horse | 말 | `text-orange-800` |
-| 18 | sheep | 양 | `text-gray-100` |
-| 19 | cow | 소 | `text-amber-900` |
-| 20 | elephant | 코끼리 | `text-gray-500` |
-| 21 | bear | 곰 | `text-amber-800` |
-| 22 | zebra | 얼룩말 | `text-gray-100` |
-| 23 | giraffe | 기린 | `text-amber-600` |
+| 14 | bird | Bird | `text-pink-200` |
+| 15 | cat | Cat | `text-rose-300` |
+| 16 | dog | Dog | `text-rose-400` |
+| 17 | horse | Horse | `text-orange-800` |
+| 18 | sheep | Sheep | `text-gray-100` |
+| 19 | cow | Cow | `text-amber-900` |
+| 20 | elephant | Elephant | `text-gray-500` |
+| 21 | bear | Bear | `text-amber-800` |
+| 22 | zebra | Zebra | `text-gray-100` |
+| 23 | giraffe | Giraffe | `text-amber-600` |
 
 ### 4.2 Out-of-Scope (Phase-1)
 

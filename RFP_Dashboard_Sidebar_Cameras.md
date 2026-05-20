@@ -113,7 +113,7 @@ This document defines the technical requirements for the **Cameras tab** panel o
 
 Blue animated dot displayed to the left of the Found tab label while scanning.
 ```
-탭 내 절대 위치: left-2 top-1/2 -translate-y-1/2
+Absolute position within tab: left-2 top-1/2 -translate-y-1/2
 CSS: w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping
 ```
 
