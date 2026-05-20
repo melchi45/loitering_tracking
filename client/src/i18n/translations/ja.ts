@@ -12,6 +12,7 @@ export const ja: Translations = {
   tabAlerts: 'アラート',
   tabZones: 'ゾーン',
   tabVideoAnalytics: '分析',
+  tabDetections: '検知',
   videoAnalyticsHint: '各AIモジュールをすべてのカメラでグローバルに有効/無効にします。',
   videoAnalyticsFooter: '無効なモジュールは直ちに処理を停止します。変更は次のフレームから有効になります。',
 
@@ -77,6 +78,19 @@ export const ja: Translations = {
   settingsTitle: '設定',
   settingsLanguage: '言語',
   settingsClose: '閉じる',
+
+  settingsWebRTC: 'WebRTC',
+  settingsWebRTCEnabled: 'WebRTCを有効化',
+  settingsStunServers: 'STUNサーバー',
+  settingsStunAdd: '+ 追加',
+  settingsStunPlaceholder: 'stun:stun.l.google.com:19302',
+  settingsTurnServer: 'TURNサーバー',
+  settingsTurnUrlPlaceholder: 'turn:サーバー:3478',
+  settingsTurnUsername: 'ユーザー名',
+  settingsTurnAdd: '+ 追加',
+  settingsTurnCredential: '認証情報',
+  settingsWebRTCApply: '適用',
+  settingsWebRTCSaved: '保存済み ✓',
 
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: '持ち物 / スポーツ用品',

@@ -95,7 +95,11 @@ function buildRouters(db, alertService) {
       }
       if (cameraId) alerts = alerts.filter(a => a.cameraId === cameraId);
 
-      alerts.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+      alerts.sort((a, b) => {
+        const ta = typeof a.timestamp === 'string' ? new Date(a.timestamp).getTime() : (a.timestamp || 0);
+        const tb = typeof b.timestamp === 'string' ? new Date(b.timestamp).getTime() : (b.timestamp || 0);
+        return tb - ta;
+      });
       alerts = alerts.slice(0, lim);
 
       res.json({ success: true, data: alerts, count: alerts.length });

@@ -22,7 +22,7 @@ interface DetectionsEvent {
 
 // Module-level ref counter so two components subscribing to the same cameraId
 // (e.g. grid cell + fullscreen modal) don't unsubscribe until both unmount.
-const subscriptionCounts = new Map<string, number>();
+export const subscriptionCounts = new Map<string, number>();
 
 export function useCamera(cameraId: string) {
   const { socket } = useSocket();

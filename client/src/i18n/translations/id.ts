@@ -12,6 +12,7 @@ export const id: Translations = {
   tabAlerts: 'Peringatan',
   tabZones: 'Zona',
   tabVideoAnalytics: 'Analitik',
+  tabDetections: 'Deteksi',
   videoAnalyticsHint: 'Aktifkan atau nonaktifkan setiap modul AI secara global untuk semua kamera.',
   videoAnalyticsFooter: 'Modul yang dinonaktifkan segera berhenti memproses. Perubahan berlaku pada frame berikutnya.',
 
@@ -77,6 +78,19 @@ export const id: Translations = {
   settingsTitle: 'Pengaturan',
   settingsLanguage: 'Bahasa',
   settingsClose: 'Tutup',
+
+  settingsWebRTC: 'WebRTC',
+  settingsWebRTCEnabled: 'Aktifkan WebRTC',
+  settingsStunServers: 'Server STUN',
+  settingsStunAdd: '+ Tambah',
+  settingsStunPlaceholder: 'stun:stun.l.google.com:19302',
+  settingsTurnServer: 'Server TURN',
+  settingsTurnUrlPlaceholder: 'turn:server:3478',
+  settingsTurnUsername: 'Nama Pengguna',
+  settingsTurnAdd: '+ Tambah',
+  settingsTurnCredential: 'Kredensial',
+  settingsWebRTCApply: 'Terapkan',
+  settingsWebRTCSaved: 'Tersimpan ✓',
 
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: 'Aksesori / Olahraga',

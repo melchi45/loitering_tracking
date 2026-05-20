@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { Volume2, VolumeX } from 'lucide-react';
 import { useCamera } from '../hooks/useCamera';
+import { useWebRTC } from '../hooks/useWebRTC';
 import { useCameraStore } from '../stores/cameraStore';
 import { useI18n } from '../i18n';
 import ZoneEditor from './ZoneEditor';
@@ -161,7 +163,6 @@ function drawOverlay(
         case 'donut':     return 'rgba(244,114,182,0.9)';  // pink-400
         case 'cake':      return 'rgba(251,207,232,0.9)';  // pink-200
         // Home Appliances — cool neutral tones
-        case 'bed':          return 'rgba(99,102,241,0.9)';   // indigo-500
         case 'toilet':       return 'rgba(226,232,240,0.9)';  // slate-200
         case 'sink':         return 'rgba(148,163,184,0.9)';  // slate-400
         case 'microwave':    return 'rgba(71,85,105,0.9)';    // slate-600
@@ -198,9 +199,11 @@ function drawOverlay(
     ctx.strokeRect(x, y, w, h);
     ctx.setLineDash([]);
 
-    // Label: "face [F3]  87%" or "person #7  94%"
+    // Label: "face [F3]  87%" or "person #3f8c7a  94%"
+    // Show first 6 chars of UUID so the label fits inside the bbox header.
     const clsLabel = (className || 'obj').slice(0, 10);
-    const faceTag  = className === 'face' && det.faceId ? ` [${det.faceId}]` : ` #${objectId}`;
+    const shortId  = typeof objectId === 'string' ? objectId.slice(0, 6) : String(objectId);
+    const faceTag  = className === 'face' && det.faceId ? ` [${det.faceId}]` : ` #${shortId}`;
     const label = `${clsLabel}${faceTag}  ${(confidence * 100).toFixed(0)}%`;
     ctx.font = 'bold 12px monospace';
     const textW = ctx.measureText(label).width + 8;
@@ -254,26 +257,61 @@ function drawOverlay(
       }
     }
 
-    // ── Color info — inside bbox, bottom-left ────────────────────────────
+    // ── Attribute lines stacked below bbox (color, then cloth) ──────────
+    ctx.font = 'bold 10px monospace';
+    let belowY = y + h;
+
     if (det.color) {
       const txt = `↑${det.color.upper} ↓${det.color.lower}`;
-      ctx.font = '9px monospace';
-      const tw2 = ctx.measureText(txt).width + 6;
+      const tw2 = ctx.measureText(txt).width + 8;
       ctx.fillStyle = 'rgba(0,0,0,0.72)';
-      ctx.fillRect(x, y + h - 15, tw2, 13);
+      ctx.fillRect(x, belowY, tw2, 16);
       ctx.fillStyle = '#d1d5db';
-      ctx.fillText(txt, x + 3, y + h - 5);
+      ctx.fillText(txt, x + 4, belowY + 11);
+      belowY += 16;
+    }
+
+    if (det.cloth) {
+      const cu = det.cloth.upper  !== 'unknown' ? det.cloth.upper  : null;
+      const cl = det.cloth.lower  !== 'unknown' ? det.cloth.lower  : null;
+      const cs = det.cloth.sleeve !== 'unknown' ? det.cloth.sleeve : null;
+      if (cu || cl) {
+        const parts = [cu && `↑${cu}`, cl && `↓${cl}`].filter(Boolean) as string[];
+        const txt = `cloth ${parts.join(' ')}${cs ? ` [${cs}]` : ''}`;
+        const tw3 = ctx.measureText(txt).width + 8;
+        ctx.fillStyle = 'rgba(0,0,0,0.72)';
+        ctx.fillRect(x, belowY, tw3, 16);
+        ctx.fillStyle = '#a78bfa'; // violet-400 — distinct from gray color text
+        ctx.fillText(txt, x + 4, belowY + 11);
+      }
     }
 
   }
 }
 
 export default function CameraView({ cameraId, cameraName }: Props) {
+  const cameras        = useCameraStore((s) => s.cameras);
+  const camera         = cameras.find((c) => c.id === cameraId);
+  // Per-camera webrtcEnabled flag alone gates WebRTC mode.
+  // STUN/TURN settings come from useWebRTC hook via webrtcConfigStore.
+  const useWebRTCMode  = !!camera?.webrtcEnabled;
+
+  // JPEG path (always active for AI detections; frame only used when not WebRTC)
   const { frame, detections, frameWidth, frameHeight } = useCamera(cameraId);
+  // WebRTC path (active only when webrtcEnabled + global WebRTC enabled)
+  const { videoRef, state: webrtcState, hasAudio, retry: retryWebRTC, iceStats } = useWebRTC(cameraId, useWebRTCMode);
+
   const imgRef    = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const cameras   = useCameraStore((s) => s.cameras);
-  const camera    = cameras.find((c) => c.id === cameraId);
+
+  const [isMuted,      setIsMuted]      = useState(true);
+  const [showIcePanel, setShowIcePanel] = useState(false);
+
+  // React's `muted` prop only sets defaultMuted — cannot be toggled via props.
+  // Control the live `muted` DOM property directly whenever isMuted or connection state changes.
+  useEffect(() => {
+    if (videoRef.current) videoRef.current.muted = isMuted;
+  }, [isMuted, videoRef, webrtcState]);
   const status    = camera?.status ?? 'idle';
   const { t }     = useI18n();
 
@@ -292,16 +330,17 @@ export default function CameraView({ cameraId, cameraName }: Props) {
 
   useEffect(() => { loadZones(); }, [loadZones]);
 
-  // Redraw overlay whenever detections, zones, or frame changes
+  // Redraw overlay whenever detections, zones change.
+  // For WebRTC mode, trigger on every detection update (no frame dependency needed).
+  const hasVideo = useWebRTCMode ? webrtcState === 'connected' : !!frame;
   useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas || !frame) return;
-    // Use rAF so layout is settled and clientWidth/Height are non-zero
+    if (!canvas || !hasVideo) return;
     const raf = requestAnimationFrame(() => {
       drawOverlay(canvas, detections, zones, frameWidth, frameHeight);
     });
     return () => cancelAnimationFrame(raf);
-  }, [detections, zones, frame, frameWidth, frameHeight]);
+  }, [detections, zones, hasVideo, frameWidth, frameHeight]);
 
   const statusColor =
     status === 'live' || status === 'streaming' ? 'bg-green-500' :
@@ -317,7 +356,123 @@ export default function CameraView({ cameraId, cameraName }: Props) {
 
   return (
     <div className="relative w-full h-full bg-gray-900 overflow-hidden rounded-lg">
-      {frame ? (
+      {useWebRTCMode ? (
+        /* ── WebRTC path: native <video> element ── */
+        <>
+          <video
+            ref={videoRef}
+            autoPlay
+            muted
+            playsInline
+            className="w-full h-full object-contain"
+            style={{ display: webrtcState === 'connected' ? 'block' : 'none' }}
+          />
+          {webrtcState !== 'connected' && (
+            <div className="flex flex-col items-center justify-center w-full h-full min-h-[120px] gap-2">
+              <div className={`w-10 h-10 rounded-full bg-gray-700 flex items-center justify-center ${webrtcState === 'connecting' ? 'animate-pulse' : ''}`}>
+                <svg xmlns="http://www.w3.org/2000/svg" className={`w-5 h-5 ${webrtcState === 'failed' ? 'text-red-400' : 'text-blue-400'}`}
+                  fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+                    d="M8.111 16.404a5.5 5.5 0 017.778 0M12 20h.01m-7.08-7.071c3.904-3.905 10.236-3.905 14.141 0M1.394 9.393c5.857-5.857 15.355-5.857 21.213 0" />
+                </svg>
+              </div>
+              {webrtcState === 'failed' ? (
+                <>
+                  <span className="text-xs text-red-400 font-semibold">WebRTC 연결 실패</span>
+                  <span className="text-[10px] text-gray-500 text-center px-4">
+                    서버에서 SERVER_IP 환경변수를 확인하세요<br/>(server/.env → SERVER_IP=서버IP)
+                  </span>
+                  <button
+                    onClick={retryWebRTC}
+                    className="mt-1 px-3 py-1 text-[11px] rounded bg-blue-700 hover:bg-blue-600 text-white transition-colors"
+                  >
+                    재연결
+                  </button>
+                </>
+              ) : (
+                <span className="text-xs text-gray-500">WebRTC 연결 중…</span>
+              )}
+            </div>
+          )}
+          {webrtcState === 'connected' && (
+            <canvas
+              ref={canvasRef}
+              className="absolute top-0 left-0 w-full h-full pointer-events-none"
+            />
+          )}
+          {/* Audio mute/unmute button — only when connected and audio track exists */}
+          {webrtcState === 'connected' && hasAudio && (
+            <button
+              onClick={() => setIsMuted((m) => !m)}
+              title={isMuted ? 'Unmute audio' : 'Mute audio'}
+              className="absolute bottom-2 left-2 z-10 flex items-center justify-center w-7 h-7 rounded-full bg-black/50 hover:bg-black/75 text-white transition-colors"
+            >
+              {isMuted
+                ? <VolumeX className="w-4 h-4" />
+                : <Volume2 className="w-4 h-4 text-blue-300" />}
+            </button>
+          )}
+          {/* WebRTC badge + ICE toggle */}
+          <div className="absolute top-2 right-12 flex items-center gap-1">
+            <div className="bg-blue-900/70 rounded px-1.5 py-0.5 text-[9px] font-bold text-blue-300">
+              WebRTC
+            </div>
+            {webrtcState === 'connected' && (
+              <button
+                onClick={() => setShowIcePanel((v) => !v)}
+                title="ICE candidate 정보"
+                className={`rounded px-1.5 py-0.5 text-[9px] font-bold transition-colors ${
+                  showIcePanel
+                    ? 'bg-cyan-600/80 text-white'
+                    : 'bg-gray-700/70 text-gray-400 hover:text-cyan-300'
+                }`}
+              >
+                ICE
+              </button>
+            )}
+          </div>
+
+          {/* ICE debug panel */}
+          {showIcePanel && webrtcState === 'connected' && (
+            <div className="absolute top-9 right-2 bg-black/85 rounded-lg p-2 text-[10px] font-mono text-gray-200 z-20 min-w-[200px] leading-5 border border-gray-700/60">
+              {iceStats ? (() => {
+                const typeColor = (t: string) =>
+                  t === 'relay'  ? 'text-orange-400' :
+                  t === 'srflx'  ? 'text-yellow-400' : 'text-green-400';
+                const typeLabel = (t: string) =>
+                  t === 'relay'  ? 'TURN relay' :
+                  t === 'srflx'  ? 'STUN mapped' :
+                  t === 'host'   ? 'host (LAN)' : t;
+                const fmtBytes = (b: number) =>
+                  b >= 1_048_576 ? `${(b / 1_048_576).toFixed(1)} MB` :
+                  b >= 1024      ? `${(b / 1024).toFixed(1)} KB` : `${b} B`;
+                return (
+                  <>
+                    <div className="text-gray-500 mb-0.5">─ local</div>
+                    <div>
+                      <span className={typeColor(iceStats.localType)}>[{iceStats.localType}]</span>
+                      {' '}{iceStats.localProtocol.toUpperCase()}{' '}
+                      {iceStats.localAddress}:{iceStats.localPort}
+                    </div>
+                    <div className="text-gray-500 text-[9px]">{typeLabel(iceStats.localType)}</div>
+                    <div className="text-gray-500 mt-0.5 mb-0.5">─ remote</div>
+                    <div>
+                      <span className={typeColor(iceStats.remoteType)}>[{iceStats.remoteType}]</span>
+                      {' '}{iceStats.remoteAddress}:{iceStats.remotePort}
+                    </div>
+                    <div className="text-gray-500 text-[9px] mt-0.5 border-t border-gray-700/60 pt-0.5">
+                      ↑ {fmtBytes(iceStats.bytesSent)} &nbsp; ↓ {fmtBytes(iceStats.bytesReceived)}
+                    </div>
+                  </>
+                );
+              })() : (
+                <span className="text-gray-500">stats 수집 중…</span>
+              )}
+            </div>
+          )}
+        </>
+      ) : frame ? (
+        /* ── JPEG path: existing <img> element ── */
         <>
           <img
             ref={imgRef}

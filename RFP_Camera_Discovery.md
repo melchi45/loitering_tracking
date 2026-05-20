@@ -67,25 +67,40 @@ Discovery Packet (hex, 160 bytes):
 ...
 ```
 
-#### 2.1.3 Response Fields
+#### 2.1.3 Response Packet Format
 
-Each camera response contains the following binary-encoded fields:
+Each camera response contains the following binary-encoded fields. Fields marked *(if len ≥ 261)* are only present in extended-format responses.
 
-| Field | Description |
-|---|---|
-| `chIP` | Camera IPv4 address |
-| `chMac` | Camera MAC address (used as unique ID) |
-| `chGateway` | Default gateway |
-| `chSubnetMask` | Subnet mask |
-| `chDeviceName` | Model name (legacy) |
-| `chDeviceNameNew` | Model name (current) |
-| `nPort` | RTSP/device port |
-| `nHttpPort` | HTTP port (default 80) |
-| `nHttpsPort` | HTTPS port (default 443) |
-| `httpType` | HTTPS-only flag |
-| `isSupportSunapi` | SUNAPI (Samsung Unified Network API) support |
-| `DDNSURL` | DDNS URL (if configured) |
-| `rtspUrl` | Direct RTSP stream URL |
+| Field | Size (bytes) | Type | Description |
+|---|---|---|---|
+| `nMode` | 1 | uint8 | Packet mode |
+| `chPacketId` | 18 | bytes | Packet identifier |
+| `chMac` | 18 | string | MAC address |
+| `chIP` | 16 | string | IP address |
+| `chSubnetMask` | 16 | string | Subnet mask |
+| `chGateway` | 16 | string | Default gateway |
+| `chPassword` | 20 | string | Password |
+| `isSupportSunapi` | 1 | uint8 | SUNAPI support flag |
+| `nPort` | 2 | uint16 BE | Device port |
+| `nStatus` | 1 | uint8 | Device status |
+| `chDeviceName` | 10 | string | Device name (short, legacy) |
+| `Reserved2` | 1 | bytes | Reserved |
+| `nHttpPort` | 2 | uint16 BE | HTTP port |
+| `nDevicePort` | 2 | uint16 BE | Device port |
+| `nTcpPort` | 2 | uint16 BE | TCP port |
+| `nUdpPort` | 2 | uint16 BE | UDP port |
+| `nUploadPort` | 2 | uint16 BE | Upload port |
+| `nMulticastPort` | 2 | uint16 BE | Multicast port |
+| `nNetworkMode` | 1 | uint8 | Network mode |
+| `DDNSURL` | 128 | string | DDNS URL |
+| `alias` | 32 | string | Camera alias *(if len ≥ 261)* |
+| `chDeviceNameNew` | 32 | string | Device name (current) *(if len ≥ 261)* |
+| `modelType` | 1 | uint8 | Model type *(if len ≥ 261)* |
+| `version` | 2 | uint16 | Firmware version *(if len ≥ 261)* |
+| `httpType` | 1 | uint8 | 0=HTTP, 1=HTTPS *(if len ≥ 261)* |
+| `Reserved3` | 1 | bytes | Reserved *(if len ≥ 261)* |
+| `nHttpsPort` | 2 | uint16 BE | HTTPS port *(if len ≥ 261)* |
+| `noPassword` | 1 | uint8 | No-password flag *(if len ≥ 261)* |
 
 #### 2.1.4 Current Implementation
 
@@ -94,6 +109,30 @@ Each camera response contains the following binary-encoded fields:
 - **Mode**: Continuous background scanning (8s scan + 2s pause, repeating)
 - **Deduplication**: MAC address based, persists across scan cycles
 - **Real-time push**: Socket.IO `discovery:result` event per new/updated device
+
+**Submodule structure** (branch: `nodejs-udp-discovery`):
+
+```
+submodules/WiseNetChromeIPInstaller/
+└── nodejs/
+    ├── udpDiscovery.js     # Core discovery module (dgram port)
+    ├── utils.js            # ntohs/ntohl/bytes2int helpers
+    └── index.js            # Example usage / CLI
+```
+
+**Usage example:**
+
+```javascript
+const { UDPDiscovery } = require('./submodules/WiseNetChromeIPInstaller/nodejs');
+
+const discovery = new UDPDiscovery();
+discovery.on('device', (camera) => {
+  console.log(`Found: ${camera.chDeviceName} @ ${camera.chIP}:${camera.nHttpPort}`);
+  // { chIP, chMac, chDeviceName, nHttpPort, nHttpsPort, httpType, modelType, ... }
+});
+discovery.start();   // broadcasts and listens
+setTimeout(() => discovery.stop(), 5000);
+```
 
 ---
 

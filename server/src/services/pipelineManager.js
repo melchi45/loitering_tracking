@@ -37,6 +37,8 @@ function _pointInPolygon(pt, poly) {
 }
 
 const RTSPCapture      = require('./rtspCapture');
+const RtpIngestion     = require('./rtpIngestion');
+const webrtcGateway    = require('./webrtcGateway');
 const DetectionService = require('./detection');
 const { ByteTracker }  = require('./tracking');
 const BehaviorEngine   = require('./behaviorEngine');
@@ -55,6 +57,18 @@ function _cosineSim(a, b) {
   return dot;
 }
 
+// Returns true when two bboxes are within `tol` pixels on all four coordinates.
+// Used to match a detected face bbox back to an enriched person's face.bbox.
+function _bboxClose(a, b, tol = 3) {
+  if (!a || !b) return false;
+  return (
+    Math.abs(a.x      - b.x)      <= tol &&
+    Math.abs(a.y      - b.y)      <= tol &&
+    Math.abs(a.width  - b.width)  <= tol &&
+    Math.abs(a.height - b.height) <= tol
+  );
+}
+
 const FACE_MATCH_THRESH = 0.35;  // cosine similarity threshold for same-person
 const FACE_EXPIRY_MS    = 30000; // forget a face after 30s of absence
 
@@ -66,12 +80,15 @@ class PipelineManager {
   /**
    * @param {import('socket.io').Server} io
    * @param {import('better-sqlite3').Database} db
+   * @param {ZoneManager} [zoneManager]  Shared ZoneManager from index.js.
+   *   When provided, zone cache invalidations from the REST API are reflected
+   *   here immediately. If omitted a private instance is created (legacy behaviour).
    */
-  constructor(io, db) {
+  constructor(io, db, zoneManager = null) {
     this._io             = io;
     this._db             = db;
     this._pipelines       = new Map(); // cameraId → PipelineContext
-    this._zoneManager     = new ZoneManager(db);
+    this._zoneManager     = zoneManager || new ZoneManager(db);
     this._alertService    = new AlertService(db);
     this._detector        = null;  // Shared YOLOv8n instance
     this._attrPipeline    = null;  // Shared attribute pipeline
@@ -87,6 +104,13 @@ class PipelineManager {
     // Cross-camera Re-ID statistics for the current server session
     // Map: faceId → { faceId, firstCameraId, lastCameraId, transitionCount, lastSeenAt }
     this._crossCameraStats  = new Map();
+
+    // Global Person Registry — persists across gallery expiry for the full session.
+    // Map: faceId → PersonTrajectory
+    // PersonTrajectory: { faceId, alias, firstSeenAt, lastSeenAt, currentCameraId,
+    //   segments: [{ cameraId, objectId, entryTime, exitTime }] }
+    this._personTrajectory   = new Map();
+    this._personAliasCounter = 0;
 
     // Single listener — broadcast saved alerts to all connected clients
     this._alertService.on('alert', (alert) => {
@@ -129,9 +153,18 @@ class PipelineManager {
       });
     }
 
-    const rtspUrl = this._buildRtspUrl(camera);
-    const capture = new RTSPCapture(camera.id, rtspUrl, { fps: 10, width: 640 });
-    const tracker = new ByteTracker();
+    const rtspUrl  = this._buildRtspUrl(camera);
+    const useWebRTC = !!(camera.webrtcEnabled && webrtcGateway.enabled);
+
+    let capture;
+    if (useWebRTC) {
+      capture = new RtpIngestion(camera.id, rtspUrl, { fps: 10, width: 640 });
+      await capture.start(); // async: sets up mediasoup PlainTransports then spawns FFmpeg
+    } else {
+      capture = new RTSPCapture(camera.id, rtspUrl, { fps: 10, width: 640 });
+    }
+
+    const tracker  = new ByteTracker();
     const behavior = new BehaviorEngine(this._zoneManager);
 
     let frameId = 0;
@@ -140,10 +173,12 @@ class PipelineManager {
       capture,
       tracker,
       behavior,
-      running: true,
-      frameCount: 0,
+      running:     true,
+      useWebRTC,
+      aiEnabled:   camera.aiEnabled !== false, // default true
+      frameCount:  0,
       lastFrameAt: null,
-      _inferring: false,  // frame-drop guard: skip inference when previous is still running
+      _inferring:  false,
     };
 
     // ── Listen for loitering events ──────────────────────────────────────
@@ -170,15 +205,21 @@ class PipelineManager {
       let frameWidth  = jpegSize?.width  ?? 640;
       let frameHeight = jpegSize?.height ?? 640;
 
-      // Emit raw frame immediately so the UI can display it without waiting for inference
-      this._io.to(camera.id).emit('frame', {
-        cameraId:    camera.id,
-        frameId:     currentFrameId,
-        timestamp,
-        data:        jpegBuffer.toString('base64'),
-        frameWidth,
-        frameHeight,
-      });
+      // Emit raw JPEG frame only for cameras NOT using WebRTC
+      // (WebRTC cameras stream video via mediasoup to <video> element)
+      if (!ctx.useWebRTC) {
+        this._io.to(camera.id).emit('frame', {
+          cameraId:    camera.id,
+          frameId:     currentFrameId,
+          timestamp,
+          data:        jpegBuffer.toString('base64'),
+          frameWidth,
+          frameHeight,
+        });
+      }
+
+      // Skip all inference when AI is disabled for this camera
+      if (!ctx.aiEnabled) return;
 
       // Skip all inference when every analytics module is disabled
       if (!analyticsConfig.anyModuleEnabled()) return;
@@ -201,7 +242,19 @@ class PipelineManager {
           }
         }
 
-        // 3. Update tracker
+        // 3a. Pre-tracking fast colour extraction — pixel averaging only (~0.5 ms/person),
+        //     no GPU or model required. Attaches det.color so the multi-cue matcher
+        //     can compare new-detection colour against the track's stored colour.
+        if (analyticsConfig.isEnabled('color') && this._attrPipeline?.ready) {
+          await Promise.all(detections.map(async (det) => {
+            if (det.className !== 'person') return;
+            try {
+              det.color = await this._attrPipeline.fastColor(jpegBuffer, det.bbox, frameWidth, frameHeight);
+            } catch { /* ignore — colour just won't be used for this detection */ }
+          }));
+        }
+
+        // 3b. Update tracker
         const trackedObjects = tracker.update(detections);
 
         // 4. Attribute enrichment (face / PPE / color) — runs BEFORE behavior so that
@@ -226,13 +279,93 @@ class PipelineManager {
 
             // Emit face detections as separate objects — only if face module enabled
             if (analyticsConfig.isEnabled('face') && detectedFaces.length > 0) {
-              const namedFaces = this._assignFaceIds(camera.id, detectedFaces, timestamp);
+              const { faces: namedFaces, crossCameraTransitions } =
+                this._assignFaceIds(camera.id, detectedFaces, timestamp);
+
+              // ── Step A: Update Global Person Registry for non-transition faces ──
+              const crossCameraFaceIds = new Set(crossCameraTransitions.map(ev => ev.faceId));
+              for (const f of namedFaces) {
+                if (crossCameraFaceIds.has(f.faceId)) continue; // handled in Step B
+                const person = attrObjects.find(obj =>
+                  obj.className === 'person' && obj.face &&
+                  _bboxClose(obj.face.bbox, f.bbox)
+                );
+                const objectId = person?.objectId ?? null;
+                const traj = this._personTrajectory.get(f.faceId);
+                if (!traj) {
+                  // First detection — create trajectory record with canonical alias
+                  const alias = `P${++this._personAliasCounter}`;
+                  const newTraj = {
+                    faceId: f.faceId, alias,
+                    firstSeenAt: timestamp, lastSeenAt: timestamp,
+                    currentCameraId: camera.id,
+                    segments: [{ cameraId: camera.id, objectId, entryTime: timestamp, exitTime: timestamp }],
+                  };
+                  this._personTrajectory.set(f.faceId, newTraj);
+                  this._io.emit('person:trajectory-update', newTraj);
+                } else {
+                  // Existing person in same camera — update exitTime silently
+                  const lastSeg = traj.segments[traj.segments.length - 1];
+                  if (lastSeg.cameraId === camera.id) {
+                    lastSeg.exitTime = timestamp;
+                    if (objectId !== null) lastSeg.objectId = objectId;
+                  }
+                  traj.lastSeenAt = timestamp;
+                }
+              }
+
+              // ── Step B: Handle cross-camera transitions ──────────────────────
+              for (const ev of crossCameraTransitions) {
+                const person = attrObjects.find(obj =>
+                  obj.className === 'person' && obj.face &&
+                  _bboxClose(obj.face.bbox, ev.faceBbox)
+                );
+                const newObjectId = person?.objectId ?? null;
+
+                // Update trajectory: close old segment, open new segment
+                let traj = this._personTrajectory.get(ev.faceId);
+                if (!traj) {
+                  const alias = `P${++this._personAliasCounter}`;
+                  traj = {
+                    faceId: ev.faceId, alias,
+                    firstSeenAt: timestamp, lastSeenAt: timestamp,
+                    currentCameraId: ev.newCameraId,
+                    segments: [{ cameraId: ev.newCameraId, objectId: newObjectId, entryTime: timestamp, exitTime: timestamp }],
+                  };
+                  this._personTrajectory.set(ev.faceId, traj);
+                } else {
+                  const lastSeg = traj.segments[traj.segments.length - 1];
+                  lastSeg.exitTime = ev.timestamp;
+                  traj.segments.push({ cameraId: ev.newCameraId, objectId: newObjectId, entryTime: ev.timestamp, exitTime: ev.timestamp });
+                  traj.currentCameraId = ev.newCameraId;
+                  traj.lastSeenAt      = ev.timestamp;
+                }
+                this._io.emit('person:trajectory-update', traj);
+
+                this._io.emit('face:reidentified', {
+                  faceId:       ev.faceId,
+                  alias:        traj.alias,
+                  prevCameraId: ev.prevCameraId,
+                  newCameraId:  ev.newCameraId,
+                  newObjectId,
+                  similarity:   ev.similarity,
+                  timestamp:    ev.timestamp,
+                });
+                console.log(
+                  `[PipelineManager] Cross-camera Re-ID: ${traj.alias}/${ev.faceId} ` +
+                  `${ev.prevCameraId.slice(0, 8)} → ${ev.newCameraId.slice(0, 8)} ` +
+                  `person#${newObjectId ?? '?'} (sim=${ev.similarity.toFixed(3)})`
+                );
+              }
+
+              // ── Build faceDetObjects with canonical alias ─────────────────────
               faceDetObjects = namedFaces.map((f, i) => ({
                 objectId:    90000 + (currentFrameId % 1000) * 10 + i,
                 className:   'face',
                 confidence:  f.score,
                 bbox:        f.bbox,
                 faceId:      f.faceId,
+                alias:       this._personTrajectory.get(f.faceId)?.alias ?? null,
                 matchScore:  f.matchScore,
                 isLoitering: false,
                 dwellTime:   0,
@@ -242,12 +375,18 @@ class PipelineManager {
             console.error(`[PipelineManager][${camera.id}] Attribute pipeline error:`, err.message);
           }
 
-          // Feed ArcFace embeddings back into the tracker for multi-cue matching.
-          // One-frame-delayed feedback loop: embeddings computed above are stored
-          // on each Track and used during the NEXT frame's association step.
+          // Feed all appearance attributes back into the tracker (one-frame delayed).
+          // Stored values are used during the NEXT frame's multi-cue association step.
           for (const obj of attrObjects) {
-            if (obj.className === 'person' && obj.face?.embedding) {
-              tracker.updateAppearance(obj.objectId, obj.face.embedding);
+            if (obj.className !== 'person') continue;
+            if (obj.face?.embedding)  tracker.updateAppearance(obj.objectId, obj.face.embedding);
+            if (obj.color)            tracker.updateColor(obj.objectId, obj.color);
+            if (obj.cloth)            tracker.updateCloth(obj.objectId, obj.cloth);
+            // Accessories: hat (PPE model) and mask (PPE model)
+            const hat  = obj.hat  !== undefined ? obj.hat  : undefined;
+            const mask = obj.mask !== undefined ? obj.mask : undefined;
+            if (hat !== undefined || mask !== undefined) {
+              tracker.updateAccessories(obj.objectId, { hat, mask });
             }
           }
         }
@@ -374,7 +513,8 @@ class PipelineManager {
     ctx.startedAt = Date.now();
     this._pipelines.set(camera.id, ctx);
     this._updateCameraStatus(camera.id, 'connecting');
-    capture.start();
+    // RtpIngestion was already started (async) above; RTSPCapture starts here (sync)
+    if (!useWebRTC) capture.start();
   }
 
   /**
@@ -390,6 +530,7 @@ class PipelineManager {
     ctx.capture.stop();
     ctx.behavior.reset();
     ctx.behavior.removeAllListeners();
+    if (ctx.useWebRTC) webrtcGateway.deleteRouter(cameraId);
     this._pipelines.delete(cameraId);
     this._updateCameraStatus(cameraId, 'offline');
   }
@@ -404,9 +545,20 @@ class PipelineManager {
     if (!ctx) return null;
     return {
       running:     ctx.running,
+      aiEnabled:   ctx.aiEnabled,
       frameCount:  ctx.frameCount,
       lastFrameAt: ctx.lastFrameAt,
     };
+  }
+
+  /**
+   * Toggle AI inference for a running pipeline without restarting it.
+   * @param {string} cameraId
+   * @param {boolean} enabled
+   */
+  setAiEnabled(cameraId, enabled) {
+    const ctx = this._pipelines.get(cameraId);
+    if (ctx) ctx.aiEnabled = enabled;
   }
 
   /** Stop all pipelines (for graceful shutdown). */
@@ -424,9 +576,10 @@ class PipelineManager {
    */
   getServiceStatus() {
     return {
-      ppe:       this._attrPipeline    ? this._attrPipeline.ppeStatus  : 'not_started',
-      face:      this._attrPipeline    ? this._attrPipeline.faceStatus : 'not_started',
-      firesmoke: this._fireSmokeService ? this._fireSmokeService.status : 'not_started',
+      ppe:       this._attrPipeline     ? this._attrPipeline.ppeStatus   : 'not_started',
+      face:      this._attrPipeline     ? this._attrPipeline.faceStatus  : 'not_started',
+      cloth:     this._attrPipeline     ? this._attrPipeline.clothStatus : 'not_started',
+      firesmoke: this._fireSmokeService ? this._fireSmokeService.status  : 'not_started',
     };
   }
 
@@ -454,7 +607,9 @@ class PipelineManager {
       g => timestamp - g.lastSeenAt < FACE_EXPIRY_MS
     );
 
-    const usedGalleryIds = new Set();
+    const usedGalleryIds      = new Set();
+    const crossCameraTransitions = [];
+
     const result = detectedFaces.map(face => {
       if (!face.embedding) {
         // No embedding — assign transient ID, skip gallery enrollment
@@ -487,20 +642,15 @@ class PipelineManager {
           stats.lastSeenAt   = timestamp;
           this._crossCameraStats.set(bestEntry.faceId, stats);
 
-          // Broadcast cross-camera Re-ID event to ALL connected clients
-          this._io.emit('face:reidentified', {
+          // Defer emission — face bbox is stored so the caller can resolve newObjectId
+          crossCameraTransitions.push({
             faceId:      bestEntry.faceId,
             prevCameraId,
             newCameraId: cameraId,
             similarity:  bestScore,
             timestamp,
+            faceBbox:    face.bbox,
           });
-
-          console.log(
-            `[PipelineManager] Cross-camera Re-ID: face ${bestEntry.faceId} ` +
-            `transitioned from camera ${prevCameraId.slice(0, 8)} ` +
-            `→ ${cameraId.slice(0, 8)} (sim=${bestScore.toFixed(3)})`
-          );
         }
 
         // Update gallery entry with current camera and timestamp
@@ -527,7 +677,7 @@ class PipelineManager {
       return { ...face, faceId: newId };
     });
 
-    return result;
+    return { faces: result, crossCameraTransitions };
   }
 
   /**
@@ -538,6 +688,15 @@ class PipelineManager {
    */
   getCrossCameraReIdStats() {
     return [...this._crossCameraStats.values()];
+  }
+
+  /**
+   * Return active person trajectories for the REST endpoint.
+   * @param {number} maxAgeMs  Include persons last seen within this window (default 5 min)
+   */
+  getPersonTrajectories(maxAgeMs = 300_000) {
+    const cutoff = Date.now() - maxAgeMs;
+    return [...this._personTrajectory.values()].filter(p => p.lastSeenAt >= cutoff);
   }
 
   _buildRtspUrl(camera) {

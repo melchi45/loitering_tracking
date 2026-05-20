@@ -12,6 +12,7 @@ export const ru: Translations = {
   tabAlerts: 'Оповещения',
   tabZones: 'Зоны',
   tabVideoAnalytics: 'Аналитика',
+  tabDetections: 'Детекция',
   videoAnalyticsHint: 'Включите или отключите каждый модуль ИИ глобально для всех камер.',
   videoAnalyticsFooter: 'Отключённые модули сразу прекращают обработку. Изменения вступают в силу на следующем кадре.',
 
@@ -77,6 +78,19 @@ export const ru: Translations = {
   settingsTitle: 'Настройки',
   settingsLanguage: 'Язык',
   settingsClose: 'Закрыть',
+
+  settingsWebRTC: 'WebRTC',
+  settingsWebRTCEnabled: 'Включить WebRTC',
+  settingsStunServers: 'STUN-серверы',
+  settingsStunAdd: '+ Добавить',
+  settingsStunPlaceholder: 'stun:stun.l.google.com:19302',
+  settingsTurnServer: 'TURN-сервер',
+  settingsTurnUrlPlaceholder: 'turn:сервер:3478',
+  settingsTurnUsername: 'Имя пользователя',
+  settingsTurnAdd: '+ Добавить',
+  settingsTurnCredential: 'Учётные данные',
+  settingsWebRTCApply: 'Применить',
+  settingsWebRTCSaved: 'Сохранено ✓',
 
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: 'Аксессуары / Спорт',

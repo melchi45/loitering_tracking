@@ -140,12 +140,12 @@ Zones configured with `"targetClasses": ["accessories"]` activate accessory dete
 
 | Class | Korean | Use Case |
 |---|---|---|
-| `shopping_bag` | 쇼핑백 | Retail environment |
-| `sports_bag` | 스포츠백 | Athletic facility |
-| `camera` | 카메라 | Tourist/surveillance context |
-| `phone` | 핸드폰 | Person interaction context |
-| `weapon_shape` | 형태적 위협물 | Security trigger (long object, etc.) |
-| `stroller` | 유모차 | Family zone monitoring |
+| `shopping_bag` | Shopping bag | Retail environment |
+| `sports_bag` | Sports bag | Athletic facility |
+| `camera` | Camera | Tourist/surveillance context |
+| `phone` | Phone | Person interaction context |
+| `weapon_shape` | Threat-shaped object | Security trigger (long object, etc.) |
+| `stroller` | Stroller | Family zone monitoring |
 
 ### 4.4 Abandoned Item Classification
 

@@ -6,9 +6,10 @@ const { v4: uuidv4 } = require('uuid');
 /**
  * @param {import('better-sqlite3').Database} db
  * @param {import('../services/pipelineManager')} pipelineManager
+ * @param {import('../services/youtubeStreamService')|null} [youtubeSvc]
  * @returns {Router}
  */
-function camerasRouter(db, pipelineManager) {
+function camerasRouter(db, pipelineManager, youtubeSvc = null) {
   const router = Router();
 
   /**
@@ -21,8 +22,13 @@ function camerasRouter(db, pipelineManager) {
         (b.createdAt || '').localeCompare(a.createdAt || ''));
       const result = cameras.map((cam) => {
         const pipelineStatus = pipelineManager.getCameraStatus(cam.id);
+        // YouTube cameras store bitrate in DB as bps; normalize to kbps for API consumers
+        const bitrate = cam.type === 'youtube' && cam.bitrate
+          ? Math.round(cam.bitrate / 1000)
+          : cam.bitrate;
         return {
           ...cam,
+          bitrate,
           password:       undefined, // Never expose password in list
           pipelineStatus: pipelineStatus || null,
         };
@@ -104,23 +110,43 @@ function camerasRouter(db, pipelineManager) {
 
   /**
    * PUT /api/cameras/:id
-   * Update camera config (name, rtspUrl, username, password).
+   * Update camera config. Restarts the pipeline when rtspUrl, credentials, or
+   * webrtcEnabled change so the new settings take effect immediately.
    */
   router.put('/:id', async (req, res) => {
     try {
       const camera = db.findOne('cameras', { id: req.params.id });
       if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
 
-      const { name, rtspUrl, username, password } = req.body;
+      const { name, rtspUrl, username, password, webrtcEnabled } = req.body;
       const updates = {};
-      if (name     !== undefined) updates.name     = name;
-      if (rtspUrl  !== undefined) updates.rtspUrl  = rtspUrl;
-      if (username !== undefined) updates.username = username || null;
-      if (password !== undefined) updates.password = password || null;
+      if (name          !== undefined) updates.name          = name;
+      if (rtspUrl       !== undefined) updates.rtspUrl       = rtspUrl;
+      if (username      !== undefined) updates.username      = username || null;
+      if (password      !== undefined) updates.password      = password || null;
+      if (webrtcEnabled !== undefined) updates.webrtcEnabled = !!webrtcEnabled;
 
       db.update('cameras', camera.id, updates);
       const updated = db.findOne('cameras', { id: camera.id });
-      res.json({ success: true, data: { ...updated, password: undefined } });
+
+      // Only restart pipeline when a value that actually affects the stream changed.
+      // Checking presence (webrtcEnabled !== undefined) was wrong — CameraEditModal
+      // always sends webrtcEnabled, causing a ByteTracker reset on every save.
+      const needsRestart =
+        (rtspUrl       !== undefined && rtspUrl                !== camera.rtspUrl) ||
+        (webrtcEnabled !== undefined && !!webrtcEnabled        !== !!camera.webrtcEnabled) ||
+        (username      !== undefined && (username || null)     !== camera.username) ||
+        (password      !== undefined && (password || null)     !== camera.password);
+
+      if (needsRestart && updated.status !== 'idle') {
+        // Await the restart so the client receives the response only after the new
+        // pipeline (including mediasoup producers) is fully ready.  This prevents
+        // the browser's WebRTC flow from racing ahead of the producer setup.
+        await pipelineManager.stopCamera(camera.id);
+        await pipelineManager.startCamera(updated);
+      }
+
+      res.json({ success: true, data: { ...updated, password: undefined }, restarted: needsRestart });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -146,16 +172,41 @@ function camerasRouter(db, pipelineManager) {
   /**
    * DELETE /api/cameras/:id
    * Remove a camera and stop its stream.
+   * For YouTube virtual cameras, also stops the yt-dlp/ffmpeg pipeline.
    */
   router.delete('/:id', async (req, res) => {
     try {
       const camera = db.findOne('cameras', { id: req.params.id });
       if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
 
-      await pipelineManager.stopCamera(camera.id);
-      db.delete('cameras', camera.id);
+      // Stop the YouTube stream service first (kills yt-dlp + ffmpeg, removes from memory)
+      if (camera.type === 'youtube' && youtubeSvc) {
+        try { await youtubeSvc.stopStream(camera.id); } catch { /* already removed */ }
+      } else {
+        await pipelineManager.stopCamera(camera.id);
+        db.delete('cameras', camera.id);
+      }
 
       res.json({ success: true, message: 'Camera removed' });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * POST /api/cameras/:id/ai/toggle
+   * Toggle AI inference on/off for a camera without restarting the pipeline.
+   */
+  router.post('/:id/ai/toggle', (req, res) => {
+    try {
+      const camera = db.findOne('cameras', { id: req.params.id });
+      if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
+
+      const newValue = camera.aiEnabled === false ? true : false; // default is true, so toggle
+      db.update('cameras', camera.id, { aiEnabled: newValue });
+      pipelineManager.setAiEnabled(camera.id, newValue);
+
+      res.json({ success: true, aiEnabled: newValue });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }

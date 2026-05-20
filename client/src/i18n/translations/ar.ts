@@ -12,6 +12,7 @@ export const ar: Translations = {
   tabAlerts: 'التنبيهات',
   tabZones: 'المناطق',
   tabVideoAnalytics: 'تحليلات',
+  tabDetections: 'كشف',
   videoAnalyticsHint: 'تمكين أو تعطيل كل وحدة ذكاء اصطناعي عالميًا لجميع الكاميرات.',
   videoAnalyticsFooter: 'تتوقف الوحدات المعطلة عن المعالجة فورًا. تسري التغييرات على الإطار التالي.',
 
@@ -77,6 +78,19 @@ export const ar: Translations = {
   settingsTitle: 'الإعدادات',
   settingsLanguage: 'اللغة',
   settingsClose: 'إغلاق',
+
+  settingsWebRTC: 'WebRTC',
+  settingsWebRTCEnabled: 'تمكين WebRTC',
+  settingsStunServers: 'خوادم STUN',
+  settingsStunAdd: '+ إضافة',
+  settingsStunPlaceholder: 'stun:stun.l.google.com:19302',
+  settingsTurnServer: 'خادم TURN',
+  settingsTurnUrlPlaceholder: 'turn:خادم:3478',
+  settingsTurnUsername: 'اسم المستخدم',
+  settingsTurnAdd: '+ إضافة',
+  settingsTurnCredential: 'بيانات الاعتماد',
+  settingsWebRTCApply: 'تطبيق',
+  settingsWebRTCSaved: 'تم الحفظ ✓',
 
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: 'الإكسسوارات / الرياضة',

@@ -8,7 +8,7 @@
 | **Issue Date** | May 15, 2026 |
 | **Proposal Deadline** | June 30, 2026 |
 | **Zone Target Key** | `cloth` |
-| **Status** | **Phase-1 구현 완료 (색상 공유) / Phase-2 PAR 준비중** |
+| **Status** | **Phase-1 Implemented (color sharing) / Phase-2 PAR Pending** |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -104,7 +104,7 @@ Zones configured with `"targetClasses": ["cloth"]` activate clothing type analys
       "fit": "slim"
     },
     "fullBody": null,
-    "description": "후드티, 청바지"
+    "description": "hoodie, jeans"
   },
   "isLoitering": true,
   "dwellTime": 38.4
@@ -119,35 +119,35 @@ Zones configured with `"targetClasses": ["cloth"]` activate clothing type analys
 
 | ID | Type | Korean | Examples |
 |---|---|---|---|
-| 0 | t-shirt | 티셔츠 | Short sleeve, round neck |
-| 1 | shirt | 셔츠 | Button-down, dress shirt |
-| 2 | hoodie | 후드티 | Pullover/zip hoodie |
-| 3 | sweater | 스웨터 | Knit, pullover, crewneck |
-| 4 | jacket | 재킷 | Blazer, denim, bomber |
-| 5 | coat | 코트 | Long coat, overcoat, trench |
-| 6 | vest | 조끼 | Waistcoat, sleeveless |
-| 7 | uniform_top | 유니폼 상의 | Work/school uniform |
+| 0 | t-shirt | T-shirt | Short sleeve, round neck |
+| 1 | shirt | Shirt | Button-down, dress shirt |
+| 2 | hoodie | Hoodie | Pullover/zip hoodie |
+| 3 | sweater | Sweater | Knit, pullover, crewneck |
+| 4 | jacket | Jacket | Blazer, denim, bomber |
+| 5 | coat | Coat | Long coat, overcoat, trench |
+| 6 | vest | Vest | Waistcoat, sleeveless |
+| 7 | uniform_top | Uniform top | Work/school uniform |
 
 ### 4.2 Lower Body Garment Categories
 
 | ID | Type | Korean | Examples |
 |---|---|---|---|
-| 0 | jeans | 청바지 | Denim jeans |
-| 1 | trousers | 바지 | Chinos, slacks, dress pants |
-| 2 | shorts | 반바지 | Short pants |
-| 3 | skirt | 치마 | Mini, midi, maxi skirt |
-| 4 | leggings | 레깅스 | Athletic, tight leggings |
-| 5 | uniform_bottom | 유니폼 하의 | Work/school uniform bottom |
+| 0 | jeans | Jeans | Denim jeans |
+| 1 | trousers | Trousers | Chinos, slacks, dress pants |
+| 2 | shorts | Shorts | Short pants |
+| 3 | skirt | Skirt | Mini, midi, maxi skirt |
+| 4 | leggings | Leggings | Athletic, tight leggings |
+| 5 | uniform_bottom | Uniform bottom | Work/school uniform bottom |
 
 ### 4.3 Full-Body Outfit Categories
 
 | ID | Type | Korean | Examples |
 |---|---|---|---|
-| 0 | dress | 원피스 | Casual, formal dress |
-| 1 | jumpsuit | 점프수트 | Overalls, boilersuit |
-| 2 | suit | 정장 | Business suit (jacket + pants) |
-| 3 | uniform_full | 전체 유니폼 | Security, medical, police |
-| 4 | sportswear | 운동복 | Tracksuit, athletic set |
+| 0 | dress | Dress | Casual, formal dress |
+| 1 | jumpsuit | Jumpsuit | Overalls, boilersuit |
+| 2 | suit | Suit | Business suit (jacket + pants) |
+| 3 | uniform_full | Full uniform | Security, medical, police |
+| 4 | sportswear | Sportswear | Tracksuit, athletic set |
 
 ### 4.4 Clothing Attribute Sub-classes
 
@@ -302,7 +302,7 @@ function generateDescription(cloth, color) {
   "appearance": {
     "upperGarment": { "type": "hoodie", "confidence": 0.87 },
     "lowerGarment": { "type": "jeans", "confidence": 0.92 },
-    "description": "후드티, 청바지",
+    "description": "hoodie, jeans",
     "uniformCompliant": false
   },
   "timestamp": 1715678901234
@@ -412,10 +412,10 @@ For sites requiring uniform compliance monitoring:
 
 | Source | URL | Notes |
 |---|---|---|
-| Event-AHU/OpenPAR (GH) | https://github.com/Event-AHU/OpenPAR | **Selected** — 40+ 속성 포함 (의류유형+색상+모자+가방) |
+| Event-AHU/OpenPAR (GH) | https://github.com/Event-AHU/OpenPAR | **Selected** — 40+ attributes (clothing type+color+hat+bag) |
 | valencebond/Rethinking_of_PAR (GH) | https://github.com/valencebond/Rethinking_of_PAR | PA100K multi-label |
-| UPAR Dataset (GH) | https://github.com/speckean/upar_dataset | 4개 데이터셋 통합 40속성 |
-| EventPAR | https://arxiv.org/abs/2408.09720 | RGB+Event 100K 샘플 |
+| UPAR Dataset (GH) | https://github.com/speckean/upar_dataset | 40 attributes unified from 4 datasets |
+| EventPAR | https://arxiv.org/abs/2408.09720 | RGB+Event 100K samples |
 
 #### Implementation Notes
 

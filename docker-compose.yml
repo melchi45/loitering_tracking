@@ -1,14 +1,25 @@
 version: '3.8'
 
 services:
+  mediamtx:
+    image: bluenviron/mediamtx:latest
+    container_name: lts-mediamtx
+    network_mode: host
+    volumes:
+      - ./mediamtx.yml:/mediamtx.yml:ro
+    restart: unless-stopped
+
   server:
     build: ./server
+    network_mode: host
     ports:
       - "3001:3001"
     env_file: ./server/.env
     volumes:
       - ./server/models:/app/models:ro
       - ./server/storage:/app/storage
+    depends_on:
+      - mediamtx
     restart: unless-stopped
 
   client:

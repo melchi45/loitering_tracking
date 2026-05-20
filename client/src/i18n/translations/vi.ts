@@ -12,6 +12,7 @@ export const vi: Translations = {
   tabAlerts: 'Cảnh báo',
   tabZones: 'Vùng',
   tabVideoAnalytics: 'Phân tích',
+  tabDetections: 'Phát hiện',
   videoAnalyticsHint: 'Bật hoặc tắt từng mô-đun AI cho tất cả camera trên toàn cục.',
   videoAnalyticsFooter: 'Các mô-đun bị tắt sẽ dừng xử lý ngay lập tức. Thay đổi có hiệu lực từ khung hình tiếp theo.',
 
@@ -77,6 +78,19 @@ export const vi: Translations = {
   settingsTitle: 'Cài đặt',
   settingsLanguage: 'Ngôn ngữ',
   settingsClose: 'Đóng',
+
+  settingsWebRTC: 'WebRTC',
+  settingsWebRTCEnabled: 'Bật WebRTC',
+  settingsStunServers: 'Máy chủ STUN',
+  settingsStunAdd: '+ Thêm',
+  settingsStunPlaceholder: 'stun:stun.l.google.com:19302',
+  settingsTurnServer: 'Máy chủ TURN',
+  settingsTurnUrlPlaceholder: 'turn:máy-chủ:3478',
+  settingsTurnUsername: 'Tên đăng nhập',
+  settingsTurnAdd: '+ Thêm',
+  settingsTurnCredential: 'Xác thực',
+  settingsWebRTCApply: 'Áp dụng',
+  settingsWebRTCSaved: 'Đã lưu ✓',
 
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: 'Phụ kiện / Thể thao',

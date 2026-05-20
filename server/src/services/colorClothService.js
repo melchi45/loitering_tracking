@@ -118,9 +118,8 @@ class ColorClothService {
     if (fs.existsSync(this.parModelPath)) {
       try {
         const ort = require('onnxruntime-node');
-        this._parSession = await ort.InferenceSession.create(this.parModelPath, {
-          executionProviders: ['cpu'], graphOptimizationLevel: 'all',
-        });
+        const { getOnnxSessionOptions } = require('../utils/onnxOptions');
+        this._parSession = await ort.InferenceSession.create(this.parModelPath, getOnnxSessionOptions());
         this._parReady = true;
         console.log('[ColorClothService] PAR model loaded (Phase-2 cloth analysis active)');
       } catch (e) {
@@ -133,6 +132,32 @@ class ColorClothService {
   }
 
   get ready() { return this._colorReady; }
+
+  /**
+   * Fast pixel-average colour extraction only — no model required (~0.5 ms/person).
+   * Called by PipelineManager BEFORE tracker.update() so new detections carry
+   * colour data into the multi-cue association step.
+   * @param {Buffer} jpegBuffer
+   * @param {{x,y,width,height}} personBbox
+   * @param {number} [imgW]
+   * @param {number} [imgH]
+   * @returns {Promise<{upper:string,lower:string,upperRgb:number[],lowerRgb:number[]}>}
+   */
+  async fastColor(jpegBuffer, personBbox, imgW, imgH) {
+    const { x, y, width, height } = personBbox;
+    const upperRoi = { x: x + width * 0.15, y: y + height * 0.25, w: width * 0.70, h: height * 0.30 };
+    const lowerRoi = { x: x + width * 0.15, y: y + height * 0.55, w: width * 0.70, h: height * 0.35 };
+    const [upperRgb, lowerRgb] = await Promise.all([
+      avgColor(jpegBuffer, upperRoi, imgW, imgH),
+      avgColor(jpegBuffer, lowerRoi, imgW, imgH),
+    ]);
+    return {
+      upper:    rgbToColorName(upperRgb[0], upperRgb[1], upperRgb[2]),
+      lower:    rgbToColorName(lowerRgb[0], lowerRgb[1], lowerRgb[2]),
+      upperRgb,
+      lowerRgb,
+    };
+  }
 
   /**
    * Extract color & clothing attributes from a person bounding box.
@@ -181,10 +206,69 @@ class ColorClothService {
   // ─── Private ──────────────────────────────────────────────────────────────
 
   async _runPAR(jpegBuffer, personBbox) {
-    // Placeholder: implement OpenPAR inference when model is available
-    // Input:  [1, 3, 256, 128] normalized person crop
-    // Output: multi-label attributes [upper_type, lower_type, sleeve, collar, ...]
-    return null;
+    try {
+      const { x, y, width: w, height: h } = personBbox;
+
+      // Clamp crop to non-zero size
+      const left   = Math.max(0, Math.round(x));
+      const top    = Math.max(0, Math.round(y));
+      const cw     = Math.max(1, Math.round(w));
+      const ch     = Math.max(1, Math.round(h));
+
+      // Resize person crop to 128×256 (W×H) → NCHW [1,3,256,128]
+      const raw = await sharp(jpegBuffer)
+        .extract({ left, top, width: cw, height: ch })
+        .resize(128, 256, { fit: 'fill' })
+        .removeAlpha()
+        .raw()
+        .toBuffer();
+
+      // Normalize with ImageNet mean/std → Float32 NCHW
+      const MEAN = [0.485, 0.456, 0.406];
+      const STD  = [0.229, 0.224, 0.225];
+      const floatData = new Float32Array(3 * 256 * 128);
+      for (let r = 0; r < 256; r++) {
+        for (let c = 0; c < 128; c++) {
+          const pi = (r * 128 + c) * 3;
+          for (let ch2 = 0; ch2 < 3; ch2++) {
+            floatData[ch2 * 256 * 128 + r * 128 + c] =
+              (raw[pi + ch2] / 255 - MEAN[ch2]) / STD[ch2];
+          }
+        }
+      }
+
+      const ort = require('onnxruntime-node');
+      const tensor = new ort.Tensor('float32', floatData, [1, 3, 256, 128]);
+      const res    = await this._parSession.run({ input: tensor });
+      const scores = res.attrs.data; // Float32Array[12]
+
+      // Index map (matches exportPAR.py ATTR_LABELS)
+      // Upper: 0=tshirt 1=shirt 2=jacket 3=hoodie 4=vest 5=dress
+      // Lower: 6=pants  7=jeans 8=shorts 9=skirt
+      // Sleeve: 10=short 11=long
+      const THRESH = 0.45;
+
+      const upperTypes = ['tshirt', 'shirt', 'jacket', 'hoodie', 'vest', 'dress'];
+      let bestUpperIdx = 0;
+      for (let i = 1; i < 6; i++) {
+        if (scores[i] > scores[bestUpperIdx]) bestUpperIdx = i;
+      }
+      const upper = scores[bestUpperIdx] >= THRESH ? upperTypes[bestUpperIdx] : 'unknown';
+
+      const lowerTypes = ['pants', 'jeans', 'shorts', 'skirt'];
+      let bestLowerIdx = 0;
+      for (let i = 1; i < 4; i++) {
+        if (scores[6 + i] > scores[6 + bestLowerIdx]) bestLowerIdx = i;
+      }
+      const lower = scores[6 + bestLowerIdx] >= THRESH ? lowerTypes[bestLowerIdx] : 'unknown';
+
+      const sleeve = scores[10] >= scores[11] ? 'short' : 'long';
+
+      return { upper, lower, sleeve };
+    } catch (err) {
+      console.warn('[ColorClothService] _runPAR error:', err.message);
+      return null;
+    }
   }
 }
 

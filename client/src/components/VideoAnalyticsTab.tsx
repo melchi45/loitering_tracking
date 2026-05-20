@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useI18n } from '../i18n';
 
-interface AttrItem  { id: string; label: string; labelKo: string; model?: string; pending?: boolean; }
+interface AttrItem  { id: string; label: string; labelKo: string; model?: string; pending?: boolean; installHint?: string; }
 interface AttrGroup { groupKey: string; items: AttrItem[]; }
 
 interface KalmanConfig {
@@ -14,7 +14,10 @@ interface KalmanConfig {
   occlusionQScale:    number;
   measurementNoise:   number;
   iouWeight:          number;
-  appWeight:          number;
+  faceWeight:         number;
+  colorWeight:        number;
+  clothWeight:        number;
+  accWeight:          number;
 }
 
 const KALMAN_DEFAULTS: KalmanConfig = {
@@ -26,8 +29,11 @@ const KALMAN_DEFAULTS: KalmanConfig = {
   slowQScale:         0.5,
   occlusionQScale:    3.0,
   measurementNoise:   10,
-  iouWeight:          0.7,
-  appWeight:          0.3,
+  iouWeight:          0.60,
+  faceWeight:         0.20,
+  colorWeight:        0.12,
+  clothWeight:        0.05,
+  accWeight:          0.03,
 };
 
 const KALMAN_SLIDERS: Array<{
@@ -36,16 +42,28 @@ const KALMAN_SLIDERS: Array<{
   hint: string;
   min: number; max: number; step: number; unit: string;
 }> = [
-  { key: 'maxAge',             label: 'Track Max Age',           hint: 'Frames before lost track is deleted (90=9s @ 10fps)', min: 10,  max: 300, step: 10,   unit: ' fr'   },
-  { key: 'iouThreshold',       label: 'IoU Match Threshold',     hint: 'Min overlap score for re-association (lower = more stable IDs)', min: 0.1, max: 0.6, step: 0.05, unit: '' },
-  { key: 'fastSpeedThreshold', label: 'Fast Speed Threshold',    hint: 'Speed above = fast motion',                           min: 5,   max: 100, step: 1,    unit: ' px/f' },
-  { key: 'fastQScale',         label: 'Fast Q Scale',            hint: 'Q × when fast (trust meas.)',                         min: 1.0, max: 10,  step: 0.5,  unit: '×'     },
-  { key: 'slowSpeedThreshold', label: 'Slow Speed Threshold',    hint: 'Speed below = stationary',                           min: 1,   max: 20,  step: 1,    unit: ' px/f' },
-  { key: 'slowQScale',         label: 'Slow Q Scale',            hint: 'Q × when still (tighten)',                            min: 0.1, max: 1.0, step: 0.05, unit: '×'     },
-  { key: 'occlusionQScale',    label: 'Occlusion Q Scale',       hint: 'Q × during occlusion',                               min: 1.0, max: 10,  step: 0.5,  unit: '×'     },
-  { key: 'measurementNoise',   label: 'Measurement Noise (R)',   hint: 'R↑ = trust prediction more',                         min: 1,   max: 50,  step: 1,    unit: ''      },
-  { key: 'iouWeight',          label: 'IoU Weight (λ_iou)',      hint: 'Higher = rely more on position overlap',              min: 0.0, max: 1.0, step: 0.05, unit: ''      },
-  { key: 'appWeight',          label: 'Appearance Weight (λ_app)', hint: 'Higher = rely more on face similarity (ArcFace)', min: 0.0, max: 1.0, step: 0.05, unit: ''      },
+  { key: 'maxAge',             label: 'Track Max Age',         hint: 'Frames before lost track is deleted (90=9s @ 10fps)',          min: 10,  max: 300, step: 10,   unit: ' fr'   },
+  { key: 'iouThreshold',       label: 'IoU Match Threshold',   hint: 'Min combined score for re-association (lower = more stable IDs)', min: 0.1, max: 0.6, step: 0.05, unit: '' },
+  { key: 'fastSpeedThreshold', label: 'Fast Speed Threshold',  hint: 'Speed above = fast motion',                                    min: 5,   max: 100, step: 1,    unit: ' px/f' },
+  { key: 'fastQScale',         label: 'Fast Q Scale',          hint: 'Q × when fast (trust measurement)',                            min: 1.0, max: 10,  step: 0.5,  unit: '×'     },
+  { key: 'slowSpeedThreshold', label: 'Slow Speed Threshold',  hint: 'Speed below = stationary',                                     min: 1,   max: 20,  step: 1,    unit: ' px/f' },
+  { key: 'slowQScale',         label: 'Slow Q Scale',          hint: 'Q × when still (tighten)',                                     min: 0.1, max: 1.0, step: 0.05, unit: '×'     },
+  { key: 'occlusionQScale',    label: 'Occlusion Q Scale',     hint: 'Q × during occlusion',                                         min: 1.0, max: 10,  step: 0.5,  unit: '×'     },
+  { key: 'measurementNoise',   label: 'Measurement Noise (R)', hint: 'R↑ = trust prediction more, measurements less',               min: 1,   max: 50,  step: 1,    unit: ''      },
+];
+
+const APPEARANCE_SLIDERS: Array<{
+  key: keyof KalmanConfig;
+  label: string;
+  hint: string;
+  color: string;
+  min: number; max: number; step: number;
+}> = [
+  { key: 'iouWeight',   label: 'IoU (λ_iou)',       hint: 'Spatial overlap — always active, baseline cue',            color: 'accent-blue-400',   min: 0.0, max: 1.0, step: 0.05 },
+  { key: 'faceWeight',  label: 'Face (λ_face)',      hint: 'ArcFace cosine sim — active when face model is enabled',   color: 'accent-green-400',  min: 0.0, max: 1.0, step: 0.05 },
+  { key: 'colorWeight', label: 'Color (λ_color)',    hint: 'Upper/lower body RGB distance — fast, no model needed',    color: 'accent-yellow-400', min: 0.0, max: 1.0, step: 0.05 },
+  { key: 'clothWeight', label: 'Cloth (λ_cloth)',    hint: 'PAR cloth-type match — active when openpar.onnx is loaded',color: 'accent-orange-400', min: 0.0, max: 1.0, step: 0.05 },
+  { key: 'accWeight',   label: 'Accessories (λ_acc)','hint': 'Hat/Mask presence — active when PPE model is enabled',  color: 'accent-purple-400', min: 0.0, max: 1.0, step: 0.05 },
 ];
 
 const GROUPS: AttrGroup[] = [
@@ -93,7 +111,8 @@ const GROUPS: AttrGroup[] = [
       { id: 'face',  label: 'Face Recognition', labelKo: '얼굴 인식', model: 'scrfd_2.5g.onnx + arcface_w600k_r50.onnx' },
       { id: 'mask',  label: 'Mask',  labelKo: '마스크', model: 'yolov8m_ppe.onnx' },
       { id: 'color', label: 'Color', labelKo: '색상'   },
-      { id: 'cloth', label: 'Cloth', labelKo: '의류',   pending: true             },
+      { id: 'cloth', label: 'Cloth', labelKo: '의류',   model: 'openpar.onnx',
+        installHint: '모델 생성: python3 server/src/scripts/exportPAR.py' },
       { id: 'hat',   label: 'Hat',   labelKo: '헬멧/안전모', model: 'yolov8m_ppe.onnx' },
     ],
   },
@@ -197,9 +216,10 @@ export default function VideoAnalyticsTab() {
   const [loadError, setLoadError] = useState(false);
 
   // Kalman / Tracker settings
-  const [kalman, setKalman]           = useState<KalmanConfig>({ ...KALMAN_DEFAULTS });
-  const [kalmanOpen, setKalmanOpen]   = useState(false);
+  const [kalman, setKalman]             = useState<KalmanConfig>({ ...KALMAN_DEFAULTS });
+  const [kalmanOpen, setKalmanOpen]     = useState(false);
   const [kalmanSaving, setKalmanSaving] = useState(false);
+  const [appearOpen, setAppearOpen]     = useState(false);
   const kalmanDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
@@ -311,6 +331,8 @@ export default function VideoAnalyticsTab() {
                     ? '구현 예정 기능 (Phase-2)'
                     : st === 'failed'
                     ? `모델 로드 실패 — 파일이 손상되었거나 메모리가 부족합니다\n경로: server/models/${item.model ?? ''}`
+                    : item.installHint
+                    ? `모델 파일 필요: ${item.model}\n${item.installHint}`
                     : item.model
                     ? `모델 파일 필요: ${item.model}\n설치: cd server && npm run download-models`
                     : '모델 미설치'
@@ -327,7 +349,9 @@ export default function VideoAnalyticsTab() {
                       !available
                         ? isFailed
                           ? 'opacity-50 cursor-not-allowed bg-gray-800 border-red-900/50 text-gray-500'
-                          : 'opacity-35 cursor-not-allowed bg-gray-800 border-transparent text-gray-500'
+                          : st === 'pending'
+                          ? 'opacity-35 cursor-not-allowed bg-gray-800 border-transparent text-gray-500'
+                          : 'opacity-60 cursor-not-allowed bg-gray-800 border-dashed border-gray-600 text-gray-500'
                         : isEnabled
                         ? 'bg-blue-700/70 border-blue-500 text-white'
                         : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
@@ -362,6 +386,80 @@ export default function VideoAnalyticsTab() {
           </div>
         ))}
 
+        {/* Appearance Weights */}
+        <div className="border-t border-gray-700/50 pt-3">
+          <button
+            onClick={() => setAppearOpen(prev => !prev)}
+            className="flex items-center justify-between w-full text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1.5 hover:text-gray-400"
+          >
+            <span>◈ Appearance Weights</span>
+            <span className="text-[10px]">{appearOpen ? '▲' : '▼'}</span>
+          </button>
+
+          {appearOpen && (
+            <div className="bg-gray-900/70 rounded-md p-2 space-y-2.5">
+              {/* Weight bars — visualise relative contribution */}
+              <div className="space-y-1 pb-2 border-b border-gray-700/40">
+                {APPEARANCE_SLIDERS.map(s => {
+                  const total = APPEARANCE_SLIDERS.reduce((sum, x) => sum + (kalman[x.key] as number), 0);
+                  const pct   = total > 0 ? Math.round(((kalman[s.key] as number) / total) * 100) : 0;
+                  const barColors: Record<string, string> = {
+                    'accent-blue-400':   'bg-blue-500',
+                    'accent-green-400':  'bg-green-500',
+                    'accent-yellow-400': 'bg-yellow-500',
+                    'accent-orange-400': 'bg-orange-500',
+                    'accent-purple-400': 'bg-purple-500',
+                  };
+                  return (
+                    <div key={s.key} className="flex items-center gap-1.5">
+                      <span className="text-[9px] text-gray-500 w-16 shrink-0">{s.label.split(' ')[0]}</span>
+                      <div className="flex-1 h-1.5 bg-gray-700 rounded-full overflow-hidden">
+                        <div
+                          className={`h-full rounded-full transition-all ${barColors[s.color] ?? 'bg-gray-500'}`}
+                          style={{ width: `${pct}%` }}
+                        />
+                      </div>
+                      <span className="text-[9px] text-gray-400 font-mono w-7 text-right">{pct}%</span>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {APPEARANCE_SLIDERS.map(s => (
+                <div key={s.key}>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <label className="text-[10px] text-gray-400">{s.label}</label>
+                    <span className="text-[10px] text-white font-semibold font-mono">
+                      {(kalman[s.key] as number).toFixed(2)}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={s.min} max={s.max} step={s.step}
+                    value={kalman[s.key] as number}
+                    onChange={(e) => handleKalmanChange(s.key, Number(e.target.value))}
+                    className={`w-full h-1 ${s.color}`}
+                  />
+                  <p className="text-[9px] text-gray-600 mt-0.5">{s.hint}</p>
+                </div>
+              ))}
+
+              <div className="flex gap-1 pt-1 border-t border-gray-700/50">
+                <button
+                  onClick={resetKalman}
+                  disabled={kalmanSaving}
+                  className="flex-1 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-[10px] text-gray-400"
+                >
+                  Reset Defaults
+                </button>
+                {kalmanSaving && (
+                  <span className="text-[9px] text-purple-400 animate-pulse self-center">saving…</span>
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Kalman / Tracker Settings */}
         <div className="border-t border-gray-700/50 pt-3">
           <button
@@ -380,7 +478,7 @@ export default function VideoAnalyticsTab() {
                     <label className="text-[10px] text-gray-400">{s.label}</label>
                     <span className="text-[10px] text-white font-semibold font-mono">
                       {typeof kalman[s.key] === 'number'
-                        ? s.step < 1 ? kalman[s.key].toFixed(2) : kalman[s.key]
+                        ? s.step < 1 ? (kalman[s.key] as number).toFixed(2) : kalman[s.key]
                         : kalman[s.key]
                       }{s.unit}
                     </span>
@@ -388,7 +486,7 @@ export default function VideoAnalyticsTab() {
                   <input
                     type="range"
                     min={s.min} max={s.max} step={s.step}
-                    value={kalman[s.key]}
+                    value={kalman[s.key] as number}
                     onChange={(e) => handleKalmanChange(s.key, Number(e.target.value))}
                     className="w-full accent-purple-500 h-1"
                   />

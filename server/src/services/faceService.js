@@ -4,6 +4,7 @@ const ort  = require('onnxruntime-node');
 const sharp = require('sharp');
 const path  = require('path');
 const fs    = require('fs');
+const { getOnnxSessionOptions } = require('../utils/onnxOptions');
 
 // ─── Constants ───────────────────────────────────────────────────────────────
 const SCRFD_SIZE   = 640;
@@ -54,9 +55,7 @@ class FaceService {
       return;
     }
     try {
-      this._scrfd = await ort.InferenceSession.create(this.scrfdPath, {
-        executionProviders: ['cpu'], graphOptimizationLevel: 'all',
-      });
+      this._scrfd = await ort.InferenceSession.create(this.scrfdPath, getOnnxSessionOptions());
       this._ready  = true;
       this._status = 'loaded';
       console.log('[FaceService] SCRFD loaded:', path.basename(this.scrfdPath));
@@ -68,9 +67,7 @@ class FaceService {
 
     if (fs.existsSync(this.arcfacePath)) {
       try {
-        this._arcface = await ort.InferenceSession.create(this.arcfacePath, {
-          executionProviders: ['cpu'], graphOptimizationLevel: 'all',
-        });
+        this._arcface = await ort.InferenceSession.create(this.arcfacePath, getOnnxSessionOptions());
         console.log('[FaceService] ArcFace loaded:', path.basename(this.arcfacePath));
       } catch (e) {
         console.warn('[FaceService] ArcFace load failed:', e.message);

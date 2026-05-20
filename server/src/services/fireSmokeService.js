@@ -4,6 +4,7 @@ const fs   = require('fs');
 const path = require('path');
 const ort  = require('onnxruntime-node');
 const sharp = require('sharp');
+const { getOnnxSessionOptions } = require('../utils/onnxOptions');
 
 const MODEL_SIZE     = 640;
 const CONF_THRESHOLD = 0.35;
@@ -50,10 +51,7 @@ class FireSmokeService {
       return;
     }
     try {
-      this._session = await ort.InferenceSession.create(this.modelPath, {
-        executionProviders: ['cpu'],
-        graphOptimizationLevel: 'all',
-      });
+      this._session = await ort.InferenceSession.create(this.modelPath, getOnnxSessionOptions());
       this._ready  = true;
       this._status = 'loaded';
       console.log('[FireSmokeService] yolov8s_fire_smoke.onnx loaded');

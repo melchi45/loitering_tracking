@@ -12,6 +12,7 @@ export const hi: Translations = {
   tabAlerts: 'अलर्ट',
   tabZones: 'ज़ोन',
   tabVideoAnalytics: 'विश्लेषण',
+  tabDetections: 'डिटेक्शन',
   videoAnalyticsHint: 'सभी कैमरों के लिए प्रत्येक AI मॉड्यूल को विश्व स्तर पर सक्षम या अक्षम करें।',
   videoAnalyticsFooter: 'अक्षम मॉड्यूल तुरंत प्रसंस्करण रोक देते हैं। परिवर्तन अगले फ्रेम से लागू होते हैं।',
 
@@ -77,6 +78,19 @@ export const hi: Translations = {
   settingsTitle: 'सेटिंग्स',
   settingsLanguage: 'भाषा',
   settingsClose: 'बंद करें',
+
+  settingsWebRTC: 'WebRTC',
+  settingsWebRTCEnabled: 'WebRTC सक्षम करें',
+  settingsStunServers: 'STUN सर्वर',
+  settingsStunAdd: '+ जोड़ें',
+  settingsStunPlaceholder: 'stun:stun.l.google.com:19302',
+  settingsTurnServer: 'TURN सर्वर',
+  settingsTurnUrlPlaceholder: 'turn:सर्वर:3478',
+  settingsTurnUsername: 'उपयोगकर्ता नाम',
+  settingsTurnAdd: '+ जोड़ें',
+  settingsTurnCredential: 'क्रेडेंशियल',
+  settingsWebRTCApply: 'लागू करें',
+  settingsWebRTCSaved: 'सहेजा गया ✓',
 
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: 'सहायक उपकरण / खेल',

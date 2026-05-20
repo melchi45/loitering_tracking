@@ -5,10 +5,15 @@
   "main": "src/index.js",
   "scripts": {
     "start": "node src/index.js",
-    "dev": "nodemon --exec /usr/bin/node src/index.js",
-    "test": "jest",
+    "stop": "fuser -k 3001/tcp || true",
+    "restart": "npm run stop && sleep 1 && npm run start",
+    "dev": "nodemon",
+    "test": "jest --runInBand --passWithNoTests",
     "discover": "node src/scripts/discoverCameras.js",
-    "download-models": "node src/scripts/downloadModels.js"
+    "download-models": "node src/scripts/downloadModels.js",
+    "health": "node src/scripts/healthCheck.js",
+    "ice-test": "node src/scripts/iceTest.js",
+    "ice-test:headless": "node src/scripts/iceTest.js --headless"
   },
   "dependencies": {
     "cors": "^2.8.5",
@@ -16,6 +21,7 @@
     "express": "^4.18.2",
     "fluent-ffmpeg": "^2.1.2",
     "jsonwebtoken": "^9.0.2",
+    "mediasoup": "^3.14.15",
     "nodemailer": "^6.9.10",
     "onnxruntime-node": "^1.17.3",
     "sharp": "^0.33.2",
@@ -24,6 +30,7 @@
   },
   "devDependencies": {
     "jest": "^29.7.0",
-    "nodemon": "^3.1.0"
+    "nodemon": "^3.1.0",
+    "playwright": "^1.60.0"
   }
 }

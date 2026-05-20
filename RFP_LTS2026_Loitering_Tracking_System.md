@@ -101,7 +101,7 @@ To ensure consistent inference performance regardless of source resolution, all 
 | Class-aware IoU matching | ✅ | Same class required for association |
 | 8-dim Kalman Filter | ✅ | [x,y,w,h,vx,vy,vw,vh] state vector; connected to Track |
 | Adaptive Kalman (dynamic Q/R) | ✅ | Implemented — velocity from kf.x[4/5], occlusion via framesWithoutHit |
-| Multi-cue association (IoU + Appearance) | ✅ P2 | Implemented — ArcFace EMA per track; `tracker.updateAppearance()`; λ weights configurable via `/api/tracker/config` |
+| Multi-cue association (IoU + Face + Color + Cloth + Acc) | ✅ P2 | 5-cue dynamic-weight scorer; fast pre-tracking colour; λ_iou/face/color/cloth/acc via `/api/tracker/config` + UI |
 | Cross-camera Re-ID | ✅ P3 | Shared in-process ArcFace gallery across all cameras — see §2.3.2 |
 
 #### 2.3.2 Cross-Camera Re-ID Architecture
@@ -123,20 +123,24 @@ _sharedFaceGallery: [
 
 When `_assignFaceIds(cameraId, detectedFaces, timestamp)` finds a cosine-similarity match (threshold ≥ 0.35) for a face whose `lastCameraId` differs from the current `cameraId`, it:
 
-1. Emits a `face:reidentified` Socket.IO event to **all** connected clients (not just the current camera room):
+1. Defers emission (stores the pending transition with `faceBbox` for objectId resolution).
+2. The caller (`_processFrame`) matches the face bbox back to the enriched person track in `attrObjects` via `_bboxClose()` (±3 px tolerance), then emits `face:reidentified` to **all** connected clients with the resolved `newObjectId`:
 
    ```json
    {
-     "faceId":      "F7",
+     "faceId":       "F7",
      "prevCameraId": "<uuid-of-camera-A>",
      "newCameraId":  "<uuid-of-camera-B>",
+     "newObjectId":  42,
      "similarity":   0.82,
      "timestamp":    1716015600000
    }
    ```
 
-2. Updates `lastCameraId` and `lastSeenAt` on the gallery entry.
-3. Increments a per-face `transitionCount` in `_crossCameraStats`.
+   `newObjectId` is the ByteTracker `objectId` of the person currently visible in camera B who was re-identified. `null` if the face could not be matched to a person track (e.g. YOLO missed the body).
+
+3. Updates `lastCameraId` and `lastSeenAt` on the gallery entry.
+4. Increments a per-face `transitionCount` in `_crossCameraStats`.
 
 The returned face object also includes a `crossCamera: { prevCameraId }` field for the current frame's detection payload.
 
@@ -162,10 +166,10 @@ The returned face object also includes a `crossCamera: { prevCameraId }` field f
 
 | Component | File | Description |
 |---|---|---|
-| `CrossCameraReIdEvent` type | `client/src/types/index.ts` | TypeScript interface for `face:reidentified` Socket.IO payload |
+| `CrossCameraReIdEvent` type | `client/src/types/index.ts` | TypeScript interface for `face:reidentified` Socket.IO payload — includes optional `newObjectId: number \| null` |
 | `useCrossCameraStore` | `client/src/stores/crossCameraStore.ts` | Zustand store; holds last 20 events, auto-expires after 60 s |
 | Global Socket listener | `client/src/App.tsx` | Subscribes to `face:reidentified` on the singleton socket and dispatches to the store |
-| Cross-Camera Re-ID feed | `client/src/components/FullscreenCameraView.tsx` | Displayed in the Detection panel footer (Detections tab) when at least one cross-camera event involves the current camera; shows `[faceId] prevCam → newCam sim%` |
+| Cross-Camera Re-ID feed | `client/src/components/FullscreenCameraView.tsx` | Displayed in the Detection panel footer (Detections tab) when at least one cross-camera event involves the current camera; shows `[faceId] CameraName → CameraName #objectId sim%` — `#objectId` is the tracker ID of the person in the destination camera (yellow, shown when `newObjectId` is present); camera names resolved from `useCameraStore` |
 | CROSS-CAM badge | `client/src/components/FullscreenCameraView.tsx` | Added to face `DetectionRow` when the face's ID matches a cross-camera event from/to the current camera |
 
 **Upgrade Path**
@@ -292,7 +296,7 @@ Based on the limitations of pure position-based tracking, the following improvem
 | Composite risk score | P0 | ✅ Done | BehaviorEngine |
 | Kalman Filter — basic (static Q) | P1 | ✅ Done | _inv4 NaN guard fixed; KF wired into Track |
 | Suspicious score threshold per zone | P1 | ✅ Done | `minRiskScore` field in zone schema + BehaviorEngine gate |
-| Multi-cue matching (IoU + appearance) | P2 | ✅ Done | ArcFace EMA per track; `tracker.updateAppearance()`; λ_iou/λ_app via `/api/tracker/config` |
+| Multi-cue matching (IoU + Face + Color + Cloth + Acc) | P2 | ✅ Done | 5-cue dynamic-weight scorer; fast pre-tracking colour extraction; λ weights via `/api/tracker/config` + Appearance Weights UI |
 | Adaptive Kalman (motion-based Q/R) | P1 | ✅ Done | Velocity from kf.x[4/5]; occlusion via framesWithoutHit |
 | Sliding-window displacement check | P2 | ✅ Done | 10-second rolling window in BehaviorEngine — fixes pacing detection — see §2.4.4 |
 | Pacing score (x-reversal detection) | P2 | ✅ Done | `_pacingScore()` in BehaviorEngine; weight 12% in risk score — see §2.4.3 |
@@ -329,52 +333,108 @@ if (occluded):             covariance *= 3  // prediction dominant during occlus
 if (appearanceConf < 0.5): covariance *= 2  // weak appearance match
 ```
 
-#### 2.4a.4 Multi-Cue Association Specification *(✅ Done — P2)*
+#### 2.4a.4 Multi-Cue Association Specification *(✅ Done — P2, v2.5)*
 
-> **Status**: ✅ Implemented — `server/src/services/tracking.js` + minimal hook in `pipelineManager.js`.
+> **Status**: ✅ Implemented — `server/src/services/tracking.js` + `pipelineManager.js` + `VideoAnalyticsTab.tsx` Appearance Weights panel.
 
-**Design: one-frame-delayed embedding feedback loop**
+##### 5-Cue Weighted Score
 
-ArcFace embeddings are produced by `attributePipeline` *after* `tracker.update()`, so they cannot be used in the same frame's cost matrix. The solution stores embeddings on the Track object and uses them starting from the *next* frame:
-
-1. `tracker.update(detections)` runs association using IoU + stored embeddings (frame N cost matrix).
-2. After enrichment, `pipelineManager` calls `tracker.updateAppearance(objectId, embedding)` for every person with a face embedding.
-3. On frame N+1, the stored embedding is available and blended into the cost matrix.
-
-**Cost function:**
+Association between each detection and each track is scored by combining up to five independent cues. Every cue is independently optional — if either the detection or the track lacks data for a given cue, that cue is dropped and the remaining weights are **re-normalised** so the total score remains in [0, 1].
 
 ```
-cost(det_i, track_j) = λ_iou × (1 − IoU(det_i, track_j.bbox))
-                     + λ_app × (1 − cosineSim(track_j.embedding_prev, ...))
+score(det_i, track_j) = Σ( λ_k × sim_k ) / Σ( λ_k  for active cues k )
 ```
 
-Default weights: **λ_iou = 0.7**, **λ_app = 0.3** (configurable at runtime).
+| Cue | sim_k | λ default | Active when |
+|---|---|:---:|---|
+| **IoU** | Intersection-over-Union of bboxes | 0.60 | Always (baseline) |
+| **Face** | ArcFace cosine similarity (EMA) | 0.20 | track.embedding set **and** det.embedding set (requires face model) |
+| **Color** | RGB Euclidean distance [0,1] on upper+lower body | 0.12 | color enabled; fast pixel avg computed pre-tracking |
+| **Cloth** | PAR cloth-type exact-match [0,1] on upper+lower | 0.05 | openpar.onnx loaded; track.cloth and det.cloth both present |
+| **Accessories** | hat/mask boolean agreement [0,1] | 0.03 | PPE model enabled; both track.accessories and det.accessories present |
 
-**Embedding storage — Exponential Moving Average (EMA):**
+Class mismatch (e.g. car vs. person) always hard-rejects the pair (score = −1).
+
+##### Pipeline Architecture — Two-Stage Appearance Feedback
+
+```
+Frame N
+ ├─ YOLO detect → raw_detections
+ ├─ [NEW] Fast colour extraction (avgColor, ~0.5 ms/person, no model)
+ │    → det.color attached to each person detection
+ ├─ tracker.update(raw_detections)          ← 5-cue score uses track attrs from frame N−1
+ ├─ attributePipeline.enrich(tracked)       ← face embedding + PAR cloth + PPE hat/mask
+ └─ tracker.update*(objectId, ...)          ← store colour/cloth/acc/embedding for frame N+1
+      updateAppearance(id, embedding)
+      updateColor(id, color)
+      updateCloth(id, cloth)
+      updateAccessories(id, {hat, mask})
+
+Frame N+1
+ ├─ YOLO detect → raw_detections (det.color pre-computed again)
+ └─ tracker.update(...)   ← 5-cue score now has BOTH det.color AND track.color
+```
+
+**Why pre-tracking fast colour?**  
+GPU-based enrichment (face, cloth, accessories) runs *after* `tracker.update()` so those values arrive one frame late. Pixel-averaging for colour is fast enough (~0.5 ms/person) to run *before* tracking, providing immediate det-vs-track colour comparison without changing the enrichment pipeline.
+
+##### Similarity Functions
+
+```
+ColorSim(a, b):
+  rgbDist(r1, r2) = 1 − min(√(ΔR²+ΔG²+ΔB²) / 441.67, 1)   // 441.67 = max RGB distance
+  return (rgbDist(a.upperRgb, b.upperRgb) + rgbDist(a.lowerRgb, b.lowerRgb)) / 2
+
+ClothSim(a, b):
+  for field in [upper, lower]:
+    if both known:  score += (a.field == b.field ? 1 : 0)
+  return score / count  (0.5 if no known fields)
+
+AccSim(a, b):
+  for field in [hat, mask]:
+    if both present: score += (a.field == b.field ? 1 : 0)
+  return score / count  (0.5 if no common fields)
+
+FaceSim(a, b):
+  return dot(a.embedding, b.embedding)        // cosine sim of L2-normalised ArcFace vecs
+  × max(0, 1 − embeddingAge × 0.1)            // age decay over 10 frames
+```
+
+##### ArcFace Embedding — Exponential Moving Average
 
 ```
 track.embedding = 0.9 × track.embedding + 0.1 × new_embedding
 ```
 
-EMA smooths frame-to-frame ArcFace variability while converging quickly to the stable face representation of the person.
+EMA smooths frame-to-frame ArcFace variability while converging quickly to a stable face representation.
 
-**Runtime-Configurable Parameters** (added to `GET / PUT /api/tracker/config`):
+##### Runtime-Configurable Parameters
+
+All weights are persisted to `storage/tracker.json` and applied immediately via `GET / PUT /api/tracker/config`. The **Appearance Weights** panel in the Video Analytics sidebar provides per-cue sliders with a real-time proportional bar chart.
 
 | Parameter | Default | Range | Effect |
 |---|:---:|---|---|
-| `iouWeight` | 0.7 | 0.0–1.0 | Weight of IoU cost term — higher = rely more on position |
-| `appWeight` | 0.3 | 0.0–1.0 | Weight of appearance cost term — higher = rely more on face similarity |
+| `iouWeight` | 0.60 | 0.0–1.0 | Spatial overlap — baseline cue, always active |
+| `faceWeight` | 0.20 | 0.0–1.0 | ArcFace cosine similarity (when face model on) |
+| `colorWeight` | 0.12 | 0.0–1.0 | Upper/lower body RGB distance (fast, no model) |
+| `clothWeight` | 0.05 | 0.0–1.0 | PAR cloth-type exact match (when openpar.onnx loaded) |
+| `accWeight` | 0.03 | 0.0–1.0 | Hat/Mask presence agreement (when PPE model on) |
 
-**Fallback behaviour (backward compatible):**
+##### Fallback Behaviour
 
-- When a track has no stored embedding (first frames, or face not detected), the cost collapses to pure IoU: `(λ_iou + λ_app) × (1−IoU)`, which preserves relative ordering.
-- Embedding confidence decays over frames without a face detection (`embeddingAge` counter) so stale embeddings have reduced influence.
+| Situation | Effective scoring |
+|---|---|
+| No face model, no colour, no cloth, no accessories | Pure IoU (all weight collapses to λ_iou) |
+| Only colour available | IoU + Colour (λ_iou + λ_color, normalised) |
+| All 5 cues active | Full 5-cue score as above |
 
-**Limitations:**
+##### Key Benefit: Re-ID After Brief Occlusion
 
-- Appearance matching only activates for persons where the ArcFace model detects a face. Persons whose face is not visible (rear view, hat, occlusion) use IoU-only matching.
-- Requires `scrfd_2.5g.onnx` + `arcface_w600k_r50.onnx` models to be present. If the face module is disabled or models are absent, behaviour is identical to pre-implementation (IoU-only).
-- Full detection-vs-track cosine scoring (i.e., comparing a new detection's embedding against the track's stored embedding) activates only once detections carry their own embeddings — currently the feedback is track-side only.
+When a person goes behind an object for several frames (IoU → 0, track goes Lost), the stored colour and cloth attributes allow re-association even without positional overlap:
+
+- "Blue shirt + black trousers" track re-matches the same combination appearing 10 frames later
+- Without colour/cloth, a new objectId would be assigned (ID switch)
+- With 5-cue scoring, the colour + cloth similarity compensates for the IoU gap
 
 #### 2.4a.5 Out-of-Scope Items *(Current Architecture)*
 
@@ -614,6 +674,21 @@ The system shall follow a modular microservices-inspired architecture:
 | Concurrent camera channels | >= 16 | >= 64 |
 | Dashboard page load time | <= 3 seconds | <= 1 second |
 | Event storage retention | 30 days | 90 days |
+
+#### 3.4.1 ONNX Runtime Thread Configuration *(Implemented — v1.1)*
+
+By default, each ONNX `InferenceSession` spawns one intra-op worker thread per logical CPU core. With 5 active models this results in `5 × CPU_cores` threads. The server controls this via `server/src/utils/onnxOptions.js` and `server/.env`:
+
+| Mode | Env Condition | `intraOpNumThreads` | `executionProviders` |
+|------|--------------|:-------------------:|----------------------|
+| Development | `NODE_ENV=development` | `ONNX_THREADS_DEV` (default **1**) | `['cpu']` |
+| CUDA | `ONNX_CUDA=1` | `ONNX_THREADS_CUDA` (default **1**) | `['cuda', 'cpu']` |
+| Production | *(default)* | `ONNX_THREADS_PROD` (default **0 = auto**) | `['cpu']` |
+
+- `ONNX_THREADS_PROD=0` → `max(2, min(8, floor(CPU_cores / 2)))`
+- `npm run dev` sets `NODE_ENV=development` automatically via `nodemon.json`
+- CUDA fallback: if CUDA provider is unavailable at runtime, falls back to CPU silently
+- Applies to: `detection.js`, `faceService.js` (×2), `fireSmokeService.js`, `protectiveEquipService.js`, `colorClothService.js`
 
 ---
 

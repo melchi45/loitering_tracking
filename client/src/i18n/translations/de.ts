@@ -12,6 +12,7 @@ export const de: Translations = {
   tabAlerts: 'Alarme',
   tabZones: 'Zonen',
   tabVideoAnalytics: 'Analytik',
+  tabDetections: 'Erkennung',
   videoAnalyticsHint: 'Aktivieren oder deaktivieren Sie jedes KI-Modul global für alle Kameras.',
   videoAnalyticsFooter: 'Deaktivierte Module stoppen die Verarbeitung sofort. Änderungen gelten ab dem nächsten Bild.',
 
@@ -77,6 +78,19 @@ export const de: Translations = {
   settingsTitle: 'Einstellungen',
   settingsLanguage: 'Sprache',
   settingsClose: 'Schließen',
+
+  settingsWebRTC: 'WebRTC',
+  settingsWebRTCEnabled: 'WebRTC aktivieren',
+  settingsStunServers: 'STUN-Server',
+  settingsStunAdd: '+ Hinzufügen',
+  settingsStunPlaceholder: 'stun:stun.l.google.com:19302',
+  settingsTurnServer: 'TURN-Server',
+  settingsTurnUrlPlaceholder: 'turn:server:3478',
+  settingsTurnUsername: 'Benutzername',
+  settingsTurnAdd: '+ Hinzufügen',
+  settingsTurnCredential: 'Anmeldedaten',
+  settingsWebRTCApply: 'Anwenden',
+  settingsWebRTCSaved: 'Gespeichert ✓',
 
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: 'Accessoires / Sport',

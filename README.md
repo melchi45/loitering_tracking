@@ -11,7 +11,7 @@
 
 ## Table of Contents
 
-1. [Project Overview](#1-project-overview)
+1. [Project Overview](#1-project-overview) — [Quick Commands](#14-quick-commands) · [ICE Candidate Test](#15-ice-candidate-test)
 2. [System Architecture](#2-system-architecture)
 3. [Technology Stack](#3-technology-stack)
 4. [IP Camera Discovery (UDP Broadcast)](#4-ip-camera-discovery-udp-broadcast)
@@ -32,6 +32,8 @@
 ---
 
 ## 1. Project Overview
+
+![LTS Dashboard — Multi-camera loitering detection with AI overlays](docs/screenshots/dashboard.png)
 
 ### 1.1 Purpose
 
@@ -57,6 +59,298 @@ Traditional CCTV monitoring is reactive and prone to human error. This system au
 | React Dashboard | Live multi-camera grid, bounding boxes, loitering alerts |
 | Zone Management | Polygon-based inclusion/exclusion zones drawn on canvas |
 | Alert Service | In-app + webhook notifications |
+
+### 1.4 Quick Commands
+
+#### Server Start / Stop
+
+```bash
+# Development mode (auto-restart on file changes — requires nodemon)
+cd server && npm run dev
+
+# Production mode
+cd server && npm start
+
+# Stop server (kills process on port 3001)
+cd server && npm stop
+
+# Restart server (stop → start)
+cd server && npm run restart
+
+# Stop: Ctrl+C  (when running in foreground)
+```
+
+> **배경 실행(Background) 환경에서는** `npm stop` 또는 `fuser -k 3001/tcp` 를 사용합니다.
+>
+> nodemon이 없는 환경에서는 아래 명령으로 서버를 백그라운드 실행합니다:
+> ```bash
+> cd server && nohup npm start > /tmp/server.log 2>&1 &
+> ```
+
+#### Web UI Start / Stop
+
+```bash
+# Development mode (Vite dev server — http://localhost:5173)
+cd client && npm run dev
+
+# Production build (creates dist/ folder)
+cd client && npm run build
+
+# Stop: Ctrl+C
+```
+
+#### Server Status Check (Health Check)
+
+Checks the camera pipeline, WebRTC ICE settings, AI modules, and mediasoup UDP ports in one step.
+
+```bash
+# Local server check (default: http://localhost:3001)
+cd server && npm run health
+
+# Specify remote server
+node server/src/scripts/healthCheck.js http://192.168.214.3:3001
+```
+
+Output example:
+```
+=== LTS Server Health Check ===
+  Target: http://localhost:3001
+
+[1] Cameras & Pipeline Status
+  ✓ 1 camera(s) in database
+  · TID-A800 (80d658eb) — running — WebRTC ON
+
+[2] WebRTC ICE Config
+  ✓ 4 STUN server(s)
+  ✓ 2 TURN server(s)
+
+[3] AI Capabilities
+  ✓ 30 AI module(s) — loaded:6 builtin:3 available:19 pending:2 missing:0
+
+[4] mediasoup UDP Ports (40000-49999)
+  ✓ 9 UDP port(s) open: 40490, 41688, …
+
+=== Result ===
+  All checks passed.
+```
+
+#### ICE / STUN / TURN Configuration Check
+
+Retrieves the ICE server list sent by the server to the browser.
+
+```bash
+# Retrieve ICE config JSON (reflects STUN/TURN values from server/.env)
+node -e "
+const http = require('http');
+http.get('http://localhost:3001/api/webrtc/ice-config', res => {
+  let b = '';
+  res.on('data', c => b += c);
+  res.on('end', () => console.log(JSON.stringify(JSON.parse(b), null, 2)));
+});
+"
+```
+
+#### TURN Server UDP Connection Test
+
+```bash
+# Check coturn service status
+systemctl status coturn
+
+# Verify TURN port (3478) UDP response — local
+node -e "
+const dgram = require('dgram');
+const s = dgram.createSocket('udp4');
+// STUN Binding Request (20 bytes)
+const req = Buffer.from('000100002112a44200000000000000000000000000000000', 'hex');
+s.send(req, 3478, '127.0.0.1', err => {
+  if (err) { console.error('Send failed:', err.message); s.close(); return; }
+  console.log('STUN request sent to 127.0.0.1:3478');
+});
+s.on('message', msg => {
+  console.log('STUN response received (' + msg.length + ' bytes) — TURN reachable');
+  s.close();
+});
+s.on('error', err => { console.error('UDP error:', err.message); });
+setTimeout(() => { console.warn('Timeout — no response (TURN may be down or blocked)'); s.close(); }, 3000);
+"
+
+# Check mediasoup WebRTC UDP port range (listening)
+ss -u -l -n | awk -F: '{print $NF}' | sort -n | awk '$1>=40000 && $1<=49999'
+```
+
+### 1.5 ICE Candidate Test
+
+This describes how to check which path (LAN direct / STUN / TURN) the WebRTC connection is using.
+
+#### Method 0 — Automated Script (full check at once)
+
+Automatically launches a browser and outputs ICE connection path, traffic, and event logs.
+
+```bash
+# Run while server + Web UI are running
+cd server && npm run ice-test
+
+# Specify remote server
+node src/scripts/iceTest.js http://192.168.214.3:3001 http://192.168.214.3:5173
+
+# Without browser window (CI/headless environment)
+npm run ice-test:headless
+```
+
+**Operation sequence:**
+
+```
+Phase 1 — Server pre-check
+  ✓ 1 camera(s) (WebRTC enabled: 1)
+  · TID-A800 (80d658eb) — running
+  ✓ STUN 4  TURN 2
+  ✓ STUN UDP ping → 192.168.214.3:3478 responded
+
+Phase 2 — Browser automation
+  · Using system Chrome: /usr/bin/google-chrome
+  · Mode: browser window visible (headed)
+  ✓ Chromium started
+  ✓ Page loaded: http://localhost:5173
+  · Waiting for ICE connection… (up to 35 seconds)
+  · [browser] [useWebRTC][80d658eb] connection state: connected
+  ✓ ICE connection successful (connectionState = connected)
+  · ICE event log:
+    PC#1 iceGatheringState→gathering
+    PC#1 candidate: host udp 192.168.214.3:42351
+    PC#1 iceGatheringState→complete
+    PC#1 connectionState→connected
+  ✓ Screenshot saved: /tmp/lts-ice-test-ok.png
+
+Phase 3 — ICE Candidate report
+  Local  candidate: [host]  UDP  192.168.214.3:42351
+    └ Direct LAN — optimal path
+  Remote candidate: [host]  192.168.214.32:56712
+
+  Traffic:
+    ↑ Sent total     : 12.3 KB
+    ↓ Received total : 45.8 MB
+    ↓ Receive speed  : ~3200 kbps (5 × 2s)
+
+=== Final result ===
+  PASS — ICE connection verified, video data flow normal
+```
+
+**Screenshot on failure:** `/tmp/lts-ice-test-fail.png`  
+**Screenshot on success:** `/tmp/lts-ice-test-ok.png`
+
+#### Method 1 — Web UI ICE Panel (recommended)
+
+While the camera is connected via WebRTC, click the **ICE** button in the top-right corner.
+
+```
+┌─────────────────────────────────────────────────┐
+│  [Camera Name]  live    WebRTC  [ICE]  + Zone   │
+│                         ┌──────────────────────┐│
+│                         │ ─ local               ││
+│                         │ [host] UDP            ││
+│                         │ 192.168.214.3:42351   ││
+│  (live video)           │   host (LAN)          ││
+│                         │ ─ remote              ││
+│                         │ [host] 192.168.214.32 ││
+│                         │        :51234         ││
+│                         │ ↑ 1.2 MB  ↓ 45.3 MB  ││
+│                         └──────────────────────┘│
+└─────────────────────────────────────────────────┘
+```
+
+**ICE Button Color Meaning (local candidate type):**
+
+| Indicator | Type | Meaning | Status |
+|:---:|---|---|:---:|
+| `[host]` | host | Direct LAN connection (optimal) | 🟢 |
+| `[srflx]` | srflx | Public IP obtained via STUN, NAT traversal | 🟡 |
+| `[relay]` | relay | Via TURN relay (firewall/internet environment) | 🟠 |
+
+> **Panel refresh interval**: `RTCPeerConnection.getStats()` called every 3 seconds — byte counter allows verification of actual data flow
+
+#### Method 2 — Browser built-in WebRTC Diagnostics
+
+Open in a new tab at any time during connection to view the full ICE negotiation process and stats.
+
+**Chrome / Edge:**
+```
+chrome://webrtc-internals
+```
+
+**Firefox:**
+```
+about:webrtc
+```
+
+Check points:
+- **ICE candidate grid** — List of all collected candidates (host / srflx / relay)
+- **candidatepairchanged** — Selected pair change history
+- **Selected Candidate Pair** — Currently active local↔remote path
+- **inbound-rtp** — Received packet count / loss rate (jitter, packetsLost)
+- **connection-state** → Whether `connected` is maintained
+
+#### Method 3 — Server command line
+
+Directly verify ICE-related settings and ports from the server.
+
+```bash
+# ① Retrieve STUN/TURN list sent by the server to the browser
+node -e "
+const http = require('http');
+http.get('http://localhost:3001/api/webrtc/ice-config', res => {
+  let b = '';
+  res.on('data', c => b += c);
+  res.on('end', () => console.log(JSON.stringify(JSON.parse(b), null, 2)));
+});
+"
+
+# ② Verify coturn UDP 3478 port response via STUN Binding Request
+node -e "
+const dgram = require('dgram');
+const HOST  = process.argv[1] || '127.0.0.1';
+const s = dgram.createSocket('udp4');
+const req = Buffer.from('000100002112a44200000000000000000000000000000000', 'hex');
+s.send(req, 3478, HOST, err => {
+  if (err) { console.error('Send failed:', err.message); s.close(); return; }
+  console.log('STUN Binding Request → ' + HOST + ':3478');
+});
+s.on('message', msg => {
+  console.log('✓ Response ' + msg.length + ' bytes — TURN/STUN reachable');
+  s.close();
+});
+setTimeout(() => { console.warn('✗ Timeout — no response'); s.close(); }, 3000);
+" -- 127.0.0.1
+
+# ③ Check mediasoup WebRTC UDP ports (created after browser connects)
+ss -u -l -n | awk -F: '{print $NF}' | sort -n | awk '$1>=40000 && $1<=49999'
+
+# ④ Full health check (cameras + ICE config + AI + mediasoup ports)
+cd server && npm run health
+```
+
+#### ICE Connection Problem Diagnosis Flow
+
+```
+Connection failed / Video frozen
+       │
+       ▼
+[Web UI ICE Panel] Open
+       │
+       ├─ local: relay → TURN relay path in use
+       │    └─ Check coturn config: systemctl status coturn
+       │       Check if allowed-peer-ip=192.168.214.3 addition needed
+       │
+       ├─ local: srflx → Via STUN public IP
+       │    └─ Hairpin NAT may be the problem
+       │       Check server/.env: SERVER_IP=<LAN IP> setting
+       │
+       ├─ local: host → Direct LAN, but failed
+       │    └─ Check mediasoup UDP port firewall
+       │       sudo ufw allow 40000:49999/udp
+       │
+       └─ Panel does not appear (no ICE button)
+            └─ WebRTC connection itself failed → check server status with npm run health
+```
 
 ---
 
@@ -158,7 +452,7 @@ Traditional CCTV monitoring is reactive and prone to human error. This system au
 | ArcFace ResNet50 | ONNX | Face Re-ID / appearance embedding (512-dim) | — | 249MB | ~15ms/crop |
 | YOLOv8m PPE | ONNX | Mask / Helmet / PPE detection | mask, hardhat | 99MB | ~30ms |
 | YOLOv8s Fire/Smoke | ONNX | Fire and smoke detection | fire, smoke, both | 43MB | ~25ms |
-| OpenPAR *(planned)* | ONNX | Clothing type classification | cloth types | TBD | TBD |
+| OpenPAR | ONNX | Clothing type classification | cloth types | 94MB | ~20ms/crop |
 
 > \* Latency measured on Intel Core i7 CPU. GPU via NVIDIA CUDA reduces by 3–5×.
 
@@ -190,7 +484,7 @@ server/models/
 ├── arcface_w600k_r50.onnx      # 249MB — Face Re-ID ArcFace ResNet50 (AI-03)
 ├── yolov8m_ppe.onnx            # 99MB  — Mask / helmet PPE (AI-04/07)
 ├── yolov8s_fire_smoke.onnx     # 43MB  — Fire & smoke detection (AI-09)
-└── [openpar.onnx]              # TBD   — Cloth type classifier (AI-06, planned)
+└── openpar.onnx                # 94MB  — Cloth type classifier (AI-06, Phase-2 active)
 ```
 
 **Download commands:**
@@ -207,87 +501,18 @@ python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt').export(format='onnx
 
 ---
 
-## 4. IP Camera Discovery (UDP Broadcast)
+## 4. IP Camera Discovery
 
-### 4.1 Overview
+> Full specification moved to **[RFP_Camera_Discovery.md](RFP_Camera_Discovery.md)** (Document ID: LTS-2026-002).
 
-Ported from [WiseNetChromeIPInstaller](https://github.com/melchi45/WiseNetChromeIPInstaller) (Chrome `sockets.udp` API → Node.js `dgram` module).
+The system supports two parallel discovery mechanisms:
 
-The discovery protocol sends a proprietary WiseNet UDP broadcast packet and parses binary responses from cameras on the local network.
+| Mechanism | Scope | Detail |
+|---|---|---|
+| WiseNet UDP Broadcast | Hanwha / WiseNet cameras | Send port 7701, receive port 7711, 255.255.255.255 |
+| ONVIF WS-Discovery | All ONVIF-compliant cameras | UDP multicast 239.255.255.250:3702 |
 
-### 4.2 Protocol Specification
-
-| Parameter | Value |
-|---|---|
-| Send Port | **7701** (broadcast to cameras) |
-| Receive Port | **7711** (listen for responses) |
-| Broadcast Address | `255.255.255.255` |
-| Listen Address | `0.0.0.0` |
-
-**Discovery packet (hex):**
-```
-018750735306465625ef6da75b047d7bcd1c3c001800000000000000f0eacf00
-000000000000000000000000faf8ec76000000000000000050ea18001a01ec76
-f0e9180000000000e4ea18008000ec76f0eacf0000000000f0000000...
-```
-
-### 4.3 Response Packet Format
-
-| Field | Size (bytes) | Type | Description |
-|---|---|---|---|
-| `nMode` | 1 | uint8 | Packet mode |
-| `chPacketId` | 18 | bytes | Packet identifier |
-| `chMac` | 18 | string | MAC address |
-| `chIP` | 16 | string | IP address |
-| `chSubnetMask` | 16 | string | Subnet mask |
-| `chGateway` | 16 | string | Default gateway |
-| `chPassword` | 20 | string | Password |
-| `isSupportSunapi` | 1 | uint8 | SUNAPI support flag |
-| `nPort` | 2 | uint16 BE | Device port |
-| `nStatus` | 1 | uint8 | Device status |
-| `chDeviceName` | 10 | string | Device name (short) |
-| `Reserved2` | 1 | bytes | Reserved |
-| `nHttpPort` | 2 | uint16 BE | HTTP port |
-| `nDevicePort` | 2 | uint16 BE | Device port |
-| `nTcpPort` | 2 | uint16 BE | TCP port |
-| `nUdpPort` | 2 | uint16 BE | UDP port |
-| `nUploadPort` | 2 | uint16 BE | Upload port |
-| `nMulticastPort` | 2 | uint16 BE | Multicast port |
-| `nNetworkMode` | 1 | uint8 | Network mode |
-| `DDNSURL` | 128 | string | DDNS URL |
-| `alias` | 32 | string | Camera alias (if len ≥ 261) |
-| `chDeviceNameNew` | 32 | string | Device name (if len ≥ 261) |
-| `modelType` | 1 | uint8 | Model type (if len ≥ 261) |
-| `version` | 2 | uint16 | Firmware version (if len ≥ 261) |
-| `httpType` | 1 | uint8 | 0=HTTP, 1=HTTPS (if len ≥ 261) |
-| `Reserved3` | 1 | bytes | Reserved (if len ≥ 261) |
-| `nHttpsPort` | 2 | uint16 BE | HTTPS port (if len ≥ 261) |
-| `noPassword` | 1 | uint8 | No-password flag (if len ≥ 261) |
-
-### 4.4 Node.js Implementation
-
-The Node.js UDP discovery module is maintained in a dedicated branch of the submodule:
-
-```
-submodules/WiseNetChromeIPInstaller/   (branch: nodejs-udp-discovery)
-└── nodejs/
-    ├── udpDiscovery.js     # Core discovery module (dgram port)
-    ├── utils.js            # ntohs/ntohl/bytes2int helpers
-    └── index.js            # Example usage / CLI
-```
-
-**Usage from Node.js server:**
-```javascript
-const { UDPDiscovery } = require('./submodules/WiseNetChromeIPInstaller/nodejs');
-
-const discovery = new UDPDiscovery();
-discovery.on('device', (camera) => {
-  console.log(`Found: ${camera.chDeviceName} @ ${camera.chIP}:${camera.nHttpPort}`);
-  // { chIP, chMac, chDeviceName, nHttpPort, nHttpsPort, httpType, modelType, ... }
-});
-discovery.start();   // broadcasts and listens
-setTimeout(() => discovery.stop(), 5000);
-```
+Both mechanisms run concurrently and merge results deduplicated by MAC address. See [RFP_Camera_Discovery.md](RFP_Camera_Discovery.md) for protocol specification, packet format, and implementation details.
 
 ---
 
@@ -429,117 +654,154 @@ Each camera zone can independently activate one or more AI analysis modules via 
 
 | # | Checkbox | Zone Key | RFP | Status | Description |
 |:---:|---|---|---|:---:|---|
-| 1 | ☑ **Human** | `human` | [AI-01](RFP_AI_Human_Detection.md) | ✅ 구현 완료 | 사람 감지 — YOLOv8n COCO class 0 (person) |
-| 2 | ☑ **Vehicle** | `vehicle` | [AI-02](RFP_AI_Vehicle_Detection.md) | ✅ 구현 완료 | 차량 감지 — bicycle/car/motorcycle/bus/truck |
-| 3 | ☑ **Face** | `face` | [AI-03](RFP_AI_Face_Recognition.md) | ✅ 구현 완료 | 얼굴 감지 — SCRFD-2.5G (3.2MB) + ArcFace ResNet50 Re-ID (249MB) |
-| 4 | ☑ **Mask** | `mask` | [AI-04](RFP_AI_Mask_Detection.md) | ✅ 구현 완료 | 마스크 착용 감지 — YOLOv8m PPE (99MB), mask/no_mask 2-class |
-| 5 | ☑ **Color** | `color` | [AI-05](RFP_AI_Color_Analysis.md) | ✅ 구현 완료 | 상/하의 색상 분석 — Phase-1 픽셀 평균, 11색 분류 (모델 불필요) |
-| 6 | ☐ **Cloth** | `cloth` | [AI-06](RFP_AI_Cloth_Analysis.md) | 🔲 준비중 | 의류 유형 분류 — OpenPAR (openpar.onnx 미설치) |
-| 7 | ☑ **Hat** | `hat` | [AI-07](RFP_AI_Hat_Detection.md) | ✅ 구현 완료 | 헬멧/모자 감지 — YOLOv8m PPE (99MB), hardhat/no_hardhat 분류 |
-| 8 | ☑ **Accessories** | `accessories` | [AI-08](RFP_AI_Accessories_Detection.md) | ✅ 구현 완료 | 소품 감지 — YOLOv8n COCO (backpack/umbrella/handbag/tie/suitcase) |
-| 9 | ☑ **Fire** | `fire` | [AI-09](RFP_AI_Fire_Smoke_Detection.md) | ✅ 구현 완료 | 화재 감지 — YOLOv8s 3-class (yolov8s_fire_smoke.onnx 43MB, Abonia1/GitHub) |
-| 10 | ☑ **Smoke** | `smoke` | [AI-09](RFP_AI_Fire_Smoke_Detection.md) | ✅ 구현 완료 | 연기 감지 — YOLOv8s 3-class (yolov8s_fire_smoke.onnx 43MB, Abonia1/GitHub) |
+| 1 | ☑ **Human** | `human` | [AI-01](RFP_AI_Human_Detection.md) | ✅ Implemented | Person detection — YOLOv8n COCO class 0 (person) |
+| 2 | ☑ **Vehicle** | `vehicle` | [AI-02](RFP_AI_Vehicle_Detection.md) | ✅ Implemented | Vehicle detection — bicycle/car/motorcycle/bus/truck |
+| 3 | ☑ **Face** | `face` | [AI-03](RFP_AI_Face_Recognition.md) | ✅ Implemented | Face detection — SCRFD-2.5G (3.2MB) + ArcFace ResNet50 Re-ID (249MB) |
+| 4 | ☑ **Mask** | `mask` | [AI-04](RFP_AI_Mask_Detection.md) | ✅ Implemented | Mask detection — YOLOv8m PPE (99MB), mask/no_mask 2-class |
+| 5 | ☑ **Color** | `color` | [AI-05](RFP_AI_Color_Analysis.md) | ✅ Implemented | Upper/lower body color analysis — Phase-1 pixel average, 11-color classification (no model required) |
+| 6 | ☑ **Cloth** | `cloth` | [AI-06](RFP_AI_Cloth_Analysis.md) | ✅ Implemented | Clothing type classification — OpenPAR (openpar.onnx 94MB), upper/lower garment + sleeve length |
+| 7 | ☑ **Hat** | `hat` | [AI-07](RFP_AI_Hat_Detection.md) | ✅ Implemented | Helmet/hat detection — YOLOv8m PPE (99MB), hardhat/no_hardhat classification |
+| 8 | ☑ **Accessories** | `accessories` | [AI-08](RFP_AI_Accessories_Detection.md) | ✅ Implemented | Accessories detection — YOLOv8n COCO (backpack/umbrella/handbag/tie/suitcase) |
+| 9 | ☑ **Fire** | `fire` | [AI-09](RFP_AI_Fire_Smoke_Detection.md) | ✅ Implemented | Fire detection — YOLOv8s 3-class (yolov8s_fire_smoke.onnx 43MB, Abonia1/GitHub) |
+| 10 | ☑ **Smoke** | `smoke` | [AI-09](RFP_AI_Fire_Smoke_Detection.md) | ✅ Implemented | Smoke detection — YOLOv8s 3-class (yolov8s_fire_smoke.onnx 43MB, Abonia1/GitHub) |
 
-> **구현 완료** 모듈은 Zone 편집 시 체크박스가 활성화됩니다. **준비중** 모듈은 체크박스가 회색으로 표시되며 해당 ONNX 모델 파일이 `server/models/`에 배치되면 자동 활성화됩니다.
+> **Implemented** modules: checkbox is enabled when editing a Zone. **Pending** modules: checkbox is shown in gray and automatically activated when the corresponding ONNX model file is placed in `server/models/`.
 >
-> 체크박스 가용성은 서버 `/api/capabilities` 엔드포인트에서 실시간으로 조회됩니다.
+> Checkbox availability is queried in real-time from the server `/api/capabilities` endpoint.
 
-### 7.2 Zone Editor UI — AI 감지 대상 체크박스
+### 7.2 Zone Editor UI — AI Detection Target Checkboxes
 
-Zone 편집 화면 하단의 **"AI 감지 대상"** 섹션에서 해당 Zone에 적용할 AI 모듈을 선택합니다.
+At the bottom of the edit screen in the **"AI Detection Targets"** section, select the AI modules to apply to this zone.
 
 ```
 ┌─────────────────────────────────┐
-│ AI 감지 대상  (미선택 시 전체)   │
+│ AI Detection Targets  (All if none selected)   │
 ├────────────────┬────────────────┤
-│ ☑ 사람         │ ☑ 차량         │
-│ ☑ 얼굴         │ ☑ 마스크        │
-│ ☑ 색상         │ ☐ 의류   준비중 │
-│ ☑ 모자         │ ☑ 소품          │
-│ ☑ 화재          │ ☑ 연기          │
+│ ☑ Human        │ ☑ Vehicle      │
+│ ☑ Face         │ ☑ Mask         │
+│ ☑ Color        │ ☑ Cloth        │
+│ ☑ Hat          │ ☑ Accessories  │
+│ ☑ Fire         │ ☑ Smoke        │
 └────────────────┴────────────────┘
 ```
 
-- **체크 선택**: 파란색 배경 + 체크 아이콘, 즉시 API 저장 (PUT `/api/cameras/:id/zones/:zoneId`)
-- **미선택 시**: `targetClasses: []` → 모든 활성 클래스 감지 (기본 동작)
-- **준비중 항목**: 비활성(회색), "준비중" 뱃지 표시, 클릭 불가
-- **가용성 동적 조회**: Zone Editor 열릴 때 `/api/capabilities` 호출 → 모델 파일 존재 여부 반영
-- **화재/연기 경보**: Zone에 fire/smoke 체크 후 탐지 시 `fire:alert` Socket 이벤트 발생 (10초 쿨다운)
+- **Checkbox selected**: Blue background + check icon, immediately saved via API (PUT `/api/cameras/:id/zones/:zoneId`)
+- **If not selected**: `targetClasses: []` → detect all active classes (default behavior)
+- **Dynamic availability query**: `/api/capabilities` called when Zone Editor opens → reflects model file existence
+- **Fire/smoke alert**: upon detection after checking fire/smoke in a Zone, `fire:alert` Socket event triggered (10-second cooldown)
 
-### 7.3 `targetClasses` 동작 규칙
+### 7.3 `targetClasses` Behavior Rules
 
 ```javascript
 // behaviorEngine.js — classMatchesZone()
 const TARGET_CLASS_MAP = {
   human:   ['person'],
   vehicle: ['bicycle', 'car', 'motorcycle', 'bus', 'truck'],
-  // 향후 추가: face, mask, color, cloth, hat, accessories
+  // future additions: face, mask, color, cloth, hat, accessories
 };
 
-// targetClasses가 비어있으면 모든 클래스 허용
+// empty means all classes allowed
 if (!targetClasses || targetClasses.length === 0) return true;
 ```
 
-| `targetClasses` 설정 | 감지 대상 | 사용 사례 |
+| `targetClasses` Setting | Detection Targets | Use Case |
 |---|---|---|
-| `[]` (기본) | 모든 활성 클래스 | 일반 감시 |
-| `["human"]` | 사람만 | 출입 통제 구역 |
-| `["vehicle"]` | 차량만 | 주차장 관리 |
-| `["human", "vehicle"]` | 사람 + 차량 | 혼합 구역 |
-| `["human", "hat"]` | 사람 + 안전모 검사 | 건설 현장 컴플라이언스 *(준비중)* |
-| `["human", "mask"]` | 사람 + 마스크 | 방역 구역 *(준비중)* |
+| `[]` (default) | All active classes | General surveillance |
+| `["human"]` | Persons only | Access-controlled area |
+| `["vehicle"]` | Vehicles only | Parking lot management |
+| `["human", "vehicle"]` | Persons + Vehicles | Mixed area |
+| `["human", "hat"]` | Persons + Safety helmet check | Construction site compliance *(Pending)* |
+| `["human", "mask"]` | Persons + Mask | Quarantine zone *(Pending)* |
 
-### 7.4 Bounding Box 색상 코드 (화면 표시)
+### 7.4 Bounding Box Color Codes (Screen Display)
 
-| 클래스 | 정상 색상 | Loitering 색상 |
+| Class | Normal color | Loitering color |
 |---|---|---|
-| person | 🟢 녹색 `rgba(34,197,94)` | 🔴 빨간색 `rgba(239,68,68)` |
-| bicycle | 🟡 노란색 `rgba(250,204,21)` | 🔴 빨간색 |
-| car | 🔵 파란색 `rgba(59,130,246)` | 🔴 빨간색 |
-| motorcycle | 🟠 주황색 `rgba(249,115,22)` | 🔴 빨간색 |
-| bus | 🟣 보라색 `rgba(168,85,247)` | 🔴 빨간색 |
-| truck | 🩵 청록색 `rgba(20,184,166)` | 🔴 빨간색 |
+| person | 🟢 Green `rgba(34,197,94)` | 🔴 Red `rgba(239,68,68)` |
+| bicycle | 🟡 Yellow `rgba(250,204,21)` | 🔴 Red |
+| car | 🔵 Blue `rgba(59,130,246)` | 🔴 Red |
+| motorcycle | 🟠 Orange `rgba(249,115,22)` | 🔴 Red |
+| bus | 🟣 Purple `rgba(168,85,247)` | 🔴 Red |
+| truck | 🩵 Teal `rgba(20,184,166)` | 🔴 Red |
 
-라벨 형식: `person #3  94%` (className + objectId + confidence)
+Label format: `person #3  94%` (className + objectId + confidence)
 
-### 7.5 설치된 AI 모델 파일 현황
+### 7.5 Installed AI Model File Status
 
-> 검증 환경: **onnxruntime-node 1.26.0** (Node.js, 2026-05-18)  
-> Python onnxruntime 1.14.1은 `yolov8n.onnx` (ONNX IR v9) 미지원 — Node.js 런타임에서만 동작
+> Verification environment: **onnxruntime-node 1.26.0** (Node.js, 2026-05-18)  
+> Python onnxruntime 1.14.1 does not support `yolov8n.onnx` (ONNX IR v9) — works only with Node.js runtime
 
-| 파일 | 크기 | Node.js 로드 | 담당 AI 모듈 | 출처 |
+| File | Size | Node.js Load | Responsible AI module | Source |
 |---|---:|:---:|---|---|
-| `yolov8n.onnx` | 13 MB | ✅ 동작 | AI-01 Human · AI-02 Vehicle · AI-08 Accessories · Indoor 객체 전체 | Ultralytics YOLOv8n COCO (ONNX IR v9) |
-| `scrfd_2.5g.onnx` | 3.2 MB | ✅ 동작 | AI-03 Face Detection (얼굴 감지) | JackCui/facefusion @ HuggingFace |
-| `arcface_w600k_r50.onnx` | 249 MB | ✅ 동작 | AI-03 Face Re-ID (얼굴 재식별) | FoivosPar/Arc2Face @ HuggingFace |
-| `yolov8m_ppe.onnx` | 99 MB | ✅ 동작 | AI-04 Mask Detection · AI-07 Helmet Detection | keremberke/yolov8m-protective-equipment-detection |
-| `yolov8s_fire_smoke.onnx` | 43 MB | ✅ 동작 | AI-09 Fire & Smoke Detection (화재·연기 3-class) | Abonia1/YOLOv8-Fire-and-Smoke-Detection @ GitHub |
-| `openpar.onnx` | — | 🔲 미설치 | AI-06 Cloth Analysis Phase-2 (의류 유형 분류) | Event-AHU/OpenPAR (연구 프레임워크 — 별도 학습 필요) |
+| `yolov8n.onnx` | 13 MB | ✅ Working | AI-01 Human · AI-02 Vehicle · AI-08 Accessories · All indoor objects | Ultralytics YOLOv8n COCO (ONNX IR v9) |
+| `scrfd_2.5g.onnx` | 3.2 MB | ✅ Working | AI-03 Face Detection | JackCui/facefusion @ HuggingFace |
+| `arcface_w600k_r50.onnx` | 249 MB | ✅ Working | AI-03 Face Re-ID | FoivosPar/Arc2Face @ HuggingFace |
+| `yolov8m_ppe.onnx` | 99 MB | ✅ Working | AI-04 Mask Detection · AI-07 Helmet Detection | keremberke/yolov8m-protective-equipment-detection |
+| `yolov8s_fire_smoke.onnx` | 43 MB | ✅ Working | AI-09 Fire & Smoke Detection (3-class) | Abonia1/YOLOv8-Fire-and-Smoke-Detection @ GitHub |
+| `openpar.onnx` | 94 MB | ✅ Working | AI-06 Cloth Analysis Phase-2 (Clothing type: tshirt/shirt/jacket/hoodie/vest/dress + pants/jeans/shorts/skirt + sleeve) | Event-AHU/OpenPAR |
 
-**모델 합계**: 설치 완료 5개 · 총 약 407 MB  
-**미설치**: 1개 (`openpar.onnx`) — Phase-2 구현 대기 (추론 코드 미완성)
+**Total models**: 6 installed · Total approximately 501 MB
 
 ```
-server/models/                       크기    상태   모듈
+server/models/                       Size    Status  Module
 ├── yolov8n.onnx                     13 MB  ✅     Human/Vehicle/Indoor/Accessories (COCO 80-class)
-├── scrfd_2.5g.onnx                 3.2 MB  ✅     얼굴 감지 SCRFD-2.5G (AI-03)
-├── arcface_w600k_r50.onnx          249 MB  ✅     얼굴 Re-ID ArcFace ResNet50 (AI-03)
-├── yolov8m_ppe.onnx                 99 MB  ✅     마스크/헬멧 YOLOv8m PPE (AI-04/07)
-└── yolov8s_fire_smoke.onnx          43 MB  ✅     화재/연기 YOLOv8s 3-class (AI-09)
-                                              출처: Abonia1/YOLOv8-Fire-and-Smoke-Detection
-[미설치]
-└── openpar.onnx                      — MB  🔲     의류 유형 PAR (AI-06 Phase-2)
-                                              출처: Event-AHU/OpenPAR (학습 완료 후 ONNX 변환 필요)
-                                              ※ colorClothService._runPAR() 추론 구현 병행 필요
+├── scrfd_2.5g.onnx                 3.2 MB  ✅     Face detection SCRFD-2.5G (AI-03)
+├── arcface_w600k_r50.onnx          249 MB  ✅     Face Re-ID ArcFace ResNet50 (AI-03)
+├── yolov8m_ppe.onnx                 99 MB  ✅     Mask/Helmet YOLOv8m PPE (AI-04/07)
+├── yolov8s_fire_smoke.onnx          43 MB  ✅     Fire/Smoke YOLOv8s 3-class (AI-09)
+│                                             Source: Abonia1/YOLOv8-Fire-and-Smoke-Detection
+└── openpar.onnx                     94 MB  ✅     Clothing type PAR (AI-06 Phase-2)
+                                              Source: Event-AHU/OpenPAR
+                                              Classes: tshirt/shirt/jacket/hoodie/vest/dress + pants/jeans/shorts/skirt + sleeve short/long
 ```
 
-> **AI-06 Cloth Phase-2 설치 조건** (현재 미완):  
-> 1. Event-AHU/OpenPAR 사전 학습 가중치 다운로드 및 ONNX 변환  
-> 2. `server/src/services/colorClothService.js` → `_runPAR()` 추론 코드 구현  
-> 3. 완료 후 `/api/capabilities` → `cloth: true` 자동 전환  
-> Phase-1 (상체·하체 색상 추출)은 모델 없이 즉시 동작 중.
+For detailed spec for each AI module, refer to `RFP_AI_Human_Detection.md` through `RFP_AI_Fire_Smoke_Detection.md`.
 
-각 AI 모듈 상세 사양: `RFP_AI_Human_Detection.md` ~ `RFP_AI_Fire_Smoke_Detection.md` 참고.
+### 7.6 ONNX Runtime Thread Configuration
+
+Each `InferenceSession` created by the ONNX Runtime spawns **intra-op worker threads** (default: one per logical CPU core). With 5 active models and a high core-count server, this can result in hundreds of idle threads. The server controls thread count via `server/src/utils/onnxOptions.js`, driven by three environment variables in `server/.env`.
+
+#### Thread Count Policy
+
+| Mode | Condition | `intraOpNumThreads` | `executionProviders` |
+|------|-----------|:-------------------:|----------------------|
+| **Development** | `NODE_ENV=development` | `ONNX_THREADS_DEV` (default: **1**) | `['cpu']` |
+| **CUDA** | `ONNX_CUDA=1` | `ONNX_THREADS_CUDA` (default: **1**) | `['cuda', 'cpu']` |
+| **Production** | default | `ONNX_THREADS_PROD` (default: **0 = auto**) | `['cpu']` |
+
+`ONNX_THREADS_PROD=0` → auto: `max(2, min(8, floor(CPU_cores / 2)))`
+
+#### Startup Log
+
+```
+[onnxOptions] mode=dev   threads=1   cores=32  providers=["cpu"]
+[onnxOptions] mode=cuda  threads=1   cores=32  providers=["cuda","cpu"]
+[onnxOptions] mode=prod  threads=8   cores=32  providers=["cpu"]
+```
+
+#### Active Models (thread consumers)
+
+| Service file | Model | InferenceSession |
+|---|---|:---:|
+| `detection.js` | `yolov8n.onnx` | 1 |
+| `faceService.js` | `scrfd_2.5g.onnx` | 1 |
+| `faceService.js` | `arcface_w600k_r50.onnx` | 1 |
+| `fireSmokeService.js` | `yolov8s_fire_smoke.onnx` | 1 |
+| `protectiveEquipService.js` | `yolov8m_ppe.onnx` | 1 |
+| `colorClothService.js` | `openpar.onnx` | 1 |
+
+Total threads in dev mode = 5 sessions × 1 thread = **5 threads**.  
+Total threads in prod mode (32-core server) = 5 sessions × 8 threads = **40 threads**.
+
+#### CUDA Enablement
+
+```bash
+# In server/.env
+ONNX_CUDA=1          # enable CUDA provider
+ONNX_THREADS_CUDA=1  # GPU handles parallelism; 1 CPU thread sufficient
+```
+
+Requires a CUDA-enabled build of `onnxruntime-node`. If CUDA is unavailable at runtime, the provider list `['cuda', 'cpu']` automatically falls back to CPU.
 
 ---
 
@@ -634,7 +896,7 @@ The Zone Editor opens as a full-viewport overlay when the **+ Zone** button is c
 | Full-screen vertex drag | Global `document.addEventListener('mousemove/mouseup')` — drag works even when cursor leaves the canvas |
 | Coordinate system | All hit-testing uses frame pixel space; hit radius dynamically converted from screen pixels via `fwEff/fhEff` |
 | Frame dimensions | Background image `naturalWidth/naturalHeight` (read via `onLoad`) replaces JPEG SOF defaults — matches `<img object-contain>` layout exactly |
-| Vertex delete | Right-click on vertex → context menu shows "꼭짓점 N 삭제"; auto-saves after deletion; minimum 3 vertices enforced |
+| Vertex delete | Right-click on vertex → context menu shows "Delete vertex N"; auto-saves after deletion; minimum 3 vertices enforced |
 | AI target classes | Checkbox grid (Human, Vehicle, + 6 planned attributes) auto-saves per toggle via PUT API |
 
 **Zone polygon storage:** coordinates are in actual JPEG frame pixel space (e.g. 1920×1080), not normalized. The ZoneEditor reads `img.naturalWidth/naturalHeight` so the canvas overlay always aligns with the displayed video regardless of container size.
@@ -697,6 +959,8 @@ Objects are sorted: loitering first, then by descending dwell time.
 
 The fullscreen view renders an additional `useCamera(cameraId)` hook for the same camera.  
 A module-level `subscriptionCounts` map ensures `camera:subscribe` is emitted only on the **first** subscriber and `camera:unsubscribe` only when the **last** subscriber unmounts — preventing the grid cell from losing its stream when the fullscreen modal closes.
+
+![Fullscreen Camera View — loitering detection with cloth analysis, zone overlay, and real-time detection panel](docs/screenshots/camera_detection.png)
 
 ---
 
@@ -881,6 +1145,26 @@ cp server/.env.example server/.env
 # JWT_SECRET=your-secret-key
 ```
 
+#### ONNX Runtime Thread Count (server/.env)
+
+```dotenv
+# Server mode — affects ONNX thread count
+# development : 1 intra-op thread per session (minimal CPU usage)
+# production  : auto (max(2, min(8, CPU_cores / 2)))
+NODE_ENV=development
+
+# CUDA execution provider
+# 0 = CPU-only  |  1 = cuda+cpu (requires CUDA-enabled onnxruntime-node)
+ONNX_CUDA=0
+
+# Per-mode intra-op thread count (0 = auto)
+ONNX_THREADS_DEV=1      # when NODE_ENV=development
+ONNX_THREADS_CUDA=1     # when ONNX_CUDA=1  (GPU handles parallelism)
+ONNX_THREADS_PROD=0     # production: 0 → max(2, min(8, CPU_cores/2))
+```
+
+`nodemon` (`npm run dev`) automatically sets `NODE_ENV=development` via `nodemon.json` — no manual export needed.
+
 ### 15.4 Running
 
 ```bash
@@ -1010,7 +1294,7 @@ loitering_tracking/
 │   │   ├── arcface_w600k_r50.onnx   # 249MB — face Re-ID ArcFace ResNet50 (AI-03)
 │   │   ├── yolov8m_ppe.onnx         # 99MB  — mask/helmet PPE (AI-04/07)
 │   │   ├── yolov8s_fire_smoke.onnx  # 43MB  — fire/smoke 3-class (AI-09)
-│   │   └── [openpar.onnx]           # TBD   — cloth type PAR (AI-06 Phase-2, planned)
+│   │   └── openpar.onnx             # 94MB  — cloth type PAR (AI-06 Phase-2, active)
 │   └── storage/                     # Event clips + DB (gitignored)
 │       ├── events.db
 │       └── clips/

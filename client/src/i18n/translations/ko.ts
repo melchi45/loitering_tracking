@@ -12,6 +12,7 @@ export const ko: Translations = {
   tabAlerts: '알림',
   tabZones: '구역',
   tabVideoAnalytics: '분석',
+  tabDetections: '감지목록',
   videoAnalyticsHint: '각 AI 모듈을 전체 카메라에 대해 전역으로 활성화/비활성화합니다.',
   videoAnalyticsFooter: '비활성화된 모듈은 즉시 처리를 중지합니다. 변경 사항은 다음 비디오 프레임부터 적용됩니다.',
 
@@ -77,6 +78,19 @@ export const ko: Translations = {
   settingsTitle: '설정',
   settingsLanguage: '언어',
   settingsClose: '닫기',
+
+  settingsWebRTC: 'WebRTC',
+  settingsWebRTCEnabled: 'WebRTC 활성화',
+  settingsStunServers: 'STUN 서버',
+  settingsStunAdd: '+ 추가',
+  settingsStunPlaceholder: 'stun:stun.l.google.com:19302',
+  settingsTurnServer: 'TURN 서버',
+  settingsTurnUrlPlaceholder: 'turn:서버주소:3478',
+  settingsTurnUsername: '사용자 이름',
+  settingsTurnAdd: '+ 추가',
+  settingsTurnCredential: '인증 정보',
+  settingsWebRTCApply: '적용',
+  settingsWebRTCSaved: '저장됨 ✓',
 
   zoneGroupPeopleVehicles: '사람 / 차량',
   zoneGroupAccessories: '소지품 / 스포츠용품',

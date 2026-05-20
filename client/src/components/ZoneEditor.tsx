@@ -84,6 +84,12 @@ export default function ZoneEditor({
   const [ctxVertexIdx,    setCtxVertexIdx]    = useState<number | null>(null);
   const [editName,        setEditName]        = useState('');
 
+  // Settings for the SELECTED (existing) zone — loaded when zone is selected
+  const [editZoneType,   setEditZoneType]   = useState<'MONITOR' | 'EXCLUDE'>('MONITOR');
+  const [editDwell,      setEditDwell]      = useState(30);
+  const [editDisp,       setEditDisp]       = useState(50);
+  const [editRisk,       setEditRisk]       = useState(0.0);
+
   const [saving, setSaving] = useState(false);
   const [error,  setError]  = useState('');
 
@@ -199,6 +205,11 @@ export default function ZoneEditor({
     setActiveVertexIdx(null);
     setEditName(z.name);
     editNameRef.current = z.name;
+    // Load current zone settings into edit state
+    setEditZoneType(z.type);
+    setEditDwell(z.dwellThreshold  ?? 30);
+    setEditDisp(z.minDisplacement  ?? 50);
+    setEditRisk(z.minRiskScore     ?? 0.0);
   }, []);
 
   const clearSelection = useCallback(() => {
@@ -498,7 +509,7 @@ export default function ZoneEditor({
     setSaving(true); setError('');
     try {
       const data = await apiPut(selId, { polygon: editPoly });
-      if (data) { onZoneUpdated(data); editPolyRef.current = null; setEditPolygon(null); }
+      if (data) { onZoneUpdated(data); }
       activeVIdxRef.current = null; setActiveVertexIdx(null);
       ctxMenuRef.current    = null; setContextMenu(null);
     } catch (err) {
@@ -506,18 +517,28 @@ export default function ZoneEditor({
     } finally { setSaving(false); }
   };
 
-  const handleSaveName = async () => {
-    const selId = selIdRef.current;
-    const name  = editNameRef.current.trim();
-    if (!selId || !name) return;
-    const zone = zonesRef.current.find(z => z.id === selId);
-    if (!zone || zone.name === name) return;
+  const handleSaveZone = async () => {
+    const selId    = selIdRef.current;
+    const editPoly = editPolyRef.current;
+    if (!selId) return;
+    setSaving(true); setError('');
     try {
-      const data = await apiPut(selId, { name });
-      if (data) onZoneUpdated(data);
+      const body: Record<string, unknown> = {
+        name:            editNameRef.current.trim() || undefined,
+        type:            editZoneType,
+        dwellThreshold:  editDwell,
+        minDisplacement: editDisp,
+        minRiskScore:    editRisk,
+      };
+      if (editPoly) body.polygon = editPoly;
+      const data = await apiPut(selId, body);
+      if (data) {
+        onZoneUpdated(data);
+        activeVIdxRef.current = null; setActiveVertexIdx(null);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Name save failed');
-    }
+      setError(err instanceof Error ? err.message : 'Save failed');
+    } finally { setSaving(false); }
   };
 
   const handleDeleteZone = async (zoneId: string) => {
@@ -668,59 +689,106 @@ export default function ZoneEditor({
         <div className="flex-1 overflow-y-auto p-3 space-y-3">
 
           {mode === 'idle' && (
-            selectedZone ? (
-              <div className="space-y-2.5">
+            <>
+              {/* Saved Zones 목록 — 항상 상단에 표시 */}
+              {zones.length > 0 ? (
+                <div className="space-y-1">
+                  <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wide mb-1">Saved Zones ({zones.length})</p>
+                  {zones.map((z) => (
+                    <div
+                      key={z.id}
+                      onClick={() => { ctxMenuRef.current = null; setContextMenu(null); selectZone(z); }}
+                      className={`flex items-center gap-1.5 rounded px-2 py-1 cursor-pointer transition-colors ${z.id === selectedZoneId ? 'bg-blue-900/40 border border-blue-600/40' : 'bg-gray-800 hover:bg-gray-700'}`}
+                    >
+                      <span className={`w-2 h-2 rounded-full flex-shrink-0 ${z.type === 'MONITOR' ? 'bg-blue-500' : 'bg-yellow-500'}`} />
+                      <span className="flex-1 truncate text-white text-[10px]">{z.name}</span>
+                      <span className="text-[9px] text-gray-500 flex-shrink-0">
+                        {z.type === 'MONITOR' ? `${z.dwellThreshold ?? 30}${t.zoneSeconds}` : t.zoneTypeExclude}
+                        {z.targetClasses && z.targetClasses.length > 0 && (
+                          <span className="ml-1 text-blue-500">{z.targetClasses.map(c => c[0].toUpperCase()).join('')}</span>
+                        )}
+                      </span>
+                      <button onClick={(e) => { e.stopPropagation(); handleDeleteZone(z.id); }} className="text-gray-600 hover:text-red-400 text-[10px] flex-shrink-0 ml-0.5">✕</button>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-3">
+                  <p className="text-[10px] text-gray-600">No zones — use + Zone tab to add one</p>
+                </div>
+              )}
 
-                <div>
-                  <label className="block text-[10px] text-gray-400 mb-1 font-semibold uppercase tracking-wide">{t.zoneName}</label>
-                  <div className="flex gap-1">
+              {/* 선택된 zone 편집 폼 — 목록 바로 아래 */}
+              {selectedZone ? (
+                <div className="space-y-2.5 border-t border-gray-700 pt-2.5">
+
+                  <div>
+                    <label className="block text-[10px] text-gray-400 mb-1 font-semibold uppercase tracking-wide">{t.zoneName}</label>
                     <input
                       value={editName}
                       onChange={(e) => { setEditName(e.target.value); editNameRef.current = e.target.value; }}
-                      onBlur={handleSaveName}
-                      onKeyDown={(e) => { if (e.key === 'Enter') { handleSaveName(); e.currentTarget.blur(); } }}
-                      className="flex-1 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500"
+                      className="w-full bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500"
                       placeholder={t.zoneName}
                     />
-                    <button onClick={handleSaveName} className="px-2 py-1 text-[10px] rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors" title={t.zoneSave}>✓</button>
+                  </div>
+
+                  <div>
+                    <label className="block text-[10px] text-gray-400 mb-1 font-semibold uppercase tracking-wide">{t.zoneType}</label>
+                    <div className="flex gap-1">
+                      {(['MONITOR', 'EXCLUDE'] as const).map((typ) => (
+                        <button key={typ} onClick={() => setEditZoneType(typ)}
+                          className={`flex-1 py-1 rounded text-[10px] font-bold transition-colors ${editZoneType === typ ? (typ === 'MONITOR' ? 'bg-blue-700 text-white' : 'bg-yellow-700 text-white') : 'bg-gray-700 text-gray-400 hover:bg-gray-600'}`}
+                        >
+                          {typ === 'MONITOR' ? t.zoneTypeMonitor : t.zoneTypeExclude}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {editZoneType === 'MONITOR' && (
+                    <>
+                      <div>
+                        <label className="block text-[10px] text-gray-400 mb-1">{t.zoneDwellLabel}&nbsp;<span className="text-white font-semibold">{editDwell}{t.zoneSeconds}</span></label>
+                        <input type="range" min={5} max={300} value={editDwell} onChange={(e) => setEditDwell(Number(e.target.value))} className="w-full accent-blue-500" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-gray-400 mb-1">Min Displacement&nbsp;<span className="text-white font-semibold">{editDisp}px</span></label>
+                        <input type="range" min={10} max={200} value={editDisp} onChange={(e) => setEditDisp(Number(e.target.value))} className="w-full accent-blue-500" />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-gray-400 mb-1">Min Risk Score&nbsp;<span className="text-white font-semibold">{editRisk.toFixed(2)}</span><span className="text-gray-500 ml-1">(alert threshold)</span></label>
+                        <input type="range" min={0} max={1} step={0.05} value={editRisk} onChange={(e) => setEditRisk(Number(e.target.value))} className="w-full accent-orange-500" />
+                      </div>
+                    </>
+                  )}
+
+                  <div className="text-[10px] text-gray-400">
+                    Vertices&nbsp;<span className="text-white font-bold">{(editPolygon ?? selectedZone.polygon).length}</span>
+                    <span className="ml-2 text-gray-600">{t.zoneVertexHint}</span>
+                  </div>
+
+                  {activeVertexIdx !== null && (
+                    <div className="bg-yellow-900/40 rounded p-2 text-[10px] text-yellow-300">
+                      Vertex {activeVertexIdx + 1} selected<br />
+                      <span className="text-yellow-200">{t.zoneDrawVertexHint}</span>
+                    </div>
+                  )}
+
+                  <div className="flex gap-1">
+                    <button onClick={clearSelection} className="flex-1 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-[10px] transition-colors">Deselect</button>
+                    <button
+                      onClick={handleSaveZone}
+                      disabled={saving || !selectedZoneId}
+                      className="flex-1 py-1.5 rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white text-[10px] font-bold transition-colors"
+                    >
+                      {saving ? t.zoneSaveVertexing : t.zoneSave}
+                    </button>
                   </div>
                 </div>
-
-                <div className="bg-gray-800 rounded p-2 flex items-center gap-2">
-                  <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${selectedZone.type === 'MONITOR' ? 'bg-blue-500' : 'bg-yellow-500'}`} />
-                  <span className="text-[10px] text-gray-400">{selectedZone.type}</span>
-                  <span className="text-[10px] text-gray-500 ml-auto">{(editPolygon ?? selectedZone.polygon).length} vertices</span>
-                </div>
-
-                <div className="bg-blue-900/30 rounded p-2 text-[10px] text-blue-300 leading-relaxed">
-                  {t.zoneVertexHint}
-                </div>
-
-                {activeVertexIdx !== null && (
-                  <div className="bg-yellow-900/40 rounded p-2 text-[10px] text-yellow-300">
-                    Vertex {activeVertexIdx + 1} selected<br />
-                    <span className="text-yellow-200">{t.zoneDrawVertexHint}</span>
-                  </div>
-                )}
-
-                <div className="flex gap-1">
-                  <button onClick={clearSelection} className="flex-1 py-1.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-[10px] transition-colors">Deselect</button>
-                  <button
-                    onClick={handleSavePolygon}
-                    disabled={saving || !editPolygon}
-                    className="flex-1 py-1.5 rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-40 text-white text-[10px] font-bold transition-colors"
-                  >
-                    {saving ? t.zoneSaveVertexing : t.zoneSaveVertex}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center h-24 text-center">
-                <p className="text-[10px] text-gray-400 leading-relaxed">
-                  {t.zoneClickToSelect}
-                </p>
-              </div>
-            )
+              ) : zones.length > 0 && (
+                <p className="text-center text-[10px] text-gray-500 py-2">{t.zoneClickToSelect}</p>
+              )}
+            </>
           )}
 
           {mode === 'draw' && (
@@ -775,14 +843,13 @@ export default function ZoneEditor({
 
           {error && <p className="text-[10px] text-red-400">{error}</p>}
 
-          {zones.length > 0 && (
+          {mode === 'draw' && zones.length > 0 && (
             <div className="border-t border-gray-700 pt-2 space-y-1">
               <p className="text-[10px] text-gray-500 font-bold uppercase tracking-wide mb-1">Saved Zones ({zones.length})</p>
               {zones.map((z) => (
                 <div
                   key={z.id}
-                  onClick={() => { if (mode === 'idle') { ctxMenuRef.current = null; setContextMenu(null); selectZone(z); } }}
-                  className={`flex items-center gap-1.5 rounded px-2 py-1 transition-colors ${mode === 'idle' ? 'cursor-pointer' : ''} ${z.id === selectedZoneId ? 'bg-blue-900/40 border border-blue-600/40' : 'bg-gray-800 hover:bg-gray-700'}`}
+                  className={`flex items-center gap-1.5 rounded px-2 py-1 ${z.id === selectedZoneId ? 'bg-blue-900/40 border border-blue-600/40' : 'bg-gray-800'}`}
                 >
                   <span className={`w-2 h-2 rounded-full flex-shrink-0 ${z.type === 'MONITOR' ? 'bg-blue-500' : 'bg-yellow-500'}`} />
                   <span className="flex-1 truncate text-white text-[10px]">{z.name}</span>

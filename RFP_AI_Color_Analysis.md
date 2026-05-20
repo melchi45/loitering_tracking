@@ -8,7 +8,7 @@
 | **Issue Date** | May 15, 2026 |
 | **Proposal Deadline** | June 30, 2026 |
 | **Zone Target Key** | `color` |
-| **Status** | **Phase-1 구현 완료 (RGB 색상 추출) / Phase-2 PAR 준비중** |
+| **Status** | **Phase-1 Implemented (RGB color extraction) / Phase-2 PAR Pending** |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -118,29 +118,29 @@ Zones with `"targetClasses": ["color"]` activate color attribute analysis for al
 
 | ID | Color | Korean | Hex Reference |
 |---|---|---|---|
-| 0 | black | 검정 | #1a1a1a |
-| 1 | white | 흰색 | #f5f5f5 |
-| 2 | gray | 회색 | #808080 |
-| 3 | red | 빨강 | #e53935 |
-| 4 | orange | 주황 | #fb8c00 |
-| 5 | yellow | 노랑 | #fdd835 |
-| 6 | green | 초록 | #43a047 |
-| 7 | blue | 파랑 | #1e88e5 |
-| 8 | purple | 보라 | #8e24aa |
-| 9 | pink | 분홍 | #f06292 |
-| 10 | brown | 갈색 | #6d4c41 |
+| 0 | black | Black | #1a1a1a |
+| 1 | white | White | #f5f5f5 |
+| 2 | gray | Gray | #808080 |
+| 3 | red | Red | #e53935 |
+| 4 | orange | Orange | #fb8c00 |
+| 5 | yellow | Yellow | #fdd835 |
+| 6 | green | Green | #43a047 |
+| 7 | blue | Blue | #1e88e5 |
+| 8 | purple | Purple | #8e24aa |
+| 9 | pink | Pink | #f06292 |
+| 10 | brown | Brown | #6d4c41 |
 
 ### 4.2 Extended Color Set (Optional)
 
 | ID | Color | Korean | Notes |
 |---|---|---|---|
-| 11 | navy | 남색 | Dark blue |
-| 12 | beige | 베이지 | Light tan |
-| 13 | khaki | 카키 | Military green-tan |
-| 14 | cyan | 청록 | Blue-green |
-| 15 | silver | 은색 | Metallic gray |
-| 16 | gold | 금색 | Metallic yellow |
-| 17 | multicolor | 다색 | Complex patterns |
+| 11 | navy | Navy | Dark blue |
+| 12 | beige | Beige | Light tan |
+| 13 | khaki | Khaki | Military green-tan |
+| 14 | cyan | Cyan | Blue-green |
+| 15 | silver | Silver | Metallic gray |
+| 16 | gold | Gold | Metallic yellow |
+| 17 | multicolor | Multicolor | Complex patterns |
 
 ### 4.3 Pattern Classes
 
@@ -404,7 +404,7 @@ server/models/
 
 ### Appendix E: Open Source Model Research (2026-05)
 
-#### Phase-1: RGB 색상 추출 (즉시 사용 가능, 모델 불필요)
+#### Phase-1: RGB Color Extraction (immediately usable, no model required)
 
 ```
 구현: colorClothService.js — avgColor() + rgbToColorName()
@@ -413,15 +413,15 @@ server/models/
 지연:   < 2ms per person
 ```
 
-11색 분류표: `black, white, gray, red, orange, yellow, green, cyan, blue, purple, brown`
+11-color classification table: `black, white, gray, red, orange, yellow, green, cyan, blue, purple, brown`
 
-#### Phase-2: PAR 모델 (ML 기반 다중 속성)
+#### Phase-2: PAR Model (ML-based multi-attribute)
 
 | Source | URL | Notes |
 |---|---|---|
-| Event-AHU/OpenPAR (GH) | https://github.com/Event-AHU/OpenPAR | **Selected** — 40+ 속성 (색상+의류+모자+가방) |
+| Event-AHU/OpenPAR (GH) | https://github.com/Event-AHU/OpenPAR | **Selected** — 40+ attributes (color+clothing+hat+bag) |
 | valencebond/Rethinking_of_PAR (GH) | https://github.com/valencebond/Rethinking_of_PAR | PA100K baseline |
-| UPAR Dataset (GH) | https://github.com/speckean/upar_dataset | PA100K+PETA+RAP2 통합 40속성 |
+| UPAR Dataset (GH) | https://github.com/speckean/upar_dataset | PA100K+PETA+RAP2 unified 40 attributes |
 
 #### Implementation Notes
 

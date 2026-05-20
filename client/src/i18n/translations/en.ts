@@ -12,6 +12,7 @@ export const en = {
   tabAlerts: 'Alerts',
   tabZones: 'Zones',
   tabVideoAnalytics: 'Analytics',
+  tabDetections: 'Detections',
 
   // Video Analytics tab
   videoAnalyticsHint: 'Enable or disable each AI module globally for all cameras.',
@@ -87,6 +88,20 @@ export const en = {
   settingsTitle: 'Settings',
   settingsLanguage: 'Language',
   settingsClose: 'Close',
+
+  // Settings — WebRTC
+  settingsWebRTC: 'WebRTC',
+  settingsWebRTCEnabled: 'Enable WebRTC',
+  settingsStunServers: 'STUN Servers',
+  settingsStunAdd: '+ Add',
+  settingsStunPlaceholder: 'stun:stun.l.google.com:19302',
+  settingsTurnServer: 'TURN Server',
+  settingsTurnUrlPlaceholder: 'turn:your-server:3478',
+  settingsTurnUsername: 'Username',
+  settingsTurnAdd: '+ Add',
+  settingsTurnCredential: 'Credential',
+  settingsWebRTCApply: 'Apply',
+  settingsWebRTCSaved: 'Saved ✓',
 
   // Zone editor groups
   zoneGroupPeopleVehicles: 'People / Vehicles',

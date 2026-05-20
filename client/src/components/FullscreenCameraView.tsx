@@ -1,9 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import { useCamera } from '../hooks/useCamera';
 import { useCrossCameraStore } from '../stores/crossCameraStore';
+import { useCameraStore } from '../stores/cameraStore';
+import { usePersonTrajectoryStore } from '../stores/personTrajectoryStore';
 import { useI18n } from '../i18n';
 import CameraView from './CameraView';
-import VideoAnalyticsTab from './VideoAnalyticsTab';
 import type { Detection } from '../types';
 
 interface Props {
@@ -25,10 +26,16 @@ const MASK_COLOR: Record<string, string> = {
   uncertain:      'bg-gray-600 text-gray-200',
 };
 
-function DetectionRow({ det, isCrossCamera }: { det: Detection; isCrossCamera?: boolean }) {
-  const { objectId, className, confidence, dwellTime, isLoitering, bbox, face, mask, hat, color,
+export function DetectionRow({ det, isCrossCamera }: { det: Detection; isCrossCamera?: boolean }) {
+  const { objectId, className, confidence, dwellTime, isLoitering, bbox, face, mask, hat, color, cloth,
           faceId, matchScore,
           riskScore, revisitCount, velocity, circularScore } = det;
+
+  // Look up canonical alias from the global person registry
+  const personAlias = usePersonTrajectoryStore((s) => {
+    const key = faceId ?? (face as { faceId?: string } | undefined)?.faceId;
+    return key ? s.persons.get(key)?.alias ?? null : null;
+  });
 
   const clsColor =
     isLoitering                ? 'text-red-400'     :
@@ -216,19 +223,37 @@ function DetectionRow({ det, isCrossCamera }: { det: Detection; isCrossCamera?: 
         </div>
       )}
 
+      {/* Cloth type attributes (Phase-2, PAR model) */}
+      {cloth && (cloth.upper || cloth.lower) && (
+        <div className="mt-1 flex items-center gap-1.5 flex-wrap text-[10px] font-mono">
+          <span className="text-violet-500">cloth</span>
+          {cloth.upper && cloth.upper !== 'unknown' && (
+            <span className="text-violet-300">↑{cloth.upper}</span>
+          )}
+          {cloth.lower && cloth.lower !== 'unknown' && (
+            <span className="text-violet-300">↓{cloth.lower}</span>
+          )}
+          {cloth.sleeve && cloth.sleeve !== 'unknown' && (
+            <span className="text-violet-600">[{cloth.sleeve}]</span>
+          )}
+        </div>
+      )}
+
       {/* Face recognition info — on person objects (face attribute) */}
       {face && (
-        <div className="mt-0.5 text-[10px] text-blue-400 font-mono">
+        <div className="mt-0.5 text-[10px] text-blue-400 font-mono flex items-center gap-1.5 flex-wrap">
           face {(face.score * 100).toFixed(0)}%
-          {face.faceId && <span className="ml-1 text-blue-300 font-bold">[{face.faceId}]</span>}
-          {face.identity && <span className="ml-1 text-blue-200">{face.identity}</span>}
+          {face.faceId && <span className="text-blue-300 font-bold">[{face.faceId}]</span>}
+          {personAlias && <span className="text-[8px] font-bold bg-teal-700/70 text-teal-100 rounded px-1 py-0.5">{personAlias}</span>}
+          {face.identity && <span className="text-blue-200">{face.identity}</span>}
         </div>
       )}
 
       {/* Face recognition info — on standalone face detection objects */}
       {className === 'face' && faceId && (
-        <div className="mt-0.5 flex items-center gap-2 flex-wrap text-[10px] font-mono">
+        <div className="mt-0.5 flex items-center gap-1.5 flex-wrap text-[10px] font-mono">
           <span className="text-blue-300 font-bold">[{faceId}]</span>
+          {personAlias && <span className="text-[8px] font-bold bg-teal-700/70 text-teal-100 rounded px-1 py-0.5">{personAlias}</span>}
           {matchScore != null && (
             <span className="text-gray-500">
               sim <span className={matchScore >= 0.6 ? 'text-green-400' : matchScore >= 0.4 ? 'text-yellow-400' : 'text-gray-400'}>
@@ -247,16 +272,66 @@ function DetectionRow({ det, isCrossCamera }: { det: Detection; isCrossCamera?: 
   );
 }
 
-function DetectionPanel({ cameraId }: { cameraId: string }) {
+// ── Class-category filter definitions ──────────────────────────────────────
+export const CATEGORIES = [
+  { key: 'people',    label: 'People',   color: 'text-green-400',   classes: new Set(['person', 'face']) },
+  { key: 'vehicle',   label: 'Vehicle',  color: 'text-blue-400',    classes: new Set(['bicycle','car','motorcycle','bus','truck']) },
+  { key: 'hazard',    label: 'Hazard',   color: 'text-orange-500',  classes: new Set(['fire','smoke']) },
+  { key: 'accessory', label: 'Acc',      color: 'text-amber-400',   classes: new Set([
+      'backpack','handbag','suitcase','umbrella','tie',
+      'sports ball','frisbee','skis','snowboard','baseball bat','baseball glove',
+      'skateboard','surfboard','tennis racket','kite','scissors','fork','knife','spoon','remote',
+    ]) },
+  { key: 'indoor',    label: 'Indoor',   color: 'text-violet-400',  classes: new Set([
+      'chair','couch','dining table','bed','tv','laptop','mouse','keyboard','cell phone',
+      'clock','cup','bottle','book','vase','microwave','oven','toaster','sink','refrigerator',
+      'toilet','toothbrush','hair drier','teddy bear','potted plant',
+    ]) },
+  { key: 'animal',    label: 'Animal',   color: 'text-pink-300',    classes: new Set(['bird','cat','dog','horse','sheep','cow','elephant','bear','zebra','giraffe']) },
+  { key: 'outdoor',   label: 'Outdoor',  color: 'text-emerald-400', classes: new Set(['bench','traffic light','fire hydrant','stop sign','parking meter','airplane','boat','train']) },
+  { key: 'food',      label: 'Food',     color: 'text-yellow-400',  classes: new Set(['bowl','wine glass','banana','apple','sandwich','orange','broccoli','carrot','hot dog','pizza','donut','cake']) },
+] as const;
+
+type CategoryKey = typeof CATEGORIES[number]['key'];
+
+export function getCategoryKey(className: string): CategoryKey | 'other' {
+  for (const cat of CATEGORIES) {
+    if ((cat.classes as Set<string>).has(className)) return cat.key;
+  }
+  return 'other';
+}
+
+export function DetectionPanel({ cameraId }: { cameraId: string }) {
   const { detections } = useCamera(cameraId);
   const crossCameraEvents = useCrossCameraStore((s) => s.events);
+  const allPersons = usePersonTrajectoryStore((s) => s.persons);
+  const cameras = useCameraStore((s) => s.cameras);
   const listRef = useRef<HTMLDivElement>(null);
   const { t } = useI18n();
+  const [showLegend, setShowLegend] = useState(false);
+  const [showCrossCamera, setShowCrossCamera] = useState(true);
+  const [showPersonTrails, setShowPersonTrails] = useState(true);
+  const [hiddenCats, setHiddenCats] = useState<Set<string>>(new Set());
+
+  // Resolve camera ID to display name (falls back to first 8 chars of ID)
+  const camName = (id: string) =>
+    cameras.find((c) => c.id === id)?.name ?? id.slice(0, 8);
+
+  const toggleCat = (key: string) =>
+    setHiddenCats((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
 
   const sorted = [...detections].sort((a, b) => {
     if (a.isLoitering !== b.isLoitering) return a.isLoitering ? -1 : 1;
     return b.dwellTime - a.dwellTime;
   });
+
+  const filtered = hiddenCats.size === 0
+    ? sorted
+    : sorted.filter((d) => !hiddenCats.has(getCategoryKey(d.className ?? '')));
 
   // Set of faceIds that appeared in a cross-camera event involving this camera
   const crossCamFaceIds = new Set(
@@ -269,6 +344,22 @@ function DetectionPanel({ cameraId }: { cameraId: string }) {
   const localEvents = crossCameraEvents.filter(
     (ev) => ev.prevCameraId === cameraId || ev.newCameraId === cameraId
   );
+
+  // Persons whose trajectory includes this camera (sorted: currently here first)
+  const personTrails = [...allPersons.values()].filter((p) =>
+    p.segments.some((s) => s.cameraId === cameraId)
+  ).sort((a, b) => {
+    const aHere = a.currentCameraId === cameraId ? 1 : 0;
+    const bHere = b.currentCameraId === cameraId ? 1 : 0;
+    return bHere - aHere || b.lastSeenAt - a.lastSeenAt;
+  });
+
+  // Helper: format duration in seconds
+  const fmtDur = (ms: number) => {
+    const s = Math.round(ms / 1000);
+    if (s < 60) return `${s}s`;
+    return `${Math.floor(s / 60)}m${s % 60 > 0 ? `${s % 60}s` : ''}`;
+  };
 
   return (
     <div className="flex flex-col h-full">
@@ -285,9 +376,39 @@ function DetectionPanel({ cameraId }: { cameraId: string }) {
         </div>
       </div>
 
+      {/* Category filter bar */}
+      <div className="flex flex-wrap gap-1 px-2 py-1.5 border-b border-gray-700/60 flex-shrink-0">
+        {CATEGORIES.map(({ key, label, color }) => {
+          const hidden = hiddenCats.has(key);
+          return (
+            <button
+              key={key}
+              onClick={() => toggleCat(key)}
+              title={hidden ? `Show ${label}` : `Hide ${label}`}
+              className={`text-[8px] font-bold rounded px-1.5 py-0.5 transition-colors border ${
+                hidden
+                  ? 'bg-gray-700/60 text-gray-600 border-gray-600 line-through'
+                  : `bg-gray-700/30 ${color} border-current/30 hover:bg-gray-700/60`
+              }`}
+            >
+              {label}
+            </button>
+          );
+        })}
+        {hiddenCats.size > 0 && (
+          <button
+            onClick={() => setHiddenCats(new Set())}
+            className="text-[8px] font-bold rounded px-1.5 py-0.5 bg-blue-800/40 text-blue-300 border border-blue-700/40 hover:bg-blue-800/60 transition-colors"
+            title="Show all categories"
+          >
+            All
+          </button>
+        )}
+      </div>
+
       {/* Detection list */}
       <div ref={listRef} className="flex-1 overflow-y-auto">
-        {sorted.length === 0 ? (
+        {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-2 text-gray-600">
             <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
@@ -295,10 +416,12 @@ function DetectionPanel({ cameraId }: { cameraId: string }) {
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
                 d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
             </svg>
-            <span className="text-xs">{t.noDetections}</span>
+            <span className="text-xs">
+              {hiddenCats.size > 0 ? 'All filtered — click "All" to reset' : t.noDetections}
+            </span>
           </div>
         ) : (
-          sorted.map((det) => (
+          filtered.map((det) => (
             <DetectionRow
               key={det.objectId}
               det={det}
@@ -308,147 +431,221 @@ function DetectionPanel({ cameraId }: { cameraId: string }) {
         )}
       </div>
 
-      {/* Cross-Camera Re-ID feed */}
-      {localEvents.length > 0 && (
-        <div className="px-3 py-2 border-t border-gray-700 flex-shrink-0">
-          <div className="text-[8px] text-blue-400 uppercase tracking-wide font-bold mb-1">
-            Cross-Camera Re-ID
-          </div>
-          <div className="space-y-0.5 max-h-20 overflow-y-auto">
-            {localEvents.slice(0, 5).map((ev, i) => (
-              <div key={i} className="text-[9px] font-mono text-gray-400">
-                <span className="text-blue-300 font-bold">[{ev.faceId}]</span>
-                {' '}{ev.prevCameraId.slice(0, 8)} &#8594; {ev.newCameraId.slice(0, 8)}
-                {' '}<span className="text-gray-600">{(ev.similarity * 100).toFixed(0)}%</span>
-              </div>
-            ))}
-          </div>
+      {/* Person Trails — collapsible, shows persons who visited this camera */}
+      {personTrails.length > 0 && (
+        <div className="border-t border-gray-700 flex-shrink-0">
+          <button
+            onClick={() => setShowPersonTrails(v => !v)}
+            className="w-full flex items-center justify-between px-3 py-1.5 hover:bg-gray-700/40 transition-colors"
+          >
+            <span className="text-[8px] text-teal-400 uppercase tracking-wide font-bold">
+              Person Trails
+              <span className="ml-1 text-teal-600 font-normal">({personTrails.length})</span>
+            </span>
+            <span className="text-[8px] text-gray-500">{showPersonTrails ? '▲' : '▼'}</span>
+          </button>
+          {showPersonTrails && (
+            <div className="px-3 pb-2 space-y-1 max-h-28 overflow-y-auto">
+              {personTrails.slice(0, 6).map((p) => {
+                const isHere = p.currentCameraId === cameraId;
+                // Build camera trail string, show up to last 4 cameras
+                const segs = p.segments.slice(-4);
+                const trail = segs.map((s, i) => {
+                  const name = camName(s.cameraId);
+                  const isCur = s.cameraId === cameraId && i === segs.length - 1;
+                  return isCur ? `►${name}` : name;
+                }).join(' → ');
+                // Total dwell time across all segments
+                const totalMs = p.segments.reduce((sum, s) => sum + (s.exitTime - s.entryTime), 0);
+                return (
+                  <div key={p.faceId} className="flex items-start gap-1.5 text-[9px] font-mono">
+                    <span className={`mt-0.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${isHere ? 'bg-teal-400' : 'bg-gray-600'}`} />
+                    <div className="flex-1 min-w-0">
+                      <span className="text-teal-300 font-bold">{p.alias}</span>
+                      <span className="text-gray-500 ml-1">[{p.faceId}]</span>
+                      <span className="text-gray-400 ml-1 block truncate">{trail}</span>
+                      <span className="text-gray-600">total {fmtDur(totalMs)}</span>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
-      {/* Legend */}
-      <div className="px-3 py-2 border-t border-gray-700 flex-shrink-0 space-y-1.5">
-        {/* People & vehicles */}
-        <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold">{t.legendPeopleVehicles}</div>
-        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
-          <span className="text-green-400">■ person</span>
-          <span className="text-red-400">■ loitering</span>
-          <span className="text-blue-300">■ face</span>
-          <span className="text-yellow-400">■ bicycle</span>
-          <span className="text-blue-400">■ car</span>
-          <span className="text-orange-400">■ motorcycle</span>
-          <span className="text-purple-400">■ bus</span>
-          <span className="text-teal-400">■ truck</span>
-          <span className="text-orange-500">■ fire</span>
-          <span className="text-slate-400">■ smoke</span>
+      {/* Cross-Camera Re-ID feed — collapsible */}
+      {localEvents.length > 0 && (
+        <div className="border-t border-gray-700 flex-shrink-0">
+          <button
+            onClick={() => setShowCrossCamera(v => !v)}
+            className="w-full flex items-center justify-between px-3 py-1.5 hover:bg-gray-700/40 transition-colors"
+          >
+            <span className="text-[8px] text-blue-400 uppercase tracking-wide font-bold">
+              Cross-Camera Re-ID
+              <span className="ml-1 text-blue-600 font-normal">({localEvents.length})</span>
+            </span>
+            <span className="text-[8px] text-gray-500">{showCrossCamera ? '▲' : '▼'}</span>
+          </button>
+          {showCrossCamera && (
+            <div className="px-3 pb-2 space-y-0.5 max-h-20 overflow-y-auto">
+              {localEvents.slice(0, 5).map((ev, i) => (
+                <div key={i} className="text-[9px] font-mono text-gray-400">
+                  <span className="text-blue-300 font-bold">[{ev.faceId}]</span>
+                  {' '}<span className="text-gray-200" title={ev.prevCameraId}>{camName(ev.prevCameraId)}</span>
+                  {' '}&#8594;{' '}
+                  <span className="text-gray-200" title={ev.newCameraId}>{camName(ev.newCameraId)}</span>
+                  {ev.alias && (
+                    <span className="text-teal-300 font-bold ml-1">{ev.alias}</span>
+                  )}
+                  {ev.newObjectId != null && (
+                    <span className="text-yellow-400 ml-0.5" title={String(ev.newObjectId)}>
+                      #{typeof ev.newObjectId === 'string' ? ev.newObjectId.slice(0, 6) : ev.newObjectId}
+                    </span>
+                  )}
+                  {' '}<span className="text-gray-500">{(ev.similarity * 100).toFixed(0)}%</span>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
-        {/* Accessories */}
-        <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.zoneGroupAccessories}</div>
-        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
-          <span className="text-amber-400">■ backpack</span>
-          <span className="text-amber-400">■ handbag</span>
-          <span className="text-amber-400">■ suitcase</span>
-          <span className="text-amber-400">■ umbrella</span>
-          <span className="text-amber-400">■ tie</span>
-          <span className="text-orange-400">■ sports ball</span>
-          <span className="text-sky-500">■ skis</span>
-          <span className="text-yellow-500">■ baseball bat</span>
-          <span className="text-orange-500">■ skateboard</span>
-          <span className="text-cyan-500">■ surfboard</span>
-          <span className="text-lime-400">■ tennis racket</span>
-          <span className="text-violet-400">■ kite</span>
-          <span className="text-gray-300">■ scissors/fork/knife</span>
-          <span className="text-gray-400">■ remote/spoon</span>
-        </div>
-        {/* Animals */}
-        <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendAnimals}</div>
-        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
-          <span className="text-pink-200">■ bird</span>
-          <span className="text-rose-300">■ cat</span>
-          <span className="text-rose-400">■ dog</span>
-          <span className="text-amber-600">■ horse</span>
-          <span className="text-gray-400">■ sheep</span>
-          <span className="text-amber-900">■ cow</span>
-          <span className="text-gray-500">■ elephant</span>
-          <span className="text-amber-800">■ bear</span>
-          <span className="text-gray-300">■ zebra</span>
-          <span className="text-amber-600">■ giraffe</span>
-        </div>
-        {/* Outdoor / Infrastructure */}
-        <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendOutdoor}</div>
-        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
-          <span className="text-emerald-400">■ bench</span>
-          <span className="text-yellow-400">■ traffic light</span>
-          <span className="text-red-500">■ fire hydrant</span>
-          <span className="text-red-700">■ stop sign</span>
-          <span className="text-gray-600">■ parking meter</span>
-          <span className="text-indigo-400">■ airplane</span>
-          <span className="text-blue-400">■ boat</span>
-          <span className="text-emerald-500">■ train</span>
-        </div>
-        {/* Food / Kitchen */}
-        <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendFood}</div>
-        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
-          <span className="text-amber-400">■ bowl</span>
-          <span className="text-violet-300">■ wine glass</span>
-          <span className="text-yellow-300">■ banana</span>
-          <span className="text-red-500">■ apple</span>
-          <span className="text-orange-500">■ orange</span>
-          <span className="text-green-600">■ broccoli</span>
-          <span className="text-orange-400">■ pizza</span>
-          <span className="text-pink-400">■ donut</span>
-          <span className="text-pink-200">■ cake</span>
-          <span className="text-orange-400">■ sandwich/hotdog</span>
-        </div>
-        {/* Home Appliances */}
-        <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendHomeAppliances}</div>
-        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
-          <span className="text-indigo-400">■ bed</span>
-          <span className="text-slate-400">■ sink</span>
-          <span className="text-slate-500">■ microwave</span>
-          <span className="text-sky-200">■ refrigerator</span>
-          <span className="text-green-300">■ potted plant</span>
-          <span className="text-rose-300">■ hair drier</span>
-          <span className="text-emerald-200">■ toothbrush</span>
-          <span className="text-orange-200">■ teddy bear</span>
-        </div>
-        {/* Indoor / office objects */}
-        <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendIndoor}</div>
-        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
-          <span className="text-violet-400">■ chair</span>
-          <span className="text-violet-300">■ couch</span>
-          <span className="text-emerald-400">■ dining table</span>
-          <span className="text-sky-400">■ tv</span>
-          <span className="text-cyan-400">■ laptop</span>
-          <span className="text-pink-400">■ keyboard</span>
-          <span className="text-amber-300">■ mouse</span>
-          <span className="text-red-300">■ cell phone</span>
-          <span className="text-emerald-300">■ clock</span>
-          <span className="text-orange-300">■ cup</span>
-          <span className="text-lime-400">■ bottle</span>
-          <span className="text-violet-200">■ book</span>
-          <span className="text-pink-300">■ vase</span>
-        </div>
-        {/* AI attribute badges */}
-        <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendAiBadges}</div>
-        <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[8px]">
-          <span className="bg-green-700/70 text-green-100 rounded px-1">MASK OK</span>
-          <span className="bg-red-700/70 text-red-100 rounded px-1">NO MASK</span>
-          <span className="bg-blue-700/70 text-blue-100 rounded px-1">HELMET</span>
-          <span className="bg-red-700/70 text-red-100 rounded px-1">NO HELMET</span>
-          <span className="bg-gray-600/70 text-gray-200 rounded px-1">MASK? / HAT?</span>
-          <span className="text-gray-500 text-[7px]">gray = AI uncertain</span>
-          <span className="text-blue-400">⬚ face bbox</span>
-          <span className="text-gray-400">↑↓ color</span>
-        </div>
+      )}
+
+      {/* Legend — collapsible, collapsed by default */}
+      <div className="border-t border-gray-700 flex-shrink-0">
+        <button
+          onClick={() => setShowLegend(v => !v)}
+          className="w-full flex items-center justify-between px-3 py-1.5 hover:bg-gray-700/40 transition-colors"
+        >
+          <span className="text-[8px] text-gray-400 uppercase tracking-wide font-bold">
+            {t.legendPeopleVehicles ?? 'Object Classes'}
+          </span>
+          <span className="text-[8px] text-gray-500">{showLegend ? '▲' : '▼'}</span>
+        </button>
+        {showLegend && (
+          <div className="px-3 pb-2 space-y-1.5 max-h-64 overflow-y-auto">
+            {/* People & vehicles */}
+            <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold">{t.legendPeopleVehicles}</div>
+            <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
+              <span className="text-green-400">■ person</span>
+              <span className="text-red-400">■ loitering</span>
+              <span className="text-blue-300">■ face</span>
+              <span className="text-yellow-400">■ bicycle</span>
+              <span className="text-blue-400">■ car</span>
+              <span className="text-orange-400">■ motorcycle</span>
+              <span className="text-purple-400">■ bus</span>
+              <span className="text-teal-400">■ truck</span>
+              <span className="text-orange-500">■ fire</span>
+              <span className="text-slate-400">■ smoke</span>
+            </div>
+            {/* Accessories */}
+            <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.zoneGroupAccessories}</div>
+            <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
+              <span className="text-amber-400">■ backpack</span>
+              <span className="text-amber-400">■ handbag</span>
+              <span className="text-amber-400">■ suitcase</span>
+              <span className="text-amber-400">■ umbrella</span>
+              <span className="text-amber-400">■ tie</span>
+              <span className="text-orange-400">■ sports ball</span>
+              <span className="text-sky-500">■ skis</span>
+              <span className="text-yellow-500">■ baseball bat</span>
+              <span className="text-orange-500">■ skateboard</span>
+              <span className="text-cyan-500">■ surfboard</span>
+              <span className="text-lime-400">■ tennis racket</span>
+              <span className="text-violet-400">■ kite</span>
+              <span className="text-gray-300">■ scissors/fork/knife</span>
+              <span className="text-gray-400">■ remote/spoon</span>
+            </div>
+            {/* Animals */}
+            <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendAnimals}</div>
+            <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
+              <span className="text-pink-200">■ bird</span>
+              <span className="text-rose-300">■ cat</span>
+              <span className="text-rose-400">■ dog</span>
+              <span className="text-amber-600">■ horse</span>
+              <span className="text-gray-400">■ sheep</span>
+              <span className="text-amber-900">■ cow</span>
+              <span className="text-gray-500">■ elephant</span>
+              <span className="text-amber-800">■ bear</span>
+              <span className="text-gray-300">■ zebra</span>
+              <span className="text-amber-600">■ giraffe</span>
+            </div>
+            {/* Outdoor / Infrastructure */}
+            <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendOutdoor}</div>
+            <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
+              <span className="text-emerald-400">■ bench</span>
+              <span className="text-yellow-400">■ traffic light</span>
+              <span className="text-red-500">■ fire hydrant</span>
+              <span className="text-red-700">■ stop sign</span>
+              <span className="text-gray-600">■ parking meter</span>
+              <span className="text-indigo-400">■ airplane</span>
+              <span className="text-blue-400">■ boat</span>
+              <span className="text-emerald-500">■ train</span>
+            </div>
+            {/* Food / Kitchen */}
+            <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendFood}</div>
+            <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
+              <span className="text-amber-400">■ bowl</span>
+              <span className="text-violet-300">■ wine glass</span>
+              <span className="text-yellow-300">■ banana</span>
+              <span className="text-red-500">■ apple</span>
+              <span className="text-orange-500">■ orange</span>
+              <span className="text-green-600">■ broccoli</span>
+              <span className="text-orange-400">■ pizza</span>
+              <span className="text-pink-400">■ donut</span>
+              <span className="text-pink-200">■ cake</span>
+              <span className="text-orange-400">■ sandwich/hotdog</span>
+            </div>
+            {/* Home Appliances */}
+            <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendHomeAppliances}</div>
+            <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
+              <span className="text-indigo-400">■ bed</span>
+              <span className="text-slate-400">■ sink</span>
+              <span className="text-slate-500">■ microwave</span>
+              <span className="text-sky-200">■ refrigerator</span>
+              <span className="text-green-300">■ potted plant</span>
+              <span className="text-rose-300">■ hair drier</span>
+              <span className="text-emerald-200">■ toothbrush</span>
+              <span className="text-orange-200">■ teddy bear</span>
+            </div>
+            {/* Indoor / office objects */}
+            <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendIndoor}</div>
+            <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[9px]">
+              <span className="text-violet-400">■ chair</span>
+              <span className="text-violet-300">■ couch</span>
+              <span className="text-emerald-400">■ dining table</span>
+              <span className="text-sky-400">■ tv</span>
+              <span className="text-cyan-400">■ laptop</span>
+              <span className="text-pink-400">■ keyboard</span>
+              <span className="text-amber-300">■ mouse</span>
+              <span className="text-red-300">■ cell phone</span>
+              <span className="text-emerald-300">■ clock</span>
+              <span className="text-orange-300">■ cup</span>
+              <span className="text-lime-400">■ bottle</span>
+              <span className="text-violet-200">■ book</span>
+              <span className="text-pink-300">■ vase</span>
+            </div>
+            {/* AI attribute badges */}
+            <div className="text-[8px] text-gray-500 uppercase tracking-wide font-bold pt-0.5">{t.legendAiBadges}</div>
+            <div className="grid grid-cols-2 gap-x-2 gap-y-0.5 text-[8px]">
+              <span className="bg-green-700/70 text-green-100 rounded px-1">MASK OK</span>
+              <span className="bg-red-700/70 text-red-100 rounded px-1">NO MASK</span>
+              <span className="bg-blue-700/70 text-blue-100 rounded px-1">HELMET</span>
+              <span className="bg-red-700/70 text-red-100 rounded px-1">NO HELMET</span>
+              <span className="bg-gray-600/70 text-gray-200 rounded px-1">MASK? / HAT?</span>
+              <span className="text-gray-500 text-[7px]">gray = AI uncertain</span>
+              <span className="text-blue-400">⬚ face bbox</span>
+              <span className="text-gray-400">↑↓ color</span>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 export default function FullscreenCameraView({ cameraId, cameraName, onClose }: Props) {
-  const [leftTab, setLeftTab] = useState<'detections' | 'analytics'>('detections');
-  const { t } = useI18n();
+  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
 
   // Close on Escape key
   useEffect(() => {
@@ -457,46 +654,23 @@ export default function FullscreenCameraView({ cameraId, cameraName, onClose }: 
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
+  useEffect(() => {
+    const handler = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', handler);
+    return () => window.removeEventListener('resize', handler);
+  }, []);
+
   return (
     <div
-      className="fixed inset-0 z-50 flex bg-black/90"
+      className="fixed inset-0 z-50 bg-black/90"
+      style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      {/* Left panel — Detection / Video Analytics tabs */}
-      <div className="w-64 flex-shrink-0 bg-gray-800 border-r border-gray-700 flex flex-col overflow-hidden">
-        {/* Tab bar */}
-        <div className="flex border-b border-gray-700 flex-shrink-0">
-          <button
-            onClick={() => setLeftTab('detections')}
-            className={`flex-1 py-2 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
-              leftTab === 'detections'
-                ? 'text-blue-400 border-b-2 border-blue-400'
-                : 'text-gray-500 hover:text-gray-300'
-            }`}
-          >
-            {t.detections}
-          </button>
-          <button
-            onClick={() => setLeftTab('analytics')}
-            className={`flex-1 py-2 text-[10px] font-semibold uppercase tracking-wide transition-colors ${
-              leftTab === 'analytics'
-                ? 'text-blue-400 border-b-2 border-blue-400'
-                : 'text-gray-500 hover:text-gray-300'
-            }`}
-          >
-            {t.tabVideoAnalytics}
-          </button>
-        </div>
-
-        {/* Tab content */}
-        <div className="flex-1 overflow-hidden">
-          {leftTab === 'detections' && <DetectionPanel cameraId={cameraId} />}
-          {leftTab === 'analytics'  && <VideoAnalyticsTab />}
-        </div>
-      </div>
-
-      {/* Main video area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Video area — full width on mobile (60%), left panel on desktop */}
+      <div
+        className="flex flex-col overflow-hidden"
+        style={isMobile ? { flex: '0 0 60%' } : { flex: 1 }}
+      >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2 bg-gray-900/80 flex-shrink-0">
           <span className="text-sm font-semibold text-white">{cameraName}</span>
@@ -515,6 +689,17 @@ export default function FullscreenCameraView({ cameraId, cameraName, onClose }: 
         <div className="flex-1 overflow-hidden p-2">
           <CameraView cameraId={cameraId} cameraName={cameraName} />
         </div>
+      </div>
+
+      {/* Detection panel — bottom on mobile (40%), right panel on desktop */}
+      <div
+        className="bg-gray-800 flex flex-col overflow-hidden"
+        style={isMobile
+          ? { flex: '0 0 40%', borderTop: '1px solid rgb(55 65 81)' }
+          : { width: 288, flexShrink: 0, borderLeft: '1px solid rgb(55 65 81)' }
+        }
+      >
+        <DetectionPanel cameraId={cameraId} />
       </div>
     </div>
   );

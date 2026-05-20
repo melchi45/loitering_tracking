@@ -440,10 +440,10 @@ Status values:
 | Value | Meaning | UI Label |
 |---|---|---|
 | `builtin`   | Always available, no model file needed | — |
-| `available` | Model file present, not yet loaded (loads on first camera start) | 대기 |
-| `loaded`    | Model actively running in memory | 활성 |
-| `failed`    | Model file found but loading failed (OOM, corrupt file) | 로드실패 |
-| `missing`   | Model file not on disk — run `npm run download-models` | 미설치 |
+| `available` | Model file present, not yet loaded (loads on first camera start) | Standby |
+| `loaded`    | Model actively running in memory | Active |
+| `failed`    | Model file found but loading failed (OOM, corrupt file) | Load failed |
+| `missing`   | Model file not on disk — run `npm run download-models` | Not installed |
 | `pending`   | Phase-2 feature, not yet implemented | Phase-2 |
 
 ### Appendix D: Related RFP Documents

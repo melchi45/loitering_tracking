@@ -39,9 +39,20 @@ class AttributePipeline {
     );
   }
 
-  get anyReady()   { return this._face.ready || this._ppe.ready || this._color.ready; }
-  get ppeStatus()  { return this._ppe.status;   }
-  get faceStatus() { return this._face.status;  }
+  get anyReady()    { return this._face.ready || this._ppe.ready || this._color.ready; }
+  get ready()       { return this._color.ready; }
+  get ppeStatus()   { return this._ppe.status;       }
+  get faceStatus()  { return this._face.status;      }
+  get clothStatus() { return this._color._parReady ? 'loaded' : 'not_started'; }
+
+  /**
+   * Fast pixel-average colour only — no GPU/model (~0.5 ms/person).
+   * Delegates to ColorClothService.fastColor(); used by PipelineManager
+   * to pre-attach colour to raw detections BEFORE tracker.update().
+   */
+  async fastColor(jpegBuffer, bbox, imgW, imgH) {
+    return this._color.fastColor(jpegBuffer, bbox, imgW, imgH);
+  }
 
   /**
    * Enrich tracked detections with face, PPE, and color/cloth attributes.

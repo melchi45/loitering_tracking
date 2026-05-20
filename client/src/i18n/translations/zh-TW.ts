@@ -12,6 +12,7 @@ export const zhTW: Translations = {
   tabAlerts: '警報',
   tabZones: '區域',
   tabVideoAnalytics: '分析',
+  tabDetections: '偵測',
   videoAnalyticsHint: '全局啟用或停用每個AI模組（對所有攝影機生效）。',
   videoAnalyticsFooter: '停用的模組將立即停止處理。變更將於下一幀生效。',
 
@@ -77,6 +78,19 @@ export const zhTW: Translations = {
   settingsTitle: '設定',
   settingsLanguage: '語言',
   settingsClose: '關閉',
+
+  settingsWebRTC: 'WebRTC',
+  settingsWebRTCEnabled: '啟用 WebRTC',
+  settingsStunServers: 'STUN 伺服器',
+  settingsStunAdd: '+ 新增',
+  settingsStunPlaceholder: 'stun:stun.l.google.com:19302',
+  settingsTurnServer: 'TURN 伺服器',
+  settingsTurnUrlPlaceholder: 'turn:伺服器:3478',
+  settingsTurnUsername: '使用者名稱',
+  settingsTurnAdd: '+ 新增',
+  settingsTurnCredential: '憑證',
+  settingsWebRTCApply: '套用',
+  settingsWebRTCSaved: '已儲存 ✓',
 
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: '隨身物品 / 運動',

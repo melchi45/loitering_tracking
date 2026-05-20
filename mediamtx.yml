@@ -1,0 +1,47 @@
+###############################################################################
+# MediaMTX configuration — LTS-2026 YouTube RTSP Ingest
+# Compatible with MediaMTX v1.x
+###############################################################################
+
+logLevel: info
+logDestinations: [stdout]
+
+# ── Network ───────────────────────────────────────────────────────────────────
+# Bind to loopback only — YouTube RTSP streams must NOT be exposed to LAN (RFP S-2)
+rtspAddress: 127.0.0.1:8554
+rtspEncryption: "no"
+rtmpAddress: 127.0.0.1:1935
+hlsAddress: 127.0.0.1:8888
+webrtcAddress: 127.0.0.1:8889
+srtAddress: 127.0.0.1:8890
+
+# ── REST API ──────────────────────────────────────────────────────────────────
+api: yes
+apiAddress: 127.0.0.1:9997
+metrics: no
+
+# ── Authentication (none — loopback only) ─────────────────────────────────────
+authInternalUsers:
+  - user: any
+    pass: ""
+    ips: []
+    permissions:
+      - action: publish
+        path: ""
+      - action: read
+        path: ""
+      - action: playback
+        path: ""
+
+# ── Path defaults ─────────────────────────────────────────────────────────────
+pathDefaults:
+  overridePublisher: yes
+  maxReaders: 10
+
+# ── Catch-all: allow any path to be published ─────────────────────────────────
+# youtubeStreamService.js creates paths in the yt/<id> namespace
+paths:
+  all_others:
+    overridePublisher: yes
+    maxReaders: 10
+

@@ -1,5 +1,19 @@
 {
-  "cameras": [],
+  "cameras": [
+    {
+      "createdAt": "2026-05-18T06:54:10.496Z",
+      "updatedAt": "2026-05-18T09:56:12.454Z",
+      "id": "ecfc664d-574a-4cf7-929b-617f6deaafea",
+      "name": "TID-A800",
+      "rtspUrl": "rtsp://192.168.214.32/0/H.264/media.smp",
+      "username": "admin",
+      "password": "5tkatjd!",
+      "ip": "192.168.214.32",
+      "mac": "00:09:18:E2:7F:16",
+      "httpPort": 80,
+      "status": "offline"
+    }
+  ],
   "zones": [],
   "events": [],
   "alerts": []

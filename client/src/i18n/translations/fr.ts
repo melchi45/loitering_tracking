@@ -12,6 +12,7 @@ export const fr: Translations = {
   tabAlerts: 'Alertes',
   tabZones: 'Zones',
   tabVideoAnalytics: 'Analytique',
+  tabDetections: 'Détect',
   videoAnalyticsHint: 'Activez ou désactivez chaque module IA globalement pour toutes les caméras.',
   videoAnalyticsFooter: 'Les modules désactivés arrêtent immédiatement le traitement. Les modifications prennent effet à la prochaine image.',
 
@@ -77,6 +78,19 @@ export const fr: Translations = {
   settingsTitle: 'Paramètres',
   settingsLanguage: 'Langue',
   settingsClose: 'Fermer',
+
+  settingsWebRTC: 'WebRTC',
+  settingsWebRTCEnabled: 'Activer WebRTC',
+  settingsStunServers: 'Serveurs STUN',
+  settingsStunAdd: '+ Ajouter',
+  settingsStunPlaceholder: 'stun:stun.l.google.com:19302',
+  settingsTurnServer: 'Serveur TURN',
+  settingsTurnUrlPlaceholder: 'turn:serveur:3478',
+  settingsTurnUsername: "Nom d'utilisateur",
+  settingsTurnAdd: '+ Ajouter',
+  settingsTurnCredential: 'Identifiant',
+  settingsWebRTCApply: 'Appliquer',
+  settingsWebRTCSaved: 'Enregistré ✓',
 
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: 'Accessoires / Sports',

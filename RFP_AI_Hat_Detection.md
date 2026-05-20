@@ -188,25 +188,25 @@ When `hat` is `undefined`, the PPE model is **not running** (module disabled or 
 
 | ID | Class | Korean | Description | Safety |
 |---|---|---|---|---|
-| 0 | `no_hat` | 맨머리 | No head covering | — |
-| 1 | `baseball_cap` | 야구모자 | Forward, backward, sideways cap | No |
-| 2 | `beanie` | 비니 | Knit beanie/winter hat | No |
-| 3 | `helmet_hard` | 안전모 | Construction/industrial hardhat | **Safety item** |
-| 4 | `helmet_bike` | 자전거 헬멧 | Bicycle/motorcycle helmet | **Safety item** |
-| 5 | `hood_up` | 후드 착용 | Hoodie with hood raised | Suspicious |
-| 6 | `hat_wide` | 챙 넓은 모자 | Sun hat, fedora, cowboy hat | No |
-| 7 | `hair_net` | 위생모 | Hygiene hair net/cap | **Safety item** |
+| 0 | `no_hat` | Bare head | No head covering | — |
+| 1 | `baseball_cap` | Baseball cap | Forward, backward, sideways cap | No |
+| 2 | `beanie` | Beanie | Knit beanie/winter hat | No |
+| 3 | `helmet_hard` | Safety helmet | Construction/industrial hardhat | **Safety item** |
+| 4 | `helmet_bike` | Bike helmet | Bicycle/motorcycle helmet | **Safety item** |
+| 5 | `hood_up` | Hood up | Hoodie with hood raised | Suspicious |
+| 6 | `hat_wide` | Wide-brim hat | Sun hat, fedora, cowboy hat | No |
+| 7 | `hair_net` | Hair net | Hygiene hair net/cap | **Safety item** |
 
 ### 4.2 Extended Classes (Optional)
 
 | ID | Class | Korean | Use Case |
 |---|---|---|---|
-| 8 | `beret` | 베레모 | Military/artistic beret |
-| 9 | `turban` | 터번 | Religious/cultural head covering |
-| 10 | `face_shield_hat` | 안면보호 헬멧 | Full face shield (welding, grinding) |
-| 11 | `hairband` | 헤어밴드 | Non-covering head accessory |
-| 12 | `police_cap` | 경찰 모자 | Law enforcement uniform cap |
-| 13 | `chef_hat` | 쉐프 모자 | Food service/kitchen hat |
+| 8 | `beret` | Beret | Military/artistic beret |
+| 9 | `turban` | Turban | Religious/cultural head covering |
+| 10 | `face_shield_hat` | Face shield helmet | Full face shield (welding, grinding) |
+| 11 | `hairband` | Hairband | Non-covering head accessory |
+| 12 | `police_cap` | Police cap | Law enforcement uniform cap |
+| 13 | `chef_hat` | Chef hat | Food service/kitchen hat |
 
 ### 4.3 Safety Classification
 

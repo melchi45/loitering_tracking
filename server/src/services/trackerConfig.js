@@ -32,12 +32,16 @@ const DEFAULT_CONFIG = {
   // Measurement noise R
   measurementNoise:   10.0, // R diagonal value — higher = trust prediction more, measurements less
 
-  // Multi-cue association weights (IoU + ArcFace appearance)
-  // cost = iouWeight × (1−IoU) + appWeight × (1−cosineSim)
-  // appWeight is only active when the track has a stored ArcFace embedding;
-  // otherwise the matcher falls back to pure IoU (appWeight effectively = 0).
-  iouWeight:          0.7,  // weight of IoU cost term (0.0–1.0)
-  appWeight:          0.3,  // weight of appearance (cosine) cost term (0.0–1.0)
+  // Multi-cue association weights (IoU + Face + Color + Cloth + Accessories)
+  // score = Σ(λ_i × sim_i) / Σ(λ_i for active features)   [0, 1]
+  // A feature's weight is included only when BOTH the track AND the detection
+  // have that attribute available; otherwise the term is skipped and the
+  // remaining weights are re-normalised so the score always stays in [0, 1].
+  iouWeight:          0.60, // IoU overlap (always active)
+  faceWeight:         0.20, // ArcFace cosine similarity (when face model is on)
+  colorWeight:        0.12, // upper/lower body RGB distance (fast pixel avg)
+  clothWeight:        0.05, // PAR cloth-type exact match (when openpar.onnx loaded)
+  accWeight:          0.03, // hat/mask presence agreement (when PPE model is on)
 };
 
 let _config = { ...DEFAULT_CONFIG };

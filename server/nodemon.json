@@ -1,0 +1,7 @@
+{
+  "watch": ["src"],
+  "ignore": ["storage/*", "models/*"],
+  "ext": "js,json",
+  "env": { "NODE_ENV": "development" },
+  "exec": "/usr/bin/node src/index.js"
+}

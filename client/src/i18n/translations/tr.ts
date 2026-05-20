@@ -12,6 +12,7 @@ export const tr: Translations = {
   tabAlerts: 'Uyarılar',
   tabZones: 'Bölgeler',
   tabVideoAnalytics: 'Analitik',
+  tabDetections: 'Tespit',
   videoAnalyticsHint: 'Her AI modülünü tüm kameralar için global olarak etkinleştirin veya devre dışı bırakın.',
   videoAnalyticsFooter: 'Devre dışı bırakılan modüller işlemeyi hemen durdurur. Değişiklikler bir sonraki karede geçerli olur.',
 
@@ -77,6 +78,19 @@ export const tr: Translations = {
   settingsTitle: 'Ayarlar',
   settingsLanguage: 'Dil',
   settingsClose: 'Kapat',
+
+  settingsWebRTC: 'WebRTC',
+  settingsWebRTCEnabled: "WebRTC'yi Etkinleştir",
+  settingsStunServers: 'STUN Sunucuları',
+  settingsStunAdd: '+ Ekle',
+  settingsStunPlaceholder: 'stun:stun.l.google.com:19302',
+  settingsTurnServer: 'TURN Sunucusu',
+  settingsTurnUrlPlaceholder: 'turn:sunucu:3478',
+  settingsTurnUsername: 'Kullanıcı Adı',
+  settingsTurnAdd: '+ Ekle',
+  settingsTurnCredential: 'Kimlik Bilgisi',
+  settingsWebRTCApply: 'Uygula',
+  settingsWebRTCSaved: 'Kaydedildi ✓',
 
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: 'Aksesuar / Spor',

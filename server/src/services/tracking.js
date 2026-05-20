@@ -197,11 +197,13 @@ class Track {
     this.kf = new KalmanFilter();
     this.kf.init(detection.bbox);
 
-    // Multi-cue appearance matching — ArcFace 512-dim embedding (Float32Array).
-    // Updated after enrichment via ByteTracker.updateAppearance(); null until first
-    // enrichment pass so IoU-only fallback is automatic.
-    this.embedding    = null; // Float32Array(512) or null
-    this.embeddingAge = 0;    // frames elapsed since last updateAppearance() call
+    // Multi-cue appearance — all fields updated via ByteTracker.update*() after enrichment.
+    // null until the first enrichment pass; each absent feature falls back gracefully.
+    this.embedding    = null; // Float32Array(512) ArcFace embedding, or null
+    this.embeddingAge = 0;    // frames since last updateAppearance()
+    this.color        = null; // { upper, lower, upperRgb, lowerRgb } from fast pixel avg
+    this.cloth        = null; // { upper, lower, sleeve } from PAR model, or null
+    this.accessories  = null; // { hat: bool, mask: bool } from PPE model, or null
   }
 
   predict() {
@@ -220,15 +222,29 @@ class Track {
       else if (speed < cfg.slowSpeedThreshold) qScale = cfg.slowQScale;
       this.kf.Q = KalmanFilter._eye(8, qScale);
 
+      const prevBbox = { ...this.bbox };
       const predicted = this.kf.predict();
-      // Guard against NaN/Infinity that can arise from matrix operations
       const safeVal = (v, fallback) => isFinite(v) ? v : fallback;
-      this.bbox = {
-        x:      Math.max(0, safeVal(predicted.x,      this.bbox.x)),
-        y:      Math.max(0, safeVal(predicted.y,      this.bbox.y)),
-        width:  Math.max(1, safeVal(predicted.width,  this.bbox.width)),
-        height: Math.max(1, safeVal(predicted.height, this.bbox.height)),
-      };
+      const px = safeVal(predicted.x,      prevBbox.x);
+      const py = safeVal(predicted.y,      prevBbox.y);
+      const pw = safeVal(predicted.width,  prevBbox.width);
+      const ph = safeVal(predicted.height, prevBbox.height);
+
+      // Sanity-check: if KF predicted position drifted more than 2× the bbox diagonal
+      // from the last known position, the velocity estimate is unreliable — fall back to
+      // frozen bbox so IoU matching isn't penalised by a wrong velocity extrapolation.
+      const diagonal  = Math.sqrt(prevBbox.width ** 2 + prevBbox.height ** 2);
+      const drift     = Math.sqrt((px - prevBbox.x) ** 2 + (py - prevBbox.y) ** 2);
+      if (drift > diagonal * 2) {
+        this.kf.init(prevBbox);  // reset KF to last-known position, clear bad velocity
+      } else {
+        this.bbox = {
+          x:      Math.max(0, px),
+          y:      Math.max(0, py),
+          width:  Math.max(1, pw),
+          height: Math.max(1, ph),
+        };
+      }
     }
     // For framesWithoutHit > 1 (extended Lost): freeze bbox at last known position.
     // Calling kf.predict() repeatedly on a Lost track causes the covariance matrix P
@@ -362,6 +378,24 @@ class ByteTracker {
       .map(t => t.toResult());
   }
 
+  /** Store fast-computed pixel colour on the track (one-frame delayed feedback). */
+  updateColor(objectId, color) {
+    const track = this._tracks.find(t => t.id === objectId);
+    if (track) track.color = color;
+  }
+
+  /** Store PAR cloth-type attributes on the track. */
+  updateCloth(objectId, cloth) {
+    const track = this._tracks.find(t => t.id === objectId);
+    if (track && cloth) track.cloth = cloth;
+  }
+
+  /** Store PPE accessories (hat/mask boolean) on the track. */
+  updateAccessories(objectId, accessories) {
+    const track = this._tracks.find(t => t.id === objectId);
+    if (track && accessories) track.accessories = accessories;
+  }
+
   /**
    * Store or update an ArcFace embedding on the track identified by objectId.
    * Called by PipelineManager AFTER enrichment, so embeddings arrive one frame
@@ -395,14 +429,57 @@ class ByteTracker {
   // ─── Private ──────────────────────────────────────────────────────────────
 
   /**
-   * Cosine similarity of two L2-normalised ArcFace embeddings.
-   * Returns a value in [−1, 1]; for well-normalised ArcFace vectors the range
-   * is effectively [0, 1] for different/same person respectively.
+   * Cosine similarity of two L2-normalised ArcFace embeddings → [−1, 1].
+   * For well-normalised ArcFace vectors the effective range is [0, 1].
    */
   static _cosineSim(a, b) {
     let dot = 0;
     for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
     return dot;
+  }
+
+  /**
+   * RGB colour similarity between two colour descriptors.
+   * Uses Euclidean distance in RGB space normalised to [0, 1].
+   * Upper and lower body are averaged; unknown channels contribute 0.5 (neutral).
+   */
+  static _colorSim(a, b) {
+    const rgbDist = (r1, r2) => {
+      if (!r1 || !r2) return 0.5;
+      const dr = r1[0] - r2[0], dg = r1[1] - r2[1], db = r1[2] - r2[2];
+      return 1 - Math.min(Math.sqrt(dr*dr + dg*dg + db*db) / 441.67, 1);
+    };
+    return (rgbDist(a.upperRgb, b.upperRgb) + rgbDist(a.lowerRgb, b.lowerRgb)) / 2;
+  }
+
+  /**
+   * PAR cloth-type similarity: exact match on upper/lower clothing type → [0, 1].
+   * 'unknown' values are skipped; if no known fields exist returns 0.5 (neutral).
+   */
+  static _clothSim(a, b) {
+    let score = 0, count = 0;
+    for (const field of ['upper', 'lower']) {
+      if (a[field] && b[field] && a[field] !== 'unknown' && b[field] !== 'unknown') {
+        score += a[field] === b[field] ? 1 : 0;
+        count++;
+      }
+    }
+    return count > 0 ? score / count : 0.5;
+  }
+
+  /**
+   * Accessories (hat/mask) presence agreement → [0, 1].
+   * Fields missing on either side are skipped; returns 0.5 if no overlap.
+   */
+  static _accSim(a, b) {
+    let score = 0, count = 0;
+    for (const field of ['hat', 'mask']) {
+      if (a[field] !== undefined && b[field] !== undefined) {
+        score += a[field] === b[field] ? 1 : 0;
+        count++;
+      }
+    }
+    return count > 0 ? score / count : 0.5;
   }
 
   _matchDetections(detections, tracks) {
@@ -414,59 +491,69 @@ class ByteTracker {
       };
     }
 
-    // ── Multi-cue cost matrix: IoU + ArcFace appearance (cosine similarity) ──
+    // ── 5-cue weighted score matrix ───────────────────────────────────────────
     //
-    // cost(det_i, track_j) = λ_iou × (1−IoU) + λ_app × (1−cosineSim)
+    // score(det, track) = Σ(λ_i × sim_i) / Σ(λ_i for active cues)
     //
-    // When a track has no stored embedding (first N frames, or face not detected),
-    // the appearance term is skipped and the cost collapses to pure IoU cost:
-    //   cost = λ_iou × (1−IoU) + λ_app × (1−IoU)  →  (λ_iou+λ_app) × (1−IoU)
-    // Since we rank by score (higher = better match) and both paths scale uniformly,
-    // the IoU-only fallback preserves the relative ordering — backward compatible.
+    // Cue           | sim_i              | Active when
+    // --------------|--------------------|-----------------------------------------
+    // IoU           | IoU(det, track)    | always
+    // Face (ArcFace)| cosine(emb, emb)   | track.embedding set AND det.embedding set
+    // Color         | RGB distance [0,1] | track.color set AND det.color set
+    // Cloth (PAR)   | exact-match [0,1]  | track.cloth set AND det.cloth set
+    // Accessories   | bool agree [0,1]   | track.accessories set AND det.accessories set
     //
-    // λ weights are runtime-configurable via /api/tracker/config (iouWeight, appWeight).
-    // Class mismatch still hard-rejects the pair (score = −1, below any threshold).
+    // Dynamic normalisation ensures score ∈ [0, 1] regardless of which cues are
+    // available. Class mismatch hard-rejects the pair (score = −1).
+    // Weights are runtime-configurable via /api/tracker/config.
 
-    const cfg = trackerConfig.getConfig();
-    const λ_iou = cfg.iouWeight ?? 0.7;
-    const λ_app = cfg.appWeight ?? 0.3;
+    const cfg   = trackerConfig.getConfig();
+    const λ_iou   = cfg.iouWeight   ?? 0.60;
+    const λ_face  = cfg.faceWeight  ?? 0.20;
+    const λ_color = cfg.colorWeight ?? 0.12;
+    const λ_cloth = cfg.clothWeight ?? 0.05;
+    const λ_acc   = cfg.accWeight   ?? 0.03;
 
-    // Build combined score matrix (higher = better match, −1 = class mismatch)
     const scoreMatrix = detections.map(det =>
       tracks.map(track => {
-        // Hard reject cross-class pairs — prevents car stealing person IDs
         if (track.className !== det.className) return -1;
 
         const iouScore = this._iou(det.bbox, track.bbox);
 
-        // Appearance term: only when the track has a stored embedding.
-        // Detections from tracker.update() do not carry embeddings yet (enrichment
-        // is post-tracking). The track's stored embedding is from a previous frame,
-        // so we compare the track's last-known appearance against its predicted
-        // position overlap with the new detection.
-        let combinedScore;
-        if (track.embedding) {
-          // We don't have a detection embedding at this stage (pre-enrichment),
-          // so appearance resolves ambiguous IoU ties using the TRACK's own
-          // embedding age as a confidence weight:
-          //   higher embeddingAge → weaker appearance signal → blend toward IoU
-          const appConf = Math.max(0, 1 - track.embeddingAge * 0.1); // decays over 10 frames
-          const appScore = iouScore; // placeholder: appearance improves tie-breaking via λ scaling
-          // When iouScore is tied between two tracks, the one with a fresher
-          // embedding (appConf closer to 1) gets a marginal boost so it wins.
-          // Full det-vs-track cosine scoring activates once detections carry embeddings.
-          combinedScore = λ_iou * iouScore + λ_app * iouScore * appConf;
-        } else {
-          // No embedding stored — pure IoU, scaled uniformly (preserves ordering)
-          combinedScore = (λ_iou + λ_app) * iouScore;
+        // Accumulate active cue scores
+        let weightedSum = λ_iou * iouScore;
+        let totalWeight = λ_iou;
+
+        // Face — ArcFace cosine similarity (embedding age decays confidence)
+        if (track.embedding && det.embedding) {
+          const faceConf = Math.max(0, 1 - track.embeddingAge * 0.1);
+          const w = λ_face * faceConf;
+          weightedSum += w * ByteTracker._cosineSim(track.embedding, det.embedding);
+          totalWeight += w;
         }
 
-        return combinedScore;
+        // Color — fast pixel-average RGB similarity
+        if (track.color && det.color) {
+          weightedSum += λ_color * ByteTracker._colorSim(track.color, det.color);
+          totalWeight += λ_color;
+        }
+
+        // Cloth — PAR type exact match
+        if (track.cloth && det.cloth) {
+          weightedSum += λ_cloth * ByteTracker._clothSim(track.cloth, det.cloth);
+          totalWeight += λ_cloth;
+        }
+
+        // Accessories — hat/mask presence agreement
+        if (track.accessories && det.accessories) {
+          weightedSum += λ_acc * ByteTracker._accSim(track.accessories, det.accessories);
+          totalWeight += λ_acc;
+        }
+
+        return weightedSum / totalWeight;
       })
     );
 
-    // Effective IoU threshold — scale by (λ_iou + λ_app) = 1.0 so the threshold
-    // remains consistent regardless of weight split (both legs use IoU as base).
     const scoreThreshold = this.iouThreshold;
 
     // Greedy matching (highest score first)

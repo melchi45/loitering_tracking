@@ -12,6 +12,7 @@ export const zhCN: Translations = {
   tabAlerts: '警报',
   tabZones: '区域',
   tabVideoAnalytics: '分析',
+  tabDetections: '检测',
   videoAnalyticsHint: '全局启用或禁用每个AI模块（对所有摄像头生效）。',
   videoAnalyticsFooter: '禁用的模块将立即停止处理。更改将在下一帧生效。',
 
@@ -77,6 +78,19 @@ export const zhCN: Translations = {
   settingsTitle: '设置',
   settingsLanguage: '语言',
   settingsClose: '关闭',
+
+  settingsWebRTC: 'WebRTC',
+  settingsWebRTCEnabled: '启用 WebRTC',
+  settingsStunServers: 'STUN 服务器',
+  settingsStunAdd: '+ 添加',
+  settingsStunPlaceholder: 'stun:stun.l.google.com:19302',
+  settingsTurnServer: 'TURN 服务器',
+  settingsTurnUrlPlaceholder: 'turn:服务器:3478',
+  settingsTurnUsername: '用户名',
+  settingsTurnAdd: '+ 添加',
+  settingsTurnCredential: '凭据',
+  settingsWebRTCApply: '应用',
+  settingsWebRTCSaved: '已保存 ✓',
 
   zoneGroupPeopleVehicles: '人员 / 车辆',
   zoneGroupAccessories: '随身物品 / 运动',

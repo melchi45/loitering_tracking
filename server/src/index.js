@@ -10,20 +10,28 @@ const cors    = require('cors');
 const { Server: SocketIOServer } = require('socket.io');
 
 const { initDB }          = require('./db');
+const webrtcGateway       = require('./services/webrtcGateway');
 const PipelineManager     = require('./services/pipelineManager');
 const ZoneManager         = require('./services/zoneManager');
 const AlertService        = require('./services/alertService');
 const { getDiscoveryService } = require('./services/discoveryService');
-const camerasRouter       = require('./api/cameras');
-const zonesRouter         = require('./api/zones');
-const buildEventsRouters  = require('./api/events');
-const analyticsRouter     = require('./api/analytics');
-const trackerRouter       = require('./api/tracker');
+const camerasRouter          = require('./api/cameras');
+const zonesRouter            = require('./api/zones');
+const buildEventsRouters     = require('./api/events');
+const analyticsRouter        = require('./api/analytics');
+const trackerRouter          = require('./api/tracker');
+const youtubeStreamsRouter    = require('./api/youtubeStreams');
+const internalRouter         = require('./api/internal');
+const YouTubeStreamService   = require('./services/youtubeStreamService');
 const registerStreamHandlers = require('./socket/streamHandler');
+const registerWebRTCHandlers = require('./socket/webrtcSignaling');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
 async function main() {
+  // ── WebRTC Gateway (mediasoup) — init before pipeline manager ──────────
+  await webrtcGateway.init();
+
   // ── Database ────────────────────────────────────────────────────────────
   const db = initDB();
   console.log('[Server] SQLite database initialised');
@@ -53,18 +61,47 @@ async function main() {
   app.set('io', io);
 
   // ── Services ─────────────────────────────────────────────────────────────
-  const zoneManager    = new ZoneManager(db);
-  const alertService   = new AlertService(db);
-  const pipelineManager = new PipelineManager(io, db);
+  const zoneManager         = new ZoneManager(db);
+  const alertService        = new AlertService(db);
+  // Pass the shared ZoneManager so zone additions/deletions via REST API are
+  // immediately visible to the pipeline without a server restart.
+  const pipelineManager     = new PipelineManager(io, db, zoneManager);
+  const youtubeSvc          = new YouTubeStreamService(db, pipelineManager);
+  youtubeSvc.init(); // Restore YouTube cameras from DB into in-memory streams Map
 
   // ── REST API Routes ───────────────────────────────────────────────────────
-  app.use('/api/cameras', camerasRouter(db, pipelineManager));
+  app.use('/api/cameras', camerasRouter(db, pipelineManager, youtubeSvc));
   app.use('/api/cameras/:cameraId/zones', zonesRouter(zoneManager));
   const { eventsRouter: eRouter, alertsRouter: aRouter } = buildEventsRouters(db, alertService);
   app.use('/api/events', eRouter);
   app.use('/api/alerts', aRouter);
-  app.use('/api/analytics', analyticsRouter);
-  app.use('/api/tracker',   trackerRouter);
+  app.use('/api/analytics',       analyticsRouter);
+  app.use('/api/tracker',         trackerRouter);
+  app.use('/api/youtube-streams', youtubeStreamsRouter(youtubeSvc));
+  app.use('/internal',            internalRouter(youtubeSvc));
+
+  // ── WebRTC ICE config (STUN/TURN) — served from .env so credentials stay server-side ──
+  // Returns stunUrls (array) and turns (array).
+  // Multiple TURN servers are supported via TURN_URL / TURN_URL_2 / TURN_URL_3 … in .env.
+  app.get('/api/webrtc/ice-config', (_req, res) => {
+    const stunUrls = (process.env.STUN_URLS || 'stun:stun.l.google.com:19302')
+      .split(',').map(s => s.trim()).filter(Boolean);
+
+    // Collect TURN_URL, TURN_URL_2, TURN_URL_3, … until a gap is found
+    const turns = [];
+    for (let i = 1; ; i++) {
+      const suffix = i === 1 ? '' : `_${i}`;
+      const url = (process.env[`TURN_URL${suffix}`] || '').trim();
+      if (!url) break;
+      turns.push({
+        url,
+        username:   (process.env[`TURN_USERNAME${suffix}`]   || '').trim(),
+        credential: (process.env[`TURN_CREDENTIAL${suffix}`] || '').trim(),
+      });
+    }
+
+    res.json({ stunUrls, turns });
+  });
 
   // ── Cross-camera Re-ID stats ──────────────────────────────────────────────────
   // Returns all faces that have been seen on more than one camera in the current session.
@@ -78,6 +115,15 @@ async function main() {
       uniqueFaces:      crossed.length,
       faces:            crossed,
     });
+  });
+
+  // ── Global Person Registry ────────────────────────────────────────────────────
+  // Returns PersonTrajectory records for persons active within maxAgeMs (default 5 min).
+  // Used by the client on page load to hydrate the personTrajectoryStore.
+  app.get('/api/persons/active', (req, res) => {
+    const maxAgeMs = parseInt(req.query.maxAgeMs) || 300_000;
+    const persons  = pipelineManager.getPersonTrajectories(maxAgeMs);
+    res.json({ total: persons.length, persons });
   });
 
   // AI module capabilities — returns availability (boolean) and detailed status per module.
@@ -108,6 +154,7 @@ async function main() {
     const yoloFile = has('yolov8n.onnx');
     const faceFile = has('scrfd_2.5g.onnx') && has('arcface_w600k_r50.onnx');
     const fsFile   = has('yolov8s_fire_smoke.onnx');
+    const parFile  = has('openpar.onnx');
 
     const ppeStatus  = toStatus('ppe',       ppeFile);
     const faceStatus = toStatus('face',      faceFile);
@@ -125,7 +172,7 @@ async function main() {
       mask:        ppeStatus,
       hat:         ppeStatus,
       color:       'builtin',
-      cloth:       'pending',
+      cloth:       toStatus('cloth', parFile),
       backpack:    yoloStatus,
       handbag:     yoloStatus,
       suitcase:    yoloStatus,
@@ -199,8 +246,17 @@ async function main() {
   io.on('connection', (socket) => {
     console.log(`[Socket.IO] Client connected: ${socket.id}`);
     registerStreamHandlers(io, socket, db);
+    registerWebRTCHandlers(io, socket);
     // Hydrate newly connected client with all known discovered devices
     discoverySvc.hydrate(socket);
+
+    // ICE test trigger: relay to all browser clients so IceTestTrigger in React initiates WebRTC
+    socket.on('webrtc:ice-test-start', ({ cameraId } = {}) => {
+      io.emit('webrtc:ice-test-trigger', { cameraId });
+    });
+    socket.on('webrtc:ice-test-done', () => {
+      io.emit('webrtc:ice-test-stop');
+    });
 
     socket.on('disconnect', (reason) => {
       console.log(`[Socket.IO] Client disconnected: ${socket.id} (${reason})`);
@@ -240,6 +296,7 @@ async function main() {
   const shutdown = async (signal) => {
     console.log(`\n[Server] Received ${signal} — shutting down gracefully…`);
     try {
+      await youtubeSvc.stopAll();
       await pipelineManager.stopAll();
       io.close();
       httpServer.close(() => {

@@ -10,15 +10,27 @@ interface AddCameraForm {
   rtspUrl: string;
   username: string;
   password: string;
+  webrtcEnabled: boolean;
 }
 
-const DEFAULT_FORM: AddCameraForm = { name: '', rtspUrl: '', username: '', password: '' };
+interface AddYouTubeForm {
+  name: string;
+  youtubeUrl: string;
+  resolution: '1080p' | '720p' | '480p';
+  bitrate: number;
+  repeatPlayback: boolean;
+}
+
+type AddSourceType = 'rtsp' | 'youtube';
+
+const DEFAULT_FORM: AddCameraForm = { name: '', rtspUrl: '', username: '', password: '', webrtcEnabled: false };
+const DEFAULT_YT_FORM: AddYouTubeForm = { name: '', youtubeUrl: '', resolution: '1080p', bitrate: 2000, repeatPlayback: false };
 
 function StatusDot({ status }: { status: Camera['status'] }) {
   const color =
-    status === 'live'    ? 'bg-green-500' :
-    status === 'error'   ? 'bg-red-500'   :
-    status === 'offline' ? 'bg-gray-500'  : 'bg-yellow-500';
+    (status === 'live' || status === 'streaming') ? 'bg-green-500' :
+    status === 'error'                            ? 'bg-red-500'   :
+    status === 'offline'                          ? 'bg-gray-500'  : 'bg-yellow-500';
   return <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${color}`} title={status} />;
 }
 
@@ -87,6 +99,7 @@ export default function CameraList() {
   const cameras      = useCameraStore((s) => s.cameras);
   const addCamera    = useCameraStore((s) => s.addCamera);
   const removeCamera = useCameraStore((s) => s.removeCamera);
+  const updateCamera = useCameraStore((s) => s.updateCamera);
   const selectedId   = useCameraStore((s) => s.selectedId);
   const selectCamera = useCameraStore((s) => s.selectCamera);
 
@@ -102,10 +115,17 @@ export default function CameraList() {
   const [editCamera, setEditCamera] = useState<Camera | null>(null);
   const [reconnecting, setReconnecting] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
+  const [addSourceType, setAddSourceType] = useState<AddSourceType>('rtsp');
 
   // double-click guard: single click selects, double-click reconnects
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [form, setForm] = useState<AddCameraForm>(DEFAULT_FORM);
+  const [ytForm, setYtForm] = useState<AddYouTubeForm>(DEFAULT_YT_FORM);
+  const [ytStarting, setYtStarting] = useState(false);
+  const [ytPollId, setYtPollId] = useState<string | null>(null);
+  const [ytElapsed, setYtElapsed] = useState(0);
+  const ytElapsedRef = useRef(0);
+  const ytPollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
   const [formError, setFormError] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -161,6 +181,17 @@ export default function CameraList() {
     finally { setTimeout(() => setReconnecting(null), 2000); }
   }, []);
 
+  const handleAiToggle = useCallback(async (e: React.MouseEvent, cam: Camera) => {
+    e.stopPropagation();
+    try {
+      const res = await fetch(`/api/cameras/${cam.id}/ai/toggle`, { method: 'POST' });
+      if (res.ok) {
+        const data = await res.json();
+        updateCamera(cam.id, { aiEnabled: data.aiEnabled });
+      }
+    } catch { /* ignore */ }
+  }, [updateCamera]);
+
   const handleCameraClick = useCallback((cam: Camera) => {
     if (clickTimerRef.current) {
       // Second click within 300ms → treat as double-click
@@ -185,8 +216,103 @@ export default function CameraList() {
     setForm((prev) => ({ ...prev, [e.target.name]: e.target.value }));
   };
 
-  const handleFormSubmit = async (e: React.FormEvent) => {
+  const handleYtFormChange = (e: React.ChangeEvent<HTMLInputElement | HTMLSelectElement>) => {
+    const { name, value } = e.target;
+    setYtForm((prev) => ({ ...prev, [name]: name === 'bitrate' ? Number(value) : value }));
+  };
+
+  // Poll stream status until live or error
+  const startYtPoll = (id: string) => {
+    setYtPollId(id);
+    ytElapsedRef.current = 0;
+    setYtElapsed(0);
+    ytPollTimer.current = setInterval(async () => {
+      ytElapsedRef.current += 2;
+      setYtElapsed(ytElapsedRef.current);
+      try {
+        const r = await fetch(`/api/youtube-streams/${id}/status`);
+        const data = await r.json();
+        if (data.status === 'live') {
+          stopYtPoll();
+          addCamera({
+            id: data.id,
+            name: data.name,
+            rtspUrl: data.rtspUrl,
+            status: 'live',
+            type: 'youtube',
+            youtubeUrl: data.youtubeUrl,
+            resolution: data.resolution,
+            bitrate: data.bitrate,
+          });
+          closeAddModal();
+          setTab('added');
+        } else if (data.status === 'error') {
+          stopYtPoll();
+          setYtStarting(false);
+          setFormError('스트림 시작에 실패했습니다. 다시 시도해주세요.');
+        } else if (ytElapsedRef.current >= 30) {
+          stopYtPoll();
+          setYtStarting(false);
+          setFormError('스트림 시작 시간이 초과되었습니다 (30s).');
+        }
+      } catch { /* network error — keep polling */ }
+    }, 2000);
+  };
+
+  const stopYtPoll = () => {
+    if (ytPollTimer.current) { clearInterval(ytPollTimer.current); ytPollTimer.current = null; }
+    setYtPollId(null);
+  };
+
+  const closeAddModal = () => {
+    stopYtPoll();
+    setShowAddModal(false);
+    setForm(DEFAULT_FORM);
+    setYtForm(DEFAULT_YT_FORM);
+    setFormError('');
+    setAddSourceType('rtsp');
+    setYtStarting(false);
+  };
+
+  const handleYtFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (!ytForm.name.trim()) { setFormError('채널 이름을 입력해주세요.'); return; }
+    if (!ytForm.youtubeUrl.trim()) { setFormError('YouTube URL을 입력해주세요.'); return; }
+    setFormError('');
+    setYtStarting(true);
+    try {
+      const res = await fetch('/api/youtube-streams', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          youtubeUrl:     ytForm.youtubeUrl.trim(),
+          name:           ytForm.name.trim(),
+          resolution:     ytForm.resolution,
+          bitrate:        ytForm.bitrate,
+          repeatPlayback: ytForm.repeatPlayback,
+        }),
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        setYtStarting(false);
+        const msg =
+          result.code === 'INVALID_YOUTUBE_URL' ? '유효하지 않은 YouTube URL입니다.' :
+          result.code === 'YT_DLP_FAILED'       ? '영상을 가져올 수 없습니다. 비공개 또는 삭제된 영상일 수 있습니다.' :
+          result.code === 'MAX_STREAMS_REACHED'  ? 'YouTube 스트림 최대 개수에 도달했습니다.' :
+          result.code === 'STREAM_TIMEOUT'       ? '스트림 시작 시간이 초과되었습니다. 다시 시도하세요.' :
+          result.error || 'Unknown error';
+        setFormError(msg);
+        return;
+      }
+      // Stream creation started — poll for live status
+      startYtPoll(result.camera.id);
+    } catch (err) {
+      setYtStarting(false);
+      setFormError(err instanceof Error ? err.message : 'Unknown error');
+    }
+  };
+
+  const handleRtspAdd = async () => {
     if (!form.name.trim() || !form.rtspUrl.trim()) {
       setFormError('Name and RTSP URL are required.');
       return;
@@ -198,17 +324,17 @@ export default function CameraList() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name:     form.name,
-          rtspUrl:  form.rtspUrl,
-          username: form.username || undefined,
-          password: form.password || undefined,
+          name:          form.name,
+          rtspUrl:       form.rtspUrl,
+          username:      form.username || undefined,
+          password:      form.password || undefined,
+          webrtcEnabled: form.webrtcEnabled,
         }),
       });
       if (!res.ok) throw new Error(await res.text() || 'Failed');
       const result = await res.json();
       if (result.success && result.data) addCamera(result.data);
-      setShowAddModal(false);
-      setForm(DEFAULT_FORM);
+      closeAddModal();
       setTab('added');
     } catch (err) {
       setFormError(err instanceof Error ? err.message : 'Unknown error');
@@ -273,6 +399,7 @@ export default function CameraList() {
               cameras.map((cam) => {
                 const isSelected = selectedId === cam.id;
                 const isReconn   = reconnecting === cam.id;
+                const aiOn       = cam.aiEnabled !== false; // default true
                 return (
                   <div
                     key={cam.id}
@@ -287,8 +414,22 @@ export default function CameraList() {
                   >
                     <StatusDot status={cam.status} />
                     <div className="flex-1 min-w-0">
-                      <div className="text-xs font-semibold text-white truncate">{cam.name}</div>
-                      {cam.ip && <div className="text-[10px] text-gray-400 truncate">{cam.ip}</div>}
+                      <div className="flex items-center gap-1">
+                        <span className="text-xs font-semibold text-white truncate">{cam.name}</span>
+                        {cam.type === 'youtube' && (
+                          <span className="flex-shrink-0 bg-red-700 text-white text-[9px] font-bold px-1 py-px rounded-sm">YT</span>
+                        )}
+                      </div>
+                      {cam.type === 'youtube'
+                        ? cam.youtubeUrl && (
+                            <div className="text-[10px] text-gray-400 truncate" title={cam.youtubeUrl}>
+                              {cam.youtubeUrl}
+                            </div>
+                          )
+                        : cam.ip && (
+                            <div className="text-[10px] text-gray-400 truncate">{cam.ip}</div>
+                          )
+                      }
                     </div>
                     {isReconn && (
                       <span className="text-[9px] text-yellow-400 animate-pulse flex-shrink-0">Reconnecting…</span>
@@ -307,6 +448,17 @@ export default function CameraList() {
                         title="Reconnect"
                       >
                         ↺
+                      </button>
+                      <button
+                        onClick={(e) => handleAiToggle(e, cam)}
+                        className={`text-[9px] font-bold px-1 rounded transition-colors ${
+                          aiOn
+                            ? 'text-green-400 hover:text-green-300'
+                            : 'text-gray-600 hover:text-gray-400'
+                        }`}
+                        title={aiOn ? 'AI On — click to disable' : 'AI Off — click to enable'}
+                      >
+                        AI
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); handleRemoveCamera(cam.id); }}
@@ -469,48 +621,270 @@ export default function CameraList() {
 
       {/* Add Camera Modal */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70">
-          <div className="bg-gray-800 rounded-lg shadow-xl w-80 p-5 border border-gray-700">
-            <h3 className="text-sm font-bold text-white mb-4">Add Camera</h3>
-            <form onSubmit={handleFormSubmit} className="space-y-3">
-              {(['name', 'rtspUrl', 'username', 'password'] as const).map((field) => (
-                <div key={field}>
-                  <label className="block text-[11px] text-gray-400 mb-1 capitalize">
-                    {field === 'rtspUrl' ? 'RTSP URL' : field}
-                    {(field === 'name' || field === 'rtspUrl') && ' *'}
-                  </label>
-                  <input
-                    type={field === 'password' ? 'password' : 'text'}
-                    name={field}
-                    value={form[field]}
-                    onChange={handleFormChange}
-                    placeholder={
-                      field === 'name'     ? 'Front Door' :
-                      field === 'rtspUrl'  ? 'rtsp://192.168.1.100:554/stream' :
-                      field === 'username' ? 'admin' : '••••••••'
-                    }
-                    className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-              ))}
-              {formError && <p className="text-xs text-red-400">{formError}</p>}
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => { setShowAddModal(false); setForm(DEFAULT_FORM); setFormError(''); }}
-                  className="px-3 py-1.5 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-200"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="px-3 py-1.5 text-xs rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white font-semibold"
-                >
-                  {submitting ? 'Adding…' : 'Add Camera'}
-                </button>
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+          onMouseDown={(e) => { if (e.target === e.currentTarget) closeAddModal(); }}
+        >
+          <div className="bg-gray-800 rounded-lg shadow-xl w-96 border border-gray-600">
+            {/* Header */}
+            <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
+              <div>
+                <h3 className="text-sm font-bold text-white">Add Camera</h3>
+                <p className="text-[11px] text-gray-400 mt-0.5">
+                  {addSourceType === 'youtube' ? 'YouTube virtual channel' : 'Manual RTSP camera'}
+                </p>
               </div>
-            </form>
+              <button onClick={closeAddModal} className="text-gray-500 hover:text-white text-xl leading-none">×</button>
+            </div>
+
+            {/* Source type toggle */}
+            <div className="flex border-b border-gray-700">
+              <button
+                type="button"
+                onClick={() => { setAddSourceType('rtsp'); setFormError(''); }}
+                className={`flex-1 py-2 text-[11px] font-semibold transition-colors ${
+                  addSourceType === 'rtsp'
+                    ? 'text-blue-400 border-b-2 border-blue-400 bg-gray-800'
+                    : 'text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                IP Camera (RTSP)
+              </button>
+              <button
+                type="button"
+                onClick={() => { setAddSourceType('youtube'); setFormError(''); }}
+                className={`flex-1 py-2 text-[11px] font-semibold transition-colors ${
+                  addSourceType === 'youtube'
+                    ? 'text-red-400 border-b-2 border-red-400 bg-gray-800'
+                    : 'text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                ▶ YouTube Source
+              </button>
+            </div>
+
+            {/* RTSP form */}
+            {addSourceType === 'rtsp' && (
+              <>
+                {/* Form body */}
+                <div className="p-4 space-y-3">
+                  {/* Name */}
+                  <div>
+                    <label className="block text-[11px] text-gray-400 mb-1">Name *</label>
+                    <input
+                      name="name"
+                      value={form.name}
+                      onChange={handleFormChange}
+                      placeholder="Front Door"
+                      className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+
+                  {/* RTSP URL */}
+                  <div>
+                    <label className="block text-[11px] text-gray-400 mb-1">RTSP URL *</label>
+                    <input
+                      name="rtspUrl"
+                      value={form.rtspUrl}
+                      onChange={handleFormChange}
+                      placeholder="rtsp://192.168.1.x:554/stream"
+                      className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 font-mono focus:outline-none focus:border-blue-500"
+                    />
+                  </div>
+
+                  {/* Credentials */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] text-gray-400 mb-1">Username</label>
+                      <input
+                        name="username"
+                        value={form.username}
+                        onChange={handleFormChange}
+                        placeholder="admin"
+                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-gray-400 mb-1">Password</label>
+                      <input
+                        name="password"
+                        type="password"
+                        value={form.password}
+                        onChange={handleFormChange}
+                        placeholder="••••••••"
+                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Tip */}
+                  <p className="text-[10px] text-gray-500">
+                    Leave Username/Password blank if no credentials required.
+                  </p>
+
+                  {/* WebRTC toggle */}
+                  <div className="flex items-center justify-between py-2 border-t border-gray-700 mt-1">
+                    <div>
+                      <p className="text-xs text-gray-200 font-medium">WebRTC Streaming</p>
+                      <p className="text-[10px] text-gray-500 mt-0.5">
+                        {form.webrtcEnabled
+                          ? 'Video via WebRTC (H.264 + Audio) — requires SERVER_IP in .env'
+                          : 'Video via JPEG / Socket.IO (default)'}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setForm((p) => ({ ...p, webrtcEnabled: !p.webrtcEnabled }))}
+                      className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors duration-200 ${
+                        form.webrtcEnabled ? 'bg-blue-600' : 'bg-gray-600'
+                      }`}
+                    >
+                      <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform duration-200 ${
+                        form.webrtcEnabled ? 'translate-x-4' : 'translate-x-0.5'
+                      }`} />
+                    </button>
+                  </div>
+
+                  {formError && <p className="text-xs text-red-400">{formError}</p>}
+                </div>
+
+                {/* Actions */}
+                <div className="flex justify-end gap-2 px-4 py-3 border-t border-gray-700">
+                  <button
+                    type="button"
+                    onClick={closeAddModal}
+                    className="px-3 py-1.5 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-200 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRtspAdd}
+                    disabled={submitting}
+                    className="px-3 py-1.5 text-xs rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white font-semibold transition-colors"
+                  >
+                    {submitting ? 'Adding…' : 'Add Camera'}
+                  </button>
+                </div>
+              </>
+            )}
+
+            {/* YouTube form */}
+            {addSourceType === 'youtube' && (
+              <div className="p-4">
+                {/* ToS warning */}
+                <div className="mb-3 text-[10px] text-yellow-500 bg-yellow-900/20 border border-yellow-700/40 rounded px-2 py-1.5">
+                  ⚠ YouTube 콘텐츠 스트리밍은 YouTube 이용 약관(Section 5.B)에 위반될 수 있습니다.
+                  자신의 채널 영상이나 적절한 라이선스가 있는 영상에만 사용하세요.
+                </div>
+
+                {ytStarting ? (
+                  /* Loading state */
+                  <div className="py-6 text-center space-y-3">
+                    <div className="text-2xl animate-pulse">⏳</div>
+                    <p className="text-xs text-gray-300">YouTube URL 해석 중…</p>
+                    <p className="text-[11px] text-gray-500">경과: {ytElapsed}s / 30s</p>
+                    <div className="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">
+                      <div
+                        className="bg-red-500 h-1.5 rounded-full transition-all duration-1000"
+                        style={{ width: `${Math.min((ytElapsed / 30) * 100, 100)}%` }}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        stopYtPoll();
+                        setYtStarting(false);
+                        // Cancel the stream if it was already created
+                        if (ytPollId) {
+                          fetch(`/api/youtube-streams/${ytPollId}`, { method: 'DELETE' }).catch(() => {});
+                        }
+                      }}
+                      className="text-xs text-gray-400 hover:text-gray-200 underline"
+                    >
+                      취소
+                    </button>
+                  </div>
+                ) : (
+                  <form onSubmit={handleYtFormSubmit} className="space-y-3">
+                    <div>
+                      <label className="block text-[11px] text-gray-400 mb-1">채널 이름 *</label>
+                      <input
+                        name="name"
+                        value={ytForm.name}
+                        onChange={handleYtFormChange}
+                        placeholder="군중 테스트 영상"
+                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-red-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] text-gray-400 mb-1">YouTube URL *</label>
+                      <input
+                        name="youtubeUrl"
+                        value={ytForm.youtubeUrl}
+                        onChange={handleYtFormChange}
+                        placeholder="https://www.youtube.com/watch?v=..."
+                        className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 font-mono focus:outline-none focus:border-red-500"
+                      />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-[11px] text-gray-400 mb-1">해상도</label>
+                        <select
+                          name="resolution"
+                          value={ytForm.resolution}
+                          onChange={handleYtFormChange}
+                          className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-red-500"
+                        >
+                          <option value="1080p">1080p</option>
+                          <option value="720p">720p</option>
+                          <option value="480p">480p</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-[11px] text-gray-400 mb-1">비트레이트 (kbps)</label>
+                        <input
+                          name="bitrate"
+                          type="number"
+                          value={ytForm.bitrate}
+                          onChange={handleYtFormChange}
+                          min={100}
+                          max={10000}
+                          step={500}
+                          className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white focus:outline-none focus:border-red-500"
+                        />
+                      </div>
+                    </div>
+                    {/* Repeat Playback */}
+                    <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={ytForm.repeatPlayback}
+                        onChange={(e) => setYtForm((prev) => ({ ...prev, repeatPlayback: e.target.checked }))}
+                        className="w-3.5 h-3.5 rounded accent-red-500"
+                      />
+                      <span>반복 재생 — 영상 종료 시 자동 재시작</span>
+                    </label>
+                    {formError && <p className="text-xs text-red-400">{formError}</p>}
+                    <div className="flex justify-end gap-2 pt-2">
+                      <button
+                        type="button"
+                        onClick={closeAddModal}
+                        className="px-3 py-1.5 text-xs rounded bg-gray-700 hover:bg-gray-600 text-gray-200"
+                      >
+                        취소
+                      </button>
+                      <button
+                        type="submit"
+                        className="px-3 py-1.5 text-xs rounded bg-red-700 hover:bg-red-600 text-white font-semibold"
+                      >
+                        스트림 추가
+                      </button>
+                    </div>
+                  </form>
+                )}
+              </div>
+            )}
           </div>
         </div>
       )}

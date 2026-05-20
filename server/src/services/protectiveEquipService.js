@@ -4,6 +4,7 @@ const ort   = require('onnxruntime-node');
 const sharp = require('sharp');
 const path  = require('path');
 const fs    = require('fs');
+const { getOnnxSessionOptions } = require('../utils/onnxOptions');
 
 const INPUT_SIZE = 640;
 
@@ -60,9 +61,7 @@ class ProtectiveEquipService {
       return;
     }
     try {
-      this._session = await ort.InferenceSession.create(this.modelPath, {
-        executionProviders: ['cpu'], graphOptimizationLevel: 'all',
-      });
+      this._session = await ort.InferenceSession.create(this.modelPath, getOnnxSessionOptions());
       // Infer actual num classes from model output dims at first run
       this._ready  = true;
       this._status = 'loaded';

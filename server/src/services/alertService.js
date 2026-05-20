@@ -16,11 +16,11 @@ class AlertService extends EventEmitter {
   }
 
   async createAlert(event) {
-    const { cameraId, objectId, zoneId, dwellTime, timestamp } = event;
+    const { cameraId, objectId, zoneId, zoneName, dwellTime, timestamp } = event;
 
     const cooldownKey = `${cameraId}:${zoneId || 'global'}`;
     const lastAlert   = this._cooldownMap.get(cooldownKey) || 0;
-    const nowMs       = timestamp || Date.now();
+    const nowMs       = (typeof timestamp === 'number' ? timestamp : null) || Date.now();
 
     if (nowMs - lastAlert < ALERT_COOLDOWN_SEC * 1000) {
       return null;
@@ -35,6 +35,7 @@ class AlertService extends EventEmitter {
         cameraId,
         objectId,
         zoneId:    zoneId || null,
+        zoneName:  zoneName || null,
         startTime: new Date(nowMs).toISOString(),
         dwellTime: dwellTime || 0,
       });
@@ -46,8 +47,11 @@ class AlertService extends EventEmitter {
       eventId,
       cameraId,
       objectId,
+      zoneId:       zoneId   || null,
+      zoneName:     zoneName || null,
+      type:         event.type || 'LOITERING',
       dwellTime:    dwellTime || 0,
-      timestamp:    new Date(nowMs).toISOString(),
+      timestamp:    nowMs,        // store as Unix ms number
       acknowledged: false,
     };
 
