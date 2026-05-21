@@ -1,5 +1,94 @@
 {
   "permissions": {
-    "allow": ["Bash(*)", "Edit(*)", "Write(*)", "Read(*)"]
+    "allow": [
+      "Bash(*)",
+      "Edit(*)",
+      "Write(*)",
+      "Read(*)"
+    ],
+    "additionalDirectories": [
+      "/home/youngho",
+      "/data6/youngho"
+    ]
+  },
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "f=$(echo \"$CLAUDE_TOOL_INPUT\" | python3 -c \"import sys,json; d=json.load(sys.stdin); print(d.get('file_path',''))\" 2>/dev/null); [[ \"$f\" == *.ts || \"$f\" == *.tsx ]] && cd /data6/youngho/workspace/loitering_tracking/client && npx tsc --noEmit 2>&1 | head -30 || true"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cd /data6/youngho/workspace/loitering_tracking && echo '--- git status ---' && git status --short"
+          }
+        ]
+      }
+    ]
+  },
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": [
+        "@playwright/mcp@latest"
+      ]
+    },
+    "lts": {
+      "command": "node",
+      "args": [
+        "/home/youngho/workspace/loitering_tracking/mcp-server/index.js"
+      ],
+      "env": {
+        "LTS_BASE_URL": "http://localhost:3001"
+      }
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/data6/youngho/workspace/loitering_tracking",
+        "/tmp"
+      ]
+    },
+    "fetch": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-fetch"
+      ]
+    },
+    "github": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
+    },
+    "memory": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-memory"
+      ]
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-sequential-thinking"
+      ]
+    }
   }
 }

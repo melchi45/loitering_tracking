@@ -12,12 +12,12 @@
  *
  * Defaults:
  *   SERVER_URL = http://localhost:3001
- *   UI_URL     = http://localhost:5173
+ *   UI_URL     = http://localhost:3001  (same — production build served by the API server)
  *
  * Examples:
  *   node src/scripts/iceTest.js
- *   node src/scripts/iceTest.js http://192.168.214.3:3001 http://192.168.214.3:5173
- *   node src/scripts/iceTest.js http://localhost:3001 http://localhost:5173 --headless
+ *   node src/scripts/iceTest.js http://192.168.214.3:3001
+ *   node src/scripts/iceTest.js http://localhost:3001 --headless
  */
 
 const http  = require('http');
@@ -32,9 +32,8 @@ try {
 const args      = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const _serverIp = process.env.SERVER_IP || 'localhost';
 const _port     = process.env.PORT || '3001';
-const _vitePort = process.env.VITE_PORT || '5173';
 const SERVER    = (args[0] || `http://${_serverIp}:${_port}`).replace(/\/$/, '');
-const UI        = (args[1] || `http://${_serverIp}:${_vitePort}`).replace(/\/$/, '');
+const UI        = (args[1] || SERVER).replace(/\/$/, '');
 // Auto-use headless when no X server is available (SSH without display forwarding)
 const HEADLESS  = process.argv.includes('--headless') || !process.env.DISPLAY;
 
@@ -480,7 +479,7 @@ async function phase2(testCameraId, iceConfig) {
     await page.goto(UI, { waitUntil: 'domcontentloaded', timeout: 15_000 });
   } catch (err) {
     fail(`UI load failed: ${err.message}`);
-    info(`  Make sure the Web UI is running: cd client && npm run dev`);
+    info(`  Make sure the server is running and the client is built: cd client && npm run build`);
     await browser.close();
     return null;
   }

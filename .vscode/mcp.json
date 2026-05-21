@@ -1,0 +1,72 @@
+{
+  "servers": {
+    "playwright": {
+      "command": "/home/youngho/.npm-global/bin/playwright-mcp",
+      "args": [],
+      "type": "stdio"
+    },
+    "lts": {
+      "command": "node",
+      "args": ["/home/youngho/workspace/loitering_tracking/mcp-server/index.js"],
+      "env": {
+        "LTS_BASE_URL": "http://localhost:3001"
+      },
+      "type": "stdio"
+    },
+    "lts-http": {
+      "type": "sse",
+      "url": "http://localhost:3002/sse"
+    },
+    "filesystem": {
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/home/youngho/workspace/loitering_tracking",
+        "/tmp"
+      ],
+      "type": "stdio"
+    },
+    "fetch": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-fetch"],
+      "type": "stdio"
+    },
+    "github": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "type": "stdio",
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${env:GITHUB_PERSONAL_ACCESS_TOKEN}"
+      }
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "type": "stdio"
+    },
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"],
+      "type": "stdio"
+    }
+  },
+  "skills": [
+    "project-setup-info-local",
+    "get-search-view-results",
+    "summarize-github-issue-pr-notification",
+    "suggest-fix-issue",
+    "form-github-search-query",
+    "show-github-search-result",
+    "address-pr-comments",
+    "create-pull-request",
+    "fix-customization-evaluation-diagnostics"
+  ],
+  "agents": [
+    "Explore",
+    "Summarize",
+    "Fixer",
+    "Reviewer",
+    "TestRunner"
+  ]
+}

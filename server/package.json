@@ -13,7 +13,9 @@
     "download-models": "node src/scripts/downloadModels.js",
     "health": "node src/scripts/healthCheck.js",
     "ice-test": "node src/scripts/iceTest.js",
-    "ice-test:headless": "node src/scripts/iceTest.js --headless"
+    "ice-test:headless": "node src/scripts/iceTest.js --headless",
+    "turn-test": "node src/scripts/turnTest.js",
+    "turn-test:headless": "node src/scripts/turnTest.js --headless"
   },
   "dependencies": {
     "cors": "^2.8.5",

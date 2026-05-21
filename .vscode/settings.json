@@ -1,0 +1,23 @@
+{
+  // ── Port auto-detection ───────────────────────────────────────────────────
+  // Prevent VSCode from popping up "Open in Browser" every time Vite / nodemon
+  // restarts and a port becomes available again.
+  "remote.autoForwardPorts": false,
+  "remote.autoForwardPortsSource": "process",
+
+  // ── Task auto-detection ───────────────────────────────────────────────────
+  "task.autoDetect": "off",
+
+  // ── Terminal ─────────────────────────────────────────────────────────────
+  "terminal.integrated.env.linux": {},
+  "chat.tools.terminal.autoApprove": {
+    "/^which git && git --version$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cd /home/youngho/workspace/loitering_tracking && git add -A && git status --short$/": {
+      "approve": true,
+      "matchCommandLine": true
+    }
+  }
+}

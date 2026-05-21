@@ -28,6 +28,7 @@
 15. [Getting Started](#15-getting-started)
 16. [API Reference](#16-api-reference)
 17. [Appendix](#17-appendix)
+18. [Documentation Index (RFP / PRD)](#appendix-c-documentation-index)
 
 ---
 
@@ -470,7 +471,7 @@ The detection service supports all **80 COCO class IDs** in `ENABLED_CLASSES`. C
 | `computer` | laptop (63), tv (62), keyboard (66), mouse (64), cell phone (67) |
 | `fire` / `smoke` | detected via YOLOv8s fire/smoke model (not YOLO 80-class) |
 
-Full 80-class breakdown: see **Section 7** and `RFP_Object_Tracking.md §3.2.2`.
+Full 80-class breakdown: see **Section 7** and [`RFP_Object_Tracking.md §3.2.2`](docs/RFP_Object_Tracking.md).
 
 #### Required AI Model Files
 
@@ -503,7 +504,7 @@ python3 -c "from ultralytics import YOLO; YOLO('yolov8n.pt').export(format='onnx
 
 ## 4. IP Camera Discovery
 
-> Full specification moved to **[RFP_Camera_Discovery.md](RFP_Camera_Discovery.md)** (Document ID: LTS-2026-002).
+> Full specification moved to **[RFP_Camera_Discovery.md](docs/RFP_Camera_Discovery.md)** (Document ID: LTS-2026-002).
 
 The system supports two parallel discovery mechanisms:
 
@@ -512,7 +513,7 @@ The system supports two parallel discovery mechanisms:
 | WiseNet UDP Broadcast | Hanwha / WiseNet cameras | Send port 7701, receive port 7711, 255.255.255.255 |
 | ONVIF WS-Discovery | All ONVIF-compliant cameras | UDP multicast 239.255.255.250:3702 |
 
-Both mechanisms run concurrently and merge results deduplicated by MAC address. See [RFP_Camera_Discovery.md](RFP_Camera_Discovery.md) for protocol specification, packet format, and implementation details.
+Both mechanisms run concurrently and merge results deduplicated by MAC address. See [RFP_Camera_Discovery.md](docs/RFP_Camera_Discovery.md) for protocol specification, packet format, and implementation details.
 
 ---
 
@@ -654,16 +655,16 @@ Each camera zone can independently activate one or more AI analysis modules via 
 
 | # | Checkbox | Zone Key | RFP | Status | Description |
 |:---:|---|---|---|:---:|---|
-| 1 | ☑ **Human** | `human` | [AI-01](RFP_AI_Human_Detection.md) | ✅ Implemented | Person detection — YOLOv8n COCO class 0 (person) |
-| 2 | ☑ **Vehicle** | `vehicle` | [AI-02](RFP_AI_Vehicle_Detection.md) | ✅ Implemented | Vehicle detection — bicycle/car/motorcycle/bus/truck |
-| 3 | ☑ **Face** | `face` | [AI-03](RFP_AI_Face_Recognition.md) | ✅ Implemented | Face detection — SCRFD-2.5G (3.2MB) + ArcFace ResNet50 Re-ID (249MB) |
-| 4 | ☑ **Mask** | `mask` | [AI-04](RFP_AI_Mask_Detection.md) | ✅ Implemented | Mask detection — YOLOv8m PPE (99MB), mask/no_mask 2-class |
-| 5 | ☑ **Color** | `color` | [AI-05](RFP_AI_Color_Analysis.md) | ✅ Implemented | Upper/lower body color analysis — Phase-1 pixel average, 11-color classification (no model required) |
-| 6 | ☑ **Cloth** | `cloth` | [AI-06](RFP_AI_Cloth_Analysis.md) | ✅ Implemented | Clothing type classification — OpenPAR (openpar.onnx 94MB), upper/lower garment + sleeve length |
-| 7 | ☑ **Hat** | `hat` | [AI-07](RFP_AI_Hat_Detection.md) | ✅ Implemented | Helmet/hat detection — YOLOv8m PPE (99MB), hardhat/no_hardhat classification |
-| 8 | ☑ **Accessories** | `accessories` | [AI-08](RFP_AI_Accessories_Detection.md) | ✅ Implemented | Accessories detection — YOLOv8n COCO (backpack/umbrella/handbag/tie/suitcase) |
-| 9 | ☑ **Fire** | `fire` | [AI-09](RFP_AI_Fire_Smoke_Detection.md) | ✅ Implemented | Fire detection — YOLOv8s 3-class (yolov8s_fire_smoke.onnx 43MB, Abonia1/GitHub) |
-| 10 | ☑ **Smoke** | `smoke` | [AI-09](RFP_AI_Fire_Smoke_Detection.md) | ✅ Implemented | Smoke detection — YOLOv8s 3-class (yolov8s_fire_smoke.onnx 43MB, Abonia1/GitHub) |
+| 1 | ☑ **Human** | `human` | [AI-01](docs/RFP_AI_Human_Detection.md) | ✅ Implemented | Person detection — YOLOv8n COCO class 0 (person) |
+| 2 | ☑ **Vehicle** | `vehicle` | [AI-02](docs/RFP_AI_Vehicle_Detection.md) | ✅ Implemented | Vehicle detection — bicycle/car/motorcycle/bus/truck |
+| 3 | ☑ **Face** | `face` | [AI-03](docs/RFP_AI_Face_Recognition.md) | ✅ Implemented | Face detection — SCRFD-2.5G (3.2MB) + ArcFace ResNet50 Re-ID (249MB) |
+| 4 | ☑ **Mask** | `mask` | [AI-04](docs/RFP_AI_Mask_Detection.md) | ✅ Implemented | Mask detection — YOLOv8m PPE (99MB), mask/no_mask 2-class |
+| 5 | ☑ **Color** | `color` | [AI-05](docs/RFP_AI_Color_Analysis.md) | ✅ Implemented | Upper/lower body color analysis — Phase-1 pixel average, 11-color classification (no model required) |
+| 6 | ☑ **Cloth** | `cloth` | [AI-06](docs/RFP_AI_Cloth_Analysis.md) | ✅ Implemented | Clothing type classification — OpenPAR (openpar.onnx 94MB), upper/lower garment + sleeve length |
+| 7 | ☑ **Hat** | `hat` | [AI-07](docs/RFP_AI_Hat_Detection.md) | ✅ Implemented | Helmet/hat detection — YOLOv8m PPE (99MB), hardhat/no_hardhat classification |
+| 8 | ☑ **Accessories** | `accessories` | [AI-08](docs/RFP_AI_Accessories_Detection.md) | ✅ Implemented | Accessories detection — YOLOv8n COCO (backpack/umbrella/handbag/tie/suitcase) |
+| 9 | ☑ **Fire** | `fire` | [AI-09](docs/RFP_AI_Fire_Smoke_Detection.md) | ✅ Implemented | Fire detection — YOLOv8s 3-class (yolov8s_fire_smoke.onnx 43MB, Abonia1/GitHub) |
+| 10 | ☑ **Smoke** | `smoke` | [AI-09](docs/RFP_AI_Fire_Smoke_Detection.md) | ✅ Implemented | Smoke detection — YOLOv8s 3-class (yolov8s_fire_smoke.onnx 43MB, Abonia1/GitHub) |
 
 > **Implemented** modules: checkbox is enabled when editing a Zone. **Pending** modules: checkbox is shown in gray and automatically activated when the corresponding ONNX model file is placed in `server/models/`.
 >
@@ -755,7 +756,7 @@ server/models/                       Size    Status  Module
                                               Classes: tshirt/shirt/jacket/hoodie/vest/dress + pants/jeans/shorts/skirt + sleeve short/long
 ```
 
-For detailed spec for each AI module, refer to `RFP_AI_Human_Detection.md` through `RFP_AI_Fire_Smoke_Detection.md`.
+For detailed spec for each AI module, refer to [`RFP_AI_Human_Detection.md`](docs/RFP_AI_Human_Detection.md) through [`RFP_AI_Fire_Smoke_Detection.md`](docs/RFP_AI_Fire_Smoke_Detection.md).
 
 ### 7.6 ONNX Runtime Thread Configuration
 
@@ -1316,19 +1317,94 @@ loitering_tracking/
 │       └── stores/
 │           ├── cameraStore.ts       # Zustand camera state
 │           └── alertStore.ts        # Zustand alert state
+├── docs/                            # All RFP and PRD specification documents
+│   ├── RFP_LTS2026_Loitering_Tracking_System.md
+│   ├── RFP_Object_Tracking.md
+│   ├── RFP_Camera_Discovery.md
+│   ├── RFP_CrossCamera_Face_Tracking.md
+│   ├── RFP_AI_Human_Detection.md    # AI-01 through AI-10
+│   ├── RFP_AI_Vehicle_Detection.md
+│   ├── RFP_AI_Face_Recognition.md
+│   ├── RFP_AI_Mask_Detection.md
+│   ├── RFP_AI_Color_Analysis.md
+│   ├── RFP_AI_Cloth_Analysis.md
+│   ├── RFP_AI_Hat_Detection.md
+│   ├── RFP_AI_Accessories_Detection.md
+│   ├── RFP_AI_Fire_Smoke_Detection.md
+│   ├── RFP_AI_Animal_Detection.md
+│   ├── RFP_LTS2026_YouTube_RTSP_Ingest.md
+│   ├── RFP_YouTube_RTSP_Ingest.md
+│   ├── RFP_WebRTC_Media_Gateway.md
+│   ├── RFP_STUN_TURN_ICE.md
+│   ├── RFP_Dashboard_Layout.md
+│   ├── RFP_Dashboard_Detection_Display.md
+│   ├── RFP_Dashboard_Sidebar_Alerts_Zones.md
+│   ├── RFP_Dashboard_Sidebar_Cameras.md
+│   ├── RFP_Mobile_Layout.md
+│   ├── RFP_Ideal_Proposal.md
+│   ├── RFP_LLM_MCP_Integration.md
+│   ├── PRD_LTS2026_Loitering_Tracking_System.md
+│   ├── PRD_Object_Tracking.md
+│   ├── PRD_Camera_Discovery.md      # PRD counterparts (25 total)
+│   └── ...                          # (one PRD per RFP)
 └── .github/
     └── workflows/
         └── ci.yml                   # Lint + test + build
 ```
 
-### Appendix C: Related RFP Documents
+### Appendix C: Documentation Index
 
-| Document | Reference | Description |
+All RFP and PRD documents are stored in the [`docs/`](docs/) folder.
+
+#### Core System
+
+| RFP | PRD | Reference | Description |
+|---|---|---|---|
+| [RFP_LTS2026_Loitering_Tracking_System.md](docs/RFP_LTS2026_Loitering_Tracking_System.md) | [PRD_LTS2026_Loitering_Tracking_System.md](docs/PRD_LTS2026_Loitering_Tracking_System.md) | LTS-2026-001 | Full loitering detection system |
+| [RFP_Object_Tracking.md](docs/RFP_Object_Tracking.md) | [PRD_Object_Tracking.md](docs/PRD_Object_Tracking.md) | OTS-2026-001 | Object tracking: KF, multi-cue association |
+| [RFP_Camera_Discovery.md](docs/RFP_Camera_Discovery.md) | [PRD_Camera_Discovery.md](docs/PRD_Camera_Discovery.md) | LTS-2026-002 | Camera discovery: UDP broadcast + ONVIF |
+| [RFP_CrossCamera_Face_Tracking.md](docs/RFP_CrossCamera_Face_Tracking.md) | [PRD_CrossCamera_Face_Tracking.md](docs/PRD_CrossCamera_Face_Tracking.md) | — | Cross-camera face tracking & Re-ID |
+| [RFP_Ideal_Proposal.md](docs/RFP_Ideal_Proposal.md) | [PRD_Ideal_Proposal.md](docs/PRD_Ideal_Proposal.md) | — | Ideal system proposal reference |
+
+#### AI Detection Modules
+
+| RFP | PRD | Reference | Description |
+|---|---|---|---|
+| [RFP_AI_Human_Detection.md](docs/RFP_AI_Human_Detection.md) | [PRD_AI_Human_Detection.md](docs/PRD_AI_Human_Detection.md) | AI-01 | Person detection — YOLOv8n COCO class 0 |
+| [RFP_AI_Vehicle_Detection.md](docs/RFP_AI_Vehicle_Detection.md) | [PRD_AI_Vehicle_Detection.md](docs/PRD_AI_Vehicle_Detection.md) | AI-02 | Vehicle detection — bicycle/car/motorcycle/bus/truck |
+| [RFP_AI_Face_Recognition.md](docs/RFP_AI_Face_Recognition.md) | [PRD_AI_Face_Recognition.md](docs/PRD_AI_Face_Recognition.md) | AI-03 | Face detection + ArcFace Re-ID |
+| [RFP_AI_Mask_Detection.md](docs/RFP_AI_Mask_Detection.md) | [PRD_AI_Mask_Detection.md](docs/PRD_AI_Mask_Detection.md) | AI-04 | Mask detection — YOLOv8m PPE |
+| [RFP_AI_Color_Analysis.md](docs/RFP_AI_Color_Analysis.md) | [PRD_AI_Color_Analysis.md](docs/PRD_AI_Color_Analysis.md) | AI-05 | Upper/lower body color analysis |
+| [RFP_AI_Cloth_Analysis.md](docs/RFP_AI_Cloth_Analysis.md) | [PRD_AI_Cloth_Analysis.md](docs/PRD_AI_Cloth_Analysis.md) | AI-06 | Clothing type classification — OpenPAR |
+| [RFP_AI_Hat_Detection.md](docs/RFP_AI_Hat_Detection.md) | [PRD_AI_Hat_Detection.md](docs/PRD_AI_Hat_Detection.md) | AI-07 | Helmet/hat detection — YOLOv8m PPE |
+| [RFP_AI_Accessories_Detection.md](docs/RFP_AI_Accessories_Detection.md) | [PRD_AI_Accessories_Detection.md](docs/PRD_AI_Accessories_Detection.md) | AI-08 | Accessories detection — YOLOv8n COCO |
+| [RFP_AI_Fire_Smoke_Detection.md](docs/RFP_AI_Fire_Smoke_Detection.md) | [PRD_AI_Fire_Smoke_Detection.md](docs/PRD_AI_Fire_Smoke_Detection.md) | AI-09 | Fire & smoke detection — YOLOv8s |
+| [RFP_AI_Animal_Detection.md](docs/RFP_AI_Animal_Detection.md) | [PRD_AI_Animal_Detection.md](docs/PRD_AI_Animal_Detection.md) | AI-10 | Animal detection |
+
+#### Media / Streaming
+
+| RFP | PRD | Description |
 |---|---|---|
-| `RFP_LTS2026_Loitering_Tracking_System.md` | LTS-2026-001 | System-level RFP: full loitering detection system |
-| `RFP_Object_Tracking.md` | OTS-2026-001 | Object tracking sub-RFP: ID stability, KF, multi-cue association |
-| `RFP_LTS2026_Camera_Discovery.md` | LTS-2026-002 | Camera discovery: UDP broadcast + ONVIF WS-Discovery |
-| `RFP_AI_Human_Detection.md` ~ `RFP_AI_Fire_Smoke_Detection.md` | AI-01–09 | Per-module AI specification documents |
+| [RFP_LTS2026_YouTube_RTSP_Ingest.md](docs/RFP_LTS2026_YouTube_RTSP_Ingest.md) | [PRD_LTS2026_YouTube_RTSP_Ingest.md](docs/PRD_LTS2026_YouTube_RTSP_Ingest.md) | YouTube + RTSP stream ingestion (LTS integration) |
+| [RFP_YouTube_RTSP_Ingest.md](docs/RFP_YouTube_RTSP_Ingest.md) | [PRD_YouTube_RTSP_Ingest.md](docs/PRD_YouTube_RTSP_Ingest.md) | YouTube / RTSP ingest module |
+| [RFP_WebRTC_Media_Gateway.md](docs/RFP_WebRTC_Media_Gateway.md) | [PRD_WebRTC_Media_Gateway.md](docs/PRD_WebRTC_Media_Gateway.md) | WebRTC media gateway (mediasoup) |
+| [RFP_STUN_TURN_ICE.md](docs/RFP_STUN_TURN_ICE.md) | [PRD_STUN_TURN_ICE.md](docs/PRD_STUN_TURN_ICE.md) | STUN / TURN / ICE configuration |
+
+#### Dashboard / UI
+
+| RFP | PRD | Description |
+|---|---|---|
+| [RFP_Dashboard_Layout.md](docs/RFP_Dashboard_Layout.md) | [PRD_Dashboard_Layout.md](docs/PRD_Dashboard_Layout.md) | Main dashboard grid layout |
+| [RFP_Dashboard_Detection_Display.md](docs/RFP_Dashboard_Detection_Display.md) | [PRD_Dashboard_Detection_Display.md](docs/PRD_Dashboard_Detection_Display.md) | Detection bounding-box display |
+| [RFP_Dashboard_Sidebar_Alerts_Zones.md](docs/RFP_Dashboard_Sidebar_Alerts_Zones.md) | [PRD_Dashboard_Sidebar_Alerts_Zones.md](docs/PRD_Dashboard_Sidebar_Alerts_Zones.md) | Alerts & zones sidebar panel |
+| [RFP_Dashboard_Sidebar_Cameras.md](docs/RFP_Dashboard_Sidebar_Cameras.md) | [PRD_Dashboard_Sidebar_Cameras.md](docs/PRD_Dashboard_Sidebar_Cameras.md) | Camera management sidebar |
+| [RFP_Mobile_Layout.md](docs/RFP_Mobile_Layout.md) | [PRD_Mobile_Layout.md](docs/PRD_Mobile_Layout.md) | Mobile responsive layout |
+
+#### LLM / MCP Integration
+
+| RFP | PRD | Description |
+|---|---|---|
+| [RFP_LLM_MCP_Integration.md](docs/RFP_LLM_MCP_Integration.md) | [PRD_LLM_MCP_Server.md](docs/PRD_LLM_MCP_Server.md) | LLM integration via Model Context Protocol (MCP) |
 
 > **END OF DOCUMENT — LTS-2026-001**
 >
