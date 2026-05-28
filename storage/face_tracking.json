@@ -1,6 +1,6 @@
 {
-  "faceCounter": 2722,
-  "personAliasCounter": 2721,
+  "faceCounter": 2724,
+  "personAliasCounter": 2723,
   "trajectories": [
     {
       "faceId": "F1",
@@ -57819,14 +57819,14 @@
       "faceId": "F2708",
       "alias": "P2708",
       "firstSeenAt": 1779970658013,
-      "lastSeenAt": 1779970870504,
+      "lastSeenAt": 1779970907269,
       "currentCameraId": "yt-ac9394cd",
       "segments": [
         {
           "cameraId": "yt-ac9394cd",
-          "objectId": "3421ac59-71bd-45b7-8301-20ae28ec773b",
+          "objectId": "3f2665c3-b100-4590-b3cb-1f5c85eed018",
           "entryTime": 1779970658013,
-          "exitTime": 1779970870504
+          "exitTime": 1779970907269
         }
       ]
     },
@@ -57960,7 +57960,7 @@
       "faceId": "F2711",
       "alias": "P2711",
       "firstSeenAt": 1779970675925,
-      "lastSeenAt": 1779970865378,
+      "lastSeenAt": 1779970894222,
       "currentCameraId": "yt-ac9394cd",
       "segments": [
         {
@@ -57989,9 +57989,9 @@
         },
         {
           "cameraId": "yt-ac9394cd",
-          "objectId": "9dd55341-b43e-48b6-8a9f-05ce335031fe",
+          "objectId": "f91cffd0-2a74-466b-8b2a-27a644015651",
           "entryTime": 1779970842568,
-          "exitTime": 1779970865378
+          "exitTime": 1779970894222
         }
       ]
     },
@@ -58029,8 +58029,8 @@
       "faceId": "F2714",
       "alias": "P2714",
       "firstSeenAt": 1779970694884,
-      "lastSeenAt": 1779970867743,
-      "currentCameraId": "yt-30db1d2f",
+      "lastSeenAt": 1779970907500,
+      "currentCameraId": "f2ed29b1-ad46-47e3-baf9-8f083be954ed",
       "segments": [
         {
           "cameraId": "2ae4b74a-1a0b-4471-a2b8-844e0a8d7ea4",
@@ -58408,7 +58408,79 @@
           "cameraId": "yt-30db1d2f",
           "objectId": null,
           "entryTime": 1779970867743,
-          "exitTime": 1779970867743
+          "exitTime": 1779970873971
+        },
+        {
+          "cameraId": "2ae4b74a-1a0b-4471-a2b8-844e0a8d7ea4",
+          "objectId": "d560bd23-a3e2-446c-8300-cc44c3afac4f",
+          "entryTime": 1779970873971,
+          "exitTime": 1779970880513
+        },
+        {
+          "cameraId": "c4f3c42b-4b40-4632-8218-3da40a842c7e",
+          "objectId": "2bbedb95-6061-4345-8226-5e0402731e9b",
+          "entryTime": 1779970880513,
+          "exitTime": 1779970881919
+        },
+        {
+          "cameraId": "2ae4b74a-1a0b-4471-a2b8-844e0a8d7ea4",
+          "objectId": "d560bd23-a3e2-446c-8300-cc44c3afac4f",
+          "entryTime": 1779970881919,
+          "exitTime": 1779970884429
+        },
+        {
+          "cameraId": "c4f3c42b-4b40-4632-8218-3da40a842c7e",
+          "objectId": "2bbedb95-6061-4345-8226-5e0402731e9b",
+          "entryTime": 1779970884429,
+          "exitTime": 1779970886149
+        },
+        {
+          "cameraId": "2ae4b74a-1a0b-4471-a2b8-844e0a8d7ea4",
+          "objectId": "d560bd23-a3e2-446c-8300-cc44c3afac4f",
+          "entryTime": 1779970886149,
+          "exitTime": 1779970888962
+        },
+        {
+          "cameraId": "c4f3c42b-4b40-4632-8218-3da40a842c7e",
+          "objectId": "2bbedb95-6061-4345-8226-5e0402731e9b",
+          "entryTime": 1779970888962,
+          "exitTime": 1779970898778
+        },
+        {
+          "cameraId": "f2ed29b1-ad46-47e3-baf9-8f083be954ed",
+          "objectId": "0681e477-9aba-4c0a-a115-c73c247249d2",
+          "entryTime": 1779970898778,
+          "exitTime": 1779970901799
+        },
+        {
+          "cameraId": "c4f3c42b-4b40-4632-8218-3da40a842c7e",
+          "objectId": "2bbedb95-6061-4345-8226-5e0402731e9b",
+          "entryTime": 1779970901799,
+          "exitTime": 1779970902945
+        },
+        {
+          "cameraId": "f2ed29b1-ad46-47e3-baf9-8f083be954ed",
+          "objectId": "0681e477-9aba-4c0a-a115-c73c247249d2",
+          "entryTime": 1779970902945,
+          "exitTime": 1779970906338
+        },
+        {
+          "cameraId": "c4f3c42b-4b40-4632-8218-3da40a842c7e",
+          "objectId": "2bbedb95-6061-4345-8226-5e0402731e9b",
+          "entryTime": 1779970906338,
+          "exitTime": 1779970907272
+        },
+        {
+          "cameraId": "2ae4b74a-1a0b-4471-a2b8-844e0a8d7ea4",
+          "objectId": "d560bd23-a3e2-446c-8300-cc44c3afac4f",
+          "entryTime": 1779970907272,
+          "exitTime": 1779970907500
+        },
+        {
+          "cameraId": "f2ed29b1-ad46-47e3-baf9-8f083be954ed",
+          "objectId": "0681e477-9aba-4c0a-a115-c73c247249d2",
+          "entryTime": 1779970907500,
+          "exitTime": 1779970907500
         }
       ]
     },
@@ -58461,7 +58533,7 @@
       "faceId": "F2718",
       "alias": "P2718",
       "firstSeenAt": 1779970786991,
-      "lastSeenAt": 1779970871261,
+      "lastSeenAt": 1779970907500,
       "currentCameraId": "f2ed29b1-ad46-47e3-baf9-8f083be954ed",
       "segments": [
         {
@@ -58490,9 +58562,9 @@
         },
         {
           "cameraId": "f2ed29b1-ad46-47e3-baf9-8f083be954ed",
-          "objectId": "0681e477-9aba-4c0a-a115-c73c247249d2",
+          "objectId": "52c39d09-4acd-4343-b4dd-e5c69557eea5",
           "entryTime": 1779970871261,
-          "exitTime": 1779970871261
+          "exitTime": 1779970907500
         }
       ]
     },
@@ -58562,6 +58634,36 @@
           "objectId": "d560bd23-a3e2-446c-8300-cc44c3afac4f",
           "entryTime": 1779970834444,
           "exitTime": 1779970861576
+        }
+      ]
+    },
+    {
+      "faceId": "F2722",
+      "alias": "P2722",
+      "firstSeenAt": 1779970871959,
+      "lastSeenAt": 1779970876602,
+      "currentCameraId": "c4f3c42b-4b40-4632-8218-3da40a842c7e",
+      "segments": [
+        {
+          "cameraId": "c4f3c42b-4b40-4632-8218-3da40a842c7e",
+          "objectId": "2bbedb95-6061-4345-8226-5e0402731e9b",
+          "entryTime": 1779970871959,
+          "exitTime": 1779970876602
+        }
+      ]
+    },
+    {
+      "faceId": "F2723",
+      "alias": "P2723",
+      "firstSeenAt": 1779970890035,
+      "lastSeenAt": 1779970902950,
+      "currentCameraId": "2ae4b74a-1a0b-4471-a2b8-844e0a8d7ea4",
+      "segments": [
+        {
+          "cameraId": "2ae4b74a-1a0b-4471-a2b8-844e0a8d7ea4",
+          "objectId": "d560bd23-a3e2-446c-8300-cc44c3afac4f",
+          "entryTime": 1779970890035,
+          "exitTime": 1779970902950
         }
       ]
     }
