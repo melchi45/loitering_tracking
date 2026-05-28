@@ -66,6 +66,38 @@ export interface ClothAttribute {
   sleeve?: string;
 }
 
+export type GalleryType = 'general' | 'vip' | 'blocklist' | 'missing';
+
+export interface FaceGallery {
+  id:          string;
+  name:        string;
+  description: string;
+  type:        GalleryType;
+  faceCount:   number;
+  createdAt:   string;
+}
+
+export interface EnrolledFace {
+  id:        string;
+  galleryId: string;
+  name:      string;
+  thumbnail: string;  // data:image/jpeg;base64,...
+  score:     number;
+  createdAt: string;
+}
+
+export interface FaceMatchEvent {
+  faceId:        string;
+  cameraId:      string;
+  identity:      string;
+  galleryId:     string;
+  galleryType:   GalleryType;
+  matchScore:    number;
+  thumbnail:     string;
+  liveCropData?: string;   // v1.1 — base64 JPEG crop of detected face from live frame
+  timestamp:     number;
+}
+
 export interface CrossCameraReIdEvent {
   faceId:       string;
   alias?:       string | null;  // canonical person alias e.g. "P3"

@@ -7,8 +7,7 @@
       "Read(*)"
     ],
     "additionalDirectories": [
-      "/home/youngho",
-      "/data6/youngho"
+      "/home/youngho"
     ]
   },
   "hooks": {
@@ -33,62 +32,5 @@
         ]
       }
     ]
-  },
-  "mcpServers": {
-    "playwright": {
-      "command": "npx",
-      "args": [
-        "@playwright/mcp@latest"
-      ]
-    },
-    "lts": {
-      "command": "node",
-      "args": [
-        "/home/youngho/workspace/loitering_tracking/mcp-server/index.js"
-      ],
-      "env": {
-        "LTS_BASE_URL": "http://localhost:3001"
-      }
-    },
-    "filesystem": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-filesystem",
-        "/data6/youngho/workspace/loitering_tracking",
-        "/tmp"
-      ]
-    },
-    "fetch": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-fetch"
-      ]
-    },
-    "github": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-github"
-      ],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_PERSONAL_ACCESS_TOKEN}"
-      }
-    },
-    "memory": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-memory"
-      ]
-    },
-    "sequential-thinking": {
-      "command": "npx",
-      "args": [
-        "-y",
-        "@modelcontextprotocol/server-sequential-thinking"
-      ]
-    }
   }
 }

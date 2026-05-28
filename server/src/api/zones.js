@@ -31,7 +31,7 @@ function zonesRouter(zoneManager) {
   router.post('/', (req, res) => {
     try {
       const { cameraId } = req.params;
-      const { name, polygon, type, dwellThreshold, minDisplacement, reentryWindow, schedule } = req.body;
+      const { name, polygon, type, dwellThreshold, minDisplacement, reentryWindow, schedule, targetClasses } = req.body;
 
       if (!name || !polygon || !Array.isArray(polygon) || polygon.length < 3) {
         return res.status(400).json({
@@ -45,7 +45,7 @@ function zonesRouter(zoneManager) {
       }
 
       const zone = zoneManager.addZone(cameraId, {
-        name, polygon, type, dwellThreshold, minDisplacement, reentryWindow, schedule,
+        name, polygon, type, dwellThreshold, minDisplacement, reentryWindow, schedule, targetClasses,
       });
       res.status(201).json({ success: true, data: zone });
     } catch (err) {

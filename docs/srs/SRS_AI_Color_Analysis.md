@@ -1,0 +1,344 @@
+# SOFTWARE REQUIREMENTS SPECIFICATION (SRS)
+# AI Module — Color Analysis
+
+| | |
+|---|---|
+| **Document ID** | SRS-LTS-AI-06-CLR |
+| **Version** | 1.0 |
+| **Status** | Active |
+| **Date** | 2026-05-26 |
+| **Parent PRD** | prd/PRD_AI_Color_Analysis.md |
+| **Parent RFP** | rfp/RFP_AI_Color_Analysis.md |
+
+---
+
+## Table of Contents
+1. [Introduction](#1-introduction)
+2. [System Overview](#2-system-overview)
+3. [Functional Requirements — Color Extraction](#3-functional-requirements--color-extraction)
+4. [Functional Requirements — ROI Computation](#4-functional-requirements--roi-computation)
+5. [Functional Requirements — Zone Gating](#5-functional-requirements--zone-gating)
+6. [Functional Requirements — Error Handling](#6-functional-requirements--error-handling)
+7. [Non-Functional Requirements](#7-non-functional-requirements)
+8. [Data Requirements](#8-data-requirements)
+9. [Interface Requirements](#9-interface-requirements)
+10. [Constraints & Assumptions](#10-constraints--assumptions)
+
+---
+
+## 1. Introduction
+
+### 1.1 Purpose
+
+This SRS defines the complete, verifiable functional requirements for the AI Color Analysis Module (AI-06-CLR) of LTS-2026. Each requirement is identified by a unique ID (FR-CLR-NNN) and is directly traceable to test cases in TC_AI_Color_Analysis.md.
+
+### 1.2 Scope
+
+This document covers:
+- HSV-based dominant color classification for upper and lower body regions of detected persons
+- Body ROI extraction parameters (upper torso and lower torso coordinates)
+- Zone-level gating via `targetClass: 'color'`
+- Error handling for degenerate bounding boxes and image extraction failures
+- Socket.IO event output schema carrying color attributes
+
+Out of scope: ML model-based color analysis (covered by Cloth Analysis SRS), pattern detection (striped/plaid), multi-color support beyond primary dominant color per region.
+
+### 1.3 Definitions
+
+| Term | Definition |
+|---|---|
+| ROI | Region of Interest — a rectangular sub-region of the full camera frame |
+| Upper ROI | Portion of person bounding box covering the upper torso (25%–55% of bbox height, inner 70% width) |
+| Lower ROI | Portion of person bounding box covering the lower torso (55%–90% of bbox height, inner 70% width) |
+| HSV | Hue-Saturation-Value color space used for color name classification |
+| Achromatic | Colors with saturation < 15%: classified as black, white, or gray by brightness |
+| Chromatic | Colors with saturation ≥ 15%: classified by hue angle into 8 named colors |
+| avgColor | Internal function that extracts an 8×8 pixel average of a ROI using sharp |
+| fastColor | Public method of ColorClothService that returns upper/lower color and RGB values |
+| targetClass | Zone configuration field that enables a specific AI analysis pipeline |
+
+---
+
+## 2. System Overview
+
+### 2.1 Component Dependencies
+
+```
+RTSP Frame (JPEG Buffer)
+  └─ PipelineManager._processFrame()
+       └─ ColorClothService.fastColor()         [AI-06-CLR: Phase-1 only]
+            ├─ avgColor(upperRoi)               — sharp extract + 8×8 resize
+            ├─ avgColor(lowerRoi)               — sharp extract + 8×8 resize
+            ├─ rgbToColorName(upperRgb)         — HSV classification
+            └─ rgbToColorName(lowerRgb)         — HSV classification
+                 └─ detections[].personAttrs.color  → Socket.IO 'detections' event
+```
+
+### 2.2 Activation Condition
+
+Color extraction is activated only when the current zone has `targetClass: 'color'` in its configuration. The `pipelineManager` reads zone configuration before each frame and gates the `fastColor()` call accordingly.
+
+### 2.3 Phase Availability
+
+- Phase-1 (current): HSV pixel-average method — always available, no model required
+- Phase-2 (planned): PAR ONNX model color output — covered in SRS-LTS-AI-07-CLT
+
+---
+
+## 3. Functional Requirements — Color Extraction
+
+### FR-CLR-001 — HSV-Based Color Classification
+
+- `rgbToColorName(r, g, b)` must accept three integer values in the range [0, 255]
+- The function must convert RGB to HSV and classify the result into exactly one of 11 color names
+- Valid output values: `'black'`, `'white'`, `'gray'`, `'red'`, `'orange'`, `'yellow'`, `'green'`, `'cyan'`, `'blue'`, `'purple'`, `'brown'`
+- No other string values may be returned
+
+### FR-CLR-002 — Achromatic Classification (Saturation < 15%)
+
+- When HSV saturation `s < 0.15`, the color must be classified as achromatic
+- Achromatic sub-classification by brightness `v`:
+  - `v < 0.25` → `'black'`
+  - `v > 0.80` → `'white'`
+  - otherwise → `'gray'`
+- Achromatic check takes priority over all hue-based rules
+
+### FR-CLR-003 — Chromatic Hue Classification
+
+- When `s ≥ 0.15`, hue angle `h` (0–360°) must be computed from the RGB-to-HSV formula
+- Hue must be normalized to [0, 360) by adding 360 when negative
+- Hue classification thresholds:
+  - `h < 15` or `h ≥ 345` → `'red'`
+  - `15 ≤ h < 50` → `'orange'`
+  - `50 ≤ h < 75` → `'yellow'`
+  - `75 ≤ h < 150` → `'green'`
+  - `150 ≤ h < 195` → `'cyan'`
+  - `195 ≤ h < 260` → `'blue'`
+  - `260 ≤ h < 320` → `'purple'`
+  - `320 ≤ h < 345` → `'red'`
+
+### FR-CLR-004 — Brown Exception
+
+- When `h ≥ 10` and `h < 50` and `v < 0.55`, the color must be classified as `'brown'`
+- The brown exception is evaluated before the general hue-based chromatic rules
+- Brown represents dark orange tones in low-brightness conditions
+
+### FR-CLR-005 — Upper Body Color Extraction
+
+- `fastColor(jpegBuffer, personBbox, imgW, imgH)` must extract the dominant color for the upper torso region
+- The upper ROI must be computed as:
+  - x offset: `personBbox.x + personBbox.width * 0.15`
+  - y offset: `personBbox.y + personBbox.height * 0.25`
+  - width: `personBbox.width * 0.70`
+  - height: `personBbox.height * 0.30`
+- The extracted average RGB must be passed to `rgbToColorName()` to produce the `upper` color string
+
+### FR-CLR-006 — Lower Body Color Extraction
+
+- `fastColor()` must extract the dominant color for the lower torso region
+- The lower ROI must be computed as:
+  - x offset: `personBbox.x + personBbox.width * 0.15`
+  - y offset: `personBbox.y + personBbox.height * 0.55`
+  - width: `personBbox.width * 0.70`
+  - height: `personBbox.height * 0.35`
+- The extracted average RGB must be passed to `rgbToColorName()` to produce the `lower` color string
+
+### FR-CLR-007 — Parallel ROI Extraction
+
+- `fastColor()` must extract upper and lower ROI colors concurrently using `Promise.all()`
+- Sequential extraction is not permitted (performance requirement)
+
+### FR-CLR-008 — 8×8 Pixel Average
+
+- The `avgColor()` function must resize each ROI to 8×8 pixels using `sharp` with `fit: 'fill'`
+- The 64 RGB pixel values must be averaged to produce a single [R, G, B] triple
+- Each channel average must be rounded to the nearest integer
+
+### FR-CLR-009 — fastColor Return Schema
+
+- `fastColor()` must return a plain object with exactly these four fields:
+  - `upper`: string — color name for upper torso
+  - `lower`: string — color name for lower torso
+  - `upperRgb`: number[3] — average RGB triple for upper ROI
+  - `lowerRgb`: number[3] — average RGB triple for lower ROI
+- Both `upper` and `lower` must be one of the 11 valid color names (FR-CLR-001)
+
+### FR-CLR-010 — Always Available (No Model Required)
+
+- Color extraction must be available immediately on server startup without loading any ONNX model
+- `ColorClothService._colorReady` must be `true` after construction, before `load()` is called
+- Color extraction must not block or fail due to PAR model availability
+
+---
+
+## 4. Functional Requirements — ROI Computation
+
+### FR-CLR-011 — ROI Coordinate Clamping
+
+- `avgColor()` must clamp the left edge to `Math.max(0, Math.round(x))`
+- `avgColor()` must clamp the top edge to `Math.max(0, Math.round(y))`
+- When `imgW` is provided, the right edge must be clamped to `Math.min(imgW, Math.round(x + w))`
+- When `imgH` is provided, the bottom edge must be clamped to `Math.min(imgH, Math.round(y + h))`
+- Effective width must be `Math.max(1, right - left)` to prevent zero-width extraction
+- Effective height must be `Math.max(1, bottom - top)` to prevent zero-height extraction
+
+### FR-CLR-012 — Alpha Channel Removal
+
+- `avgColor()` must call `sharp(...).removeAlpha()` before converting to raw pixel buffer
+- The resulting buffer must contain exactly 3 bytes per pixel (RGB, no alpha)
+
+### FR-CLR-013 — Frame Dimension Parameters
+
+- `fastColor(jpegBuffer, personBbox, imgW, imgH)` must accept optional `imgW` and `imgH` parameters
+- When `imgW` and `imgH` are provided, they must be forwarded to `avgColor()` for edge clamping
+- When `imgW` or `imgH` are not provided, ROI edge clamping against frame boundaries is skipped
+
+---
+
+## 5. Functional Requirements — Zone Gating
+
+### FR-CLR-014 — Zone targetClass Activation
+
+- Color extraction via `fastColor()` must only be called when the zone configuration for the current camera includes `'color'` in its `targetClasses` array
+- `pipelineManager` must check zone configuration before invoking `fastColor()` for each detection
+
+### FR-CLR-015 — Color Output Attachment
+
+- When color extraction is active and succeeds, the result must be attached to the detection as `personAttrs.color`
+- The attached object must match the `fastColor()` return schema: `{ upper, lower, upperRgb, lowerRgb }`
+
+### FR-CLR-016 — Color in Socket.IO Detections Event
+
+- The `detections` Socket.IO event payload must include `personAttrs.color` for each detection where color extraction ran
+- The event must carry `personAttrs.color.upper` and `personAttrs.color.lower` as string color names
+- When zone does not include `'color'`, `personAttrs.color` must be absent or `null`
+
+---
+
+## 6. Functional Requirements — Error Handling
+
+### FR-CLR-017 — Graceful Failure on Extract Error
+
+- If `sharp` throws an exception during ROI extraction, `avgColor()` must catch the error and return `[128, 128, 128]` (neutral gray)
+- The error must not propagate to `fastColor()` or the caller
+- This fallback ensures the pipeline continues without interruption
+
+### FR-CLR-018 — Zero-Size Bounding Box Handling
+
+- When `personBbox.width` or `personBbox.height` is zero or near zero, the computed ROI dimensions may underflow
+- The clamping in FR-CLR-011 (`Math.max(1, ...)`) must prevent a zero-size extract from being submitted to `sharp`
+- The resulting color for a degenerate bbox is `'gray'` (from the [128,128,128] fallback)
+
+---
+
+## 7. Non-Functional Requirements
+
+### FR-CLR-019 — Performance: Latency per Person
+
+- End-to-end `fastColor()` execution time must be ≤ 2 ms per person under typical operation
+- Target latency for a single person with 1080p source frame is approximately 0.5 ms
+
+### FR-CLR-020 — Concurrency
+
+- Multiple instances of `fastColor()` may execute concurrently across different persons in the same frame without data corruption
+- No shared mutable state is used between concurrent calls (all parameters are call-local)
+
+### FR-CLR-021 — Memory
+
+- The 8×8 raw pixel buffer (192 bytes per ROI) must be garbage-collected after each `avgColor()` call
+- No ROI pixel data is retained in service state between frames
+
+---
+
+## 8. Data Requirements
+
+### 8.1 Input: Person Bounding Box
+
+```json
+{
+  "x":      "number — left edge in pixels",
+  "y":      "number — top edge in pixels",
+  "width":  "number — bbox width in pixels",
+  "height": "number — bbox height in pixels"
+}
+```
+
+### 8.2 Output: Color Attribute Object
+
+```typescript
+interface ColorAttribute {
+  upper:    string;    // one of 11 color names
+  lower:    string;    // one of 11 color names
+  upperRgb: [number, number, number];   // avg RGB for upper ROI
+  lowerRgb: [number, number, number];   // avg RGB for lower ROI
+}
+```
+
+### 8.3 Valid Color Names
+
+```
+black | white | gray | red | orange | yellow | green | cyan | blue | purple | brown
+```
+
+### 8.4 HSV Classification Table
+
+| Condition | Output |
+|---|---|
+| s < 0.15 AND v < 0.25 | black |
+| s < 0.15 AND v > 0.80 | white |
+| s < 0.15 AND 0.25 ≤ v ≤ 0.80 | gray |
+| s ≥ 0.15 AND h∈[10,50) AND v < 0.55 | brown |
+| s ≥ 0.15 AND (h < 15 OR h ≥ 345) | red |
+| s ≥ 0.15 AND h∈[15,50) | orange |
+| s ≥ 0.15 AND h∈[50,75) | yellow |
+| s ≥ 0.15 AND h∈[75,150) | green |
+| s ≥ 0.15 AND h∈[150,195) | cyan |
+| s ≥ 0.15 AND h∈[195,260) | blue |
+| s ≥ 0.15 AND h∈[260,320) | purple |
+| s ≥ 0.15 AND h∈[320,345) | red |
+
+---
+
+## 9. Interface Requirements
+
+### 9.1 Internal API
+
+| Method | Signature | Returns | Notes |
+|---|---|---|---|
+| `rgbToColorName` | `(r, g, b) → string` | Color name string | Pure function, synchronous |
+| `avgColor` | `(jpegBuffer, roi, imgW, imgH) → Promise<number[3]>` | RGB triple | Fallback [128,128,128] on error |
+| `fastColor` | `(jpegBuffer, personBbox, imgW?, imgH?) → Promise<ColorAttribute>` | Color attribute object | Calls avgColor twice in parallel |
+
+### 9.2 Socket.IO Event
+
+| Event | Direction | Payload Field | Description |
+|---|---|---|---|
+| `detections` | Server → Client | `detections[].personAttrs.color` | Color attribute object per person |
+| `detections` | Server → Client | `detections[].personAttrs.color.upper` | Upper body color name |
+| `detections` | Server → Client | `detections[].personAttrs.color.lower` | Lower body color name |
+
+### 9.3 REST API
+
+No dedicated REST endpoints for color analysis. Color data flows exclusively through the Socket.IO `detections` event.
+
+---
+
+## 10. Constraints & Assumptions
+
+| ID | Constraint / Assumption |
+|---|---|
+| C-01 | Color extraction operates on Phase-1 HSV algorithm only; ML model color is Phase-2 (SRS-LTS-AI-07-CLT) |
+| C-02 | Input frame must be a valid JPEG buffer decodable by `sharp` |
+| C-03 | Person bounding box coordinates are in pixel units relative to the full frame |
+| C-04 | The 11-color taxonomy is fixed; adding or removing colors requires code change |
+| C-05 | Color accuracy may degrade under extreme illumination conditions (very dark/overexposed frames) |
+| C-06 | Color extraction classifies the dominant single color per region — no multi-color or pattern support in Phase-1 |
+| C-07 | `sharp` library must be installed in the server runtime environment |
+
+---
+
+## Document History
+
+| Version | Date | Author | Description |
+|---|---|---|---|
+| 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for AI Color Analysis |

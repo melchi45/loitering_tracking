@@ -1,0 +1,167 @@
+name: LTS-2026 Test Suite
+
+on:
+  push:
+    branches: [main, develop, 'feature/**', 'fix/**']
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+    inputs:
+      skip_filter:
+        description: 'Skip filter (e.g. "e2e" or "youtube")'
+        required: false
+        default: 'e2e'
+
+env:
+  LTS_URL: http://localhost:3001
+  MCP_URL: http://localhost:3002
+  NODE_ENV: test
+
+jobs:
+  test:
+    name: Run Test Suites
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Checkout ─────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Node.js setup ────────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+            mcp-server/package-lock.json
+
+      # ── Install dependencies ──────────────────────────────────────────────
+      - name: Install root dependencies
+        run: npm ci --prefer-offline || npm install
+
+      - name: Install server dependencies
+        run: npm ci --prefer-offline || npm install
+        working-directory: server
+
+      - name: Install mcp-server dependencies
+        run: npm ci --prefer-offline || npm install
+        working-directory: mcp-server
+
+      # ── Start LTS server ─────────────────────────────────────────────────
+      - name: Start LTS server (background)
+        run: |
+          cd server
+          node src/index.js &
+          echo "SERVER_PID=$!" >> $GITHUB_ENV
+
+      - name: Wait for LTS server to be ready
+        run: |
+          echo "Waiting for server at $LTS_URL/health ..."
+          for i in $(seq 1 30); do
+            if curl -sf "$LTS_URL/health" > /dev/null 2>&1; then
+              echo "Server is ready after $i seconds"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: Server did not start within 30 seconds"
+          exit 1
+
+      # ── Run tests ─────────────────────────────────────────────────────────
+      - name: Run all test suites
+        id: run_tests
+        run: |
+          SKIP="${{ github.event.inputs.skip_filter || 'e2e' }}"
+          node test/run_all.js --skip "$SKIP"
+        continue-on-error: true
+
+      # ── Generate report ───────────────────────────────────────────────────
+      - name: Generate test report
+        run: |
+          SKIP="${{ github.event.inputs.skip_filter || 'e2e' }}"
+          node test/generate_report.js --skip "$SKIP" --output test/reports/ci-report.md
+        continue-on-error: true
+
+      # ── Upload report artifact ────────────────────────────────────────────
+      - name: Upload test report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-report-${{ github.run_number }}
+          path: test/reports/
+          retention-days: 30
+
+      # ── Stop server ───────────────────────────────────────────────────────
+      - name: Stop LTS server
+        if: always()
+        run: |
+          if [ -n "$SERVER_PID" ]; then
+            kill "$SERVER_PID" 2>/dev/null || true
+          fi
+          # Also kill by port as fallback
+          fuser -k 3001/tcp 2>/dev/null || true
+
+      # ── Fail job if tests failed ──────────────────────────────────────────
+      - name: Check test results
+        if: steps.run_tests.outcome == 'failure'
+        run: |
+          echo "One or more test suites failed. See uploaded report for details."
+          exit 1
+
+  # ── Optional: Phase-3 E2E tests (manual trigger only) ─────────────────────
+  e2e:
+    name: Phase-3 E2E Tests (Playwright)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.skip_filter == 'none'
+    needs: test
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm ci || npm install
+          cd server && npm ci || npm install
+          cd ../client && npm ci || npm install
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium
+        working-directory: client
+
+      - name: Start LTS server
+        run: cd server && node src/index.js &
+
+      - name: Wait for LTS server
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf "$LTS_URL/health" > /dev/null 2>&1 && exit 0
+            sleep 1
+          done
+          exit 1
+
+      - name: Start frontend (Vite dev server)
+        run: |
+          cd client
+          npm run dev &
+          sleep 5
+
+      - name: Run Playwright E2E tests
+        run: |
+          FRONTEND_URL=http://localhost:5173 \
+          npx playwright test test/e2e/
+        continue-on-error: true
+
+      - name: Stop servers
+        if: always()
+        run: |
+          fuser -k 3001/tcp 2>/dev/null || true
+          fuser -k 5173/tcp 2>/dev/null || true

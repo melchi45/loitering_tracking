@@ -16,9 +16,18 @@ import FullscreenCameraView from './components/FullscreenCameraView';
 import { DashboardDetectionPanel } from './components/DashboardDetectionPanel';
 import ZonesPanel from './components/ZonesPanel';
 import VideoAnalyticsTab from './components/VideoAnalyticsTab';
+import FaceGalleryTab from './components/FaceGalleryTab';
+import { SearchBar } from './components/SearchBar';
+import { SearchFullscreen } from './components/SearchFullscreen';
+import StatsPanelModal from './components/StatsPanelModal';
+import type { SearchResult } from './hooks/useSearch';
 import type { Alert, CrossCameraReIdEvent, PersonTrajectory } from './types';
+import { useAuthStore } from './stores/authStore';
+import SignInPage from './pages/SignInPage';
+import PendingPage from './pages/PendingPage';
+import AdminUsersPage from './pages/admin/AdminUsersPage';
 
-type SidebarTab = 'cameras' | 'alerts' | 'zones' | 'detections' | 'analytics';
+type SidebarTab = 'cameras' | 'alerts' | 'zones' | 'detections' | 'analytics' | 'faces';
 
 // ── Layout picker dropdown ──────────────────────────────────────────────────
 function LayoutPicker({ current, onChange }: { current: LayoutId; onChange: (id: LayoutId) => void }) {
@@ -307,15 +316,29 @@ function IceTestTrigger({ cameraId }: { cameraId: string }) {
   );
 }
 
-export default function App() {
+function Dashboard() {
+  const auth = useAuthStore();
+
+  // ── Dashboard ─────────────────────────────────────────────────────────────
   const [layout, setLayout] = useState<LayoutId>(() => {
     const saved = localStorage.getItem('lts-layout') as LayoutId | null;
     if (saved) return saved;
     return window.innerWidth < 768 ? '1' : '4';
-  });
-  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('cameras');
+  });  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('cameras');
+
+  // Navigate to relevant sidebar tab when a search result is clicked
+  const handleSearchNavigate = (result: SearchResult) => {
+    if (result._type === 'alert')                setSidebarTab('alerts');
+    else if (result._type === 'face')            setSidebarTab('faces');
+    else if (result._type === 'match')           setSidebarTab('faces');
+    else                                         setSidebarTab('detections');
+  };
+
   const [fullscreenCameraId, setFullscreenCameraId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showStats,    setShowStats]    = useState(false);
+  const [showSearchFullscreen, setShowSearchFullscreen] = useState(false);
+  const [searchFullscreenQuery, setSearchFullscreenQuery] = useState('');
   const [iceTestCameraId, setIceTestCameraId] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(288);
   const isResizingRef = useRef(false);
@@ -358,6 +381,37 @@ export default function App() {
       .catch(() => {});
   }, [hydratePerson]);
 
+  // Sync layout with server on mount.
+  // • Server has value → apply it (source of truth across sessions).
+  // • Server 404 (not set yet) → seed server from current localStorage/default value.
+  useEffect(() => {
+    const localVal = localStorage.getItem('lts-layout') as LayoutId | null;
+    const currentId = (localVal && LAYOUT_DEFS.find((d) => d.id === localVal)) ? localVal : layout;
+
+    fetch('/api/settings/layout')
+      .then((r) => {
+        if (r.status === 404) {
+          // Seed server with current value
+          fetch('/api/settings/layout', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value: currentId }),
+          }).catch(() => {});
+          return null;
+        }
+        return r.ok ? r.json() : null;
+      })
+      .then((data: { value?: string } | null) => {
+        const id = data?.value as LayoutId | undefined;
+        if (id && LAYOUT_DEFS.find((d) => d.id === id)) {
+          setLayout(id);
+          localStorage.setItem('lts-layout', id);
+        }
+      })
+      .catch(() => {}); // offline — keep localStorage value
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Mobile breakpoint detection
   useEffect(() => {
     const handler = () => setIsMobile(window.innerWidth < 768);
@@ -365,17 +419,29 @@ export default function App() {
     return () => window.removeEventListener('resize', handler);
   }, []);
 
-  // Seed ICE server config from server on mount — only when localStorage has no
-  // saved config (first run / cleared storage). If the user has already saved
-  // custom STUN/TURN settings they should NOT be overwritten on every page load.
+  // Sync ICE/WebRTC config with server on mount.
+  // Priority: DB settings → .env fallback (auto-seeded to DB on first hit).
+  // On every mount, the server value overwrites localStorage to keep all sessions in sync.
   useEffect(() => {
-    const STORAGE_KEY = 'lts-webrtc-config';
-    if (localStorage.getItem(STORAGE_KEY)) return; // User has saved config — skip seed
-
-    fetch('/api/webrtc/ice-config')
-      .then((r) => r.json())
-      .then((data: { stunUrls: string[]; turns: TurnServer[] }) => {
-        setWebRTCConfig({ enabled: webrtcEnabled, stunUrls: data.stunUrls ?? [], turns: data.turns ?? [] });
+    fetch('/api/settings/webrtcConfig')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((data: { enabled?: boolean; stunUrls?: string[]; turns?: TurnServer[] } | null) => {
+        if (data && Array.isArray(data.stunUrls)) {
+          // Server has saved config — use it and sync to store + localStorage
+          setWebRTCConfig({
+            enabled:  data.enabled ?? webrtcEnabled,
+            stunUrls: data.stunUrls,
+            turns:    data.turns ?? [],
+          });
+        } else {
+          // Not in DB yet — call /api/webrtc/ice-config which seeds DB from .env
+          fetch('/api/webrtc/ice-config')
+            .then((r) => r.json())
+            .then((cfg: { stunUrls: string[]; turns: TurnServer[] }) => {
+              setWebRTCConfig({ enabled: webrtcEnabled, stunUrls: cfg.stunUrls ?? [], turns: cfg.turns ?? [] });
+            })
+            .catch(() => {});
+        }
       })
       .catch(() => {});
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -436,6 +502,9 @@ export default function App() {
     socket.on('webrtc:ice-test-trigger', handleIceTestTrigger);
     socket.on('webrtc:ice-test-stop',    handleIceTestStop);
 
+    // Expose socket globally so FaceGalleryTab can subscribe to face_match events
+    (window as unknown as Record<string, unknown>).__ltsSocket = socket;
+
     return () => {
       socket.off('camera:status',           handleCameraStatus);
       socket.off('alert:new',               handleAlert);
@@ -453,6 +522,7 @@ export default function App() {
     { id: 'zones'      as SidebarTab, icon: '🗺',  label: t.tabZones },
     { id: 'detections' as SidebarTab, icon: '👁',  label: t.tabDetections },
     { id: 'analytics'  as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
+    { id: 'faces'      as SidebarTab, icon: '🪪',  label: t.tabFaceGallery },
   ];
 
   // ── Shared: tab content renderer ────────────────────────────────────────────
@@ -462,8 +532,24 @@ export default function App() {
     if (sidebarTab === 'analytics')  return <VideoAnalyticsTab />;
     if (sidebarTab === 'detections') return <DashboardDetectionPanel />;
     if (sidebarTab === 'zones')      return <ZonesPanel onOpenCamera={setFullscreenCameraId} />;
+    if (sidebarTab === 'faces')      return <FaceGalleryTab />;
     return null;
   }
+
+  // ── Shared: stats chart button ──────────────────────────────────────────
+  const statsBtn = (
+    <button
+      onClick={() => setShowStats(true)}
+      className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-white transition-colors"
+      title="Statistics"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+          d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z"
+        />
+      </svg>
+    </button>
+  );
 
   // ── Shared: settings gear button ─────────────────────────────────────────
   const settingsBtn = (
@@ -481,6 +567,43 @@ export default function App() {
     </button>
   );
 
+  // ── Shared: user menu (avatar + dropdown) ─────────────────────────────────
+  const userMenu = auth.user ? (
+    <div className="relative group">
+      <button className="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-gray-700 transition-colors" title={auth.user.email}>
+        <span className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">
+          {auth.user.name?.charAt(0).toUpperCase() || auth.user.email.charAt(0).toUpperCase()}
+        </span>
+        <span className="text-xs text-gray-300 hidden sm:block max-w-[80px] truncate">{auth.user.name || auth.user.email}</span>
+        <svg className="w-3 h-3 text-gray-500" fill="currentColor" viewBox="0 0 20 20">
+          <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+        </svg>
+      </button>
+      <div className="absolute right-0 top-full mt-1 w-44 bg-gray-800 border border-gray-700 rounded-lg shadow-xl py-1 z-50 hidden group-hover:block">
+        <div className="px-3 py-2 border-b border-gray-700">
+          <p className="text-xs font-medium text-white truncate">{auth.user.name || auth.user.email}</p>
+          <p className="text-xs text-gray-400 capitalize">{auth.user.role}</p>
+        </div>
+        {auth.user.role === 'admin' && (
+          <button onClick={() => auth.navigateTo('admin')}
+            className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors flex items-center gap-2">
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
+            </svg>
+            User Management
+          </button>
+        )}
+        <button onClick={() => auth.logout()}
+          className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors flex items-center gap-2">
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+          </svg>
+          Sign Out
+        </button>
+      </div>
+    </div>
+  ) : null;
+
   // ── Shared: overlays ─────────────────────────────────────────────────────
   const overlays = (
     <>
@@ -492,6 +615,13 @@ export default function App() {
         ) : null;
       })()}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {showStats    && <StatsPanelModal open={showStats} onClose={() => setShowStats(false)} />}
+      {showSearchFullscreen && (
+        <SearchFullscreen
+          initialQuery={searchFullscreenQuery}
+          onClose={() => setShowSearchFullscreen(false)}
+        />
+      )}
     </>
   );
 
@@ -512,7 +642,9 @@ export default function App() {
           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
           <div className="flex-1" />
           <span className="text-[10px] text-gray-400">{cameras.filter(c => c.status === 'live' || c.status === 'streaming').length}/{cameras.length} {t.live}</span>
+          {statsBtn}
           {settingsBtn}
+          {userMenu}
         </header>
 
         {/* Mobile content area */}
@@ -560,7 +692,10 @@ export default function App() {
                     )}
                     {/* Mini layout picker overlay */}
                     <div className="absolute top-2 right-2 z-10">
-                      <LayoutPicker current={layout} onChange={(id) => { setLayout(id); setChannelOffset(0); localStorage.setItem('lts-layout', id); }} />
+                      <LayoutPicker current={layout} onChange={(id) => {
+                      setLayout(id); setChannelOffset(0); localStorage.setItem('lts-layout', id);
+                      fetch('/api/settings/layout', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: id }) }).catch(() => {});
+                    }} />
                     </div>
                     {/* Page indicator dots */}
                     {totalPages > 1 && (
@@ -654,15 +789,26 @@ export default function App() {
         {/* Spacer */}
         <div className="flex-1" />
 
+        {/* Search bar */}
+        <SearchBar
+          onNavigate={handleSearchNavigate}
+          onFullscreen={(q) => { setSearchFullscreenQuery(q); setShowSearchFullscreen(true); }}
+        />
+
         {/* Camera count */}
         <span className="text-xs text-gray-400">
           {cameras.filter((c) => c.status === 'live' || c.status === 'streaming').length}/{cameras.length} {t.live}
         </span>
 
         {/* Layout picker */}
-        <LayoutPicker current={layout} onChange={(id) => { setLayout(id); setChannelOffset(0); localStorage.setItem('lts-layout', id); }} />
+        <LayoutPicker current={layout} onChange={(id) => {
+          setLayout(id); setChannelOffset(0); localStorage.setItem('lts-layout', id);
+          fetch('/api/settings/layout', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: id }) }).catch(() => {});
+        }} />
 
+        {statsBtn}
         {settingsBtn}
+        {userMenu}
       </header>
 
       {/* Main content */}
@@ -781,4 +927,61 @@ export default function App() {
       {overlays}
     </div>
   );
+}
+
+export default function App() {
+  const auth = useAuthStore();
+  const [initializing, setInitializing] = useState(true);
+
+  useEffect(() => {
+    // Handle OAuth callback result passed via URL query param.
+    // The server redirects to /?auth=success|pending|denied|error after OAuth.
+    const params = new URLSearchParams(window.location.search);
+    const authResult = params.get('auth');
+
+    // Strip the query string immediately so it doesn't reappear on refresh.
+    if (authResult) {
+      window.history.replaceState({}, '', '/');
+    }
+
+    if (authResult === 'pending') {
+      auth.navigateTo('pending');
+      setInitializing(false);
+      return;
+    }
+
+    if (authResult === 'denied' || authResult === 'error') {
+      const reason = params.get('reason');
+      auth.setError(
+        reason === 'not_configured'
+          ? 'OAuth provider is not configured. Contact your administrator.'
+          : authResult === 'denied'
+          ? 'Access denied. Contact an administrator to activate your account.'
+          : 'Authentication failed. Please try again.',
+      );
+      setInitializing(false);
+      return;
+    }
+
+    // Normal flow — try to restore session from HttpOnly refresh cookie.
+    // On success this also calls auth.navigateTo('dashboard') internally.
+    auth.refresh().finally(() => setInitializing(false));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (initializing) {
+    return (
+      <div className="flex h-screen bg-gray-900 items-center justify-center">
+        <div className="flex flex-col items-center gap-3">
+          <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+          <span className="text-gray-400 text-sm">Loading…</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (auth.page === 'signin')  return <SignInPage />;
+  if (auth.page === 'pending') return <PendingPage />;
+  if (auth.page === 'admin')   return <AdminUsersPage />;
+  return <Dashboard />;
 }

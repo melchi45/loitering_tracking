@@ -1,6 +1,9 @@
 'use strict';
 
+const path = require('path');
+const fs   = require('fs');
 const { v4: uuidv4 } = require('uuid');
+const snapshotSvc = require('./snapshotService');
 
 /**
  * Parse width/height from JPEG SOF marker — no full decode, reads ~100 bytes.
@@ -69,8 +72,9 @@ function _bboxClose(a, b, tol = 3) {
   );
 }
 
-const FACE_MATCH_THRESH = 0.35;  // cosine similarity threshold for same-person
-const FACE_EXPIRY_MS    = 30000; // forget a face after 30s of absence
+const FACE_MATCH_THRESH   = 0.35;  // cosine similarity threshold for same-person
+const FACE_EXPIRY_MS      = 30000; // forget a face after 30s of absence
+const FACE_TRACKING_PATH  = path.join(__dirname, '../../../storage/face_tracking.json');
 
 /**
  * Orchestrates the full camera processing pipeline:
@@ -101,6 +105,13 @@ class PipelineManager {
     this._sharedFaceGallery = [];
     this._faceCounter       = 1;
 
+    // Persistent named gallery loaded from DB (faceGalleryFaces table).
+    // Each entry: { id, galleryId, name, embedding, thumbnail }
+    // Reloaded on enrollment/deletion via reloadPersistentGallery().
+    this._persistentGallery = [];
+    // Cooldown map for face_match alerts: `${faceId}:${galleryFaceId}` → lastEmittedAt (ms)
+    this._faceMatchCooldown = new Map();
+
     // Cross-camera Re-ID statistics for the current server session
     // Map: faceId → { faceId, firstCameraId, lastCameraId, transitionCount, lastSeenAt }
     this._crossCameraStats  = new Map();
@@ -111,6 +122,10 @@ class PipelineManager {
     //   segments: [{ cameraId, objectId, entryTime, exitTime }] }
     this._personTrajectory   = new Map();
     this._personAliasCounter = 0;
+    this._faceTrackingSaveTimer = null; // debounce timer for face_tracking.json
+
+    // Restore persisted trajectory state
+    this._loadFaceTracking();
 
     // Single listener — broadcast saved alerts to all connected clients
     this._alertService.on('alert', (alert) => {
@@ -279,8 +294,45 @@ class PipelineManager {
 
             // Emit face detections as separate objects — only if face module enabled
             if (analyticsConfig.isEnabled('face') && detectedFaces.length > 0) {
-              const { faces: namedFaces, crossCameraTransitions } =
+              const { faces: namedFaces, crossCameraTransitions, pendingMatchEvents } =
                 this._assignFaceIds(camera.id, detectedFaces, timestamp);
+
+              // ── v1.1: Async crop + emit face_match + persist ──
+              if (pendingMatchEvents && pendingMatchEvents.length > 0) {
+                const _io   = this._io;
+                const _db   = this._db;
+                const _snapshotSvc = snapshotSvc;
+                const _jpegBuffer  = jpegBuffer;
+                const _frameWidth  = frameWidth;
+                const _frameHeight = frameHeight;
+                setImmediate(async () => {
+                  for (const { evt, faceBbox } of pendingMatchEvents) {
+                    let liveCropData;
+                    try {
+                      if (_snapshotSvc.isEnabled() && _jpegBuffer && faceBbox) {
+                        const { data: cropBuf } = await _snapshotSvc.cropJpeg(
+                          _jpegBuffer, faceBbox, _frameWidth, _frameHeight
+                        );
+                        liveCropData = 'data:image/jpeg;base64,' + cropBuf.toString('base64');
+                      }
+                    } catch (_) { /* non-fatal — emit without crop */ }
+                    const fullEvt = liveCropData ? { ...evt, liveCropData } : evt;
+                    _io.emit('face_match', fullEvt);
+                    if (fullEvt.galleryType === 'missing') {
+                      _io.emit('missing_person_match', fullEvt);
+                    }
+                    try {
+                      _db.insert('faceMatchHistory', {
+                        id:        require('crypto').randomUUID(),
+                        ...fullEvt,
+                        createdAt: new Date(evt.timestamp).toISOString(),
+                      });
+                    } catch (dbErr) {
+                      console.warn('[PipelineManager] faceMatchHistory insert error:', dbErr.message);
+                    }
+                  }
+                });
+              }
 
               // ── Step A: Update Global Person Registry for non-transition faces ──
               const crossCameraFaceIds = new Set(crossCameraTransitions.map(ev => ev.faceId));
@@ -302,6 +354,7 @@ class PipelineManager {
                     segments: [{ cameraId: camera.id, objectId, entryTime: timestamp, exitTime: timestamp }],
                   };
                   this._personTrajectory.set(f.faceId, newTraj);
+                  this._scheduleFaceTrackingSave();
                   this._io.emit('person:trajectory-update', newTraj);
                 } else {
                   // Existing person in same camera — update exitTime silently
@@ -340,6 +393,7 @@ class PipelineManager {
                   traj.currentCameraId = ev.newCameraId;
                   traj.lastSeenAt      = ev.timestamp;
                 }
+                this._scheduleFaceTrackingSave();
                 this._io.emit('person:trajectory-update', traj);
 
                 this._io.emit('face:reidentified', {
@@ -458,6 +512,42 @@ class PipelineManager {
           frameWidth,
           frameHeight,
         });
+
+        // 8. Save detection snapshots (non-blocking via setImmediate)
+        if (snapshotSvc.isEnabled() && _allDets.length > 0) {
+          const _jpegBuf  = jpegBuffer;
+          const _fw       = frameWidth;
+          const _fh       = frameHeight;
+          const _ts       = timestamp;
+          const _dets     = _allDets;
+          const _camera   = camera;
+          const _db       = this._db;
+          const _io       = this._io;
+          setImmediate(async () => {
+            for (const det of _dets) {
+              try {
+                const hasFaceMatch = !!(det.face && det.face.matchScore > 0);
+                const isFireSmoke  = det.className === 'fire' || det.className === 'smoke';
+                if (!snapshotSvc.shouldSave(_camera.id, det.objectId, {
+                      isLoitering: det.isLoitering, hasFaceMatch, isFireSmoke, timestamp: _ts })) continue;
+                const { data: cropBuf, width: cw, height: ch } =
+                  await snapshotSvc.cropJpeg(_jpegBuf, det.bbox, _fw, _fh);
+                const snapId = await snapshotSvc.saveSnapshot(
+                  _db, _camera, det, cropBuf, cw, ch, _fw, _fh, _ts);
+                _io.to(_camera.id).emit('snapshot:new', {
+                  cameraId:   _camera.id,
+                  snapshotId: snapId,
+                  objectId:   det.objectId,
+                  className:  det.className,
+                  timestamp:  _ts,
+                  cropData:   'data:image/jpeg;base64,' + cropBuf.toString('base64'),
+                });
+              } catch (_e) {
+                // per-detection crop errors are non-fatal
+              }
+            }
+          });
+        }
       } finally {
         ctx._inferring = false;
       }
@@ -609,6 +699,7 @@ class PipelineManager {
 
     const usedGalleryIds      = new Set();
     const crossCameraTransitions = [];
+    const pendingMatchEvents   = [];  // v1.1: collected instead of emitting directly
 
     const result = detectedFaces.map(face => {
       if (!face.embedding) {
@@ -658,26 +749,86 @@ class PipelineManager {
         bestEntry.lastCameraId = cameraId;
         usedGalleryIds.add(bestEntry.faceId);
 
+        // Also search persistent gallery for named identity
+        let namedMatch2 = null, namedScore2 = FACE_MATCH_THRESH;
+        for (const pg of this._persistentGallery) {
+          const sim = _cosineSim(face.embedding, pg.embedding);
+          if (sim > namedScore2) { namedScore2 = sim; namedMatch2 = pg; }
+        }
+        if (namedMatch2) {
+          const cooldownKey = `${bestEntry.faceId}:${namedMatch2.id}`;
+          const lastEmit = this._faceMatchCooldown.get(cooldownKey) || 0;
+          if (timestamp - lastEmit > 30_000) {
+            this._faceMatchCooldown.set(cooldownKey, timestamp);
+            const gallery2 = this._db.findOne('faceGalleries', { id: namedMatch2.galleryId });
+            const galleryType2 = gallery2?.type || 'general';
+            const matchEvt2 = {
+              faceId:      bestEntry.faceId,
+              cameraId,
+              identity:    namedMatch2.name,
+              galleryId:   namedMatch2.galleryId,
+              galleryType: galleryType2,
+              matchScore:  namedScore2,
+              thumbnail:   namedMatch2.thumbnail,
+              timestamp,
+            };
+            // v1.1: collect instead of emit — frame handler will crop + emit
+            pendingMatchEvents.push({ evt: matchEvt2, faceBbox: face.bbox });
+          }
+        }
+
         return {
           ...face,
           faceId:      bestEntry.faceId,
           matchScore:  bestScore,
+          identity:    namedMatch2 ? namedMatch2.name : undefined,
           crossCamera: prevCameraId !== cameraId ? { prevCameraId } : undefined,
         };
       }
 
       // New face — enroll in shared gallery with current camera
       const newId = `F${this._faceCounter++}`;
+      this._scheduleFaceTrackingSave();
       this._sharedFaceGallery.push({
         faceId:       newId,
         embedding:    face.embedding,
         lastSeenAt:   timestamp,
         lastCameraId: cameraId,
       });
+
+      // Search persistent (named) gallery for this new face
+      let namedMatch = null, namedScore = FACE_MATCH_THRESH;
+      for (const pg of this._persistentGallery) {
+        const sim = _cosineSim(face.embedding, pg.embedding);
+        if (sim > namedScore) { namedScore = sim; namedMatch = pg; }
+      }
+      if (namedMatch) {
+        const cooldownKey = `${newId}:${namedMatch.id}`;
+        const lastEmit = this._faceMatchCooldown.get(cooldownKey) || 0;
+        if (timestamp - lastEmit > 30_000) {
+          this._faceMatchCooldown.set(cooldownKey, timestamp);
+          const gallery = this._db.findOne('faceGalleries', { id: namedMatch.galleryId });
+          const galleryType = gallery?.type || 'general';
+          const matchEvt = {
+            faceId:      newId,
+            cameraId,
+            identity:    namedMatch.name,
+            galleryId:   namedMatch.galleryId,
+            galleryType,
+            matchScore:  namedScore,
+            thumbnail:   namedMatch.thumbnail,
+            timestamp,
+          };
+          // v1.1: collect instead of emit — frame handler will crop + emit
+          pendingMatchEvents.push({ evt: matchEvt, faceBbox: face.bbox });
+        }
+        return { ...face, faceId: newId, identity: namedMatch.name, matchScore: namedScore };
+      }
+
       return { ...face, faceId: newId };
     });
 
-    return { faces: result, crossCameraTransitions };
+    return { faces: result, crossCameraTransitions, pendingMatchEvents };
   }
 
   /**
@@ -697,6 +848,97 @@ class PipelineManager {
   getPersonTrajectories(maxAgeMs = 300_000) {
     const cutoff = Date.now() - maxAgeMs;
     return [...this._personTrajectory.values()].filter(p => p.lastSeenAt >= cutoff);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Face tracking persistence — face_tracking.json
+  // ---------------------------------------------------------------------------
+
+  /** Load persisted trajectory state from storage/face_tracking.json on startup. */
+  _loadFaceTracking() {
+    try {
+      if (!fs.existsSync(FACE_TRACKING_PATH)) return;
+      const raw = fs.readFileSync(FACE_TRACKING_PATH, 'utf8');
+      const data = JSON.parse(raw);
+      if (typeof data.faceCounter === 'number' && data.faceCounter > this._faceCounter) {
+        this._faceCounter = data.faceCounter;
+      }
+      if (typeof data.personAliasCounter === 'number') {
+        this._personAliasCounter = data.personAliasCounter;
+      }
+      if (Array.isArray(data.trajectories)) {
+        for (const t of data.trajectories) {
+          if (t && t.faceId) {
+            this._personTrajectory.set(t.faceId, t);
+          }
+        }
+      }
+      console.log(`[PipelineManager] Loaded face tracking: faceCounter=${this._faceCounter}, persons=${this._personTrajectory.size}`);
+    } catch (e) {
+      console.warn('[PipelineManager] _loadFaceTracking error:', e.message);
+    }
+  }
+
+  /** Persist trajectory state to storage/face_tracking.json (debounced 1 s). */
+  _scheduleFaceTrackingSave() {
+    if (this._faceTrackingSaveTimer) clearTimeout(this._faceTrackingSaveTimer);
+    this._faceTrackingSaveTimer = setTimeout(() => {
+      this._faceTrackingSaveTimer = null;
+      this._saveFaceTracking();
+    }, 1000);
+  }
+
+  _saveFaceTracking() {
+    try {
+      const data = {
+        faceCounter: this._faceCounter,
+        personAliasCounter: this._personAliasCounter,
+        // Strip large embedding buffers from trajectory segments to save space
+        trajectories: [...this._personTrajectory.values()].map(t => ({
+          faceId: t.faceId,
+          alias: t.alias,
+          firstSeenAt: t.firstSeenAt,
+          lastSeenAt: t.lastSeenAt,
+          currentCameraId: t.currentCameraId,
+          segments: (t.segments || []).map(s => ({
+            cameraId: s.cameraId,
+            objectId: s.objectId ?? null,
+            entryTime: s.entryTime,
+            exitTime: s.exitTime ?? null,
+          })),
+        })),
+      };
+      const dir = path.dirname(FACE_TRACKING_PATH);
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(FACE_TRACKING_PATH, JSON.stringify(data, null, 2), 'utf8');
+    } catch (e) {
+      console.warn('[PipelineManager] _saveFaceTracking error:', e.message);
+    }
+  }
+
+  /**
+   * Reload persistent face gallery from DB.
+   * Called by the REST API after enrollment or deletion.
+   */
+  reloadPersistentGallery() {
+    try {
+      this._persistentGallery = this._db.find('faceGalleryFaces', {})
+        .filter(f => Array.isArray(f.embedding) && f.embedding.length > 0);
+      console.log(`[PipelineManager] Persistent gallery reloaded — ${this._persistentGallery.length} face(s)`);
+    } catch (e) {
+      console.warn('[PipelineManager] reloadPersistentGallery error:', e.message);
+    }
+  }
+
+  /** Eagerly initialize the attribute pipeline (face + PPE + color) without starting a camera.
+   *  Called on server startup so gallery enrollment works even with no active cameras. */
+  async loadFaceServiceEagerly() {
+    if (this._attrPipeline) return; // already loaded (camera was started first)
+    this._attrPipeline = new AttributePipeline();
+    await this._attrPipeline.load().catch((err) => {
+      console.warn('[PipelineManager] Eager FaceService load warn:', err.message);
+    });
+    console.log(`[PipelineManager] Eager load — face:${this._attrPipeline.faceStatus}`);
   }
 
   _buildRtspUrl(camera) {

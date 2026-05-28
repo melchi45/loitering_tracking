@@ -71,9 +71,45 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     return saved && TRANSLATION_MAP[saved] ? saved : 'en';
   });
 
+  // On mount: sync with server.
+  // • If server has a saved value → use it (overrides localStorage).
+  // • If server returns 404 (not set yet) → seed server from current localStorage value
+  //   so the setting survives browser cache clears on next session.
+  useEffect(() => {
+    const localVal = localStorage.getItem(STORAGE_KEY) as LangCode | null;
+    fetch('/api/settings/language')
+      .then((r) => {
+        if (r.status === 404) {
+          // Not in DB yet — seed server with current value
+          const seed = (localVal && TRANSLATION_MAP[localVal]) ? localVal : 'en';
+          return fetch('/api/settings/language', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ value: seed }),
+          }).then(() => null); // null signals "keep current state"
+        }
+        return r.ok ? r.json() : null;
+      })
+      .then((data: { value?: string } | null) => {
+        const code = data?.value as LangCode | undefined;
+        if (code && TRANSLATION_MAP[code]) {
+          setLangState(code);
+          localStorage.setItem(STORAGE_KEY, code);
+        }
+      })
+      .catch(() => {}); // offline — keep localStorage value
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const setLang = (code: LangCode) => {
     setLangState(code);
     localStorage.setItem(STORAGE_KEY, code);
+    // Persist to server so all browsers/sessions stay in sync
+    fetch('/api/settings/language', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ value: code }),
+    }).catch(() => {});
   };
 
   // Apply RTL direction for Arabic

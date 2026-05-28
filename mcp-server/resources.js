@@ -82,4 +82,17 @@ export function registerResources(server, client) {
       };
     }
   );
+
+  // ── Stats dashboard (full aggregated stats) ───────────────────────────────
+  server.resource(
+    'stats-dashboard',
+    'lts://stats/dashboard',
+    { mimeType: 'application/json', description: 'Full aggregated stats dashboard: cameras, events (7-day trend), alerts by severity, zones, Face ID, and storage mode' },
+    async () => {
+      const { data } = await client.get('/api/stats');
+      return {
+        contents: [{ uri: 'lts://stats/dashboard', text: JSON.stringify(data, null, 2), mimeType: 'application/json' }],
+      };
+    }
+  );
 }

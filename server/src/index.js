@@ -3,13 +3,17 @@
 // Load environment variables first
 require('dotenv').config({ path: require('path').resolve(__dirname, '..', '.env') });
 
-const http    = require('http');
-const path    = require('path');
-const express = require('express');
-const cors    = require('cors');
+const http         = require('http');
+const https        = require('https');
+const fs           = require('fs');
+const path         = require('path');
+const express      = require('express');
+const cors         = require('cors');
+const cookieParser = require('cookie-parser');
+const session      = require('express-session');
 const { Server: SocketIOServer } = require('socket.io');
 
-const { initDB }          = require('./db');
+const { initDB, flushNow }    = require('./db');
 const webrtcGateway       = require('./services/webrtcGateway');
 const PipelineManager     = require('./services/pipelineManager');
 const ZoneManager         = require('./services/zoneManager');
@@ -20,8 +24,16 @@ const zonesRouter            = require('./api/zones');
 const buildEventsRouters     = require('./api/events');
 const analyticsRouter        = require('./api/analytics');
 const trackerRouter          = require('./api/tracker');
+const settingsRouter         = require('./api/settings');
 const youtubeStreamsRouter    = require('./api/youtubeStreams');
 const internalRouter         = require('./api/internal');
+const faceGalleryRouter      = require('./api/faceGallery');
+const { buildRouter: buildSnapshotsRouter } = require('./api/snapshots');
+const { buildRouter: buildSearchRouter }    = require('./api/search');
+const { buildRouter: buildStatsRouter }     = require('./api/stats');
+const authRouter     = require('./routes/auth');
+const adminRouter    = require('./routes/admin');
+const { passport: configuredPassport, setup: setupPassport } = require('./config/passport');
 const YouTubeStreamService   = require('./services/youtubeStreamService');
 const registerStreamHandlers = require('./socket/streamHandler');
 const registerWebRTCHandlers = require('./socket/webrtcSignaling');
@@ -33,22 +45,72 @@ async function main() {
   await webrtcGateway.init();
 
   // ── Database ────────────────────────────────────────────────────────────
-  const db = initDB();
-  console.log('[Server] SQLite database initialised');
+  const db = await initDB();
+  console.log('[Server] Database initialised (mode:', require('./db').getStorageMode(), ')');
 
   // ── Express ─────────────────────────────────────────────────────────────
   const app = express();
 
+  // Read HTTPS mode early so HSTS middleware can reference it
+  const httpsEnabled = process.env.HTTPS_ENABLED === 'true';
+
   app.use(cors({
-    origin: '*',
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    origin: process.env.CLIENT_ORIGIN
+      ? process.env.CLIENT_ORIGIN.split(',').map(s => s.trim())
+      : true,
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
   }));
   app.use(express.json());
   app.use(express.urlencoded({ extended: false }));
+  app.use(cookieParser(process.env.COOKIE_SECRET));
 
-  // ── HTTP + Socket.IO ─────────────────────────────────────────────────────
-  const httpServer = http.createServer(app);
+  // ── Session (required for OAuth state management) ─────────────────────────
+  app.use(session({
+    secret:            process.env.SESSION_SECRET || process.env.COOKIE_SECRET || 'lts-session-secret',
+    resave:            false,
+    saveUninitialized: false,
+    cookie: {
+      secure:   httpsEnabled,
+      sameSite: 'lax',
+      maxAge:   10 * 60 * 1000,  // 10 min — only needed for OAuth CSRF state
+    },
+  }));
+
+  // ── Passport (Google OAuth strategy) ──────────────────────────────────────
+  setupPassport();
+  app.use(configuredPassport.initialize());
+  app.use(configuredPassport.session());
+
+  // HSTS — only when serving over HTTPS (SRS FR-HTTPS-007)
+  if (httpsEnabled) {
+    app.use((_req, res, next) => {
+      res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
+      next();
+    });
+  }
+
+  // ── HTTP / HTTPS + Socket.IO ──────────────────────────────────────────────
+  // HTTPS_ENABLED=true  → TLS server on HTTPS_PORT (default 3443)
+  //                        cert: SSL_CERT_PATH, key: SSL_KEY_PATH (PEM)
+  // HTTP_REDIRECT=true  → keeps plain HTTP on PORT and issues 301 → HTTPS
+  // HTTPS_ENABLED=false → plain HTTP on PORT (default, no cert required)
+  let httpServer;
+  if (httpsEnabled) {
+    const certFile = path.resolve(__dirname, '..', process.env.SSL_CERT_PATH || './certs/server.crt');
+    const keyFile  = path.resolve(__dirname, '..', process.env.SSL_KEY_PATH  || './certs/server.key');
+    const caFile   = process.env.SSL_CA_PATH
+      ? path.resolve(__dirname, '..', process.env.SSL_CA_PATH) : null;
+    const tlsOpts = {
+      cert: fs.readFileSync(certFile),
+      key:  fs.readFileSync(keyFile),
+    };
+    if (caFile) tlsOpts.ca = fs.readFileSync(caFile);
+    httpServer = https.createServer(tlsOpts, app);
+  } else {
+    httpServer = http.createServer(app);
+  }
   const io = new SocketIOServer(httpServer, {
     cors: {
       origin: '*',
@@ -69,6 +131,10 @@ async function main() {
   const youtubeSvc          = new YouTubeStreamService(db, pipelineManager);
   youtubeSvc.init(); // Restore YouTube cameras from DB into in-memory streams Map
 
+  // ── Auth / Admin Routes ───────────────────────────────────────────────────
+  app.use('/auth',  authRouter);
+  app.use('/admin', adminRouter);
+
   // ── REST API Routes ───────────────────────────────────────────────────────
   app.use('/api/cameras', camerasRouter(db, pipelineManager, youtubeSvc));
   app.use('/api/cameras/:cameraId/zones', zonesRouter(zoneManager));
@@ -77,17 +143,53 @@ async function main() {
   app.use('/api/alerts', aRouter);
   app.use('/api/analytics',       analyticsRouter);
   app.use('/api/tracker',         trackerRouter);
+  app.use('/api/settings',        settingsRouter);
   app.use('/api/youtube-streams', youtubeStreamsRouter(youtubeSvc));
   app.use('/internal',            internalRouter(youtubeSvc));
 
-  // ── WebRTC ICE config (STUN/TURN) — served from .env so credentials stay server-side ──
-  // Returns stunUrls (array) and turns (array).
-  // Multiple TURN servers are supported via TURN_URL / TURN_URL_2 / TURN_URL_3 … in .env.
+  // Face gallery — getter always resolves to the live FaceService once models are loaded
+  const getFaceService = () => pipelineManager._attrPipeline?._face ?? null;
+  app.use('/api/galleries', faceGalleryRouter(db, pipelineManager, getFaceService));
+
+  // Detection Snapshots & Global Search
+  app.use('/api/snapshots', buildSnapshotsRouter(db));
+  app.use('/api/search',    buildSearchRouter(db));
+
+  // System-wide Stats Dashboard
+  app.use('/api/stats',     buildStatsRouter(db));
+  // Eagerly load face models so enrollment works without an active camera pipeline.
+  // Also reload persistent gallery after models are ready.
+  pipelineManager.loadFaceServiceEagerly()
+    .then(() => pipelineManager.reloadPersistentGallery())
+    .catch(() => {});
+
+  // Cross-camera stats and person trajectories (standalone /api/faces/* routes)
+  app.get('/api/faces/cross-camera-stats', (_req, res) => {
+    try { res.json({ success: true, data: pipelineManager.getCrossCameraReIdStats() }); }
+    catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  });
+  app.get('/api/faces/trajectories', (req, res) => {
+    try {
+      const maxAgeMs = parseInt(req.query.maxAgeMs) || 300_000;
+      res.json({ success: true, data: pipelineManager.getPersonTrajectories(maxAgeMs) });
+    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  });
+
+  // ── WebRTC ICE config (STUN/TURN) ─────────────────────────────────────────
+  // Priority: 1. DB settings table ('webrtcConfig' row)
+  //           2. .env fallback (STUN_URLS, TURN_URL, TURN_URL_2, …)
+  // The client writes back via PUT /api/settings/webrtcConfig when the user saves.
   app.get('/api/webrtc/ice-config', (_req, res) => {
+    // 1. Try DB first
+    const saved = db.findOne('settings', { id: 'webrtcConfig' });
+    if (saved && Array.isArray(saved.stunUrls)) {
+      return res.json({ stunUrls: saved.stunUrls, turns: saved.turns ?? [] });
+    }
+
+    // 2. Fallback to .env
     const stunUrls = (process.env.STUN_URLS || 'stun:stun.l.google.com:19302')
       .split(',').map(s => s.trim()).filter(Boolean);
 
-    // Collect TURN_URL, TURN_URL_2, TURN_URL_3, … until a gap is found
     const turns = [];
     for (let i = 1; ; i++) {
       const suffix = i === 1 ? '' : `_${i}`;
@@ -99,6 +201,9 @@ async function main() {
         credential: (process.env[`TURN_CREDENTIAL${suffix}`] || '').trim(),
       });
     }
+
+    // Seed DB with .env values so future calls return from DB
+    db.insert('settings', { id: 'webrtcConfig', enabled: false, stunUrls, turns });
 
     res.json({ stunUrls, turns });
   });
@@ -220,7 +325,7 @@ async function main() {
   if (require('fs').existsSync(clientBuildPath)) {
     app.use(express.static(clientBuildPath));
     // SPA fallback: all non-API routes serve index.html
-    app.get(/^(?!\/api|\/health|\/socket\.io).*/, (req, res) => {
+    app.get(/^(?!\/api|\/auth|\/admin|\/health|\/socket\.io).*/, (req, res) => {
       res.sendFile(path.join(clientBuildPath, 'index.html'));
     });
     console.log(`[Server] Serving React UI from ${clientBuildPath}`);
@@ -282,15 +387,29 @@ async function main() {
   }
 
   // ── Start listening ───────────────────────────────────────────────────────
+  const ACTIVE_PORT  = httpsEnabled ? parseInt(process.env.HTTPS_PORT || '3443', 10) : PORT;
+  const ACTIVE_PROTO = httpsEnabled ? 'https' : 'http';
+
+  // Optional: HTTP → HTTPS redirect on the plain HTTP port
+  if (httpsEnabled && process.env.HTTP_REDIRECT === 'true') {
+    const redirectApp = express();
+    redirectApp.use((req, res) => {
+      res.redirect(301, `https://${req.hostname}:${ACTIVE_PORT}${req.url}`);
+    });
+    http.createServer(redirectApp).listen(PORT, () => {
+      console.log(`[Server] HTTP→HTTPS redirect listening on port ${PORT}`);
+    });
+  }
+
   await new Promise((resolve, reject) => {
-    httpServer.listen(PORT, (err) => {
+    httpServer.listen(ACTIVE_PORT, (err) => {
       if (err) return reject(err);
       resolve();
     });
   });
 
-  console.log(`[Server] Loitering Tracking System backend listening on port ${PORT}`);
-  console.log(`[Server] Health: http://localhost:${PORT}/health`);
+  console.log(`[Server] Loitering Tracking System backend listening on port ${ACTIVE_PORT}`);
+  console.log(`[Server] Health: ${ACTIVE_PROTO}://localhost:${ACTIVE_PORT}/health`);
 
   // ── Graceful shutdown ────────────────────────────────────────────────────
   const shutdown = async (signal) => {
@@ -299,8 +418,9 @@ async function main() {
       await youtubeSvc.stopAll();
       await pipelineManager.stopAll();
       io.close();
+      flushNow(); // flush any pending debounced DB write before shutdown
       httpServer.close(() => {
-        console.log('[Server] HTTP server closed');
+        console.log(`[Server] ${httpsEnabled ? 'HTTPS' : 'HTTP'} server closed`);
         try { db.close(); } catch (_) {}
         process.exit(0);
       });

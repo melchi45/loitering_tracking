@@ -13,6 +13,31 @@ export const en = {
   tabZones: 'Zones',
   tabVideoAnalytics: 'Analytics',
   tabDetections: 'Detections',
+  tabFaceGallery: 'Face ID',
+
+  // Face Gallery tab
+  faceGallerySubtitle: 'Enroll & recognize persons',
+  faceNewGalleryPlaceholder: 'New gallery name…',
+  faceCreateGallery: '+ Gallery',
+  faceDeleteGallery: 'Delete gallery',
+  faceDeleteGalleryConfirm: 'Delete this gallery and all enrolled faces?',
+  faceNoGalleries: 'No galleries yet — create one above.',
+  faceSelectGallery: 'Select a gallery to manage faces.',
+  faceEnrollTitle: 'Enroll Face',
+  faceUploadHint: 'Click or drag a photo here',
+  faceNamePlaceholder: 'Person name…',
+  faceEnroll: 'Enroll',
+  faceEnrolling: 'Enrolling…',
+  faceEnrolled: 'Enrolled Faces',
+  faceNoFaces: 'No faces enrolled yet.',
+  faceLiveMatches: 'Live Matches',
+  faceNoMatches: 'No matches yet',
+  faceSelectType: 'Select gallery type',
+  galleryTypeGeneral: 'General',
+  galleryTypeVip: 'VIP',
+  galleryTypeBlocklist: 'Blocklist',
+  galleryTypeMissing: 'Missing Persons',
+  missingPersonAlert: 'MISSING PERSON DETECTED',
 
   // Video Analytics tab
   videoAnalyticsHint: 'Enable or disable each AI module globally for all cameras.',
@@ -136,6 +161,38 @@ export const en = {
   cameraCancel: 'Cancel',
   cameraAdd: 'Add Camera',
   cameraEdit: 'Edit Camera',
+
+  // Search Fullscreen — UI strings
+  searchPlaceholder: 'Search alerts, detections, faces, events…',
+  searchClose: 'Close (Esc)',
+  searchSort: 'Sort:',
+  searchSortNewest: 'Newest',
+  searchSortOldest: 'Oldest',
+  searchSortCamera: 'Camera A→Z',
+  searchFrom: 'From',
+  searchTo: 'To',
+  searchClear: 'Clear',
+  searchNoResults: (q: string) => `No results found for "${q}"`,
+  searchTypeQuery: 'Type a query to search across all events',
+  searchResults: (n: number) => `${n.toLocaleString()} result${n !== 1 ? 's' : ''}`,
+  searchLoadMore: (shown: number, total: number) => `Load More (${shown} / ${total})`,
+  searchAllLoaded: (total: number) => `All ${total} loaded`,
+
+  // Search filter chip labels
+  searchChipAll: 'All',
+  searchChipDetection: 'Detection',
+  searchChipAlert: 'Alert',
+  searchChipFace: 'Face',
+  searchChipMatch: 'Match',
+  searchChipEvent: 'Event',
+
+  // Search filter chip tooltips
+  searchChipAllTooltip: 'Shows all result types — searches Detections, Alerts, Faces, Matches, and Events all at once.',
+  searchChipDetectionTooltip: 'AI-detected object snapshots (people, vehicles, etc.). Includes dwell time, risk score, clothing, and color analysis.',
+  searchChipAlertTooltip: 'Alerts triggered when the loitering threshold is exceeded. Unacknowledged alerts appear first; includes camera, zone, and dwell time.',
+  searchChipFaceTooltip: 'Search persons enrolled in the face gallery. Filter by gallery type: Missing Persons, Suspects, Authorized Personnel, etc.',
+  searchChipMatchTooltip: 'Real-time face recognition match events. Includes similarity score (%) and a live face crop at the time of detection.',
+  searchChipEventTooltip: 'Loitering event records. Includes zone entry/exit times, total dwell time, and camera movement path.',
 };
 
 export type Translations = typeof en;

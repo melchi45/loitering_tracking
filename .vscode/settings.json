@@ -11,6 +11,139 @@
   // ── Terminal ─────────────────────────────────────────────────────────────
   "terminal.integrated.env.linux": {},
   "chat.tools.terminal.autoApprove": {
+    "git": true,
+    "pkill": true,
+    "openssl": true,
+    "fuser": true,
+    "printf": true,
+    "locale": true,
+    "bash": true,
+    "npm": true,
+    "node": true,
+    "npx": true,
+    "python3": true,
+    "curl": true,
+    "wget": true,
+    "cd": true,
+    "echo": true,
+    "ls": true,
+    "dir": true,
+    "pwd": true,
+    "cat": true,
+    "head": true,
+    "tail": true,
+    "findstr": true,
+    "wc": true,
+    "tr": true,
+    "cut": true,
+    "cmp": true,
+    "which": true,
+    "basename": true,
+    "dirname": true,
+    "realpath": true,
+    "readlink": true,
+    "stat": true,
+    "file": true,
+    "od": true,
+    "du": true,
+    "df": true,
+    "sleep": true,
+    "nl": true,
+    "grep": true,
+    "/^git(\\s+(-C\\s+\\S+|--no-pager))*\\s+status\\b/": true,
+    "/^git(\\s+(-C\\s+\\S+|--no-pager))*\\s+log\\b/": true,
+    "/^git(\\s+(-C\\s+\\S+|--no-pager))*\\s+log\\b.*\\s--output(=|\\s|$)/": false,
+    "/^git(\\s+(-C\\s+\\S+|--no-pager))*\\s+show\\b/": true,
+    "/^git(\\s+(-C\\s+\\S+|--no-pager))*\\s+diff\\b/": true,
+    "/^git(\\s+(-C\\s+\\S+|--no-pager))*\\s+ls-files\\b/": true,
+    "/^git(\\s+(-C\\s+\\S+|--no-pager))*\\s+grep\\b/": true,
+    "/^git(\\s+(-C\\s+\\S+|--no-pager))*\\s+branch\\b/": true,
+    "/^git(\\s+(-C\\s+\\S+|--no-pager))*\\s+branch\\b.*\\s-(d|D|m|M|-delete|-force)\\b/": false,
+    "/^docker\\s+(ps|images|info|version|inspect|logs|top|stats|port|diff|search|events)\\b/": true,
+    "/^docker\\s+(container|image|network|volume|context|system)\\s+(ls|ps|inspect|history|show|df|info)\\b/": true,
+    "/^docker\\s+compose\\s+(ps|ls|top|logs|images|config|version|port|events)\\b/": true,
+    "Get-ChildItem": true,
+    "Get-Content": true,
+    "Get-Date": true,
+    "Get-Random": true,
+    "Get-Location": true,
+    "Set-Location": true,
+    "Write-Host": true,
+    "Write-Output": true,
+    "Out-String": true,
+    "Split-Path": true,
+    "Join-Path": true,
+    "Start-Sleep": true,
+    "Where-Object": true,
+    "/^Select-[a-z0-9]/i": true,
+    "/^Measure-[a-z0-9]/i": true,
+    "/^Compare-[a-z0-9]/i": true,
+    "/^Format-[a-z0-9]/i": true,
+    "/^Sort-[a-z0-9]/i": true,
+    "/^npm\\s+(ls|list|outdated|view|info|show|explain|why|root|prefix|bin|search|doctor|fund|repo|bugs|docs|home|help(-search)?)\\b/": true,
+    "/^npm\\s+config\\s+(list|get)\\b/": true,
+    "/^npm\\s+pkg\\s+get\\b/": true,
+    "/^npm\\s+audit$/": true,
+    "/^npm\\s+cache\\s+verify\\b/": true,
+    "/^yarn\\s+(list|outdated|info|why|bin|help|versions)\\b/": true,
+    "/^yarn\\s+licenses\\b/": true,
+    "/^yarn\\s+audit\\b(?!.*\\bfix\\b)/": true,
+    "/^yarn\\s+config\\s+(list|get)\\b/": true,
+    "/^yarn\\s+cache\\s+dir\\b/": true,
+    "/^pnpm\\s+(ls|list|outdated|why|root|bin|doctor)\\b/": true,
+    "/^pnpm\\s+licenses\\b/": true,
+    "/^pnpm\\s+audit\\b(?!.*\\bfix\\b)/": true,
+    "/^pnpm\\s+config\\s+(list|get)\\b/": true,
+    "npm ci": true,
+    "/^yarn\\s+install\\s+--frozen-lockfile\\b/": true,
+    "/^pnpm\\s+install\\s+--frozen-lockfile\\b/": true,
+    "column": true,
+    "/^column\\b.*\\s-c\\s+[0-9]{4,}/": false,
+    "date": true,
+    "/^date\\b.*\\s(-s|--set)\\b/": false,
+    "find": true,
+    "/^find\\b.*\\s-(delete|exec|execdir|fprint|fprintf|fls|ok|okdir)\\b/": false,
+    "rg": true,
+    "/^rg\\b.*\\s(--pre|--hostname-bin)\\b/": false,
+    "sed": true,
+    "/^sed\\b.*\\s(-[a-zA-Z]*(e|f)[a-zA-Z]*|--expression|--file)\\b/": false,
+    "/^sed\\b.*s\\/.*\\/.*\\/[ew]/": false,
+    "/^sed\\b.*;W/": false,
+    "sort": true,
+    "/^sort\\b.*\\s-(o|S)\\b/": false,
+    "tree": true,
+    "/^tree\\b.*\\s-o\\b/": false,
+    "/^xxd$/": true,
+    "/^xxd\\b(\\s+-\\S+)*\\s+[^-\\s]\\S*$/": true,
+    "rm": false,
+    "rmdir": false,
+    "del": false,
+    "Remove-Item": false,
+    "ri": false,
+    "rd": false,
+    "erase": false,
+    "dd": false,
+    "kill": false,
+    "ps": false,
+    "top": false,
+    "Stop-Process": false,
+    "spps": false,
+    "taskkill": false,
+    "taskkill.exe": false,
+    "Invoke-RestMethod": false,
+    "Invoke-WebRequest": false,
+    "irm": false,
+    "iwr": false,
+    "chmod": false,
+    "chown": false,
+    "Set-ItemProperty": false,
+    "sp": false,
+    "Set-Acl": false,
+    "jq": false,
+    "xargs": false,
+    "eval": false,
+    "Invoke-Expression": false,
+    "iex": false,
     "/^which git && git --version$/": {
       "approve": true,
       "matchCommandLine": true
@@ -18,6 +151,67 @@
     "/^cd /home/youngho/workspace/loitering_tracking && git add -A && git status --short$/": {
       "approve": true,
       "matchCommandLine": true
+    },
+    "/^cd /home/youngho/workspace/loitering_tracking && git commit -m \"chore: add VSCode MCP/Copilot config, mcp-server, docs reorganization\n\n- Add \\.vscode/mcp\\.json with MCP servers \\(playwright, filesystem, github, memory, sequential-thinking, docker\\), skills and agents for Copilot\n- Update \\.claude/settings\\.json: remove duplicate mcpServers \\(now managed via \\.vscode/mcp\\.json\\)\n- Move RFP docs from root to docs/ directory\n- Add PRD docs to docs/\n- Add mcp-server: LTS MCP server implementation with tools for cameras, alerts, analytics, loitering\n- Add server/src/scripts/turnTest\\.js\n- Update server/package\\.json, iceTest\\.js\n- Add yolov8s\\.pt model\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cd /home/youngho/workspace/loitering_tracking && git push origin main$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^python3 -c \"\nimport json\npath = '/home/youngho/workspace/loitering_tracking/server/storage/lts\\.json'\nwith open\\(path\\) as f: d = json\\.load\\(f\\)\ns = d\\.get\\('settings', \\[\\]\\)\nprint\\('settings count:', len\\(s\\)\\)\nfor r in s: print\\(' ', r\\.get\\('id'\\), list\\(r\\.keys\\(\\)\\)\\[:5\\]\\)\n\" 2>&1$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^python3 -c \"\nimport json\nwith open\\('/home/youngho/workspace/loitering_tracking/server/storage/lts\\.json'\\) as f:\n    d = json\\.load\\(f\\)\nprint\\('top-level keys:', list\\(d\\.keys\\(\\)\\)\\)\nprint\\('settings:', \\[r\\['id'\\] for r in d\\.get\\('settings', \\[\\]\\)\\]\\)\n\" 2>&1$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cd /home/youngho/workspace/loitering_tracking/server && node -e \"\nrequire\\('dotenv'\\)\\.config\\(\\{ path: '\\./\\.env' \\}\\);\n// Verify index\\.js parses cleanly\nconst src = require\\('fs'\\)\\.readFileSync\\('\\./src/index\\.js', 'utf8'\\);\n// Check key patterns exist\nconst checks = \\[\n  \\[/const https\\\\s\\*=\\\\s\\*require\\\\\\('https'\\\\\\)/, 'https import'\\],\n  \\[/const fs\\\\s\\*=\\\\s\\*require\\\\\\('fs'\\\\\\)/, 'fs import'\\],\n  \\[/httpsEnabled/, 'httpsEnabled variable'\\],\n  \\[/ACTIVE_PORT/, 'ACTIVE_PORT'\\],\n  \\[/ACTIVE_PROTO/, 'ACTIVE_PROTO'\\],\n  \\[/HTTP_REDIRECT/, 'HTTP_REDIRECT'\\],\n  \\[/Strict-Transport-Security/, 'HSTS header'\\],\n  \\[/httpsEnabled \\\\\\? 'HTTPS' : 'HTTP'/, 'shutdown log'\\],\n\\];\nchecks\\.forEach\\(\\(\\[re, name\\]\\) => \\{\n  if \\(re\\.test\\(src\\)\\) console\\.log\\('  OK:', name\\);\n  else console\\.error\\('  MISSING:', name\\);\n\\}\\);\nprocess\\.exit\\(0\\);\n\" 2>&1$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cd /home/youngho/workspace/loitering_tracking/server && node -e \"\nconst src = require\\('fs'\\)\\.readFileSync\\('\\./src/index\\.js', 'utf8'\\);\nconst checks = \\[\n  \\[/const https\\\\s\\*=\\\\s\\*require\\\\\\('https'\\\\\\)/, 'https import'\\],\n  \\[/const fs\\\\s\\*=\\\\s\\*require\\\\\\('fs'\\\\\\)/, 'fs import'\\],\n  \\[/const httpsEnabled = process\\\\\\.env\\\\\\.HTTPS_ENABLED/, 'httpsEnabled early declaration'\\],\n  \\[/Strict-Transport-Security/, 'HSTS header'\\],\n  \\[/ACTIVE_PORT/, 'ACTIVE_PORT'\\],\n  \\[/HTTP_REDIRECT/, 'HTTP_REDIRECT'\\],\n  \\[/httpsEnabled \\\\\\? 'HTTPS' : 'HTTP'/, 'shutdown log'\\],\n\\];\n// Check declaration order: httpsEnabled before HSTS\nconst hstsPos = src\\.indexOf\\('Strict-Transport-Security'\\);\nconst httpsEnabledPos = src\\.indexOf\\('const httpsEnabled = process\\.env\\.HTTPS_ENABLED'\\);\nconsole\\.log\\('httpsEnabled declared at pos', httpsEnabledPos, '  HSTS used at pos', hstsPos\\);\nconsole\\.log\\('Order OK:', httpsEnabledPos < hstsPos\\);\nchecks\\.forEach\\(\\(\\[re, name\\]\\) => \\{\n  if \\(re\\.test\\(src\\)\\) console\\.log\\('  OK:', name\\);\n  else console\\.error\\('  MISSING:', name\\);\n\\}\\);\n\" 2>&1$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cd /home/youngho/workspace/loitering_tracking/server && node --check src/index\\.js && echo \"Syntax OK\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cd /home/youngho/workspace/loitering_tracking/server && node -e \"\nvar fs = require\\('fs'\\);\nvar data = JSON\\.parse\\(fs\\.readFileSync\\('\\./storage/lts\\.json', 'utf8'\\)\\);\nObject\\.keys\\(data\\)\\.forEach\\(function\\(k\\) \\{\n  var arr = data\\[k\\];\n  console\\.log\\(k \\+ ':', arr\\.length, 'rows', arr\\.length > 0 \\? '  \\(sample keys: ' \\+ Object\\.keys\\(arr\\[0\\]\\)\\.slice\\(0,6\\)\\.join\\(', '\\) \\+ '\\)' : ''\\);\n\\}\\);\n\" 2>&1$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cd /home/youngho/workspace/loitering_tracking/server && node -e \"\nvar fs = require\\('fs'\\);\nvar data = JSON\\.parse\\(fs\\.readFileSync\\('\\./storage/lts\\.json', 'utf8'\\)\\);\n\n// events 샘플\nconsole\\.log\\('=== events \\(loitering detection results\\) ==='\\);\nvar ev = data\\.events;\nconsole\\.log\\('Total:', ev\\.length\\);\nif \\(ev\\.length > 0\\) \\{\n  var s = ev\\[ev\\.length-1\\];\n  console\\.log\\('Latest:', JSON\\.stringify\\(s, null, 2\\)\\.split\\('\\\\n'\\)\\.slice\\(0,15\\)\\.join\\('\\\\n'\\)\\);\n\\}\n\n// alerts 샘플\nconsole\\.log\\('\\\\n=== alerts ==='\\);\nvar al = data\\.alerts;\nconsole\\.log\\('Total:', al\\.length\\);\nif \\(al\\.length > 0\\) \\{\n  var a = al\\[al\\.length-1\\];\n  console\\.log\\('Latest:', JSON\\.stringify\\(a, null, 2\\)\\.split\\('\\\\n'\\)\\.slice\\(0,12\\)\\.join\\('\\\\n'\\)\\);\n\\}\n\n// settings \\(analytics \\+ tracker config\\)\nconsole\\.log\\('\\\\n=== settings \\(analytics/tracker config\\) ==='\\);\ndata\\.settings\\.forEach\\(function\\(r\\) \\{\n  if \\(r\\.id === 'analytics'\\) \\{\n    var \\{ createdAt, updatedAt, id, \\.\\.\\.vals \\} = r;\n    var enabled = Object\\.entries\\(vals\\)\\.filter\\(function\\(kv\\)\\{ return kv\\[1\\] === true; \\}\\)\\.map\\(function\\(kv\\)\\{ return kv\\[0\\]; \\}\\);\n    console\\.log\\('analytics — enabled modules:', enabled\\.join\\(', '\\) \\|\\| '\\(none\\)'\\);\n    console\\.log\\('analytics — total keys:', Object\\.keys\\(vals\\)\\.length\\);\n  \\} else if \\(r\\.id === 'tracker'\\) \\{\n    var \\{ createdAt: c2, updatedAt: u2, id: id2, \\.\\.\\.tv \\} = r;\n    console\\.log\\('tracker config:', JSON\\.stringify\\(tv\\)\\);\n  \\}\n\\}\\);\n\" 2>&1$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^pgrep -af \"node\\.\\*index\\\\\\|nodemon\" \\| grep -v grep \\| head -5$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^for f in /home/youngho/workspace/loitering_tracking/docs/rfp/RFP_Stats_Panel\\.md /home/youngho/workspace/loitering_tracking/docs/prd/PRD_Stats_Panel\\.md /home/youngho/workspace/loitering_tracking/docs/srs/SRS_Stats_Panel\\.md /home/youngho/workspace/loitering_tracking/docs/tc/TC_Stats_Panel\\.md /home/youngho/workspace/loitering_tracking/docs/design/Design_Stats_Panel\\.md; do echo \"=== \\$f ===\"; wc -l \"\\$f\"; grep -c '\\[가-힣\\]' \"\\$f\" \\|\\| true; done$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^echo \\$LANG && locale \\| head -5 && python3 -c \"\nimport re\ntext = open\\('/home/youngho/workspace/loitering_tracking/docs/prd/PRD_AI_Accessories_Detection\\.md'\\)\\.read\\(\\)\nmatches = re\\.findall\\(r'\\[가-힣\\]\\+', text\\)\nprint\\('Korean matches:', matches\\[:20\\]\\)\nprint\\('Total Korean chars:', len\\(re\\.findall\\(r'\\[가-힣\\]', text\\)\\)\\)\n\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cd /home/youngho/workspace/loitering_tracking/docs && for f in README\\.md rfp/\\*\\.md; do\n  count=\\$\\(grep -cP '\\[가-힣\\]' \"\\$f\" 2>/dev/null \\|\\| echo 0\\)\n  printf \"%4d  %s\\\\n\" \"\\$count\" \"\\$f\"\ndone$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cd /home/youngho/workspace/loitering_tracking/server && fuser -k 3443/tcp 2>/dev/null \\|\\| true && npm start$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cd /home/youngho/workspace/loitering_tracking/server/certs && \\\\\n  openssl genrsa -out jwt\\.key 2048 2>&1 && \\\\\n  openssl rsa -in jwt\\.key -pubout -out jwt\\.pub 2>&1 && \\\\\n  echo \"Keys generated:\" && ls -la jwt\\.\\*$/": {
+      "approve": true,
+      "matchCommandLine": true
     }
-  }
+  },
+  "chat.agent.maxRequests": 1000
 }

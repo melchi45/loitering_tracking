@@ -54,6 +54,13 @@ export const useWebRTCConfigStore = create<WebRTCConfigStore>((set, get) => ({
   setConfig(cfg) {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(cfg));
     set(cfg);
+    // Persist to server (DB) so config survives browser cache clears and
+    // stays consistent across multiple browser sessions / devices.
+    fetch('/api/settings/webrtcConfig', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(cfg),
+    }).catch(() => {});
   },
 
   getIceServers() {

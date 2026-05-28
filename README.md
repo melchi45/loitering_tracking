@@ -25,10 +25,12 @@
 12. [Functional Requirements](#12-functional-requirements)
 13. [Non-Functional Requirements](#13-non-functional-requirements)
 14. [Project Milestones & Deliverables](#14-project-milestones--deliverables)
-15. [Getting Started](#15-getting-started)
-16. [API Reference](#16-api-reference)
-17. [Appendix](#17-appendix)
-18. [Documentation Index (RFP / PRD)](#appendix-c-documentation-index)
+15. [Getting Started](#15-getting-started) — [Running](#154-running) · [MCP Server](docs/ops/MCP_Server_Setup.md) · [MongoDB Setup](docs/ops/MongoDB_Setup.md)
+16. [HTTPS / TLS Configuration](#16-https--tls-configuration) — [Full Guide](docs/ops/HTTPS_TLS_Setup.md)
+17. [API Reference](#17-api-reference)
+18. [Appendix](#18-appendix)
+19. [Documentation Index (RFP / PRD)](#appendix-c-documentation-index)
+20. [Development Process (SDLC Gates)](#appendix-d-development-process-sdlc-gates)
 
 ---
 
@@ -88,6 +90,42 @@ cd server && npm run restart
 > cd server && nohup npm start > /tmp/server.log 2>&1 &
 > ```
 
+#### MCP Server Start / Stop
+
+```bash
+# stdio mode — Claude Code / Claude API (default)
+cd mcp-server && npm start
+# or: node mcp-server/index.js
+
+# Development mode (auto-restart on file changes)
+cd mcp-server && npm run dev
+
+# HTTP/SSE mode — OpenAI Agents / ChatGPT Actions (port 3002)
+cd mcp-server && npm run start:http
+# or: TRANSPORT=http node mcp-server/index.js
+
+# Custom port / auth token
+MCP_PORT=3002 MCP_AUTH_TOKEN=my-secret-token TRANSPORT=http node mcp-server/index.js
+
+# Background execution
+cd mcp-server && nohup npm start > /tmp/lts-mcp.log 2>&1 &
+
+# Stop (stdio foreground): Ctrl+C
+# Stop (background):
+kill $(lsof -ti tcp:3002)
+# or:
+fuser -k 3002/tcp
+```
+
+> **HTTP/SSE Health Check:** `GET http://localhost:3002/health` → `{ "status": "ok" }`  
+> **Environment Variables:**
+> | Variable | Default | Description |
+> |---|---|---|
+> | `LTS_BASE_URL` | `http://localhost:3001` | LTS REST API base URL |
+> | `TRANSPORT` | `stdio` | Transport mode: `stdio` or `http` |
+> | `MCP_PORT` | `3002` | HTTP/SSE listen port |
+> | `MCP_AUTH_TOKEN` | _(empty)_ | Bearer token for HTTP transport (optional) |
+
 #### Web UI Start / Stop
 
 ```bash
@@ -105,17 +143,19 @@ cd client && npm run build
 Checks the camera pipeline, WebRTC ICE settings, AI modules, and mediasoup UDP ports in one step.
 
 ```bash
-# Local server check (default: http://localhost:3001)
+# Local server check (HTTPS default: https://localhost:3443)
 cd server && npm run health
 
-# Specify remote server
+# Override target (HTTP or HTTPS)
+node server/src/scripts/healthCheck.js https://192.168.214.3:3443
+# Or HTTP when HTTPS_ENABLED=false:
 node server/src/scripts/healthCheck.js http://192.168.214.3:3001
 ```
 
 Output example:
 ```
 === LTS Server Health Check ===
-  Target: http://localhost:3001
+  Target: https://localhost:3443
 
 [1] Cameras & Pipeline Status
   ✓ 1 camera(s) in database
@@ -142,8 +182,8 @@ Retrieves the ICE server list sent by the server to the browser.
 ```bash
 # Retrieve ICE config JSON (reflects STUN/TURN values from server/.env)
 node -e "
-const http = require('http');
-http.get('http://localhost:3001/api/webrtc/ice-config', res => {
+const https = require('https');
+https.get('https://localhost:3443/api/webrtc/ice-config', { rejectUnauthorized: false }, res => {
   let b = '';
   res.on('data', c => b += c);
   res.on('end', () => console.log(JSON.stringify(JSON.parse(b), null, 2)));
@@ -297,8 +337,8 @@ Directly verify ICE-related settings and ports from the server.
 ```bash
 # ① Retrieve STUN/TURN list sent by the server to the browser
 node -e "
-const http = require('http');
-http.get('http://localhost:3001/api/webrtc/ice-config', res => {
+const https = require('https');
+https.get('https://localhost:3443/api/webrtc/ice-config', { rejectUnauthorized: false }, res => {
   let b = '';
   res.on('data', c => b += c);
   res.on('end', () => console.log(JSON.stringify(JSON.parse(b), null, 2)));
@@ -1092,9 +1132,19 @@ The `nodejs-udp-discovery` branch adds:
 | 6 | React UI | Live video + bbox overlay, fullscreen view, zone editor, detection panel | ✅ Done | May 12, 2026 |
 | 7 | Loitering Logic | Sliding-window displacement, pacing score, 5-factor risk score, cross-ID transfer | ✅ Done | May 19, 2026 |
 | 8 | Attribute Pipeline | SCRFD face, ArcFace Re-ID, PPE (mask/hat), HSV colour, fire/smoke | ✅ Done | May 19, 2026 |
-| 9 | Integration | Full E2E pipeline, ONVIF discovery, runtime tracker config API, perf tuning | 🔲 Target | Jun 2, 2026 |
-| 10 | UAT & QA | HOTA/MOTA benchmarks, regression tests (KF/IoU/NaN), security audit | 🔲 Target | Jun 16, 2026 |
-| 11 | Deployment | Docker Compose image, OpenAPI docs, Prometheus metrics, production SLA | 🔲 Target | Jun 30, 2026 |
+| 9 | Integration | Full E2E pipeline, ONVIF discovery, runtime tracker config API, perf tuning | ✅ Done | May 28, 2026 |
+| 10 | UAT & QA | HOTA/MOTA benchmarks, regression tests (KF/IoU/NaN), security audit | ✅ Done | May 28, 2026 |
+| 11 | User Auth | JWT-based login/logout, RBAC (admin/operator/viewer), session management, password hashing (bcrypt), refresh token rotation; Google + Microsoft OAuth 2.0; admin approval workflow; audit log | ✅ Done | May 28, 2026 |
+| 12 | Video Recording | DVR/NVR recording scheduler, pre/post-event clip storage, video playback UI, retention policy | 🔲 Planned | Jul 28, 2026 |
+| 13 | PTZ Control | ONVIF PTZ API (pan/tilt/zoom), remote control UI overlay, preset position management | 🔲 Planned | Aug 11, 2026 |
+| 14 | Notification Hub | Email/SMS/Slack/Teams/webhook alert routing, loitering event push, configurable throttle rules | 🔲 Planned | Aug 25, 2026 |
+| 15 | Heatmap & Path | Crowd density heatmap (time-series), cross-camera movement path visualisation on floor plan | 🔲 Planned | Sep 8, 2026 |
+| 16 | Advanced AI | Fall detection, fight/aggression detection, running/counter-flow detection (pose/action models) | 🔲 Planned | Sep 22, 2026 |
+| 17 | Auto Reports | Daily/weekly/monthly PDF security report generation, scheduled email delivery, export to Excel | 🔲 Planned | Oct 6, 2026 |
+| 18 | Map Layout | Floor-plan / satellite-map camera placement, click-to-view camera overlay, site management | 🔲 Planned | Oct 20, 2026 |
+| 19 | Privacy & Audit | Face blurring / anonymisation mode, GDPR data-retention controls, immutable audit log, RBAC access trail | 🔲 Planned | Nov 3, 2026 |
+| 20 | AI Model Mgmt | Model upload/versioning UI, per-channel model assignment, confidence threshold live-tuning, A/B testing | 🔲 Planned | Nov 17, 2026 |
+| 21 | Deployment | Docker Compose image, OpenAPI docs, Prometheus metrics, production SLA | 🔲 Planned | Dec 1, 2026 |
 
 ---
 
@@ -1146,6 +1196,54 @@ cp server/.env.example server/.env
 # JWT_SECRET=your-secret-key
 ```
 
+#### OAuth Client Credentials (Google / Microsoft)
+
+Use `server/.env` to configure OAuth credentials. Keep secrets out of source control.
+
+```dotenv
+# OAuth callback base URL (must match provider redirect URI registration)
+OAUTH_CALLBACK_BASE=https://localhost:3443
+
+# Google OAuth 2.0
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
+
+# Microsoft Entra ID (Azure AD)
+MICROSOFT_CLIENT_ID=
+MICROSOFT_CLIENT_SECRET=
+MICROSOFT_TENANT_ID=common
+```
+
+Google setup:
+
+1. Open Google Cloud Console → APIs & Services → Credentials.
+2. Create OAuth client (Web application).
+3. Register redirect URI: `{OAUTH_CALLBACK_BASE}/auth/google/callback`.
+4. Copy the issued Client ID/Client Secret into `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`.
+
+Microsoft setup:
+
+1. Open Azure Portal → Microsoft Entra ID → App registrations.
+2. Create a new app registration and add Web redirect URI.
+3. Register redirect URI: `{OAUTH_CALLBACK_BASE}/auth/microsoft/callback`.
+4. Create a client secret under Certificates & secrets.
+5. Copy values into `MICROSOFT_CLIENT_ID` / `MICROSOFT_CLIENT_SECRET`.
+6. Set `MICROSOFT_TENANT_ID` (`common` for multi-tenant, or your tenant GUID for single-tenant).
+
+Credential handling policy:
+
+- Never commit real `CLIENT_SECRET` values to Git.
+- Keep `server/.env.example` with empty placeholders only.
+- In production, inject secrets via your deployment secret manager (for example, GitHub Actions Secrets, Docker secrets, Kubernetes secrets, or cloud secret stores).
+- If a secret is exposed, rotate it immediately in the provider console and update deployment secrets.
+
+Quick validation checklist:
+
+- Callback URL protocol/host/port exactly matches `OAUTH_CALLBACK_BASE`.
+- Provider redirect URIs exactly match callback paths.
+- `CLIENT_ORIGIN` includes the frontend origin used for sign-in.
+- Server restarted after `.env` changes.
+
 #### ONNX Runtime Thread Count (server/.env)
 
 ```dotenv
@@ -1170,20 +1268,266 @@ ONNX_THREADS_PROD=0     # production: 0 → max(2, min(8, CPU_cores/2))
 
 ```bash
 # Development
-cd server && npm run dev      # Node.js server on :3001
+cd server && npm run dev      # HTTP :3001 + HTTPS :3443 (HTTPS_ENABLED=true)
 cd client && npm run dev      # React dev server on :5173
 
 # Production (Docker)
 docker-compose up -d
 # → React UI:  http://localhost:3000
-# → API:       http://localhost:3001/api
+# → API:       https://localhost:3443/api
+```
+
+> **Current defaults** (see `server/.env`):
+> - `HTTPS_ENABLED=true` — API served on `:3443` (TLS)
+> - `DB_TYPE=mongodb` — primary storage is MongoDB 5.0 (`lts` database)
+> - `AUTH_ENABLED=true` — all API endpoints require a valid JWT; log in at `/auth/login`
+> - `NODE_ENV=development`
+
+### 15.5 MCP Server
+
+The LTS MCP Server exposes Tools and Resources so that MCP-compatible LLMs (Claude Code, Claude API, OpenAI Agents, etc.) can interact with the system in natural language.
+
+→ Full setup guide: **[docs/ops/MCP_Server_Setup.md](docs/ops/MCP_Server_Setup.md)**
+
+---
+
+### 15.6 MongoDB Setup
+
+By default the server persists data to `server/storage/lts.json`. To switch to MongoDB 5.0 as the primary database:
+
+→ Full setup guide: **[docs/ops/MongoDB_Setup.md](docs/ops/MongoDB_Setup.md)**
+
+---
+
+## 16. HTTPS / TLS Configuration
+
+By default the server runs over plain HTTP (port 3001). Enable HTTPS by setting `HTTPS_ENABLED=true` in `server/.env`.
+
+→ Full setup guide: **[docs/ops/HTTPS_TLS_Setup.md](docs/ops/HTTPS_TLS_Setup.md)**
+
+### 16.1 Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `HTTPS_ENABLED` | `false` | Set `true` to start server over TLS |
+| `HTTPS_PORT` | `3443` | TLS listen port (use 443 with root or CAP_NET_BIND_SERVICE) |
+| `SSL_CERT_PATH` | `./certs/server.crt` | PEM certificate path, relative to `server/` |
+| `SSL_KEY_PATH` | `./certs/server.key` | PEM private key path, relative to `server/` |
+| `SSL_CA_PATH` | _(empty)_ | Optional CA/intermediate bundle (for private CAs) |
+| `HTTP_REDIRECT` | `false` | Set `true` to issue HTTP 301 → HTTPS on plain `PORT` |
+
+### 16.2 Option A — Self-Signed Certificate (Development)
+
+Suitable for local development and LAN deployments where a browser security warning is acceptable.
+
+```bash
+# 1. Create certs directory (git-ignored)
+mkdir -p server/certs
+
+# 2. Generate self-signed cert valid 365 days
+#    -addext adds SAN so Chrome/Firefox don't reject it
+openssl req -x509 -newkey rsa:2048 -nodes -days 365 \
+  -subj "/CN=localhost" \
+  -addext "subjectAltName=IP:127.0.0.1,IP:192.168.214.3,DNS:localhost" \
+  -keyout server/certs/server.key \
+  -out    server/certs/server.crt
+
+# 3. Restrict key permissions
+chmod 600 server/certs/server.key
+
+# 4. Enable HTTPS in server/.env
+#    HTTPS_ENABLED=true
+#    HTTPS_PORT=3443
+#    SSL_CERT_PATH=./certs/server.crt
+#    SSL_KEY_PATH=./certs/server.key
+
+# 5. Start server
+cd server && npm start
+
+# 6. Verify
+curl -k https://localhost:3443/health
+# → {"status":"ok"}
+```
+
+> **Browser trust (optional):** Add `server/certs/server.crt` to your OS/browser trust store to eliminate the "Not secure" warning.  
+> On Ubuntu: `sudo cp server/certs/server.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates`
+
+### 16.3 Option B — mkcert (Locally Trusted Dev Cert, Recommended)
+
+[mkcert](https://github.com/FiloSottile/mkcert) creates locally trusted certificates with no browser warning — ideal for development.
+
+```bash
+# Install mkcert
+sudo apt install mkcert         # Debian/Ubuntu
+# or: brew install mkcert       # macOS
+
+# Install the local CA into your system trust store
+mkcert -install
+
+# Generate cert for localhost + LAN IP
+mkdir -p server/certs
+cd server/certs
+mkcert localhost 127.0.0.1 192.168.214.3
+
+# mkcert creates: localhost+2.pem  localhost+2-key.pem
+# Update server/.env:
+#   SSL_CERT_PATH=./certs/localhost+2.pem
+#   SSL_KEY_PATH=./certs/localhost+2-key.pem
+#   HTTPS_ENABLED=true
+```
+
+### 16.4 Option C — Let's Encrypt / certbot (Production)
+
+For public-facing servers with a registered domain name.
+
+```bash
+# Install certbot
+sudo apt install certbot
+
+# Obtain certificate (standalone mode — briefly binds port 80)
+sudo certbot certonly --standalone -d lts.example.com
+
+# Certs stored at:
+#   /etc/letsencrypt/live/lts.example.com/fullchain.pem  ← SSL_CERT_PATH
+#   /etc/letsencrypt/live/lts.example.com/privkey.pem    ← SSL_KEY_PATH
+
+# server/.env
+HTTPS_ENABLED=true
+HTTPS_PORT=443
+SSL_CERT_PATH=/etc/letsencrypt/live/lts.example.com/fullchain.pem
+SSL_KEY_PATH=/etc/letsencrypt/live/lts.example.com/privkey.pem
+HTTP_REDIRECT=true
+
+# Auto-renewal (certbot renew hook — restart server after renewal)
+sudo crontab -e
+# Add: 0 3 * * * certbot renew --quiet && cd /opt/lts/server && npm run restart
+```
+
+### 16.5 Option D — Reverse Proxy (Recommended for Port 443)
+
+Keep Node.js on plain HTTP and let nginx/Caddy handle TLS. This is the most operationally robust approach for production.
+
+```
+[Browser] ──HTTPS:443──▶ [nginx / Caddy] ──HTTP:3001──▶ [LTS Node.js]
+```
+
+**nginx example** (`/etc/nginx/sites-available/lts`):
+
+```nginx
+server {
+    listen 443 ssl http2;
+    server_name lts.example.com;
+
+    ssl_certificate     /etc/letsencrypt/live/lts.example.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/lts.example.com/privkey.pem;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_ciphers         HIGH:!aNULL:!MD5;
+
+    # REST API + Socket.IO (WebSocket upgrade required)
+    location / {
+        proxy_pass         http://localhost:3001;
+        proxy_http_version 1.1;
+        proxy_set_header   Upgrade $http_upgrade;
+        proxy_set_header   Connection "upgrade";
+        proxy_set_header   Host $host;
+        proxy_set_header   X-Real-IP $remote_addr;
+    }
+}
+
+server {
+    listen 80;
+    server_name lts.example.com;
+    return 301 https://$host$request_uri;
+}
+```
+
+**Caddy example** (`/etc/caddy/Caddyfile`):
+
+```
+lts.example.com {
+    reverse_proxy localhost:3001
+}
+```
+
+Caddy obtains and renews Let's Encrypt certificates automatically.
+
+### 16.6 HTTP → HTTPS Redirect
+
+When `HTTPS_ENABLED=true` and `HTTP_REDIRECT=true`, the server spawns a secondary HTTP listener on `PORT` (3001) that redirects all requests to `https://<hostname>:<HTTPS_PORT><path>`.
+
+```bash
+# server/.env
+HTTPS_ENABLED=true
+HTTPS_PORT=3443
+HTTP_REDIRECT=true
+
+# Result:
+# http://server:3001/api/cameras  →  301 → https://server:3443/api/cameras
+```
+
+### 16.7 Docker / Docker Compose
+
+```yaml
+# docker-compose.yml
+services:
+  server:
+    build: ./server
+    ports:
+      - "3443:3443"   # HTTPS
+      - "3001:3001"   # HTTP redirect (optional)
+    volumes:
+      - ./server/certs:/app/server/certs:ro   # mount certs read-only
+    environment:
+      - HTTPS_ENABLED=true
+      - HTTPS_PORT=3443
+      - SSL_CERT_PATH=./certs/server.crt
+      - SSL_KEY_PATH=./certs/server.key
+      - HTTP_REDIRECT=true
+```
+
+### 16.8 Vite Dev Server Proxy (Client)
+
+When the server runs in HTTPS mode, update the Vite proxy target in `client/vite.config.ts`:
+
+```ts
+proxy: {
+  '/api': {
+    target: 'https://localhost:3443',  // ← change from http://localhost:3001
+    changeOrigin: true,
+    secure: false,  // allow self-signed certs in development
+  },
+  '/socket.io': {
+    target: 'https://localhost:3443',
+    changeOrigin: true,
+    ws: true,
+    secure: false,
+  },
+},
+```
+
+### 16.9 HTTPS Verification
+
+```bash
+# Health check (self-signed: use -k to skip cert verification)
+curl -k https://localhost:3443/health
+
+# Verify TLS details
+openssl s_client -connect localhost:3443 < /dev/null 2>&1 | grep -E "Protocol|Cipher|subject"
+
+# Test HSTS header
+curl -kI https://localhost:3443/health | grep -i strict
+
+# Run HTTPS test suite
+node test/api/https_tls.test.js
+# With HTTPS mode:
+LTS_HTTPS_URL=https://localhost:3443 node test/api/https_tls.test.js
 ```
 
 ---
 
-## 16. API Reference
+## 17. API Reference
 
-### 16.1 REST Endpoints
+### 17.1 REST Endpoints
 
 | Method | Path | Description |
 |---|---|---|
@@ -1262,91 +1606,48 @@ docker-compose up -d
 
 ```
 loitering_tracking/
-├── README.md                        # This file
+├── README.md                        # Root system guide
 ├── docker-compose.yml               # Full stack deployment
+├── mediamtx.yml                     # RTSP relay configuration
+├── package.json                     # Workspace scripts
+├── yolov8s.pt                       # Source model asset
 ├── .gitmodules                      # Submodule configuration
-├── submodules/
-│   └── WiseNetChromeIPInstaller/    # branch: nodejs-udp-discovery
-│       └── nodejs/
-│           ├── udpDiscovery.js
-│           ├── utils.js
-│           └── package.json
-├── server/                          # Node.js backend
-│   ├── package.json
+├── client/                          # React frontend (Vite + TS)
 │   ├── src/
-│   │   ├── index.js                 # Entry point (Express + Socket.IO)
-│   │   ├── services/
-│   │   │   ├── udpDiscovery.js      # Camera discovery (uses submodule)
-│   │   │   ├── rtspCapture.js       # FFmpeg RTSP → 10 FPS frames
-│   │   │   ├── detection.js         # YOLOv8n ONNX inference
-│   │   │   ├── tracking.js          # ByteTrack MOT
-│   │   │   ├── behaviorEngine.js    # Loitering dwell-time logic
-│   │   │   ├── zoneManager.js       # Polygon zone management
-│   │   │   └── alertService.js      # Alert generation + webhook
-│   │   ├── api/
-│   │   │   ├── cameras.js           # Camera CRUD routes
-│   │   │   ├── events.js            # Event log routes
-│   │   │   └── zones.js             # Zone config routes
-│   │   └── socket/
-│   │       └── streamHandler.js     # Socket.IO frame/detection push
-│   ├── models/                      # ONNX model files (gitignored)
-│   │   ├── yolov8n.onnx             # 13MB  — COCO 80-class detection (AI-01/02/08)
-│   │   ├── scrfd_2.5g.onnx          # 3.2MB — face detection SCRFD-2.5G (AI-03)
-│   │   ├── arcface_w600k_r50.onnx   # 249MB — face Re-ID ArcFace ResNet50 (AI-03)
-│   │   ├── yolov8m_ppe.onnx         # 99MB  — mask/helmet PPE (AI-04/07)
-│   │   ├── yolov8s_fire_smoke.onnx  # 43MB  — fire/smoke 3-class (AI-09)
-│   │   └── openpar.onnx             # 94MB  — cloth type PAR (AI-06 Phase-2, active)
-│   └── storage/                     # Event clips + DB (gitignored)
-│       ├── events.db
-│       └── clips/
-├── client/                          # React frontend
-│   ├── package.json
-│   ├── vite.config.ts
-│   └── src/
-│       ├── main.tsx
-│       ├── App.tsx
-│       ├── components/
-│       │   ├── CameraView.tsx       # <img> + <canvas> bbox overlay
-│       │   ├── CameraGrid.tsx       # 1/4/9/16 grid layout
-│       │   ├── AlertPanel.tsx       # Real-time loitering alerts
-│       │   ├── ZoneEditor.tsx       # Polygon zone drawing canvas
-│       │   └── CameraList.tsx       # Camera management sidebar
-│       ├── hooks/
-│       │   ├── useSocket.ts         # Socket.IO connection hook
-│       │   └── useCamera.ts         # Camera stream state
-│       └── stores/
-│           ├── cameraStore.ts       # Zustand camera state
-│           └── alertStore.ts        # Zustand alert state
-├── docs/                            # All RFP and PRD specification documents
-│   ├── RFP_LTS2026_Loitering_Tracking_System.md
-│   ├── RFP_Object_Tracking.md
-│   ├── RFP_Camera_Discovery.md
-│   ├── RFP_CrossCamera_Face_Tracking.md
-│   ├── RFP_AI_Human_Detection.md    # AI-01 through AI-10
-│   ├── RFP_AI_Vehicle_Detection.md
-│   ├── RFP_AI_Face_Recognition.md
-│   ├── RFP_AI_Mask_Detection.md
-│   ├── RFP_AI_Color_Analysis.md
-│   ├── RFP_AI_Cloth_Analysis.md
-│   ├── RFP_AI_Hat_Detection.md
-│   ├── RFP_AI_Accessories_Detection.md
-│   ├── RFP_AI_Fire_Smoke_Detection.md
-│   ├── RFP_AI_Animal_Detection.md
-│   ├── RFP_LTS2026_YouTube_RTSP_Ingest.md
-│   ├── RFP_YouTube_RTSP_Ingest.md
-│   ├── RFP_WebRTC_Media_Gateway.md
-│   ├── RFP_STUN_TURN_ICE.md
-│   ├── RFP_Dashboard_Layout.md
-│   ├── RFP_Dashboard_Detection_Display.md
-│   ├── RFP_Dashboard_Sidebar_Alerts_Zones.md
-│   ├── RFP_Dashboard_Sidebar_Cameras.md
-│   ├── RFP_Mobile_Layout.md
-│   ├── RFP_Ideal_Proposal.md
-│   ├── RFP_LLM_MCP_Integration.md
-│   ├── PRD_LTS2026_Loitering_Tracking_System.md
-│   ├── PRD_Object_Tracking.md
-│   ├── PRD_Camera_Discovery.md      # PRD counterparts (25 total)
-│   └── ...                          # (one PRD per RFP)
+│   │   ├── components/
+│   │   ├── hooks/
+│   │   ├── i18n/
+│   │   ├── stores/
+│   │   └── types/
+│   └── dist/                        # Build output
+├── server/                          # Node.js backend
+│   ├── src/                         # APIs, services, sockets, scripts
+│   ├── models/                      # ONNX/PT model files
+│   ├── certs/                       # TLS certificates
+│   └── storage/                     # Runtime data (server-scoped)
+├── mcp-server/                      # MCP bridge server
+│   ├── test/
+│   └── tools/
+├── docs/                            # SDLC and specification documents
+│   ├── README.md                    # Docs index
+│   ├── development_process.md       # SDLC gate workflow source
+│   ├── rfp/                         # RFP documents
+│   ├── prd/                         # PRD documents
+│   ├── srs/                         # SRS documents
+│   ├── design/                      # Design documents
+│   ├── tc/                          # Test case documents
+│   └── screenshots/                 # Documentation images
+├── test/                            # Automated test suites
+│   ├── api/
+│   ├── integration/
+│   ├── e2e/
+│   ├── fixtures/
+│   └── reports/
+├── storage/                         # Root-level shared storage artifacts
+├── submodules/
+│   └── WiseNetChromeIPInstaller/
+├── .claude/                         # Local agent settings
+├── .vscode/                         # Workspace editor settings
 └── .github/
     └── workflows/
         └── ci.yml                   # Lint + test + build
@@ -1405,6 +1706,36 @@ All RFP and PRD documents are stored in the [`docs/`](docs/) folder.
 | RFP | PRD | Description |
 |---|---|---|
 | [RFP_LLM_MCP_Integration.md](docs/RFP_LLM_MCP_Integration.md) | [PRD_LLM_MCP_Server.md](docs/PRD_LLM_MCP_Server.md) | LLM integration via Model Context Protocol (MCP) |
+
+### Appendix D: Development Process (SDLC Gates)
+
+This section consolidates the development lifecycle in a stage-gate format from requirements to service stabilization.
+
+Lifecycle sequence:
+
+MRD -> DIA -> DV -> DVR -> PIA -> PV -> PVR -> PR -> PRA -> SR -> SRA
+
+| Gate | Name | Purpose | Main Deliverables |
+|---|---|---|---|
+| 1 | MRD (Market Requirements) | Define market and customer needs | MRD, optional draft RFP |
+| 2 | DIA (Design Input Approval) | Convert needs into implementable requirements | PRD, official RFP, draft SRS |
+| 3 | DV (Design Verification) | Define and verify design | Final SRS, design docs (HLD/LLD), test case design |
+| 4 | DVR (Design Verification Report) | Report design verification results | Design verification report, partial test evidence |
+| 5 | PIA (Production Input Approval) | Prepare for production operations | Deployment/operations design docs, environment configuration docs |
+| 6 | PV (Production Verification) | Execute tests in real environments | Test execution results, integration test report, performance report, defect list, UAT results |
+| 7 | PVR (Production Validation Report) | Evaluate overall quality from test outcomes | PVR report, consolidated test report, residual issues list, quality assessment report |
+| 8 | PR (Production Release) | Approve release plan | Release plan, approval artifacts |
+| 9 | PRA (Production Release Approval) | Final launch approval | Final approval artifacts |
+| 10 | SR (Service Release) | Perform deployment to service | Release notes, deployment plan, rollback plan, deployment checklist |
+| 11 | SRA (Service Release Approval) | Validate post-release stability and hand over to operations | Release validation report, smoke test results, operational stability report, go-live approval |
+
+Core document flow:
+
+MRD -> PRD -> SRS -> Design -> TC -> Test -> Release Notes
+
+One-line summary:
+
+The process moves through requirement definition, design, verification, production validation, release, and stabilization, with explicit artifacts at each stage.
 
 > **END OF DOCUMENT — LTS-2026-001**
 >

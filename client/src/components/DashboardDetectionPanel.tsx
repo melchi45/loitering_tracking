@@ -3,6 +3,7 @@ import { useCameraStore } from '../stores/cameraStore';
 import { useCrossCameraStore } from '../stores/crossCameraStore';
 import { usePersonTrajectoryStore } from '../stores/personTrajectoryStore';
 import { useAllDetections } from '../hooks/useAllDetections';
+import { useSocket } from '../hooks/useSocket';
 import { DetectionRow, CATEGORIES, getCategoryKey } from './FullscreenCameraView';
 import { useI18n } from '../i18n';
 import type { Detection } from '../types';
@@ -226,6 +227,10 @@ function ColorLegendPopup({ onClose }: { onClose: () => void }) {
 export function DashboardDetectionPanel() {
   const cameras = useCameraStore((s) => s.cameras);
   const { t }   = useI18n();
+  const { socket } = useSocket();
+
+  // ── Snapshot crop thumbnails: key = 'cameraId:objectId' → base64 data URL
+  const [cropMap, setCropMap] = useState<Record<string, string>>({});
 
   // Camera filter state — all enabled by default
   const [enabledIds, setEnabledIds] = useState<Set<string>>(
@@ -248,6 +253,17 @@ export function DashboardDetectionPanel() {
 
   const enabledList  = cameras.filter((c) => enabledIds.has(c.id)).map((c) => c.id);
   const detectionMap = useAllDetections(enabledList);
+
+  // Subscribe to snapshot:new events from the server
+  useEffect(() => {
+    if (!socket) return;
+    const handler = (data: { cameraId: string; objectId: number | string; cropData: string }) => {
+      const key = `${data.cameraId}:${data.objectId}`;
+      setCropMap(prev => ({ ...prev, [key]: data.cropData }));
+    };
+    socket.on('snapshot:new', handler);
+    return () => { socket.off('snapshot:new', handler); };
+  }, [socket]);
 
   const crossCameraEvents = useCrossCameraStore((s) => s.events);
   const allPersons        = usePersonTrajectoryStore((s) => s.persons);
@@ -396,22 +412,42 @@ export function DashboardDetectionPanel() {
             </span>
           </div>
         ) : (
-          filtered.map((det, i) => (
-            <div key={`${det._cameraId}-${det.objectId}-${i}`}>
-              {/* Camera name badge — shown when cameraId changes from previous row */}
-              {(i === 0 || det._cameraId !== filtered[i - 1]._cameraId) && (
-                <div className="px-3 pt-1.5 pb-0.5">
-                  <span className="text-[8px] font-bold uppercase tracking-wide bg-gray-700/60 text-gray-400 rounded px-1.5 py-0.5">
-                    {det._cameraName}
-                  </span>
+          filtered.map((det, i) => {
+            const cropKey  = `${det._cameraId}:${det.objectId}`;
+            const cropData = cropMap[cropKey];
+            return (
+              <div key={`${det._cameraId}-${det.objectId}-${i}`}>
+                {/* Camera name badge — shown when cameraId changes from previous row */}
+                {(i === 0 || det._cameraId !== filtered[i - 1]._cameraId) && (
+                  <div className="px-3 pt-1.5 pb-0.5">
+                    <span className="text-[8px] font-bold uppercase tracking-wide bg-gray-700/60 text-gray-400 rounded px-1.5 py-0.5">
+                      {det._cameraName}
+                    </span>
+                  </div>
+                )}
+                <div className="flex items-start gap-1.5 pr-1">
+                  {/* Crop thumbnail */}
+                  {cropData ? (
+                    <img
+                      src={cropData}
+                      alt={det.className ?? 'crop'}
+                      className="w-8 h-10 object-cover rounded border border-gray-600 bg-gray-700 flex-shrink-0 mt-0.5 ml-1 cursor-pointer hover:opacity-80 transition-opacity"
+                      title="Click to enlarge"
+                      onClick={() => window.open(cropData, '_blank')}
+                    />
+                  ) : (
+                    <div className="w-8 h-10 rounded border border-gray-700/40 bg-gray-800/30 flex-shrink-0 mt-0.5 ml-1" />
+                  )}
+                  <div className="flex-1 min-w-0">
+                    <DetectionRow
+                      det={det}
+                      isCrossCamera={det.className === 'face' && det.faceId != null && crossCamFaceIds.has(det.faceId)}
+                    />
+                  </div>
                 </div>
-              )}
-              <DetectionRow
-                det={det}
-                isCrossCamera={det.className === 'face' && det.faceId != null && crossCamFaceIds.has(det.faceId)}
-              />
-            </div>
-          ))
+              </div>
+            );
+          })
         )}
       </div>
 
