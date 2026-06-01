@@ -412,22 +412,35 @@ export default function CameraView({ cameraId, cameraName }: Props) {
                 : <Volume2 className="w-4 h-4 text-blue-300" />}
             </button>
           )}
-          {/* WebRTC badge + ICE toggle */}
-          <div className="absolute top-2 right-12 flex items-center gap-1">
-            <div className="bg-blue-900/70 rounded px-1.5 py-0.5 text-[9px] font-bold text-blue-300">
-              WebRTC
+          {/* WebRTC badge + ICE toggle + Zone button — stacked in top-right corner */}
+          <div className="absolute top-2 right-2 flex flex-col items-end gap-1 z-10">
+            {/* Row 1: WebRTC badge + ICE toggle */}
+            <div className="flex items-center gap-1">
+              <div className="bg-blue-900/70 rounded px-1.5 py-0.5 text-[9px] font-bold text-blue-300">
+                WebRTC
+              </div>
+              {webrtcState === 'connected' && (
+                <button
+                  onClick={() => setShowIcePanel((v) => !v)}
+                  title="ICE candidate info"
+                  className={`rounded px-1.5 py-0.5 text-[9px] font-bold transition-colors ${
+                    showIcePanel
+                      ? 'bg-cyan-600/80 text-white'
+                      : 'bg-gray-700/70 text-gray-400 hover:text-cyan-300'
+                  }`}
+                >
+                  ICE
+                </button>
+              )}
             </div>
-            {webrtcState === 'connected' && (
+            {/* Row 2: Zone edit button */}
+            {!editZones && (
               <button
-                onClick={() => setShowIcePanel((v) => !v)}
-                title="ICE candidate info"
-                className={`rounded px-1.5 py-0.5 text-[9px] font-bold transition-colors ${
-                  showIcePanel
-                    ? 'bg-cyan-600/80 text-white'
-                    : 'bg-gray-700/70 text-gray-400 hover:text-cyan-300'
-                }`}
+                onClick={() => setEditZones(true)}
+                className="bg-black/60 hover:bg-black/80 rounded px-2 py-1 text-[10px] text-gray-300 hover:text-white transition-colors"
+                title={t.zoneEdit}
               >
-                ICE
+                {zones.length > 0 ? `Zone ${zones.length}` : t.zoneAdd}
               </button>
             )}
           </div>
@@ -522,11 +535,12 @@ export default function CameraView({ cameraId, cameraName }: Props) {
         <span className={`text-[10px] font-bold ${statusColor.replace('bg-', 'text-')} ml-1`}>{statusLabel}</span>
       </div>
 
-      {/* Zone edit button (top-right) */}
-      {!editZones && (
+      {/* Zone edit button (top-right) — shown for non-WebRTC cameras only;
+          WebRTC cameras render this button inside the WebRTC badge container above */}
+      {!editZones && !useWebRTCMode && (
         <button
           onClick={() => setEditZones(true)}
-          className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 rounded px-2 py-1 text-[10px] text-gray-300 hover:text-white transition-colors"
+          className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 rounded px-2 py-1 text-[10px] text-gray-300 hover:text-white transition-colors z-10"
           title={t.zoneEdit}
         >
           {zones.length > 0 ? `Zone ${zones.length}` : t.zoneAdd}

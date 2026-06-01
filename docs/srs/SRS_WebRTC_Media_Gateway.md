@@ -24,6 +24,7 @@
 9. [Non-Functional Requirements](#9-non-functional-requirements)
 10. [Interface Requirements](#10-interface-requirements)
 11. [Constraints & Assumptions](#11-constraints--assumptions)
+12. [Post-Patch Stability Requirements](#12-post-patch-stability-requirements)
 
 ---
 
@@ -408,8 +409,35 @@ Server start
 
 ---
 
+## 12. Post-Patch Stability Requirements
+
+### FR-WRTC-066 — Duplicate Camera Subscribe Guard
+
+- Server `camera:subscribe` handling must ignore duplicate room-join requests from the same socket for the same camera.
+- For duplicate requests, server must return `camera:subscribed` acknowledgment without repeated room-join side effects.
+
+### FR-WRTC-067 — Duplicate Transport Creation Guard
+
+- Server `webrtc:createTransport` handling must reuse an active transport for the same `socketId:cameraId` session.
+- Duplicate transport creation requests must not create a new transport when an existing non-closed transport is available.
+
+### FR-WRTC-068 — RTP Timestamp Stability
+
+- RTP ingestion FFmpeg arguments must enforce monotonic timestamp behavior for unstable RTSP sources.
+- The following warning signatures must not recur during normal playback:
+  - `Non-monotonous DTS in output stream`
+  - `Queue input is backward in time`
+
+### FR-WRTC-069 — Frozen Stream Auto-Recovery
+
+- Client WebRTC hook must detect connected-but-frozen media (no inbound bytes growth over a bounded interval) and trigger controlled reconnect.
+- Client must avoid false reconnect loops caused by delayed `video.play()` completion when `srcObject` is already assigned.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for WebRTC Media Gateway |
+| 1.1 | 2026-05-29 | LTS Engineering Team | Added post-patch stability requirements (duplicate guard, timestamp stability, frozen-stream recovery) |

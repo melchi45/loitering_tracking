@@ -11,6 +11,9 @@
   // ── Terminal ─────────────────────────────────────────────────────────────
   "terminal.integrated.env.linux": {},
   "chat.tools.terminal.autoApprove": {
+    "mv": true,
+    "cp": true,
+    "sort": true,
     "git": true,
     "pkill": true,
     "openssl": true,
@@ -109,7 +112,6 @@
     "/^sed\\b.*\\s(-[a-zA-Z]*(e|f)[a-zA-Z]*|--expression|--file)\\b/": false,
     "/^sed\\b.*s\\/.*\\/.*\\/[ew]/": false,
     "/^sed\\b.*;W/": false,
-    "sort": true,
     "/^sort\\b.*\\s-(o|S)\\b/": false,
     "tree": true,
     "/^tree\\b.*\\s-o\\b/": false,
@@ -211,7 +213,16 @@
     "/^cd /home/youngho/workspace/loitering_tracking/server/certs && \\\\\n  openssl genrsa -out jwt\\.key 2048 2>&1 && \\\\\n  openssl rsa -in jwt\\.key -pubout -out jwt\\.pub 2>&1 && \\\\\n  echo \"Keys generated:\" && ls -la jwt\\.\\*$/": {
       "approve": true,
       "matchCommandLine": true
-    }
+    },
+    "/^mv /home/youngho/workspace/loitering_tracking/CLAUDE\\.md /home/youngho/workspace/loitering_tracking/\\.claude/CLAUDE\\.md && ls /home/youngho/workspace/loitering_tracking/\\.claude/$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "lsof": true,
+    "ss": true
   },
-  "chat.agent.maxRequests": 1000
+  "chat.agent.maxRequests": 1000,
+  // settings.json
+  "browser.startUrl": "https://dev.hanwhavision.com:3443",
+  "browser.useExternalBrowser": true
 }

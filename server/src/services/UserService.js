@@ -59,7 +59,10 @@ function list({ status, search } = {}) {
     const q = search.toLowerCase();
     users = users.filter(u =>
       u.email.toLowerCase().includes(q) ||
-      (u.name || '').toLowerCase().includes(q)
+      (u.name         || '').toLowerCase().includes(q) ||
+      (u.organization || '').toLowerCase().includes(q) ||
+      (u.phone        || '').toLowerCase().includes(q) ||
+      (u.bio          || '').toLowerCase().includes(q)
     );
   }
   // Never return password hash to callers
@@ -141,6 +144,27 @@ function recordLogin(id) {
     user.loginCount  = (user.loginCount || 0) + 1;
     _save(users);
   }
+}
+
+/**
+ * Update profile fields for a user (self-service).
+ * @param {string} id
+ * @param {{ name?, organization?, phone?, bio?, avatarDataUrl? }} fields
+ * @returns {object|null} safe user record (no passwordHash)
+ */
+function updateProfile(id, { name, organization, phone, bio, avatarDataUrl } = {}) {
+  const users = _load();
+  const idx   = users.findIndex(u => u.id === id);
+  if (idx === -1) return null;
+  const user = users[idx];
+  if (name          !== undefined) user.name          = name;
+  if (organization  !== undefined) user.organization  = organization;
+  if (phone         !== undefined) user.phone         = phone;
+  if (bio           !== undefined) user.bio           = bio;
+  if (avatarDataUrl !== undefined) user.avatarDataUrl = avatarDataUrl;
+  _save(users);
+  const { passwordHash: _, ...safe } = user;
+  return safe;
 }
 
 /** Delete a user by id. Returns true if found and deleted. */
@@ -236,6 +260,7 @@ module.exports = {
   list,
   create,
   updateStatus,
+  updateProfile,
   recordLogin,
   remove,
 };

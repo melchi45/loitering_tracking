@@ -37,17 +37,30 @@ function registerWebRTCHandlers(_io, socket) {
     try {
       const router = await webrtcGateway.getOrCreateRouter(cameraId);
 
-      // ── Close any existing transport for this socket:camera pair ─────
-      // Prevents resource leaks when the client retries without properly
-      // calling webrtc:leave first.
+      // ── Reuse existing transport for duplicate createTransport calls ───
+      // Some clients may call createTransport repeatedly during transient
+      // network jitter. Reusing avoids tearing down a healthy transport.
       const key = sessionKey(cameraId);
       const existing = sessions.get(key);
+      if (existing && existing.transport && !existing.transport.closed) {
+        const t = existing.transport;
+        console.log(`${tag} createTransport: reusing existing transport ${t.id.slice(0, 8)} for camera ${cameraId.slice(0, 8)}`);
+        return cb({
+          id:             t.id,
+          iceParameters:  t.iceParameters,
+          iceCandidates:  t.iceCandidates,
+          dtlsParameters: t.dtlsParameters,
+        });
+      }
+
+      // If an old closed/broken session object is hanging around, clear it.
       if (existing) {
-        console.log(`${tag} createTransport: closing stale transport for camera ${cameraId.slice(0, 8)}`);
         for (const c of [existing.videoConsumer, existing.audioConsumer]) {
           if (c && !c.closed) try { c.close(); } catch (_) {}
         }
-        if (!existing.transport.closed) try { existing.transport.close(); } catch (_) {}
+        if (existing.transport && !existing.transport.closed) {
+          try { existing.transport.close(); } catch (_) {}
+        }
         sessions.delete(key);
       }
 

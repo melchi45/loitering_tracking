@@ -1,0 +1,205 @@
+name: LTS-2026 Test → Jira Issue Reporter
+
+on:
+  # 기존 test.yml 완료 후 실행
+  workflow_run:
+    workflows: ['LTS-2026 Test Suite']
+    types: [completed]
+
+  # 수동 실행 (특정 브랜치 또는 PR 지정 가능)
+  workflow_dispatch:
+    inputs:
+      skip_filter:
+        description: '제외할 테스트 그룹 (예: e2e, youtube)'
+        required: false
+        default: 'e2e'
+      dry_run:
+        description: 'Dry-run (Jira에 실제 등록 안 함)'
+        type: boolean
+        required: false
+        default: false
+      jira_issue_type:
+        description: 'Jira 이슈 유형'
+        required: false
+        default: 'Bug'
+
+env:
+  LTS_URL:  http://localhost:3001
+  NODE_ENV: test
+  # Value source guide
+  # 1) GitHub Secrets (Repository/Organization Actions secrets)
+  #    - JIRA_BASE_URL, JIRA_USER_EMAIL, JIRA_API_TOKEN, JIRA_PROJECT_KEY, JIRA_COMPONENT
+  # 2) Manual workflow inputs (Actions -> Run workflow)
+  #    - jira_issue_type, dry_run, skip_filter
+  # 3) GitHub runtime context (auto provided)
+  #    - github.server_url, github.repository, github.run_id
+  # Defaults used in this workflow
+  #    - JIRA_PROJECT_KEY: LTS
+  #    - JIRA_ISSUE_TYPE: Bug
+  #    - JIRA_COMPONENT: LTS-2026
+  # GitHub Secrets에서 넣는 값
+  # 대상 키: JIRA_BASE_URL, JIRA_USER_EMAIL, JIRA_API_TOKEN, JIRA_PROJECT_KEY, JIRA_COMPONENT
+  # 위치: GitHub 저장소 → Settings → Secrets and variables → Actions → New repository secret
+  # 조직 공용으로 쓰려면: Organization Settings → Secrets and variables → Actions에서 Org Secret 생성 후 이 저장소에 접근 허용
+  # 워크플로 수동 실행 입력값에서 넣는 값
+  # 대상 키: jira_issue_type, dry_run, skip_filter
+  # 위치: Actions 탭 → 이 워크플로 선택 → Run workflow 클릭 → 입력 폼에 값 입력
+  # 즉, JIRA_ISSUE_TYPE은 github.event.inputs.jira_issue_type에서 들어옵니다.
+  # GitHub가 자동으로 제공하는 컨텍스트 값
+  # 대상: github.server_url, github.repository, github.run_id
+  # 그래서 GITHUB_RUN_URL은 별도 설정 없이 자동 조합됩니다.
+  # 추가로, 현재 test-jira.yml에는 기본값이 들어가 있습니다.
+  # JIRA_PROJECT_KEY: secret 없으면 LTS
+  # JIRA_ISSUE_TYPE: 입력 없으면 LTS
+  # JIRA_COMPONENT: secret 없으면 LTS-2026
+  JIRA_BASE_URL:    ${{ secrets.JIRA_BASE_URL }}
+  JIRA_USER_EMAIL:  ${{ secrets.JIRA_USER_EMAIL }}
+  JIRA_API_TOKEN:   ${{ secrets.JIRA_API_TOKEN }}
+  JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY || 'LTS' }}
+  JIRA_ISSUE_TYPE:  ${{ github.event.inputs.jira_issue_type || 'Bug' }}
+  JIRA_COMPONENT:   ${{ secrets.JIRA_COMPONENT || 'LTS-2026' }}
+  GITHUB_RUN_URL:   ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  test-and-report:
+    name: Run Tests & Report to Jira
+    runs-on: ubuntu-latest
+
+    # workflow_run 트리거 시: 원본 워크플로가 실패한 경우에만 실행
+    # workflow_dispatch 트리거 시: 항상 실행
+    if: |
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'failure'
+
+    steps:
+      # ── Checkout ─────────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Node.js 설정 ──────────────────────────────────────────────────────
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            server/package-lock.json
+
+      # ── 의존성 설치 ───────────────────────────────────────────────────────
+      - name: Install dependencies
+        run: |
+          npm ci --prefer-offline || npm install
+          cd server && npm ci --prefer-offline || npm install
+
+      # ── LTS 서버 시작 ──────────────────────────────────────────────────────
+      - name: Start LTS server
+        run: |
+          cd server && node src/index.js &
+          echo "SERVER_PID=$!" >> $GITHUB_ENV
+
+      - name: Wait for LTS server
+        run: |
+          for i in $(seq 1 30); do
+            if curl -sf "$LTS_URL/health" > /dev/null 2>&1; then
+              echo "서버 준비 완료 ($i초 소요)"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "ERROR: 서버 시작 타임아웃"
+          exit 1
+
+      # ── Jest JSON 결과 출력으로 테스트 실행 ──────────────────────────────
+      - name: Run test suites (JSON output)
+        id: run_tests
+        run: |
+          mkdir -p test/reports
+          SKIP="${{ github.event.inputs.skip_filter || 'e2e' }}"
+
+          # Jest를 직접 실행하여 JSON 결과 파일 생성
+          cd server
+          npx jest \
+            --testPathPattern="../../test/api" \
+            --json \
+            --outputFile="../test/reports/jest-results.json" \
+            --forceExit \
+            --passWithNoTests \
+            2>&1 | tee ../test/reports/jest-stdout.log || true
+
+          # jest-results.json 존재 확인
+          if [ ! -f "../test/reports/jest-results.json" ]; then
+            echo "WARNING: jest-results.json 생성 실패 — run_all.js 결과로 대체"
+            cd ..
+            node test/run_all.js --skip "$SKIP" --json > test/reports/jest-results.json 2>&1 || true
+          fi
+        continue-on-error: true
+
+      # ── Jira 이슈 등록 ────────────────────────────────────────────────────
+      - name: Report failures to Jira
+        if: always()
+        run: |
+          DRY_RUN_FLAG=""
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            DRY_RUN_FLAG="--dry-run"
+          fi
+
+          node test/jira-reporter.js \
+            --input test/reports/jest-results.json \
+            $DRY_RUN_FLAG
+
+      # ── 결과 요약을 GitHub Step Summary에 출력 ────────────────────────────
+      - name: Write GitHub Step Summary
+        if: always()
+        run: |
+          echo "## LTS-2026 테스트 결과 요약" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ -f "test/reports/jira-issues.json" ]; then
+            echo "### Jira 이슈 등록 결과" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "| 테스트 파일 | TC 문서 | Jira 이슈 | 상태 |" >> $GITHUB_STEP_SUMMARY
+            echo "|------------|---------|-----------|------|" >> $GITHUB_STEP_SUMMARY
+
+            # JSON 파싱하여 마크다운 테이블 생성
+            node -e "
+              const issues = require('./test/reports/jira-issues.json');
+              const jiraUrl = process.env.JIRA_BASE_URL || '';
+              for (const r of issues) {
+                const tc = (r.tcDocIds || []).join(', ');
+                const key = r.issueKey
+                  ? (jiraUrl ? \`[\${r.issueKey}](\${jiraUrl}/browse/\${r.issueKey})\` : r.issueKey)
+                  : (r.dry ? '(dry-run)' : '❌ 생성 실패');
+                const status = r.created ? '✅ 신규' : r.dry ? '🔍 시뮬레이션' : r.error ? '❌ 오류' : '↩ 기존';
+                console.log(\`| \${r.testFile} | \${tc} | \${key} | \${status} |\`);
+              }
+            " >> $GITHUB_STEP_SUMMARY 2>/dev/null || echo "| (결과 파싱 실패) | - | - | - |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "> ℹ Jira 이슈 결과 파일 없음 (테스트 전부 통과 또는 스크립트 미실행)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### CI 실행 정보" >> $GITHUB_STEP_SUMMARY
+          echo "- **실행 번호**: #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **브랜치**: \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **커밋**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY
+        env:
+          JIRA_BASE_URL: ${{ secrets.JIRA_BASE_URL }}
+
+      # ── 아티팩트 업로드 ───────────────────────────────────────────────────
+      - name: Upload Jira report artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jira-report-${{ github.run_number }}
+          path: |
+            test/reports/jest-results.json
+            test/reports/jira-issues.json
+            test/reports/jest-stdout.log
+          retention-days: 14
+
+      # ── 서버 종료 ─────────────────────────────────────────────────────────
+      - name: Stop LTS server
+        if: always()
+        run: |
+          [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true

@@ -20,6 +20,7 @@ import FaceGalleryTab from './components/FaceGalleryTab';
 import { SearchBar } from './components/SearchBar';
 import { SearchFullscreen } from './components/SearchFullscreen';
 import StatsPanelModal from './components/StatsPanelModal';
+import ProfileModal from './components/ProfileModal';
 import type { SearchResult } from './hooks/useSearch';
 import type { Alert, CrossCameraReIdEvent, PersonTrajectory } from './types';
 import { useAuthStore } from './stores/authStore';
@@ -337,6 +338,7 @@ function Dashboard() {
   const [fullscreenCameraId, setFullscreenCameraId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showStats,    setShowStats]    = useState(false);
+  const [showProfile,  setShowProfile]  = useState(false);
   const [showSearchFullscreen, setShowSearchFullscreen] = useState(false);
   const [searchFullscreenQuery, setSearchFullscreenQuery] = useState('');
   const [iceTestCameraId, setIceTestCameraId] = useState<string | null>(null);
@@ -425,20 +427,22 @@ function Dashboard() {
   useEffect(() => {
     fetch('/api/settings/webrtcConfig')
       .then((r) => (r.ok ? r.json() : null))
-      .then((data: { enabled?: boolean; stunUrls?: string[]; turns?: TurnServer[] } | null) => {
-        if (data && Array.isArray(data.stunUrls)) {
+      .then((resp: { success?: boolean; data?: { enabled?: boolean; stunUrls?: string[]; turns?: TurnServer[] } } | null) => {
+        // Settings API wraps the payload in { success, data: {...} }
+        const cfg = resp?.data;
+        if (cfg && Array.isArray(cfg.stunUrls)) {
           // Server has saved config — use it and sync to store + localStorage
           setWebRTCConfig({
-            enabled:  data.enabled ?? webrtcEnabled,
-            stunUrls: data.stunUrls,
-            turns:    data.turns ?? [],
+            enabled:  cfg.enabled ?? webrtcEnabled,
+            stunUrls: cfg.stunUrls,
+            turns:    cfg.turns ?? [],
           });
         } else {
           // Not in DB yet — call /api/webrtc/ice-config which seeds DB from .env
           fetch('/api/webrtc/ice-config')
             .then((r) => r.json())
-            .then((cfg: { stunUrls: string[]; turns: TurnServer[] }) => {
-              setWebRTCConfig({ enabled: webrtcEnabled, stunUrls: cfg.stunUrls ?? [], turns: cfg.turns ?? [] });
+            .then((iceCfg: { stunUrls: string[]; turns: TurnServer[] }) => {
+              setWebRTCConfig({ enabled: webrtcEnabled, stunUrls: iceCfg.stunUrls ?? [], turns: iceCfg.turns ?? [] });
             })
             .catch(() => {});
         }
@@ -571,19 +575,32 @@ function Dashboard() {
   const userMenu = auth.user ? (
     <div className="relative group">
       <button className="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-gray-700 transition-colors" title={auth.user.email}>
-        <span className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">
-          {auth.user.name?.charAt(0).toUpperCase() || auth.user.email.charAt(0).toUpperCase()}
-        </span>
+        {auth.user.avatarDataUrl
+          ? <img src={auth.user.avatarDataUrl} alt="avatar" className="w-6 h-6 rounded-full object-cover" />
+          : <span className="w-6 h-6 rounded-full bg-blue-600 text-white text-xs font-bold flex items-center justify-center">
+              {auth.user.name?.charAt(0).toUpperCase() || auth.user.email.charAt(0).toUpperCase()}
+            </span>
+        }
         <span className="text-xs text-gray-300 hidden sm:block max-w-[80px] truncate">{auth.user.name || auth.user.email}</span>
         <svg className="w-3 h-3 text-gray-500" fill="currentColor" viewBox="0 0 20 20">
           <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
         </svg>
       </button>
-      <div className="absolute right-0 top-full mt-1 w-44 bg-gray-800 border border-gray-700 rounded-lg shadow-xl py-1 z-50 hidden group-hover:block">
+      <div className="absolute right-0 top-full mt-1 w-48 bg-gray-800 border border-gray-700 rounded-lg shadow-xl py-1 z-50 hidden group-hover:block">
         <div className="px-3 py-2 border-b border-gray-700">
           <p className="text-xs font-medium text-white truncate">{auth.user.name || auth.user.email}</p>
           <p className="text-xs text-gray-400 capitalize">{auth.user.role}</p>
+          {auth.user.organization && (
+            <p className="text-xs text-gray-500 truncate mt-0.5">{auth.user.organization}</p>
+          )}
         </div>
+        <button onClick={() => setShowProfile(true)}
+          className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors flex items-center gap-2">
+          <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5.121 17.804A13.937 13.937 0 0112 16c2.5 0 4.847.655 6.879 1.804M15 10a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+          Profile
+        </button>
         {auth.user.role === 'admin' && (
           <button onClick={() => auth.navigateTo('admin')}
             className="w-full text-left px-3 py-2 text-xs text-gray-300 hover:bg-gray-700 hover:text-white transition-colors flex items-center gap-2">
@@ -616,6 +633,7 @@ function Dashboard() {
       })()}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
       {showStats    && <StatsPanelModal open={showStats} onClose={() => setShowStats(false)} />}
+      {showProfile  && <ProfileModal onClose={() => setShowProfile(false)} />}
       {showSearchFullscreen && (
         <SearchFullscreen
           initialQuery={searchFullscreenQuery}

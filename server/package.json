@@ -4,8 +4,8 @@
   "description": "Loitering Tracking System - Node.js Backend",
   "main": "src/index.js",
   "scripts": {
-    "start": "node src/index.js",
-    "stop": "fuser -k 3001/tcp || true",
+    "start": "/usr/bin/node src/index.js",
+    "stop": "fuser -k 3443/tcp 3001/tcp || true",
     "restart": "npm run stop && sleep 1 && npm run start",
     "dev": "nodemon",
     "test": "jest --runInBand --passWithNoTests",

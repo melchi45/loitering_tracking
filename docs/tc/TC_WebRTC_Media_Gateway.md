@@ -25,6 +25,7 @@
 9. [Test Group G — Performance & Security](#9-test-group-g--performance--security)
 10. [Test Execution Order](#10-test-execution-order)
 11. [Pass/Fail Criteria](#11-passfail-criteria)
+12. [Post-Patch Stability Verification](#12-post-patch-stability-verification)
 
 ---
 
@@ -75,6 +76,10 @@
 | FR-WRTC-063 | TC-G-004 |
 | FR-WRTC-064 | TC-G-005 |
 | FR-WRTC-065 | TC-G-006 |
+| FR-WRTC-066 | TC-H-001 |
+| FR-WRTC-067 | TC-H-002 |
+| FR-WRTC-068 | TC-H-003 |
+| FR-WRTC-069 | TC-H-004 |
 
 ---
 
@@ -303,8 +308,33 @@ Group F (REST API) → Group A (codec config) → Group C (router lifecycle) →
 
 ---
 
+## 12. Post-Patch Stability Verification
+
+### TC-H-001 — Duplicate Camera Subscribe Guard
+- **Input:** Same socket emits `camera:subscribe` for identical camera multiple times.
+- **Expected:** Only one effective room join; no repeated subscribe churn.
+- **Acceptance:** Server logs at most one subscribe line per socket-camera pair for a single join session.
+
+### TC-H-002 — Duplicate createTransport Reuse
+- **Input:** Same socket emits repeated `webrtc:createTransport` for the same camera while an active transport exists.
+- **Expected:** Existing active transport is reused.
+- **Acceptance:** No additional transport allocation for duplicate calls; session remains stable.
+
+### TC-H-003 — Timestamp Stability Warnings
+- **Input:** Run WebRTC playback for at least 2 minutes on configured RTSP camera.
+- **Expected:** Timestamp-related FFmpeg warnings do not recur.
+- **Acceptance:** Log contains no `Non-monotonous DTS` and no `Queue input is backward in time` warnings.
+
+### TC-H-004 — Connected but Frozen Stream Recovery
+- **Input:** Maintain WebRTC session while inducing transient stream stall conditions.
+- **Expected:** Client detects no inbound media progress and performs controlled reconnect.
+- **Acceptance:** Playback resumes without full page reload; ICE state returns to `connected/completed`.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for WebRTC Media Gateway |
+| 1.1 | 2026-05-29 | LTS Engineering Team | Added post-patch stability verification (TC-H-001 ~ TC-H-004) |

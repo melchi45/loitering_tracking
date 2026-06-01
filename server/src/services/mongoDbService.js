@@ -124,7 +124,7 @@ async function upsert(table, id, row) {
     await model(table).findOneAndUpdate(
       { id },
       { $set: clean },
-      { upsert: true, new: false },
+      { upsert: true, returnDocument: 'before' },
     );
   } catch (err) {
     console.error(`[MongoDB] upsert ${table}/${id} failed:`, err.message);

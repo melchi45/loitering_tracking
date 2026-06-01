@@ -101,6 +101,11 @@ const SUITES = [
     label: 'TC_WebRTC_Media_Gateway — Group F (Capabilities & Stats API)',
     tags:  ['webrtc'],
   },
+  {
+    file:  'test/api/webrtc_stability.test.js',
+    label: 'TC_WebRTC_Media_Gateway — Group H (Post-Patch Stability Verification)',
+    tags:  ['webrtc', 'stability'],
+  },
 
   // ── Main System ───────────────────────────────────────────────────────────
   {

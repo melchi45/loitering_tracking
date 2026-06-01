@@ -37,6 +37,7 @@ const { passport: configuredPassport, setup: setupPassport } = require('./config
 const YouTubeStreamService   = require('./services/youtubeStreamService');
 const registerStreamHandlers = require('./socket/streamHandler');
 const registerWebRTCHandlers = require('./socket/webrtcSignaling');
+const registerWebRTCTelemetryHandlers = require('./socket/webrtcTelemetryHandlers');
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
@@ -352,6 +353,7 @@ async function main() {
     console.log(`[Socket.IO] Client connected: ${socket.id}`);
     registerStreamHandlers(io, socket, db);
     registerWebRTCHandlers(io, socket);
+    registerWebRTCTelemetryHandlers(io, socket);
     // Hydrate newly connected client with all known discovered devices
     discoverySvc.hydrate(socket);
 

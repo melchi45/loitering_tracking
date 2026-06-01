@@ -268,8 +268,30 @@ CameraView
   ├─ <video autoPlay muted playsInline>   ← WebRTC MediaStream
   ├─ <canvas>                              ← Bounding box overlay (preserved from JPEG path)
   ├─ Reconnect button (shown when failed)
-  └─ Mute button (client-side track.enabled = false)
+  ├─ Mute button (client-side track.enabled = false)
+  └─ Top-right overlay container (absolute top-2 right-2, flex-col)
+       ├─ Row 1: [WebRTC badge] [ICE button]   ← WebRTC mode only
+       └─ Row 2: [Zone button]                 ← Stacked below badge row
 ```
+
+#### 4.2.1 Overlay Button Layout (v1.1 fix)
+
+**문제**: WebRTC 카메라에서 `WebRTC badge + ICE` 버튼이 `absolute top-2 right-12`에, `Zone` 버튼이 `absolute top-2 right-2`에 독립 배치되어 멀티캠 환경(셀이 좁을 때)에서 두 버튼이 겹침.
+
+**수정**: 두 버튼 그룹을 하나의 `absolute top-2 right-2 flex flex-col` 컨테이너로 통합.
+
+```
+┌─────────────────────────────────┐
+│                    [WebRTC][ICE]│  ← Row 1: badge + ICE (WebRTC only)
+│                         [Zone 2]│  ← Row 2: Zone button (stacked below)
+│                                 │
+│  ● CameraName  LIVE             │
+└─────────────────────────────────┘
+```
+
+- JPEG(비WebRTC) 카메라: Zone 버튼만 `absolute top-2 right-2`에 단독 표시  
+- WebRTC 카메라: `flex-col` 컨테이너로 묶어 ICE 버튼과 Zone 버튼이 세로로 정렬됨  
+- `z-index: 10` 적용으로 캔버스 오버레이 위에 렌더링
 
 ---
 
@@ -464,3 +486,4 @@ Browser (useWebRTC)      Socket.IO            webrtcSignaling     WebRTCGateway
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for WebRTC Media Gateway |
+| 1.1 | 2026-05-29 | LTS Engineering Team | §4.2 CameraView overlay layout fix — WebRTC ICE button and Zone button overlap in multi-camera grid (resolved by merging into shared `flex-col` container) |

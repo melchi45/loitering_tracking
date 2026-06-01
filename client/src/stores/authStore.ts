@@ -13,6 +13,10 @@ export interface AuthUser {
   createdAt: string;
   lastLoginAt: string | null;
   loginCount: number;
+  organization?: string;
+  phone?: string;
+  bio?: string;
+  avatarDataUrl?: string;
 }
 
 interface AuthState {
@@ -30,6 +34,13 @@ interface AuthState {
   navigateTo: (page: AppPage) => void;
   clearError: () => void;
   setError: (msg: string | null) => void;
+  updateProfile: (fields: {
+    name?: string;
+    organization?: string;
+    phone?: string;
+    bio?: string;
+    avatarDataUrl?: string;
+  }) => Promise<void>;
 }
 
 const BASE = '';  // same origin — proxy or direct HTTPS
@@ -116,5 +127,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ user: null, accessToken: null, page: 'signin' });
       return false;
     }
+  },
+
+  updateProfile: async (fields) => {
+    const { accessToken } = get();
+    const updated = await apiFetch('/auth/me', {
+      method:  'PATCH',
+      headers: { Authorization: `Bearer ${accessToken}` },
+      body:    JSON.stringify(fields),
+    });
+    set({ user: updated });
   },
 }));

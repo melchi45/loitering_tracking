@@ -1,0 +1,560 @@
+name: Jira Bug to Copilot Auto-Fix
+
+# ============================================================
+# 동작 방식:
+#   1. Jira Automation 이 repository_dispatch 이벤트를 발생
+#   2. Jira 버그 정보로 GitHub Issue 생성
+#   3. @github-copilot 코딩 에이전트를 이슈에 자동 할당
+#   4. Copilot 이 분석 후 fix/ 브랜치로 PR 자동 생성
+#   5. (선택) Jira 이슈에 GitHub Issue/PR 링크 코멘트 등록
+#
+# Jira Automation 설정:
+#   Trigger : Issue Created (Bug 유형)
+#   Action  : Send web request
+#     URL    : https://api.github.com/repos/{owner}/{repo}/dispatches
+#     Method : POST
+#     Headers:
+#       Authorization: Bearer {{GITHUB_PAT}}
+#       Content-Type: application/json
+#     Body:
+#       {
+#         "event_type": "jira-bug-created",
+#         "client_payload": {
+#           "jira_key":         "{{issue.key}}",
+#           "jira_summary":     "{{issue.summary}}",
+#           "jira_description": "{{issue.description}}",
+#           "jira_priority":    "{{issue.priority.name}}",
+#           "jira_reporter":    "{{issue.reporter.displayName}}",
+#           "jira_url":         "{{issue.url}}",
+#           "jira_components":  "{{issue.components}}"
+#         }
+#       }
+#
+# 필요 Repository Secrets:
+#   GH_PAT           - repo + issues 권한 PAT
+#                      (GITHUB_TOKEN 은 Copilot 할당 API 에 권한 부족)
+#   JIRA_BASE_URL    - https://your-company.atlassian.net
+#   JIRA_USER_EMAIL  - Jira API 호출용 이메일
+#   JIRA_API_TOKEN   - Jira API Token
+#   SLACK_WEBHOOK_URL - (선택) Slack Incoming Webhook URL
+# ============================================================
+
+on:
+  repository_dispatch:
+    types:
+      - jira-bug-created
+      - jira-bug-updated
+
+  workflow_dispatch:
+    inputs:
+      jira_key:
+        description: "Jira Issue Key (e.g. LTS-123)"
+        required: true
+        default: "LTS-000"
+      jira_summary:
+        description: "Bug title"
+        required: true
+        default: "[Test] Sample bug title"
+      jira_description:
+        description: "Bug description"
+        required: false
+        default: "Steps to reproduce, expected vs actual result."
+      jira_priority:
+        description: "Priority"
+        required: false
+        default: "Medium"
+        type: choice
+        options:
+          - Critical
+          - High
+          - Medium
+          - Low
+      jira_reporter:
+        description: "Reporter name"
+        required: false
+        default: "QA Team"
+      jira_url:
+        description: "Jira Issue URL"
+        required: false
+        default: ""
+      jira_components:
+        description: "Components (comma-separated)"
+        required: false
+        default: ""
+      jira_issue_type:
+        description: "Jira issue type (for report metadata)"
+        required: false
+        default: "Bug"
+
+# 동일 Jira 이슈 중복 처리 방지
+concurrency:
+  group: jira-copilot-${{ github.event.client_payload.jira_key || inputs.jira_key }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+env:
+  # Value source guide
+  # 1) GitHub Secrets (Repository/Organization Actions secrets)
+  #    - JIRA_BASE_URL, JIRA_USER_EMAIL, JIRA_API_TOKEN, JIRA_PROJECT_KEY, JIRA_COMPONENT
+  # 2) Manual workflow inputs (Actions -> Run workflow)
+  #    - jira_issue_type
+  # 3) repository_dispatch payload
+  #    - github.event.client_payload.jira_issue_type
+  # 4) GitHub runtime context (auto provided)
+  #    - github.server_url, github.repository, github.run_id
+  # Defaults used in this workflow
+  #    - JIRA_PROJECT_KEY: LTS
+  #    - JIRA_ISSUE_TYPE: Bug
+  #    - JIRA_COMPONENT: LTS-2026
+  JIRA_KEY:         ${{ github.event.client_payload.jira_key        || inputs.jira_key        || '' }}
+  JIRA_SUMMARY:     ${{ github.event.client_payload.jira_summary     || inputs.jira_summary     || '' }}
+  JIRA_DESCRIPTION: ${{ github.event.client_payload.jira_description || inputs.jira_description || '' }}
+  JIRA_PRIORITY:    ${{ github.event.client_payload.jira_priority    || inputs.jira_priority    || 'Medium' }}
+  JIRA_REPORTER:    ${{ github.event.client_payload.jira_reporter    || inputs.jira_reporter    || 'Unknown' }}
+  JIRA_URL:         ${{ github.event.client_payload.jira_url         || inputs.jira_url         || '' }}
+  JIRA_COMPONENTS:  ${{ github.event.client_payload.jira_components  || inputs.jira_components  || '' }}
+  JIRA_BASE_URL:    ${{ secrets.JIRA_BASE_URL }}
+  JIRA_USER_EMAIL:  ${{ secrets.JIRA_USER_EMAIL }}
+  JIRA_API_TOKEN:   ${{ secrets.JIRA_API_TOKEN }}
+  JIRA_PROJECT_KEY: ${{ secrets.JIRA_PROJECT_KEY || 'LTS' }}
+  JIRA_ISSUE_TYPE:  ${{ github.event.client_payload.jira_issue_type || inputs.jira_issue_type || 'Bug' }}
+  JIRA_COMPONENT:   ${{ secrets.JIRA_COMPONENT || 'LTS-2026' }}
+  GITHUB_RUN_URL:   ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+jobs:
+  # ===========================================================
+  # Job 1: Jira 버그 -> GitHub Issue 생성
+  # ===========================================================
+  create-github-issue:
+    name: "1/4 Create GitHub Issue"
+    runs-on: ubuntu-latest
+    outputs:
+      issue_number: ${{ steps.resolve_issue.outputs.issue_number }}
+      issue_url:    ${{ steps.resolve_issue.outputs.issue_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ---- 우선순위 -> 라벨/이모지 매핑 ----------------------
+      - name: Map priority to label
+        id: priority
+        shell: bash
+        run: |
+          case "$JIRA_PRIORITY" in
+            Critical|Blocker)
+              echo "label=priority: critical" >> "$GITHUB_OUTPUT"
+              echo "emoji=:red_circle:"        >> "$GITHUB_OUTPUT"
+              ;;
+            High)
+              echo "label=priority: high"     >> "$GITHUB_OUTPUT"
+              echo "emoji=:orange_circle:"    >> "$GITHUB_OUTPUT"
+              ;;
+            Medium)
+              echo "label=priority: medium"   >> "$GITHUB_OUTPUT"
+              echo "emoji=:yellow_circle:"    >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "label=priority: low"      >> "$GITHUB_OUTPUT"
+              echo "emoji=:green_circle:"     >> "$GITHUB_OUTPUT"
+              ;;
+          esac
+
+      # ---- 컴포넌트 -> 라벨 매핑 ------------------------------
+      - name: Map components to labels
+        id: components
+        shell: bash
+        run: |
+          EXTRA_LABELS=""
+          IFS=',' read -ra COMPS <<< "$JIRA_COMPONENTS"
+          for comp in "${COMPS[@]}"; do
+            c=$(echo "$comp" | xargs | tr '[:upper:]' '[:lower:]')
+            case "$c" in
+              *camera*|*rtsp*|*onvif*|*webrtc*)
+                EXTRA_LABELS="$EXTRA_LABELS,area: camera" ;;
+              *ai*|*detection*|*yolo*|*track*)
+                EXTRA_LABELS="$EXTRA_LABELS,area: ai-detection" ;;
+              *ui*|*dashboard*|*react*|*frontend*)
+                EXTRA_LABELS="$EXTRA_LABELS,area: frontend" ;;
+              *api*|*server*|*backend*)
+                EXTRA_LABELS="$EXTRA_LABELS,area: backend" ;;
+              *alert*|*zone*)
+                EXTRA_LABELS="$EXTRA_LABELS,area: zone-alert" ;;
+              *face*|*reid*)
+                EXTRA_LABELS="$EXTRA_LABELS,area: face-reid" ;;
+              *docker*|*deploy*|*infra*)
+                EXTRA_LABELS="$EXTRA_LABELS,area: devops" ;;
+            esac
+          done
+          echo "extra=${EXTRA_LABELS#,}" >> "$GITHUB_OUTPUT"
+
+      # ---- 라벨 일괄 생성 (없으면 생성) -----------------------
+      - name: Ensure labels exist
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          declare -A LABEL_COLORS=(
+            ["bug"]="d73a4a"
+            ["jira-sync"]="e4e669"
+            ["copilot-autofix"]="0075ca"
+            ["priority: critical"]="b60205"
+            ["priority: high"]="e4440c"
+            ["priority: medium"]="fbca04"
+            ["priority: low"]="0e8a16"
+            ["area: camera"]="1d76db"
+            ["area: ai-detection"]="5319e7"
+            ["area: frontend"]="0075ca"
+            ["area: backend"]="e99695"
+            ["area: zone-alert"]="f9d0c4"
+            ["area: face-reid"]="c5def5"
+            ["area: devops"]="bfd4f2"
+          )
+          for label in "${!LABEL_COLORS[@]}"; do
+            color="${LABEL_COLORS[$label]}"
+            gh label create "$label" --color "$color" --force \
+              --repo "${{ github.repository }}" 2>/dev/null || true
+          done
+
+      # ---- 중복 이슈 확인 -------------------------------------
+      - name: Check for duplicate issue
+        id: duplicate
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          EXISTING=$(gh issue list \
+            --repo "${{ github.repository }}" \
+            --search "$JIRA_KEY in:title" \
+            --state open \
+            --json number,title \
+            --limit 5)
+          COUNT=$(echo "$EXISTING" | jq 'length')
+          if [[ "$COUNT" -gt 0 ]]; then
+            NUM=$(echo "$EXISTING" | jq -r '.[0].number')
+            echo "exists=true"    >> "$GITHUB_OUTPUT"
+            echo "number=$NUM"   >> "$GITHUB_OUTPUT"
+            echo "::notice::Duplicate found: issue #$NUM"
+          else
+            echo "exists=false"  >> "$GITHUB_OUTPUT"
+          fi
+
+      # ---- Issue 본문 파일 생성 --------------------------------
+      - name: Build issue body
+        id: body
+        if: steps.duplicate.outputs.exists == 'false'
+        shell: bash
+        run: |
+          JIRA_LINK="$JIRA_KEY"
+          if [[ -n "$JIRA_URL" ]]; then
+            JIRA_LINK="[$JIRA_KEY]($JIRA_URL)"
+          fi
+
+          BRANCH_NAME="fix/${JIRA_KEY}-copilot-autofix"
+
+          cat > /tmp/issue_body.md << BODY
+          ## ${{ steps.priority.outputs.emoji }} Jira Bug: ${JIRA_KEY}
+
+          > **이 이슈는 Jira Automation 에 의해 자동 생성되었습니다.
+          > GitHub Copilot 코딩 에이전트가 자동으로 버그 수정을 시도합니다.**
+
+          ---
+
+          ### 버그 정보
+
+          | 항목 | 내용 |
+          |------|------|
+          | **Jira 키** | ${JIRA_LINK} |
+          | **우선순위** | ${JIRA_PRIORITY} |
+          | **보고자** | ${JIRA_REPORTER} |
+          | **컴포넌트** | ${JIRA_COMPONENTS:-N/A} |
+          | **트리거** | ${{ github.event_name }} |
+
+          ---
+
+          ### 버그 설명
+
+          ${JIRA_DESCRIPTION:-_설명 없음_}
+
+          ---
+
+          ### Copilot 처리 지침
+
+          @github-copilot 아래 지침에 따라 이 버그를 수정해 주세요:
+
+          1. **재현 환경 확인**: \`server/src/\` 및 \`client/src/\` 에서 관련 파일을 찾으세요.
+          2. **근본 원인 분석**: 버그 설명을 바탕으로 문제 코드를 특정하세요.
+          3. **최소 범위 수정**: 버그 수정 외 리팩터링은 포함하지 마세요.
+          4. **테스트 확인**: \`test/\` 폴더의 관련 테스트를 실행하고 필요시 케이스를 추가하세요.
+          5. **PR 생성**: 수정 사항을 \`${BRANCH_NAME}\` 브랜치로 PR 을 열어 주세요.
+
+          #### 프로젝트 구조 참고
+
+          \`\`\`
+          server/src/services/   - AI 감지, 카메라, 알림, Zone 관리 (Node.js)
+          client/src/components/ - React/TypeScript UI 컴포넌트
+          test/                  - API / 통합 / E2E 테스트
+          docs/design/           - 시스템 설계 문서
+          \`\`\`
+
+          ---
+
+          _자동 생성: \`jira-bug-to-copilot\` 워크플로우 | Run #${{ github.run_number }}_
+          BODY
+
+          echo "path=/tmp/issue_body.md" >> "$GITHUB_OUTPUT"
+
+      # ---- 신규 Issue 생성 ------------------------------------
+      - name: Create issue
+        id: new_issue
+        if: steps.duplicate.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          ALL_LABELS="bug,jira-sync,copilot-autofix,${{ steps.priority.outputs.label }}"
+          EXTRA="${{ steps.components.outputs.extra }}"
+          if [[ -n "$EXTRA" ]]; then
+            ALL_LABELS="$ALL_LABELS,$EXTRA"
+          fi
+
+          URL=$(gh issue create \
+            --repo "${{ github.repository }}" \
+            --title "[$JIRA_KEY] $JIRA_SUMMARY" \
+            --body-file "${{ steps.body.outputs.path }}" \
+            --label "$ALL_LABELS")
+
+          NUM=$(echo "$URL" | grep -oE '[0-9]+$')
+          echo "number=$NUM" >> "$GITHUB_OUTPUT"
+          echo "url=$URL"    >> "$GITHUB_OUTPUT"
+          echo "::notice::Created issue #$NUM: $URL"
+
+      # ---- 출력 통합 (신규 or 중복) ---------------------------
+      - name: Resolve issue reference
+        id: resolve_issue
+        shell: bash
+        run: |
+          if [[ "${{ steps.duplicate.outputs.exists }}" == "true" ]]; then
+            NUM="${{ steps.duplicate.outputs.number }}"
+            URL="https://github.com/${{ github.repository }}/issues/$NUM"
+          else
+            NUM="${{ steps.new_issue.outputs.number }}"
+            URL="${{ steps.new_issue.outputs.url }}"
+          fi
+          echo "issue_number=$NUM" >> "$GITHUB_OUTPUT"
+          echo "issue_url=$URL"    >> "$GITHUB_OUTPUT"
+
+  # ===========================================================
+  # Job 2: GitHub Copilot 에이전트 할당
+  # ===========================================================
+  assign-copilot:
+    name: "2/4 Assign Copilot Agent"
+    runs-on: ubuntu-latest
+    needs: create-github-issue
+    if: needs.create-github-issue.outputs.issue_number != ''
+
+    steps:
+      - name: Assign @github-copilot via REST API
+        id: assign
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          ISSUE_NUM="${{ needs.create-github-issue.outputs.issue_number }}"
+
+          HTTP_STATUS=$(curl -s -o /tmp/assign_resp.json -w "%{http_code}" \
+            -X POST \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "X-GitHub-Api-Version: 2022-11-28" \
+            "https://api.github.com/repos/${{ github.repository }}/issues/${ISSUE_NUM}/assignees" \
+            -d '{"assignees":["copilot"]}')
+
+          echo "HTTP Status: $HTTP_STATUS"
+          jq '.' /tmp/assign_resp.json 2>/dev/null || cat /tmp/assign_resp.json
+
+          if [[ "$HTTP_STATUS" -ge 200 && "$HTTP_STATUS" -lt 300 ]]; then
+            echo "::notice::Copilot assigned to issue #$ISSUE_NUM"
+            echo "assigned=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning::Direct assignment failed (HTTP $HTTP_STATUS). Falling back to mention."
+            echo "assigned=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # 직접 할당 실패 시 코멘트로 폴백
+      - name: Fallback - mention copilot in comment
+        if: steps.assign.outputs.assigned == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          ISSUE_NUM="${{ needs.create-github-issue.outputs.issue_number }}"
+          gh issue comment "$ISSUE_NUM" \
+            --repo "${{ github.repository }}" \
+            --body "@github-copilot Jira 버그 \`${{ env.JIRA_KEY }}\` 를 분석하고 수정 PR 을 생성해 주세요."
+
+  # ===========================================================
+  # Job 3: Jira 이슈에 GitHub 링크 코멘트 등록
+  # ===========================================================
+  comment-on-jira:
+    name: "3/4 Comment on Jira Issue"
+    runs-on: ubuntu-latest
+    needs: [create-github-issue, assign-copilot]
+    # JIRA_API_TOKEN secret 유무는 env 변수로 간접 확인
+    if: |
+      always() &&
+      needs.create-github-issue.outputs.issue_number != ''
+
+    steps:
+      - name: Post GitHub link to Jira
+        env:
+          JIRA_BASE_URL:   ${{ secrets.JIRA_BASE_URL }}
+          JIRA_USER_EMAIL: ${{ secrets.JIRA_USER_EMAIL }}
+          JIRA_API_TOKEN:  ${{ secrets.JIRA_API_TOKEN }}
+        shell: bash
+        run: |
+          # Jira API Token 이 설정되지 않으면 스킵
+          if [[ -z "$JIRA_BASE_URL" || -z "$JIRA_API_TOKEN" ]]; then
+            echo "::notice::JIRA_* secrets not configured. Skipping Jira comment."
+            exit 0
+          fi
+
+          ISSUE_URL="${{ needs.create-github-issue.outputs.issue_url }}"
+          ISSUE_NUM="${{ needs.create-github-issue.outputs.issue_number }}"
+
+          PAYLOAD=$(jq -n \
+            --arg url  "$ISSUE_URL" \
+            --arg num  "#$ISSUE_NUM" \
+            '{
+              body: {
+                version: 1,
+                type: "doc",
+                content: [
+                  {
+                    type: "paragraph",
+                    content: [
+                      {type: "text", text: "GitHub Copilot Auto-Fix ", marks: [{type: "strong"}]},
+                      {type: "text", text: "처리가 시작되었습니다."}
+                    ]
+                  },
+                  {
+                    type: "bulletList",
+                    content: [
+                      {
+                        type: "listItem",
+                        content: [{
+                          type: "paragraph",
+                          content: [
+                            {type: "text", text: "GitHub Issue "},
+                            {type: "text", text: $num,
+                              marks: [{type: "link", attrs: {href: $url}}]}
+                          ]
+                        }]
+                      },
+                      {
+                        type: "listItem",
+                        content: [{
+                          type: "paragraph",
+                          content: [{type: "text",
+                            text: "Copilot 에이전트가 버그를 분석하여 자동으로 수정 PR 을 생성할 예정입니다."}]
+                        }]
+                      }
+                    ]
+                  }
+                ]
+              }
+            }')
+
+          HTTP_STATUS=$(curl -s -o /tmp/jira_resp.json -w "%{http_code}" \
+            -X POST \
+            -u "$JIRA_USER_EMAIL:$JIRA_API_TOKEN" \
+            -H "Content-Type: application/json" \
+            "$JIRA_BASE_URL/rest/api/3/issue/${{ env.JIRA_KEY }}/comment" \
+            -d "$PAYLOAD")
+
+          echo "Jira API HTTP Status: $HTTP_STATUS"
+          if [[ "$HTTP_STATUS" -ge 200 && "$HTTP_STATUS" -lt 300 ]]; then
+            echo "::notice::Jira comment posted to ${{ env.JIRA_KEY }}"
+          else
+            echo "::warning::Jira comment failed (HTTP $HTTP_STATUS)"
+            cat /tmp/jira_resp.json
+          fi
+
+  # ===========================================================
+  # Job 4: 알림 & 워크플로우 요약
+  # ===========================================================
+  notify-and-summarize:
+    name: "4/4 Notify & Summarize"
+    runs-on: ubuntu-latest
+    needs: [create-github-issue, assign-copilot]
+    if: always() && needs.create-github-issue.outputs.issue_number != ''
+
+    steps:
+      - name: Send Slack notification
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          JIRA_PRIORITY:     ${{ env.JIRA_PRIORITY }}
+        shell: bash
+        run: |
+          if [[ -z "$SLACK_WEBHOOK_URL" ]]; then
+            echo "::notice::SLACK_WEBHOOK_URL not configured. Skipping."
+            exit 0
+          fi
+
+          case "$JIRA_PRIORITY" in
+            Critical|Blocker) COLOR="#b60205" ;;
+            High)             COLOR="#e4440c" ;;
+            Medium)           COLOR="#fbca04" ;;
+            *)                COLOR="#0e8a16" ;;
+          esac
+
+          ISSUE_URL="${{ needs.create-github-issue.outputs.issue_url }}"
+          ISSUE_NUM="${{ needs.create-github-issue.outputs.issue_number }}"
+
+          curl -s -X POST "$SLACK_WEBHOOK_URL" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg color    "$COLOR" \
+              --arg jira_key "${{ env.JIRA_KEY }}" \
+              --arg priority "$JIRA_PRIORITY" \
+              --arg summary  "${{ env.JIRA_SUMMARY }}" \
+              --arg url      "$ISSUE_URL" \
+              --arg num      "#$ISSUE_NUM" \
+              '{
+                attachments: [{
+                  color: $color,
+                  title: "Jira Bug -> Copilot Auto-Fix Started",
+                  fields: [
+                    {title: "Jira Key",    value: $jira_key, short: true},
+                    {title: "Priority",    value: $priority,  short: true},
+                    {title: "Summary",     value: $summary,   short: false},
+                    {title: "GitHub Issue",value: ("\($num) <\($url)>"), short: false}
+                  ],
+                  footer: "LTS-2026 Jira->Copilot Pipeline"
+                }]
+              }')" || true
+
+      - name: Write job summary
+        shell: bash
+        run: |
+          ISSUE_NUM="${{ needs.create-github-issue.outputs.issue_number }}"
+          ISSUE_URL="${{ needs.create-github-issue.outputs.issue_url }}"
+          {
+            echo "## Jira Bug -> Copilot Auto-Fix 결과"
+            echo ""
+            echo "| 항목 | 내용 |"
+            echo "|------|------|"
+            echo "| **Jira Key** | \`${{ env.JIRA_KEY }}\` |"
+            echo "| **Summary** | ${{ env.JIRA_SUMMARY }} |"
+            echo "| **Priority** | ${{ env.JIRA_PRIORITY }} |"
+            echo "| **Reporter** | ${{ env.JIRA_REPORTER }} |"
+            echo "| **GitHub Issue** | [#${ISSUE_NUM}](${ISSUE_URL}) |"
+            echo "| **Copilot Assigned** | \`@github-copilot\` |"
+            echo "| **Run** | #${{ github.run_number }} |"
+            echo ""
+            echo "> Copilot 이 버그를 분석하여 \`fix/${{ env.JIRA_KEY }}-copilot-autofix\` 브랜치로 PR 을 생성합니다."
+          } >> "$GITHUB_STEP_SUMMARY"

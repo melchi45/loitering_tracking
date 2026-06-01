@@ -33,6 +33,7 @@ class RtpIngestion extends EventEmitter {
 
     this._proc           = null;
     this._running        = false;
+    this._restarting     = false;
     this._frameBuf       = Buffer.alloc(0);
     this._retryTimer     = null;
     this._retryCount     = 0;
@@ -58,6 +59,7 @@ class RtpIngestion extends EventEmitter {
   /** Stop FFmpeg and close mediasoup transports. */
   stop() {
     this._running = false;
+    this._restarting = false;
     if (this._retryTimer) { clearTimeout(this._retryTimer); this._retryTimer = null; }
     this._kill();
     this._closeMediasoup();
@@ -127,14 +129,40 @@ class RtpIngestion extends EventEmitter {
     this._videoTransport = this._audioTransport = null;
   }
 
+  async _restart() {
+    if (!this._running || this._restarting) return;
+    this._restarting = true;
+    try {
+      this._kill();
+      this._closeMediasoup();
+      await this._setupMediasoup();
+      if (!this._running) return;
+      this._spawn();
+    } catch (err) {
+      this.emit('warn', {
+        cameraId: this.cameraId,
+        message: `restart failed: ${err?.message || String(err)}`,
+      });
+      if (this._running) {
+        const delay = Math.min(1000 * Math.pow(2, this._retryCount - 1), 30_000);
+        this._retryTimer = setTimeout(() => this._restart().catch(() => {}), delay);
+      }
+    } finally {
+      this._restarting = false;
+    }
+  }
+
   _buildArgs() {
     return [
       // Input
       '-rtsp_transport', 'tcp',
+      // Normalize broken source timestamps from some RTSP cameras.
+      '-fflags', '+genpts+igndts',
       // Replace camera-supplied timestamps with wall-clock reception time.
       // Cameras that output non-monotonous DTS (e.g. TID-A800) would otherwise
       // produce backward RTP timestamps that stall the browser's jitter buffer.
       '-use_wallclock_as_timestamps', '1',
+      '-max_interleave_delta', '0',
       '-stimeout',        '5000000',
       '-analyzeduration', '1000000',
       '-probesize',       '1000000',
@@ -150,6 +178,8 @@ class RtpIngestion extends EventEmitter {
 
       // Output 2: Opus audio → mediasoup PlainTransport (optional — skipped when no audio)
       '-map', '0:a?',
+      // Re-timestamp audio to monotonic timeline to avoid "Queue input is backward in time".
+      '-af', 'aresample=async=1:first_pts=0',
       '-c:a', 'libopus', '-b:a', '32k', '-vbr', 'on', '-application', 'voip',
       '-payload_type', String(PT_OPUS),
       '-ssrc', String(SSRC_AUDIO),
@@ -194,12 +224,17 @@ class RtpIngestion extends EventEmitter {
     proc.on('close', (code, signal) => {
       this._proc = null;
       if (!this._running) return;
+
+      // Force producer lifecycle close on source failure so clients receive
+      // producerclose and reconnect against fresh producers.
+      this._closeMediasoup();
+
       this._retryCount++;
       this.emit('reconnecting', { cameraId: this.cameraId, attempt: this._retryCount });
       this.emit('warn', { cameraId: this.cameraId, message: `ffmpeg exited (code=${code} signal=${signal}) — retry #${this._retryCount}` });
       // Exponential backoff: 1s, 2s, 4s, 8s, 16s … capped at 30 s
       const delay = Math.min(1000 * Math.pow(2, this._retryCount - 1), 30_000);
-      this._retryTimer = setTimeout(() => this._spawn(), delay);
+      this._retryTimer = setTimeout(() => this._restart().catch(() => {}), delay);
     });
   }
 

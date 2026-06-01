@@ -39,6 +39,7 @@ const CONNECT_TIMEOUT_MS    = 30_000;
 const ICE_DISCONNECT_WAIT   = 5_000;  // how long to wait for ICE self-recovery
 const MAX_AUTO_RETRIES      = 8;   // covers ~32 s of startup retries (8 × 4 s)
 const AUTO_RETRY_DELAY      = 4_000;
+const VIDEO_STALL_WAIT      = 10_000; // reconnect if inbound video bytes stop increasing
 
 // Errors that indicate a transient server startup state — retry silently
 const PIPELINE_STARTING_RE = /pipeline not ready|no video producer|no producers available/i;
@@ -58,6 +59,8 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
   const consumersRef    = useRef<any[]>([]);
   const retryTimerRef   = useRef<ReturnType<typeof setTimeout>>();
   const icePollerRef    = useRef<ReturnType<typeof setInterval>>();
+  const lastVideoBytesRef = useRef<number | null>(null);
+  const videoStallSinceRef = useRef<number | null>(null);
 
   const [retryCount, setRetryCount] = useState(0);
   const [iceStats, setIceStats]     = useState<IceStats | null>(null);
@@ -69,6 +72,8 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
   const cleanup = useCallback(() => {
     if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = undefined; }
     if (icePollerRef.current)  { clearInterval(icePollerRef.current);  icePollerRef.current  = undefined; }
+    lastVideoBytesRef.current = null;
+    videoStallSinceRef.current = null;
     setIceStats(null);
     for (const c of consumersRef.current) {
       try { if (!c.closed) c.close(); } catch (_) {}
@@ -130,6 +135,19 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
     };
     socket.on('webrtc:producer-closed', handleProducerClosed);
 
+    // Source is unreachable (RTSP auth/network/refused). Keep retrying, but
+    // expose a failed UI state immediately so users don't see a frozen video.
+    const handleStreamUnavailable = ({ cameraId: unavailableId }: { cameraId: string }) => {
+      if (unavailableId !== cameraId || cancelled) return;
+      console.warn(`[useWebRTC][${cameraId.slice(0,8)}] server: stream unavailable — scheduling retry`);
+      setState('failed');
+      if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = undefined; }
+      retryTimerRef.current = setTimeout(() => {
+        if (!cancelled) setRetryCount((n) => n + 1);
+      }, AUTO_RETRY_DELAY);
+    };
+    socket.on('camera:stream-unavailable', handleStreamUnavailable);
+
     (async () => {
       try {
         // ── Dynamic import ────────────────────────────────────────────────
@@ -182,11 +200,36 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
           try {
             const report: RTCStatsReport = await transportRef.current.getStats();
             let selectedPair: any = null;
+            let inboundVideoBytes: number | null = null;
             const candidates = new Map<string, any>();
             report.forEach((e: any) => {
               if (e.type === 'local-candidate' || e.type === 'remote-candidate') candidates.set(e.id, e);
               if (e.type === 'candidate-pair' && e.nominated) selectedPair = e;
+              if (e.type === 'inbound-rtp' && (e.kind === 'video' || e.mediaType === 'video') && typeof e.bytesReceived === 'number') {
+                inboundVideoBytes = e.bytesReceived;
+              }
             });
+            // Recover from "connected but frozen" cases by forcing a reconnect
+            // if inbound video bytes remain unchanged for too long.
+            if (transportRef.current.connectionState === 'connected' && inboundVideoBytes !== null) {
+              const prevBytes = lastVideoBytesRef.current;
+              if (prevBytes === null || inboundVideoBytes > prevBytes) {
+                lastVideoBytesRef.current = inboundVideoBytes;
+                videoStallSinceRef.current = null;
+              } else {
+                const now = Date.now();
+                if (!videoStallSinceRef.current) {
+                  videoStallSinceRef.current = now;
+                } else if (now - videoStallSinceRef.current >= VIDEO_STALL_WAIT) {
+                  console.warn(`[useWebRTC][${cameraId.slice(0,8)}] inbound video stalled for ${VIDEO_STALL_WAIT / 1000}s - reconnecting`);
+                  if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = undefined; }
+                  setState('failed');
+                  setRetryCount((n) => n + 1);
+                  return;
+                }
+              }
+            }
+
             if (!selectedPair) return;
             const loc = candidates.get(selectedPair.localCandidateId);
             const rem = candidates.get(selectedPair.remoteCandidateId);
@@ -223,6 +266,11 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
           if (cancelled) return;
           if (s === 'connected') {
             transportConnected = true;
+            // Clear any pending retry from a prior transient disconnect.
+            if (retryTimerRef.current) {
+              clearTimeout(retryTimerRef.current);
+              retryTimerRef.current = undefined;
+            }
             // Only flip to UI-connected when srcObject is already set.
             // If not yet (race: ICE done before consume loop finishes), srcObjectReady
             // path below will call markConnected() once srcObject is assigned.
@@ -230,6 +278,10 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
           } else if (s === 'disconnected') {
             // Transient — ICE may self-recover. Force a retry if it doesn't within 5 s.
             console.warn(`[useWebRTC][${cameraId.slice(0,8)}] ICE disconnected (waiting up to ${ICE_DISCONNECT_WAIT / 1000} s…)`);
+            if (retryTimerRef.current) {
+              clearTimeout(retryTimerRef.current);
+              retryTimerRef.current = undefined;
+            }
             retryTimerRef.current = setTimeout(() => {
               if (!cancelled) {
                 console.warn(`[useWebRTC][${cameraId.slice(0,8)}] disconnected timeout — forcing retry`);
@@ -241,9 +293,19 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
             setState('failed');
             // Auto-retry up to MAX_AUTO_RETRIES times
             if (retryCount < MAX_AUTO_RETRIES) {
+              if (retryTimerRef.current) {
+                clearTimeout(retryTimerRef.current);
+                retryTimerRef.current = undefined;
+              }
               retryTimerRef.current = setTimeout(() => {
                 if (!cancelled) setRetryCount((n) => n + 1);
               }, AUTO_RETRY_DELAY);
+            }
+          } else {
+            // For intermediate states like "connecting", ensure stale retry timers do not leak.
+            if (retryTimerRef.current) {
+              clearTimeout(retryTimerRef.current);
+              retryTimerRef.current = undefined;
             }
           }
         });
@@ -354,6 +416,7 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
       cancelled = true;
       clearTimeout(connectTimeoutId);
       socket.off('webrtc:producer-closed', handleProducerClosed);
+      socket.off('camera:stream-unavailable', handleStreamUnavailable);
       cleanup();
     };
   }, [cameraId, enabled, socket, getIceServers, cleanup, retryCount]);

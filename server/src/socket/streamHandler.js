@@ -20,6 +20,10 @@ function registerStreamHandlers(io, socket, db) {
    */
   socket.on('camera:subscribe', ({ cameraId } = {}) => {
     if (!cameraId) return;
+    if (socket.rooms.has(cameraId)) {
+      socket.emit('camera:subscribed', { cameraId });
+      return;
+    }
     socket.join(cameraId);
     console.log(`[Socket.IO] ${socket.id.slice(0,8)} subscribed to camera ${cameraId.slice(0,8)}`);
     socket.emit('camera:subscribed', { cameraId });
@@ -31,6 +35,10 @@ function registerStreamHandlers(io, socket, db) {
    */
   socket.on('camera:unsubscribe', ({ cameraId } = {}) => {
     if (!cameraId) return;
+    if (!socket.rooms.has(cameraId)) {
+      socket.emit('camera:unsubscribed', { cameraId });
+      return;
+    }
     socket.leave(cameraId);
     socket.emit('camera:unsubscribed', { cameraId });
   });

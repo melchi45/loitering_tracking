@@ -174,6 +174,58 @@ router.get('/me', verifyAccessToken, (req, res) => {
   res.json(user);
 });
 
+// ── PATCH /auth/me ────────────────────────────────────────────────────────────
+// Update authenticated user's own profile.
+// Body: { name?, organization?, phone?, bio?, avatarDataUrl? }
+router.patch('/me', verifyAccessToken, (req, res) => {
+  try {
+    const { name, organization, phone, bio, avatarDataUrl } = req.body;
+
+    // Validate name if provided
+    if (name !== undefined) {
+      if (typeof name !== 'string' || name.trim().length === 0)
+        return res.status(400).json({ error: 'name must be a non-empty string' });
+      if (name.trim().length > 64)
+        return res.status(400).json({ error: 'name must be 64 characters or fewer' });
+    }
+    if (organization !== undefined && typeof organization === 'string' && organization.length > 128)
+      return res.status(400).json({ error: 'organization must be 128 characters or fewer' });
+    if (phone !== undefined && typeof phone === 'string' && phone.length > 32)
+      return res.status(400).json({ error: 'phone must be 32 characters or fewer' });
+    if (bio !== undefined && typeof bio === 'string' && bio.length > 256)
+      return res.status(400).json({ error: 'bio must be 256 characters or fewer' });
+    if (avatarDataUrl !== undefined) {
+      if (typeof avatarDataUrl !== 'string' || !avatarDataUrl.startsWith('data:image/'))
+        return res.status(400).json({ error: 'avatarDataUrl must be a data:image/... URL' });
+      if (avatarDataUrl.length > 65536)
+        return res.status(400).json({ error: 'avatarDataUrl exceeds maximum size (48 KB)' });
+    }
+
+    const fields = {};
+    if (name          !== undefined) fields.name          = name.trim();
+    if (organization  !== undefined) fields.organization  = organization;
+    if (phone         !== undefined) fields.phone         = phone;
+    if (bio           !== undefined) fields.bio           = bio;
+    if (avatarDataUrl !== undefined) fields.avatarDataUrl = avatarDataUrl;
+
+    const updated = UserService.updateProfile(req.user.sub, fields);
+    if (!updated) return res.status(404).json({ error: 'User not found' });
+
+    AuditService.log({
+      event:   'profile_updated',
+      userId:  updated.id,
+      email:   updated.email,
+      actorId: req.user.sub,
+      detail:  { fields: Object.keys(fields).filter(k => k !== 'avatarDataUrl') },
+    });
+
+    res.json(updated);
+  } catch (err) {
+    console.error('[auth/me PATCH]', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // OAUTH 2.0 — Google & Microsoft
 // After a successful OAuth callback the server:

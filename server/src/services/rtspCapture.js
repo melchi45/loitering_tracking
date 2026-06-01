@@ -66,10 +66,13 @@ class RTSPCapture extends EventEmitter {
     return [
       // Input options
       '-rtsp_transport', 'tcp',
+      // Normalize broken source timestamps from some RTSP cameras.
+      '-fflags',         '+genpts+igndts+nobuffer',
       '-stimeout',       '5000000',   // 5 s socket timeout (µs)
       '-analyzeduration','1000000',
       '-probesize',      '1000000',
       '-i',              this.rtspUrl,
+      // Keep pipeline real-time by dropping late frames instead of buffering.
       // Video filter: limit fps + scale to width, preserve aspect ratio
       '-vf',             `fps=${this.fps},scale=${this.width}:-2`,
       // Output: raw JPEG stream to stdout

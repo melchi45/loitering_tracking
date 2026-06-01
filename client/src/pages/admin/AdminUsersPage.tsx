@@ -12,6 +12,10 @@ interface User {
   loginCount: number;
   approvedAt: string | null;
   approvedBy: string | null;
+  organization?: string;
+  phone?: string;
+  bio?: string;
+  avatarDataUrl?: string;
 }
 
 type StatusFilter = 'all' | 'pending' | 'active' | 'rejected' | 'revoked';
@@ -142,7 +146,7 @@ export default function AdminUsersPage() {
             type="search"
             value={search}
             onChange={e => setSearch(e.target.value)}
-            placeholder="Search by email or name…"
+            placeholder="Search by email, name, org, phone, bio…"
             className="flex-1 min-w-[200px] bg-gray-800 border border-gray-700 rounded-lg px-4 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
           />
         </div>
@@ -161,6 +165,7 @@ export default function AdminUsersPage() {
               <thead>
                 <tr className="border-b border-gray-800 text-gray-400 text-xs uppercase tracking-wide">
                   <th className="text-left px-5 py-3">User</th>
+                  <th className="text-left px-4 py-3">Organization</th>
                   <th className="text-left px-4 py-3">Role</th>
                   <th className="text-left px-4 py-3">Status</th>
                   <th className="text-left px-4 py-3">Joined</th>
@@ -172,9 +177,22 @@ export default function AdminUsersPage() {
                 {users.map(u => (
                   <tr key={u.id} className="border-b border-gray-800 hover:bg-gray-800/50 transition-colors">
                     <td className="px-5 py-3">
-                      <div className="font-medium text-white">{u.name || u.email}</div>
-                      <div className="text-gray-500 text-xs">{u.email}</div>
+                      <div className="flex items-center gap-2.5">
+                        {u.avatarDataUrl
+                          ? <img src={u.avatarDataUrl} alt="avatar" className="w-7 h-7 rounded-full object-cover flex-shrink-0" />
+                          : <span className="w-7 h-7 rounded-full bg-blue-700 text-white text-xs font-bold flex items-center justify-center flex-shrink-0">
+                              {(u.name || u.email).charAt(0).toUpperCase()}
+                            </span>
+                        }
+                        <div>
+                          <div className="font-medium text-white leading-tight">{u.name || u.email}</div>
+                          <div className="text-gray-500 text-xs">{u.email}</div>
+                          {u.phone && <div className="text-gray-500 text-xs">{u.phone}</div>}
+                        </div>
+                      </div>
+                      {u.bio && <p className="text-gray-500 text-xs mt-1 ml-9 max-w-xs truncate">{u.bio}</p>}
                     </td>
+                    <td className="px-4 py-3 text-gray-400 text-sm">{u.organization || '—'}</td>
                     <td className="px-4 py-3">
                       <span className={`text-xs px-2 py-0.5 rounded-full capitalize font-medium ${ROLE_BADGE[u.role] ?? ''}`}>
                         {u.role}

@@ -570,6 +570,13 @@ class PipelineManager {
 
     capture.on('warn', ({ message }) => {
       console.warn(`[RTSPCapture][${camera.id}] ${message}`);
+      if (/(Connection refused|Authentication|401|timed out|No route to host|Network is unreachable)/i.test(message)) {
+        this._updateCameraStatus(camera.id, 'source_unavailable');
+        this._io.to(camera.id).emit('camera:stream-unavailable', {
+          cameraId: camera.id,
+          reason: message,
+        });
+      }
     });
 
     capture.on('reconnecting', ({ attempt, delay }) => {
