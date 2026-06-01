@@ -26,7 +26,7 @@ if (!fs.existsSync(STORAGE_PATH)) fs.mkdirSync(STORAGE_PATH, { recursive: true }
 const DB_PATH = path.join(STORAGE_PATH, 'lts.json');
 
 // ── In-memory store ──────────────────────────────────────────────────────────
-const ALL_TABLES = ['cameras', 'zones', 'events', 'alerts', 'faceGalleries', 'faceGalleryFaces', 'settings', 'detectionSnapshots', 'faceMatchHistory'];
+const ALL_TABLES = ['cameras', 'zones', 'events', 'alerts', 'faceGalleries', 'faceGalleryFaces', 'settings', 'detectionSnapshots', 'faceMatchHistory', 'missing_persons', 'missing_person_detections'];
 
 let store = {};
 ALL_TABLES.forEach(t => { store[t] = []; });

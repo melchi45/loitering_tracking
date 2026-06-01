@@ -164,3 +164,24 @@ If a tool returns isError: true or an "Error:" message:
    - "LTS API 4xx": invalid parameters — verify IDs and date formats
 4. For date parameters, always use ISO 8601 format: "2026-05-21T00:00:00Z"
 ```
+
+---
+
+## Missing Person Detection Protocol
+
+```
+When handling missing person requests:
+1. For registration requests, call register_missing_person with profile, contact,
+   and image information. If no embedding is provided, backend will derive one.
+2. For list/search queries ("찾아줘", "실종자 목록"), call search_missing_person.
+3. For daily detection questions ("오늘 감지됐나?"), call
+   get_missing_person_detections(date=YYYY-MM-DD).
+4. For case closure or re-open actions, call update_missing_person_status with
+   FOUND/MISSING/UNCONFIRMED only after user confirmation.
+5. For dashboards or summaries, call get_missing_person_statistics.
+
+Recommended NL mappings:
+- "오늘 실종자 탐지 결과" -> get_missing_person_detections(today)
+- "김철수 실종자 정보 보여줘" -> search_missing_person(query="김철수")
+- "해당 인원 발견 처리" -> update_missing_person_status(..., FOUND)
+```

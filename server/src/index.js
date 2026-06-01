@@ -25,6 +25,7 @@ const buildEventsRouters     = require('./api/events');
 const analyticsRouter        = require('./api/analytics');
 const trackerRouter          = require('./api/tracker');
 const settingsRouter         = require('./api/settings');
+const missingPersonsRouter   = require('./api/missingPersons');
 const youtubeStreamsRouter    = require('./api/youtubeStreams');
 const internalRouter         = require('./api/internal');
 const faceGalleryRouter      = require('./api/faceGallery');
@@ -145,6 +146,7 @@ async function main() {
   app.use('/api/analytics',       analyticsRouter);
   app.use('/api/tracker',         trackerRouter);
   app.use('/api/settings',        settingsRouter);
+  app.use('/api/missing-persons', missingPersonsRouter());
   app.use('/api/youtube-streams', youtubeStreamsRouter(youtubeSvc));
   app.use('/internal',            internalRouter(youtubeSvc));
 

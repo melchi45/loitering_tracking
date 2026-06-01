@@ -7,6 +7,7 @@ import { registerCameraTools }    from './tools/cameras.js';
 import { registerAnalyticsTools } from './tools/analytics.js';
 import { registerSnapshotTools }  from './tools/snapshots.js';
 import { registerStatsTools }     from './tools/stats.js';
+import { registerMissingPersonTools, registerMissingPersonResources } from './tools/missing-person.js';
 import { registerResources }      from './resources.js';
 
 /**
@@ -28,7 +29,9 @@ export function createServer(baseUrl) {
   registerAnalyticsTools(server, client);
   registerSnapshotTools(server, client);
   registerStatsTools(server, client);
+  registerMissingPersonTools(server, client);
   registerResources(server, client);
+  registerMissingPersonResources(server, client);
 
   return server;
 }
@@ -48,6 +51,11 @@ export const TOOL_CATALOG = [
   { name: 'get_object_snapshots',    access: 'read',  description: 'Detection snapshots with cropped images for a specific tracked object.' },
   { name: 'search_person',           access: 'read',  description: 'Missing person search: loitering events + tracking history + snapshot images.' },
   { name: 'get_stats_dashboard',     access: 'read',  description: 'System-wide stats snapshot: cameras, events, alerts, zones, Face ID, and storage mode.' },
+  { name: 'register_missing_person', access: 'write', description: 'Register a missing person profile with contact info and embedding.' },
+  { name: 'search_missing_person',   access: 'read',  description: 'Search missing person registry by filters and free text.' },
+  { name: 'get_missing_person_detections', access: 'read', description: 'Retrieve missing-person detections by date and status.' },
+  { name: 'update_missing_person_status', access: 'write', description: 'Update a missing person status: FOUND/MISSING/UNCONFIRMED.' },
+  { name: 'get_missing_person_statistics', access: 'read', description: 'Get missing-person registry and detection statistics.' },
 ];
 
 export const RESOURCE_CATALOG = [
@@ -56,4 +64,6 @@ export const RESOURCE_CATALOG = [
   { uri: 'lts://zones/{cameraId}',   description: 'Zone configuration for a specific camera.' },
   { uri: 'lts://system/summary',     description: 'Overall system health: camera counts, active alerts, recent event stats.' },
   { uri: 'lts://stats/dashboard',    description: 'Full aggregated stats dashboard: cameras, events (7-day trend), alerts by severity, zones, Face ID.' },
+  { uri: 'missing-persons://registry', description: 'Missing person registry snapshot.' },
+  { uri: 'missing-persons://detections/{date}', description: 'Missing-person detections for a specific date.' },
 ];
