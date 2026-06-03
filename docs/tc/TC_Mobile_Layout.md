@@ -83,10 +83,10 @@
 
 ## 2. Test Environment and Prerequisites
 
-- Browser dashboard at `http://localhost:5173`
+- Browser dashboard at `http://localhost:3080`
 - Playwright configured with mobile device emulation (iPhone 12)
 - At least 5 cameras registered for paging tests
-- Server at `http://localhost:3001`
+- Server at `http://localhost:3080`
 
 ---
 

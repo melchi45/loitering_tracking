@@ -300,7 +300,7 @@ const pad = (n) => String(n).padStart(2, '0');
 const ts  = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
             `_${pad(now.getHours())}-${pad(now.getMinutes())}`;
 
-const ltsUrl    = process.env.LTS_URL    || 'http://localhost:3001';
+const ltsUrl    = process.env.LTS_URL    || 'http://localhost:3080';
 const nodeVer   = process.version;
 const platform  = process.platform;
 
@@ -416,7 +416,7 @@ To implement Phase-3 tests:
 \`\`\`bash
 npm install --save-dev @playwright/test
 npx playwright install
-FRONTEND_URL=http://localhost:5173 npx playwright test test/e2e/
+FRONTEND_URL=http://localhost:3080 npx playwright test test/e2e/
 \`\`\`
 
 ---

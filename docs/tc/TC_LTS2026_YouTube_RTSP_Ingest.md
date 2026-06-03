@@ -75,7 +75,7 @@
 
 ## 2. Test Environment and Prerequisites
 
-- Server running on `http://localhost:3001`
+- Server running on `http://localhost:3080`
 - `yt-dlp` and `ffmpeg` available on PATH
 - MediaMTX running and bound to `127.0.0.1:8554`
 - Test YouTube URLs accessible (or mocked)

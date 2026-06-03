@@ -138,15 +138,20 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
         (username      !== undefined && (username || null)     !== camera.username) ||
         (password      !== undefined && (password || null)     !== camera.password);
 
-      if (needsRestart && updated.status !== 'idle') {
-        // Await the restart so the client receives the response only after the new
-        // pipeline (including mediasoup producers) is fully ready.  This prevents
-        // the browser's WebRTC flow from racing ahead of the producer setup.
-        await pipelineManager.stopCamera(camera.id);
-        await pipelineManager.startCamera(updated);
-      }
-
+      // Respond immediately so the browser does not time out while waiting for
+      // ONNX model load / RTSP negotiation (can take several seconds).
       res.json({ success: true, data: { ...updated, password: undefined }, restarted: needsRestart });
+
+      if (needsRestart && updated.status !== 'idle') {
+        setImmediate(async () => {
+          try {
+            await pipelineManager.stopCamera(camera.id);
+            await pipelineManager.startCamera(updated);
+          } catch (e) {
+            console.error('[cameras] pipeline restart error:', e.message);
+          }
+        });
+      }
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -161,9 +166,15 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       const camera = db.findOne('cameras', { id: req.params.id });
       if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
 
-      await pipelineManager.stopCamera(camera.id);
-      await pipelineManager.startCamera(camera);
       res.json({ success: true, message: 'Reconnecting', cameraId: camera.id });
+      setImmediate(async () => {
+        try {
+          await pipelineManager.stopCamera(camera.id);
+          await pipelineManager.startCamera(camera);
+        } catch (e) {
+          console.error('[cameras] reconnect error:', e.message);
+        }
+      });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }

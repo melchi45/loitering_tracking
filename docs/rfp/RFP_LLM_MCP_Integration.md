@@ -38,7 +38,7 @@ This RFP solicits development of a **Model Context Protocol (MCP) server** that 
 The selected solution shall:
 
 - Implement an MCP-compliant server (`@modelcontextprotocol/sdk`) as a standalone Node.js process
-- Connect to the running LTS-2026 REST API (`http://localhost:3001`) as a data source
+- Connect to the running LTS-2026 REST API (`http://localhost:3080`) as a data source
 - Expose tools for event querying, alert management, camera monitoring, and report generation
 - Expose resources for cameras, active alerts, zones, and system summary
 - Support **stdio transport** (Claude Code / Claude API integration)
@@ -51,7 +51,7 @@ The selected solution shall:
 
 ### 2.1 System Context
 
-The LTS-2026 system processes live CCTV feeds through a YOLOv8-based detection pipeline, tracks individuals via multi-object tracking (ByteTrack), and raises loitering alerts when configured dwell-time thresholds are exceeded. The system stores events and alerts in a JSON database (`storage/lts.json`) and exposes a REST API on port 3001.
+The LTS-2026 system processes live CCTV feeds through a YOLOv8-based detection pipeline, tracks individuals via multi-object tracking (ByteTrack), and raises loitering alerts when configured dwell-time thresholds are exceeded. The system stores events and alerts in a JSON database (`storage/lts.json`) and exposes a REST API on port 3080.
 
 ### 2.2 Problem Statement
 
@@ -156,7 +156,7 @@ mcp-server/
 
 | Variable | Default | Description |
 |---|---|---|
-| `LTS_BASE_URL` | `http://localhost:3001` | LTS REST API base URL |
+| `LTS_BASE_URL` | `http://localhost:3080` | LTS REST API base URL |
 | `MCP_PORT` | `3002` | HTTP/SSE transport port (Phase 2) |
 | `MCP_AUTH_TOKEN` | _(none)_ | Bearer token for HTTP transport |
 | `LOG_LEVEL` | `info` | Logging verbosity |
@@ -278,7 +278,7 @@ The MCP server shall be registered in `.claude/settings.json`:
     "lts": {
       "command": "node",
       "args": ["mcp-server/index.js"],
-      "env": { "LTS_BASE_URL": "http://localhost:3001" }
+      "env": { "LTS_BASE_URL": "http://localhost:3080" }
     }
   }
 }
@@ -294,7 +294,7 @@ Simultaneously registered in `.vscode/mcp.json` for VS Code Copilot/extension co
     "lts": {
       "command": "node",
       "args": ["mcp-server/index.js"],
-      "env": { "LTS_BASE_URL": "http://localhost:3001" },
+      "env": { "LTS_BASE_URL": "http://localhost:3080" },
       "type": "stdio"
     }
   }

@@ -75,7 +75,7 @@
 
 ## 2. Test Environment and Prerequisites
 
-- Server running on `http://localhost:3001`
+- Server running on `http://localhost:3080`
 - `yolov8n.onnx` and `yolov8m_ppe.onnx` present
 - `analyticsConfig.mask` enabled before Group B/C/D tests
 

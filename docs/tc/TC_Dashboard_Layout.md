@@ -76,8 +76,8 @@
 
 ## 2. Test Environment and Prerequisites
 
-- Browser dashboard at `http://localhost:5173`
-- Server at `http://localhost:3001`
+- Browser dashboard at `http://localhost:3080`
+- Server at `http://localhost:3080`
 - At least 5 cameras registered (for paging tests)
 
 ---

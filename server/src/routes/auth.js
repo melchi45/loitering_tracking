@@ -240,7 +240,7 @@ router.patch('/me', verifyAccessToken, (req, res) => {
 
 /** Primary frontend origin (first entry in CLIENT_ORIGIN). */
 function spaOrigin() {
-  return (process.env.CLIENT_ORIGIN || 'https://localhost:5173')
+  return (process.env.CLIENT_ORIGIN || 'https://localhost:3443')
     .split(',')[0]
     .trim()
     .replace(/\/$/, '');

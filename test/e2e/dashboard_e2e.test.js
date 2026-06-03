@@ -8,12 +8,12 @@
  * To run Phase-3 tests (future):
  *   npm install --save-dev @playwright/test
  *   npx playwright install
- *   FRONTEND_URL=http://localhost:5173 npx playwright test test/e2e/
+ *   FRONTEND_URL=http://localhost:3080 npx playwright test test/e2e/
  *
  * Run: node test/e2e/dashboard_e2e.test.js
  */
 
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3080';
 
 // ── Phase-3 marker ─────────────────────────────────────────────────────────────
 
@@ -84,7 +84,7 @@ async function main() {
   console.log('    1. npm install --save-dev @playwright/test');
   console.log('    2. npx playwright install');
   console.log('    3. Convert each group to playwright test blocks');
-  console.log('    4. Run: FRONTEND_URL=http://localhost:5173 npx playwright test test/e2e/');
+  console.log('    4. Run: FRONTEND_URL=http://localhost:3080 npx playwright test test/e2e/');
 }
 
 main();

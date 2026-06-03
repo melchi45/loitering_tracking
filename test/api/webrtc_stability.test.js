@@ -6,12 +6,12 @@
  *
  * Run:
  *   node test/api/webrtc_stability.test.js --log /path/to/server.log
- *   LTS_URL=http://localhost:3001 node test/api/webrtc_stability.test.js --log ./server.log
+ *   LTS_URL=http://localhost:3080 node test/api/webrtc_stability.test.js --log ./server.log
  */
 
 const fs = require('fs');
 
-const BASE_URL = process.env.LTS_URL || 'http://localhost:3001';
+const BASE_URL = process.env.LTS_URL || 'http://localhost:3080';
 
 let passed = 0;
 let failed = 0;

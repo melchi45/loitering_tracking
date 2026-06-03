@@ -4,7 +4,7 @@
  * Run: node test/run_all.js
  *
  * Environment:
- *   LTS_URL=http://localhost:3001              (default)
+ *   LTS_URL=http://localhost:3080              (default)
  *   YOUTUBE_TEST_URL=https://www.youtube.com/watch?v=...  (optional)
  *
  * Flags:

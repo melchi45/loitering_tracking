@@ -42,7 +42,7 @@
 │  └────────┬────────┘  └───────────────────────┬──────────────────────────────┘   │
 │           │ RTSP                               │ MCP (stdio / HTTP SSE)           │
 │  ┌────────▼──────────────────────────────────▼──────────────────────────────┐   │
-│  │                         SERVER PROCESS  (port 3001)                        │   │
+│  │                         SERVER PROCESS  (port 3080)                        │   │
 │  │                                                                             │   │
 │  │  ┌───────────────┐  ┌────────────────┐  ┌──────────────┐                 │   │
 │  │  │Video Ingestion │  │  Detection     │  │  Attribute   │                 │   │
@@ -463,7 +463,7 @@ App.tsx
 
 ```typescript
 // App.tsx singleton
-const socket = io('http://localhost:3001');
+const socket = io('http://localhost:3080');
 (window as any).__ltsSocket = socket;   // global ref for child components
 
 socket.on('detections', (data) => { /* update per-camera bboxes */ });
@@ -482,7 +482,7 @@ The MCP server is a **separate Node.js process** in `mcp-server/`. It connects t
 
 | Direction | Interface | Description |
 |---|---|---|
-| LTS API → MCP | HTTP REST (port 3001) | MCP tools query live detection data |
+| LTS API → MCP | HTTP REST (port 3080) | MCP tools query live detection data |
 | MCP → LLM Client | stdio or SSE (port 3002) | LLM receives tool responses |
 | LTS Config → MCP | `LTS_BASE_URL` env var | Points to active LTS server |
 | MCP → Claude Code | `.claude/settings.json` | Auto-registered as `lts` MCP server |

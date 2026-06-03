@@ -24,7 +24,7 @@ on:
         default: 'Bug'
 
 env:
-  LTS_URL:  http://localhost:3001
+  LTS_URL:  http://localhost:3080
   NODE_ENV: test
   # Value source guide
   # 1) GitHub Secrets (Repository/Organization Actions secrets)

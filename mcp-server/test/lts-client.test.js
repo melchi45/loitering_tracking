@@ -19,7 +19,7 @@ function makeFetch(status, body) {
 describe('LTSClient.get()', () => {
   it('returns parsed JSON on 200', async () => {
     globalThis.fetch = makeFetch(200, { success: true, data: [{ id: '1' }] });
-    const client = new LTSClient('http://localhost:3001');
+    const client = new LTSClient('http://localhost:3080');
     const result = await client.get('/api/cameras');
     assert.deepEqual(result, { success: true, data: [{ id: '1' }] });
   });
@@ -30,7 +30,7 @@ describe('LTSClient.get()', () => {
       capturedUrl = url.toString();
       return { ok: true, status: 200, json: async () => ({ data: [] }) };
     };
-    const client = new LTSClient('http://localhost:3001');
+    const client = new LTSClient('http://localhost:3080');
     await client.get('/api/events', { limit: 10, cameraId: 'abc' });
     assert.ok(capturedUrl.includes('limit=10'));
     assert.ok(capturedUrl.includes('cameraId=abc'));
@@ -42,7 +42,7 @@ describe('LTSClient.get()', () => {
       capturedUrl = url.toString();
       return { ok: true, status: 200, json: async () => ({ data: [] }) };
     };
-    const client = new LTSClient('http://localhost:3001');
+    const client = new LTSClient('http://localhost:3080');
     await client.get('/api/events', { limit: 5, cameraId: undefined, from: null });
     assert.ok(!capturedUrl.includes('cameraId'));
     assert.ok(!capturedUrl.includes('from'));
@@ -55,14 +55,14 @@ describe('LTSClient.get()', () => {
       capturedUrl = url.toString();
       return { ok: true, status: 200, json: async () => ({}) };
     };
-    const client = new LTSClient('http://localhost:3001/');
+    const client = new LTSClient('http://localhost:3080/');
     await client.get('/api/cameras');
     assert.ok(!capturedUrl.includes('//api'));
   });
 
   it('throws on non-2xx response', async () => {
     globalThis.fetch = makeFetch(404, 'Not Found');
-    const client = new LTSClient('http://localhost:3001');
+    const client = new LTSClient('http://localhost:3080');
     await assert.rejects(
       () => client.get('/api/cameras'),
       (err) => {
@@ -74,7 +74,7 @@ describe('LTSClient.get()', () => {
 
   it('throws on 500 response', async () => {
     globalThis.fetch = makeFetch(500, 'Internal Server Error');
-    const client = new LTSClient('http://localhost:3001');
+    const client = new LTSClient('http://localhost:3080');
     await assert.rejects(
       () => client.get('/api/cameras'),
       (err) => {
@@ -94,7 +94,7 @@ describe('LTSClient.post()', () => {
       capturedOptions = opts;
       return { ok: true, status: 200, json: async () => ({ success: true }) };
     };
-    const client = new LTSClient('http://localhost:3001');
+    const client = new LTSClient('http://localhost:3080');
     const result = await client.post('/api/alerts/abc/acknowledge', {});
     assert.equal(capturedOptions.method, 'POST');
     assert.equal(capturedOptions.headers['Content-Type'], 'application/json');
@@ -103,7 +103,7 @@ describe('LTSClient.post()', () => {
 
   it('throws on non-2xx POST response', async () => {
     globalThis.fetch = makeFetch(400, 'Bad Request');
-    const client = new LTSClient('http://localhost:3001');
+    const client = new LTSClient('http://localhost:3080');
     await assert.rejects(() => client.post('/api/alerts/bad/acknowledge'));
   });
 });
@@ -117,7 +117,7 @@ describe('LTSClient.put()', () => {
       capturedOptions = opts;
       return { ok: true, status: 200, json: async () => ({ success: true, data: { dwellThreshold: 60 } }) };
     };
-    const client = new LTSClient('http://localhost:3001');
+    const client = new LTSClient('http://localhost:3080');
     const body = { dwellThreshold: 60 };
     const result = await client.put('/api/cameras/cam1/zones/zone1', body);
     assert.equal(capturedOptions.method, 'PUT');
@@ -127,7 +127,7 @@ describe('LTSClient.put()', () => {
 
   it('throws on non-2xx PUT response', async () => {
     globalThis.fetch = makeFetch(422, 'Unprocessable Entity');
-    const client = new LTSClient('http://localhost:3001');
+    const client = new LTSClient('http://localhost:3080');
     await assert.rejects(() => client.put('/api/cameras/c/zones/z', {}));
   });
 });

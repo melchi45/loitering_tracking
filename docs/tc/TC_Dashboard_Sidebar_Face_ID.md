@@ -97,7 +97,7 @@
 ## 2. Test Environment and Prerequisites
 
 ```
-Server running:      http://localhost:3001
+Server running:      http://localhost:3080
 ONNX models:         server/models/scrfd_2.5g.onnx + arcface_w600k_r50.onnx
                      (TC-B-001 requires models; others work without)
 Storage writable:    storage/ directory writable

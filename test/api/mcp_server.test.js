@@ -9,7 +9,7 @@
  *   2. Tool handler integration against live LTS API — TC-B/C/D/E
  *
  * Prerequisites:
- *   - LTS server running on LTS_URL (default http://localhost:3001)
+ *   - LTS server running on LTS_URL (default http://localhost:3080)
  *   - Node.js 18+ (dynamic import)
  *
  * Run: node test/api/mcp_server.test.js
@@ -18,7 +18,7 @@
 const { spawn }  = require('child_process');
 const path       = require('path');
 
-const BASE_URL   = process.env.LTS_URL  || 'http://localhost:3001';
+const BASE_URL   = process.env.LTS_URL  || 'http://localhost:3080';
 const MCP_PORT   = parseInt(process.env.MCP_PORT || '3002', 10);
 const MCP_URL    = `http://localhost:${MCP_PORT}`;
 const MCP_DIR    = path.resolve(__dirname, '../../mcp-server');

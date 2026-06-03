@@ -11,7 +11,7 @@
  *
  * Extends TC-LTS-YT-01. Only covers LTS-2026-012-specific additions.
  *
- * Prerequisites: Server running on BASE_URL (default http://localhost:3001)
+ * Prerequisites: Server running on BASE_URL (default http://localhost:3080)
  *                yt-dlp and ffmpeg installed on PATH
  * Run: node test/api/youtube_streams_lts2026.test.js
  *
@@ -19,7 +19,7 @@
  * Set YOUTUBE_TEST_URL to provide a real YouTube URL.
  */
 
-const BASE_URL = process.env.LTS_URL || 'http://localhost:3001';
+const BASE_URL = process.env.LTS_URL || 'http://localhost:3080';
 const YT_URL = process.env.YOUTUBE_TEST_URL || 'https://www.youtube.com/watch?v=jNQXAC9IVRw';
 
 // ── Minimal test harness ────────────────────────────────────────────────────

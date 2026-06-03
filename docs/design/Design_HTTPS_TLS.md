@@ -252,7 +252,7 @@ server/certs/
 // vite.config.ts
 proxy: {
   '/api': {
-    target: process.env.VITE_API_URL || 'http://localhost:3001',
+    target: process.env.VITE_API_URL || 'http://localhost:3080',
     changeOrigin: true,
     secure: false,  // allow self-signed cert
   },

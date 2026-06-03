@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
-    "predev": "fuser -k 3001/tcp 2>/dev/null; fuser -k 5173/tcp 2>/dev/null; sleep 1; true",
+    "predev": "fuser -k 3080/tcp 2>/dev/null; fuser -k 3443/tcp 2>/dev/null; sleep 1; true",
     "dev": "concurrently --kill-others --names \"SERVER,CLIENT\" --prefix-colors \"cyan,magenta\" \"cd server && npm run dev\" \"cd client && npm run dev\"",
     "install:all": "cd server && npm install && cd ../client && npm install",
     "build:client": "cd client && npm run build",

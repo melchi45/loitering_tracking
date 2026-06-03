@@ -76,6 +76,10 @@ const FACE_MATCH_THRESH   = 0.35;  // cosine similarity threshold for same-perso
 const FACE_EXPIRY_MS      = 30000; // forget a face after 30s of absence
 const FACE_TRACKING_PATH  = path.join(__dirname, '../../../storage/face_tracking.json');
 
+// Maximum number of concurrent camera pipelines (each = 1 RTSPCapture ffmpeg process).
+// Configurable via MAX_PIPELINES env var; 0 = unlimited.
+const MAX_PIPELINES = parseInt(process.env.MAX_PIPELINES || '8', 10);
+
 /**
  * Orchestrates the full camera processing pipeline:
  * RTSPCapture → Detection → Tracking → BehaviorEngine → Socket.IO emission
@@ -141,6 +145,15 @@ class PipelineManager {
   async startCamera(camera) {
     if (this._pipelines.has(camera.id)) {
       await this.stopCamera(camera.id);
+    }
+
+    // Enforce pipeline concurrency limit
+    if (MAX_PIPELINES > 0 && this._pipelines.size >= MAX_PIPELINES) {
+      console.warn(
+        `[PipelineManager] MAX_PIPELINES (${MAX_PIPELINES}) reached — skipping camera ${camera.id}. ` +
+        `Increase MAX_PIPELINES in .env to allow more concurrent streams.`
+      );
+      return;
     }
 
     // Lazy-load detector (shared across cameras)
@@ -589,13 +602,17 @@ class PipelineManager {
 
     capture.on('error', (err) => {
       console.error(`[PipelineManager][${camera.id}] Fatal error:`, err.message);
-      this._updateCameraStatus(camera.id, 'reconnecting');
+      // Permanent failures (e.g. ffmpeg not installed) — mark as error, do not restart.
+      const permanent = err.message.includes('ffmpeg not found');
+      this._updateCameraStatus(camera.id, permanent ? 'error' : 'reconnecting');
       this._io.to(camera.id).emit('camera:error', { cameraId: camera.id, message: err.message });
-      // Restart the entire pipeline after 1 second (spawn-level failure recovery)
-      if (ctx.running) {
+      if (!permanent && ctx.running) {
+        // Exponential backoff: 2s → 4s → 8s … capped at 30s
+        const attempt = (ctx._reconnectAttempts = (ctx._reconnectAttempts || 0) + 1);
+        const delay = Math.min(2000 * Math.pow(1.5, attempt - 1), 30000);
         setTimeout(() => {
           if (ctx.running) this.startCamera(camera).catch(() => {});
-        }, 1000);
+        }, delay);
       }
     });
 

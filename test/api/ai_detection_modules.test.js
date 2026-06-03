@@ -17,7 +17,7 @@
  * Run: node test/api/ai_detection_modules.test.js
  */
 
-const BASE_URL = process.env.LTS_URL || 'http://localhost:3001';
+const BASE_URL = process.env.LTS_URL || 'http://localhost:3080';
 
 // ── Minimal test harness ─────────────────────────────────────────────────────
 

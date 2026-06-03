@@ -86,7 +86,7 @@
 
 ### 2.1 Server State
 
-- Server running on `http://localhost:3001`
+- Server running on `http://localhost:3080`
 - `GET /health` returns `{ status: 'ok' }`
 - ArcFace model may or may not be loaded — REST endpoints are available regardless
 

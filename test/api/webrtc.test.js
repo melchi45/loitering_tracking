@@ -11,13 +11,13 @@
  *       and Group G (performance/latency) require a live WebRTC pipeline and
  *       are covered in Phase-2/3 integration tests.
  *
- * Prerequisites: Server running on BASE_URL (default http://localhost:3001)
+ * Prerequisites: Server running on BASE_URL (default http://localhost:3080)
  * Run: node test/api/webrtc.test.js
  *
  * Set LTS_URL env var to override base URL.
  */
 
-const BASE_URL = process.env.LTS_URL || 'http://localhost:3001';
+const BASE_URL = process.env.LTS_URL || 'http://localhost:3080';
 
 // ── Minimal test harness ────────────────────────────────────────────────────
 

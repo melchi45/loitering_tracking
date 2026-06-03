@@ -5,7 +5,7 @@
   "main": "src/index.js",
   "scripts": {
     "start": "/usr/bin/node src/index.js",
-    "stop": "fuser -k 3443/tcp 3001/tcp || true",
+    "stop": "fuser -k 3443/tcp 3080/tcp || true",
     "restart": "npm run stop && sleep 1 && npm run start",
     "dev": "nodemon",
     "test": "jest --runInBand --passWithNoTests",

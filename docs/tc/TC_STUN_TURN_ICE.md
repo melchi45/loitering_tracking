@@ -88,9 +88,9 @@
 
 ## 2. Test Environment and Prerequisites
 
-- Server running on `http://localhost:3001`
+- Server running on `http://localhost:3080`
 - `GET /health` returns `{ status: 'ok' }`
-- For ice-test CLI: `node server/src/scripts/iceTest.js --url http://localhost:3001` must be executable
+- For ice-test CLI: `node server/src/scripts/iceTest.js --url http://localhost:3080` must be executable
 - For Phase-2 browser tests: Playwright installed
 
 ---
@@ -174,7 +174,7 @@
 ## 7. Test Group E — Phase 1: Server Pre-Check
 
 ### TC-E-001 — Phase 1 Execution
-- **Input:** Run `node iceTest.js --url http://localhost:3001`
+- **Input:** Run `node iceTest.js --url http://localhost:3080`
 - **Expected:** Phase 1 fetches `/api/webrtc/ice-config`; sends UDP ping to each STUN/TURN server
 - **Acceptance:** Phase 1 completes and reports each server as reachable/unreachable
 

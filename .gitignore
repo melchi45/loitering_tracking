@@ -1,8 +1,18 @@
 node_modules/
 .env
-server/models/
 server/storage/
 client/dist/
 *.db
 *.db-shm
 *.db-wal
+
+# ML model binaries (too large for GitHub; use Git LFS or download script)
+server/models/*.onnx
+*.pt
+
+# Auto-generated TLS certificates
+auto.crt
+auto.key
+
+# Backup files
+*.bak

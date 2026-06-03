@@ -5,7 +5,7 @@ import cors                     from 'cors';
 
 import { createServer, TOOL_CATALOG, RESOURCE_CATALOG } from './create-server.js';
 
-const BASE_URL        = process.env.LTS_BASE_URL    || 'http://localhost:3001';
+const BASE_URL        = process.env.LTS_BASE_URL    || 'http://localhost:3080';
 const TRANSPORT       = process.env.TRANSPORT       || 'stdio';
 const MCP_PORT        = parseInt(process.env.MCP_PORT || '3002', 10);
 const MCP_AUTH_TOKEN  = process.env.MCP_AUTH_TOKEN  || '';

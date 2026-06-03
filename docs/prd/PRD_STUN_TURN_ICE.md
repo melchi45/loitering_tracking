@@ -193,7 +193,7 @@ Server → All:    42["webrtc:ice-test-stop"]
 |---|---|---|
 | `SERVER_IP` | `localhost` | Server LAN IP — included in mediasoup host ICE candidates |
 | `PORT` | `3001` | Backend HTTP/Socket.IO port |
-| `VITE_PORT` | `5173` | Vite development server port |
+| `VITE_PORT` | `3080` | Vite development server port |
 | `STUN_URLS` | `stun:stun.l.google.com:19302` | Comma-separated STUN server URLs |
 | `TURN_URL` | (none) | TURN server URL (`turn:` or `turns:`) |
 | `TURN_USERNAME` | (none) | TURN authentication username |
@@ -230,7 +230,7 @@ sudo ufw allow 40000:49999/udp
 ```bash
 cd server && npm run ice-test              # Headed mode (shows browser window)
 cd server && npm run ice-test:headless     # Headless mode (SSH / CI)
-node src/scripts/iceTest.js http://<SERVER>:3001 http://<SERVER>:5173
+node src/scripts/iceTest.js http://<SERVER>:3080 http://<SERVER>:3080
 ```
 
 ---

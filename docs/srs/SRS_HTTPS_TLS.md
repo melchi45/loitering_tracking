@@ -67,7 +67,7 @@ This document specifies the functional and non-functional requirements for HTTPS
 - `GET /health` MUST remain reachable over the active protocol
 - Startup log MUST print the correct URL:
   - HTTPS: `[Server] Health: https://localhost:3443/health`
-  - HTTP:  `[Server] Health: http://localhost:3001/health`
+  - HTTP:  `[Server] Health: http://localhost:3080/health`
 
 ### FR-HTTPS-009 — Graceful Shutdown
 
@@ -113,12 +113,12 @@ This document specifies the functional and non-functional requirements for HTTPS
 [Server] Health: https://localhost:3443/health
 
 # HTTPS mode + HTTP redirect
-[Server] HTTP→HTTPS redirect listening on port 3001
+[Server] HTTP→HTTPS redirect listening on port 3080
 [Server] Loitering Tracking System backend listening on port 3443
 
 # HTTP mode (default)
-[Server] Loitering Tracking System backend listening on port 3001
-[Server] Health: http://localhost:3001/health
+[Server] Loitering Tracking System backend listening on port 3080
+[Server] Health: http://localhost:3080/health
 ```
 
 ### 4.3 Error Output (cert file missing)

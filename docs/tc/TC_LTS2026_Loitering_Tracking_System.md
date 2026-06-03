@@ -107,7 +107,7 @@
 
 ## 2. Test Environment and Prerequisites
 
-- Server running on `http://localhost:3001`
+- Server running on `http://localhost:3080`
 - `GET /health` returns `{ status: 'ok' }`
 - `yolov8n.onnx` model present
 - At least 1 RTSP camera available (for Phase-2 integration tests)

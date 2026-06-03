@@ -52,7 +52,7 @@ Every test case references one or more FR-FSD-NNN requirement IDs from SRS_AI_Fi
 
 ### 2.1 Server State
 
-- Server running on `http://localhost:3001`
+- Server running on `http://localhost:3080`
 - `GET /health` returns `{ status: 'ok' }`
 - Fire/smoke model may or may not be present — tests cover both states
 

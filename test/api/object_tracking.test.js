@@ -8,7 +8,7 @@
  *
  * SRS: FR-TRK-020 ~ FR-TRK-023, NFR-TRK-01
  *
- * Prerequisites: Server running on BASE_URL (default http://localhost:3001)
+ * Prerequisites: Server running on BASE_URL (default http://localhost:3080)
  *                At least one camera registered in the system.
  * Run: node test/api/object_tracking.test.js
  *
@@ -16,7 +16,7 @@
  * Set TEST_CAMERA_ID to use a specific camera (falls back to first available camera).
  */
 
-const BASE_URL = process.env.LTS_URL || 'http://localhost:3001';
+const BASE_URL = process.env.LTS_URL || 'http://localhost:3080';
 
 // ── Minimal test harness ─────────────────────────────────────────────────────
 

@@ -58,7 +58,7 @@ Every test case references one or more FR-FAC-NNN requirement IDs from SRS_AI_Fa
 
 ### 2.1 Server State
 
-- Server running on `http://localhost:3001`
+- Server running on `http://localhost:3080`
 - `server/models/scrfd_2.5g.onnx` and `server/models/arcface_w600k_r50.onnx` present
 - `GET /health` returns `{ status: 'ok' }`
 - `GET /api/capabilities` returns `{ ai: { face: true } }`

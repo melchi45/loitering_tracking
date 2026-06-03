@@ -67,7 +67,7 @@
 └────────────────────────┬────────────────────────────────────────┘
                          │  HTTP fetch (AbortSignal.timeout 8s)
 ┌────────────────────────▼────────────────────────────────────────┐
-│             LTS-2026 Express API  (port 3001)                    │
+│             LTS-2026 Express API  (port 3080)                    │
 │   /api/cameras  /api/events  /api/alerts  /api/cameras/:id/zones│
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -608,7 +608,7 @@ Tools that look up specific IDs by filtering a list:
 
 | Variable | Default | Used in |
 |---|---|---|
-| `LTS_BASE_URL` | `http://localhost:3001` | `index.js` → `createServer(baseUrl)` |
+| `LTS_BASE_URL` | `http://localhost:3080` | `index.js` → `createServer(baseUrl)` |
 | `TRANSPORT` | `stdio` | `index.js` |
 | `MCP_PORT` | `3002` | `index.js` (HTTP mode) |
 | `MCP_AUTH_TOKEN` | _(empty)_ | `index.js` (HTTP mode) |

@@ -39,7 +39,7 @@
 └─────────────────────────────────────┬───────────────────────────┘
                                       │
 ┌─────────────────────────────────────▼───────────────────────────┐
-│                 SERVER (Node.js, port 3001)                      │
+│                 SERVER (Node.js, port 3080)                      │
 │                                                                   │
 │  GET /api/webrtc/ice-config                                      │
 │   └─ parseIceConfig(env) → { stunUrls, turns }                  │

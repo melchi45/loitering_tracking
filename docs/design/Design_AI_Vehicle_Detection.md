@@ -361,7 +361,7 @@ Client                     Server
 YOLO_MODEL=models/yolov8n.onnx     # Shared model path
 CONFIDENCE_THRESHOLD=0.45          # Applies to all COCO classes
 NMS_IOU_THRESHOLD=0.5              # NMS IoU (inter-class suppression allowed)
-PORT=3001
+PORT=3080
 ```
 
 ### 8.2 Road-Vehicle Zone Mapping

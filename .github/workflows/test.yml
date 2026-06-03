@@ -13,7 +13,7 @@ on:
         default: 'e2e'
 
 env:
-  LTS_URL: http://localhost:3001
+  LTS_URL: http://localhost:3080
   MCP_URL: http://localhost:3002
   NODE_ENV: test
 
@@ -102,7 +102,7 @@ jobs:
             kill "$SERVER_PID" 2>/dev/null || true
           fi
           # Also kill by port as fallback
-          fuser -k 3001/tcp 2>/dev/null || true
+          fuser -k 3080/tcp 2>/dev/null || true
 
       # ── Fail job if tests failed ──────────────────────────────────────────
       - name: Check test results
@@ -156,12 +156,12 @@ jobs:
 
       - name: Run Playwright E2E tests
         run: |
-          FRONTEND_URL=http://localhost:5173 \
+          FRONTEND_URL=http://localhost:3080 \
           npx playwright test test/e2e/
         continue-on-error: true
 
       - name: Stop servers
         if: always()
         run: |
-          fuser -k 3001/tcp 2>/dev/null || true
-          fuser -k 5173/tcp 2>/dev/null || true
+          fuser -k 3080/tcp 2>/dev/null || true
+          fuser -k 3080/tcp 2>/dev/null || true

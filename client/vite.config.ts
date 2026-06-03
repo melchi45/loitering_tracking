@@ -21,9 +21,20 @@ const senv = loadServerEnv();
 // Backend URL: prefer explicit BACKEND_PORT / HTTPS_ENABLED env, fall back to server/.env
 const httpsEnabled = (process.env.HTTPS_ENABLED ?? senv.HTTPS_ENABLED) === 'true';
 const backendPort  = process.env.BACKEND_PORT
-  ?? (httpsEnabled ? (senv.HTTPS_PORT || '3443') : (senv.PORT || '3001'));
+  ?? (httpsEnabled ? (senv.HTTPS_PORT || '3443') : (senv.HTTP_PORT || senv.PORT || '3080'));
 const backendProto  = httpsEnabled ? 'https' : 'http';
 const backendTarget = `${backendProto}://localhost:${backendPort}`;
+
+// When the backend uses HTTPS (self-signed), serve Vite dev server over HTTPS too.
+// This ensures OAuth cookies (Secure; SameSite=Lax) set on localhost:3443 are sent
+// back to localhost:3080, and the browser only needs to trust the cert once.
+const certDir = path.resolve(__dirname, '../server/certs');
+const httpsConfig = httpsEnabled && fs.existsSync(path.join(certDir, 'server.key'))
+  ? {
+      key:  fs.readFileSync(path.join(certDir, 'server.key')),
+      cert: fs.readFileSync(path.join(certDir, 'server.crt')),
+    }
+  : undefined;
 
 export default defineConfig({
   plugins: [react()],
@@ -34,7 +45,8 @@ export default defineConfig({
   server: {
     host: '0.0.0.0',   // Accessible from the entire LAN (default 127.0.0.1 is local-only)
     open: false,        // Prevent VSCode from repeatedly opening the browser on port detection
-    port: parseInt(process.env.VITE_PORT || '5173'),
+    port: parseInt(process.env.VITE_PORT || '3080'),
+    https: httpsConfig,
     proxy: {
       '/api': {
         target: backendTarget,

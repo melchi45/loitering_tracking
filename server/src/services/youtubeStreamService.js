@@ -35,6 +35,10 @@ const START_TIMEOUT   = parseInt(process.env.YOUTUBE_START_TIMEOUT_MS || '30000'
 const FFMPEG_BIN      = process.env.FFMPEG_BIN  || 'ffmpeg';
 // Bypass SSL certificate verification (corporate networks with self-signed certs)
 const YTDLP_NO_CHECK_CERT = process.env.YTDLP_NO_CHECK_CERT !== 'false';
+// Remote EJS challenge-solver components (ejs:github or ejs:npm). Set to '' to disable.
+const YTDLP_REMOTE_COMPONENTS = process.env.YTDLP_REMOTE_COMPONENTS !== undefined
+  ? process.env.YTDLP_REMOTE_COMPONENTS
+  : 'ejs:github';
 
 // yt-dlp binary path — detected in order: env var > known paths > PATH
 const { execFileSync } = require('child_process');
@@ -47,6 +51,7 @@ function findNodeBin() {
   const candidates = [
     '/usr/local/lib/nodejs/node-22/bin/node',
     '/usr/local/bin/node',
+    '/usr/bin/node',
     '/usr/bin/nodejs',
   ];
   for (const p of candidates) {
@@ -486,6 +491,7 @@ class YouTubeStreamService {
         '--newline',         // one status line per update (easier parsing)
       ];
       if (NODE_BIN_FOR_YTDLP) ytArgs.push('--js-runtimes', `node:${NODE_BIN_FOR_YTDLP}`);
+      if (NODE_BIN_FOR_YTDLP && YTDLP_REMOTE_COMPONENTS) ytArgs.push('--remote-components', YTDLP_REMOTE_COMPONENTS);
       if (YTDLP_NO_CHECK_CERT) ytArgs.push('--no-check-certificate');
       ytArgs.push(entry.youtubeUrl);
 

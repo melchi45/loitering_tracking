@@ -44,7 +44,7 @@
 └────────────────────────┬────────────────────────────────────────┘
                          │ REST API + Socket.IO
 ┌────────────────────────▼────────────────────────────────────────┐
-│                  SERVER (Node.js, port 3001)                     │
+│                  SERVER (Node.js, port 3080)                     │
 │                                                                   │
 │  YouTubeStreamService                                            │
 │   ├─ createStream(name, youtubeUrl, resolution, bitrate)         │

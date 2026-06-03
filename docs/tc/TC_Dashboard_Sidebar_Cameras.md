@@ -82,8 +82,8 @@
 
 ## 2. Test Environment and Prerequisites
 
-- Server running on `http://localhost:3001`
-- Dashboard accessible at `http://localhost:5173`
+- Server running on `http://localhost:3080`
+- Dashboard accessible at `http://localhost:3080`
 - Clean camera state (no cameras) for add tests
 
 ---

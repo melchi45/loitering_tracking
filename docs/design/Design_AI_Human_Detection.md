@@ -361,7 +361,7 @@ Camera JPEG Frame
 YOLO_MODEL=models/yolov8n.onnx        # Model path (relative to server/)
 CONFIDENCE_THRESHOLD=0.45             # Detection confidence cutoff
 NMS_IOU_THRESHOLD=0.5                 # NMS IoU threshold
-PORT=3001                             # Express server port
+PORT=3080                             # Express server port
 ```
 
 ### 8.2 Constructor Options

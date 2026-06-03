@@ -53,7 +53,7 @@ Every test case references one or more FR-HDT-NNN requirement IDs from SRS_AI_Hu
 
 ### 2.1 Server State
 
-- Server running on `http://localhost:3001`
+- Server running on `http://localhost:3080`
 - `server/models/yolov8n.onnx` present and loaded
 - `GET /health` returns `{ status: 'ok' }`
 - `GET /api/capabilities` returns `{ ai: { humanDetection: true } }`

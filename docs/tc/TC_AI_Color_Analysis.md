@@ -54,7 +54,7 @@ Every test case references one or more FR-CLR-NNN requirement IDs from SRS_AI_Co
 
 ### 2.1 Server State
 
-- Server running on `http://localhost:3001`
+- Server running on `http://localhost:3080`
 - `GET /health` returns `{ status: 'ok' }`
 - Color analysis requires no ONNX model — available immediately on startup
 

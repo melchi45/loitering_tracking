@@ -703,7 +703,7 @@ Pass Criteria:
 
 ```
 ┌─ Test Server (Node.js) ─────────────┐
-│ - localhost:3001                    │
+│ - localhost:3080                    │
 │ - Test DB (JSON file)               │
 │ - MCP Server enabled                │
 │ - Socket.IO mock clients            │

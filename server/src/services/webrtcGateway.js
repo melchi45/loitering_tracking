@@ -3,7 +3,10 @@
 const os = require('os');
 
 let mediasoup;
-try { mediasoup = require('mediasoup'); } catch (_) {}
+// WEBRTC_DISABLED=1 allows skipping mediasoup entirely (e.g. WSL2/sandbox environments)
+if (process.env.WEBRTC_DISABLED !== '1') {
+  try { mediasoup = require('mediasoup'); } catch (_) {}
+}
 
 const MEDIA_CODECS = [
   { kind: 'audio', mimeType: 'audio/opus', clockRate: 48000, channels: 2 },
@@ -96,12 +99,16 @@ class WebRTCGateway {
       return;
     }
     try {
-      this._worker = await mediasoup.createWorker({
+      const workerPromise = mediasoup.createWorker({
         logLevel:   'warn',
         logTags:    ['rtp', 'srtp'],
         rtcMinPort: parseInt(process.env.WEBRTC_PORT_MIN || '40000'),
         rtcMaxPort: parseInt(process.env.WEBRTC_PORT_MAX || '49999'),
       });
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('createWorker timeout after 5s')), 5000)
+      );
+      this._worker = await Promise.race([workerPromise, timeoutPromise]);
       this._worker.on('died', () => {
         console.error('[WebRTCGateway] mediasoup worker died — WebRTC unavailable');
         this.enabled = false;

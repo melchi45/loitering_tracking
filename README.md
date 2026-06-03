@@ -74,7 +74,7 @@ cd server && npm run dev
 # Production mode
 cd server && npm start
 
-# Stop server (kills process on port 3001)
+# Stop server (kills process on port 3080)
 cd server && npm stop
 
 # Restart server (stop → start)
@@ -83,7 +83,7 @@ cd server && npm run restart
 # Stop: Ctrl+C  (when running in foreground)
 ```
 
-> **In background execution environments**, use `npm stop` or `fuser -k 3001/tcp`.
+> **In background execution environments**, use `npm stop` or `fuser -k 3080/tcp`.
 >
 > If nodemon is not available, run the server in the background with:
 > ```bash
@@ -121,7 +121,7 @@ fuser -k 3002/tcp
 > **Environment Variables:**
 > | Variable | Default | Description |
 > |---|---|---|
-> | `LTS_BASE_URL` | `http://localhost:3001` | LTS REST API base URL |
+> | `LTS_BASE_URL` | `http://localhost:3080` | LTS REST API base URL |
 > | `TRANSPORT` | `stdio` | Transport mode: `stdio` or `http` |
 > | `MCP_PORT` | `3002` | HTTP/SSE listen port |
 > | `MCP_AUTH_TOKEN` | _(empty)_ | Bearer token for HTTP transport (optional) |
@@ -129,7 +129,7 @@ fuser -k 3002/tcp
 #### Web UI Start / Stop
 
 ```bash
-# Development mode (Vite dev server — http://localhost:5173)
+# Development mode (Vite dev server — http://localhost:3080)
 cd client && npm run dev
 
 # Production build (creates dist/ folder)
@@ -232,7 +232,7 @@ Automatically launches a browser and outputs ICE connection path, traffic, and e
 cd server && npm run ice-test
 
 # Specify remote server
-node src/scripts/iceTest.js http://192.168.214.3:3001 http://192.168.214.3:5173
+node src/scripts/iceTest.js http://192.168.214.3:3080 http://192.168.214.3:3080
 
 # Without browser window (CI/headless environment)
 npm run ice-test:headless
@@ -251,7 +251,7 @@ Phase 2 — Browser automation
   · Using system Chrome: /usr/bin/google-chrome
   · Mode: browser window visible (headed)
   ✓ Chromium started
-  ✓ Page loaded: http://localhost:5173
+  ✓ Page loaded: http://localhost:3080
   · Waiting for ICE connection… (up to 35 seconds)
   · [browser] [useWebRTC][80d658eb] connection state: connected
   ✓ ICE connection successful (connectionState = connected)
@@ -1187,7 +1187,7 @@ wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.onnx
 ```bash
 cp server/.env.example server/.env
 # Edit server/.env:
-# PORT=3001
+# PORT=3080
 # RTSP_DEFAULT_USERNAME=admin
 # RTSP_DEFAULT_PASSWORD=
 # YOLO_MODEL=models/yolov8n.onnx
@@ -1268,8 +1268,8 @@ ONNX_THREADS_PROD=0     # production: 0 → max(2, min(8, CPU_cores/2))
 
 ```bash
 # Development
-cd server && npm run dev      # HTTP :3001 + HTTPS :3443 (HTTPS_ENABLED=true)
-cd client && npm run dev      # React dev server on :5173
+cd server && npm run dev      # HTTP :3080 + HTTPS :3443 (HTTPS_ENABLED=true)
+cd client && npm run dev      # React dev server on :3080
 
 # Production (Docker)
 docker-compose up -d
@@ -1301,7 +1301,7 @@ By default the server persists data to `server/storage/lts.json`. To switch to M
 
 ## 16. HTTPS / TLS Configuration
 
-By default the server runs over plain HTTP (port 3001). Enable HTTPS by setting `HTTPS_ENABLED=true` in `server/.env`.
+By default the server runs over plain HTTP (port 3080). Enable HTTPS by setting `HTTPS_ENABLED=true` in `server/.env`.
 
 → Full setup guide: **[docs/ops/HTTPS_TLS_Setup.md](docs/ops/HTTPS_TLS_Setup.md)**
 
@@ -1425,7 +1425,7 @@ server {
 
     # REST API + Socket.IO (WebSocket upgrade required)
     location / {
-        proxy_pass         http://localhost:3001;
+        proxy_pass         http://localhost:3080;
         proxy_http_version 1.1;
         proxy_set_header   Upgrade $http_upgrade;
         proxy_set_header   Connection "upgrade";
@@ -1445,7 +1445,7 @@ server {
 
 ```
 lts.example.com {
-    reverse_proxy localhost:3001
+    reverse_proxy localhost:3080
 }
 ```
 
@@ -1474,7 +1474,7 @@ services:
     build: ./server
     ports:
       - "3443:3443"   # HTTPS
-      - "3001:3001"   # HTTP redirect (optional)
+      - "3080:3080"   # HTTP redirect (optional)
     volumes:
       - ./server/certs:/app/server/certs:ro   # mount certs read-only
     environment:
@@ -1492,7 +1492,7 @@ When the server runs in HTTPS mode, update the Vite proxy target in `client/vite
 ```ts
 proxy: {
   '/api': {
-    target: 'https://localhost:3443',  // ← change from http://localhost:3001
+    target: 'https://localhost:3443',  // ← change from http://localhost:3080
     changeOrigin: true,
     secure: false,  // allow self-signed certs in development
   },

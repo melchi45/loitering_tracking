@@ -18,7 +18,7 @@
 ```
 loitering_tracking/
 ├── server/src/            # Node.js 백엔드
-│   ├── index.js           # Express 앱 진입점 (포트 3001)
+│   ├── index.js           # Express 앱 진입점 (포트 3080)
 │   ├── db.js              # JSON 파일 DB 추상화 레이어
 │   ├── services/          # 핵심 비즈니스 로직
 │   │   ├── detection.js        # YOLOv8n ONNX 추론 (640×640)
@@ -63,7 +63,7 @@ loitering_tracking/
 - 비동기 코드는 `async/await` 사용, Promise 체인 지양
 - `server/src/db.js`를 통해서만 `storage/lts.json` 접근 (직접 파일 I/O 금지)
 - 환경 변수는 `server/.env`에서 로드 (`dotenv`)
-- 포트 3001 기본값; `process.env.PORT`로 재정의 가능
+- 포트 3080 기본값; `process.env.PORT`로 재정의 가능
 - Socket.IO 이벤트 이름은 `camelCase` 사용 (예: `frameData`, `newAlert`)
 
 ### 클라이언트 (React/TypeScript)

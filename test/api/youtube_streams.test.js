@@ -11,7 +11,7 @@
  * Note: Groups B (process management), C (state machine), E (MediaMTX),
  *       G (performance) require live processes and are covered in Phase-2/3.
  *
- * Prerequisites: Server running on BASE_URL (default http://localhost:3001)
+ * Prerequisites: Server running on BASE_URL (default http://localhost:3080)
  *                yt-dlp and ffmpeg installed on PATH
  * Run: node test/api/youtube_streams.test.js
  *
@@ -19,7 +19,7 @@
  * Set YOUTUBE_TEST_URL to provide a real YouTube URL for TC-A-001.
  */
 
-const BASE_URL = process.env.LTS_URL || 'http://localhost:3001';
+const BASE_URL = process.env.LTS_URL || 'http://localhost:3080';
 
 // A short, publicly available YouTube video for live testing.
 // Override with YOUTUBE_TEST_URL if needed.

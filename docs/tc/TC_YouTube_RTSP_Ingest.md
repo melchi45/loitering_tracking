@@ -97,7 +97,7 @@
 
 ## 2. Test Environment and Prerequisites
 
-- Server running on `http://localhost:3001`
+- Server running on `http://localhost:3080`
 - `yt-dlp` and `ffmpeg` installed and on PATH
 - MediaMTX running and accessible on `127.0.0.1:8554`
 - `GET /health` returns `{ status: 'ok' }`

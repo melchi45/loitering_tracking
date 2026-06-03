@@ -79,7 +79,7 @@
 
 ## 2. Test Environment and Prerequisites
 
-- Server running on `http://localhost:3001`
+- Server running on `http://localhost:3080`
 - At least 1 camera registered with zones
 - `GET /health` returns `{ status: 'ok' }`
 

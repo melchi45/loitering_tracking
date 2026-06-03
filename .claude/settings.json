@@ -7,7 +7,7 @@
       "Read(*)"
     ],
     "additionalDirectories": [
-      "/home/youngho"
+      "/home/melchi45"
     ]
   },
   "hooks": {
@@ -17,7 +17,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "f=$(echo \"$CLAUDE_TOOL_INPUT\" | python3 -c \"import sys,json; d=json.load(sys.stdin); print(d.get('file_path',''))\" 2>/dev/null); [[ \"$f\" == *.ts || \"$f\" == *.tsx ]] && cd /data6/youngho/workspace/loitering_tracking/client && npx tsc --noEmit 2>&1 | head -30 || true"
+            "command": "f=$(echo \"$CLAUDE_TOOL_INPUT\" | python3 -c \"import sys,json; d=json.load(sys.stdin); print(d.get('file_path',''))\" 2>/dev/null); [[ \"$f\" == *.ts || \"$f\" == *.tsx ]] && cd /mnt/c/workspace/loitering_tracking/client && npx tsc --noEmit 2>&1 | head -30 || true"
           }
         ]
       }
@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "cd /data6/youngho/workspace/loitering_tracking && echo '--- git status ---' && git status --short"
+            "command": "cd /mnt/c/workspace/loitering_tracking && echo '--- git status ---' && git status --short"
           }
         ]
       }

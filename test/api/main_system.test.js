@@ -11,13 +11,13 @@
  * Note: Groups A-C (ingestion, AI, tracking), G (Socket.IO), H-001 (restart persistence),
  *       I (performance) require live cameras and are covered in Phase-2/3 integration tests.
  *
- * Prerequisites: Server running on BASE_URL (default http://localhost:3001)
+ * Prerequisites: Server running on BASE_URL (default http://localhost:3080)
  * Run: node test/api/main_system.test.js
  *
  * Set LTS_URL env var to override base URL.
  */
 
-const BASE_URL = process.env.LTS_URL || 'http://localhost:3001';
+const BASE_URL = process.env.LTS_URL || 'http://localhost:3080';
 
 // ── Minimal test harness ────────────────────────────────────────────────────
 

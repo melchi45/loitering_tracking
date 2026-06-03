@@ -138,7 +138,7 @@
 ### 5.1 Server Initialization
 
 On startup (`node mcp-server/index.js`):
-1. Read `LTS_BASE_URL` from environment (default `http://localhost:3001`)
+1. Read `LTS_BASE_URL` from environment (default `http://localhost:3080`)
 2. Instantiate `McpServer` with name `lts-mcp-server`, version `1.0.0`
 3. Register all tools (loitering, alerts, cameras, analytics)
 4. Register all resources (cameras, alerts/active, zones template, system/summary)
@@ -496,7 +496,7 @@ Content:
 
 When `fetch()` throws a network error (ECONNREFUSED, ETIMEDOUT):
 - Tool returns `isError: true`
-- Message: `"Error: LTS server unavailable at http://localhost:3001 — ensure the server is running (npm run dev)"`
+- Message: `"Error: LTS server unavailable at http://localhost:3080 — ensure the server is running (npm run dev)"`
 
 ### 9.2 Resource Not Found
 
@@ -550,7 +550,7 @@ If zone or event sub-calls fail, `explain_alert` degrades gracefully:
 ### AC-006: Integration
 - [ ] Claude Code discovers server after `.claude/settings.json` update
 - [ ] VS Code discovers server after `.vscode/mcp.json` update
-- [ ] `LTS_BASE_URL` env var correctly overrides default `http://localhost:3001`
+- [ ] `LTS_BASE_URL` env var correctly overrides default `http://localhost:3080`
 
 ### AC-007: Performance
 - [ ] `get_active_alerts` responds in < 2s on local network

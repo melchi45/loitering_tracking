@@ -75,7 +75,7 @@
 
 | Artifact | Purpose |
 |---|---|
-| `LTS_BASE_URL=http://localhost:3001` | MCP server target |
+| `LTS_BASE_URL=http://localhost:3080` | MCP server target |
 | Sample loitering event fixture | Tool response tests |
 | Zone fixture with dwell threshold | `update_zone_threshold` test |
 | `MCP_AUTH_TOKEN=test-token` | Auth tests |
@@ -84,8 +84,8 @@
 
 ## 2. Test Environment and Prerequisites
 
-- LTS server running on `http://localhost:3001`
-- MCP server started with `LTS_BASE_URL=http://localhost:3001`
+- LTS server running on `http://localhost:3080`
+- MCP server started with `LTS_BASE_URL=http://localhost:3080`
 - For HTTP SSE tests: `TRANSPORT=http MCP_PORT=3002`
 - At least 1 camera, 1 zone, 1 loitering event, 1 active alert
 

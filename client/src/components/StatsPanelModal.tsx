@@ -643,10 +643,20 @@ function ItemDetailView({ section, hour, item }: {
   const typeKey = SECTION_TYPES[section][0] ?? 'detections';
   const ts = itemTimestamp(item);
 
+  const isImageValue = (v: unknown): v is string =>
+    typeof v === 'string' && (
+      String(v).startsWith('data:image/') ||
+      String(v).match(/\.(jpg|jpeg|png|webp|gif)$/i) !== null
+    );
+
   const imageKey = Object.keys(item).find(k =>
-    (k.toLowerCase().includes('snapshot') || k.toLowerCase().includes('image') || k.toLowerCase().includes('path'))
-    && typeof item[k] === 'string'
-    && String(item[k]).match(/\.(jpg|jpeg|png|webp|gif)$/i)
+    (k.toLowerCase().includes('snapshot') ||
+     k.toLowerCase().includes('image') ||
+     k.toLowerCase().includes('path') ||
+     k.toLowerCase().includes('thumbnail') ||
+     k.toLowerCase().includes('photo') ||
+     k.toLowerCase().includes('avatar'))
+    && isImageValue(item[k])
   );
 
   return (
@@ -679,6 +689,11 @@ function ItemDetailView({ section, hour, item }: {
                     <span className={`px-2 py-0.5 rounded text-xs font-semibold ${v ? 'bg-green-900/60 text-green-300' : 'bg-gray-700 text-gray-400'}`}>
                       {v ? 'Yes' : 'No'}
                     </span>
+                  );
+                } else if (isImageValue(v)) {
+                  displayVal = (
+                    <img src={String(v)} alt={k} className="max-h-32 max-w-[180px] rounded object-contain"
+                      onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
                   );
                 } else if (
                   typeof v === 'string' && v.length > 6 &&

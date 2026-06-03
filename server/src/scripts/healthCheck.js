@@ -3,7 +3,7 @@
 /**
  * Server health-check script.
  * Usage: node src/scripts/healthCheck.js [BASE_URL]
- * Default BASE_URL: http://localhost:3001
+ * Default BASE_URL: http://localhost:3080
  *
  * Checks:
  *   1. /api/cameras           — DB + pipeline status
@@ -14,7 +14,7 @@
 
 const http = require('http');
 
-const BASE = (process.argv[2] || 'http://localhost:3001').replace(/\/$/, '');
+const BASE = (process.argv[2] || 'http://localhost:3080').replace(/\/$/, '');
 
 const RESET  = '\x1b[0m';
 const GREEN  = '\x1b[32m';

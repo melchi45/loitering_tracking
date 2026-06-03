@@ -13,7 +13,7 @@ services:
     build: ./server
     network_mode: host
     ports:
-      - "3001:3001"
+      - "3080:3080"
     env_file: ./server/.env
     volumes:
       - ./server/models:/app/models:ro

@@ -11,13 +11,13 @@
  *   node src/scripts/iceTest.js [SERVER_URL] [UI_URL] [--headless]
  *
  * Defaults:
- *   SERVER_URL = http://localhost:3001
- *   UI_URL     = http://localhost:3001  (same — production build served by the API server)
+ *   SERVER_URL = http://localhost:3080
+ *   UI_URL     = http://localhost:3080  (same — production build served by the API server)
  *
  * Examples:
  *   node src/scripts/iceTest.js
  *   node src/scripts/iceTest.js http://192.168.214.3:3001
- *   node src/scripts/iceTest.js http://localhost:3001 --headless
+ *   node src/scripts/iceTest.js http://localhost:3080 --headless
  */
 
 const http  = require('http');
@@ -31,7 +31,7 @@ try {
 
 const args      = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const _serverIp = process.env.SERVER_IP || 'localhost';
-const _port     = process.env.PORT || '3001';
+const _port     = process.env.HTTP_PORT || '3080';
 const SERVER    = (args[0] || `http://${_serverIp}:${_port}`).replace(/\/$/, '');
 const UI        = (args[1] || SERVER).replace(/\/$/, '');
 // Auto-use headless when no X server is available (SSH without display forwarding)

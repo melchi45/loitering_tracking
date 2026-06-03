@@ -19,7 +19,7 @@
 | **Precondition** | `HTTPS_ENABLED=false` (or absent) in `.env` |
 | **Input** | Start server normally |
 | **Expected** | Server listens on `PORT` (3001) over HTTP |
-| **Validation** | `curl http://localhost:3001/health` → `200 OK` |
+| **Validation** | `curl http://localhost:3080/health` → `200 OK` |
 | **SRS** | FR-HTTPS-002 |
 
 ### TC-HTTPS-A-002: HTTPS mode activation
@@ -70,16 +70,16 @@
 | Field | Value |
 |---|---|
 | **Precondition** | `HTTPS_ENABLED=true`, `HTTP_REDIRECT=true` |
-| **Input** | `GET http://localhost:3001/api/cameras` |
+| **Input** | `GET http://localhost:3080/api/cameras` |
 | **Expected** | `301 Moved Permanently`, `Location: https://localhost:3443/api/cameras` |
-| **Validation** | `curl -v http://localhost:3001/api/cameras 2>&1 \| grep "< HTTP"` → `301` |
+| **Validation** | `curl -v http://localhost:3080/api/cameras 2>&1 \| grep "< HTTP"` → `301` |
 | **SRS** | FR-HTTPS-005 |
 
 ### TC-HTTPS-B-002: Redirect preserves path and query
 
 | Field | Value |
 |---|---|
-| **Input** | `GET http://localhost:3001/api/events?limit=10` |
+| **Input** | `GET http://localhost:3080/api/events?limit=10` |
 | **Expected** | `Location: https://localhost:3443/api/events?limit=10` |
 | **SRS** | FR-HTTPS-005 |
 
@@ -88,7 +88,7 @@
 | Field | Value |
 |---|---|
 | **Precondition** | `HTTPS_ENABLED=true`, `HTTP_REDIRECT=false` |
-| **Input** | `curl http://localhost:3001/health` |
+| **Input** | `curl http://localhost:3080/health` |
 | **Expected** | Connection refused (no HTTP server on PORT) |
 | **SRS** | FR-HTTPS-002, FR-HTTPS-005 |
 
@@ -161,7 +161,7 @@
 | Field | Value |
 |---|---|
 | **Precondition** | `HTTPS_ENABLED=false` |
-| **Input** | `curl -I http://localhost:3001/health` |
+| **Input** | `curl -I http://localhost:3080/health` |
 | **Expected** | No `Strict-Transport-Security` header |
 | **SRS** | FR-HTTPS-007 |
 

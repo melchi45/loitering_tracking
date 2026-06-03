@@ -53,7 +53,7 @@ Every test case references one or more FR-CLT-NNN requirement IDs from SRS_AI_Cl
 
 ### 2.1 Server State
 
-- Server running on `http://localhost:3001`
+- Server running on `http://localhost:3080`
 - `GET /health` returns `{ status: 'ok' }`
 - `server/models/yolov8n.onnx` present (person detection required)
 

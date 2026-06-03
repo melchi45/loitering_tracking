@@ -57,7 +57,7 @@ Out of scope: real-time video delivery via MCP, LLM inference within the server,
 | Resource | A read-only URI-addressed data source accessible to an LLM via MCP |
 | stdio transport | Process-level MCP communication via stdin/stdout (Claude Code) |
 | SSE transport | HTTP Server-Sent Events MCP communication (OpenAI Agents) |
-| LTS API | The LTS-2026 Express REST API running on port 3001 |
+| LTS API | The LTS-2026 Express REST API running on port 3080 |
 | Zod | TypeScript-first schema validation library used for tool input schemas |
 | `isError` | MCP response field indicating a tool-level error occurred |
 
@@ -105,7 +105,7 @@ Out of scope: real-time video delivery via MCP, LLM inference within the server,
 ### FR-MCP-001 — Startup
 
 On process start (`node mcp-server/index.js`):
-- The server shall read `LTS_BASE_URL` from the environment (default `http://localhost:3001`).
+- The server shall read `LTS_BASE_URL` from the environment (default `http://localhost:3080`).
 - A `McpServer` instance shall be created with name `lts-mcp-server`, version `1.0.0`.
 - All 11 tools and 5 resources shall be registered before transport connection.
 - The server shall log `[LTS MCP] stdio server running — connected to {LTS_BASE_URL}` to **stderr** (not stdout).
@@ -120,7 +120,7 @@ The transport mode shall be determined by the `TRANSPORT` environment variable:
 
 | Variable | Default | Description |
 |---|---|---|
-| `LTS_BASE_URL` | `http://localhost:3001` | LTS REST API base URL |
+| `LTS_BASE_URL` | `http://localhost:3080` | LTS REST API base URL |
 | `TRANSPORT` | `stdio` | Transport mode: `stdio` or `http` |
 | `MCP_PORT` | `3002` | HTTP/SSE server listen port |
 | `MCP_AUTH_TOKEN` | _(none)_ | Bearer token for HTTP transport (empty = no auth) |
@@ -428,7 +428,7 @@ Network failures shall produce: `"Error: LTS API <status>: <statusText>: <body>"
     "lts": {
       "command": "node",
       "args": ["mcp-server/index.js"],
-      "env": { "LTS_BASE_URL": "http://localhost:3001" }
+      "env": { "LTS_BASE_URL": "http://localhost:3080" }
     }
   }
 }
@@ -443,7 +443,7 @@ Registered in `.claude/settings.json`.
     "lts": {
       "command": "node",
       "args": ["mcp-server/index.js"],
-      "env": { "LTS_BASE_URL": "http://localhost:3001" },
+      "env": { "LTS_BASE_URL": "http://localhost:3080" },
       "type": "stdio"
     }
   }

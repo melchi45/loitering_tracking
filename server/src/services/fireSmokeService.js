@@ -10,19 +10,20 @@ const MODEL_SIZE     = 640;
 const CONF_THRESHOLD = 0.35;
 const NMS_THRESHOLD  = 0.45;
 
-// Model classes from Abonia1/YOLOv8-Fire-and-Smoke-Detection (3-class output [1,7,8400])
-// Index 1 ('default') is ignored — only fire and smoke are reported.
+// Model classes mapped by index position (3-class output [1,7,8400])
+// Index 1 ('other'/'default') is ignored — only fire and smoke are reported.
 const CLASS_NAMES    = ['fire', 'default', 'smoke'];
 const SKIP_CLASSES   = new Set(['default']);
 // Normalise class names to lowercase for downstream consumers
 const NORMALISE      = { Fire: 'fire', fire: 'fire', smoke: 'smoke', default: 'default' };
 
 /**
- * Fire and Smoke detector using a YOLOv8s model fine-tuned on D-Fire / similar datasets.
+ * Fire and Smoke detector using a YOLOv8s model fine-tuned on fire/smoke datasets.
  *
  * Model file: server/models/yolov8s_fire_smoke.onnx
- * Source: github.com/Abonia1/YOLOv8-Fire-and-Smoke-Detection (runs/detect/train/weights/best.pt)
- * Output shape: [1, 7, 8400]  (4 bbox + 3 class scores: Fire / default / smoke)
+ * Source: huggingface.co/Mehedi-2-96/fire-smoke-detection-yolo (fire_smoke_yolov8s_model.pt)
+ *         Classes: fire(0), other(1, skipped), smoke(2)
+ * Output shape: [1, 7, 8400]  (4 bbox + 3 class scores: fire / other / smoke)
  *
  * Download / export:
  *   python3 -c "

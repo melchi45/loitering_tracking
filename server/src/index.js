@@ -40,9 +40,38 @@ const registerStreamHandlers = require('./socket/streamHandler');
 const registerWebRTCHandlers = require('./socket/webrtcSignaling');
 const registerWebRTCTelemetryHandlers = require('./socket/webrtcTelemetryHandlers');
 
-const PORT = parseInt(process.env.PORT || '3001', 10);
+const PORT = parseInt(process.env.HTTP_PORT || '3080', 10);
+
+/** Resolve true if `ffmpeg` is executable, false otherwise. */
+function checkFfmpeg() {
+  return new Promise((resolve) => {
+    const { spawn: sp } = require('child_process');
+    const p = sp('ffmpeg', ['-version'], { stdio: 'ignore' });
+    p.on('error', () => resolve(false));
+    p.on('close',  () => resolve(true));
+  });
+}
 
 async function main() {
+  // ── ffmpeg availability check ────────────────────────────────────────────
+  const hasFfmpeg = await checkFfmpeg();
+  if (!hasFfmpeg) {
+    console.error('');
+    console.error('╔══════════════════════════════════════════════════════════╗');
+    console.error('║  ERROR: ffmpeg not found                                 ║');
+    console.error('║                                                          ║');
+    console.error('║  ffmpeg is required to capture RTSP camera streams.     ║');
+    console.error('║                                                          ║');
+    console.error('║  Install ffmpeg and retry:                               ║');
+    console.error('║    Ubuntu/Debian : sudo apt install ffmpeg               ║');
+    console.error('║    macOS         : brew install ffmpeg                   ║');
+    console.error('║    Windows       : winget install ffmpeg                 ║');
+    console.error('║    Docker        : ffmpeg is included in the image       ║');
+    console.error('╚══════════════════════════════════════════════════════════╝');
+    console.error('');
+    process.exit(1);
+  }
+
   // ── WebRTC Gateway (mediasoup) — init before pipeline manager ──────────
   await webrtcGateway.init();
 
@@ -160,11 +189,13 @@ async function main() {
 
   // System-wide Stats Dashboard
   app.use('/api/stats',     buildStatsRouter(db));
-  // Eagerly load face models so enrollment works without an active camera pipeline.
-  // Also reload persistent gallery after models are ready.
-  pipelineManager.loadFaceServiceEagerly()
-    .then(() => pipelineManager.reloadPersistentGallery())
-    .catch(() => {});
+  // Defer ONNX model loading by 3 seconds so the HTTP server can accept requests
+  // immediately on startup without the event loop being blocked by session creation.
+  setTimeout(() => {
+    pipelineManager.loadFaceServiceEagerly()
+      .then(() => pipelineManager.reloadPersistentGallery())
+      .catch(() => {});
+  }, 3000);
 
   // Cross-camera stats and person trajectories (standalone /api/faces/* routes)
   app.get('/api/faces/cross-camera-stats', (_req, res) => {
@@ -325,22 +356,21 @@ async function main() {
 
   // ── Serve React static build ──────────────────────────────────────────────
   const clientBuildPath = path.resolve(__dirname, '..', '..', 'client', 'dist');
-  if (require('fs').existsSync(clientBuildPath)) {
-    app.use(express.static(clientBuildPath));
-    // SPA fallback: all non-API routes serve index.html
-    app.get(/^(?!\/api|\/auth|\/admin|\/health|\/socket\.io).*/, (req, res) => {
-      res.sendFile(path.join(clientBuildPath, 'index.html'));
-    });
-    console.log(`[Server] Serving React UI from ${clientBuildPath}`);
-  } else {
-    // 404 fallback for API-only mode (before client is built)
-    app.use('/api/*', (req, res) => {
-      res.status(404).json({ success: false, error: `Cannot ${req.method} ${req.path}` });
-    });
-    app.get('/', (req, res) => {
+  // express.static passes through silently when the directory doesn't exist yet,
+  // so register it unconditionally — no startup-time existsSync needed.
+  app.use(express.static(clientBuildPath));
+  console.log(`[Server] React UI path: ${clientBuildPath}`);
+
+  // SPA fallback: check at request time so the server doesn't need a restart
+  // after 'npm run build' completes while the server is already running.
+  app.get(/^(?!\/api|\/auth|\/admin|\/health|\/internal|\/socket\.io).*/, (req, res) => {
+    const indexHtml = path.join(clientBuildPath, 'index.html');
+    if (fs.existsSync(indexHtml)) {
+      res.sendFile(indexHtml);
+    } else {
       res.send('<h2>LTS Backend running. Build the client: <code>cd client && npm run build</code></h2>');
-    });
-  }
+    }
+  });
 
   // Global error handler
   app.use((err, req, res, next) => {
@@ -375,16 +405,21 @@ async function main() {
   // Start background continuous discovery
   discoverySvc.start();
 
-  // ── Auto-start all registered cameras on startup ─────────────────────────
+  // ── Auto-start all registered cameras on startup (deferred) ─────────────
+  // Delay pipeline start so HTTP server is fully ready before ONNX loading
+  // blocks the event loop.  Each camera starts with a staggered 500 ms gap
+  // to spread the CPU load rather than hitting it all at once.
   try {
     const allCameras = db.find('cameras', {});
     if (allCameras.length > 0) {
-      console.log(`[Server] Starting ${allCameras.length} registered camera pipeline(s)`);
-      for (const cam of allCameras) {
-        pipelineManager.startCamera(cam).catch((err) => {
-          console.error(`[Server] Auto-start failed for camera ${cam.id}:`, err.message);
-        });
-      }
+      console.log(`[Server] Scheduling ${allCameras.length} camera pipeline(s) (deferred 5 s)`);
+      allCameras.forEach((cam, i) => {
+        setTimeout(() => {
+          pipelineManager.startCamera(cam).catch((err) => {
+            console.error(`[Server] Auto-start failed for camera ${cam.id}:`, err.message);
+          });
+        }, 5000 + i * 500);
+      });
     }
   } catch (err) {
     console.warn('[Server] Could not auto-start cameras:', err.message);

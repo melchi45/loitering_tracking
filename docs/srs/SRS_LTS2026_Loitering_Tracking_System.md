@@ -138,7 +138,7 @@ Out of scope: body-level Re-ID (FastReID/TorchReID), human segmentation masks, m
 5. `pipelineManager.loadFaceServiceEagerly()` — load SCRFD + ArcFace ONNX
 6. `pipelineManager.reloadPersistentGallery()` — cache DB face embeddings
 7. `YouTubeStreamService.init()` — restore YouTube cameras from DB
-8. `httpServer.listen(PORT)` — begin serving (default port 3001)
+8. `httpServer.listen(PORT)` — begin serving (default port 3080)
 9. Auto-start all enabled cameras from DB
 
 ---

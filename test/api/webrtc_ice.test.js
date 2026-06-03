@@ -11,13 +11,13 @@
  * Note: Groups B (STUN UDP ping), E-G (ice-test CLI phases), H (Socket.IO trigger)
  *       require live STUN/TURN servers and are covered in Phase-2/3.
  *
- * Prerequisites: Server running on BASE_URL (default http://localhost:3001)
+ * Prerequisites: Server running on BASE_URL (default http://localhost:3080)
  * Run: node test/api/webrtc_ice.test.js
  *
  * Set LTS_URL env var to override base URL.
  */
 
-const BASE_URL = process.env.LTS_URL || 'http://localhost:3001';
+const BASE_URL = process.env.LTS_URL || 'http://localhost:3080';
 
 // ── Minimal test harness ────────────────────────────────────────────────────
 

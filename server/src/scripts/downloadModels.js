@@ -21,6 +21,13 @@ const MODELS_DIR = path.resolve(__dirname, '..', '..', 'models');
 // ─── Models downloadable directly as ONNX ────────────────────────────────────
 const DIRECT_MODELS = [
   {
+    file:    'yolov8n.onnx',
+    url:     'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolov8n.onnx',
+    size:    '~12 MB',
+    module:  'AI-01/02 Human+Vehicle Detection (required)',
+    enabled: true,
+  },
+  {
     file:    'scrfd_2.5g.onnx',
     url:     'https://huggingface.co/JackCui/facefusion/resolve/main/scrfd_2.5g.onnx',
     size:    '3.3 MB',
@@ -62,7 +69,8 @@ const PYTHON_EXPORT_INSTRUCTIONS = `
 │  PYEOF                                                                      │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  AI-09 Fire & Smoke Detection                                               │
-│  Source: https://huggingface.co/keremberke/yolov8m-fire-and-smoke-detection │
+│  Source: https://huggingface.co/Mehedi-2-96/fire-smoke-detection-yolo       │
+│          Classes: fire(0), other(1, skipped), smoke(2) — output [1,7,8400] │
 │                                                                             │
 │  pip install ultralytics huggingface_hub                                    │
 │                                                                             │
@@ -72,19 +80,14 @@ const PYTHON_EXPORT_INSTRUCTIONS = `
 │  import shutil, os                                                          │
 │                                                                             │
 │  pt = hf_hub_download(                                                      │
-│      repo_id="keremberke/yolov8m-fire-and-smoke-detection",                 │
-│      filename="best.pt")                                                    │
+│      repo_id="Mehedi-2-96/fire-smoke-detection-yolo",                       │
+│      filename="fire_smoke_yolov8s_model.pt")                                │
 │  YOLO(pt).export(format="onnx", imgsz=640, simplify=True)                  │
 │  onnx = pt.replace(".pt", ".onnx")                                          │
 │  dest = os.path.join("server/models", "yolov8s_fire_smoke.onnx")           │
 │  shutil.copy(onnx, dest)                                                    │
 │  print("Saved:", dest)                                                      │
 │  PYEOF                                                                      │
-│                                                                             │
-│  Alternative (GitHub YOLOv8n — lighter):                                    │
-│    https://github.com/Abonia1/YOLOv8-Fire-and-Smoke-Detection               │
-│    Download best.pt, export same way                                        │
-│    Dataset: https://github.com/gaiasd/DFireDataset (21,000+ images)        │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  AI-05 Color + AI-06 Cloth (PAR multi-label attributes)                     │
 │  Source: https://github.com/Event-AHU/OpenPAR                               │

@@ -9,7 +9,7 @@
 
 ## 1. Background
 
-LTS-2026 currently serves all REST API, Socket.IO, and WebRTC signalling traffic over plain HTTP (port 3001). In production and enterprise deployments this poses several risks:
+LTS-2026 currently serves all REST API, Socket.IO, and WebRTC signalling traffic over plain HTTP (port 3080). In production and enterprise deployments this poses several risks:
 
 - REST API credentials (JWT tokens) and camera credentials transmitted in cleartext
 - Browser Mixed-Content policy blocks WebRTC signalling when the web UI is served over HTTPS
@@ -71,7 +71,7 @@ LTS-2026 currently serves all REST API, Socket.IO, and WebRTC signalling traffic
 ## 6. Acceptance Criteria
 
 1. `curl -k https://localhost:3443/health` returns `200 OK` when `HTTPS_ENABLED=true`
-2. `curl http://localhost:3001/health` returns `301 → https://localhost:3443/health` when `HTTP_REDIRECT=true`
+2. `curl http://localhost:3080/health` returns `301 → https://localhost:3443/health` when `HTTP_REDIRECT=true`
 3. Server startup fails with `[Server] TLS ERROR: cert/key file not found` when cert files are missing
 4. `HTTPS_ENABLED=false` (default): existing HTTP tests pass without modification
 5. Browser WebRTC signalling succeeds over `wss://` when served via HTTPS

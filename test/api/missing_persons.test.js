@@ -15,7 +15,7 @@
 const fs   = require('fs');
 const path = require('path');
 
-const BASE_URL    = process.env.LTS_URL || 'http://localhost:3001';
+const BASE_URL    = process.env.LTS_URL || 'http://localhost:3080';
 const FIXTURE_DIR = path.resolve(__dirname, '../fixtures');
 const SOCKET_IO_TIMEOUT = parseInt(process.env.SOCKET_TIMEOUT || '5000');
 

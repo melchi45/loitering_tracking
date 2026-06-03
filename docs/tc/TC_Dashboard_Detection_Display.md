@@ -85,9 +85,9 @@
 
 ## 2. Test Environment and Prerequisites
 
-- Server running on `http://localhost:3001`
+- Server running on `http://localhost:3080`
 - At least 1 camera registered and running (for integration tests)
-- Browser dashboard open at `http://localhost:5173` (Playwright E2E)
+- Browser dashboard open at `http://localhost:3080` (Playwright E2E)
 
 ---
 

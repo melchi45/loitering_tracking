@@ -85,7 +85,7 @@
 
 ## 2. Test Environment and Prerequisites
 
-- Server running on `http://localhost:3001`
+- Server running on `http://localhost:3080`
 - `WEBRTC_ENABLED=true` environment variable set
 - mediasoup worker dependencies installed
 - `GET /api/capabilities` returns `webrtcEnabled: true`

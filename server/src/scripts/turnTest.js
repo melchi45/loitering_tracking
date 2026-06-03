@@ -11,12 +11,12 @@
  *   node src/scripts/turnTest.js [SERVER_URL] [--headless]
  *
  * Defaults:
- *   SERVER_URL = http://localhost:3001
+ *   SERVER_URL = http://localhost:3080
  *
  * Examples:
  *   node src/scripts/turnTest.js
  *   node src/scripts/turnTest.js http://192.168.214.3:3001
- *   node src/scripts/turnTest.js http://localhost:3001 --headless
+ *   node src/scripts/turnTest.js http://localhost:3080 --headless
  */
 
 const http = require('http');
@@ -28,7 +28,7 @@ try {
 
 const args      = process.argv.slice(2).filter((a) => !a.startsWith('--'));
 const _serverIp = process.env.SERVER_IP || 'localhost';
-const _port     = process.env.PORT || '3001';
+const _port     = process.env.HTTP_PORT || process.env.PORT || '3080';
 const SERVER    = (args[0] || `http://${_serverIp}:${_port}`).replace(/\/$/, '');
 const HEADLESS  = process.argv.includes('--headless') || !process.env.DISPLAY;
 

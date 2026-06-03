@@ -14,7 +14,7 @@
 
 The LTS MCP Server exposes Tools and Resources so that MCP-compatible LLMs (Claude Code, Claude API, OpenAI Agents, etc.) can interact with the system in natural language.
 
-> **Prerequisite:** The LTS backend server must be running on `localhost:3001` before starting the MCP server.
+> **Prerequisite:** The LTS backend server must be running on `localhost:3080` before starting the MCP server.
 
 ## Installation
 
@@ -69,7 +69,7 @@ HTTP/SSE endpoints:
 
 | Variable | Default | Description |
 |---|---|---|
-| `LTS_BASE_URL` | `http://localhost:3001` | LTS REST API base URL |
+| `LTS_BASE_URL` | `http://localhost:3080` | LTS REST API base URL |
 | `TRANSPORT` | `stdio` | Transport mode: `stdio` or `http` |
 | `MCP_PORT` | `3002` | HTTP/SSE listen port |
 | `MCP_AUTH_TOKEN` | _(none)_ | Bearer token for HTTP transport (optional) |
@@ -84,7 +84,7 @@ Add the following to `.claude/settings.json`:
     "lts": {
       "command": "node",
       "args": ["mcp-server/index.js"],
-      "env": { "LTS_BASE_URL": "http://localhost:3001" }
+      "env": { "LTS_BASE_URL": "http://localhost:3080" }
     }
   }
 }

@@ -219,7 +219,10 @@
       "matchCommandLine": true
     },
     "lsof": true,
-    "ss": true
+    "ss": true,
+    "command": true,
+    "type": true,
+    "true": true
   },
   "chat.agent.maxRequests": 1000,
   // settings.json

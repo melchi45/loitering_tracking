@@ -12,7 +12,7 @@
 
 ---
 
-By default the server runs over plain HTTP (port 3001). Enable HTTPS by setting `HTTPS_ENABLED=true` in `server/.env`.
+By default the server runs over plain HTTP (port 3080). Enable HTTPS by setting `HTTPS_ENABLED=true` in `server/.env`.
 
 ## Environment Variables
 
@@ -134,7 +134,7 @@ server {
 
     # REST API + Socket.IO (WebSocket upgrade required)
     location / {
-        proxy_pass         http://localhost:3001;
+        proxy_pass         http://localhost:3080;
         proxy_http_version 1.1;
         proxy_set_header   Upgrade $http_upgrade;
         proxy_set_header   Connection "upgrade";
@@ -154,7 +154,7 @@ server {
 
 ```
 lts.example.com {
-    reverse_proxy localhost:3001
+    reverse_proxy localhost:3080
 }
 ```
 
@@ -183,7 +183,7 @@ services:
     build: ./server
     ports:
       - "3443:3443"   # HTTPS
-      - "3001:3001"   # HTTP redirect (optional)
+      - "3080:3080"   # HTTP redirect (optional)
     volumes:
       - ./server/certs:/app/server/certs:ro   # mount certs read-only
     environment:
@@ -201,7 +201,7 @@ When the server runs in HTTPS mode, update the Vite proxy target in `client/vite
 ```ts
 proxy: {
   '/api': {
-    target: 'https://localhost:3443',  // ← change from http://localhost:3001
+    target: 'https://localhost:3443',  // ← change from http://localhost:3080
     changeOrigin: true,
     secure: false,  // allow self-signed certs in development
   },

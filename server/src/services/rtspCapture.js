@@ -67,8 +67,8 @@ class RTSPCapture extends EventEmitter {
       // Input options
       '-rtsp_transport', 'tcp',
       // Normalize broken source timestamps from some RTSP cameras.
-      '-fflags',         '+genpts+igndts+nobuffer',
-      '-stimeout',       '5000000',   // 5 s socket timeout (µs)
+      '-fflags',         '+genpts+igndts',
+      '-timeout',        '5000000',   // 5 s socket timeout (µs); replaces -stimeout removed in ffmpeg 8
       '-analyzeduration','1000000',
       '-probesize',      '1000000',
       '-i',              this.rtspUrl,
@@ -128,6 +128,12 @@ class RTSPCapture extends EventEmitter {
       this._proc = null;
       if (!this._running) return;
       this.emit('warn', { cameraId: this.cameraId, message: `spawn error: ${err.message}` });
+      // ENOENT = ffmpeg not installed — retrying will never succeed; stop immediately.
+      if (err.code === 'ENOENT') {
+        this._running = false;
+        this.emit('error', new Error('ffmpeg not found. Install ffmpeg to enable RTSP capture.'));
+        return;
+      }
       this._scheduleRetry();
     });
   }

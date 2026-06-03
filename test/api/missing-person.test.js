@@ -7,7 +7,7 @@
  * Run: node test/api/missing-person.test.js
  */
 
-const BASE_URL = process.env.LTS_URL || 'http://localhost:3001';
+const BASE_URL = process.env.LTS_URL || 'http://localhost:3080';
 
 let passed = 0;
 let failed = 0;

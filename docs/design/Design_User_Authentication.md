@@ -185,7 +185,7 @@ JWT_REFRESH_EXPIRES=7d
 COOKIE_SECRET=<random 32+ byte hex>
 
 # CORS allowed origins for credentials (comma-separated)
-CLIENT_ORIGIN=https://localhost:5173,http://localhost:5173
+CLIENT_ORIGIN=https://localhost:3443,http://localhost:3080
 
 # First registered user email auto-promoted to admin (optional)
 ADMIN_SEED_EMAIL=admin@lts.local

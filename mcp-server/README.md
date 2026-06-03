@@ -31,7 +31,7 @@ Exposes detection events, alerts, camera status, and analytics as MCP tools and 
 └───────────────────────────┬─────────────────────────────┘
                             │  HTTP REST
 ┌───────────────────────────▼─────────────────────────────┐
-│          LTS-2026 Express API  (localhost:3001)          │
+│          LTS-2026 Express API  (localhost:3080)          │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -42,7 +42,7 @@ Exposes detection events, alerts, camera status, and analytics as MCP tools and 
 | Requirement | Version |
 |---|---|
 | Node.js | ≥ 20 (ESM) |
-| LTS-2026 backend | Running on `http://localhost:3001` |
+| LTS-2026 backend | Running on `http://localhost:3080` |
 
 ---
 
@@ -83,7 +83,7 @@ Starts an Express server on port 3002 (configurable via `MCP_PORT`).
 
 | Variable | Default | Description |
 |---|---|---|
-| `LTS_BASE_URL` | `http://localhost:3001` | LTS REST API base URL |
+| `LTS_BASE_URL` | `http://localhost:3080` | LTS REST API base URL |
 | `TRANSPORT` | `stdio` | Transport mode: `stdio` or `http` |
 | `MCP_PORT` | `3002` | HTTP/SSE listen port |
 | `MCP_AUTH_TOKEN` | _(empty)_ | Bearer token for HTTP transport (optional) |
@@ -107,7 +107,7 @@ Add to `.claude/settings.json`:
     "lts": {
       "command": "node",
       "args": ["mcp-server/index.js"],
-      "env": { "LTS_BASE_URL": "http://localhost:3001" }
+      "env": { "LTS_BASE_URL": "http://localhost:3080" }
     }
   }
 }

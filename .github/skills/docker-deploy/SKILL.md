@@ -11,7 +11,7 @@ argument-hint: "배포 환경 또는 작업 (예: production, staging, restart, 
 ```
 docker-compose.yml
 ├── mediamtx       — RTSP/WebRTC/HLS 미디어 프록시 (포트 8554, 8889, 9997)
-├── server         — Node.js 백엔드 API + AI 파이프라인 (포트 3001)
+├── server         — Node.js 백엔드 API + AI 파이프라인 (포트 3080)
 └── client         — React 정적 파일 (Nginx, 포트 3000)
 ```
 
@@ -60,7 +60,7 @@ docker compose logs -f mediamtx --tail 100
 
 ```bash
 # 서버 포트
-PORT=3001
+PORT=3080
 NODE_ENV=production
 
 # MongoDB 연결
@@ -128,7 +128,7 @@ docker exec -it mongodb mongosh lts2026 \
 
 ```bash
 # 서버 API 상태 확인
-curl http://localhost:3001/health
+curl http://localhost:3080/health
 
 # MediaMTX 경로 상태
 curl http://localhost:9997/v3/paths/list
@@ -159,7 +159,7 @@ docker compose logs server   # 오류 로그 확인
 
 ### 포트 충돌
 ```bash
-lsof -i :3001   # 포트 점유 프로세스 확인
+lsof -i :3080   # 포트 점유 프로세스 확인
 ```
 
 ### 볼륨 마운트 권한 오류

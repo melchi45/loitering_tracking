@@ -208,7 +208,7 @@ const transport = device.createRecvTransport({
 ```
 cd server && npm run ice-test              # headed (shows browser window)
 cd server && npm run ice-test:headless     # headless (SSH/CI environment)
-node src/scripts/iceTest.js http://192.168.214.3:3001 http://192.168.214.3:5173
+node src/scripts/iceTest.js http://192.168.214.3:3080 http://192.168.214.3:3080
 ```
 
 ### 4.2 Architecture: Socket.IO Trigger Approach (v2.0)
@@ -399,7 +399,7 @@ sudo ufw allow 40000:49999/udp
 |------|--------|------|
 | `SERVER_IP` | `localhost` | Server LAN IP (included in host ICE candidates) |
 | `PORT` | `3001` | Backend HTTP/Socket.IO port |
-| `VITE_PORT` | `5173` | Vite development server port |
+| `VITE_PORT` | `3080` | Vite development server port |
 | `STUN_URLS` | `stun:stun.l.google.com:19302` | Specify multiple STUN servers separated by comma |
 | `TURN_URL` | (none) | TURN server URL (turn: or turns:) |
 | `TURN_USERNAME` | (none) | TURN authentication username |

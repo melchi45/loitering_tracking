@@ -55,7 +55,7 @@ Every test case references one or more FR-ACC-NNN requirement IDs from SRS_AI_Ac
 
 ### 2.1 Server State
 
-- Server running on `http://localhost:3001`
+- Server running on `http://localhost:3080`
 - `server/models/yolov8n.onnx` present
 - `GET /health` returns `{ status: 'ok' }`
 
@@ -68,7 +68,7 @@ Every test case references one or more FR-ACC-NNN requirement IDs from SRS_AI_Ac
 
 ```
 node >= 18
-Server running on BASE_URL (default: http://localhost:3001)
+Server running on BASE_URL (default: http://localhost:3080)
 ```
 
 ---

@@ -13,7 +13,7 @@
  * and are marked as SKIP in this script.
  *
  * Prerequisites:
- *   - Server running on BASE_URL (default http://localhost:3001, or https://localhost:3443)
+ *   - Server running on BASE_URL (default http://localhost:3080, or https://localhost:3443)
  *   - For HTTPS tests: HTTPS_ENABLED=true in server/.env, valid cert at SSL_CERT_PATH
  *   - Set LTS_URL and/or LTS_HTTPS_URL env vars to override base URLs
  *
@@ -23,7 +23,7 @@
  *   LTS_HTTPS_URL=https://localhost:3443 node test/api/https_tls.test.js
  */
 
-const BASE_URL       = process.env.LTS_URL       || 'http://localhost:3001';
+const BASE_URL       = process.env.LTS_URL       || 'http://localhost:3080';
 const HTTPS_BASE_URL = process.env.LTS_HTTPS_URL || null; // null → HTTPS tests skipped
 
 // ── Minimal test harness ─────────────────────────────────────────────────────

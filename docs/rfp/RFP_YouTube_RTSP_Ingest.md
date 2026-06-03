@@ -163,7 +163,7 @@ yt-dlp --no-playlist \
 | **Why MediaMTX** | Zero-config path creation; supports RTSP, RTMP, HLS, WebRTC output simultaneously; webhook events for publish/read lifecycle; single static binary. |
 | **Port** | `8554` (RTSP/TCP, loopback only — not exposed to LAN). |
 | **Path prefix** | `/yt/<channelId>` — isolates YouTube virtual channels from physical camera paths. |
-| **Webhook** | `POST http://localhost:3001/internal/mediamtx` — notifies LTS server of `publish`, `read`, `unpublish` events. |
+| **Webhook** | `POST http://localhost:3080/internal/mediamtx` — notifies LTS server of `publish`, `read`, `unpublish` events. |
 | **Docker** | `bluenviron/mediamtx:latest` added to `docker-compose.yml`. |
 
 ### 4.4 Dependency Summary
