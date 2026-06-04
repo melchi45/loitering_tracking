@@ -965,16 +965,41 @@ class PipelineManager {
     console.log(`[PipelineManager] Eager load — face:${this._attrPipeline.faceStatus}`);
   }
 
+  _normalizeRtspUrl(inputUrl, cameraId) {
+    if (typeof inputUrl !== 'string') return inputUrl;
+    let normalized = inputUrl.trim();
+
+    // Common typo from camera configuration: "rtps://" -> "rtsp://"
+    if (/^rtps:\/\//i.test(normalized)) {
+      normalized = normalized.replace(/^rtps:\/\//i, 'rtsp://');
+      console.warn(
+        `[PipelineManager][${cameraId || 'unknown'}] Invalid protocol "rtps://" detected; ` +
+        'normalized to "rtsp://".'
+      );
+    }
+
+    return normalized;
+  }
+
   _buildRtspUrl(camera) {
     if (camera.rtspUrl) {
+      const normalizedRtspUrl = this._normalizeRtspUrl(camera.rtspUrl, camera.id);
       // Inject credentials if not already in URL
-      if (camera.username && !camera.rtspUrl.includes('@')) {
-        const url = new URL(camera.rtspUrl);
-        url.username = camera.username;
-        url.password = camera.password || '';
-        return url.toString();
+      if (camera.username && !normalizedRtspUrl.includes('@')) {
+        try {
+          const url = new URL(normalizedRtspUrl);
+          url.username = camera.username;
+          url.password = camera.password || '';
+          return url.toString();
+        } catch (e) {
+          console.warn(
+            `[PipelineManager][${camera.id}] Failed to parse RTSP URL; ` +
+            `using normalized URL as-is. (${e.message})`
+          );
+          return normalizedRtspUrl;
+        }
       }
-      return camera.rtspUrl;
+      return normalizedRtspUrl;
     }
     const user = camera.username || process.env.RTSP_DEFAULT_USERNAME || 'admin';
     const pass = camera.password || process.env.RTSP_DEFAULT_PASSWORD || '';

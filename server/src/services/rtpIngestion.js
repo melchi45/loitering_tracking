@@ -1,6 +1,6 @@
 'use strict';
 
-const { spawn }        = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const { EventEmitter } = require('events');
 const webrtcGateway    = require('./webrtcGateway');
 
@@ -14,6 +14,22 @@ const PT_OPUS = 111;
 // SSRC values must fit in signed int32 (FFmpeg 3.x limitation: max 2147483647)
 const SSRC_VIDEO = 1111;
 const SSRC_AUDIO = 2222;
+
+function _detectFfmpegMajor() {
+  try {
+    const r = spawnSync('ffmpeg', ['-version'], { encoding: 'utf8' });
+    const m = (r.stdout || '').match(/ffmpeg version (\d+)/);
+    return m ? parseInt(m[1], 10) : 4;
+  } catch (_) {
+    return 4;
+  }
+}
+
+// -stimeout was removed in ffmpeg 7.0; ffmpeg 3.x expects -stimeout.
+const FFMPEG_MAJOR = _detectFfmpegMajor();
+const RTSP_TIMEOUT_ARGS = FFMPEG_MAJOR < 4
+  ? ['-stimeout', '5000000']
+  : ['-timeout', '5000000'];
 
 /**
  * Dual-output FFmpeg capture:
@@ -165,7 +181,7 @@ class RtpIngestion extends EventEmitter {
       // produce backward RTP timestamps that stall the browser's jitter buffer.
       '-use_wallclock_as_timestamps', '1',
       '-max_interleave_delta', '0',
-      '-stimeout',        '5000000',
+      ...RTSP_TIMEOUT_ARGS,
       '-analyzeduration', '1000000',
       '-probesize',       '1000000',
       '-i',               this.rtspUrl,

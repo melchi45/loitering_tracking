@@ -15,6 +15,20 @@ const sessions = new Map();
 function registerWebRTCHandlers(_io, socket) {
   function sessionKey(cameraId) { return `${socket.id}:${cameraId}`; }
 
+  function getPreferredAnnouncedIp() {
+    const xfHost = socket.handshake?.headers?.['x-forwarded-host'];
+    const hostHeader = (Array.isArray(xfHost) ? xfHost[0] : xfHost) || socket.handshake?.headers?.host || '';
+    const host = String(hostHeader).split(',')[0].trim();
+    if (!host) return '';
+
+    // host examples: "192.168.214.254:3080", "[::1]:3080", "localhost:5173"
+    const ipv6Match = host.match(/^\[([^\]]+)\]/);
+    if (ipv6Match) return '';
+
+    const withoutPort = host.replace(/:\d+$/, '');
+    return withoutPort;
+  }
+
   const tag = `[WebRTC][${socket.id.slice(0, 8)}]`;
 
   // ── webrtc:getCapabilities ─────────────────────────────────────────────
@@ -64,7 +78,8 @@ function registerWebRTCHandlers(_io, socket) {
         sessions.delete(key);
       }
 
-      const listenIps = webrtcGateway.getListenIps();
+      const preferredIp = getPreferredAnnouncedIp();
+      const listenIps = webrtcGateway.getListenIps(preferredIp);
       console.log(`${tag} createTransport — announcing IPs: ${listenIps.map(l => l.announcedIp).join(', ')}`);
       const transport = await router.createWebRtcTransport({
         listenIps,

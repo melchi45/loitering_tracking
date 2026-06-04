@@ -87,6 +87,23 @@ function getAllListenIps() {
   return ips;
 }
 
+function _dedupeListenIps(list) {
+  const seen = new Set();
+  const out = [];
+  for (const item of list) {
+    if (!item || !item.announcedIp) continue;
+    const key = `${item.ip}|${item.announcedIp}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(item);
+  }
+  return out;
+}
+
+function _isIpv4(host) {
+  return /^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$/.test(host);
+}
+
 class WebRTCGateway {
   constructor() {
     this.enabled   = false;
@@ -169,8 +186,15 @@ class WebRTCGateway {
     return this._producers.get(cameraId) ?? { video: null, audio: null };
   }
 
-  getListenIps() {
-    return getAllListenIps();
+  getListenIps(preferredAnnouncedIp) {
+    const base = getAllListenIps();
+    if (!preferredAnnouncedIp || !_isIpv4(preferredAnnouncedIp)) return base;
+    // Put the client-facing server IP first so ICE checks start with a
+    // reachable candidate on multi-NIC hosts.
+    return _dedupeListenIps([
+      { ip: '0.0.0.0', announcedIp: preferredAnnouncedIp },
+      ...base,
+    ]);
   }
 
   async close() {
