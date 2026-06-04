@@ -2,6 +2,27 @@
 
 const os = require('os');
 
+let _cudaDisabledForRuntime = false;
+let _cudaDisableReasonLogged = false;
+
+function _isTrue(v) {
+  return v === '1' || v === 'true';
+}
+
+function _disableCudaForRuntime(reason) {
+  _cudaDisabledForRuntime = true;
+  if (_cudaDisableReasonLogged) return;
+  _cudaDisableReasonLogged = true;
+  console.warn(
+    '[onnxOptions] CUDA execution provider is unavailable in this runtime. ' +
+    `Falling back to CPU for all ONNX sessions. reason="${reason}"`
+  );
+  console.warn(
+    '[onnxOptions] To enable CUDA: install a CUDA-enabled onnxruntime-node build and verify NVIDIA driver/CUDA/cuDNN compatibility. ' +
+    'Set ONNX_CUDA=0 to silence this warning when using CPU-only inference.'
+  );
+}
+
 /**
  * Returns ONNX InferenceSession options tuned to the runtime environment.
  *
@@ -22,7 +43,8 @@ const os = require('os');
  */
 function getOnnxSessionOptions() {
   const isDev   = process.env.NODE_ENV === 'development';
-  const useCuda = process.env.ONNX_CUDA === '1' || process.env.ONNX_CUDA === 'true';
+  const useCudaRequested = _isTrue(process.env.ONNX_CUDA);
+  const useCuda = useCudaRequested && !_cudaDisabledForRuntime;
 
   const numCores    = os.cpus().length;
   const autoThreads = Math.max(2, Math.min(8, Math.floor(numCores / 2)));
@@ -40,7 +62,9 @@ function getOnnxSessionOptions() {
   }
 
   const providers = useCuda ? ['cuda', 'cpu'] : ['cpu'];
-  const modeTag   = useCuda ? 'cuda' : (isDev ? 'dev' : 'prod');
+  const modeTag   = useCuda
+    ? 'cuda'
+    : (useCudaRequested && _cudaDisabledForRuntime ? 'cpu(cuda-disabled)' : (isDev ? 'dev' : 'prod'));
 
   console.log(
     `[onnxOptions] mode=${modeTag}  threads=${threads}  cores=${numCores}  providers=${JSON.stringify(providers)}`
@@ -71,11 +95,31 @@ async function createOnnxSession(ort, modelPath, logTag = 'ONNX') {
   const preferred = getOnnxSessionOptions();
   const providers = preferred.executionProviders || ['cpu'];
   const wantsCuda = providers.includes('cuda');
-  const strictCuda = process.env.ONNX_CUDA_STRICT === '1' || process.env.ONNX_CUDA_STRICT === 'true';
+  const strictCuda = _isTrue(process.env.ONNX_CUDA_STRICT);
 
   try {
-    return await ort.InferenceSession.create(modelPath, preferred);
+    const session = await ort.InferenceSession.create(modelPath, preferred);
+
+    // Some ORT builds silently drop unavailable providers (e.g. cuda -> cpu)
+    // without throwing. If that happens once, stop requesting CUDA repeatedly.
+    if (wantsCuda && !_cudaDisabledForRuntime) {
+      const active = Array.isArray(session?.executionProviders)
+        ? session.executionProviders.map((p) => String(p).toLowerCase())
+        : null;
+      if (active && !active.includes('cuda')) {
+        _disableCudaForRuntime(`requested=[${providers.join(',')}] active=[${active.join(',')}]`);
+      }
+    }
+
+    return session;
   } catch (err) {
+    const msg = String(err?.message || err || 'unknown');
+    const looksLikeCudaUnavailable = /backend not found|not available|cuda|execution provider/i.test(msg);
+
+    if (wantsCuda && looksLikeCudaUnavailable) {
+      _disableCudaForRuntime(msg);
+    }
+
     if (!wantsCuda || strictCuda) throw err;
 
     const cpuOnly = {
@@ -84,7 +128,7 @@ async function createOnnxSession(ort, modelPath, logTag = 'ONNX') {
     };
 
     console.warn(
-      `[${logTag}] CUDA session create failed (${err.message}). ` +
+      `[${logTag}] CUDA session create failed (${msg}). ` +
       'Retrying with CPU provider.'
     );
 

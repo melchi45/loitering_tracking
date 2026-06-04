@@ -230,7 +230,10 @@
     "where.exe": true,
     "ffmpeg": true,
     "ForEach-Object": true,
-    "%": true
+    "%": true,
+    "nvidia-smi": true,
+    "Test-Path": true,
+    "Get-CimInstance": true
   },
   "chat.agent.maxRequests": 1000,
   // settings.json

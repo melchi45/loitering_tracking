@@ -1,0 +1,11 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Search CUDA packages",
+			"type": "shell",
+			"command": "winget search CUDA && winget search cuDNN",
+			"isBackground": false
+		}
+	]
+}

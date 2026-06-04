@@ -9,37 +9,60 @@ const SCAN_INTERVAL = 15000; // pause between scans — long enough for cameras 
 // ─── UDP device mapper ────────────────────────────────────────────────────────
 
 function mapUDPDevice(raw) {
-  const mac = (raw.chMac || '').replace(/\xff/g, '').trim();
-  const ip  = (raw.chIP  || '').replace(/\xff/g, '').trim();
+  const clean = (v) => String(v || '').replace(/\xff/g, '').replace(/[^\x20-\x7E]/g, '').trim();
+
+  // Accept both WiseNet submodule shape (chIP/chMac/...) and
+  // inline fallback shape (ip/mac/model/httpPort/...)
+  const mac = clean(raw.chMac || raw.MACAddress || raw.mac);
+  const ip  = clean(raw.chIP  || raw.IPAddress  || raw.ip);
   if (!ip) return null;
 
-  const model     = (raw.chDeviceNameNew && raw.chDeviceNameNew !== '')
-                      ? raw.chDeviceNameNew : (raw.chDeviceName || raw.Model || '');
-  const httpPort  = (!raw.nHttpPort  || raw.nHttpPort  === 0) ? 80  : raw.nHttpPort;
-  const httpsPort = (!raw.nHttpsPort || raw.nHttpsPort === 0) ? 443 : raw.nHttpsPort;
-  const httpType  = raw.httpType != null ? raw.httpType !== 0 : false;
-  const clean     = (s) => (s || '').replace(/[^\x20-\x7E]/g, '').trim();
+  const model     = clean(
+    (raw.chDeviceNameNew && raw.chDeviceNameNew !== '')
+      ? raw.chDeviceNameNew
+      : (raw.chDeviceName || raw.Model || raw.model || raw.name)
+  );
+
+  const resolvePort = (a, b, fallback) => {
+    const v = parseInt(a != null ? a : b, 10);
+    return Number.isFinite(v) && v > 0 ? v : fallback;
+  };
+
+  const httpPort  = resolvePort(raw.nHttpPort,  raw.httpPort ?? raw.HttpPort,  80);
+  const httpsPort = resolvePort(raw.nHttpsPort, raw.httpsPort ?? raw.HttpsPort, 443);
+  const rtspPort  = resolvePort(raw.nPort,      raw.Port,                    554);
+  const httpType  = raw.httpType != null
+    ? raw.httpType !== 0
+    : (raw.HttpType != null ? !!raw.HttpType : false);
+
+  const rtspUrl = clean(raw.rtspUrl) || `rtsp://${ip}:${rtspPort}/`;
+  const gateway = clean(raw.chGateway || raw.Gateway);
+  const subnet  = clean(raw.chSubnetMask || raw.SubnetMask);
+  const ddnsUrl = clean(raw.DDNSURL || raw.URL);
+  const supportSunapi = raw.isSupportSunapi === 1 || raw.SupportSunapi === true;
+  const supportOnvif  = raw.SupportOnvif !== false;
+  const id = mac ? `${mac}_${ip}` : `ip_${ip}`;
 
   return {
-    id:           `${mac}_${ip}`,
+    id,
     source:       'udp',
     Model:        model,
     Manufacturer: 'Hanwha Vision',
     Type:         raw.modelType,
     IPAddress:    ip,
     MACAddress:   mac,
-    Port:         raw.nPort,
+    Port:         rtspPort,
     Channel:      1,
     MaxChannel:   1,
     HttpType:     httpType,
     HttpPort:     httpPort,
     HttpsPort:    httpsPort,
-    Gateway:      clean(raw.chGateway),
-    SubnetMask:   clean(raw.chSubnetMask),
-    SupportSunapi: raw.isSupportSunapi === 1,
-    SupportOnvif:  true,   // Hanwha cameras support ONVIF
-    URL:          raw.DDNSURL || '',
-    rtspUrl:      raw.rtspUrl,
+    Gateway:      gateway,
+    SubnetMask:   subnet,
+    SupportSunapi: supportSunapi,
+    SupportOnvif:  supportOnvif,
+    URL:          ddnsUrl,
+    rtspUrl,
     profiles:     [],
   };
 }
@@ -60,13 +83,21 @@ function deviceKey(dev) {
 function mergeDevices(existing, incoming) {
   const merged = { ...existing };
 
+  const hasMeaningful = (v) => {
+    const s = String(v || '').trim();
+    if (!s) return false;
+    return !/^unknown$/i.test(s);
+  };
+
   // Source badge
   if (existing.source !== incoming.source) merged.source = 'both';
 
   // Fill in empty basic fields (never overwrite existing data)
   for (const key of ['Model', 'Manufacturer', 'MACAddress', 'FirmwareVersion',
                       'SerialNumber', 'Gateway', 'SubnetMask', 'URL']) {
-    if (!merged[key] && incoming[key]) merged[key] = incoming[key];
+    if (!hasMeaningful(merged[key]) && hasMeaningful(incoming[key])) {
+      merged[key] = incoming[key];
+    }
   }
 
   // rtspUrl: prefer a real GetStreamUri URL over the fallback 'rtsp://ip:554/'

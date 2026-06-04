@@ -4,25 +4,40 @@ const dgram  = require('dgram');
 const { EventEmitter } = require('events');
 const path   = require('path');
 
-const SUBMODULE_PATH = path.resolve(
-  __dirname,
-  '..', '..', '..', 'submodules',
-  'WiseNetChromeIPInstaller', 'nodejs', 'udpDiscovery.js'
-);
-
 let _SubmoduleDiscovery = null;
-try {
-  const mod = require(SUBMODULE_PATH);
-  _SubmoduleDiscovery = mod.UDPDiscovery || mod.default || mod;
-} catch (_) {
-  // Submodule not initialised — use inline fallback
+function _isDiscoveryCtor(v) {
+  return typeof v === 'function' && typeof v.prototype?.start === 'function';
+}
+
+const SUBMODULE_CANDIDATES = [
+  path.resolve(__dirname, '..', '..', '..', 'submodules', 'WiseNetChromeIPInstaller', 'nodejs', 'udpDiscovery.js'),
+  path.resolve(__dirname, '..', '..', '..', 'submodules', 'WiseNetChromeIPInstaller', 'udpDiscovery.js'),
+];
+
+for (const candidate of SUBMODULE_CANDIDATES) {
+  try {
+    const mod = require(candidate);
+    const Ctor = mod.UDPDiscovery || mod.default || mod;
+    if (_isDiscoveryCtor(Ctor)) {
+      _SubmoduleDiscovery = Ctor;
+      console.log(`[UDPDiscovery] Using submodule implementation: ${candidate}`);
+      break;
+    }
+  } catch (_) {
+    // try next candidate
+  }
+}
+
+if (!_SubmoduleDiscovery) {
+  console.warn('[UDPDiscovery] Submodule implementation not found. Using inline fallback.');
 }
 
 // ─── Inline Fallback Implementation ─────────────────────────────────────────
 // Implements WiseNet SUNAPI UDP device discovery broadcast.
-// Sends a discovery broadcast to port 7700 and parses XML-like responses.
+// Sends discovery to port 7701 and listens on 7711 (same as legacy tool behavior).
 
-const DISCOVERY_PORT      = 7700;
+const DISCOVERY_SEND_PORT = 7701;
+const DISCOVERY_RECV_PORT = 7711;
 const DISCOVERY_BROADCAST = '255.255.255.255';
 const DISCOVERY_TIMEOUT   = 5000; // ms
 const DISCOVERY_PAYLOAD   = Buffer.from(
@@ -37,12 +52,14 @@ class UDPDiscoveryFallback extends EventEmitter {
   /**
    * @param {object} [options]
    * @param {number} [options.timeout=5000]  Discovery window in ms
-   * @param {number} [options.port=7700]     Broadcast port
+   * @param {number} [options.sendPort=7701] Broadcast destination port
+   * @param {number} [options.recvPort=7711] Local UDP listen port
    */
   constructor(options = {}) {
     super();
     this.timeout  = options.timeout  || DISCOVERY_TIMEOUT;
-    this.port     = options.port     || DISCOVERY_PORT;
+    this.sendPort = options.sendPort || options.port || DISCOVERY_SEND_PORT;
+    this.recvPort = options.recvPort || DISCOVERY_RECV_PORT;
     this._socket  = null;
     this._timer   = null;
     this._seen    = new Set();
@@ -65,13 +82,14 @@ class UDPDiscoveryFallback extends EventEmitter {
       if (device) this.emit('device', device);
     });
 
-    this._socket.bind(() => {
+    this._socket.bind(this.recvPort, '0.0.0.0', () => {
       try {
         this._socket.setBroadcast(true);
         this._socket.send(
           DISCOVERY_PAYLOAD, 0, DISCOVERY_PAYLOAD.length,
-          this.port, DISCOVERY_BROADCAST
+          this.sendPort, DISCOVERY_BROADCAST
         );
+        this.emit('listening', { recvPort: this.recvPort, sendPort: this.sendPort });
       } catch (err) {
         this.emit('error', err);
       }
@@ -97,8 +115,8 @@ class UDPDiscoveryFallback extends EventEmitter {
     // Extract common fields from ONVIF/WiseNet XML response
     const ip    = rinfo.address;
     const mac   = this._extractTag(text, 'MACAddress') || this._extractTag(text, 'HardwareAddress') || null;
-    const model = this._extractTag(text, 'Model')      || this._extractTag(text, 'FriendlyName')    || 'Unknown';
-    const name  = this._extractTag(text, 'Name')       || model;
+    const model = this._extractTag(text, 'Model')      || this._extractTag(text, 'FriendlyName')    || '';
+    const name  = this._extractTag(text, 'Name')       || model || '';
     const xaddr = this._extractTag(text, 'XAddrs')     || null;
 
     // Try to derive HTTP port from XAddrs

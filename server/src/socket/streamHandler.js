@@ -62,35 +62,47 @@ function registerStreamHandlers(io, socket, db) {
     _discoveryInstance = discovery;
 
     discovery.on('device', (raw) => {
+      const clean = (v) => String(v || '').replace(/\xff/g, '').replace(/[^\x20-\x7E]/g, '').trim();
+      const resolvePort = (a, b, fallback) => {
+        const v = parseInt(a != null ? a : b, 10);
+        return Number.isFinite(v) && v > 0 ? v : fallback;
+      };
+
       // Map raw WiseNet binary fields exactly as the Chrome extension does
-      const strMacAddress = (raw.chMac  || '').replace(/\xff/g, '').trim();
-      const strIpAddress  = (raw.chIP   || '').replace(/\xff/g, '').trim();
+      const strMacAddress = clean(raw.chMac || raw.MACAddress || raw.mac);
+      const strIpAddress  = clean(raw.chIP  || raw.IPAddress  || raw.ip);
       const strModel      = (raw.chDeviceNameNew && raw.chDeviceNameNew !== '')
                               ? raw.chDeviceNameNew
-                              : (raw.chDeviceName || '');
-      const numHttpPort   = (!raw.nHttpPort  || raw.nHttpPort  === 0) ? 80  : raw.nHttpPort;
-      const numHttpsPort  = (!raw.nHttpsPort || raw.nHttpsPort === 0) ? 443 : raw.nHttpsPort;
-      const httpType      = (raw.httpType != null) ? (raw.httpType !== 0) : false;
+                              : (raw.chDeviceName || raw.Model || raw.model || raw.name || '');
+      const numHttpPort   = resolvePort(raw.nHttpPort,  raw.httpPort ?? raw.HttpPort,  80);
+      const numHttpsPort  = resolvePort(raw.nHttpsPort, raw.httpsPort ?? raw.HttpsPort, 443);
+      const rtspPort      = resolvePort(raw.nPort,      raw.Port,                    554);
+      const httpType      = (raw.httpType != null)
+        ? (raw.httpType !== 0)
+        : (raw.HttpType != null ? !!raw.HttpType : false);
+      const supportSunapi = raw.isSupportSunapi === 1 || raw.SupportSunapi === true;
+      const rtspUrl       = clean(raw.rtspUrl) || `rtsp://${strIpAddress}:${rtspPort}/`;
+      const id            = strMacAddress ? `${strMacAddress}_${strIpAddress}` : `ip_${strIpAddress}`;
 
       const device = {
-        id:           `${strMacAddress}_${strIpAddress}`,
+        id,
         Model:        strModel,
         Type:         raw.modelType,
         Username:     '',
         Password:     '',
         IPAddress:    strIpAddress,
         MACAddress:   strMacAddress,
-        Port:         raw.nPort,
+        Port:         rtspPort,
         Channel:      1,
         MaxChannel:   1,
         HttpType:     httpType,
         HttpPort:     numHttpPort,
         HttpsPort:    numHttpsPort,
-        Gateway:      (raw.chGateway    || '').replace(/\xff/g, '').trim(),
-        SubnetMask:   (raw.chSubnetMask || '').replace(/\xff/g, '').trim(),
-        SupportSunapi: raw.isSupportSunapi === 1,
-        URL:          raw.DDNSURL || '',
-        rtspUrl:      raw.rtspUrl,
+        Gateway:      clean(raw.chGateway || raw.Gateway),
+        SubnetMask:   clean(raw.chSubnetMask || raw.SubnetMask),
+        SupportSunapi: supportSunapi,
+        URL:          clean(raw.DDNSURL || raw.URL),
+        rtspUrl,
       };
       socket.emit('discovery:result', { device });
     });
@@ -118,6 +130,13 @@ function registerStreamHandlers(io, socket, db) {
    * Clear known devices and restart discovery from scratch (triggered by client "Clean").
    */
   socket.on('discovery:rescan', () => {
+    const svc = getDiscoveryService();
+    if (svc) svc.rescan();
+  });
+
+  // REST /api/cameras/discover emits this event via io.emit(...).
+  // Bridge it to the same background rescan path used by the UI "Clean" action.
+  socket.on('discovery:trigger', () => {
     const svc = getDiscoveryService();
     if (svc) svc.rescan();
   });
