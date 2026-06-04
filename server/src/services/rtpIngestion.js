@@ -86,6 +86,8 @@ class RtpIngestion extends EventEmitter {
           mimeType:    'video/H264',
           payloadType: PT_H264,
           clockRate:   90000,
+          // 42e01f = Baseline 3.1 for mediasoup codec matching; browser decodes
+          // the real H264 profile from the SPS/PPS NAL units in the RTP stream.
           parameters:  { 'packetization-mode': 1, 'profile-level-id': '42e01f' },
         }],
         encodings: [{ ssrc: SSRC_VIDEO }],

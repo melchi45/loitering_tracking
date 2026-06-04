@@ -1,12 +1,36 @@
 'use strict';
 
-const { spawn }       = require('child_process');
-const { EventEmitter } = require('events');
+const { spawn, spawnSync } = require('child_process');
+const { EventEmitter }     = require('events');
 
 const JPEG_SOI = Buffer.from([0xff, 0xd8, 0xff]);
 const JPEG_EOI = Buffer.from([0xff, 0xd9]);
 
 const RETRY_DELAY = 1000; // ms — fixed 1-second retry interval, unlimited attempts
+
+// ── ffmpeg version detection ────────────────────────────────────────────────
+// Ubuntu 18.04 = ffmpeg 3.4  → use -stimeout (µs) for RTSP socket timeout
+// Ubuntu 20.04 = ffmpeg 4.2  → -timeout works as AVOption; -stimeout still ok
+// Ubuntu 22.04 = ffmpeg 4.4  → same
+// Ubuntu 24.04 = ffmpeg 6.1  → -timeout preferred; -stimeout deprecated
+// Ubuntu 26.04 = ffmpeg 7.x  → -stimeout removed; -timeout only
+// The flag must be placed BEFORE -i to take effect as an input AVOption.
+function _detectFfmpegMajor() {
+  try {
+    const r = spawnSync('ffmpeg', ['-version'], { encoding: 'utf8' });
+    const m = (r.stdout || '').match(/ffmpeg version (\d+)/);
+    return m ? parseInt(m[1], 10) : 4;
+  } catch (_) {
+    return 4; // safe default
+  }
+}
+
+const FFMPEG_MAJOR = _detectFfmpegMajor();
+
+// -stimeout was removed in ffmpeg 7.0; -timeout was broken as global in 3.x
+const RTSP_TIMEOUT_ARGS = FFMPEG_MAJOR < 4
+  ? ['-stimeout', '5000000']   // ffmpeg 3.x (Ubuntu 18.04)
+  : ['-timeout',  '5000000'];  // ffmpeg 4+ (Ubuntu 20.04+)
 
 /**
  * Captures JPEG frames from an RTSP stream using a direct ffmpeg child process.
@@ -68,7 +92,7 @@ class RTSPCapture extends EventEmitter {
       '-rtsp_transport', 'tcp',
       // Normalize broken source timestamps from some RTSP cameras.
       '-fflags',         '+genpts+igndts',
-      '-timeout',        '5000000',   // 5 s socket timeout (µs); replaces -stimeout removed in ffmpeg 8
+      ...RTSP_TIMEOUT_ARGS,            // -stimeout (ffmpeg 3.x) or -timeout (ffmpeg 4+)
       '-analyzeduration','1000000',
       '-probesize',      '1000000',
       '-i',              this.rtspUrl,

@@ -1,0 +1,22 @@
+{
+  "labels": [
+    "upper_tshirt",
+    "upper_shirt",
+    "upper_jacket",
+    "upper_hoodie",
+    "upper_vest",
+    "upper_dress",
+    "lower_pants",
+    "lower_jeans",
+    "lower_shorts",
+    "lower_skirt",
+    "sleeve_short",
+    "sleeve_long"
+  ],
+  "input": [
+    1,
+    3,
+    256,
+    128
+  ]
+}

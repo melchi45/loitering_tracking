@@ -4,7 +4,8 @@
       "Bash(*)",
       "Edit(*)",
       "Write(*)",
-      "Read(*)"
+      "Read(*)",
+      "Edit(/.claude/skills/camera-stream-setup/**)"
     ],
     "additionalDirectories": [
       "/home/melchi45"

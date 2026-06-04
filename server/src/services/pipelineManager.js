@@ -39,7 +39,7 @@ function _pointInPolygon(pt, poly) {
   return inside;
 }
 
-const RTSPCapture      = require('./rtspCapture');
+const { createCapture, CAPTURE_BACKEND } = require('./captureFactory');
 const RtpIngestion     = require('./rtpIngestion');
 const webrtcGateway    = require('./webrtcGateway');
 const DetectionService = require('./detection');
@@ -76,13 +76,13 @@ const FACE_MATCH_THRESH   = 0.35;  // cosine similarity threshold for same-perso
 const FACE_EXPIRY_MS      = 30000; // forget a face after 30s of absence
 const FACE_TRACKING_PATH  = path.join(__dirname, '../../../storage/face_tracking.json');
 
-// Maximum number of concurrent camera pipelines (each = 1 RTSPCapture ffmpeg process).
+// Maximum number of concurrent camera pipelines (each = 1 capture backend process).
 // Configurable via MAX_PIPELINES env var; 0 = unlimited.
 const MAX_PIPELINES = parseInt(process.env.MAX_PIPELINES || '8', 10);
 
 /**
  * Orchestrates the full camera processing pipeline:
- * RTSPCapture → Detection → Tracking → BehaviorEngine → Socket.IO emission
+ * CaptureBackend (ffmpeg|gstreamer|pyav) → Detection → Tracking → BehaviorEngine → Socket.IO emission
  */
 class PipelineManager {
   /**
@@ -189,7 +189,7 @@ class PipelineManager {
       capture = new RtpIngestion(camera.id, rtspUrl, { fps: 10, width: 640 });
       await capture.start(); // async: sets up mediasoup PlainTransports then spawns FFmpeg
     } else {
-      capture = new RTSPCapture(camera.id, rtspUrl, { fps: 10, width: 640 });
+      capture = createCapture(camera.id, rtspUrl, { fps: 10, width: 640 });
     }
 
     const tracker  = new ByteTracker();
@@ -582,7 +582,7 @@ class PipelineManager {
     })());
 
     capture.on('warn', ({ message }) => {
-      console.warn(`[RTSPCapture][${camera.id}] ${message}`);
+      console.warn(`[Capture:${CAPTURE_BACKEND}][${camera.id}] ${message}`);
       if (/(Connection refused|Authentication|401|timed out|No route to host|Network is unreachable)/i.test(message)) {
         this._updateCameraStatus(camera.id, 'source_unavailable');
         this._io.to(camera.id).emit('camera:stream-unavailable', {
@@ -602,8 +602,8 @@ class PipelineManager {
 
     capture.on('error', (err) => {
       console.error(`[PipelineManager][${camera.id}] Fatal error:`, err.message);
-      // Permanent failures (e.g. ffmpeg not installed) — mark as error, do not restart.
-      const permanent = err.message.includes('ffmpeg not found');
+      // Permanent failures (binary not found / dependency missing) — mark as error, do not restart.
+      const permanent = /not found|not installed|not available/i.test(err.message);
       this._updateCameraStatus(camera.id, permanent ? 'error' : 'reconnecting');
       this._io.to(camera.id).emit('camera:error', { cameraId: camera.id, message: err.message });
       if (!permanent && ctx.running) {
@@ -627,7 +627,7 @@ class PipelineManager {
     ctx.startedAt = Date.now();
     this._pipelines.set(camera.id, ctx);
     this._updateCameraStatus(camera.id, 'connecting');
-    // RtpIngestion was already started (async) above; RTSPCapture starts here (sync)
+    // RtpIngestion was already started (async) above; capture backend starts here (sync)
     if (!useWebRTC) capture.start();
   }
 

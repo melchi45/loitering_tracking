@@ -211,11 +211,19 @@ function registerWebRTCHandlers(_io, socket) {
   socket.on('webrtc:resumeConsumer', async ({ cameraId, consumerId }) => {
     try {
       const session = sessions.get(sessionKey(cameraId));
-      if (!session) return;
-      for (const c of [session.videoConsumer, session.audioConsumer]) {
-        if (c && c.id === consumerId && !c.closed) await c.resume();
+      if (!session) {
+        console.warn(`${tag} resumeConsumer: no session for camera ${cameraId?.slice(0,8)}`);
+        return;
       }
-    } catch (_) {}
+      for (const c of [session.videoConsumer, session.audioConsumer]) {
+        if (c && c.id === consumerId && !c.closed) {
+          await c.resume();
+          console.log(`${tag} resumeConsumer OK — ${c.kind} consumer ${consumerId.slice(0,8)}`);
+        }
+      }
+    } catch (err) {
+      console.error(`${tag} resumeConsumer error:`, err.message);
+    }
   });
 
   // ── webrtc:leave ──────────────────────────────────────────────────────

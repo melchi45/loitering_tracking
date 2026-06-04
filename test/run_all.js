@@ -149,6 +149,13 @@ const SUITES = [
     tags:  ['camera', 'sidebar'],
   },
 
+  // ── Capture Backend ───────────────────────────────────────────────────────
+  {
+    file:  'test/api/capture-backend.test.js',
+    label: 'TC_RTSP_Capture_Backend — CaptureFactory / GStreamer / PyAV unit tests',
+    tags:  ['capture', 'rtsp', 'gstreamer', 'pyav', 'ffmpeg'],
+  },
+
   // ── Dashboard & Mobile E2E (Phase-3 placeholder) ─────────────────────────
   {
     file:  'test/e2e/dashboard_e2e.test.js',

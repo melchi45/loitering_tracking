@@ -14,6 +14,9 @@ const MEDIA_CODECS = [
   { kind: 'audio', mimeType: 'audio/PCMA', clockRate: 8000 },
   {
     kind: 'video', mimeType: 'video/H264', clockRate: 90000,
+    // 42e01f = Baseline 3.1 — used for SDP negotiation with browsers.
+    // The actual RTP stream may be High Profile (from camera); browsers decode
+    // using the real SPS/PPS in the stream regardless of what SDP declares.
     parameters: { 'packetization-mode': 1, 'profile-level-id': '42e01f',
                   'level-asymmetry-allowed': 1 },
   },
