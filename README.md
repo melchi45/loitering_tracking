@@ -844,6 +844,49 @@ ONNX_THREADS_CUDA=1  # GPU handles parallelism; 1 CPU thread sufficient
 
 Requires a CUDA-enabled build of `onnxruntime-node`. If CUDA is unavailable at runtime, the provider list `['cuda', 'cpu']` automatically falls back to CPU.
 
+##### Windows (NVIDIA CUDA)
+
+- Supported with NVIDIA GPU + recent NVIDIA driver + CUDA Toolkit 12.x + cuDNN 8.x
+- Confirm driver/GPU:
+
+```powershell
+nvidia-smi
+```
+
+- Run server with CUDA enabled:
+
+```powershell
+cd server
+$env:ONNX_CUDA='1'
+npm start
+```
+
+##### Linux (NVIDIA CUDA)
+
+- Supported with NVIDIA GPU + recent NVIDIA driver + CUDA Toolkit 12.x + cuDNN 8.x
+- Confirm driver/GPU:
+
+```bash
+nvidia-smi
+```
+
+- Run server with CUDA enabled:
+
+```bash
+cd server
+ONNX_CUDA=1 npm start
+```
+
+##### Runtime Check (both OS)
+
+- Startup log should include:
+
+```text
+[onnxOptions] mode=cuda ... providers=["cuda","cpu"]
+```
+
+- If CUDA provider is not available, startup falls back to CPU providers.
+
 ---
 
 ## 8. Loitering Detection Logic
@@ -1162,6 +1205,127 @@ Python 3.10+ (for ONNX model export only)
 NVIDIA GPU + CUDA 12.x + cuDNN 8.x
 ```
 
+### 15.1.1 Automated Setup (Recommended)
+
+The setup scripts **auto-detect** Node.js, Python 3, and FFmpeg.  
+If any tool is missing, they attempt to install it automatically (via `winget` on Windows, `apt`/`dnf`/`brew` on Linux/macOS) and then generate `server/.env` with the correct OS-specific binary paths.
+
+#### Windows (PowerShell)
+
+```powershell
+# Run from project root
+powershell -ExecutionPolicy Bypass -File server/src/scripts/setup-env.windows.ps1
+
+# Or via npm (from server/ directory)
+cd server
+npm run setup-env:windows
+```
+
+**What it does:**
+
+| Step | Action |
+|------|--------|
+| 1 | Detects `node` — installs **Node.js LTS** via `winget` if missing |
+| 2 | Detects `python` — installs **Python 3.12** via `winget` if missing |
+| 3 | Detects `ffmpeg` — installs **FFmpeg** via `winget` if missing |
+| 4 | Creates `server/.env` from `.env.example` (skips if already exists) |
+| 5 | Patches `SERVER_RUNTIME_OS`, `NODE_EXEC_WINDOWS`, `PYTHON_EXEC_WINDOWS`, `PYAV_PYTHON_BIN_WINDOWS` with resolved paths |
+
+#### Linux / macOS (Bash)
+
+```bash
+# Run from project root
+bash server/src/scripts/setup-env.linux.sh
+
+# Or via npm (from server/ directory)
+cd server
+npm run setup-env:linux
+```
+
+**What it does:**
+
+| Step | Action |
+|------|--------|
+| 1 | Detects `node` — installs via `apt` / `dnf` / `brew` / NodeSource if missing |
+| 2 | Detects `python3` — installs via system package manager if missing |
+| 3 | Detects `ffmpeg` — installs via system package manager if missing |
+| 4 | Creates `server/.env` from `.env.example` (skips if already exists) |
+| 5 | Patches `SERVER_RUNTIME_OS`, `NODE_EXEC_LINUX`, `PYTHON_EXEC_LINUX`, `PYAV_PYTHON_BIN_LINUX` with resolved paths |
+
+#### .env OS-specific path variables
+
+The setup scripts write the following variables into `server/.env`:
+
+```dotenv
+# OS detection (auto / windows / linux)
+SERVER_RUNTIME_OS=windows          # or: linux
+
+# Node.js binary path
+NODE_EXEC_WINDOWS=C:\Program Files\nodejs\node.exe
+NODE_EXEC_LINUX=/usr/bin/node
+
+# Python binary path
+PYTHON_EXEC_WINDOWS=C:\Users\<user>\AppData\Local\Programs\Python\Python312\python.exe
+PYTHON_EXEC_LINUX=/usr/bin/python3
+
+# PyAV sidecar Python binary (overrides PYTHON_EXEC if set separately)
+PYAV_PYTHON_BIN_WINDOWS=python
+PYAV_PYTHON_BIN_LINUX=/usr/bin/python3
+```
+
+> All variables fall back to the cross-OS `NODE_EXEC` / `PYTHON_EXEC` if the OS-specific key is empty.
+
+---
+
+### 15.1.2 ONNX Model Download Scripts
+
+After environment setup, download or export the required ONNX model files:
+
+#### Windows
+
+```powershell
+cd server
+npm run download-models:windows
+```
+
+**Script:** `server/src/scripts/downloadModels.windows.ps1`
+
+| Step | Action |
+|------|--------|
+| 1 | Runs `node src/scripts/downloadModels.js` to download direct ONNX models (`yolov8n.onnx`, `scrfd_2.5g.onnx`, `arcface_w600k_r50.onnx`) |
+| 2 | Resolves Python path from `PYTHON_EXEC` / `PYTHON_EXEC_WINDOWS` / `PYTHON` env variables |
+| 3 | Installs `ultralytics huggingface_hub torch torchvision onnx` via pip |
+| 4 | Exports `yolov8m_ppe.onnx` (PPE/Helmet detection) from HuggingFace |
+| 5 | Exports `yolov8s_fire_smoke.onnx` (Fire & Smoke detection) from HuggingFace |
+| 6 | Exports `openpar.onnx` (Cloth attribute recognition) via `exportPAR.py` |
+
+Set `LTS_SKIP_PYTHON_EXPORT=1` in `.env` to skip steps 3–6 (download only).
+
+#### Linux / macOS
+
+```bash
+cd server
+npm run download-models:linux
+```
+
+**Script:** `server/src/scripts/downloadModels.linux.sh`
+
+Identical steps to the Windows script, using `PYTHON_EXEC_LINUX` / `PYTHON_EXEC` for Python path resolution.
+
+#### Model status after download
+
+```
+=== Model Status ===
+  ✓ yolov8n.onnx                   AI-01/02 Person+Vehicle (required)
+  ✓ scrfd_2.5g.onnx                AI-03 Face Detection
+  ✓ arcface_w600k_r50.onnx         AI-03 Face Recognition
+  ✗ yolov8m_ppe.onnx               AI-04 Mask + AI-07 Helmet  (Python export)
+  ✗ openpar.onnx                   AI-05 Color + AI-06 Cloth  (Python export)
+  ✗ yolov8s_fire_smoke.onnx        AI-09 Fire & Smoke         (Python export)
+```
+
+---
+
 ### 15.2 Installation
 
 ```bash
@@ -1182,9 +1346,19 @@ wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.onnx
      -O models/yolov8n.onnx
 ```
 
-### 15.3 Configuration
+### 15.4 Configuration
+
+> **Tip:** Use the automated setup scripts described in [15.1.1](#1511-automated-setup-recommended) to generate `server/.env` with correct paths detected automatically.  
+> Manual copy is still available as a fallback:
 
 ```bash
+# Windows
+powershell -ExecutionPolicy Bypass -File server/src/scripts/setup-env.windows.ps1
+
+# Linux / macOS
+bash server/src/scripts/setup-env.linux.sh
+
+# Manual fallback (then edit paths by hand)
 cp server/.env.example server/.env
 # Edit server/.env:
 # PORT=3080
@@ -1264,7 +1438,7 @@ ONNX_THREADS_PROD=0     # production: 0 → max(2, min(8, CPU_cores/2))
 
 `nodemon` (`npm run dev`) automatically sets `NODE_ENV=development` via `nodemon.json` — no manual export needed.
 
-### 15.4 Running
+### 15.5 Running
 
 ```bash
 # Development

@@ -350,7 +350,7 @@ async function main() {
     ok(`Page loaded: ${URL_A}`);
   } catch (err) {
     fail(`UI load failed: ${err.message}`);
-    info('  Make sure the server is running and the client is built: cd client && npm run build');
+    info('  Make sure the server is running and the client is built: node server/src/scripts/buildClient.js');
     await browser.close();
     process.exit(1);
   }

@@ -54,4 +54,44 @@ function getOnnxSessionOptions() {
   };
 }
 
-module.exports = { getOnnxSessionOptions };
+/**
+ * Create ONNX Runtime session with optional CUDA->CPU fallback.
+ *
+ * Behavior:
+ * - ONNX_CUDA=1 + CUDA build available: uses ['cuda','cpu']
+ * - ONNX_CUDA=1 + CUDA unavailable: retries with ['cpu'] unless strict mode
+ * - strict mode: ONNX_CUDA_STRICT=1 (or true)
+ *
+ * @param {object} ort onnxruntime-node module
+ * @param {string} modelPath
+ * @param {string} logTag
+ * @returns {Promise<any>} InferenceSession
+ */
+async function createOnnxSession(ort, modelPath, logTag = 'ONNX') {
+  const preferred = getOnnxSessionOptions();
+  const providers = preferred.executionProviders || ['cpu'];
+  const wantsCuda = providers.includes('cuda');
+  const strictCuda = process.env.ONNX_CUDA_STRICT === '1' || process.env.ONNX_CUDA_STRICT === 'true';
+
+  try {
+    return await ort.InferenceSession.create(modelPath, preferred);
+  } catch (err) {
+    if (!wantsCuda || strictCuda) throw err;
+
+    const cpuOnly = {
+      ...preferred,
+      executionProviders: ['cpu'],
+    };
+
+    console.warn(
+      `[${logTag}] CUDA session create failed (${err.message}). ` +
+      'Retrying with CPU provider.'
+    );
+
+    const session = await ort.InferenceSession.create(modelPath, cpuOnly);
+    console.warn(`[${logTag}] Running with CPU fallback provider.`);
+    return session;
+  }
+}
+
+module.exports = { getOnnxSessionOptions, createOnnxSession };

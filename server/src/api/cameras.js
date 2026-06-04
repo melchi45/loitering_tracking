@@ -3,6 +3,32 @@
 const { Router } = require('express');
 const { v4: uuidv4 } = require('uuid');
 
+function normalizeRtspUrl(rtspUrl) {
+  if (typeof rtspUrl !== 'string' || !rtspUrl.trim()) {
+    return { ok: false, error: 'rtspUrl must be a non-empty string' };
+  }
+
+  let normalized = rtspUrl.trim();
+  let correctedFromRtps = false;
+  if (/^rtps:\/\//i.test(normalized)) {
+    normalized = normalized.replace(/^rtps:\/\//i, 'rtsp://');
+    correctedFromRtps = true;
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(normalized);
+  } catch (_) {
+    return { ok: false, error: 'rtspUrl must be a valid RTSP URL' };
+  }
+
+  if (parsed.protocol !== 'rtsp:') {
+    return { ok: false, error: 'rtspUrl must start with rtsp://' };
+  }
+
+  return { ok: true, value: parsed.toString(), correctedFromRtps };
+}
+
 /**
  * @param {import('better-sqlite3').Database} db
  * @param {import('../services/pipelineManager')} pipelineManager
@@ -71,9 +97,14 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
         return res.status(400).json({ success: false, error: 'name and rtspUrl are required' });
       }
 
+      const normalizedRtsp = normalizeRtspUrl(rtspUrl);
+      if (!normalizedRtsp.ok) {
+        return res.status(400).json({ success: false, error: normalizedRtsp.error });
+      }
+
       const id = uuidv4();
       db.insert('cameras', {
-        id, name, rtspUrl,
+        id, name, rtspUrl: normalizedRtsp.value,
         username:  username  || process.env.RTSP_DEFAULT_USERNAME || null,
         password:  password  || process.env.RTSP_DEFAULT_PASSWORD || null,
         ip:        ip        || null,
@@ -83,7 +114,11 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       });
 
       const camera = db.findOne('cameras', { id });
-      res.status(201).json({ success: true, data: { ...camera, password: undefined } });
+      res.status(201).json({
+        success: true,
+        data: { ...camera, password: undefined },
+        warning: normalizedRtsp.correctedFromRtps ? 'rtps:// was corrected to rtsp:// automatically' : undefined,
+      });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -119,9 +154,17 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
 
       const { name, rtspUrl, username, password, webrtcEnabled } = req.body;
+      let normalizedRtsp = null;
+      if (rtspUrl !== undefined) {
+        normalizedRtsp = normalizeRtspUrl(rtspUrl);
+        if (!normalizedRtsp.ok) {
+          return res.status(400).json({ success: false, error: normalizedRtsp.error });
+        }
+      }
+
       const updates = {};
       if (name          !== undefined) updates.name          = name;
-      if (rtspUrl       !== undefined) updates.rtspUrl       = rtspUrl;
+      if (rtspUrl       !== undefined) updates.rtspUrl       = normalizedRtsp.value;
       if (username      !== undefined) updates.username      = username || null;
       if (password      !== undefined) updates.password      = password || null;
       if (webrtcEnabled !== undefined) updates.webrtcEnabled = !!webrtcEnabled;
@@ -133,14 +176,19 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       // Checking presence (webrtcEnabled !== undefined) was wrong — CameraEditModal
       // always sends webrtcEnabled, causing a ByteTracker reset on every save.
       const needsRestart =
-        (rtspUrl       !== undefined && rtspUrl                !== camera.rtspUrl) ||
+        (rtspUrl       !== undefined && normalizedRtsp.value    !== camera.rtspUrl) ||
         (webrtcEnabled !== undefined && !!webrtcEnabled        !== !!camera.webrtcEnabled) ||
         (username      !== undefined && (username || null)     !== camera.username) ||
         (password      !== undefined && (password || null)     !== camera.password);
 
       // Respond immediately so the browser does not time out while waiting for
       // ONNX model load / RTSP negotiation (can take several seconds).
-      res.json({ success: true, data: { ...updated, password: undefined }, restarted: needsRestart });
+      res.json({
+        success: true,
+        data: { ...updated, password: undefined },
+        restarted: needsRestart,
+        warning: normalizedRtsp?.correctedFromRtps ? 'rtps:// was corrected to rtsp:// automatically' : undefined,
+      });
 
       if (needsRestart && updated.status !== 'idle') {
         setImmediate(async () => {

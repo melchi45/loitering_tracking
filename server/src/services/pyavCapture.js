@@ -9,7 +9,41 @@ const JPEG_EOI = Buffer.from([0xff, 0xd9]);
 
 const RETRY_DELAY = 1000;
 
-const PYAV_PYTHON_BIN = process.env.PYAV_PYTHON_BIN || 'python3';
+function resolveRuntimeOs() {
+  const override = (process.env.SERVER_RUNTIME_OS || 'auto').trim().toLowerCase();
+  if (override === 'windows' || override === 'win') return 'windows';
+  if (override === 'linux') return 'linux';
+  return process.platform === 'win32' ? 'windows' : 'linux';
+}
+
+function firstNonEmpty(candidates) {
+  for (const value of candidates) {
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  return '';
+}
+
+function resolvePyavPythonBin() {
+  const runtimeOs = resolveRuntimeOs();
+  const pyavOsDefault = runtimeOs === 'windows'
+    ? process.env.PYAV_PYTHON_BIN_WINDOWS
+    : process.env.PYAV_PYTHON_BIN_LINUX;
+  const pythonOsDefault = runtimeOs === 'windows'
+    ? process.env.PYTHON_EXEC_WINDOWS
+    : process.env.PYTHON_EXEC_LINUX;
+  const fallback = runtimeOs === 'windows' ? 'python' : 'python3';
+
+  return firstNonEmpty([
+    process.env.PYAV_PYTHON_BIN,
+    pyavOsDefault,
+    process.env.PYTHON_EXEC,
+    pythonOsDefault,
+    process.env.PYTHON,
+    fallback,
+  ]);
+}
+
+const PYAV_PYTHON_BIN = resolvePyavPythonBin();
 const PYAV_HW_ACCEL   = (process.env.PYAV_HW_ACCEL  || 'none').toLowerCase();
 const SIDECAR_SCRIPT  = path.join(__dirname, '../python/pyav_capture.py');
 

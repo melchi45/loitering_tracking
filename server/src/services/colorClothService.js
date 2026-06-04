@@ -118,8 +118,8 @@ class ColorClothService {
     if (fs.existsSync(this.parModelPath)) {
       try {
         const ort = require('onnxruntime-node');
-        const { getOnnxSessionOptions } = require('../utils/onnxOptions');
-        this._parSession = await ort.InferenceSession.create(this.parModelPath, getOnnxSessionOptions());
+        const { createOnnxSession } = require('../utils/onnxOptions');
+        this._parSession = await createOnnxSession(ort, this.parModelPath, 'ColorClothService/PAR');
         this._parReady = true;
         console.log('[ColorClothService] PAR model loaded (Phase-2 cloth analysis active)');
       } catch (e) {

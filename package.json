@@ -6,7 +6,7 @@
     "predev": "fuser -k 3080/tcp 2>/dev/null; fuser -k 3443/tcp 2>/dev/null; sleep 1; true",
     "dev": "concurrently --kill-others --names \"SERVER,CLIENT\" --prefix-colors \"cyan,magenta\" \"cd server && npm run dev\" \"cd client && npm run dev\"",
     "install:all": "cd server && npm install && cd ../client && npm install",
-    "build:client": "cd client && npm run build",
+    "build:client": "node server/src/scripts/buildClient.js",
     "start": "cd server && npm start",
     "dev:server": "cd server && npm run dev",
     "setup": "npm run install:all && npm run build:client",

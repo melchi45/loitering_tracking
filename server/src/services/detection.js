@@ -3,7 +3,7 @@
 const ort = require('onnxruntime-node');
 const sharp = require('sharp');
 const path = require('path');
-const { getOnnxSessionOptions } = require('../utils/onnxOptions');
+const { createOnnxSession } = require('../utils/onnxOptions');
 
 const INPUT_SIZE = 640;
 
@@ -135,7 +135,7 @@ class DetectionService {
   async load() {
     if (this._session) return;
     if (this._loading) return this._loading;
-    this._loading = ort.InferenceSession.create(this.modelPath, getOnnxSessionOptions()).then((session) => {
+    this._loading = createOnnxSession(ort, this.modelPath, 'Detection').then((session) => {
       this._session = session;
       this._loading = null;
     });

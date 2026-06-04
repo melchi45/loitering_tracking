@@ -66,7 +66,12 @@ const NODE_BIN_FOR_YTDLP = findNodeBin();
 console.log(`[YouTubeStream] Node bin for yt-dlp JS runtime: ${NODE_BIN_FOR_YTDLP || '(not found, using config file)'}`);
 
 function findYtDlp() {
+  // 1. Explicit single-path override
   if (process.env.YTDLP_BIN) return process.env.YTDLP_BIN;
+  // 2. OS-specific override written by setup-env scripts
+  const isWindows = process.platform === 'win32';
+  const osKey = isWindows ? process.env.YTDLP_BIN_WINDOWS : process.env.YTDLP_BIN_LINUX;
+  if (osKey) return osKey;
   const candidates = [
     '/home/' + (process.env.USER || require('os').userInfo().username) + '/.local/bin/yt-dlp',
     '/usr/local/bin/yt-dlp',

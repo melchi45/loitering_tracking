@@ -479,7 +479,7 @@ async function phase2(testCameraId, iceConfig) {
     await page.goto(UI, { waitUntil: 'domcontentloaded', timeout: 15_000 });
   } catch (err) {
     fail(`UI load failed: ${err.message}`);
-    info(`  Make sure the server is running and the client is built: cd client && npm run build`);
+    info(`  Make sure the server is running and the client is built: node server/src/scripts/buildClient.js`);
     await browser.close();
     return null;
   }

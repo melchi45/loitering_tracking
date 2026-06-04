@@ -368,7 +368,7 @@ async function main() {
     if (fs.existsSync(indexHtml)) {
       res.sendFile(indexHtml);
     } else {
-      res.send('<h2>LTS Backend running. Build the client: <code>cd client && npm run build</code></h2>');
+      res.send('<h2>LTS Backend running. Build the client: <code>node server/src/scripts/buildClient.js</code></h2>');
     }
   });
 

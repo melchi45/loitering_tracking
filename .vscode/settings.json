@@ -222,7 +222,15 @@
     "ss": true,
     "command": true,
     "type": true,
-    "true": true
+    "true": true,
+    "Get-Command": true,
+    "winget": true,
+    "py": true,
+    "cl": true,
+    "where.exe": true,
+    "ffmpeg": true,
+    "ForEach-Object": true,
+    "%": true
   },
   "chat.agent.maxRequests": 1000,
   // settings.json
