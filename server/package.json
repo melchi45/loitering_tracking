@@ -35,13 +35,13 @@
     "mediasoup": "^3.14.15",
     "mongoose": "^9.6.2",
     "multer": "^2.1.1",
-    "nodemailer": "^6.9.10",
-    "onnxruntime-node": "^1.17.3",
+    "nodemailer": "^8.0.10",
+    "onnxruntime-node": "^1.26.0",
     "passport": "^0.7.0",
     "passport-google-oauth20": "^2.0.0",
     "sharp": "^0.33.5",
     "socket.io": "^4.7.2",
-    "uuid": "^9.0.1"
+    "uuid": "^14.0.0"
   },
   "devDependencies": {
     "jest": "^29.7.0",
