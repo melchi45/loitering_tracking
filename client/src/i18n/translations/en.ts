@@ -128,6 +128,13 @@ export const en = {
   settingsWebRTCApply: 'Apply',
   settingsWebRTCSaved: 'Saved ✓',
 
+  // Settings — ICE Test
+  settingsIceTest: 'ICE Connectivity Test',
+  settingsIceTestRun: 'Run ICE Test',
+  settingsIceTestRunning: 'Testing… (click to abort)',
+  settingsIceTestDownload: 'Download Report',
+  settingsIceTestClear: 'Clear',
+
   // Zone editor groups
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: 'Accessories / Sports',

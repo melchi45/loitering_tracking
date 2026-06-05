@@ -115,6 +115,13 @@ export const ko: Translations = {
   settingsWebRTCApply: '적용',
   settingsWebRTCSaved: '저장됨 ✓',
 
+  // Settings — ICE Test
+  settingsIceTest: 'ICE 연결 테스트',
+  settingsIceTestRun: 'ICE 테스트 실행',
+  settingsIceTestRunning: '테스트 중… (클릭하여 중단)',
+  settingsIceTestDownload: '리포트 다운로드',
+  settingsIceTestClear: '지우기',
+
   zoneGroupPeopleVehicles: '사람 / 차량',
   zoneGroupAccessories: '소지품 / 스포츠용품',
   zoneGroupAiAttributes: 'AI 속성',

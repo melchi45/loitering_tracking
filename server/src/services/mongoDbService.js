@@ -25,7 +25,9 @@ const TABLES = [
   'alerts',
   'faceGalleries',
   'faceGalleryFaces',
-  'settings',       // single-document settings (face tracking state etc.)
+  'settings',                    // single-document settings (face tracking state etc.)
+  'missing_persons',             // registered missing persons with face embeddings
+  'missing_person_detections',   // detection events matched against missing persons
 ];
 
 // ── Schema: flexible, identity keyed by `id` ────────────────────────────────

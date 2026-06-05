@@ -115,6 +115,13 @@ export const hi: Translations = {
   settingsWebRTCApply: 'लागू करें',
   settingsWebRTCSaved: 'सहेजा गया ✓',
 
+  // Settings — ICE Test
+  settingsIceTest: 'ICE Connectivity Test',
+  settingsIceTestRun: 'Run ICE Test',
+  settingsIceTestRunning: 'Testing… (click to abort)',
+  settingsIceTestDownload: 'Download Report',
+  settingsIceTestClear: 'Clear',
+
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: 'सहायक उपकरण / खेल',
   zoneGroupAiAttributes: 'AI Attributes',

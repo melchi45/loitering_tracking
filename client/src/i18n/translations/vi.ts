@@ -115,6 +115,13 @@ export const vi: Translations = {
   settingsWebRTCApply: 'Áp dụng',
   settingsWebRTCSaved: 'Đã lưu ✓',
 
+  // Settings — ICE Test
+  settingsIceTest: 'ICE Connectivity Test',
+  settingsIceTestRun: 'Run ICE Test',
+  settingsIceTestRunning: 'Testing… (click to abort)',
+  settingsIceTestDownload: 'Download Report',
+  settingsIceTestClear: 'Clear',
+
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: 'Phụ kiện / Thể thao',
   zoneGroupAiAttributes: 'AI Attributes',

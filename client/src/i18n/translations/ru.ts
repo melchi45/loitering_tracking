@@ -115,6 +115,13 @@ export const ru: Translations = {
   settingsWebRTCApply: 'Применить',
   settingsWebRTCSaved: 'Сохранено ✓',
 
+  // Settings — ICE Test
+  settingsIceTest: 'ICE Connectivity Test',
+  settingsIceTestRun: 'Run ICE Test',
+  settingsIceTestRunning: 'Testing… (click to abort)',
+  settingsIceTestDownload: 'Download Report',
+  settingsIceTestClear: 'Clear',
+
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: 'Аксессуары / Спорт',
   zoneGroupAiAttributes: 'AI Attributes',

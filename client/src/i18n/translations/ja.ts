@@ -115,6 +115,13 @@ export const ja: Translations = {
   settingsWebRTCApply: '適用',
   settingsWebRTCSaved: '保存済み ✓',
 
+  // Settings — ICE Test
+  settingsIceTest: 'ICE Connectivity Test',
+  settingsIceTestRun: 'Run ICE Test',
+  settingsIceTestRunning: 'Testing… (click to abort)',
+  settingsIceTestDownload: 'Download Report',
+  settingsIceTestClear: 'Clear',
+
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: '持ち物 / スポーツ用品',
   zoneGroupAiAttributes: 'AI Attributes',

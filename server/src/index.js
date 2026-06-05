@@ -255,6 +255,62 @@ async function main() {
     res.json({ stunUrls, turns });
   });
 
+  // ── WebRTC ICE connectivity test ──────────────────────────────────────────────
+  // Creates a temporary mediasoup WebRtcTransport so the browser can verify
+  // that the server's ICE/DTLS port range is reachable.
+  // The test transport is auto-deleted after 90 s to prevent resource leaks.
+  const iceTestSessions = new Map(); // testId → { transport, timer }
+
+  app.post('/api/webrtc/ice-test', async (req, res) => {
+    if (!webrtcGateway.enabled) {
+      return res.status(503).json({ error: 'WebRTC gateway not available (mediasoup not initialised)' });
+    }
+    try {
+      const TEST_CAM = '__ice-test__';
+      const router = await webrtcGateway.getOrCreateRouter(TEST_CAM);
+      const listenIps = webrtcGateway.getListenIps('');
+      const transport = await router.createWebRtcTransport({
+        listenIps,
+        enableUdp:  true,
+        enableTcp:  true,
+        preferUdp:  true,
+        enableSctp: false,
+      });
+
+      const testId = `icetest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const timer = setTimeout(() => {
+        const s = iceTestSessions.get(testId);
+        if (s) {
+          try { if (!s.transport.closed) s.transport.close(); } catch (_) {}
+          iceTestSessions.delete(testId);
+        }
+      }, 90_000);
+      iceTestSessions.set(testId, { transport, timer });
+
+      res.json({
+        testId,
+        transportId:    transport.id,
+        iceParameters:  transport.iceParameters,
+        iceCandidates:  transport.iceCandidates,
+        dtlsParameters: transport.dtlsParameters,
+      });
+    } catch (err) {
+      console.error('[ICE-test] createTransport error:', err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/webrtc/ice-test/:testId', (req, res) => {
+    const { testId } = req.params;
+    const s = iceTestSessions.get(testId);
+    if (s) {
+      clearTimeout(s.timer);
+      try { if (!s.transport.closed) s.transport.close(); } catch (_) {}
+      iceTestSessions.delete(testId);
+    }
+    res.json({ ok: true });
+  });
+
   // ── Cross-camera Re-ID stats ──────────────────────────────────────────────────
   // Returns all faces that have been seen on more than one camera in the current session.
   // Each entry: { faceId, firstCameraId, lastCameraId, transitionCount, lastSeenAt }

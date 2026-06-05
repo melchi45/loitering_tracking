@@ -102,6 +102,13 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   const [turns,    setTurns]    = useState<TurnServer[]>(webrtcStore.turns ?? []);
   const [saved,    setSaved]    = useState(false);
 
+  // ICE test state
+  const [iceRunning,    setIceRunning]    = useState(false);
+  const [iceLog,        setIceLog]        = useState<string[]>([]);
+  const [iceFailedUrls, setIceFailedUrls] = useState<string[]>([]);  // STUN URLs that errored
+  const iceLogRef   = useRef<HTMLTextAreaElement>(null);
+  const iceAbortRef = useRef(false);
+
   function updateStun(idx: number, value: string) {
     setStunUrls((prev) => prev.map((u, i) => (i === idx ? value : u)));
     setSaved(false);
@@ -136,6 +143,159 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
     };
     webrtcStore.setConfig(cfg);
     setSaved(true);
+  }
+
+  async function runIceTest() {
+    setIceRunning(true);
+    setIceFailedUrls([]);
+    iceAbortRef.current = false;
+    const lines: string[] = [];
+    const ts = () => new Date().toISOString().slice(11, 23);
+    const log = (msg: string) => {
+      lines.push(`[${ts()}] ${msg}`);
+      setIceLog([...lines]);
+      requestAnimationFrame(() => {
+        if (iceLogRef.current) {
+          iceLogRef.current.scrollTop = iceLogRef.current.scrollHeight;
+        }
+      });
+    };
+
+    try {
+      // Build ICE servers from the current draft (unsaved values are intentional)
+      const iceServers: RTCIceServer[] = [
+        ...stunUrls.map(u => u.trim()).filter(Boolean).map(urls => ({ urls })),
+        ...turns.filter(t => t.url.trim()).map(t => ({
+          urls: t.url.trim(), username: t.username, credential: t.credential,
+        })),
+      ];
+
+      // ── Phase 1: ICE candidate gathering ────────────────────────────────
+      log('=== Phase 1: ICE Candidate Gathering ===');
+      log(`STUN servers  : ${stunUrls.filter(Boolean).join(', ') || '(none)'}`);
+      log(`TURN servers  : ${turns.filter(t => t.url).map(t => t.url).join(', ') || '(none)'}`);
+      log(`Total ICE servers: ${iceServers.length}`);
+
+      const pc = new RTCPeerConnection({ iceServers });
+      pc.createDataChannel('lts-ice-check');
+
+      const gathered: RTCIceCandidate[] = [];
+      // Track URLs that produced error ≥ 700 (host lookup / connection failure)
+      // These are the servers that should be removed to prevent gather timeouts.
+      const failedUrls: string[] = [];
+
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          log('  Gathering timed out after 15 s');
+          log('  ⚠ Timeout caused by unreachable ICE servers — remove them to fix stream instability');
+          resolve();
+        }, 15_000);
+
+        pc.onicecandidate = (e) => {
+          if (!e.candidate) return;
+          gathered.push(e.candidate);
+          const c = e.candidate;
+          log(`  + ${c.type?.padEnd(5)} ${c.address}:${c.port}  proto=${c.protocol}`);
+        };
+
+        pc.onicecandidateerror = (e) => {
+          const err = e as RTCPeerConnectionIceErrorEvent;
+          log(`  ! ICE error: code=${err.errorCode} url=${err.url} "${err.errorText}"`);
+          // 700–799 = host lookup / allocation / auth failures — server is unusable
+          if (err.errorCode >= 700 && err.url) failedUrls.push(err.url);
+        };
+
+        pc.onicegatheringstatechange = () => {
+          if (pc.iceGatheringState === 'complete') {
+            clearTimeout(timer);
+            resolve();
+          }
+        };
+
+        pc.createOffer()
+          .then(offer => pc.setLocalDescription(offer))
+          .catch(err => { log(`  Offer error: ${err.message}`); clearTimeout(timer); resolve(); });
+      });
+
+      pc.close();
+
+      // Surface failed URLs so the UI can offer to remove them
+      const dedupedFailed = [...new Set(failedUrls)];
+      if (dedupedFailed.length > 0) setIceFailedUrls(dedupedFailed);
+
+      const hostN  = gathered.filter(c => c.type === 'host').length;
+      const srflxN = gathered.filter(c => c.type === 'srflx').length;
+      const relayN = gathered.filter(c => c.type === 'relay').length;
+
+      log('');
+      log('--- Phase 1 Summary ---');
+      log(`  host  (local)   : ${hostN}`);
+      log(`  srflx (STUN)    : ${srflxN}  ${srflxN > 0 ? '✓ STUN reachable' : '✗ STUN unreachable or no STUN configured'}`);
+      log(`  relay (TURN)    : ${relayN}  ${relayN > 0 ? '✓ TURN reachable' : turns.length > 0 ? '✗ TURN unreachable' : '(no TURN configured)'}`);
+      if (dedupedFailed.length > 0) {
+        log(`  ⚠ ${dedupedFailed.length} unreachable server(s) — causes ${dedupedFailed.length * 5}–15 s gather delay on every WebRTC connect`);
+      }
+
+      if (iceAbortRef.current) { log('Aborted.'); return; }
+
+      // ── Phase 2: Server transport test ───────────────────────────────────
+      log('');
+      log('=== Phase 2: Server Transport Test ===');
+
+      let testId = '';
+      try {
+        const resp = await fetch('/api/webrtc/ice-test', { method: 'POST' });
+        const contentType = resp.headers.get('content-type') ?? '';
+        if (!contentType.includes('application/json')) {
+          log(`  ✗ Server returned non-JSON (HTTP ${resp.status}) — restart the server and try again`);
+        } else {
+          const data = await resp.json();
+          if (!resp.ok || data.error) {
+            log(`  ✗ Server transport failed: ${data.error ?? `HTTP ${resp.status}`}`);
+          } else {
+            testId = data.testId;
+            log(`  ✓ Transport created: id=${(data.transportId ?? '').slice(0, 8)}`);
+            const cands: Array<{ type: string; ip: string; port: number; protocol: string }> = data.iceCandidates ?? [];
+            log(`  Server ICE candidates: ${cands.length}`);
+            cands.forEach(c => {
+              const warn = (c.ip === '127.0.0.1') ? '  ⚠ loopback! Set SERVER_IP in .env' : '';
+              log(`    + ${(c.type ?? '').padEnd(5)} ${c.ip}:${c.port}  proto=${c.protocol}${warn}`);
+            });
+            const hasLoopback = cands.some(c => c.ip === '127.0.0.1');
+            if (hasLoopback) {
+              log('  ⚠ Server is announcing 127.0.0.1 — browser cannot reach it directly.');
+              log('    → Set SERVER_IP=<LAN IP> in server/.env and restart');
+              log('    → Without this, all streams relay through external TURN (unstable)');
+            }
+          }
+        }
+      } catch (err: unknown) {
+        log(`  ✗ Server transport request failed: ${(err as Error).message}`);
+      } finally {
+        if (testId) {
+          fetch(`/api/webrtc/ice-test/${testId}`, { method: 'DELETE' }).catch(() => {});
+          log('  Server transport cleaned up.');
+        }
+      }
+
+      log('');
+      log('=== ICE Test Complete ===');
+    } catch (err: unknown) {
+      log(`Error: ${(err as Error).message}`);
+    } finally {
+      setIceRunning(false);
+    }
+  }
+
+  function downloadIceReport() {
+    const text = iceLog.join('\n');
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `ice-test-report-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
   }
 
   const inputCls = 'w-full bg-gray-900 text-xs text-gray-200 px-2 py-1.5 rounded border border-gray-600 focus:outline-none focus:border-blue-500 placeholder-gray-600';
@@ -287,6 +447,71 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
             >
               {saved ? t.settingsWebRTCSaved : t.settingsWebRTCApply}
             </button>
+          </div>
+
+          {/* ── ICE Connectivity Test ── */}
+          <div className="border-t border-gray-700 pt-4">
+            <div className="flex items-center justify-between mb-2">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide">{t.settingsIceTest}</p>
+              {iceLog.length > 0 && (
+                <div className="flex gap-1">
+                  <button
+                    onClick={downloadIceReport}
+                    className="text-[10px] px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 transition-colors"
+                    title={t.settingsIceTestDownload}
+                  >
+                    {t.settingsIceTestDownload}
+                  </button>
+                  <button
+                    onClick={() => setIceLog([])}
+                    className="text-[10px] px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 transition-colors"
+                  >
+                    {t.settingsIceTestClear}
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <button
+              onClick={iceRunning ? () => { iceAbortRef.current = true; } : runIceTest}
+              disabled={false}
+              className={`w-full py-1.5 rounded-lg text-xs font-semibold transition-colors mb-2 ${
+                iceRunning
+                  ? 'bg-yellow-700/70 text-yellow-200 hover:bg-yellow-700'
+                  : 'bg-indigo-700 hover:bg-indigo-600 text-white'
+              }`}
+            >
+              {iceRunning ? t.settingsIceTestRunning : t.settingsIceTestRun}
+            </button>
+
+            {/* Banner: remove unreachable servers */}
+            {iceFailedUrls.length > 0 && (
+              <div className="bg-yellow-900/40 border border-yellow-700/60 rounded-lg px-3 py-2 mb-2 text-[10px] text-yellow-300">
+                <div className="font-semibold mb-1">⚠ {iceFailedUrls.length}개 서버가 연결 불가 (15초 지연 발생)</div>
+                {iceFailedUrls.map(u => <div key={u} className="font-mono text-yellow-400/80">{u}</div>)}
+                <button
+                  onClick={() => {
+                    setStunUrls(prev => prev.filter(u => !iceFailedUrls.includes(u.trim())));
+                    setTurns(prev => prev.filter(t => !iceFailedUrls.includes(t.url.trim())));
+                    setIceFailedUrls([]);
+                    setSaved(false);
+                  }}
+                  className="mt-1.5 px-2 py-0.5 bg-yellow-700 hover:bg-yellow-600 text-white rounded text-[10px] font-semibold"
+                >
+                  Remove unreachable servers
+                </button>
+              </div>
+            )}
+
+            {iceLog.length > 0 && (
+              <textarea
+                ref={iceLogRef}
+                readOnly
+                value={iceLog.join('\n')}
+                className="w-full h-40 bg-black/60 text-[10px] font-mono text-green-300 px-2 py-1.5 rounded border border-gray-700 resize-none focus:outline-none"
+                spellCheck={false}
+              />
+            )}
           </div>
         </form>
         {/* Footer */}

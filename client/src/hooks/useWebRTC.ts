@@ -34,12 +34,16 @@ interface ConsumeResult {
 }
 
 // Max time to wait for the full signaling + ICE + DTLS handshake.
-// If exceeded, the state is set to 'failed' so the user can see an error.
-const CONNECT_TIMEOUT_MS    = 30_000;
-const ICE_DISCONNECT_WAIT   = 5_000;  // how long to wait for ICE self-recovery
+// 45 s gives enough room even when STUN servers with DNS problems add ~15 s
+// of ICE gathering latency before the connection attempt can proceed.
+const CONNECT_TIMEOUT_MS    = 45_000;
+const ICE_DISCONNECT_WAIT   = 8_000;  // wait longer for ICE self-recovery before retry
 const MAX_AUTO_RETRIES      = 8;   // covers ~32 s of startup retries (8 × 4 s)
 const AUTO_RETRY_DELAY      = 4_000;
-const VIDEO_STALL_WAIT      = 10_000; // reconnect if inbound video bytes stop increasing
+const VIDEO_STALL_WAIT      = 15_000; // reconnect if inbound video bytes stop increasing
+// Warn in the console when ICE gathering takes longer than expected.
+// Usually caused by unreachable STUN servers (DNS failure) in the config.
+const ICE_GATHER_SLOW_MS    = 8_000;
 
 // Errors that indicate a transient server startup state — retry silently
 const PIPELINE_STARTING_RE = /pipeline not ready|no video producer|no producers available/i;
@@ -192,8 +196,20 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
         transportRef.current = transport;
 
         // ── ICE / connection state monitoring ─────────────────────────────
-        transport.on('icegatheringstatechange', (s: string) =>
-          console.log(`[useWebRTC][${cameraId.slice(0,8)}] ICE gathering: ${s}`));
+        let iceSlowTimer: ReturnType<typeof setTimeout> | undefined;
+        transport.on('icegatheringstatechange', (s: string) => {
+          console.log(`[useWebRTC][${cameraId.slice(0,8)}] ICE gathering: ${s}`);
+          if (s === 'gathering') {
+            iceSlowTimer = setTimeout(() => {
+              console.warn(
+                `[useWebRTC][${cameraId.slice(0,8)}] ICE gathering >8 s — likely caused by ` +
+                'unreachable STUN/TURN servers. Open Settings → ICE Test and remove failing servers.'
+              );
+            }, ICE_GATHER_SLOW_MS);
+          } else if (s === 'complete') {
+            if (iceSlowTimer) { clearTimeout(iceSlowTimer); iceSlowTimer = undefined; }
+          }
+        });
 
         const pollIceStats = async () => {
           if (!transportRef.current) return;

@@ -184,12 +184,14 @@ class PipelineManager {
     const rtspUrl  = this._buildRtspUrl(camera);
     const useWebRTC = !!(camera.webrtcEnabled && webrtcGateway.enabled);
 
+    const captureFps = parseInt(process.env.CAPTURE_FPS, 10) || 10;
+
     let capture;
     if (useWebRTC) {
-      capture = new RtpIngestion(camera.id, rtspUrl, { fps: 10, width: 640 });
+      capture = new RtpIngestion(camera.id, rtspUrl, { fps: captureFps, width: 640 });
       await capture.start(); // async: sets up mediasoup PlainTransports then spawns FFmpeg
     } else {
-      capture = createCapture(camera.id, rtspUrl, { fps: 10, width: 640 });
+      capture = createCapture(camera.id, rtspUrl, { fps: captureFps, width: 640 });
     }
 
     const tracker  = new ByteTracker();

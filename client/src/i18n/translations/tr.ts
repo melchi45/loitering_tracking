@@ -115,6 +115,13 @@ export const tr: Translations = {
   settingsWebRTCApply: 'Uygula',
   settingsWebRTCSaved: 'Kaydedildi ✓',
 
+  // Settings — ICE Test
+  settingsIceTest: 'ICE Connectivity Test',
+  settingsIceTestRun: 'Run ICE Test',
+  settingsIceTestRunning: 'Testing… (click to abort)',
+  settingsIceTestDownload: 'Download Report',
+  settingsIceTestClear: 'Clear',
+
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: 'Aksesuar / Spor',
   zoneGroupAiAttributes: 'AI Attributes',

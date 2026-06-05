@@ -115,6 +115,13 @@ export const de: Translations = {
   settingsWebRTCApply: 'Anwenden',
   settingsWebRTCSaved: 'Gespeichert ✓',
 
+  // Settings — ICE Test
+  settingsIceTest: 'ICE Connectivity Test',
+  settingsIceTestRun: 'Run ICE Test',
+  settingsIceTestRunning: 'Testing… (click to abort)',
+  settingsIceTestDownload: 'Download Report',
+  settingsIceTestClear: 'Clear',
+
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: 'Accessoires / Sport',
   zoneGroupAiAttributes: 'AI Attributes',

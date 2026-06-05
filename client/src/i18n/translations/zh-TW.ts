@@ -115,6 +115,13 @@ export const zhTW: Translations = {
   settingsWebRTCApply: '套用',
   settingsWebRTCSaved: '已儲存 ✓',
 
+  // Settings — ICE Test
+  settingsIceTest: 'ICE Connectivity Test',
+  settingsIceTestRun: 'Run ICE Test',
+  settingsIceTestRunning: 'Testing… (click to abort)',
+  settingsIceTestDownload: 'Download Report',
+  settingsIceTestClear: 'Clear',
+
   zoneGroupPeopleVehicles: 'People / Vehicles',
   zoneGroupAccessories: '隨身物品 / 運動',
   zoneGroupAiAttributes: 'AI Attributes',

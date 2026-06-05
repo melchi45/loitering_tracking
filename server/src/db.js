@@ -279,6 +279,9 @@ async function initDB() {
           }
         }
         console.log('[DB] Storage mode: MongoDB (JSON as hot-standby backup)');
+        // Sync JSON with the MongoDB snapshot so the hot-standby is up-to-date
+        // even if the server crashed before the last debounced write completed.
+        _flushJson();
       } catch (err) {
         console.warn('[DB] MongoDB connection failed — falling back to JSON:', err.message);
         mongoSvc = null;
