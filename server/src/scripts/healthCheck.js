@@ -3,7 +3,7 @@
 /**
  * Server health-check script.
  * Usage: node src/scripts/healthCheck.js [BASE_URL]
- * Default BASE_URL: http://localhost:3080
+ * Default BASE_URL: auto-detects HTTP/HTTPS based on .env HTTPS_ENABLED
  *
  * Checks:
  *   1. /api/cameras           — DB + pipeline status
@@ -12,9 +12,21 @@
  *   4. mediasoup UDP ports    — 40000-49999 reachable via SS/netstat
  */
 
-const http = require('http');
+const http  = require('http');
+const https = require('https');
+const path  = require('path');
 
-const BASE = (process.argv[2] || 'http://localhost:3080').replace(/\/$/, '');
+try {
+  require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
+} catch { /* dotenv optional */ }
+
+const _httpsEnable = (process.env.HTTPS_ENABLED || 'false').toLowerCase() === 'true';
+const _httpsPort   = process.env.HTTPS_PORT || '3443';
+const _httpPort    = process.env.HTTP_PORT || '3080';
+const _port        = _httpsEnable ? _httpsPort : _httpPort;
+const _proto       = _httpsEnable ? 'https' : 'http';
+const _serverIp    = process.env.SERVER_IP || 'localhost';
+const BASE         = (process.argv[2] || `${_proto}://${_serverIp}:${_port}`).replace(/\/$/, '');
 
 const RESET  = '\x1b[0m';
 const GREEN  = '\x1b[32m';
@@ -28,10 +40,14 @@ function warn(msg) { console.log(`  ${YELLOW}!${RESET} ${msg}`); }
 function fail(msg) { console.log(`  ${RED}✗${RESET} ${msg}`); }
 function info(msg) { console.log(`  ${CYAN}·${RESET} ${msg}`); }
 
-function get(path) {
+function get(urlPath) {
   return new Promise((resolve, reject) => {
-    const url = `${BASE}${path}`;
-    http.get(url, { timeout: 5000 }, (res) => {
+    const url = new URL(`${BASE}${urlPath}`);
+    const isHttps = url.protocol === 'https:';
+    const client = isHttps ? https : http;
+    const options = isHttps ? { rejectUnauthorized: false, timeout: 5000 } : { timeout: 5000 };
+    
+    client.get(url, options, (res) => {
       let body = '';
       res.on('data', (c) => { body += c; });
       res.on('end', () => {

@@ -887,6 +887,71 @@ ONNX_CUDA=1 npm start
 
 - If CUDA provider is not available, startup falls back to CPU providers.
 
+##### Source Build Automation (CUDA 13.3 + local onnxruntime-node)
+
+If the prebuilt `onnxruntime-node` package does not expose CUDA on your machine, use the source-build scripts below to build ONNX Runtime and wire a local `js/node` package into this server project.
+
+- Added scripts:
+  - `server/src/scripts/build-onnxruntime-source.windows.ps1`
+  - `server/src/scripts/build-onnxruntime-source.linux.sh`
+
+Windows:
+
+```powershell
+cd server
+npm run build-ort-source:windows
+```
+
+Optional Windows arguments:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File src/scripts/build-onnxruntime-source.windows.ps1 \
+  -OrtRepoDir "D:\src\onnxruntime" \
+  -OrtRef "v1.26.0" \
+  -CudaHome "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3" \
+  -CudnnHome "C:\tools\cudnn" \
+  -CudaArch "120"
+```
+
+Linux:
+
+```bash
+cd server
+npm run build-ort-source:linux
+```
+
+Optional Linux environment variables:
+
+```bash
+cd server
+ORT_REPO_DIR=$HOME/source/onnxruntime \
+ORT_REF=v1.26.0 \
+CUDA_HOME=/usr/local/cuda-13.3 \
+CUDNN_HOME=/usr/lib/x86_64-linux-gnu \
+CUDA_ARCH=120 \
+npm run build-ort-source:linux
+```
+
+What the scripts do:
+
+1. Clone or update `microsoft/onnxruntime` source
+2. Build native ONNX Runtime with CUDA EP (`--build_shared_lib`, flash-attention OFF)
+3. Build `onnxruntime/js/node`
+4. Install local package into this project with `npm --prefix <server> install <onnxruntime/js/node> --no-save`
+
+After build:
+
+```bash
+cd server
+npm run restart
+```
+
+Expected startup log when CUDA EP is active:
+
+```text
+[onnxOptions] mode=cuda ... providers=["cuda","cpu"]
+```
+
 ---
 
 ## 8. Loitering Detection Logic

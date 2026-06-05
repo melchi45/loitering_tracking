@@ -66,7 +66,7 @@ docs/
 ├── srs/           SRS documents (detailed functional specification)
 ├── design/        Design documents (architecture + code structure)
 ├── tc/            Test cases
-├── ops/           Operations guides (MongoDB, HTTPS, MCP Server)
+├── ops/           Operations guides (MongoDB, HTTPS, MCP Server, ONNX Runtime provider/source build)
 └── screenshots/   Dashboard screenshots
 
 test/              Test scripts (TC-based automation)
@@ -231,6 +231,7 @@ node test/generate_report.js
 | 2026-05-28 | **User Authentication SDLC chain completed** — `RFP_User_Authentication.md` authored (FR-AUTH-001–030, NFR-AUTH-001–009, AC-001–010); `test/api/auth.test.js` created (Groups A–G: registration, sign-in, JWT, logout, admin mgmt, RBAC, regression); `docs/README.md` updated with module row and test script row |
 | 2026-05-28 | **Stats Dashboard Panel v1.2** — Full-screen layout (remove max-w-[420px]); drill-down navigation (Overview → Section → HourList → ItemDetail); `GET /api/stats/items` endpoint added; `BreadcrumbNav`, `OverviewGrid`, `SectionDrillView`, `HourListView`, `ItemDetailView` components; ESC key navigation; Design/SRS/TC_Stats_Panel.md all updated to v1.2 (FR-STATS-031–042, NFR-STATS-009–010, Group J TC-J-001–14, Group K TC-K-001–20) |
 | 2026-05-28 | **MongoDB 5.0 adopted as primary storage** — installed on Ubuntu 18.04 (Bionic) via official apt repo; `mongod` service enabled; existing `server/storage/lts.json` data migrated via `mongoimport` (cameras ×9, detectionSnapshots ×431, total 419 docs); `DB_TYPE=mongodb` set in `server/.env`; setup guide moved to `docs/ops/MongoDB_Setup.md` |
+| 2026-06-05 | **ONNX Runtime source build ops guide added** — `docs/ops/ONNX_Runtime_Source_Build_CUDA13.md` authored; includes CUDA 13.3 source build automation runbook for Windows/Linux, script options, verification logs, and recovery steps for partial npm installs/module resolution failures |
 | 2026-05-28 | **`docs/development_process.md` integrated into `docs/README.md`** — Development Process Overview section added (MRD→DIA→DV→DVR→PIA→PV→PVR→PR→PRA→SR→SRA stage-gate table, key deliverables, core document flow); source file retired |
 | 2026-05-28 | **`docs/MRD_LTS2026.md` created** — Market Requirements Document synthesized from all RFP/PRD/codebase status (Phase 1–11); covers market problem, TAM/SAM/SOM, customer segments, competitive matrix, 11 core + 11 AI modules, business requirements, 7 market use cases, regulatory compliance, KPIs, roadmap alignment |
 | 2026-06-05 | **CUDA Acceleration SDLC v1.1 amendment** — `RFP/PRD/SRS/Design/TC_AI_CUDA_Acceleration.md` updated with ONNX startup diagnostics and Windows DML auto-selection policy; `server/src/index.js` startup-check and `server/src/utils/onnxOptions.js` provider pre-disable behavior documented; ops runbook added: `docs/ops/ONNX_Runtime_Provider_Diagnostics.md` |

@@ -20,22 +20,27 @@
  *   node src/scripts/iceTest.js http://localhost:3080 --headless
  */
 
-const http  = require('http');
-const dgram = require('dgram');
-const path  = require('path');
+const http   = require('http');
+const https  = require('https');
+const dgram  = require('dgram');
+const path   = require('path');
 
 // Load .env so SERVER_IP / PORT / VITE_PORT are available without manual args
 try {
-  require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '..', '.env') });
+  require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
 } catch { /* dotenv optional */ }
 
-const args      = process.argv.slice(2).filter((a) => !a.startsWith('--'));
-const _serverIp = process.env.SERVER_IP || 'localhost';
-const _port     = process.env.HTTP_PORT || '3080';
-const SERVER    = (args[0] || `http://${_serverIp}:${_port}`).replace(/\/$/, '');
-const UI        = (args[1] || SERVER).replace(/\/$/, '');
+const args         = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const _serverIp    = process.env.SERVER_IP || 'localhost';
+const _httpsEnable = (process.env.HTTPS_ENABLED || 'false').toLowerCase() === 'true';
+const _httpsPort   = process.env.HTTPS_PORT || '3443';
+const _httpPort    = process.env.HTTP_PORT || '3080';
+const _port        = _httpsEnable ? _httpsPort : _httpPort;
+const _proto       = _httpsEnable ? 'https' : 'http';
+const SERVER       = (args[0] || `${_proto}://${_serverIp}:${_port}`).replace(/\/$/, '');
+const UI           = (args[1] || SERVER).replace(/\/$/, '');
 // Auto-use headless when no X server is available (SSH without display forwarding)
-const HEADLESS  = process.argv.includes('--headless') || !process.env.DISPLAY;
+const HEADLESS     = process.argv.includes('--headless') || !process.env.DISPLAY;
 
 // Adaptive wait: max time to detect RTCPeerConnection creation after trigger
 const PC_DETECT_MS    = 8_000;
@@ -46,6 +51,10 @@ const POLL_COUNT      = 5;
 const POLL_INTERVAL   = 2_000;
 // Path to system Chrome (avoids downloading Playwright's Chromium)
 const CHROME_PATH = [
+  // Windows paths
+  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  // Linux/macOS paths
   '/usr/bin/google-chrome',
   '/usr/bin/chromium-browser',
   '/usr/bin/chromium',
@@ -67,10 +76,15 @@ function fail(m) { console.log(`  ${RE}✗${R} ${m}`); }
 function info(m) { console.log(`  ${C}·${R} ${m}`); }
 function hdr(m)  { console.log(`\n${B}${m}${R}`); }
 
-// ── HTTP helper ────────────────────────────────────────────────────────────
+// ── HTTP/HTTPS helper ──────────────────────────────────────────────────────
 function httpGet(urlPath) {
   return new Promise((resolve, reject) => {
-    http.get(`${SERVER}${urlPath}`, { timeout: 5000 }, (res) => {
+    const url = new URL(`${SERVER}${urlPath}`);
+    const isHttps = url.protocol === 'https:';
+    const client = isHttps ? https : http;
+    const options = isHttps ? { rejectUnauthorized: false, timeout: 5000 } : { timeout: 5000 };
+    
+    client.get(url, options, (res) => {
       let b = '';
       res.on('data', (c) => { b += c; });
       res.on('end', () => {
@@ -85,13 +99,23 @@ function httpPut(urlPath, body) {
   return new Promise((resolve, reject) => {
     const payload = JSON.stringify(body);
     const url = new URL(`${SERVER}${urlPath}`);
+    const isHttps = url.protocol === 'https:';
+    const client = isHttps ? https : http;
+    
     const options = {
-      hostname: url.hostname, port: url.port || 80, path: url.pathname,
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
       timeout: 10000,
     };
-    const req = http.request(options, (res) => {
+    
+    if (isHttps) {
+      options.rejectUnauthorized = false;
+    }
+    
+    const req = client.request(options, (res) => {
       let b = '';
       res.on('data', (c) => { b += c; });
       res.on('end', () => {

@@ -19,28 +19,37 @@
  *   node src/scripts/turnTest.js http://localhost:3080 --headless
  */
 
-const http = require('http');
-const path = require('path');
+const http  = require('http');
+const https = require('https');
+const path  = require('path');
 
 try {
-  require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '..', '.env') });
+  require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
 } catch { /* dotenv optional */ }
 
-const args      = process.argv.slice(2).filter((a) => !a.startsWith('--'));
-const _serverIp = process.env.SERVER_IP || 'localhost';
-const _port     = process.env.HTTP_PORT || process.env.PORT || '3080';
-const SERVER    = (args[0] || `http://${_serverIp}:${_port}`).replace(/\/$/, '');
+const args         = process.argv.slice(2).filter((a) => !a.startsWith('--'));
+const _serverIp    = process.env.SERVER_IP || 'localhost';
+const _httpsEnable = (process.env.HTTPS_ENABLED || 'false').toLowerCase() === 'true';
+const _httpsPort   = process.env.HTTPS_PORT || '3443';
+const _httpPort    = process.env.HTTP_PORT || process.env.PORT || '3080';
+const _port        = _httpsEnable ? _httpsPort : _httpPort;
+const _proto       = _httpsEnable ? 'https' : 'http';
+const SERVER       = (args[0] || `${_proto}://${_serverIp}:${_port}`).replace(/\/$/, '');
 const HEADLESS  = process.argv.includes('--headless') || !process.env.DISPLAY;
 
 // Two-context relay: pageA uses loopback, pageB uses LAN IP (different source path to TURN)
-const URL_A = `http://localhost:${_port}`;
+const URL_A = `${_proto}://localhost:${_port}`;
 const URL_B = (_serverIp && _serverIp !== 'localhost' && _serverIp !== '127.0.0.1')
-  ? `http://${_serverIp}:${_port}`
+  ? `${_proto}://${_serverIp}:${_port}`
   : null; // null → fall back to same-machine hairpin test
 
 const TURN_CONNECT_MS = 20_000;
 
 const CHROME_PATH = [
+  // Windows paths
+  'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+  'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+  // Linux/macOS paths
   '/usr/bin/google-chrome',
   '/usr/bin/chromium-browser',
   '/usr/bin/chromium',
@@ -61,10 +70,15 @@ function fail(m) { console.log(`  ${RE}✗${R} ${m}`); }
 function info(m) { console.log(`  ${C}·${R} ${m}`); }
 function hdr(m)  { console.log(`\n${B}${m}${R}`); }
 
-// ── HTTP helper ────────────────────────────────────────────────────────────
+// ── HTTP/HTTPS helper ──────────────────────────────────────────────────────
 function httpGet(urlPath) {
   return new Promise((resolve, reject) => {
-    http.get(`${SERVER}${urlPath}`, { timeout: 5000 }, (res) => {
+    const url = new URL(`${SERVER}${urlPath}`);
+    const isHttps = url.protocol === 'https:';
+    const client = isHttps ? https : http;
+    const options = isHttps ? { rejectUnauthorized: false, timeout: 5000 } : { timeout: 5000 };
+    
+    client.get(url, options, (res) => {
       let b = '';
       res.on('data', (c) => { b += c; });
       res.on('end', () => {
