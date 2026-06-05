@@ -1,7 +1,11 @@
 'use strict';
 
 // Load environment variables first
-require('dotenv').config({ path: require('path').resolve(__dirname, '..', '.env') });
+try {
+  require('dotenv').config({ path: require('path').resolve(__dirname, '..', '.env') });
+} catch {
+  // Continue with existing process env when dotenv is unavailable.
+}
 
 const http         = require('http');
 const https        = require('https');

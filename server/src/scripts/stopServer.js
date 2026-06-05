@@ -3,7 +3,11 @@
 const path = require('path');
 const { execSync } = require('child_process');
 
-require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
+try {
+  require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
+} catch {
+  // Allow stop script to run even when dependencies are partially missing.
+}
 
 function parsePort(value, fallback) {
   const n = parseInt(value || String(fallback), 10);

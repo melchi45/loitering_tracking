@@ -3,7 +3,11 @@
 const path = require('path');
 const { spawn } = require('child_process');
 
-require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
+try {
+  require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
+} catch {
+  // Continue with process env when dotenv is unavailable.
+}
 
 function resolveRuntimeOs() {
   const override = (process.env.SERVER_RUNTIME_OS || 'auto').trim().toLowerCase();

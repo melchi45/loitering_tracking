@@ -69,3 +69,27 @@ This SRS defines requirements for CUDA-enabled ONNX session creation and fallbac
 - Added startup diagnostics requirements (FR-CUDA-010/011).
 - Added Windows DML provider policy requirements (FR-CUDA-012/013).
 - Added traceability mapping for new validation group (TC-CUDA-E).
+
+---
+
+## 8. Bidirectional Traceability Matrix
+
+| Requirement ID | Design Reference | Test Reference |
+|---|---|---|
+| FR-CUDA-001 | `docs/design/Design_AI_CUDA_Acceleration.md` §8 | `TC-CUDA-A-001`, `TC-CUDA-A-002` |
+| FR-CUDA-002 | `docs/design/Design_AI_CUDA_Acceleration.md` §3.2, §8 | `TC-CUDA-A-002` |
+| FR-CUDA-003 | `docs/design/Design_AI_CUDA_Acceleration.md` §4, §8 | `TC-CUDA-A-003` |
+| FR-CUDA-004 | `docs/design/Design_AI_CUDA_Acceleration.md` §4, §8 | `TC-CUDA-A-004` |
+| FR-CUDA-005 | `docs/design/Design_AI_CUDA_Acceleration.md` §2, §8 | `TC-CUDA-B-001`, `TC-CUDA-B-002`, `TC-CUDA-B-003` |
+| FR-CUDA-006 | `docs/design/Design_AI_CUDA_Acceleration.md` §6, §8 | `TC-CUDA-C-001` |
+| FR-CUDA-007 | `docs/design/Design_AI_CUDA_Acceleration.md` §4, §6, §8 | `TC-CUDA-C-002` |
+| FR-CUDA-008 | `docs/design/Design_AI_CUDA_Acceleration.md` §5, §8 | `TC-CUDA-D-001`, `TC-CUDA-D-002` |
+| FR-CUDA-009 | `docs/design/Design_AI_CUDA_Acceleration.md` §3.2, §8 | `TC-CUDA-A-001` |
+| FR-CUDA-010 | `docs/design/Design_AI_CUDA_Acceleration.md` §1, §2, §8 | `TC-CUDA-E-001` |
+| FR-CUDA-011 | `docs/design/Design_AI_CUDA_Acceleration.md` §6, §8 | `TC-CUDA-E-001` |
+| FR-CUDA-012 | `docs/design/Design_AI_CUDA_Acceleration.md` §3.1, §3.2, §8 | `TC-CUDA-E-003` |
+| FR-CUDA-013 | `docs/design/Design_AI_CUDA_Acceleration.md` §3.2, §4, §8 | `TC-CUDA-E-004` |
+
+Reference documents:
+- `docs/design/Design_AI_CUDA_Acceleration.md`
+- `docs/tc/TC_AI_CUDA_Acceleration.md`
