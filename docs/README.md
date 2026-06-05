@@ -233,6 +233,7 @@ node test/generate_report.js
 | 2026-05-28 | **MongoDB 5.0 adopted as primary storage** — installed on Ubuntu 18.04 (Bionic) via official apt repo; `mongod` service enabled; existing `server/storage/lts.json` data migrated via `mongoimport` (cameras ×9, detectionSnapshots ×431, total 419 docs); `DB_TYPE=mongodb` set in `server/.env`; setup guide moved to `docs/ops/MongoDB_Setup.md` |
 | 2026-05-28 | **`docs/development_process.md` integrated into `docs/README.md`** — Development Process Overview section added (MRD→DIA→DV→DVR→PIA→PV→PVR→PR→PRA→SR→SRA stage-gate table, key deliverables, core document flow); source file retired |
 | 2026-05-28 | **`docs/MRD_LTS2026.md` created** — Market Requirements Document synthesized from all RFP/PRD/codebase status (Phase 1–11); covers market problem, TAM/SAM/SOM, customer segments, competitive matrix, 11 core + 11 AI modules, business requirements, 7 market use cases, regulatory compliance, KPIs, roadmap alignment |
+| 2026-06-05 | **CUDA Acceleration SDLC v1.1 amendment** — `RFP/PRD/SRS/Design/TC_AI_CUDA_Acceleration.md` updated with ONNX startup diagnostics and Windows DML auto-selection policy; `server/src/index.js` startup-check and `server/src/utils/onnxOptions.js` provider pre-disable behavior documented; ops runbook added: `docs/ops/ONNX_Runtime_Provider_Diagnostics.md` |
 
 ---
 

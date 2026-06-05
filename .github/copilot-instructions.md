@@ -18,7 +18,7 @@
 ```
 loitering_tracking/
 ├── server/src/            # Node.js 백엔드
-│   ├── index.js           # Express 앱 진입점 (포트 3080)
+│   ├── index.js           # Express 앱 진입점 (기본 HTTP 포트 3080)
 │   ├── db.js              # JSON 파일 DB 추상화 레이어
 │   ├── services/          # 핵심 비즈니스 로직
 │   │   ├── detection.js        # YOLOv8n ONNX 추론 (640×640)
@@ -32,7 +32,8 @@ loitering_tracking/
 │   │   ├── rtspCapture.js      # RTSP 스트림 캡처 (10 FPS)
 │   │   ├── webrtcGateway.js    # WebRTC 미디어 게이트웨이
 │   │   └── fireSmokeService.js # 화재/연기 감지
-│   ├── routes/            # Express 라우터
+│   ├── api/               # Express API 라우터
+│   ├── routes/            # 인증/관리자 라우터
 │   ├── socket/            # Socket.IO 이벤트 핸들러
 │   └── middleware/        # 인증, 에러 핸들링
 ├── client/src/            # React 프론트엔드
@@ -63,7 +64,7 @@ loitering_tracking/
 - 비동기 코드는 `async/await` 사용, Promise 체인 지양
 - `server/src/db.js`를 통해서만 `storage/lts.json` 접근 (직접 파일 I/O 금지)
 - 환경 변수는 `server/.env`에서 로드 (`dotenv`)
-- 포트 3080 기본값; `process.env.PORT`로 재정의 가능
+- 포트 3080 기본값; `process.env.HTTP_PORT`로 재정의 가능
 - Socket.IO 이벤트 이름은 `camelCase` 사용 (예: `frameData`, `newAlert`)
 
 ### 클라이언트 (React/TypeScript)
@@ -91,11 +92,14 @@ loitering_tracking/
 |--------|------|------|
 | GET | `/api/cameras` | 카메라 목록 조회 |
 | POST | `/api/cameras` | 카메라 추가 |
+| POST | `/api/cameras/discover` | 카메라 탐색 트리거 |
 | GET | `/api/alerts` | 경보 목록 조회 |
 | POST | `/api/alerts/:id/acknowledge` | 경보 확인 처리 |
-| GET | `/api/zones` | 구역 목록 조회 |
-| POST | `/api/zones` | 구역 생성 |
-| GET | `/api/analytics/summary` | 분석 요약 통계 |
+| GET | `/api/cameras/:cameraId/zones` | 카메라별 구역 목록 조회 |
+| POST | `/api/cameras/:cameraId/zones` | 카메라별 구역 생성 |
+| GET | `/api/events` | 이벤트 목록 조회 |
+| GET | `/api/stats` | 시스템 통계 조회 |
+| GET | `/api/search` | 전역 검색 |
 
 ---
 
@@ -103,11 +107,11 @@ loitering_tracking/
 
 | 이벤트 | 방향 | 설명 |
 |--------|------|------|
-| `frameData` | Server → Client | 어노테이션된 JPEG 프레임 |
-| `newAlert` | Server → Client | 신규 경보 발생 |
-| `objectTracked` | Server → Client | 추적 객체 업데이트 |
-| `cameraStatus` | Server → Client | 카메라 연결 상태 변경 |
-| `subscribeCamera` | Client → Server | 카메라 스트림 구독 |
+| `frame` | Server → Client | 카메라 룸 대상 프레임 전송 |
+| `alert:new` | Server → Client | 신규 경보 발생 |
+| `person:trajectory-update` | Server → Client | 인물 궤적 업데이트 |
+| `camera:status` | Server → Client | 카메라 상태 변경 |
+| `camera:subscribe` | Client → Server | 카메라 룸 구독 |
 
 ---
 
@@ -124,7 +128,7 @@ cd client && npm run dev
 cd server && npm test
 
 # Docker로 전체 스택 실행
-docker-compose up -d
+docker compose up -d
 ```
 
 ---

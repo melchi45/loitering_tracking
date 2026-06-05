@@ -89,3 +89,15 @@ RTSP/WebRTC 스트림
 - [Design_AI_Human_Detection.md](../../docs/design/Design_AI_Human_Detection.md)
 - [Design_AI_Mask_Detection.md](../../docs/design/Design_AI_Mask_Detection.md)
 - [Design_AI_Fire_Smoke_Detection.md](../../docs/design/Design_AI_Fire_Smoke_Detection.md)
+
+## 최근 운영 변경 (2026-06-05)
+
+- ONNX provider startup diagnostics가 추가되어 서버 시작 시 지원 backend를 1회 점검합니다.
+- 구현 위치:
+  - `server/src/index.js` (startup check 실행)
+  - `server/src/utils/onnxOptions.js` (provider 선택/비활성화 로직)
+- 동작 요약:
+  - `ONNX_CUDA=1`인데 CUDA backend가 없으면 CUDA를 런타임에서 비활성화하고 CPU 폴백
+  - Windows에서 `ONNX_CUDA=0`이면 `['dml','cpu']` 우선 시도
+  - DML 미지원 시 CPU 폴백으로 반복 경고/실패 최소화
+- 운영 문서: `docs/ops/ONNX_Runtime_Provider_Diagnostics.md`

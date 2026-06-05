@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | Document ID | RFP-LTS-AI-CUDA-01 |
-| Version | 1.0 |
+| Version | 1.1 |
 | Status | Approved |
-| Date | 2026-06-04 |
+| Date | 2026-06-05 |
 | Program | LTS-2026 |
 
 ---
@@ -46,6 +46,8 @@ Current deployments require lower end-to-end inference latency and higher concur
 - FR-02: System shall fall back to CPU provider if CUDA session creation fails.
 - FR-03: System shall support strict mode to fail fast when CUDA is required.
 - FR-04: Existing AI services shall remain API-compatible.
+- FR-05: System shall run ONNX provider startup diagnostics once at server boot.
+- FR-06: On Windows with ONNX_CUDA=0, system shall prefer DirectML provider before CPU.
 
 ---
 
@@ -54,6 +56,7 @@ Current deployments require lower end-to-end inference latency and higher concur
 - NFR-01: No regression for CPU-only deployments.
 - NFR-02: Startup logs shall show selected provider mode.
 - NFR-03: Error messages shall clearly identify CUDA failure and fallback behavior.
+- NFR-04: Startup diagnostics shall prevent repeated provider failure noise by pre-disabling unavailable providers.
 
 ---
 
@@ -72,3 +75,12 @@ Current deployments require lower end-to-end inference latency and higher concur
 - AC-01: ONNX_CUDA=1 works on CUDA-ready hosts (Windows/Linux).
 - AC-02: ONNX_CUDA=1 with missing CUDA runtime falls back to CPU unless strict mode enabled.
 - AC-03: AI pipeline continues to load detection, face, PPE, fire/smoke, and cloth modules.
+- AC-04: Startup diagnostics log supported backends exactly once at boot and clearly indicate CUDA/DML availability.
+
+---
+
+## 8. SDLC Amendment (v1.1)
+
+- Added startup diagnostics requirement for ONNX providers.
+- Added Windows DML auto-selection policy when CUDA is not requested.
+- Added operational requirement to suppress repeated provider failure loops through pre-disable logic.

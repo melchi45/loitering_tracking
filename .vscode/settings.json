@@ -233,7 +233,9 @@
     "%": true,
     "nvidia-smi": true,
     "Test-Path": true,
-    "Get-CimInstance": true
+    "Get-CimInstance": true,
+    "nvcc": true,
+    "Out-File": true
   },
   "chat.agent.maxRequests": 1000,
   // settings.json

@@ -39,6 +39,7 @@ const YouTubeStreamService   = require('./services/youtubeStreamService');
 const registerStreamHandlers = require('./socket/streamHandler');
 const registerWebRTCHandlers = require('./socket/webrtcSignaling');
 const registerWebRTCTelemetryHandlers = require('./socket/webrtcTelemetryHandlers');
+const { runOnnxStartupDiagnostics } = require('./utils/onnxOptions');
 
 const PORT = parseInt(process.env.HTTP_PORT || '3080', 10);
 
@@ -70,6 +71,14 @@ async function main() {
     console.error('╚══════════════════════════════════════════════════════════╝');
     console.error('');
     process.exit(1);
+  }
+
+  // ── ONNX provider startup diagnostics (CUDA/DML availability) ──────────
+  try {
+    const ort = require('onnxruntime-node');
+    runOnnxStartupDiagnostics(ort);
+  } catch (err) {
+    console.warn(`[onnxOptions][startup-check] Failed to run provider diagnostics: ${String(err?.message || err)}`);
   }
 
   // ── WebRTC Gateway (mediasoup) — init before pipeline manager ──────────

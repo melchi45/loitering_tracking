@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | Document ID | SRS-LTS-AI-CUDA-01 |
-| Version | 1.0 |
+| Version | 1.1 |
 | Status | Active |
-| Date | 2026-06-04 |
+| Date | 2026-06-05 |
 | Parent PRD | prd/PRD_AI_CUDA_Acceleration.md |
 | Parent RFP | rfp/RFP_AI_CUDA_Acceleration.md |
 
@@ -39,6 +39,10 @@ This SRS defines requirements for CUDA-enabled ONNX session creation and fallbac
 
 - FR-CUDA-008: Behavior shall be identical on Windows and Linux for the same environment variables.
 - FR-CUDA-009: CPU-only operation shall remain functional with ONNX_CUDA=0.
+- FR-CUDA-010: System shall run a one-time ONNX backend startup diagnostics routine before model sessions are created.
+- FR-CUDA-011: Startup diagnostics shall log listSupportedBackends output for operations visibility.
+- FR-CUDA-012: On Windows with ONNX_CUDA=0, preferred providers shall be [dml, cpu].
+- FR-CUDA-013: If DML is unavailable, system shall disable DML for the runtime and continue with CPU fallback.
 
 ---
 
@@ -46,6 +50,7 @@ This SRS defines requirements for CUDA-enabled ONNX session creation and fallbac
 
 - NFR-CUDA-001: No additional latency overhead in steady-state CPU path beyond one-time startup checks.
 - NFR-CUDA-002: No changes to external REST/Socket contracts.
+- NFR-CUDA-003: Startup diagnostics shall emit provider availability logs at most once per process boot.
 
 ---
 
@@ -55,3 +60,12 @@ This SRS defines requirements for CUDA-enabled ONNX session creation and fallbac
 - FR-CUDA-005 -> TC-CUDA-B group.
 - FR-CUDA-006..007 -> TC-CUDA-C group.
 - FR-CUDA-008..009 -> TC-CUDA-D group.
+- FR-CUDA-010..013 -> TC-CUDA-E group.
+
+---
+
+## 7. SDLC Amendment (v1.1)
+
+- Added startup diagnostics requirements (FR-CUDA-010/011).
+- Added Windows DML provider policy requirements (FR-CUDA-012/013).
+- Added traceability mapping for new validation group (TC-CUDA-E).

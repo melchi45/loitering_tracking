@@ -1203,7 +1203,19 @@ Python 3.10+ (for ONNX model export only)
 
 # Optional (GPU acceleration)
 NVIDIA GPU + CUDA 12.x + cuDNN 8.x
+
+# Windows ONNX acceleration
+DirectML (DML) is auto-selected on Windows when ONNX_CUDA=0.
+See: docs/ops/ONNX_Runtime_Provider_Diagnostics.md
 ```
+
+### 15.1.2 ONNX Provider Startup Diagnostics (2026-06-05)
+
+- The server performs a one-time ONNX provider diagnostics check at startup.
+- It logs `listSupportedBackends()` once and pre-disables unavailable CUDA/DML providers.
+- On Windows with `ONNX_CUDA=0`, runtime preference is `['dml','cpu']`.
+- If DML is unavailable, inference falls back to CPU and avoids repeated provider warnings.
+- Reference: `docs/ops/ONNX_Runtime_Provider_Diagnostics.md`
 
 ### 15.1.1 Automated Setup (Recommended)
 

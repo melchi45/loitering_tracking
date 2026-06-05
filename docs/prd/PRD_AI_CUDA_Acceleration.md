@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | Document ID | PRD-LTS-AI-CUDA-01 |
-| Version | 1.0 |
+| Version | 1.1 |
 | Status | Active |
-| Date | 2026-06-04 |
+| Date | 2026-06-05 |
 | Parent RFP | rfp/RFP_AI_CUDA_Acceleration.md |
 
 ---
@@ -30,6 +30,8 @@ Provide a stable CUDA acceleration path for ONNX inference in LTS-2026 video ana
 - PR-02: CUDA initialization failure automatically retries with [cpu].
 - PR-03: ONNX_CUDA_STRICT=1 disables fallback and keeps fail-fast behavior.
 - PR-04: Session creation behavior is shared across all AI services.
+- PR-05: Startup diagnostics shall log supported ONNX backends once per server boot.
+- PR-06: Windows runtime shall auto-prefer [dml, cpu] when ONNX_CUDA is disabled.
 
 ---
 
@@ -38,6 +40,7 @@ Provide a stable CUDA acceleration path for ONNX inference in LTS-2026 video ana
 - SM-01: Zero startup crash caused by missing CUDA runtime when strict mode is off.
 - SM-02: All AI model services load successfully on CPU fallback path.
 - SM-03: Startup logs expose mode and fallback events for operations teams.
+- SM-04: On Windows, DML availability is visible at startup and fallback path remains deterministic.
 
 ---
 
@@ -54,3 +57,11 @@ Provide a stable CUDA acceleration path for ONNX inference in LTS-2026 video ana
 - RC-01: SRS requirements mapped to TC cases.
 - RC-02: Server code diagnostics pass for modified files.
 - RC-03: Docs index updated to include CUDA SDLC chain.
+
+---
+
+## 7. SDLC Amendment (v1.1)
+
+- Extended product scope from CUDA-only acceleration policy to provider-aware startup diagnostics.
+- Added Windows DirectML auto-selection as the default GPU path when CUDA is not requested.
+- Added release expectation for one-time startup backend visibility in operations logs.
