@@ -104,7 +104,7 @@ certbot certonly --standalone -d your-domain.com
 cp /etc/letsencrypt/live/your-domain.com/fullchain.pem server/certs/server.crt
 cp /etc/letsencrypt/live/your-domain.com/privkey.pem server/certs/server.key
 ```
-- 참고: [HTTPS_TLS_Setup.md](../../docs/ops/HTTPS_TLS_Setup.md)
+- 참고: [HTTPS_TLS_Setup.md](../../../docs/ops/HTTPS_TLS_Setup.md)
 
 ## MongoDB 설정
 
@@ -122,7 +122,7 @@ docker run -d \
 docker exec -it mongodb mongosh lts2026 \
   --eval "db.getCollectionNames()"
 ```
-- 참고: [MongoDB_Setup.md](../../docs/ops/MongoDB_Setup.md)
+- 참고: [MongoDB_Setup.md](../../../docs/ops/MongoDB_Setup.md)
 
 ## 헬스체크
 
@@ -167,8 +167,33 @@ lsof -i :3080   # 포트 점유 프로세스 확인
 chmod -R 755 server/models server/storage
 ```
 
-## 관련 설계 문서
-- [Design_HTTPS_TLS.md](../../docs/design/Design_HTTPS_TLS.md)
-- [Design_Storage_MongoDB.md](../../docs/design/Design_Storage_MongoDB.md)
-- [HTTPS_TLS_Setup.md](../../docs/ops/HTTPS_TLS_Setup.md)
-- [MongoDB_Setup.md](../../docs/ops/MongoDB_Setup.md)
+## 관련 문서 (SDLC 참조)
+
+> 구현·수정 전 아래 문서를 확인하고, **코드 변경 시 해당 문서를 반드시 동기화**하세요.
+
+| 구분 | 문서 |
+|------|------|
+| PRD | [PRD_HTTPS_TLS](../../../docs/prd/PRD_HTTPS_TLS.md) · [PRD_Storage_MongoDB](../../../docs/prd/PRD_Storage_MongoDB.md) · [PRD_LTS2026_Loitering_Tracking_System](../../../docs/prd/PRD_LTS2026_Loitering_Tracking_System.md) |
+| SRS | [SRS_HTTPS_TLS](../../../docs/srs/SRS_HTTPS_TLS.md) · [SRS_Storage_MongoDB](../../../docs/srs/SRS_Storage_MongoDB.md) · [SRS_LTS2026_Loitering_Tracking_System](../../../docs/srs/SRS_LTS2026_Loitering_Tracking_System.md) |
+| Design | [Design_HTTPS_TLS](../../../docs/design/Design_HTTPS_TLS.md) · [Design_Storage_MongoDB](../../../docs/design/Design_Storage_MongoDB.md) · [Design_LTS2026_Loitering_Tracking_System](../../../docs/design/Design_LTS2026_Loitering_Tracking_System.md) |
+| TC | [TC_HTTPS_TLS](../../../docs/tc/TC_HTTPS_TLS.md) · [TC_Storage_MongoDB](../../../docs/tc/TC_Storage_MongoDB.md) · [TC_LTS2026_Loitering_Tracking_System](../../../docs/tc/TC_LTS2026_Loitering_Tracking_System.md) |
+| Ops | [HTTPS_TLS_Setup](../../../docs/ops/HTTPS_TLS_Setup.md) · [MongoDB_Setup](../../../docs/ops/MongoDB_Setup.md) · [RTSP_Capture_Backend_Setup](../../../docs/ops/RTSP_Capture_Backend_Setup.md) · [MCP_Server_Setup](../../../docs/ops/MCP_Server_Setup.md) |
+
+## 코드 수정 시 문서 동기화 의무
+
+| 변경 파일 | 업데이트 필요 문서 |
+|-----------|------------------|
+| `docker-compose.yml` (서비스·포트 변경) | `docs/design/Design_LTS2026_Loitering_Tracking_System.md` 아키텍처 섹션 |
+| `server/.env` (환경변수 추가·변경) | 해당 기능의 SRS 설정 파라미터 섹션 + `docs/ops/` 관련 가이드 |
+| `server/src/index.js` (포트·TLS 설정) | `docs/design/Design_HTTPS_TLS.md`, `docs/ops/HTTPS_TLS_Setup.md`, `docs/tc/TC_HTTPS_TLS.md` |
+| `server/src/db.js`, `mongoDbService.js` | `docs/design/Design_Storage_MongoDB.md`, `docs/srs/SRS_Storage_MongoDB.md`, `docs/tc/TC_Storage_MongoDB.md` |
+| `server/certs/` (인증서 구조 변경) | `docs/ops/HTTPS_TLS_Setup.md` |
+| `mediamtx.yml` | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/ops/RTSP_Capture_Backend_Setup.md` |
+| 새 서비스 컨테이너 추가 | `docs/design/Design_LTS2026_Loitering_Tracking_System.md` 배포 아키텍처 다이어그램 + Ops 가이드 신규 추가 |
+
+**공통 규칙**
+- **포트 변경** → Design 아키텍처 포트 표 + SRS 시스템 제약 + Ops 가이드 업데이트
+- **환경변수 추가** → `.env.example` + 해당 기능 SRS + Ops 가이드 반영
+- **TLS 인증서 경로 변경** → `docs/ops/HTTPS_TLS_Setup.md` 설치 절차 업데이트
+- **MongoDB 스키마 변경** → `docs/design/Design_Storage_MongoDB.md` 컬렉션 명세 업데이트
+- **Docker 이미지 버전 업그레이드** → Ops 가이드 버전 표 + TC 호환성 케이스 갱신

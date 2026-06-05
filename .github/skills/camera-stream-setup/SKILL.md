@@ -271,10 +271,36 @@ gst-launch-1.0 rtspsrc location=rtsp://localhost:8554/cam_01 protocols=tcp ! \
 yt-dlp -F https://youtube.com/watch?v=...
 ```
 
-## 관련 설계 문서
-- [Design_RTSP_Capture_Backend.md](../../../docs/design/Design_RTSP_Capture_Backend.md)
-- [Design_FFmpeg_RTSP_Capture.md](../../../docs/design/Design_FFmpeg_RTSP_Capture.md)
-- [Design_WebRTC_Media_Gateway.md](../../../docs/design/Design_WebRTC_Media_Gateway.md)
-- [Design_Camera_Discovery.md](../../../docs/design/Design_Camera_Discovery.md)
-- [Design_YouTube_RTSP_Ingest.md](../../../docs/design/Design_YouTube_RTSP_Ingest.md)
-- [Design_STUN_TURN_ICE.md](../../../docs/design/Design_STUN_TURN_ICE.md)
+## 관련 문서 (SDLC 참조)
+
+> 구현·수정 전 아래 문서를 확인하고, **코드 변경 시 해당 문서를 반드시 동기화**하세요.
+
+| 구분 | 문서 |
+|------|------|
+| PRD | [PRD_LTS2026_YouTube_RTSP_Ingest](../../../docs/prd/PRD_LTS2026_YouTube_RTSP_Ingest.md) · [PRD_Camera_Discovery](../../../docs/prd/PRD_Camera_Discovery.md) · [PRD_WebRTC_Media_Gateway](../../../docs/prd/PRD_WebRTC_Media_Gateway.md) · [PRD_STUN_TURN_ICE](../../../docs/prd/PRD_STUN_TURN_ICE.md) |
+| SRS | [SRS_LTS2026_YouTube_RTSP_Ingest](../../../docs/srs/SRS_LTS2026_YouTube_RTSP_Ingest.md) · [SRS_Camera_Discovery](../../../docs/srs/SRS_Camera_Discovery.md) · [SRS_WebRTC_Media_Gateway](../../../docs/srs/SRS_WebRTC_Media_Gateway.md) · [SRS_STUN_TURN_ICE](../../../docs/srs/SRS_STUN_TURN_ICE.md) |
+| Design | [Design_RTSP_Capture_Backend](../../../docs/design/Design_RTSP_Capture_Backend.md) · [Design_FFmpeg_RTSP_Capture](../../../docs/design/Design_FFmpeg_RTSP_Capture.md) · [Design_WebRTC_Media_Gateway](../../../docs/design/Design_WebRTC_Media_Gateway.md) |
+| Design | [Design_Camera_Discovery](../../../docs/design/Design_Camera_Discovery.md) · [Design_YouTube_RTSP_Ingest](../../../docs/design/Design_YouTube_RTSP_Ingest.md) · [Design_STUN_TURN_ICE](../../../docs/design/Design_STUN_TURN_ICE.md) |
+| TC | [TC_RTSP_Capture_Backend](../../../docs/tc/TC_RTSP_Capture_Backend.md) · [TC_FFmpeg_RTSP_Capture](../../../docs/tc/TC_FFmpeg_RTSP_Capture.md) · [TC_WebRTC_Media_Gateway](../../../docs/tc/TC_WebRTC_Media_Gateway.md) · [TC_STUN_TURN_ICE](../../../docs/tc/TC_STUN_TURN_ICE.md) |
+| Ops | [RTSP_Capture_Backend_Setup](../../../docs/ops/RTSP_Capture_Backend_Setup.md) · [FFmpeg_Installation_Compatibility](../../../docs/ops/FFmpeg_Installation_Compatibility.md) |
+
+## 코드 수정 시 문서 동기화 의무
+
+| 변경 파일 | 업데이트 필요 문서 |
+|-----------|------------------|
+| `rtspCapture.js`, `captureFactory.js` | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/design/Design_FFmpeg_RTSP_Capture.md`, `docs/tc/TC_RTSP_Capture_Backend.md` |
+| `gstreamerCapture.js` | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/ops/RTSP_Capture_Backend_Setup.md` |
+| `pyavCapture.js`, `python/pyav_capture.py` | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/ops/RTSP_Capture_Backend_Setup.md` |
+| `webrtcGateway.js`, `rtpIngestion.js` | `docs/design/Design_WebRTC_Media_Gateway.md`, `docs/srs/SRS_WebRTC_Media_Gateway.md`, `docs/tc/TC_WebRTC_Media_Gateway.md` |
+| `socket/webrtcSignaling.js` | `docs/design/Design_WebRTC_Media_Gateway.md`, `docs/tc/TC_WebRTC_Media_Gateway.md` |
+| `discoveryService.js`, `onvifDiscovery.js` | `docs/design/Design_Camera_Discovery.md`, `docs/srs/SRS_Camera_Discovery.md`, `docs/tc/TC_Camera_Discovery.md` |
+| `youtubeStreamService.js` | `docs/design/Design_YouTube_RTSP_Ingest.md`, `docs/srs/SRS_LTS2026_YouTube_RTSP_Ingest.md`, `docs/tc/TC_LTS2026_YouTube_RTSP_Ingest.md` |
+| `mediamtx.yml` | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/ops/RTSP_Capture_Backend_Setup.md` |
+| ffmpeg 버전 호환성 변경 | `docs/design/Design_FFmpeg_RTSP_Capture.md`, `docs/ops/FFmpeg_Installation_Compatibility.md`, `docs/tc/TC_FFmpeg_RTSP_Capture.md` |
+| coturn / TURN 설정 변경 | `docs/design/Design_STUN_TURN_ICE.md`, `docs/tc/TC_STUN_TURN_ICE.md` |
+
+**공통 규칙**
+- **새 기능 추가** → PRD + SRS + Design + TC 문서 모두 신규 작성 또는 기존 문서에 항목 추가
+- **버그 수정** → 스펙 오류가 원인이면 SRS·Design 수정, TC에 회귀 케이스 추가
+- **설정 파라미터 변경** → SRS 제약 조건 + Ops 가이드 + TC 경계값 반영
+- **새 캡처 백엔드 추가** → Design_RTSP_Capture_Backend + SRS + TC + Ops 가이드 신규 추가

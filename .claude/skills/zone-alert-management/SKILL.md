@@ -105,6 +105,30 @@ PATCH /api/alerts/:id/acknowledge
 - `mcp_lts_acknowledge_alert` — 알림 확인 처리
 - `mcp_lts_query_loitering_events` — 배회 이벤트 조회
 
-## 관련 설계 문서
-- [Design_Dashboard_Sidebar_Alerts_Zones.md](../../docs/design/Design_Dashboard_Sidebar_Alerts_Zones.md)
-- [Design_LTS2026_Loitering_Tracking_System.md](../../docs/design/Design_LTS2026_Loitering_Tracking_System.md)
+## 관련 문서 (SDLC 참조)
+
+> 구현·수정 전 아래 문서를 확인하고, **코드 변경 시 해당 문서를 반드시 동기화**하세요.
+
+| 구분 | 문서 |
+|------|------|
+| PRD | [PRD_LTS2026_Loitering_Tracking_System](../../../docs/prd/PRD_LTS2026_Loitering_Tracking_System.md) · [PRD_Dashboard_Sidebar_Alerts_Zones](../../../docs/prd/PRD_Dashboard_Sidebar_Alerts_Zones.md) |
+| SRS | [SRS_LTS2026_Loitering_Tracking_System](../../../docs/srs/SRS_LTS2026_Loitering_Tracking_System.md) · [SRS_Dashboard_Sidebar_Alerts_Zones](../../../docs/srs/SRS_Dashboard_Sidebar_Alerts_Zones.md) |
+| Design | [Design_Dashboard_Sidebar_Alerts_Zones](../../../docs/design/Design_Dashboard_Sidebar_Alerts_Zones.md) · [Design_LTS2026_Loitering_Tracking_System](../../../docs/design/Design_LTS2026_Loitering_Tracking_System.md) |
+| TC | [TC_LTS2026_Loitering_Tracking_System](../../../docs/tc/TC_LTS2026_Loitering_Tracking_System.md) · [TC_Dashboard_Sidebar_Alerts_Zones](../../../docs/tc/TC_Dashboard_Sidebar_Alerts_Zones.md) |
+
+## 코드 수정 시 문서 동기화 의무
+
+| 변경 파일 | 업데이트 필요 문서 |
+|-----------|------------------|
+| `zoneManager.js` (구역 CRUD·다각형) | `docs/design/Design_LTS2026_Loitering_Tracking_System.md`, `docs/srs/SRS_LTS2026_Loitering_Tracking_System.md`, `docs/tc/TC_LTS2026_Loitering_Tracking_System.md` |
+| `alertService.js` (알림 생성·에스컬레이션) | `docs/design/Design_Dashboard_Sidebar_Alerts_Zones.md`, `docs/srs/SRS_LTS2026_Loitering_Tracking_System.md`, `docs/tc/TC_Dashboard_Sidebar_Alerts_Zones.md` |
+| `behaviorEngine.js` (배회 점수 로직) | `docs/design/Design_LTS2026_Loitering_Tracking_System.md`, `docs/srs/SRS_LTS2026_Loitering_Tracking_System.md` |
+| `client/…/ZonesPanel.tsx`, `ZoneEditor.tsx` | `docs/design/Design_Dashboard_Sidebar_Alerts_Zones.md`, `docs/tc/TC_Dashboard_Sidebar_Alerts_Zones.md` |
+| 알림 우선순위·임계값 기준 변경 | `docs/srs/SRS_LTS2026_Loitering_Tracking_System.md` (요구사항 표 반영) + TC 경계값 업데이트 |
+| 에스컬레이션 정책 변경 | `docs/design/Design_Dashboard_Sidebar_Alerts_Zones.md` 에스컬레이션 시퀀스 다이어그램 업데이트 |
+
+**공통 규칙**
+- **새 알림 유형 추가** → PRD + SRS + Design + TC 문서 모두 해당 유형 항목 추가
+- **구역 스키마 변경** → SRS 데이터 모델 섹션 + Design API 명세 + TC 업데이트
+- **에스컬레이션 정책 변경** → Design 시퀀스 다이어그램 + SRS 비기능 요구사항 반영
+- **MCP 도구 동작 변경** → `docs/design/Design_LLM_MCP_Server.md` 도구 목록 업데이트

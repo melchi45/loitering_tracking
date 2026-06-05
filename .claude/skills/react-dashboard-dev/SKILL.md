@@ -100,11 +100,37 @@ npm run preview      # 빌드 결과 미리보기
 - `client/src/types/` — 감지 결과, 알림, 카메라, 구역 등 공통 타입
 - 서버 API 응답 타입은 이 폴더에서 정의 후 컴포넌트에서 import
 
-## 관련 설계 문서
-- [Design_Dashboard_Layout.md](../../docs/design/Design_Dashboard_Layout.md)
-- [Design_Dashboard_Detection_Display.md](../../docs/design/Design_Dashboard_Detection_Display.md)
-- [Design_Dashboard_Sidebar_Cameras.md](../../docs/design/Design_Dashboard_Sidebar_Cameras.md)
-- [Design_Dashboard_Sidebar_Alerts_Zones.md](../../docs/design/Design_Dashboard_Sidebar_Alerts_Zones.md)
-- [Design_Mobile_Layout.md](../../docs/design/Design_Mobile_Layout.md)
-- [Design_Stats_Panel.md](../../docs/design/Design_Stats_Panel.md)
-- [Design_Dashboard_Search_Fullscreen.md](../../docs/design/Design_Dashboard_Search_Fullscreen.md)
+## 관련 문서 (SDLC 참조)
+
+> 구현·수정 전 아래 문서를 확인하고, **코드 변경 시 해당 문서를 반드시 동기화**하세요.
+
+| 구분 | 문서 |
+|------|------|
+| PRD | [PRD_Dashboard_Layout](../../../docs/prd/PRD_Dashboard_Layout.md) · [PRD_Dashboard_Detection_Display](../../../docs/prd/PRD_Dashboard_Detection_Display.md) · [PRD_Dashboard_Sidebar_Cameras](../../../docs/prd/PRD_Dashboard_Sidebar_Cameras.md) |
+| PRD | [PRD_Dashboard_Sidebar_Alerts_Zones](../../../docs/prd/PRD_Dashboard_Sidebar_Alerts_Zones.md) · [PRD_Dashboard_Sidebar_Face_ID](../../../docs/prd/PRD_Dashboard_Sidebar_Face_ID.md) · [PRD_Dashboard_Search_Fullscreen](../../../docs/prd/PRD_Dashboard_Search_Fullscreen.md) · [PRD_Mobile_Layout](../../../docs/prd/PRD_Mobile_Layout.md) · [PRD_Stats_Panel](../../../docs/prd/PRD_Stats_Panel.md) |
+| SRS | [SRS_Dashboard_Layout](../../../docs/srs/SRS_Dashboard_Layout.md) · [SRS_Dashboard_Sidebar_Cameras](../../../docs/srs/SRS_Dashboard_Sidebar_Cameras.md) · [SRS_Dashboard_Sidebar_Alerts_Zones](../../../docs/srs/SRS_Dashboard_Sidebar_Alerts_Zones.md) · [SRS_Mobile_Layout](../../../docs/srs/SRS_Mobile_Layout.md) |
+| Design | [Design_Dashboard_Layout](../../../docs/design/Design_Dashboard_Layout.md) · [Design_Dashboard_Detection_Display](../../../docs/design/Design_Dashboard_Detection_Display.md) · [Design_Dashboard_Sidebar_Cameras](../../../docs/design/Design_Dashboard_Sidebar_Cameras.md) |
+| Design | [Design_Dashboard_Sidebar_Alerts_Zones](../../../docs/design/Design_Dashboard_Sidebar_Alerts_Zones.md) · [Design_Dashboard_Sidebar_Face_ID](../../../docs/design/Design_Dashboard_Sidebar_Face_ID.md) · [Design_Dashboard_Search_Fullscreen](../../../docs/design/Design_Dashboard_Search_Fullscreen.md) · [Design_Mobile_Layout](../../../docs/design/Design_Mobile_Layout.md) · [Design_Stats_Panel](../../../docs/design/Design_Stats_Panel.md) |
+| TC | [TC_Dashboard_Layout](../../../docs/tc/TC_Dashboard_Layout.md) · [TC_Dashboard_Detection_Display](../../../docs/tc/TC_Dashboard_Detection_Display.md) · [TC_Dashboard_Sidebar_Cameras](../../../docs/tc/TC_Dashboard_Sidebar_Cameras.md) · [TC_Dashboard_Sidebar_Alerts_Zones](../../../docs/tc/TC_Dashboard_Sidebar_Alerts_Zones.md) · [TC_Mobile_Layout](../../../docs/tc/TC_Mobile_Layout.md) |
+| TC | [TC_Dashboard_Sidebar_Face_ID](../../../docs/tc/TC_Dashboard_Sidebar_Face_ID.md) · [TC_Detection_Snapshot_Search](../../../docs/tc/TC_Detection_Snapshot_Search.md) |
+
+## 코드 수정 시 문서 동기화 의무
+
+| 변경 파일 | 업데이트 필요 문서 |
+|-----------|------------------|
+| `CameraGrid.tsx`, `CameraView.tsx` | `docs/design/Design_Dashboard_Layout.md`, `docs/design/Design_Dashboard_Sidebar_Cameras.md`, `docs/tc/TC_Dashboard_Layout.md` |
+| `AlertPanel.tsx` | `docs/design/Design_Dashboard_Sidebar_Alerts_Zones.md`, `docs/tc/TC_Dashboard_Sidebar_Alerts_Zones.md` |
+| `ZonesPanel.tsx`, `ZoneEditor.tsx` | `docs/design/Design_Dashboard_Sidebar_Alerts_Zones.md`, `docs/srs/SRS_Dashboard_Sidebar_Alerts_Zones.md` |
+| `FaceGalleryTab.tsx` | `docs/design/Design_Dashboard_Sidebar_Face_ID.md`, `docs/tc/TC_Dashboard_Sidebar_Face_ID.md` |
+| `SearchFullscreen.tsx` | `docs/design/Design_Dashboard_Search_Fullscreen.md`, `docs/prd/PRD_Dashboard_Search_Fullscreen.md` |
+| `StatsPanelModal.tsx` | `docs/design/Design_Stats_Panel.md`, `docs/prd/PRD_Stats_Panel.md` |
+| `DashboardDetectionPanel.tsx` | `docs/design/Design_Dashboard_Detection_Display.md`, `docs/tc/TC_Dashboard_Detection_Display.md` |
+| `i18n/translations/*.ts` | 해당 UI 컴포넌트의 Design 문서 UI 텍스트 섹션 |
+| 새 컴포넌트 추가 | PRD + SRS + Design + TC 문서 신규 작성 또는 관련 문서에 섹션 추가 |
+
+**공통 규칙**
+- **새 UI 컴포넌트** → Design 문서에 UI 구조·상태·이벤트 흐름 추가, TC에 렌더링·인터랙션 케이스 추가
+- **Zustand 스토어 변경** → SRS 데이터 모델 섹션 업데이트
+- **API 연동 변경** → Design의 데이터 플로우 다이어그램 및 TC 업데이트
+- **반응형 레이아웃 변경** → `docs/design/Design_Mobile_Layout.md` + `docs/tc/TC_Mobile_Layout.md` 업데이트
+- **i18n 키 추가** → 해당 화면의 Design 문서 UI 텍스트 항목 추가

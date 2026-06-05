@@ -135,3 +135,48 @@ npm test -- --bail
 # 특정 테스트만 실행 (--only 패턴 사용)
 npm test -- --testNamePattern="WebRTC ICE"
 ```
+
+## 관련 문서 (SDLC 참조)
+
+> 테스트 작성 전 아래 문서를 확인하고, **코드 변경 시 TC 문서를 반드시 동기화**하세요.
+
+| 구분 | 문서 |
+|------|------|
+| SRS | [SRS_LTS2026_Loitering_Tracking_System](../../../docs/srs/SRS_LTS2026_Loitering_Tracking_System.md) — 테스트 대상 요구사항 원본 |
+| TC | [TC_AI_Human_Detection](../../../docs/tc/TC_AI_Human_Detection.md) · [TC_Object_Tracking](../../../docs/tc/TC_Object_Tracking.md) · [TC_AI_Fire_Smoke_Detection](../../../docs/tc/TC_AI_Fire_Smoke_Detection.md) |
+| TC | [TC_AI_Face_Recognition](../../../docs/tc/TC_AI_Face_Recognition.md) · [TC_CrossCamera_Face_Tracking](../../../docs/tc/TC_CrossCamera_Face_Tracking.md) · [TC_Camera_Discovery](../../../docs/tc/TC_Camera_Discovery.md) |
+| TC | [TC_WebRTC_Media_Gateway](../../../docs/tc/TC_WebRTC_Media_Gateway.md) · [TC_STUN_TURN_ICE](../../../docs/tc/TC_STUN_TURN_ICE.md) · [TC_RTSP_Capture_Backend](../../../docs/tc/TC_RTSP_Capture_Backend.md) |
+| TC | [TC_User_Authentication](../../../docs/tc/TC_User_Authentication.md) · [TC_Dashboard_Sidebar_Alerts_Zones](../../../docs/tc/TC_Dashboard_Sidebar_Alerts_Zones.md) · [TC_LTS2026_YouTube_RTSP_Ingest](../../../docs/tc/TC_LTS2026_YouTube_RTSP_Ingest.md) |
+| TC | [TC_Storage_MongoDB](../../../docs/tc/TC_Storage_MongoDB.md) · [TC_HTTPS_TLS](../../../docs/tc/TC_HTTPS_TLS.md) · [TC_Stats_Panel](../../../docs/tc/TC_Stats_Panel.md) · [TC_Detection_Snapshot_Search](../../../docs/tc/TC_Detection_Snapshot_Search.md) |
+| TC (전체 목록) | [`docs/tc/`](../../../docs/tc/) 디렉토리 |
+
+## 테스트 파일 ↔ TC 문서 매핑
+
+| 테스트 파일 | 대응 TC 문서 |
+|-------------|-------------|
+| `human_detection.test.js` | `docs/tc/TC_AI_Human_Detection.md` |
+| `object_tracking.test.js` | `docs/tc/TC_Object_Tracking.md` |
+| `face_enrollment.test.js`, `face_gallery.test.js` | `docs/tc/TC_AI_Face_Recognition.md` |
+| `cross_camera_tracking.test.js` | `docs/tc/TC_CrossCamera_Face_Tracking.md` |
+| `camera_discovery.test.js` | `docs/tc/TC_Camera_Discovery.md` |
+| `webrtc.test.js`, `webrtc_ice.test.js`, `webrtc_stability.test.js` | `docs/tc/TC_WebRTC_Media_Gateway.md`, `docs/tc/TC_STUN_TURN_ICE.md` |
+| `auth.test.js` | `docs/tc/TC_User_Authentication.md` |
+| `sidebar_alerts_zones.test.js` | `docs/tc/TC_Dashboard_Sidebar_Alerts_Zones.md` |
+| `youtube_streams.test.js` | `docs/tc/TC_LTS2026_YouTube_RTSP_Ingest.md` |
+| `ai_detection_modules.test.js` | `docs/tc/TC_AI_Human_Detection.md`, `docs/tc/TC_AI_Fire_Smoke_Detection.md` 등 |
+| `stats_panel.test.js` | `docs/tc/TC_Stats_Panel.md` |
+| `detection_snapshot_search.test.js` | `docs/tc/TC_Detection_Snapshot_Search.md` |
+
+## 코드 수정 시 문서 동기화 의무
+
+| 변경 사항 | 업데이트 필요 문서 |
+|-----------|------------------|
+| 새 테스트 파일 추가 | `docs/tc/` 에 대응 TC 문서 생성, `test/jira-reporter.js` `TC_DOC_IDS` 매핑 추가 |
+| 기존 테스트 케이스 변경 | 대응 `docs/tc/TC_xxx.md` 의 테스트 케이스 항목 동기화 |
+| API 엔드포인트 변경으로 인한 테스트 수정 | 해당 기능의 SRS API 명세 + TC 문서 갱신 |
+| `test/run_all.js` 스위트 구조 변경 | Jira 통합 SKILL 참조 (`test/jira-reporter.js` `SUITE_TC_MAP` 업데이트) |
+
+**공통 규칙**
+- **새 기능 구현** → 기능 코드 작성과 동시에 `docs/tc/TC_xxx.md` 테스트 케이스 문서화
+- **테스트 실패 회귀** → TC 문서에 회귀 케이스(Regression) 항목 추가
+- **커버리지 미달 영역** → 해당 SRS 요구사항 항목에 TC 연결 확인 후 테스트 추가

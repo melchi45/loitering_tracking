@@ -83,12 +83,40 @@ RTSP/WebRTC 스트림
 }
 ```
 
-## 관련 설계 문서
-- [Design_LTS2026_Loitering_Tracking_System.md](../../docs/design/Design_LTS2026_Loitering_Tracking_System.md)
-- [Design_Object_Tracking.md](../../docs/design/Design_Object_Tracking.md)
-- [Design_AI_Human_Detection.md](../../docs/design/Design_AI_Human_Detection.md)
-- [Design_AI_Mask_Detection.md](../../docs/design/Design_AI_Mask_Detection.md)
-- [Design_AI_Fire_Smoke_Detection.md](../../docs/design/Design_AI_Fire_Smoke_Detection.md)
+## 관련 문서 (SDLC 참조)
+
+> 구현·수정 전 아래 문서를 확인하고, **코드 변경 시 해당 문서를 반드시 동기화**하세요.
+
+| 구분 | 문서 |
+|------|------|
+| PRD | [PRD_LTS2026_Loitering_Tracking_System](../../../docs/prd/PRD_LTS2026_Loitering_Tracking_System.md) · [PRD_Object_Tracking](../../../docs/prd/PRD_Object_Tracking.md) · [PRD_AI_Human_Detection](../../../docs/prd/PRD_AI_Human_Detection.md) · [PRD_AI_Vehicle_Detection](../../../docs/prd/PRD_AI_Vehicle_Detection.md) |
+| PRD | [PRD_AI_Fire_Smoke_Detection](../../../docs/prd/PRD_AI_Fire_Smoke_Detection.md) · [PRD_AI_Cloth_Analysis](../../../docs/prd/PRD_AI_Cloth_Analysis.md) · [PRD_AI_Color_Analysis](../../../docs/prd/PRD_AI_Color_Analysis.md) · [PRD_AI_Mask_Detection](../../../docs/prd/PRD_AI_Mask_Detection.md) · [PRD_AI_Hat_Detection](../../../docs/prd/PRD_AI_Hat_Detection.md) |
+| SRS | [SRS_LTS2026_Loitering_Tracking_System](../../../docs/srs/SRS_LTS2026_Loitering_Tracking_System.md) · [SRS_Object_Tracking](../../../docs/srs/SRS_Object_Tracking.md) · [SRS_AI_Human_Detection](../../../docs/srs/SRS_AI_Human_Detection.md) |
+| SRS | [SRS_AI_Fire_Smoke_Detection](../../../docs/srs/SRS_AI_Fire_Smoke_Detection.md) · [SRS_AI_Cloth_Analysis](../../../docs/srs/SRS_AI_Cloth_Analysis.md) · [SRS_AI_Color_Analysis](../../../docs/srs/SRS_AI_Color_Analysis.md) · [SRS_AI_Mask_Detection](../../../docs/srs/SRS_AI_Mask_Detection.md) · [SRS_AI_Hat_Detection](../../../docs/srs/SRS_AI_Hat_Detection.md) |
+| Design | [Design_LTS2026_Loitering_Tracking_System](../../../docs/design/Design_LTS2026_Loitering_Tracking_System.md) · [Design_Object_Tracking](../../../docs/design/Design_Object_Tracking.md) · [Design_AI_Human_Detection](../../../docs/design/Design_AI_Human_Detection.md) |
+| Design | [Design_AI_Fire_Smoke_Detection](../../../docs/design/Design_AI_Fire_Smoke_Detection.md) · [Design_AI_Cloth_Analysis](../../../docs/design/Design_AI_Cloth_Analysis.md) · [Design_AI_Color_Analysis](../../../docs/design/Design_AI_Color_Analysis.md) · [Design_AI_Mask_Detection](../../../docs/design/Design_AI_Mask_Detection.md) · [Design_AI_Hat_Detection](../../../docs/design/Design_AI_Hat_Detection.md) |
+| TC | [TC_AI_Human_Detection](../../../docs/tc/TC_AI_Human_Detection.md) · [TC_Object_Tracking](../../../docs/tc/TC_Object_Tracking.md) · [TC_AI_Fire_Smoke_Detection](../../../docs/tc/TC_AI_Fire_Smoke_Detection.md) |
+| TC | [TC_AI_Cloth_Analysis](../../../docs/tc/TC_AI_Cloth_Analysis.md) · [TC_AI_Color_Analysis](../../../docs/tc/TC_AI_Color_Analysis.md) · [TC_AI_Mask_Detection](../../../docs/tc/TC_AI_Mask_Detection.md) · [TC_AI_Hat_Detection](../../../docs/tc/TC_AI_Hat_Detection.md) |
+| Ops | [ONNX_Runtime_Provider_Diagnostics](../../../docs/ops/ONNX_Runtime_Provider_Diagnostics.md) · [ONNX_Runtime_Source_Build_CUDA13](../../../docs/ops/ONNX_Runtime_Source_Build_CUDA13.md) |
+
+## 코드 수정 시 문서 동기화 의무
+
+| 변경 파일 | 업데이트 필요 문서 |
+|-----------|------------------|
+| `detection.js` | `docs/design/Design_AI_Human_Detection.md`, `docs/srs/SRS_AI_Human_Detection.md`, `docs/tc/TC_AI_Human_Detection.md` |
+| `tracking.js`, `trackerConfig.js` | `docs/design/Design_Object_Tracking.md`, `docs/srs/SRS_Object_Tracking.md`, `docs/tc/TC_Object_Tracking.md` |
+| `behaviorEngine.js` | `docs/design/Design_LTS2026_Loitering_Tracking_System.md`, `docs/srs/SRS_LTS2026_Loitering_Tracking_System.md` |
+| `attributePipeline.js`, `colorClothService.js` | `docs/design/Design_AI_Cloth_Analysis.md`, `docs/design/Design_AI_Color_Analysis.md`, `docs/tc/TC_AI_Cloth_Analysis.md`, `docs/tc/TC_AI_Color_Analysis.md` |
+| `fireSmokeService.js` | `docs/design/Design_AI_Fire_Smoke_Detection.md`, `docs/srs/SRS_AI_Fire_Smoke_Detection.md`, `docs/tc/TC_AI_Fire_Smoke_Detection.md` |
+| `protectiveEquipService.js` | `docs/design/Design_AI_Mask_Detection.md`, `docs/design/Design_AI_Hat_Detection.md`, `docs/tc/TC_AI_Mask_Detection.md`, `docs/tc/TC_AI_Hat_Detection.md` |
+| `utils/onnxOptions.js` | `docs/ops/ONNX_Runtime_Provider_Diagnostics.md` |
+| `pipelineManager.js` (서비스 추가) | 해당 기능의 PRD + SRS + Design + TC 신규 문서 생성 |
+
+**공통 규칙**
+- **새 기능 추가** → PRD + SRS + Design + TC 문서 모두 신규 작성 또는 기존 문서에 항목 추가
+- **버그 수정** → 스펙 오류가 원인이면 SRS·Design 수정, TC에 회귀 케이스 추가
+- **임계값·파라미터 변경** → SRS 제약 조건 섹션 반영 + TC 경계값 업데이트
+- **AI 모델 교체** → Design 아키텍처 섹션 + SRS 성능 요구사항 + TC 정확도 기준 업데이트
 
 ## 최근 운영 변경 (2026-06-05)
 

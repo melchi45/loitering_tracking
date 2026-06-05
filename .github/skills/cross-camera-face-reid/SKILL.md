@@ -94,8 +94,31 @@ Content-Type: multipart/form-data
 - 동의 없는 얼굴 등록 금지 — 시스템 접근 권한 관리 필수
 - 데이터 보존 기간 설정: MongoDB TTL 인덱스로 자동 만료
 
-## 관련 설계 문서
-- [Design_Face_Recognition.md](../../docs/design/Design_AI_Face_Recognition.md)
-- [Design_CrossCamera_Face_Tracking.md](../../docs/design/Design_CrossCamera_Face_Tracking.md)
-- [Design_Dashboard_Sidebar_Face_ID.md](../../docs/design/Design_Dashboard_Sidebar_Face_ID.md)
-- [Design_Detection_Snapshot_Search.md](../../docs/design/Design_Detection_Snapshot_Search.md)
+## 관련 문서 (SDLC 참조)
+
+> 구현·수정 전 아래 문서를 확인하고, **코드 변경 시 해당 문서를 반드시 동기화**하세요.
+
+| 구분 | 문서 |
+|------|------|
+| PRD | [PRD_AI_Face_Recognition](../../../docs/prd/PRD_AI_Face_Recognition.md) · [PRD_CrossCamera_Face_Tracking](../../../docs/prd/PRD_CrossCamera_Face_Tracking.md) · [PRD_Dashboard_Sidebar_Face_ID](../../../docs/prd/PRD_Dashboard_Sidebar_Face_ID.md) · [PRD_Detection_Snapshot_Search](../../../docs/prd/PRD_Detection_Snapshot_Search.md) |
+| SRS | [SRS_AI_Face_Recognition](../../../docs/srs/SRS_AI_Face_Recognition.md) · [SRS_CrossCamera_Face_Tracking](../../../docs/srs/SRS_CrossCamera_Face_Tracking.md) · [SRS_Dashboard_Sidebar_Face_ID](../../../docs/srs/SRS_Dashboard_Sidebar_Face_ID.md) · [SRS_Detection_Snapshot_Search](../../../docs/srs/SRS_Detection_Snapshot_Search.md) |
+| Design | [Design_AI_Face_Recognition](../../../docs/design/Design_AI_Face_Recognition.md) · [Design_CrossCamera_Face_Tracking](../../../docs/design/Design_CrossCamera_Face_Tracking.md) · [Design_Dashboard_Sidebar_Face_ID](../../../docs/design/Design_Dashboard_Sidebar_Face_ID.md) · [Design_Detection_Snapshot_Search](../../../docs/design/Design_Detection_Snapshot_Search.md) |
+| TC | [TC_AI_Face_Recognition](../../../docs/tc/TC_AI_Face_Recognition.md) · [TC_CrossCamera_Face_Tracking](../../../docs/tc/TC_CrossCamera_Face_Tracking.md) · [TC_Dashboard_Sidebar_Face_ID](../../../docs/tc/TC_Dashboard_Sidebar_Face_ID.md) · [TC_Detection_Snapshot_Search](../../../docs/tc/TC_Detection_Snapshot_Search.md) |
+
+## 코드 수정 시 문서 동기화 의무
+
+| 변경 파일 | 업데이트 필요 문서 |
+|-----------|------------------|
+| `faceService.js` (임베딩·검색·등록) | `docs/design/Design_AI_Face_Recognition.md`, `docs/srs/SRS_AI_Face_Recognition.md`, `docs/tc/TC_AI_Face_Recognition.md` |
+| `faceService.js` (유사도 임계값 변경) | `docs/srs/SRS_AI_Face_Recognition.md` 정확도 요구사항 + `docs/tc/TC_AI_Face_Recognition.md` 경계값 케이스 |
+| `mongoDbService.js` (Vector Search 인덱스) | `docs/design/Design_CrossCamera_Face_Tracking.md`, `docs/design/Design_Storage_MongoDB.md` |
+| `AuditService.js` (감사 로그 범위) | `docs/srs/SRS_AI_Face_Recognition.md` 개인정보 섹션 |
+| `snapshotService.js` | `docs/design/Design_Detection_Snapshot_Search.md`, `docs/tc/TC_Detection_Snapshot_Search.md` |
+| `FaceGalleryTab.tsx` | `docs/design/Design_Dashboard_Sidebar_Face_ID.md`, `docs/tc/TC_Dashboard_Sidebar_Face_ID.md` |
+| 개인정보 마스킹 정책 변경 | `docs/srs/SRS_AI_Face_Recognition.md` GDPR 섹션 + `docs/design/Design_AI_Face_Recognition.md` |
+
+**공통 규칙**
+- **새 기능 추가** → PRD + SRS + Design + TC 문서 모두 추가
+- **임베딩 모델 교체** → Design 아키텍처 다이어그램 + SRS 성능·정확도 요구사항 + TC 갱신
+- **개인정보 처리 변경** → SRS GDPR 섹션 필수 업데이트 (법적 요구사항)
+- **Atlas Vector Search 인덱스 변경** → `docs/design/Design_Storage_MongoDB.md` 인덱스 명세 업데이트

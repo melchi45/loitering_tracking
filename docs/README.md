@@ -115,6 +115,7 @@ test/              Test scripts (TC-based automation)
 | **Detection Snapshot & Search** | [rfp/](rfp/RFP_Detection_Snapshot_Search.md) | [prd/](prd/PRD_Detection_Snapshot_Search.md) | [srs/](srs/SRS_Detection_Snapshot_Search.md) | [design/](design/Design_Detection_Snapshot_Search.md) | [tc/](tc/TC_Detection_Snapshot_Search.md) |
 | **Stats Dashboard Panel** | [rfp/](rfp/RFP_Stats_Panel.md) | [prd/](prd/PRD_Stats_Panel.md) | [srs/](srs/SRS_Stats_Panel.md) | [design/](design/Design_Stats_Panel.md) | [tc/](tc/TC_Stats_Panel.md) |
 | **User Authentication** | [rfp/](rfp/RFP_User_Authentication.md) | [prd/](prd/PRD_User_Authentication.md) | [srs/](srs/SRS_User_Authentication.md) | [design/](design/Design_User_Authentication.md) | [tc/](tc/TC_User_Authentication.md) |
+| **Video Capture Pipeline** | [rfp/](rfp/RFP_Video_Capture_Pipeline.md) | [prd/](prd/PRD_Video_Capture_Pipeline.md) | [srs/](srs/SRS_Video_Capture_Pipeline.md) | [design/](design/Design_Video_Capture_Pipeline.md) | [tc/](tc/TC_Video_Capture_Pipeline.md) |
 
 ---
 
@@ -235,6 +236,7 @@ node test/generate_report.js
 | 2026-05-28 | **`docs/development_process.md` integrated into `docs/README.md`** — Development Process Overview section added (MRD→DIA→DV→DVR→PIA→PV→PVR→PR→PRA→SR→SRA stage-gate table, key deliverables, core document flow); source file retired |
 | 2026-05-28 | **`docs/MRD_LTS2026.md` created** — Market Requirements Document synthesized from all RFP/PRD/codebase status (Phase 1–11); covers market problem, TAM/SAM/SOM, customer segments, competitive matrix, 11 core + 11 AI modules, business requirements, 7 market use cases, regulatory compliance, KPIs, roadmap alignment |
 | 2026-06-05 | **CUDA Acceleration SDLC v1.1 amendment** — `RFP/PRD/SRS/Design/TC_AI_CUDA_Acceleration.md` updated with ONNX startup diagnostics and Windows DML auto-selection policy; `server/src/index.js` startup-check and `server/src/utils/onnxOptions.js` provider pre-disable behavior documented; ops runbook added: `docs/ops/ONNX_Runtime_Provider_Diagnostics.md` |
+| 2026-06-05 | **Video Capture Pipeline SDLC chain authored** — `RFP/PRD/SRS/Design/TC_Video_Capture_Pipeline.md` 5-document chain created; covers current FFmpeg/GStreamer/PyAV/RtpIngestion architecture, WebRTC stream instability root-cause analysis (SERVER_IP loopback, Google STUN DNS failure, FFmpeg 3-output CPU load), full technology comparison matrix (FFmpeg, GStreamer, MediaMTX, DeepStream, aiortc, Pion, live555), and 4-phase improvement roadmap; 40 test cases in Groups A–G |
 
 ---
 

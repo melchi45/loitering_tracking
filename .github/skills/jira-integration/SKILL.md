@@ -109,7 +109,31 @@ const TC_DOC_IDS = {
 - 해결(Done)된 이슈는 재오픈 대신 신규 생성
 
 ## 관련 파일
-- [test/jira-reporter.js](../../test/jira-reporter.js)
-- [.github/workflows/test-jira.yml](../../.github/workflows/test-jira.yml)
-- [.github/workflows/test.yml](../../.github/workflows/test.yml)
-- [docs/tc/](../../docs/tc/) — TC 문서 디렉토리
+- [test/jira-reporter.js](../../../test/jira-reporter.js)
+- [.github/workflows/test-jira.yml](../../../.github/workflows/test-jira.yml)
+- [.github/workflows/test.yml](../../../.github/workflows/test.yml)
+- [docs/tc/](../../../docs/tc/) — TC 문서 디렉토리
+
+## 관련 문서 (SDLC 참조)
+
+> **TC 문서가 Jira 이슈 제목·레이블의 원천**입니다. TC 문서 변경 시 `jira-reporter.js` 매핑도 함께 업데이트하세요.
+
+| 구분 | 문서 |
+|------|------|
+| TC (전체) | [`docs/tc/`](../../../docs/tc/) — 모든 TC 문서; `TC_DOC_IDS` 매핑의 기준 |
+| SRS | [SRS_LTS2026_Loitering_Tracking_System](../../../docs/srs/SRS_LTS2026_Loitering_Tracking_System.md) — TC 요구사항 추적성 원본 |
+
+## 코드 수정 시 문서 동기화 의무
+
+| 변경 파일 | 업데이트 필요 사항 |
+|-----------|------------------|
+| `test/jira-reporter.js` → `TC_DOC_IDS` 추가 | `docs/tc/TC_xxx.md` 신규 문서 먼저 작성 |
+| `test/jira-reporter.js` → `SUITE_TC_MAP` 추가 | 대응 `test/api/xxx.test.js` 파일 존재 확인 |
+| `.github/workflows/test-jira.yml` 트리거 조건 변경 | 워크플로 주석에 변경 이유 기록 |
+| 새 TC 문서 (`docs/tc/TC_xxx.md`) 추가 | `TC_DOC_IDS`에 Document ID 매핑 추가 |
+| Jira 프로젝트 키 변경 | GitHub Secrets (`JIRA_PROJECT_KEY`) + 워크플로 업데이트 |
+
+**공통 규칙**
+- TC 문서 ID(`TC-LTS-AI-01` 형식)는 `docs/tc/` 문서 헤더에서 관리; `jira-reporter.js`는 이를 참조만 함
+- TC 문서 삭제 시 → `TC_DOC_IDS`에서도 제거 (삭제된 ID로 Jira 이슈 생성 방지)
+- 새 Jira 컴포넌트 추가 시 → GitHub Secrets `JIRA_COMPONENT` + 워크플로 문서 주석 업데이트
