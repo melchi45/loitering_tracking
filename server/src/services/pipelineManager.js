@@ -215,7 +215,14 @@ class PipelineManager {
     }
 
     const rtspUrl  = this._buildRtspUrl(camera);
-    const useWebRTC = !!camera.webrtcEnabled;
+    // When MediaMTX is the capture backend it already holds the camera stream and
+    // can serve video directly to the browser via WHEP. Default useWebRTC=true so
+    // the server never emits Socket.IO JPEG frames for these cameras — video
+    // delivery is completely independent of the Node.js event loop.
+    // Cameras that explicitly set webrtcEnabled=false are left unchanged.
+    const useWebRTC = CAPTURE_BACKEND === 'mediamtx'
+      ? (camera.webrtcEnabled !== false)
+      : !!camera.webrtcEnabled;
     const captureFps = parseInt(process.env.CAPTURE_FPS, 10) || 10;
 
     // Register with MediaMTX when: browser WebRTC delivery is needed, OR the

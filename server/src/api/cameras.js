@@ -3,7 +3,20 @@
 const { Router } = require('express');
 const { v4: uuidv4 } = require('uuid');
 
-const SERVER_MODE = process.env.SERVER_MODE || 'combined';
+const SERVER_MODE     = process.env.SERVER_MODE     || 'combined';
+const CAPTURE_BACKEND = (process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase();
+
+// When MediaMTX manages the camera stream, default webrtcEnabled=true so the
+// browser uses MediaMTX WHEP for video instead of Socket.IO JPEG frames.
+// This removes JPEG frame emission from the Node.js event loop entirely,
+// decoupling video playback from the AI analysis pipeline.
+// Cameras that explicitly set webrtcEnabled=false are left unchanged.
+function _withWebRTCOverride(cam) {
+  if (CAPTURE_BACKEND === 'mediamtx' && cam.webrtcEnabled !== false) {
+    return { ...cam, webrtcEnabled: true };
+  }
+  return cam;
+}
 
 function normalizeRtspUrl(rtspUrl) {
   if (typeof rtspUrl !== 'string' || !rtspUrl.trim()) {
@@ -54,12 +67,12 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
         const bitrate = cam.type === 'youtube' && cam.bitrate
           ? Math.round(cam.bitrate / 1000)
           : cam.bitrate;
-        return {
+        return _withWebRTCOverride({
           ...cam,
           bitrate,
           password:       undefined, // Never expose password in list
           pipelineStatus: pipelineStatus || null,
-        };
+        });
       });
       res.json({ success: true, data: result });
     } catch (err) {
@@ -144,7 +157,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       const pipelineStatus = pipelineManager.getCameraStatus(camera.id);
       res.json({
         success: true,
-        data: { ...camera, password: undefined, pipelineStatus: pipelineStatus || null },
+        data: _withWebRTCOverride({ ...camera, password: undefined, pipelineStatus: pipelineStatus || null }),
       });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
