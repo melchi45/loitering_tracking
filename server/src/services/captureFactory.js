@@ -32,7 +32,9 @@
  */
 
 const CAPTURE_BACKEND        = (process.env.CAPTURE_BACKEND        || 'ffmpeg').toLowerCase();
-const MEDIAMTX_FRAME_BACKEND = (process.env.MEDIAMTX_FRAME_BACKEND || 'snapshot').toLowerCase();
+// Default: ffmpeg. Use 'snapshot' only with MediaMTX versions that expose
+// GET /v3/paths/{name}/get-snapshot (verify with: curl http://localhost:9997/v3/paths/{id}/get-snapshot)
+const MEDIAMTX_FRAME_BACKEND = (process.env.MEDIAMTX_FRAME_BACKEND || 'ffmpeg').toLowerCase();
 
 let _warnedOnce = false;
 
