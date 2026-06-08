@@ -59,7 +59,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
           bitrate,
           password:       undefined, // Never expose password in list
           pipelineStatus: pipelineStatus || null,
-        });
+        };
       });
       res.json({ success: true, data: result });
     } catch (err) {
