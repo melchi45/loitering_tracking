@@ -37,13 +37,59 @@ function _gstAvailable() {
   }
 }
 
-const GST_AVAILABLE = _gstAvailable();
-const HW_DECODER    = GST_AVAILABLE ? _detectHwDecoder() : 'software';
+// Check whether avdec_h264 (provided by gstreamer1.0-libav) is present.
+// Without it, software-mode decodebin cannot decode H264 streams.
+function _checkH264Plugin() {
+  try {
+    const r = spawnSync('gst-inspect-1.0', ['avdec_h264'], { encoding: 'utf8' });
+    return r.status === 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+const GST_AVAILABLE  = _gstAvailable();
+const H264_AVAILABLE = GST_AVAILABLE ? _checkH264Plugin() : false;
+const HW_DECODER     = GST_AVAILABLE ? _detectHwDecoder() : 'software';
 
 if (GST_AVAILABLE) {
-  console.log(`[GStreamerCapture] GStreamer available — hw decoder: ${HW_DECODER}`);
+  if (!H264_AVAILABLE && HW_DECODER === 'software') {
+    console.error(`
+╔══════════════════════════════════════════════════════════════════════╗
+║  [GStreamerCapture] 필수 플러그인 누락: avdec_h264 (gst-libav)      ║
+║  MEDIAMTX_FRAME_BACKEND=gstreamer 이지만 H264 디코더가 없습니다.   ║
+║                                                                      ║
+║  ▶ Linux (Ubuntu/Debian)                                             ║
+║    sudo apt-get install -y gstreamer1.0-libav                        ║
+║                                                                      ║
+║  ▶ Windows                                                            ║
+║    1. https://gstreamer.freedesktop.org/download/ 에서               ║
+║       "MSVC 64-bit" 런타임 + 개발 패키지 설치                        ║
+║    2. 설치 시 "Complete" 선택 (또는 gst-libav 컴포넌트 개별 선택)   ║
+║    3. 설치 후 재시작                                                  ║
+║                                                                      ║
+║  설치 전까지 이 카메라 파이프라인은 시작되지 않습니다.               ║
+╚══════════════════════════════════════════════════════════════════════╝`);
+  } else {
+    console.log(`[GStreamerCapture] GStreamer available — hw decoder: ${HW_DECODER}`);
+  }
 } else {
-  console.warn('[GStreamerCapture] gst-launch-1.0 not found');
+  console.error(`
+╔══════════════════════════════════════════════════════════════════════╗
+║  [GStreamerCapture] gst-launch-1.0 를 찾을 수 없습니다.             ║
+║  MEDIAMTX_FRAME_BACKEND=gstreamer 이지만 GStreamer가 없습니다.      ║
+║                                                                      ║
+║  ▶ Linux (Ubuntu/Debian)                                             ║
+║    sudo apt-get install -y gstreamer1.0-tools \\                     ║
+║      gstreamer1.0-plugins-base gstreamer1.0-plugins-good \\          ║
+║      gstreamer1.0-plugins-bad  gstreamer1.0-libav                   ║
+║                                                                      ║
+║  ▶ Windows                                                            ║
+║    https://gstreamer.freedesktop.org/download/ 에서                  ║
+║    "MSVC 64-bit" 런타임 패키지 다운로드 후 설치 (Complete 선택)     ║
+║                                                                      ║
+║  설치 전까지 이 카메라 파이프라인은 시작되지 않습니다.               ║
+╚══════════════════════════════════════════════════════════════════════╝`);
 }
 
 /**
@@ -80,7 +126,19 @@ class GStreamerCapture extends EventEmitter {
   start() {
     if (this._running) return;
     if (!GST_AVAILABLE) {
-      this.emit('error', new Error('gst-launch-1.0 not found. Install GStreamer to use gstreamer backend.'));
+      this.emit('error', new Error(
+        'gst-launch-1.0 not found.\n' +
+        '  Linux:   sudo apt-get install -y gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav\n' +
+        '  Windows: https://gstreamer.freedesktop.org/download/ → MSVC 64-bit → Complete 설치'
+      ));
+      return;
+    }
+    if (!H264_AVAILABLE && HW_DECODER === 'software') {
+      this.emit('error', new Error(
+        'GStreamer H264 decoder (avdec_h264) not found.\n' +
+        '  Linux:   sudo apt-get install -y gstreamer1.0-libav\n' +
+        '  Windows: https://gstreamer.freedesktop.org/download/ → MSVC 64-bit → Complete 설치'
+      ));
       return;
     }
     this._running    = true;
@@ -99,8 +157,11 @@ class GStreamerCapture extends EventEmitter {
   // ── Private ────────────────────────────────────────────────────────────────
 
   _buildArgs() {
-    const rate    = `videorate max-rate=${this.fps}`;
-    const scale   = `videoscale ! video/x-raw,width=${this.width}`;
+    const rate  = `videorate max-rate=${this.fps}`;
+    // pixel-aspect-ratio=1/1 forces square-pixel output so that GStreamer
+    // calculates height proportionally from width (without it, GStreamer
+    // scales only width and leaves height at the source value).
+    const scale   = `videoscale add-borders=false ! video/x-raw,width=${this.width},pixel-aspect-ratio=1/1`;
     const convert = 'videoconvert';
     const encode  = 'jpegenc quality=85';
     const sink    = 'fdsink fd=1';

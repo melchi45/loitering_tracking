@@ -220,16 +220,18 @@ class PipelineManager {
 
     // Register with MediaMTX when: browser WebRTC delivery is needed, OR the
     // mediamtx capture backend is active (so MediaMTX holds the single camera
-    // connection and AI capture reads from the local RTSP re-publish).
+    // connection and all capture backends read from the local RTSP re-publish).
     const needsMediaMTX = useWebRTC || CAPTURE_BACKEND === 'mediamtx';
     if (needsMediaMTX) {
       mediamtxManager.addCameraPath(camera.id, rtspUrl).catch(() => {});
     }
 
-    // For the mediamtx backend, AI capture reads from MediaMTX's local RTSP
-    // re-publish instead of the original camera — one camera connection total.
     const mediamtxRtspPort = parseInt(process.env.MEDIAMTX_RTSP_PORT, 10) || 8554;
-    const captureUrl = CAPTURE_BACKEND === 'mediamtx'
+    // When MediaMTX holds the camera stream (WebRTC mode or mediamtx backend),
+    // ALL capture backends (gstreamer, ffmpeg, pyav) should read from the
+    // MediaMTX local RTSP re-publish.  This prevents a second direct connection
+    // to the camera which many devices limit to one simultaneous RTSP client.
+    const captureUrl = needsMediaMTX
       ? `rtsp://127.0.0.1:${mediamtxRtspPort}/${camera.id}`
       : rtspUrl;
 
@@ -280,10 +282,12 @@ class PipelineManager {
       let frameWidth  = jpegSize?.width  ?? 640;
       let frameHeight = jpegSize?.height ?? 640;
 
-      // Emit raw JPEG frame only for cameras NOT using WebRTC
-      // (WebRTC cameras are served by MediaMTX via WHEP)
+      // Emit raw JPEG frame only for cameras NOT using WebRTC.
+      // volatile: if the browser's WebSocket buffer is full (slow ACK), the frame
+      // is dropped rather than queued — prevents stale-frame pile-up that causes
+      // the visual "freeze then burst" effect when the browser catches up.
       if (!ctx.useWebRTC) {
-        this._io.to(camera.id).emit('frame', {
+        this._io.to(camera.id).volatile.emit('frame', {
           cameraId:    camera.id,
           frameId:     currentFrameId,
           timestamp,
@@ -296,14 +300,10 @@ class PipelineManager {
       // Skip all inference when AI is disabled for this camera
       if (!ctx.aiEnabled) return;
 
-      // Skip all inference when every analytics module is disabled
-      if (!analyticsConfig.anyModuleEnabled()) return;
-
       // ── Streaming mode: per-camera "latest-frame-wins" analysis queue ────────
-      // Each camera has one pending slot. A new frame always overwrites the
-      // previous pending frame so analysis never runs on stale data.
-      // When analysis completes, the slot is consumed and the next pending
-      // frame (if any) is dispatched immediately — no queue build-up.
+      // In streaming mode the remote analysis server decides which AI modules to
+      // run — the streaming server's own analyticsConfig is irrelevant here.
+      // Always forward frames when an analysis client is configured.
       if (SERVER_MODE === 'streaming') {
         if (!this._analysisClient) return; // monitoring-only mode
         ctx._pendingFrame = {
@@ -314,13 +314,15 @@ class PipelineManager {
           fw:       frameWidth,
           fh:       frameHeight,
           zones:    this._zoneManager.getActiveZones(camera.id),
-          cfg:      analyticsConfig.getConfig(),
         };
         if (!ctx._analyzing) this._runPendingAnalysis(ctx, camera, analyticsConfig);
         return;
       }
 
       // ── Local inference (combined / analysis mode) ───────────────────────
+      // Skip if every analytics module is disabled on this server.
+      if (!analyticsConfig.anyModuleEnabled()) return;
+
       // Skip if previous frame is still being processed — CPU-bound ONNX
       // inference must be serialized per camera.
       if (ctx._inferring) return;
@@ -638,7 +640,7 @@ class PipelineManager {
     });
 
     capture.on('started', ({ cmdline }) => {
-      console.log(`[PipelineManager][${camera.id}] FFmpeg started: ${cmdline}`);
+      console.log(`[PipelineManager][${camera.id}] Capture started (${CAPTURE_BACKEND}): ${cmdline}`);
     });
 
     capture.on('frame', (() => {
@@ -826,12 +828,11 @@ class PipelineManager {
     ctx._analyzing    = true;
 
     this._analysisClient.analyzeFrame({
-      cameraId:        frame.cameraId,
-      frameId:         frame.frameId,
-      timestamp:       new Date(frame.ts).toISOString(),
-      jpegBuffer:      frame.buf,
-      zones:           frame.zones,
-      analyticsConfig: frame.cfg,
+      cameraId:  frame.cameraId,
+      frameId:   frame.frameId,
+      timestamp: new Date(frame.ts).toISOString(),
+      jpegBuffer: frame.buf,
+      zones:     frame.zones,
     }).then(result => {
       ctx._analyzing = false;
       if (!ctx.running) { ctx._pendingFrame = null; return; }

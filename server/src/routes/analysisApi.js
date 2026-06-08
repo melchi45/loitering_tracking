@@ -107,22 +107,49 @@ setInterval(() => {
 }, 60_000).unref();
 
 // ── POST /api/analysis/frame ──────────────────────────────────────────────────
-router.post('/frame', express.json({ limit: '20mb' }), async (req, res) => {
+// Accepts two content-types:
+//   image/jpeg  — binary JPEG body + JSON metadata in X-LTS-Meta header (preferred)
+//   application/json — legacy: { cameraId, frameId, timestamp, frame: base64, zones }
+function _parseFrameBody(req, res, next) {
+  const ct = (req.headers['content-type'] || '').split(';')[0].trim();
+  if (ct === 'image/jpeg') {
+    express.raw({ type: 'image/jpeg', limit: '10mb' })(req, res, next);
+  } else {
+    express.json({ limit: '20mb' })(req, res, next);
+  }
+}
+
+router.post('/frame', _parseFrameBody, async (req, res) => {
   const t0 = Date.now();
   try {
-    const {
-      cameraId,
-      frameId,
-      timestamp,
-      frame,
-      zones = [],
-    } = req.body;
+    let cameraId, frameId, timestamp, zones = [], jpegBuffer;
 
-    if (!cameraId || !frame) {
-      return res.status(400).json({ error: 'cameraId and frame (base64 JPEG) are required' });
+    const ct = (req.headers['content-type'] || '').split(';')[0].trim();
+    if (ct === 'image/jpeg') {
+      // Binary mode: JPEG in body, lightweight JSON metadata in X-LTS-Meta header
+      let meta = {};
+      try { meta = JSON.parse(req.headers['x-lts-meta'] || '{}'); } catch { /* ignore */ }
+      cameraId  = meta.cameraId;
+      frameId   = meta.frameId;
+      timestamp = meta.timestamp;
+      zones     = meta.zones || [];
+      jpegBuffer = req.body; // Buffer
+    } else {
+      // Legacy JSON mode
+      const body = req.body || {};
+      cameraId  = body.cameraId;
+      frameId   = body.frameId;
+      timestamp = body.timestamp;
+      zones     = body.zones || [];
+      if (!body.frame) {
+        return res.status(400).json({ error: 'cameraId and frame (base64 JPEG) are required' });
+      }
+      jpegBuffer = Buffer.from(body.frame, 'base64');
     }
 
-    const jpegBuffer = Buffer.from(frame, 'base64');
+    if (!cameraId || !jpegBuffer?.length) {
+      return res.status(400).json({ error: 'cameraId and frame are required' });
+    }
 
     // Use the analysis server's own analyticsConfig (managed independently via its DB/settings).
     // remoteAnalyticsConfig from the streaming server is intentionally ignored here —

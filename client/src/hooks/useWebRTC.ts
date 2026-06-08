@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useSocket } from './useSocket';
+import { useWebRTCConfigStore } from '../stores/webrtcConfigStore';
 
 // Kept for backwards compatibility with components that import this type
 export interface IceStats {
@@ -32,6 +33,7 @@ const ICE_GATHER_TIMEOUT = 5_000;
  */
 export function useWebRTC(cameraId: string, enabled: boolean) {
   const { socket }  = useSocket();
+  const getIceServers = useWebRTCConfigStore((s) => s.getIceServers);
   const videoRef                    = useRef<HTMLVideoElement>(null);
   const [state, setState]           = useState<WebRTCState>('idle');
   const [hasAudio, setHasAudio]     = useState(false);
@@ -92,7 +94,7 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
 
     (async () => {
       try {
-        const pc = new RTCPeerConnection({ iceServers: [] });
+        const pc = new RTCPeerConnection({ iceServers: getIceServers() });
         pcRef.current = pc;
 
         // Receive-only transceivers (browser is consumer only)

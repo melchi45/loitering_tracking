@@ -4,15 +4,18 @@ const http  = require('http');
 const https = require('https');
 const { URL } = require('url');
 
-const DEFAULT_TIMEOUT_MS     = 5_000;
+// 2 s is aggressive enough to detect a dead server quickly while still allowing
+// a slow inference pass to complete. Override via ANALYSIS_REQUEST_TIMEOUT_MS.
+const DEFAULT_TIMEOUT_MS     = 2_000;
 // Each camera uses one concurrent slot (per-camera pending-slot pattern).
 // Set high enough to cover typical camera counts without artificial back-pressure.
 const DEFAULT_MAX_CONCURRENT = 16;
 
-// Circuit breaker: after this many consecutive failures, pause sending frames.
-const CIRCUIT_OPEN_THRESHOLD = 5;
-// How long to wait before retrying after the circuit opens (ms).
-const CIRCUIT_RETRY_INTERVAL = 30_000;
+// Circuit breaker: open after this many consecutive failures.
+// 3 × 2 s = 6 s total before the circuit trips and all frame traffic stops.
+const CIRCUIT_OPEN_THRESHOLD = 3;
+// How long the circuit stays open before a health probe is attempted (ms).
+const CIRCUIT_RETRY_INTERVAL = 15_000;
 // Log at most one error line per camera per this interval (ms).
 const ERROR_LOG_INTERVAL_MS  = 10_000;
 
@@ -61,21 +64,22 @@ class AnalysisClient {
   /**
    * Send a JPEG frame to the analysis server.
    * Returns null immediately if the circuit is open or back-pressure limit hit.
+   *
+   * Transport: raw JPEG binary body + JSON metadata in X-LTS-Meta header.
+   * This avoids base64 encoding (+33 % size) and a large JSON.stringify call
+   * on the Node.js main thread, both of which would briefly block the event loop
+   * and delay Socket.IO frame delivery to the browser.
    */
-  async analyzeFrame({ cameraId, frameId, timestamp, jpegBuffer, zones = [], analyticsConfig = {} }) {
+  async analyzeFrame({ cameraId, frameId, timestamp, jpegBuffer, zones = [] }) {
     if (this._open) return null;
     if (this._inflight >= this._maxConc) { this._dropped++; return null; }
 
     this._total++;
     this._inflight++;
     try {
-      const body = JSON.stringify({
-        cameraId, frameId, timestamp,
-        frame: jpegBuffer.toString('base64'),
-        zones, analyticsConfig,
-      });
-      const result = await this._post('/api/analysis/frame', body);
-      // Success — reset consecutive failure counter
+      // Metadata is small (< 4 KB typically); JPEG travels as binary body.
+      const meta   = JSON.stringify({ cameraId, frameId, timestamp, zones });
+      const result = await this._postJpeg('/api/analysis/frame', jpegBuffer, meta);
       if (this._consecutive > 0) {
         this._consecutive = 0;
         console.log(`[AnalysisClient][${cameraId?.slice(0, 8)}] reconnected to analysis server`);
@@ -174,6 +178,46 @@ class AnalysisClient {
       rejectUnauthorized: process.env.NODE_ENV === 'production',
       agent:              this._url.protocol === 'https:' ? this._httpsAgent : this._httpAgent,
     };
+  }
+
+  /**
+   * POST raw JPEG binary to pathname.
+   * metaJson is a small JSON string sent in the X-LTS-Meta header.
+   * Avoids base64 encoding and large JSON.stringify on the main thread.
+   */
+  _postJpeg(pathname, jpegBuffer, metaJson) {
+    return new Promise((resolve, reject) => {
+      const mod  = this._httpModule();
+      const opts = {
+        hostname: this._url.hostname,
+        port:     this._url.port || (this._url.protocol === 'https:' ? 443 : 80),
+        path:     pathname,
+        method:   'POST',
+        headers: {
+          'Content-Type':   'image/jpeg',
+          'Content-Length': jpegBuffer.byteLength,
+          'X-LTS-Meta':     metaJson,
+        },
+        timeout:            this._timeout,
+        rejectUnauthorized: process.env.NODE_ENV === 'production',
+        agent:              this._url.protocol === 'https:' ? this._httpsAgent : this._httpAgent,
+      };
+      const req = mod.request(opts, (res) => {
+        let raw = '';
+        res.on('data', c => { raw += c; });
+        res.on('end', () => {
+          if (res.statusCode < 200 || res.statusCode >= 300) {
+            return reject(new Error(`HTTP ${res.statusCode}: ${raw.slice(0, 120)}`));
+          }
+          try { resolve(JSON.parse(raw)); }
+          catch { reject(new Error(`Invalid JSON from analysis server: ${raw.slice(0, 120)}`)); }
+        });
+      });
+      req.on('timeout', () => { req.destroy(); reject(new Error(`Request timeout (${this._timeout}ms)`)); });
+      req.on('error', reject);
+      req.write(jpegBuffer);
+      req.end();
+    });
   }
 
   _post(pathname, body) {
