@@ -5,7 +5,9 @@ const https = require('https');
 const { URL } = require('url');
 
 const DEFAULT_TIMEOUT_MS     = 5_000;
-const DEFAULT_MAX_CONCURRENT = 4;
+// Each camera uses one concurrent slot (per-camera pending-slot pattern).
+// Set high enough to cover typical camera counts without artificial back-pressure.
+const DEFAULT_MAX_CONCURRENT = 16;
 
 // Circuit breaker: after this many consecutive failures, pause sending frames.
 const CIRCUIT_OPEN_THRESHOLD = 5;
