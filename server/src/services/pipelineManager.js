@@ -215,19 +215,25 @@ class PipelineManager {
     }
 
     const rtspUrl  = this._buildRtspUrl(camera);
-    // WebRTC delivery is now handled by MediaMTX (WHEP) — all cameras use the same
-    // RTSPCapture for JPEG frames (AI inference). For WebRTC cameras, MediaMTX pulls
-    // the RTSP source independently and serves it to the browser via WHEP.
     const useWebRTC = !!camera.webrtcEnabled;
-
     const captureFps = parseInt(process.env.CAPTURE_FPS, 10) || 10;
 
-    const capture = createCapture(camera.id, rtspUrl, { fps: captureFps, width: 640 });
-
-    if (useWebRTC) {
-      // Register with MediaMTX so it pulls the RTSP and serves WebRTC (non-blocking).
+    // Register with MediaMTX when: browser WebRTC delivery is needed, OR the
+    // mediamtx capture backend is active (so MediaMTX holds the single camera
+    // connection and AI capture reads from the local RTSP re-publish).
+    const needsMediaMTX = useWebRTC || CAPTURE_BACKEND === 'mediamtx';
+    if (needsMediaMTX) {
       mediamtxManager.addCameraPath(camera.id, rtspUrl).catch(() => {});
     }
+
+    // For the mediamtx backend, AI capture reads from MediaMTX's local RTSP
+    // re-publish instead of the original camera — one camera connection total.
+    const mediamtxRtspPort = parseInt(process.env.MEDIAMTX_RTSP_PORT, 10) || 8554;
+    const captureUrl = CAPTURE_BACKEND === 'mediamtx'
+      ? `rtsp://127.0.0.1:${mediamtxRtspPort}/${camera.id}`
+      : rtspUrl;
+
+    const capture = createCapture(camera.id, captureUrl, { fps: captureFps, width: 640 });
 
     const tracker  = new ByteTracker();
     const behavior = new BehaviorEngine(this._zoneManager);
