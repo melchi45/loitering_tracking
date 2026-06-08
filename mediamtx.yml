@@ -12,7 +12,15 @@ rtspAddress: 127.0.0.1:8554
 rtspEncryption: "no"
 rtmpAddress: 127.0.0.1:1935
 hlsAddress: 127.0.0.1:8888
+# WebRTC HTTP signaling stays on loopback — proxied through Node.js /api/webrtc/whep/:id
+# so the browser only needs to reach the Node.js server port.
 webrtcAddress: 127.0.0.1:8889
+# ICE media (UDP) listens on all interfaces so browsers on the LAN can connect.
+webrtcLocalUDPAddress: :8189
+# Auto-detect server LAN IPs and include them in ICE candidates.
+webrtcIPsFromInterfaces: yes
+webrtcIPsFromInterfacesList: []
+webrtcAdditionalHosts: []
 srtAddress: 127.0.0.1:8890
 
 # ── REST API ──────────────────────────────────────────────────────────────────
@@ -32,6 +40,7 @@ authInternalUsers:
         path: ""
       - action: playback
         path: ""
+      - action: api
 
 # ── Path defaults ─────────────────────────────────────────────────────────────
 pathDefaults:

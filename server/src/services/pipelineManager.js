@@ -40,8 +40,7 @@ function _pointInPolygon(pt, poly) {
 }
 
 const { createCapture, CAPTURE_BACKEND } = require('./captureFactory');
-const RtpIngestion     = require('./rtpIngestion');
-const webrtcGateway    = require('./webrtcGateway');
+const mediamtxManager  = require('./mediamtxManager');
 const DetectionService = require('./detection');
 const { ByteTracker }  = require('./tracking');
 const BehaviorEngine   = require('./behaviorEngine');
@@ -98,6 +97,7 @@ class PipelineManager {
     this._io             = io;
     this._db             = db;
     this._pipelines       = new Map(); // cameraId → PipelineContext
+    this._starting        = new Set(); // cameraIds currently inside startCamera (race guard)
     this._zoneManager     = zoneManager || new ZoneManager(db);
     this._alertService    = new AlertService(db);
     this._detector        = null;  // Shared YOLOv8n instance
@@ -146,6 +146,20 @@ class PipelineManager {
    * @returns {Promise<void>}
    */
   async startCamera(camera) {
+    // Prevent concurrent startCamera calls for the same camera.
+    // Without this guard, two simultaneous calls (e.g. auto-start + error-retry)
+    // both pass the _pipelines.has() check before either finishes, resulting in
+    // duplicate FFmpeg processes and extreme CPU usage.
+    if (this._starting.has(camera.id)) return;
+    this._starting.add(camera.id);
+    try {
+      await this._doStartCamera(camera);
+    } finally {
+      this._starting.delete(camera.id);
+    }
+  }
+
+  async _doStartCamera(camera) {
     if (this._pipelines.has(camera.id)) {
       await this.stopCamera(camera.id);
     }
@@ -201,16 +215,18 @@ class PipelineManager {
     }
 
     const rtspUrl  = this._buildRtspUrl(camera);
-    const useWebRTC = !!(camera.webrtcEnabled && webrtcGateway.enabled);
+    // WebRTC delivery is now handled by MediaMTX (WHEP) — all cameras use the same
+    // RTSPCapture for JPEG frames (AI inference). For WebRTC cameras, MediaMTX pulls
+    // the RTSP source independently and serves it to the browser via WHEP.
+    const useWebRTC = !!camera.webrtcEnabled;
 
     const captureFps = parseInt(process.env.CAPTURE_FPS, 10) || 10;
 
-    let capture;
+    const capture = createCapture(camera.id, rtspUrl, { fps: captureFps, width: 640 });
+
     if (useWebRTC) {
-      capture = new RtpIngestion(camera.id, rtspUrl, { fps: captureFps, width: 640 });
-      await capture.start(); // async: sets up mediasoup PlainTransports then spawns FFmpeg
-    } else {
-      capture = createCapture(camera.id, rtspUrl, { fps: captureFps, width: 640 });
+      // Register with MediaMTX so it pulls the RTSP and serves WebRTC (non-blocking).
+      mediamtxManager.addCameraPath(camera.id, rtspUrl).catch(() => {});
     }
 
     const tracker  = new ByteTracker();
@@ -255,7 +271,7 @@ class PipelineManager {
       let frameHeight = jpegSize?.height ?? 640;
 
       // Emit raw JPEG frame only for cameras NOT using WebRTC
-      // (WebRTC cameras stream video via mediasoup to <video> element)
+      // (WebRTC cameras are served by MediaMTX via WHEP)
       if (!ctx.useWebRTC) {
         this._io.to(camera.id).emit('frame', {
           cameraId:    camera.id,
@@ -273,153 +289,155 @@ class PipelineManager {
       // Skip all inference when every analytics module is disabled
       if (!analyticsConfig.anyModuleEnabled()) return;
 
-      // Skip inference if previous frame is still being processed (frame-drop)
+      // ── Streaming mode: fire-and-forget to remote analysis server ─────────
+      // AnalysisClient._inflight manages concurrency (ANALYSIS_MAX_CONCURRENT).
+      // No _inferring gate — frame capture runs at full fps regardless of
+      // network round-trip time to the analysis server.
+      if (SERVER_MODE === 'streaming') {
+        if (!this._analysisClient) return; // monitoring-only mode
+        const _cameraId = camera.id;
+        const _frameId  = currentFrameId;
+        const _ts       = timestamp;
+        const _buf      = jpegBuffer;
+        const _fw       = frameWidth;
+        const _fh       = frameHeight;
+        this._analysisClient.analyzeFrame({
+          cameraId:        _cameraId,
+          frameId:         _frameId,
+          timestamp:       new Date(_ts).toISOString(),
+          jpegBuffer:      _buf,
+          zones:           this._zoneManager.getActiveZones(_cameraId),
+          analyticsConfig: analyticsConfig.getConfig(),
+        }).then(result => {
+          if (!result) return;
+          const remoteTracked   = Array.isArray(result.tracked)       ? result.tracked       : [];
+          const remoteFireSmoke = Array.isArray(result.fireSmoke)     ? result.fireSmoke     : [];
+          const remoteFaces     = Array.isArray(result.detectedFaces) ? result.detectedFaces : [];
+          const remoteFrameWidth  = result.frameWidth  || _fw;
+          const remoteFrameHeight = result.frameHeight || _fh;
+          let faceDetObjects = [];
+
+          if (analyticsConfig.isEnabled('face') && remoteFaces.length > 0) {
+            const { faces: namedFaces, crossCameraTransitions, pendingMatchEvents } =
+              this._assignFaceIds(_cameraId, remoteFaces, _ts);
+
+            if (pendingMatchEvents && pendingMatchEvents.length > 0) {
+              const _io = this._io;
+              const _db = this._db;
+              const _snapshotSvc = snapshotSvc;
+              setImmediate(async () => {
+                for (const { evt, faceBbox } of pendingMatchEvents) {
+                  let liveCropData;
+                  try {
+                    if (_snapshotSvc.isEnabled() && _buf && faceBbox) {
+                      const { data: cropBuf } = await _snapshotSvc.cropJpeg(
+                        _buf, faceBbox, remoteFrameWidth, remoteFrameHeight
+                      );
+                      liveCropData = 'data:image/jpeg;base64,' + cropBuf.toString('base64');
+                    }
+                  } catch (_) { /* non-fatal */ }
+                  const fullEvt = liveCropData ? { ...evt, liveCropData } : evt;
+                  _io.emit('face_match', fullEvt);
+                  if (fullEvt.galleryType === 'missing') {
+                    _io.emit('missing_person_match', fullEvt);
+                  }
+                  try {
+                    _db.insert('faceMatchHistory', {
+                      id:        require('crypto').randomUUID(),
+                      ...fullEvt,
+                      createdAt: new Date(evt.timestamp).toISOString(),
+                    });
+                  } catch (dbErr) {
+                    console.warn('[PipelineManager] faceMatchHistory insert error:', dbErr.message);
+                  }
+                }
+              });
+            }
+
+            for (const ev of (crossCameraTransitions || [])) {
+              this._io.emit('face:reidentified', {
+                faceId:       ev.faceId,
+                prevCameraId: ev.prevCameraId,
+                newCameraId:  ev.newCameraId,
+                similarity:   ev.similarity,
+                timestamp:    ev.timestamp,
+              });
+            }
+
+            faceDetObjects = namedFaces.map((f, i) => ({
+              objectId:    90000 + (_frameId % 1000) * 10 + i,
+              className:   'face',
+              confidence:  f.score,
+              bbox:        f.bbox,
+              faceId:      f.faceId,
+              matchScore:  f.matchScore,
+              isLoitering: false,
+              dwellTime:   0,
+            }));
+          }
+
+          const allDetections = [...remoteTracked, ...faceDetObjects, ...remoteFireSmoke];
+          this._io.to(_cameraId).emit('detections', {
+            cameraId:   _cameraId,
+            frameId:    _frameId,
+            timestamp:  _ts,
+            detections: allDetections,
+            frameWidth:  remoteFrameWidth,
+            frameHeight: remoteFrameHeight,
+          });
+
+          for (const b of (result.behaviors || [])) {
+            if (b.isLoitering || b.type === 'loitering') {
+              this._io.to(_cameraId).emit('loitering', b);
+              this._alertService.createAlert({ ...b, cameraId: _cameraId }).catch((err) => {
+                console.error('[PipelineManager] Alert creation failed:', err.message);
+              });
+            }
+          }
+
+          if (snapshotSvc.isEnabled() && allDetections.length > 0) {
+            const _db  = this._db;
+            const _io  = this._io;
+            const _cam = camera;
+            setImmediate(async () => {
+              for (const det of allDetections) {
+                try {
+                  const hasFaceMatch = !!(det.face && det.face.matchScore > 0) || !!det.matchScore;
+                  const isFireSmoke  = det.className === 'fire' || det.className === 'smoke';
+                  if (!snapshotSvc.shouldSave(_cameraId, det.objectId, {
+                        isLoitering: det.isLoitering,
+                        hasFaceMatch,
+                        isFireSmoke,
+                        timestamp:   _ts,
+                      })) continue;
+                  const { data: cropBuf, width: cw, height: ch } =
+                    await snapshotSvc.cropJpeg(_buf, det.bbox, remoteFrameWidth, remoteFrameHeight);
+                  const snapId = await snapshotSvc.saveSnapshot(
+                    _db, _cam, det, cropBuf, cw, ch, remoteFrameWidth, remoteFrameHeight, _ts
+                  );
+                  _io.to(_cameraId).emit('snapshot:new', {
+                    cameraId:   _cameraId,
+                    snapshotId: snapId,
+                    objectId:   det.objectId,
+                    className:  det.className,
+                    timestamp:  _ts,
+                    cropData:   'data:image/jpeg;base64,' + cropBuf.toString('base64'),
+                  });
+                } catch (_) { /* non-fatal */ }
+              }
+            });
+          }
+        }).catch(() => {}); // errors already handled inside AnalysisClient
+        return;
+      }
+
+      // ── Local inference (combined / analysis mode) ───────────────────────
+      // Skip if previous frame is still being processed — CPU-bound ONNX
+      // inference must be serialized per camera.
       if (ctx._inferring) return;
       ctx._inferring = true;
 
       try {
-        // ── Streaming mode: delegate all AI inference to remote analysis server ──
-        if (SERVER_MODE === 'streaming' && !this._analysisClient) {
-          return; // monitoring-only mode: keep video streaming, skip AI processing
-        }
-        if (SERVER_MODE === 'streaming' && this._analysisClient) {
-          const zones = this._zoneManager.getActiveZones(camera.id);
-          const result = await this._analysisClient.analyzeFrame({
-            cameraId:        camera.id,
-            frameId:         currentFrameId,
-            timestamp:       new Date(timestamp).toISOString(),
-            jpegBuffer,
-            zones,
-            analyticsConfig: analyticsConfig.getConfig(),
-          });
-          if (result) {
-            const remoteTracked = Array.isArray(result.tracked) ? result.tracked : [];
-            const remoteFireSmoke = Array.isArray(result.fireSmoke) ? result.fireSmoke : [];
-            const remoteFaces = Array.isArray(result.detectedFaces) ? result.detectedFaces : [];
-            const remoteFrameWidth = result.frameWidth || frameWidth;
-            const remoteFrameHeight = result.frameHeight || frameHeight;
-            let faceDetObjects = [];
-
-            if (analyticsConfig.isEnabled('face') && remoteFaces.length > 0) {
-              const { faces: namedFaces, crossCameraTransitions, pendingMatchEvents } =
-                this._assignFaceIds(camera.id, remoteFaces, timestamp);
-
-              if (pendingMatchEvents && pendingMatchEvents.length > 0) {
-                const _io = this._io;
-                const _db = this._db;
-                const _snapshotSvc = snapshotSvc;
-                const _jpegBuffer = jpegBuffer;
-                setImmediate(async () => {
-                  for (const { evt, faceBbox } of pendingMatchEvents) {
-                    let liveCropData;
-                    try {
-                      if (_snapshotSvc.isEnabled() && _jpegBuffer && faceBbox) {
-                        const { data: cropBuf } = await _snapshotSvc.cropJpeg(
-                          _jpegBuffer, faceBbox, remoteFrameWidth, remoteFrameHeight
-                        );
-                        liveCropData = 'data:image/jpeg;base64,' + cropBuf.toString('base64');
-                      }
-                    } catch (_) { /* non-fatal */ }
-                    const fullEvt = liveCropData ? { ...evt, liveCropData } : evt;
-                    _io.emit('face_match', fullEvt);
-                    if (fullEvt.galleryType === 'missing') {
-                      _io.emit('missing_person_match', fullEvt);
-                    }
-                    try {
-                      _db.insert('faceMatchHistory', {
-                        id:        require('crypto').randomUUID(),
-                        ...fullEvt,
-                        createdAt: new Date(evt.timestamp).toISOString(),
-                      });
-                    } catch (dbErr) {
-                      console.warn('[PipelineManager] faceMatchHistory insert error:', dbErr.message);
-                    }
-                  }
-                });
-              }
-
-              for (const ev of (crossCameraTransitions || [])) {
-                this._io.emit('face:reidentified', {
-                  faceId: ev.faceId,
-                  prevCameraId: ev.prevCameraId,
-                  newCameraId: ev.newCameraId,
-                  similarity: ev.similarity,
-                  timestamp: ev.timestamp,
-                });
-              }
-
-              faceDetObjects = namedFaces.map((f, i) => ({
-                objectId:    90000 + (currentFrameId % 1000) * 10 + i,
-                className:   'face',
-                confidence:  f.score,
-                bbox:        f.bbox,
-                faceId:      f.faceId,
-                matchScore:  f.matchScore,
-                isLoitering: false,
-                dwellTime:   0,
-              }));
-            }
-
-            const allDetections = [...remoteTracked, ...faceDetObjects, ...remoteFireSmoke];
-            this._io.to(camera.id).emit('detections', {
-              cameraId:   camera.id,
-              frameId:    currentFrameId,
-              timestamp,
-              detections: allDetections,
-              frameWidth:  remoteFrameWidth,
-              frameHeight: remoteFrameHeight,
-            });
-
-            for (const b of (result.behaviors || [])) {
-              if (b.isLoitering || b.type === 'loitering') {
-                this._io.to(camera.id).emit('loitering', b);
-                this._alertService.createAlert({ ...b, cameraId: camera.id }).catch((err) => {
-                  console.error('[PipelineManager] Alert creation failed:', err.message);
-                });
-              }
-            }
-
-            if (snapshotSvc.isEnabled() && allDetections.length > 0) {
-              const _jpegBuf = jpegBuffer;
-              const _fw = remoteFrameWidth;
-              const _fh = remoteFrameHeight;
-              const _ts = timestamp;
-              const _camera = camera;
-              const _db = this._db;
-              const _io = this._io;
-              setImmediate(async () => {
-                for (const det of allDetections) {
-                  try {
-                    const hasFaceMatch = !!(det.face && det.face.matchScore > 0) || !!det.matchScore;
-                    const isFireSmoke = det.className === 'fire' || det.className === 'smoke';
-                    if (!snapshotSvc.shouldSave(_camera.id, det.objectId, {
-                          isLoitering: det.isLoitering,
-                          hasFaceMatch,
-                          isFireSmoke,
-                          timestamp: _ts,
-                        })) {
-                      continue;
-                    }
-                    const { data: cropBuf, width: cw, height: ch } =
-                      await snapshotSvc.cropJpeg(_jpegBuf, det.bbox, _fw, _fh);
-                    const snapId = await snapshotSvc.saveSnapshot(
-                      _db, _camera, det, cropBuf, cw, ch, _fw, _fh, _ts
-                    );
-                    _io.to(_camera.id).emit('snapshot:new', {
-                      cameraId: _camera.id,
-                      snapshotId: snapId,
-                      objectId: det.objectId,
-                      className: det.className,
-                      timestamp: _ts,
-                      cropData: 'data:image/jpeg;base64,' + cropBuf.toString('base64'),
-                    });
-                  } catch (_) { /* non-fatal */ }
-                }
-              });
-            }
-          }
-          return; // skip local inference below
-        }
 
         // 2. Run detection — skipped entirely if no detection module is enabled
         let detections = [];
@@ -789,10 +807,25 @@ class PipelineManager {
     });
 
     ctx.startedAt = Date.now();
+    ctx.frameWatchdogTimer = null;
     this._pipelines.set(camera.id, ctx);
     this._updateCameraStatus(camera.id, 'connecting');
-    // RtpIngestion was already started (async) above; capture backend starts here (sync)
-    if (!useWebRTC) capture.start();
+    capture.start();
+
+    // Frame watchdog: restart RTSPCapture if no JPEG arrives for 20 s.
+    {
+      const FRAME_STALL_MS = 20_000;
+      ctx.frameWatchdogTimer = setInterval(() => {
+        if (!ctx.running || !ctx.lastFrameAt) return;
+        const stalledMs = Date.now() - ctx.lastFrameAt;
+        if (stalledMs > FRAME_STALL_MS) {
+          console.warn(`[PipelineManager][${camera.id}] Frame watchdog: no frame for ${Math.round(stalledMs / 1000)}s — restarting capture`);
+          ctx.lastFrameAt = Date.now();
+          ctx.capture.stop();
+          ctx.capture.start();
+        }
+      }, 8_000);
+    }
   }
 
   /**
@@ -805,10 +838,14 @@ class PipelineManager {
     if (!ctx) return;
 
     ctx.running = false;
+    if (ctx.frameWatchdogTimer) {
+      clearInterval(ctx.frameWatchdogTimer);
+      ctx.frameWatchdogTimer = null;
+    }
     ctx.capture.stop();
     ctx.behavior.reset();
     ctx.behavior.removeAllListeners();
-    if (ctx.useWebRTC) webrtcGateway.deleteRouter(cameraId);
+    if (ctx.useWebRTC) mediamtxManager.removeCameraPath(cameraId).catch(() => {});
     this._pipelines.delete(cameraId);
     this._updateCameraStatus(cameraId, 'offline');
   }
@@ -839,10 +876,31 @@ class PipelineManager {
     if (ctx) ctx.aiEnabled = enabled;
   }
 
+  /** Returns status snapshot of all active pipelines for the dev monitor. */
+  getAllPipelineStatus() {
+    const result = [];
+    for (const [cameraId, ctx] of this._pipelines) {
+      result.push({
+        cameraId,
+        running:     ctx.running,
+        aiEnabled:   ctx.aiEnabled,
+        useWebRTC:   ctx.useWebRTC,
+        frameCount:  ctx.frameCount,
+        lastFrameAt: ctx.lastFrameAt,
+        startedAt:   ctx.startedAt,
+      });
+    }
+    return result;
+  }
+
   /** Stop all pipelines (for graceful shutdown). */
   async stopAll() {
     const ids = [...this._pipelines.keys()];
     await Promise.all(ids.map(id => this.stopCamera(id)));
+    if (this._analysisClient) {
+      this._analysisClient.destroy();
+      this._analysisClient = null;
+    }
   }
 
   /**

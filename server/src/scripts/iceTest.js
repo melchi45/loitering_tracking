@@ -201,8 +201,7 @@ function socketIOConnect(serverUrl) {
 // ── Loopback ICE injection ─────────────────────────────────────────────────
 // Injects two RTCPeerConnections into the browser page and negotiates them
 // locally (no signaling server needed). This reliably tests STUN/TURN without
-// depending on mediasoup-client, which fails in headless Chrome due to codec
-// detection limitations (UnsupportedError: device not supported).
+// depending on any signaling — works reliably in headless Chrome.
 async function injectLoopbackICETest(page, iceConfig) {
   const stunUrls = iceConfig?.stunUrls ?? [];
   const turns    = iceConfig?.turns    ?? [];
@@ -455,7 +454,6 @@ async function phase2(testCameraId, iceConfig) {
   const page = await context.newPage();
 
   // ── Inject RTCPeerConnection interceptor ──
-  // Must run before any page scripts so mediasoup-client picks up our proxy.
   await page.addInitScript(() => {
     window.__lts_rtcPCs = [];
     window.__lts_rtcEvents = [];
@@ -509,24 +507,10 @@ async function phase2(testCameraId, iceConfig) {
   }
   ok(`Page loaded: ${UI}`);
 
-  // ── Socket.IO trigger: tell the React app to start a WebRTC test connection ──
-  // (Optional — IceTestTrigger uses mediasoup-client which may fail in headless Chrome.
-  //  The loopback injection below provides a reliable fallback.)
-  let sio = null;
-  if (testCameraId) {
-    try {
-      sio = await socketIOConnect(SERVER);
-      sio.emit('webrtc:ice-test-start', { cameraId: testCameraId });
-      ok(`Socket.IO trigger sent → webrtc:ice-test-start (camera ${testCameraId.slice(0, 8)}…)`);
-    } catch (err) {
-      warn(`Socket.IO connection failed: ${err.message}`);
-    }
-  }
-
-  // ── Loopback ICE injection (primary path — no mediasoup-client required) ──
+  // ── Loopback ICE injection (primary path) ───────────────────────────────
   // Creates two RTCPeerConnections inside the browser page and connects them via
   // local SDP exchange, using the server's STUN/TURN ICE servers.
-  // This works reliably in headless Chrome without codec/mediasoup limitations.
+  // This works reliably in headless Chrome.
   info('Injecting loopback ICE test…');
   try {
     await injectLoopbackICETest(page, iceConfig);
@@ -542,11 +526,11 @@ async function phase2(testCameraId, iceConfig) {
 
   if (!pcFound) {
     fail('RTCPeerConnection was not created');
-    warn('  → Loopback injection failed and IceTestTrigger also did not fire');
+    warn('  → Loopback injection failed — check browser console for details');
     const ssPath = '/tmp/lts-ice-test-fail.png';
     await page.screenshot({ path: ssPath }).catch(() => {});
     info(`Screenshot saved: ${ssPath}`);
-    if (sio) sio.close();
+
     await browser.close();
     return null;
   }
@@ -579,7 +563,7 @@ async function phase2(testCameraId, iceConfig) {
     const ssPath = '/tmp/lts-ice-test-fail.png';
     await page.screenshot({ path: ssPath }).catch(() => {});
     info(`Screenshot saved: ${ssPath}`);
-    if (sio) sio.close();
+
     await browser.close();
     return null;
   }
@@ -617,12 +601,6 @@ async function phase2(testCameraId, iceConfig) {
   const ssPath = '/tmp/lts-ice-test-ok.png';
   await page.screenshot({ path: ssPath, fullPage: false }).catch(() => {});
   ok(`Screenshot saved: ${ssPath}`);
-
-  // Signal test completion so the React app cleans up the hidden WebRTC connection
-  if (sio) {
-    sio.emit('webrtc:ice-test-done', {});
-    sio.close();
-  }
 
   await browser.close();
   ok('Browser closed');
@@ -692,7 +670,7 @@ function phase3(snapshots) {
   } else if (last.localType === 'relay') {
     warn(`Path: TURN relay — recommend investigating why LAN direct (host) path is unavailable`);
     info('  Check server/.env → SERVER_IP=<LAN IP>');
-    info('  Check /etc/turnserver.conf → allowed-peer-ip=<mediasoup LAN IP>');
+    info('  Check /etc/turnserver.conf → allowed-peer-ip=<server LAN IP>');
   }
 
   // Loopback tests have static bytesReceived (ICE handshake only, no continuous stream).

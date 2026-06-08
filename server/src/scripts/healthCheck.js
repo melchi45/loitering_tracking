@@ -9,7 +9,7 @@
  *   1. /api/cameras           — DB + pipeline status
  *   2. /api/webrtc/ice-config — STUN/TURN config from .env
  *   3. /api/capabilities      — AI model / service status
- *   4. mediasoup UDP ports    — 40000-49999 reachable via SS/netstat
+ *   4. MediaMTX               — WebRTC relay health (port 9997 REST API)
  */
 
 const http  = require('http');
@@ -58,22 +58,18 @@ function get(urlPath) {
   });
 }
 
-function checkPorts() {
-  const { execSync } = require('child_process');
-  try {
-    // ss -u -l -n lists UDP listening sockets; grep mediasoup port range
-    const out = execSync('ss -u -l -n 2>/dev/null || netstat -u -l -n 2>/dev/null', { timeout: 3000 }).toString();
-    const portRe = /:(4[0-9]{4})\b/g;
-    const ports = new Set();
-    let m;
-    while ((m = portRe.exec(out)) !== null) {
-      const p = parseInt(m[1]);
-      if (p >= 40000 && p <= 49999) ports.add(p);
-    }
-    return [...ports].sort((a, b) => a - b);
-  } catch {
-    return null;
-  }
+function checkMediaMTX(apiUrl) {
+  return new Promise((resolve) => {
+    const u = new URL(`${apiUrl}/v3/config/global/get`);
+    const mod = u.protocol === 'https:' ? https : http;
+    const req = mod.get(u.toString(), { timeout: 3000 }, (res) => {
+      let body = '';
+      res.on('data', (c) => { body += c; });
+      res.on('end', () => resolve({ ok: res.statusCode < 400, status: res.statusCode, body }));
+    });
+    req.on('error', (e) => resolve({ ok: false, error: e.message }));
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'timeout' }); });
+  });
 }
 
 async function main() {
@@ -161,15 +157,17 @@ async function main() {
     warn(`GET /api/capabilities — ${err.message}`);
   }
 
-  // ── 4. mediasoup UDP ports ────────────────────────────────────────────────
-  console.log(`\n${BOLD}[4] mediasoup UDP Ports (40000-49999)${RESET}`);
-  const ports = checkPorts();
-  if (ports === null) {
-    warn('Could not check UDP ports (ss/netstat not available)');
-  } else if (ports.length === 0) {
-    warn('No mediasoup UDP ports listening — WebRTC transport not yet created (normal before first viewer)');
-  } else {
-    ok(`${ports.length} UDP port(s) open: ${ports.slice(0, 5).join(', ')}${ports.length > 5 ? ' …' : ''}`);
+  // ── 4. MediaMTX health ────────────────────────────────────────────────────
+  console.log(`\n${BOLD}[4] MediaMTX WebRTC Relay${RESET}`);
+  {
+    const MEDIAMTX_API = process.env.MEDIAMTX_API_URL || 'http://127.0.0.1:9997';
+    const mtx = await checkMediaMTX(MEDIAMTX_API);
+    if (mtx.ok) {
+      ok(`MediaMTX reachable at ${MEDIAMTX_API}`);
+    } else {
+      const reason = mtx.error || `HTTP ${mtx.status}`;
+      warn(`MediaMTX not reachable (${reason}) — WebRTC delivery unavailable`);
+    }
   }
 
   // ── 5. SERVER_IP env sanity ──────────────────────────────────────────────

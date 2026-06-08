@@ -63,6 +63,16 @@ export default defineConfig({
         changeOrigin: true,
         secure: false,
       },
+      '/health': {
+        target: backendTarget,
+        changeOrigin: true,
+        secure: false,
+      },
+      '/internal': {
+        target: backendTarget,
+        changeOrigin: true,
+        secure: false,
+      },
       '/socket.io': {
         target: backendTarget,
         ws: true,

@@ -18,7 +18,6 @@ const session      = require('express-session');
 const { Server: SocketIOServer } = require('socket.io');
 
 const { initDB, flushNow }    = require('./db');
-const webrtcGateway       = require('./services/webrtcGateway');
 const PipelineManager     = require('./services/pipelineManager');
 const ZoneManager         = require('./services/zoneManager');
 const AlertService        = require('./services/alertService');
@@ -41,8 +40,7 @@ const adminRouter    = require('./routes/admin');
 const { passport: configuredPassport, setup: setupPassport } = require('./config/passport');
 const YouTubeStreamService   = require('./services/youtubeStreamService');
 const registerStreamHandlers = require('./socket/streamHandler');
-const registerWebRTCHandlers = require('./socket/webrtcSignaling');
-const registerWebRTCTelemetryHandlers = require('./socket/webrtcTelemetryHandlers');
+const mediamtxManager        = require('./services/mediamtxManager');
 const { runOnnxStartupDiagnostics } = require('./utils/onnxOptions');
 
 const PORT        = parseInt(process.env.HTTP_PORT || '3080', 10);
@@ -89,9 +87,6 @@ async function main() {
   } catch (err) {
     console.warn(`[onnxOptions][startup-check] Failed to run provider diagnostics: ${String(err?.message || err)}`);
   }
-
-  // ── WebRTC Gateway (mediasoup) — init before pipeline manager ──────────
-  await webrtcGateway.init();
 
   // ── Database ────────────────────────────────────────────────────────────
   const db = await initDB();
@@ -273,61 +268,72 @@ async function main() {
     res.json({ stunUrls, turns });
   });
 
-  // ── WebRTC ICE connectivity test ──────────────────────────────────────────────
-  // Creates a temporary mediasoup WebRtcTransport so the browser can verify
-  // that the server's ICE/DTLS port range is reachable.
-  // The test transport is auto-deleted after 90 s to prevent resource leaks.
-  const iceTestSessions = new Map(); // testId → { transport, timer }
-
+  // ── WebRTC ICE test (MediaMTX-based) ─────────────────────────────────────
+  // Replaces the old mediasoup transport test. Returns MediaMTX health status
+  // and the ICE candidate IPs that MediaMTX will announce to browsers.
+  // Used by the Web UI ICE test panel (Phase 2).
   app.post('/api/webrtc/ice-test', async (req, res) => {
-    if (!webrtcGateway.enabled) {
-      return res.status(503).json({ error: 'WebRTC gateway not available (mediasoup not initialised)' });
-    }
-    try {
-      const TEST_CAM = '__ice-test__';
-      const router = await webrtcGateway.getOrCreateRouter(TEST_CAM);
-      const listenIps = webrtcGateway.getListenIps('');
-      const transport = await router.createWebRtcTransport({
-        listenIps,
-        enableUdp:  true,
-        enableTcp:  true,
-        preferUdp:  true,
-        enableSctp: false,
+    const healthy = await mediamtxManager.isHealthy().catch(() => false);
+    if (!healthy) {
+      return res.status(503).json({
+        error: 'MediaMTX not reachable — make sure MediaMTX is running (npm run dev starts it automatically)',
+        engine: 'mediamtx-whep',
       });
+    }
+    const serverIp       = process.env.SERVER_IP        || '';
+    const serverPublicIp = process.env.SERVER_PUBLIC_IP || '';
+    const udpPort        = parseInt(process.env.MEDIAMTX_WEBRTC_UDP_PORT || '8189', 10);
+    const iceCandidates  = [];
+    if (serverIp) iceCandidates.push({ type: 'host', ip: serverIp,       port: udpPort, protocol: 'udp' });
+    if (serverPublicIp && serverPublicIp !== serverIp) {
+      iceCandidates.push({ type: 'host', ip: serverPublicIp, port: udpPort, protocol: 'udp' });
+    }
+    res.json({
+      testId:      `mediamtx-${Date.now()}`,
+      engine:      'mediamtx-whep',
+      transportId: 'MediaMTX WHEP',
+      iceCandidates,
+      whepProxy:   '/api/webrtc/whep/:cameraId',
+      udpPort,
+    });
+  });
 
-      const testId = `icetest-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      const timer = setTimeout(() => {
-        const s = iceTestSessions.get(testId);
-        if (s) {
-          try { if (!s.transport.closed) s.transport.close(); } catch (_) {}
-          iceTestSessions.delete(testId);
+  // DELETE is a no-op (MediaMTX test has no server-side resource to clean up)
+  app.delete('/api/webrtc/ice-test/:testId', (req, res) => res.json({ ok: true }));
+
+  // ── WebRTC WHEP proxy ─────────────────────────────────────────────────────
+  // Browser sends SDP offer → Node.js forwards to MediaMTX → returns SDP answer.
+  // Keeping the proxy on the same port as Node.js means the browser only needs
+  // to reach one host:port. ICE media (UDP) flows directly between browser and
+  // MediaMTX on port 8189 using the LAN IP from the ICE candidates.
+  const MEDIAMTX_WEBRTC = process.env.MEDIAMTX_WEBRTC_URL || 'http://127.0.0.1:8889';
+
+  app.post('/api/webrtc/whep/:cameraId',
+    express.text({ type: 'application/sdp', limit: '64kb' }),
+    async (req, res) => {
+      const { cameraId } = req.params;
+      const sdpOffer = typeof req.body === 'string' ? req.body : '';
+      if (!sdpOffer) return res.status(400).json({ error: 'Missing SDP offer body (Content-Type: application/sdp)' });
+      try {
+        const whepUrl = `${MEDIAMTX_WEBRTC}/${cameraId}/whep`;
+        const upstream = await fetch(whepUrl, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/sdp' },
+          body:    sdpOffer,
+        });
+        const sdpAnswer = await upstream.text();
+        // Forward WHEP spec headers (Location, Link, ETag) if present
+        for (const hdr of ['location', 'link', 'etag', 'access-control-expose-headers']) {
+          const val = upstream.headers.get(hdr);
+          if (val) res.setHeader(hdr, val);
         }
-      }, 90_000);
-      iceTestSessions.set(testId, { transport, timer });
-
-      res.json({
-        testId,
-        transportId:    transport.id,
-        iceParameters:  transport.iceParameters,
-        iceCandidates:  transport.iceCandidates,
-        dtlsParameters: transport.dtlsParameters,
-      });
-    } catch (err) {
-      console.error('[ICE-test] createTransport error:', err.message);
-      res.status(500).json({ error: err.message });
+        res.status(upstream.status).type('application/sdp').send(sdpAnswer);
+      } catch (err) {
+        console.error(`[WHEP-proxy][${cameraId.slice(0,8)}] ${err.message}`);
+        res.status(503).json({ error: `MediaMTX unreachable: ${err.message}` });
+      }
     }
-  });
-
-  app.delete('/api/webrtc/ice-test/:testId', (req, res) => {
-    const { testId } = req.params;
-    const s = iceTestSessions.get(testId);
-    if (s) {
-      clearTimeout(s.timer);
-      try { if (!s.transport.closed) s.transport.close(); } catch (_) {}
-      iceTestSessions.delete(testId);
-    }
-    res.json({ ok: true });
-  });
+  );
 
   // ── Cross-camera Re-ID stats ──────────────────────────────────────────────────
   // Returns all faces that have been seen on more than one camera in the current session.
@@ -431,6 +437,22 @@ async function main() {
     res.json({ ai: aiMap, status: statusMap });
   });
 
+  // Pipeline dev monitor — no auth, localhost-only (NODE_ENV=development)
+  app.get('/api/webrtc/monitor', async (req, res) => {
+    const ip = req.ip || req.connection?.remoteAddress || '';
+    const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+    if (process.env.NODE_ENV !== 'development' && !isLocal) {
+      return res.status(403).json({ error: 'monitor endpoint is dev-only' });
+    }
+    const mediamtxStatus = await mediamtxManager.isHealthy().then(ok => ({ ok })).catch(() => ({ ok: false }));
+    res.json({
+      serverMode: SERVER_MODE,
+      timestamp:  Date.now(),
+      pipelines:  pipelineManager.getAllPipelineStatus(),
+      mediamtx:   mediamtxStatus,
+    });
+  });
+
   // Health check
   app.get('/health', (req, res) => {
     res.json({
@@ -473,18 +495,9 @@ async function main() {
   io.on('connection', (socket) => {
     console.log(`[Socket.IO] Client connected: ${socket.id}`);
     registerStreamHandlers(io, socket, db, { discoveryEnabled });
-    registerWebRTCHandlers(io, socket);
-    registerWebRTCTelemetryHandlers(io, socket);
     // Hydrate newly connected client with all known discovered devices
     if (discoverySvc) discoverySvc.hydrate(socket);
 
-    // ICE test trigger: relay to all browser clients so IceTestTrigger in React initiates WebRTC
-    socket.on('webrtc:ice-test-start', ({ cameraId } = {}) => {
-      io.emit('webrtc:ice-test-trigger', { cameraId });
-    });
-    socket.on('webrtc:ice-test-done', () => {
-      io.emit('webrtc:ice-test-stop');
-    });
 
     socket.on('disconnect', (reason) => {
       console.log(`[Socket.IO] Client disconnected: ${socket.id} (${reason})`);

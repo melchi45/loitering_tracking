@@ -65,6 +65,7 @@ class RTSPCapture extends EventEmitter {
     this._retryCount  = 0;
     this._retryTimer  = null;
     this._connected   = false;
+    this._generation  = 0;  // incremented each _spawn(); stale close events are ignored
   }
 
   /** Start capturing. Idempotent. */
@@ -114,11 +115,34 @@ class RTSPCapture extends EventEmitter {
     const cmdline = `ffmpeg ${args.join(' ')}`;
     this.emit('started', { cameraId: this.cameraId, cmdline });
 
+    const gen  = ++this._generation;
     const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'] });
     this._proc = proc;
 
+    // Per-process stdout-stall watchdog: kill FFmpeg if connected but no data
+    // arrives for 15 s. Fires a normal 'close' event which triggers _scheduleRetry().
+    const STDOUT_STALL_MS = 15_000;
+    let lastDataAt = null;
+    let stallTimer = null;
+    const scheduleStallCheck = () => {
+      if (stallTimer) clearTimeout(stallTimer);
+      stallTimer = setTimeout(() => {
+        if (!this._running || this._proc !== proc) return;
+        if (lastDataAt !== null && Date.now() - lastDataAt > STDOUT_STALL_MS) {
+          this.emit('warn', { cameraId: this.cameraId, message: 'stdout stall — killing FFmpeg' });
+          try { proc.kill('SIGKILL'); } catch (_) {}
+        } else {
+          scheduleStallCheck();
+        }
+      }, STDOUT_STALL_MS);
+    };
+
     // ── stdout → JPEG frame extraction ──────────────────────────────────────
-    proc.stdout.on('data', (chunk) => this._onData(chunk));
+    proc.stdout.on('data', (chunk) => {
+      lastDataAt = Date.now();
+      if (stallTimer === null) scheduleStallCheck(); // arm watchdog on first data
+      this._onData(chunk);
+    });
     proc.stdout.on('error', () => {});   // pipe closed during kill — suppress
 
     // ── stderr → log lines ──────────────────────────────────────────────────
@@ -139,6 +163,12 @@ class RTSPCapture extends EventEmitter {
 
     // ── process exit ────────────────────────────────────────────────────────
     proc.on('close', (code, signal) => {
+      if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
+      // Guard against stale close events from a SIGKILL'd proc when stop()+start()
+      // is called in rapid succession (e.g. frame watchdog). Without this check,
+      // the old proc's close fires after the new proc is already running, nulling
+      // out this._proc and scheduling an extra retry — causing orphaned processes.
+      if (this._generation !== gen) return;
       this._proc = null;
       if (!this._running) return;
       this.emit('warn', {
@@ -149,6 +179,8 @@ class RTSPCapture extends EventEmitter {
     });
 
     proc.on('error', (err) => {
+      if (stallTimer) { clearTimeout(stallTimer); stallTimer = null; }
+      if (this._generation !== gen) return;
       this._proc = null;
       if (!this._running) return;
       this.emit('warn', { cameraId: this.cameraId, message: `spawn error: ${err.message}` });

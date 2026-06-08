@@ -7,7 +7,6 @@ import { useCrossCameraStore } from './stores/crossCameraStore';
 import { usePersonTrajectoryStore } from './stores/personTrajectoryStore';
 import { useI18n, LANGUAGES, type LangCode } from './i18n';
 import { useWebRTCConfigStore, type WebRTCConfig, type TurnServer } from './stores/webrtcConfigStore';
-import { useWebRTC } from './hooks/useWebRTC';
 import CameraGrid, { LayoutId, LAYOUT_DEFS, LAYOUT_GROUPS, LayoutIcon } from './components/CameraGrid';
 import CameraList from './components/CameraList';
 import AlertPanel from './components/AlertPanel';
@@ -238,11 +237,10 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
 
       if (iceAbortRef.current) { log('Aborted.'); return; }
 
-      // ── Phase 2: Server transport test ───────────────────────────────────
+      // ── Phase 2: MediaMTX WebRTC relay test ──────────────────────────────
       log('');
-      log('=== Phase 2: Server Transport Test ===');
+      log('=== Phase 2: MediaMTX WebRTC Relay ===');
 
-      let testId = '';
       try {
         const resp = await fetch('/api/webrtc/ice-test', { method: 'POST' });
         const contentType = resp.headers.get('content-type') ?? '';
@@ -251,31 +249,30 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
         } else {
           const data = await resp.json();
           if (!resp.ok || data.error) {
-            log(`  ✗ Server transport failed: ${data.error ?? `HTTP ${resp.status}`}`);
+            log(`  ✗ MediaMTX unreachable: ${data.error ?? `HTTP ${resp.status}`}`);
+            log('    → Run: npm run dev  (starts MediaMTX automatically)');
           } else {
-            testId = data.testId;
-            log(`  ✓ Transport created: id=${(data.transportId ?? '').slice(0, 8)}`);
+            log(`  ✓ MediaMTX reachable  engine=${data.engine ?? 'mediamtx-whep'}  UDP port=${data.udpPort ?? 8189}`);
+            log(`  WHEP proxy: ${data.whepProxy ?? '/api/webrtc/whep/:cameraId'}`);
             const cands: Array<{ type: string; ip: string; port: number; protocol: string }> = data.iceCandidates ?? [];
-            log(`  Server ICE candidates: ${cands.length}`);
-            cands.forEach(c => {
-              const warn = (c.ip === '127.0.0.1') ? '  ⚠ loopback! Set SERVER_IP in .env' : '';
-              log(`    + ${(c.type ?? '').padEnd(5)} ${c.ip}:${c.port}  proto=${c.protocol}${warn}`);
-            });
-            const hasLoopback = cands.some(c => c.ip === '127.0.0.1');
-            if (hasLoopback) {
-              log('  ⚠ Server is announcing 127.0.0.1 — browser cannot reach it directly.');
-              log('    → Set SERVER_IP=<LAN IP> in server/.env and restart');
-              log('    → Without this, all streams relay through external TURN (unstable)');
+            if (cands.length === 0) {
+              log('  ⚠ No server IPs configured — set SERVER_IP in server/.env');
+            } else {
+              log(`  Server ICE candidates (${cands.length}):`);
+              cands.forEach(c => {
+                const warn = (c.ip === '127.0.0.1') ? '  ⚠ loopback! Set SERVER_IP in .env' : '';
+                log(`    + ${(c.type ?? '').padEnd(5)} ${c.ip}:${c.port}  proto=${c.protocol}${warn}`);
+              });
+              const hasLoopback = cands.some(c => c.ip === '127.0.0.1');
+              if (hasLoopback) {
+                log('  ⚠ Server is announcing 127.0.0.1 — browser cannot reach it directly.');
+                log('    → Set SERVER_IP=<LAN IP> in server/.env and restart');
+              }
             }
           }
         }
       } catch (err: unknown) {
-        log(`  ✗ Server transport request failed: ${(err as Error).message}`);
-      } finally {
-        if (testId) {
-          fetch(`/api/webrtc/ice-test/${testId}`, { method: 'DELETE' }).catch(() => {});
-          log('  Server transport cleaned up.');
-        }
+        log(`  ✗ Request failed: ${(err as Error).message}`);
       }
 
       log('');
@@ -528,19 +525,6 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   );
 }
 
-// Hidden WebRTC connection used only by npm run ice-test (triggered via Socket.IO)
-function IceTestTrigger({ cameraId }: { cameraId: string }) {
-  const { videoRef } = useWebRTC(cameraId, true);
-  return (
-    <video
-      ref={videoRef}
-      autoPlay
-      muted
-      playsInline
-      style={{ position: 'absolute', width: 0, height: 0, opacity: 0, pointerEvents: 'none' }}
-    />
-  );
-}
 
 function Dashboard() {
   const auth = useAuthStore();
@@ -567,8 +551,7 @@ function Dashboard() {
   const [showProfile,  setShowProfile]  = useState(false);
   const [showSearchFullscreen, setShowSearchFullscreen] = useState(false);
   const [searchFullscreenQuery, setSearchFullscreenQuery] = useState('');
-  const [iceTestCameraId, setIceTestCameraId] = useState<string | null>(null);
-  const [sidebarWidth, setSidebarWidth] = useState(288);
+const [sidebarWidth, setSidebarWidth] = useState(288);
   const isResizingRef = useRef(false);
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
   const [channelOffset, setChannelOffset] = useState(0);
@@ -735,17 +718,10 @@ function Dashboard() {
       updatePerson(p);
     };
 
-    const handleIceTestTrigger = ({ cameraId }: { cameraId: string }) => {
-      setIceTestCameraId(cameraId);
-    };
-    const handleIceTestStop = () => setIceTestCameraId(null);
-
     socket.on('camera:status',           handleCameraStatus);
     socket.on('alert:new',               handleAlert);
     socket.on('face:reidentified',       handleFaceReidentified);
     socket.on('person:trajectory-update', handlePersonTrajectory);
-    socket.on('webrtc:ice-test-trigger', handleIceTestTrigger);
-    socket.on('webrtc:ice-test-stop',    handleIceTestStop);
 
     // Expose socket globally so FaceGalleryTab can subscribe to face_match events
     (window as unknown as Record<string, unknown>).__ltsSocket = socket;
@@ -755,8 +731,6 @@ function Dashboard() {
       socket.off('alert:new',               handleAlert);
       socket.off('face:reidentified',       handleFaceReidentified);
       socket.off('person:trajectory-update', handlePersonTrajectory);
-      socket.off('webrtc:ice-test-trigger', handleIceTestTrigger);
-      socket.off('webrtc:ice-test-stop',    handleIceTestStop);
     };
   }, [socket, updateCameraStatus, addAlert, addCrossCameraEvent, updatePerson]);
 
@@ -911,8 +885,7 @@ function Dashboard() {
   // ── Shared: overlays ─────────────────────────────────────────────────────
   const overlays = (
     <>
-      {iceTestCameraId && <IceTestTrigger cameraId={iceTestCameraId} />}
-      {fullscreenCameraId && (() => {
+{fullscreenCameraId && (() => {
         const cam = cameras.find(c => c.id === fullscreenCameraId);
         return cam ? (
           <FullscreenCameraView cameraId={cam.id} cameraName={cam.name} onClose={() => setFullscreenCameraId(null)} />

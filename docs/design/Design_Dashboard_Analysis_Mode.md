@@ -99,16 +99,31 @@ useEffect(() => {
 
 ### 2.4 TAB_ITEMS 조건부 구성
 
+`SERVER_MODE` 별 탭 정책 (PRD_Dashboard_Layout.md 4.4절):
+- `combined`: 전체 탭 표시
+- `streaming`: CAMERAS, ALERTS, ZONES, DETECTIONS, FACE ID — **ANALYTICS 숨김**
+- `analysis`: ALERTS, ZONES, DETECTIONS, ANALYTICS, FACE ID — **CAMERAS 숨김**
+
 ```tsx
 const isAnalysis = serverMode === 'analysis';
+const isStreaming = serverMode === 'streaming';
 const TAB_ITEMS = [
   !isAnalysis && { id: 'cameras' as SidebarTab, icon: '📷', label: t.tabCameras },
   { id: 'alerts'     as SidebarTab, icon: '🔔', label: t.tabAlerts },
   { id: 'zones'      as SidebarTab, icon: '🗺',  label: t.tabZones },
   { id: 'detections' as SidebarTab, icon: '👁',  label: t.tabDetections },
-  { id: 'analytics'  as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
+  !isStreaming && { id: 'analytics'  as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
   { id: 'faces'      as SidebarTab, icon: '🪪',  label: t.tabFaceGallery },
 ].filter(Boolean) as { id: SidebarTab; icon: string; label: string }[];
+```
+
+모드 전환 시 현재 탭이 숨겨진 탭이면 유효한 탭으로 이동:
+
+```tsx
+useEffect(() => {
+  if (serverMode === 'analysis' && sidebarTab === 'cameras') setSidebarTab('alerts');
+  if (serverMode === 'streaming' && sidebarTab === 'analytics') setSidebarTab('detections');
+}, [serverMode, sidebarTab]);
 ```
 
 ### 2.5 데스크톱 헤더 조건부 렌더링

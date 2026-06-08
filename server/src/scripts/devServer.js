@@ -71,6 +71,7 @@ function main() {
   const nodemonBin = path.resolve(__dirname, '..', '..', 'node_modules', 'nodemon', 'bin', 'nodemon.js');
   const nodemonConfig = path.resolve(__dirname, '..', '..', 'nodemon.json');
   const serverEntry = path.resolve(__dirname, '..', 'index.js');
+  const monitorEntry = path.resolve(__dirname, 'webrtcMonitor.js');
   const childEnv = { ...process.env };
   const pathKey = getPathEnvKey(childEnv);
   const pathEntries = [];
@@ -90,6 +91,38 @@ function main() {
     childEnv.PYAV_PYTHON_BIN = pythonExec;
   }
 
+  // ── MediaMTX (WebRTC relay) ──────────────────────────────────────────────
+  // Start MediaMTX before nodemon so the API is ready when pipelineManager
+  // calls addCameraPath() on the first camera start.
+  const mediamtxBin    = resolveByRuntime(runtimeOs, 'MEDIAMTX_BIN') || 'mediamtx';
+  const mediamtxConfig = path.resolve(__dirname, '..', '..', '..', 'mediamtx.yml');
+  let mediamtxChild = null;
+
+  function startMediaMTX() {
+    const proc = spawn(mediamtxBin, [mediamtxConfig], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: childEnv,
+    });
+    mediamtxChild = proc;
+
+    proc.stdout.on('data', (d) => process.stdout.write(`[MediaMTX] ${d}`));
+    proc.stderr.on('data', (d) => process.stderr.write(`[MediaMTX] ${d}`));
+
+    proc.on('error', (e) => {
+      console.warn(`[Dev] MediaMTX failed to start: ${e.message} — WebRTC delivery will be unavailable`);
+      mediamtxChild = null;
+    });
+    proc.on('exit', (code) => {
+      mediamtxChild = null;
+      if (code !== 0 && code !== null) {
+        console.warn(`[Dev] MediaMTX exited (code=${code})`);
+      }
+    });
+  }
+
+  try { startMediaMTX(); } catch (_) {}
+
+  // ── nodemon (main server process) ────────────────────────────────────────
   const child = spawn(nodeExec, [nodemonBin, '--config', nodemonConfig, '--exec', nodeExec, serverEntry], {
     stdio: 'inherit',
     env: childEnv,
@@ -101,12 +134,41 @@ function main() {
   });
 
   child.on('exit', (code, signal) => {
+    if (monitorChild) try { monitorChild.kill(); } catch (_) {}
+    if (mediamtxChild) try { mediamtxChild.kill(); } catch (_) {}
     if (signal) {
       process.kill(process.pid, signal);
       return;
     }
     process.exit(code || 0);
   });
+
+  // ── WebRTC monitor (companion process) ──────────────────────────────────
+  let monitorChild = null;
+  const MONITOR_START_DELAY_MS = 3_000;
+  setTimeout(() => {
+    monitorChild = spawn(nodeExec, [monitorEntry], {
+      stdio: 'inherit',
+      env: childEnv,
+    });
+    monitorChild.on('error', (e) => {
+      console.warn(`[Dev] WebRTC monitor failed to start: ${e.message}`);
+    });
+    monitorChild.on('exit', (code) => {
+      if (code !== 0 && code !== null) {
+        console.warn(`[Dev] WebRTC monitor exited (code=${code})`);
+      }
+    });
+  }, MONITOR_START_DELAY_MS);
+
+  // Forward SIGINT/SIGTERM so all children are cleaned up on Ctrl+C
+  for (const sig of ['SIGINT', 'SIGTERM']) {
+    process.on(sig, () => {
+      if (monitorChild)  try { monitorChild.kill(sig);  } catch (_) {}
+      if (mediamtxChild) try { mediamtxChild.kill(sig); } catch (_) {}
+      try { child.kill(sig); } catch (_) {}
+    });
+  }
 }
 
 main();
