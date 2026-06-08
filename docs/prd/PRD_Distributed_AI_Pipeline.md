@@ -37,7 +37,10 @@
 
 - `SERVER_MODE=combined` 기본값으로 **현재 동작을 100% 유지**하여 기존 설치 환경에서 재설정 없이 업그레이드 가능
 - `SERVER_MODE=streaming`에서 카메라 JPEG 프레임을 HTTP POST로 분석 서버에 전달하고, 분석 결과(detections, tracked, behaviors, fireSmoke)를 WebRTC/Socket.IO 오버레이로 합성
+- `SERVER_MODE=streaming`에서 분석 서버 응답의 `detectedFaces`를 사용해 Face ID 매칭, face crop 생성, snapshot 저장까지 수행
+- `SERVER_MODE=streaming`에서는 서버 시작 시 로컬 분석 모델(AttributePipeline/Face/PAR/FireSmoke) eager load를 수행하지 않음
 - `SERVER_MODE=analysis`에서 `POST /api/analysis/frame` 엔드포인트를 통해 순수 AI 추론(YOLOv8 → ByteTrack → BehaviorEngine → AttributePipeline → FireSmokeService)을 수행하고 JSON 응답 반환
+- `SERVER_MODE=analysis`에서 카메라 Discovery 기능을 비활성화하고, Dashboard 메인 영역에 Analysis 모드 상태 패널을 표시
 - 분석 서버 장애 시 스트리밍 서버는 AI 오버레이 없이 계속 스트리밍 유지 (graceful degradation)
 - `ANALYSIS_MAX_CONCURRENT` 초과 요청을 프레임 드롭으로 처리하는 백프레셔 구현
 - 분석 서버에서 카메라별 ByteTracker / BehaviorEngine 상태를 메모리에 유지하여 tracker ID 연속성 보장
@@ -84,16 +87,25 @@ Docker Compose 또는 쿠버네티스에서 `streaming` 컨테이너와 `analysi
 
 | 모드 | 카메라 캡처 | AI 추론 | HTTP 분석 클라이언트 | 분석 API 엔드포인트 |
 |---|---|---|---|---|
-| `combined` | O (로컬) | O (로컬) | X | X |
+| `combined` | O (로컬) | O (로컬) | X | O |
 | `streaming` | O (로컬) | X | O (외부 전송) | X |
 | `analysis` | X | O (로컬) | X | O |
+
+### 4.1.1 Dashboard 탭 정책
+
+| 모드 | Cameras Tab | Analytics Tab | 메인 영역 |
+|---|---|---|---|
+| `combined` | 표시 | 표시 | CameraGrid |
+| `streaming` | 표시 | 숨김 | CameraGrid |
+| `analysis` | 숨김 | 표시 | Analysis 모드 안내 패널 |
 
 ### 4.2 분석 서버 URL 설정
 
 - 환경변수: `ANALYSIS_SERVER_URL`
 - 예시: `http://192.168.1.200:3001`
 - `streaming` 모드에서만 참조됨
-- 미설정 시 `streaming` 모드로 시작 거부 (서버 시작 오류 발생)
+- 미설정 시에도 서버는 시작되며 영상 스트리밍은 유지됨 (monitoring-only)
+- 미설정 시 AI 분석 결과(`detections`, `behaviors`, `face_match`)는 수신되지 않음
 
 ### 4.3 백프레셔 처리
 

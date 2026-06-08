@@ -35,6 +35,18 @@ ONVIF 자동 탐색             webrtcGateway.js           ├── gstreamerCa
 
 ## 주요 작업 절차
 
+### SERVER_MODE 별 캡처/분석 분리 규칙
+
+- `SERVER_MODE=combined`: 캡처 + 로컬 AI 추론 + 스트리밍
+- `SERVER_MODE=streaming`: 캡처 + 스트리밍만 수행, AI 추론은 `ANALYSIS_SERVER_URL` 원격 서버로 위임
+- `SERVER_MODE=analysis`: 캡처/Discovery 미실행, `/api/analysis/frame` 추론 전용
+
+운영 주의:
+- `streaming` 모드에서는 로컬 PAR/ArcFace 모델 eager load가 발생하면 설정/코드 회귀입니다.
+- 기준 구현: `server/src/index.js`에서 streaming 모드 eager model loading 스킵.
+- `ANALYSIS_SERVER_URL`이 비어 있어도 스트리밍 서버는 monitoring-only로 동작해야 하며 영상 송출은 유지됩니다.
+- 이 상태에서는 AI 결과(detections/alerts/face_match)만 비활성입니다.
+
 ### CAPTURE_BACKEND 전환 (ffmpeg / gstreamer / pyav)
 
 `server/.env`에서 선택:

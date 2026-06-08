@@ -140,3 +140,17 @@ RTSP/WebRTC 스트림
   - Windows에서 `ONNX_CUDA=0`이면 `['dml','cpu']` 우선 시도
   - DML 미지원 시 CPU 폴백으로 반복 경고/실패 최소화
 - 운영 문서: `docs/ops/ONNX_Runtime_Provider_Diagnostics.md`
+
+## 최근 운영 변경 (2026-06-08)
+
+- `SERVER_MODE=streaming`에서는 서버 시작 시 `pipelineManager.loadFaceServiceEagerly()`를 호출하지 않습니다.
+- 목적: streaming 노드에서 로컬 PAR/ArcFace/FireSmoke 모델 선로딩을 방지하고, 분석은 원격 `ANALYSIS_SERVER_URL`로만 위임합니다.
+- 구현 위치:
+  - `server/src/index.js` (streaming 모드 eager-load 스킵)
+  - `server/src/services/pipelineManager.js` (`loadFaceServiceEagerly()` 내부 2차 가드)
+- 회귀 테스트:
+  - `test/api/streaming_mode_model_skip.test.js`
+  - `docs/tc/TC_Streaming_Model_Load_Policy.md`
+
+- `SERVER_MODE=streaming`에서 `ANALYSIS_SERVER_URL`이 비어 있어도 서버는 종료되지 않습니다.
+- 이 경우 monitoring-only(영상 스트리밍만 유지, 원격 AI 결과 미수신)로 동작합니다.

@@ -26,8 +26,11 @@
 9. [TC-DAP-006: per-camera 상태 유지](#9-tc-dap-006-per-camera-상태-유지)
 10. [TC-DAP-007: analysis 서버 5분 비활성 컨텍스트 자동 정리](#10-tc-dap-007-analysis-서버-5분-비활성-컨텍스트-자동-정리)
 11. [TC-DAP-008: WebRTC 스트림과 분석 결과 동시 표시](#11-tc-dap-008-webrtc-스트림과-분석-결과-동시-표시)
-12. [Test Execution Order](#12-test-execution-order)
-13. [Pass/Fail Criteria](#13-passfail-criteria)
+12. [TC-DAP-009: 모드별 Dashboard 탭 정책](#12-tc-dap-009-모드별-dashboard-탭-정책)
+13. [TC-DAP-010: analysis 모드 discovery 비활성](#13-tc-dap-010-analysis-모드-discovery-비활성)
+14. [TC-DAP-011: streaming 모드 eager 모델 로드 금지](#14-tc-dap-011-streaming-모드-eager-모델-로드-금지)
+15. [Test Execution Order](#15-test-execution-order)
+16. [Pass/Fail Criteria](#16-passfail-criteria)
 
 ---
 
@@ -123,7 +126,7 @@ ANALYSIS_MAX_CONCURRENT=2
 | TC-DAP-001-04 | 구역 API | `GET /api/zones` | 200 OK |
 | TC-DAP-001-05 | 알림 API | `GET /api/alerts` | 200 OK |
 | TC-DAP-001-06 | 헬스 체크 | `GET /health` | 200 OK |
-| TC-DAP-001-07 | analysisApi 미등록 | `POST /api/analysis/frame` | 404 Not Found |
+| TC-DAP-001-07 | combined에서 analysisApi 등록 확인 | `POST /api/analysis/frame` with empty body | 400 Bad Request (라우트 활성) |
 | TC-DAP-001-08 | 잘못된 모드 | `SERVER_MODE=invalid` | `process.exit(1)` 호출, 에러 메시지 출력 |
 | TC-DAP-001-09 | 기존 Jest 테스트 | `npm test` | 모든 기존 테스트 통과 |
 
@@ -152,7 +155,7 @@ ANALYSIS_MAX_CONCURRENT=2
 | 단계 | 테스트 항목 | 입력 | 예상 결과 |
 |---|---|---|---|
 | TC-DAP-002-01 | streaming 서버 시작 | `SERVER_MODE=streaming`, URL 설정 | 로그에 `SERVER_MODE=streaming \| ANALYSIS_SERVER_URL=...` 출력 |
-| TC-DAP-002-02 | URL 미설정 시작 실패 | `SERVER_MODE=streaming`, URL 없음 | `process.exit(1)`, "ANALYSIS_SERVER_URL" 에러 메시지 |
+| TC-DAP-002-02 | URL 미설정 monitoring-only 동작 | `SERVER_MODE=streaming`, URL 없음 | 서버는 계속 동작, 원격 AI 요청 미전송 |
 | TC-DAP-002-03 | 프레임 HTTP POST 발생 | 카메라 프레임 이벤트 시뮬레이션 | 목 서버가 `POST /api/analysis/frame` 수신 |
 | TC-DAP-002-04 | 요청 페이로드 구조 | 프레임 수신 | `{ cameraId, frameId, timestamp, frame(base64), zones, analyticsConfig }` 포함 |
 | TC-DAP-002-05 | frame 필드가 유효한 base64 | 페이로드 확인 | Buffer.from(frame, 'base64') 디코딩 성공 |
@@ -163,7 +166,8 @@ ANALYSIS_MAX_CONCURRENT=2
 
 - 카메라 프레임 이벤트마다 목 서버에 HTTP POST 요청 발생
 - 페이로드에 필수 필드(`cameraId`, `frame`) 포함
-- `ANALYSIS_SERVER_URL` 미설정 시 서버 시작 실패
+- `ANALYSIS_SERVER_URL` 미설정 시에도 영상 스트리밍 유지
+- `ANALYSIS_SERVER_URL` 미설정 시 분석 결과 이벤트는 발생하지 않음
 
 ### 테스트 코드 스니펫
 
@@ -241,12 +245,12 @@ describe('TC-DAP-002: streaming 모드 프레임 전송', () => {
 | TC-DAP-003-01 | 서버 시작 | `SERVER_MODE=analysis` | 로그에 `SERVER_MODE=analysis` 출력 |
 | TC-DAP-003-02 | 카메라 캡처 미실행 | 서버 시작 후 확인 | FFmpeg/GStreamer 프로세스 미생성 |
 | TC-DAP-003-03 | 정상 추론 요청 | `POST /api/analysis/frame` with 유효 payload | HTTP 200, JSON 응답 |
-| TC-DAP-003-04 | 응답 필드 확인 | 200 응답 | `detections`, `tracked`, `behaviors`, `fireSmoke`, `cameraId`, `frameId`, `timestamp` 포함 |
+| TC-DAP-003-04 | 응답 필드 확인 | 200 응답 | `detections`, `tracked`, `detectedFaces`, `behaviors`, `fireSmoke`, `cameraId`, `frameId`, `timestamp` 포함 |
 | TC-DAP-003-05 | cameraId 누락 | `{ frame: "..." }` | 400 Bad Request |
 | TC-DAP-003-06 | frame 필드 누락 | `{ cameraId: "cam1" }` | 400 Bad Request |
 | TC-DAP-003-07 | 빈 body | `{}` | 400 Bad Request |
 | TC-DAP-003-08 | 헬스 엔드포인트 | `GET /api/analysis/health` | 200, `{ status: "ok", mode: "analysis", ... }` |
-| TC-DAP-003-09 | combined 모드에서 해당 엔드포인트 | `POST /api/analysis/frame` (SERVER_MODE=combined) | 404 Not Found |
+| TC-DAP-003-09 | combined 모드에서 해당 엔드포인트 | `POST /api/analysis/frame` (SERVER_MODE=combined, empty body) | 400 Bad Request |
 | TC-DAP-003-10 | 레이턴시 측정 | 정상 요청 10회 반복 | p95 ≤ 200ms (LAN 환경) |
 
 ### 합격 기준
@@ -578,7 +582,33 @@ describe('TC-DAP-008: WebRTC 스트림과 분석 결과 동시 표시', () => {
 
 ---
 
-## 12. Test Execution Order
+## 12. TC-DAP-009: 모드별 Dashboard 탭 정책
+
+| 단계 | 테스트 항목 | 입력 | 예상 결과 |
+|---|---|---|---|
+| TC-DAP-009-01 | combined 탭 정책 | `SERVER_MODE=combined` | Cameras/Analytics 탭 모두 표시 |
+| TC-DAP-009-02 | streaming 탭 정책 | `SERVER_MODE=streaming` | Cameras 탭 표시, Analytics 탭 미표시 |
+| TC-DAP-009-03 | analysis 탭 정책 | `SERVER_MODE=analysis` | Cameras 탭 미표시, 메인 영역에 Analysis 상태 패널 표시 |
+
+## 13. TC-DAP-010: analysis 모드 discovery 비활성
+
+| 단계 | 테스트 항목 | 입력 | 예상 결과 |
+|---|---|---|---|
+| TC-DAP-010-01 | REST discovery 비활성 | `POST /api/cameras/discover` | 409 + `SERVER_MODE=analysis` 에러 메시지 |
+| TC-DAP-010-02 | 소켓 discovery 비활성 | `discovery:start` emit | `discovery:disabled` 이벤트 수신 |
+
+---
+
+## 14. TC-DAP-011: streaming 모드 eager 모델 로드 금지
+
+| 단계 | 테스트 항목 | 입력 | 예상 결과 |
+|---|---|---|---|
+| TC-DAP-011-01 | 서버 시작 eager-load 가드 | `SERVER_MODE=streaming` | 로그에 `skipping eager AI model loading` 또는 동등 메시지 |
+| TC-DAP-011-02 | 유닛 계약 검증 | `node test/api/streaming_mode_model_skip.test.js` | `_attrPipeline === null` 유지 |
+
+---
+
+## 15. Test Execution Order
 
 ```
 1. TC-DAP-001 — combined 모드 (가장 기본, 환경 검증)
@@ -593,13 +623,13 @@ describe('TC-DAP-008: WebRTC 스트림과 분석 결과 동시 표시', () => {
 
 ---
 
-## 13. Pass/Fail Criteria
+## 16. Pass/Fail Criteria
 
-### 13.1 통과 기준
+### 16.1 통과 기준
 
 | 케이스 | 필수 통과 조건 |
 |---|---|
-| TC-DAP-001 | 기존 `npm test` 100% 통과 + `/api/analysis/frame` 404 확인 |
+| TC-DAP-001 | 기존 `npm test` 100% 통과 + `/api/analysis/frame` 라우트 활성(400 validation) 확인 |
 | TC-DAP-002 | 프레임마다 HTTP POST 발생 확인 + URL 미설정 시 종료 확인 |
 | TC-DAP-003 | 200 JSON 응답 + 필수 필드 포함 + 400/404 오류 처리 |
 | TC-DAP-004 | `analyzeFrame()` null 반환 + 카메라 상태 변경 없음 |
@@ -608,7 +638,7 @@ describe('TC-DAP-008: WebRTC 스트림과 분석 결과 동시 표시', () => {
 | TC-DAP-007 | TTL 경과 후 `activeCameras` 감소 + 재생성 시 ID 리셋 |
 | TC-DAP-008 | `frame`과 `detections` 이벤트 독립 수신 + WebRTC 계속 동작 |
 
-### 13.2 실패 시 처리
+### 16.2 실패 시 처리
 
 - TC-DAP-001 실패: 하위 호환성 문제 — 병합 차단 (Critical)
 - TC-DAP-004 실패: 프로덕션 장애 위험 — 병합 차단 (Critical)

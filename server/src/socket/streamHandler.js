@@ -8,8 +8,10 @@ const { getDiscoveryService } = require('../services/discoveryService');
  * @param {import('socket.io').Server}   io
  * @param {import('socket.io').Socket}   socket
  * @param {import('better-sqlite3').Database} db
+ * @param {{ discoveryEnabled?: boolean }} [options]
  */
-function registerStreamHandlers(io, socket, db) {
+function registerStreamHandlers(io, socket, db, options = {}) {
+  const discoveryEnabled = options.discoveryEnabled !== false;
   let _discoveryInstance = null;
 
   // ─── Camera room subscription ──────────────────────────────────────────
@@ -51,6 +53,10 @@ function registerStreamHandlers(io, socket, db) {
    * Emits 'discovery:result' for each found device and 'discovery:done' when finished.
    */
   socket.on('discovery:start', ({ timeout = 5000 } = {}) => {
+    if (!discoveryEnabled) {
+      socket.emit('discovery:disabled', { reason: 'SERVER_MODE=analysis' });
+      return;
+    }
     // If a discovery is already in progress, stop it first
     if (_discoveryInstance) {
       try { _discoveryInstance.stop(); } catch (_) {}
@@ -130,6 +136,10 @@ function registerStreamHandlers(io, socket, db) {
    * Clear known devices and restart discovery from scratch (triggered by client "Clean").
    */
   socket.on('discovery:rescan', () => {
+    if (!discoveryEnabled) {
+      socket.emit('discovery:disabled', { reason: 'SERVER_MODE=analysis' });
+      return;
+    }
     const svc = getDiscoveryService();
     if (svc) svc.rescan();
   });
@@ -137,6 +147,10 @@ function registerStreamHandlers(io, socket, db) {
   // REST /api/cameras/discover emits this event via io.emit(...).
   // Bridge it to the same background rescan path used by the UI "Clean" action.
   socket.on('discovery:trigger', () => {
+    if (!discoveryEnabled) {
+      socket.emit('discovery:disabled', { reason: 'SERVER_MODE=analysis' });
+      return;
+    }
     const svc = getDiscoveryService();
     if (svc) svc.rescan();
   });
@@ -145,6 +159,10 @@ function registerStreamHandlers(io, socket, db) {
    * Stop an in-progress discovery scan.
    */
   socket.on('discovery:stop', () => {
+    if (!discoveryEnabled) {
+      socket.emit('discovery:disabled', { reason: 'SERVER_MODE=analysis' });
+      return;
+    }
     if (_discoveryInstance) {
       try { _discoveryInstance.stop(); } catch (_) {}
       _discoveryInstance = null;

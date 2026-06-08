@@ -3,6 +3,8 @@
 const { Router } = require('express');
 const { v4: uuidv4 } = require('uuid');
 
+const SERVER_MODE = process.env.SERVER_MODE || 'combined';
+
 function normalizeRtspUrl(rtspUrl) {
   if (typeof rtspUrl !== 'string' || !rtspUrl.trim()) {
     return { ok: false, error: 'rtspUrl must be a non-empty string' };
@@ -72,6 +74,12 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
    */
   router.post('/discover', (req, res) => {
     try {
+      if (SERVER_MODE === 'analysis') {
+        return res.status(409).json({
+          success: false,
+          error: 'Camera discovery is disabled when SERVER_MODE=analysis',
+        });
+      }
       // Signal via Socket.IO to start discovery (handled in streamHandler)
       // The actual UDPDiscovery is kicked off by the client via socket event.
       // This REST endpoint exists as a convenience trigger.

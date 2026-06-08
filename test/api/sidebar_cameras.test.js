@@ -171,15 +171,25 @@ async function runGroupC() {
 async function runGroupD() {
   console.log('[Group D] Found Cameras (Discovery API)\n');
 
-  await test('TC-D-001', 'POST /api/cameras/discover → 200, discovery triggered', async () => {
+  const health = await get('/health');
+  const serverMode = health.body?.serverMode || 'combined';
+  const expectDisabled = serverMode === 'analysis';
+
+  await test('TC-D-001', 'POST /api/cameras/discover → mode-specific response', async () => {
     const { status, body } = await post('/api/cameras/discover', {});
+    if (expectDisabled) {
+      assertEq(status, 409, 'HTTP status');
+      assertEq(body.success, false, 'success');
+      assert(typeof body.error === 'string' && body.error.includes('SERVER_MODE=analysis'), 'analysis mode error message');
+      return;
+    }
     assertEq(status, 200, 'HTTP status');
     assertEq(body.success, true, 'success');
   });
 
-  await test('TC-D-002', 'POST /api/cameras/discover — repeated call → 200', async () => {
+  await test('TC-D-002', 'POST /api/cameras/discover — repeated call mode-specific', async () => {
     const { status } = await post('/api/cameras/discover', {});
-    assertEq(status, 200, 'HTTP status');
+    assertEq(status, expectDisabled ? 409 : 200, 'HTTP status');
   });
 }
 

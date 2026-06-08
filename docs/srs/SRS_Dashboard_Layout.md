@@ -55,7 +55,12 @@ The sidebar shall be rendered on the right side of the main area with a default 
 A 4 px wide vertical divider between the main area and sidebar shall change color on hover (blue) and support mouse-drag resizing. Width shall be persisted within the current session.
 
 ### FR-DLY-006 — Sidebar Tab Navigation
-The sidebar shall expose six tabs: Cameras, Alerts, Zones, Detections, Analytics, Face Gallery. The active tab shall be visually distinguished by a blue bottom border and blue text color. The Alerts tab shall display an unread count badge (red circle) when unacknowledged alerts exist.
+The sidebar shall expose mode-dependent tabs based on `SERVER_MODE`:
+- `combined`: Cameras, Alerts, Zones, Detections, Analytics, Face Gallery
+- `streaming`: Cameras, Alerts, Zones, Detections, Face Gallery (Analytics hidden)
+- `analysis`: Alerts, Zones, Detections, Analytics, Face Gallery (Cameras hidden)
+
+The active tab shall be visually distinguished by a blue bottom border and blue text color. The Alerts tab shall display an unread count badge (red circle) when unacknowledged alerts exist.
 
 ### FR-DLY-007 — Camera Grid Area
 The main content area shall render a `CameraGrid` component that fills all remaining horizontal and vertical space after header and sidebar are accounted for.
@@ -73,7 +78,7 @@ When the total number of registered cameras exceeds the current layout channel c
 Double-clicking a camera cell in the grid shall open `FullscreenCameraView` as a fixed overlay covering the full viewport. Pressing ESC or clicking the close button shall dismiss it.
 
 ### FR-DLY-012 — Mobile Bottom Navigation
-On mobile the bottom navigation bar shall be 52 px high and display six icon+label buttons corresponding to the six sidebar tabs. The active tab shall show a blue indicator bar at the top of the button.
+On mobile the bottom navigation bar shall be 52 px high and display icon+label buttons corresponding to the mode-dependent sidebar tab policy defined in FR-DLY-006. The active tab shall show a blue indicator bar at the top of the button.
 
 ### FR-DLY-013 — Mobile Camera Tab Layout
 When the active mobile tab is "Cameras," the screen shall be divided vertically: camera grid occupying 58% and camera list occupying 42% of the content area height.

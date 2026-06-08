@@ -149,6 +149,23 @@ const SUITES = [
     tags:  ['camera', 'sidebar'],
   },
 
+  // ── Distributed AI Pipeline ───────────────────────────────────────────────
+  {
+    file:  'test/api/distributed_pipeline.test.js',
+    label: 'TC_Distributed_Pipeline — SERVER_MODE mode contract tests',
+    tags:  ['distributed', 'pipeline', 'server_mode', 'analysis', 'streaming'],
+  },
+  {
+    file:  'test/api/streaming_mode_model_skip.test.js',
+    label: 'TC_Streaming_Model_Skip — streaming eager model-load guard',
+    tags:  ['streaming', 'server_mode', 'models', 'unit'],
+  },
+  {
+    file:  'test/api/streaming_without_analysis_url.test.js',
+    label: 'TC_Streaming_Monitoring_Only — empty ANALYSIS_SERVER_URL fallback',
+    tags:  ['streaming', 'server_mode', 'monitoring-only', 'unit'],
+  },
+
   // ── Capture Backend ───────────────────────────────────────────────────────
   {
     file:  'test/api/capture-backend.test.js',

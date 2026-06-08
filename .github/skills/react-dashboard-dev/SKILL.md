@@ -136,3 +136,11 @@ npm run preview      # 빌드 결과 미리보기
 - **API 연동 변경** → Design의 데이터 플로우 다이어그램 및 TC 업데이트
 - **반응형 레이아웃 변경** → `docs/design/Design_Mobile_Layout.md` + `docs/tc/TC_Mobile_Layout.md` 업데이트
 - **i18n 키 추가** → 해당 화면의 Design 문서 UI 텍스트 항목 추가
+
+## SERVER_MODE 기반 탭 노출 정책 (중요)
+
+- 기준 위치: `client/src/App.tsx` (`serverMode`, `isStreaming`, `TAB_ITEMS`)
+- `combined`: Cameras/Analytics 탭 모두 표시
+- `streaming`: Analytics 탭 숨김
+- `analysis`: Cameras 탭 숨김, Analytics 탭 표시
+- 모드 변경으로 현재 활성 탭이 숨김 대상이 되면 유효 탭으로 자동 전환하도록 유지

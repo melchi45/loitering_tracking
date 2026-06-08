@@ -166,12 +166,12 @@ class PipelineManager {
         const AnalysisClient = require('./analysisClient');
         const url = process.env.ANALYSIS_SERVER_URL;
         if (!url) {
-          console.error('[PipelineManager] SERVER_MODE=streaming requires ANALYSIS_SERVER_URL in .env');
-          return;
+          console.warn('[PipelineManager] SERVER_MODE=streaming with empty ANALYSIS_SERVER_URL — streaming continues without remote AI results');
+        } else {
+          this._analysisClient = new AnalysisClient(url);
+          const health = await this._analysisClient.healthCheck();
+          console.log('[PipelineManager] Analysis server health:', JSON.stringify(health));
         }
-        this._analysisClient = new AnalysisClient(url);
-        const health = await this._analysisClient.healthCheck();
-        console.log('[PipelineManager] Analysis server health:', JSON.stringify(health));
       }
     } else {
       // Lazy-load detector (shared across cameras)
@@ -279,6 +279,9 @@ class PipelineManager {
 
       try {
         // ── Streaming mode: delegate all AI inference to remote analysis server ──
+        if (SERVER_MODE === 'streaming' && !this._analysisClient) {
+          return; // monitoring-only mode: keep video streaming, skip AI processing
+        }
         if (SERVER_MODE === 'streaming' && this._analysisClient) {
           const zones = this._zoneManager.getActiveZones(camera.id);
           const result = await this._analysisClient.analyzeFrame({
@@ -290,14 +293,83 @@ class PipelineManager {
             analyticsConfig: analyticsConfig.getConfig(),
           });
           if (result) {
+            const remoteTracked = Array.isArray(result.tracked) ? result.tracked : [];
+            const remoteFireSmoke = Array.isArray(result.fireSmoke) ? result.fireSmoke : [];
+            const remoteFaces = Array.isArray(result.detectedFaces) ? result.detectedFaces : [];
+            const remoteFrameWidth = result.frameWidth || frameWidth;
+            const remoteFrameHeight = result.frameHeight || frameHeight;
+            let faceDetObjects = [];
+
+            if (analyticsConfig.isEnabled('face') && remoteFaces.length > 0) {
+              const { faces: namedFaces, crossCameraTransitions, pendingMatchEvents } =
+                this._assignFaceIds(camera.id, remoteFaces, timestamp);
+
+              if (pendingMatchEvents && pendingMatchEvents.length > 0) {
+                const _io = this._io;
+                const _db = this._db;
+                const _snapshotSvc = snapshotSvc;
+                const _jpegBuffer = jpegBuffer;
+                setImmediate(async () => {
+                  for (const { evt, faceBbox } of pendingMatchEvents) {
+                    let liveCropData;
+                    try {
+                      if (_snapshotSvc.isEnabled() && _jpegBuffer && faceBbox) {
+                        const { data: cropBuf } = await _snapshotSvc.cropJpeg(
+                          _jpegBuffer, faceBbox, remoteFrameWidth, remoteFrameHeight
+                        );
+                        liveCropData = 'data:image/jpeg;base64,' + cropBuf.toString('base64');
+                      }
+                    } catch (_) { /* non-fatal */ }
+                    const fullEvt = liveCropData ? { ...evt, liveCropData } : evt;
+                    _io.emit('face_match', fullEvt);
+                    if (fullEvt.galleryType === 'missing') {
+                      _io.emit('missing_person_match', fullEvt);
+                    }
+                    try {
+                      _db.insert('faceMatchHistory', {
+                        id:        require('crypto').randomUUID(),
+                        ...fullEvt,
+                        createdAt: new Date(evt.timestamp).toISOString(),
+                      });
+                    } catch (dbErr) {
+                      console.warn('[PipelineManager] faceMatchHistory insert error:', dbErr.message);
+                    }
+                  }
+                });
+              }
+
+              for (const ev of (crossCameraTransitions || [])) {
+                this._io.emit('face:reidentified', {
+                  faceId: ev.faceId,
+                  prevCameraId: ev.prevCameraId,
+                  newCameraId: ev.newCameraId,
+                  similarity: ev.similarity,
+                  timestamp: ev.timestamp,
+                });
+              }
+
+              faceDetObjects = namedFaces.map((f, i) => ({
+                objectId:    90000 + (currentFrameId % 1000) * 10 + i,
+                className:   'face',
+                confidence:  f.score,
+                bbox:        f.bbox,
+                faceId:      f.faceId,
+                matchScore:  f.matchScore,
+                isLoitering: false,
+                dwellTime:   0,
+              }));
+            }
+
+            const allDetections = [...remoteTracked, ...faceDetObjects, ...remoteFireSmoke];
             this._io.to(camera.id).emit('detections', {
               cameraId:   camera.id,
               frameId:    currentFrameId,
               timestamp,
-              detections: [...(result.tracked || []), ...(result.fireSmoke || [])],
-              frameWidth:  result.frameWidth  || frameWidth,
-              frameHeight: result.frameHeight || frameHeight,
+              detections: allDetections,
+              frameWidth:  remoteFrameWidth,
+              frameHeight: remoteFrameHeight,
             });
+
             for (const b of (result.behaviors || [])) {
               if (b.isLoitering || b.type === 'loitering') {
                 this._io.to(camera.id).emit('loitering', b);
@@ -305,6 +377,45 @@ class PipelineManager {
                   console.error('[PipelineManager] Alert creation failed:', err.message);
                 });
               }
+            }
+
+            if (snapshotSvc.isEnabled() && allDetections.length > 0) {
+              const _jpegBuf = jpegBuffer;
+              const _fw = remoteFrameWidth;
+              const _fh = remoteFrameHeight;
+              const _ts = timestamp;
+              const _camera = camera;
+              const _db = this._db;
+              const _io = this._io;
+              setImmediate(async () => {
+                for (const det of allDetections) {
+                  try {
+                    const hasFaceMatch = !!(det.face && det.face.matchScore > 0) || !!det.matchScore;
+                    const isFireSmoke = det.className === 'fire' || det.className === 'smoke';
+                    if (!snapshotSvc.shouldSave(_camera.id, det.objectId, {
+                          isLoitering: det.isLoitering,
+                          hasFaceMatch,
+                          isFireSmoke,
+                          timestamp: _ts,
+                        })) {
+                      continue;
+                    }
+                    const { data: cropBuf, width: cw, height: ch } =
+                      await snapshotSvc.cropJpeg(_jpegBuf, det.bbox, _fw, _fh);
+                    const snapId = await snapshotSvc.saveSnapshot(
+                      _db, _camera, det, cropBuf, cw, ch, _fw, _fh, _ts
+                    );
+                    _io.to(_camera.id).emit('snapshot:new', {
+                      cameraId: _camera.id,
+                      snapshotId: snapId,
+                      objectId: det.objectId,
+                      className: det.className,
+                      timestamp: _ts,
+                      cropData: 'data:image/jpeg;base64,' + cropBuf.toString('base64'),
+                    });
+                  } catch (_) { /* non-fatal */ }
+                }
+              });
             }
           }
           return; // skip local inference below
@@ -1010,6 +1121,10 @@ class PipelineManager {
   /** Eagerly initialize the attribute pipeline (face + PPE + color) without starting a camera.
    *  Called on server startup so gallery enrollment works even with no active cameras. */
   async loadFaceServiceEagerly() {
+    if (SERVER_MODE === 'streaming') {
+      console.log('[PipelineManager] Streaming mode — skip eager AttributePipeline load');
+      return;
+    }
     if (this._attrPipeline) return; // already loaded (camera was started first)
     this._attrPipeline = new AttributePipeline();
     await this._attrPipeline.load().catch((err) => {

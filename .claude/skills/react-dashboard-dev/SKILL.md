@@ -1,7 +1,7 @@
 ---
 name: react-dashboard-dev
-description: "LTS-2026 React/TypeScript 대시보드 UI 개발. Use when: 대시보드 컴포넌트 추가/수정, Zustand 스토어 상태 관리, WebSocket 실시간 이벤트 수신, Tailwind CSS 스타일링, 카메라 그리드 뷰 수정, 알림 패널 UI 개선, 구역 편집기 수정, i18n 다국어 텍스트 추가, 검색 UI 구현, 모바일 반응형 레이아웃 조정, Vite 빌드 오류 수정, analysis 모드 UI 분기 수정. Covers: client/src/ React components, Zustand stores, hooks, i18n, Vite, Tailwind."
-argument-hint: "수정할 UI 영역 (예: camera-grid, alert-panel, zone-editor, face-gallery, analysis-mode)"
+description: "LTS-2026 React/TypeScript 대시보드 UI 개발. Use when: 대시보드 컴포넌트 추가/수정, Zustand 스토어 상태 관리, WebSocket 실시간 이벤트 수신, Tailwind CSS 스타일링, 카메라 그리드 뷰 수정, 알림 패널 UI 개선, 구역 편집기 수정, i18n 다국어 텍스트 추가, 검색 UI 구현, 모바일 반응형 레이아웃 조정, Vite 빌드 오류 수정. Covers: client/src/ React components, Zustand stores, hooks, i18n, Vite, Tailwind."
+argument-hint: "수정할 UI 영역 (예: camera-grid, alert-panel, zone-editor, face-gallery)"
 ---
 
 # React Dashboard Development
@@ -88,53 +88,6 @@ export function useAlertSocket(socket: Socket) {
 2. 그리드 열 수 변경: `grid-cols-2`, `grid-cols-3`, `grid-cols-4`
 3. 반응형: `sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-4`
 
-### Analysis 모드 UI 분기 수정
-
-`App.tsx`의 `isAnalysis` 플래그로 analysis 모드 전용 UI를 제어한다.
-
-**서버 모드 감지 방식:**
-```tsx
-// App.tsx — Dashboard 컴포넌트 내
-const [serverMode, setServerMode] = useState<string | null>(null);
-const isAnalysis = serverMode === 'analysis';
-
-useEffect(() => {
-  fetch('/health')
-    .then(r => r.json())
-    .then((data: { serverMode?: string }) => {
-      if (data.serverMode) {
-        setServerMode(data.serverMode);
-        if (data.serverMode === 'analysis') setSidebarTab('alerts');
-      }
-    })
-    .catch(() => {});
-}, []);
-```
-
-**analysis 모드에서 숨겨지는 UI 요소:**
-| 요소 | 위치 | 제어 변수 |
-|---|---|---|
-| 카메라 수 (`X/Y live`) | 헤더 | `!isAnalysis` |
-| 레이아웃 피커 | 헤더 | `!isAnalysis` |
-| 카메라 탭 (📷) | 사이드바 / 모바일 하단 | TAB_ITEMS 필터 |
-| CameraGrid + 페이지 버튼 | 메인 영역 | `isAnalysis ? Panel : Grid` |
-| DiscoveredCameraPanel | 메인 영역 | CameraGrid 블록 안에 포함 |
-| 카메라 그리드+목록 스와이프 뷰 | 모바일 콘텐츠 | `!isAnalysis && sidebarTab === 'cameras'` |
-
-**AnalysisServerPanel:**
-- `App.tsx` 내 인라인 JSX 변수 (별도 파일 없음)
-- Dashboard 스코프의 `connected`, `t` 변수를 직접 참조
-- `isAnalysis === true`일 때 메인 영역 전체를 대체
-
-**TAB_ITEMS 구성:**
-```tsx
-const TAB_ITEMS = [
-  !isAnalysis && { id: 'cameras' as SidebarTab, icon: '📷', label: t.tabCameras },
-  { id: 'alerts', ... },
-  // ... 나머지 5개
-].filter(Boolean) as { id: SidebarTab; icon: string; label: string }[];
-```
-
 ### 개발 서버 실행
 ```bash
 cd client
@@ -161,16 +114,12 @@ npm run preview      # 빌드 결과 미리보기
 | Design | [Design_Dashboard_Layout](../../../docs/design/Design_Dashboard_Layout.md) · [Design_Dashboard_Detection_Display](../../../docs/design/Design_Dashboard_Detection_Display.md) · [Design_Dashboard_Sidebar_Cameras](../../../docs/design/Design_Dashboard_Sidebar_Cameras.md) |
 | Design | [Design_Dashboard_Sidebar_Alerts_Zones](../../../docs/design/Design_Dashboard_Sidebar_Alerts_Zones.md) · [Design_Dashboard_Sidebar_Face_ID](../../../docs/design/Design_Dashboard_Sidebar_Face_ID.md) · [Design_Dashboard_Search_Fullscreen](../../../docs/design/Design_Dashboard_Search_Fullscreen.md) · [Design_Mobile_Layout](../../../docs/design/Design_Mobile_Layout.md) · [Design_Stats_Panel](../../../docs/design/Design_Stats_Panel.md) |
 | TC | [TC_Dashboard_Layout](../../../docs/tc/TC_Dashboard_Layout.md) · [TC_Dashboard_Detection_Display](../../../docs/tc/TC_Dashboard_Detection_Display.md) · [TC_Dashboard_Sidebar_Cameras](../../../docs/tc/TC_Dashboard_Sidebar_Cameras.md) · [TC_Dashboard_Sidebar_Alerts_Zones](../../../docs/tc/TC_Dashboard_Sidebar_Alerts_Zones.md) · [TC_Mobile_Layout](../../../docs/tc/TC_Mobile_Layout.md) |
-| TC | [TC_Dashboard_Sidebar_Face_ID](../../../docs/tc/TC_Dashboard_Sidebar_Face_ID.md) · [TC_Detection_Snapshot_Search](../../../docs/tc/TC_Detection_Snapshot_Search.md) · [TC_Dashboard_Analysis_Mode](../../../docs/tc/TC_Dashboard_Analysis_Mode.md) |
-| PRD | [PRD_Dashboard_Analysis_Mode](../../../docs/prd/PRD_Dashboard_Analysis_Mode.md) |
-| SRS | [SRS_Dashboard_Analysis_Mode](../../../docs/srs/SRS_Dashboard_Analysis_Mode.md) |
-| Design | [Design_Dashboard_Analysis_Mode](../../../docs/design/Design_Dashboard_Analysis_Mode.md) |
+| TC | [TC_Dashboard_Sidebar_Face_ID](../../../docs/tc/TC_Dashboard_Sidebar_Face_ID.md) · [TC_Detection_Snapshot_Search](../../../docs/tc/TC_Detection_Snapshot_Search.md) |
 
 ## 코드 수정 시 문서 동기화 의무
 
 | 변경 파일 | 업데이트 필요 문서 |
 |-----------|------------------|
-| `App.tsx` (serverMode / isAnalysis 분기) | `docs/design/Design_Dashboard_Analysis_Mode.md`, `docs/srs/SRS_Dashboard_Analysis_Mode.md`, `docs/tc/TC_Dashboard_Analysis_Mode.md` |
 | `CameraGrid.tsx`, `CameraView.tsx` | `docs/design/Design_Dashboard_Layout.md`, `docs/design/Design_Dashboard_Sidebar_Cameras.md`, `docs/tc/TC_Dashboard_Layout.md` |
 | `AlertPanel.tsx` | `docs/design/Design_Dashboard_Sidebar_Alerts_Zones.md`, `docs/tc/TC_Dashboard_Sidebar_Alerts_Zones.md` |
 | `ZonesPanel.tsx`, `ZoneEditor.tsx` | `docs/design/Design_Dashboard_Sidebar_Alerts_Zones.md`, `docs/srs/SRS_Dashboard_Sidebar_Alerts_Zones.md` |
@@ -187,3 +136,11 @@ npm run preview      # 빌드 결과 미리보기
 - **API 연동 변경** → Design의 데이터 플로우 다이어그램 및 TC 업데이트
 - **반응형 레이아웃 변경** → `docs/design/Design_Mobile_Layout.md` + `docs/tc/TC_Mobile_Layout.md` 업데이트
 - **i18n 키 추가** → 해당 화면의 Design 문서 UI 텍스트 항목 추가
+
+## SERVER_MODE 기반 탭 노출 정책 (중요)
+
+- 기준 위치: `client/src/App.tsx` (`serverMode`, `isStreaming`, `TAB_ITEMS`)
+- `combined`: Cameras/Analytics 탭 모두 표시
+- `streaming`: Analytics 탭 숨김
+- `analysis`: Cameras 탭 숨김, Analytics 탭 표시
+- 모드 변경으로 현재 활성 탭이 숨김 대상이 되면 유효 탭으로 자동 전환하도록 유지

@@ -162,18 +162,29 @@ router.post('/frame', express.json({ limit: '20mb' }), async (req, res) => {
 
     // 4. Attribute enrichment (face / PPE / color)
     let enrichedObjects = trackedObjects;
+    let detectedFaces = [];
     const anyAttrEnabled = ['face', 'mask', 'hat', 'color', 'cloth'].some(m => analyticsConfig.isEnabled(m));
     if (anyAttrEnabled && _attrPipeline?.anyReady) {
       try {
-        const { enrichedObjects: e } = await _attrPipeline.enrich(
+        const { enrichedObjects: e, detectedFaces: f } = await _attrPipeline.enrich(
           jpegBuffer, frameWidth, frameHeight, trackedObjects, zones,
           analyticsConfig.getConfig()
         );
         enrichedObjects = e;
+        detectedFaces = f;
       } catch (err) {
         console.warn(`[AnalysisAPI] Attribute enrichment warn:`, err.message);
       }
     }
+
+    const faceDetections = detectedFaces.map((f, i) => ({
+      objectId:  90000 + (Number(frameId || 0) % 1000) * 10 + i,
+      className: 'face',
+      confidence: f.score,
+      bbox: f.bbox,
+      isLoitering: false,
+      dwellTime: 0,
+    }));
 
     // 5. Behavior engine
     const behaviorsResult = ctx.behavior.update(cameraId, enrichedObjects, timestamp || new Date().toISOString());
@@ -196,6 +207,7 @@ router.post('/frame', express.json({ limit: '20mb' }), async (req, res) => {
     if (io) {
       const allDetections = [
         ...(enrichedObjects || []),
+        ...(faceDetections || []),
         ...(fireSmoke || []),
       ];
       io.to(cameraId).emit('detections', {
@@ -230,6 +242,7 @@ router.post('/frame', express.json({ limit: '20mb' }), async (req, res) => {
       timestamp:    ts,
       detections,
       tracked:      enrichedObjects,
+      detectedFaces,
       behaviors,
       fireSmoke,
       frameWidth,

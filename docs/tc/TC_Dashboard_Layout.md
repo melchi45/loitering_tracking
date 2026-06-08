@@ -113,10 +113,13 @@
 - **Expected:** Sidebar width adjusts between 180 px and 600 px
 - **Acceptance:** Min 180 px; max 600 px; drag updates width in real time
 
-### TC-B-003 — Sidebar Tabs
-- **Input:** Desktop sidebar
-- **Expected:** 6 tabs visible: Cameras, Alerts, Zones, Detections, Analytics, Face Gallery
-- **Acceptance:** All 6 tab labels present; unacknowledged alert badge visible when count > 0
+### TC-B-003 — Sidebar Tabs (Mode-Dependent)
+- **Input:** Desktop sidebar (`SERVER_MODE`별 확인)
+- **Expected:**
+  - combined: Cameras, Alerts, Zones, Detections, Analytics, Face Gallery
+  - streaming: Cameras, Alerts, Zones, Detections, Face Gallery (Analytics hidden)
+  - analysis: Alerts, Zones, Detections, Analytics, Face Gallery (Cameras hidden)
+- **Acceptance:** 각 모드별 탭 노출 정책 일치; unacknowledged alert badge visible when count > 0
 
 ---
 
@@ -166,7 +169,7 @@
 
   > Note: SRS_Dashboard_Layout specifies 6 tabs but SRS_Mobile_Layout specifies 5; defer to Mobile_Layout SRS for tab count.
 
-- **Acceptance:** Bottom bar present and fixed at bottom
+- **Acceptance:** Bottom bar present and fixed at bottom; 탭 개수는 mode-dependent 정책(analysis에서 Cameras 제거, streaming에서 Analytics 제거)을 따른다
 
 ### TC-E-003 — Mobile Cameras Tab Split
 - **Input:** Mobile viewport; Cameras tab active

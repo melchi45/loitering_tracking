@@ -106,8 +106,8 @@
 │                   ANALYSIS SERVER (GPU)                        │
 │                   SERVER_MODE=analysis                         │
 │                                                                │
-│  (카메라 캡처 없음)                                             │
-│  (WebRTC/Socket.IO 스트림 없음)                                │
+│  (카메라 캡처/Discovery 없음)                                   │
+│  (Dashboard는 카메라 레이아웃 대신 Analysis 상태 패널 표시)      │
 │                                                                │
 │  Express Routes:                                              │
 │   POST /api/analysis/frame  ──► analysisApi.js               │
@@ -127,6 +127,18 @@
 ---
 
 ## 2. Component Description
+
+### 2.0 Dashboard Mode Policy
+
+| SERVER_MODE | Cameras Tab | Analytics Tab | Main Area |
+|---|---|---|---|
+| `combined` | 표시 | 표시 | CameraGrid |
+| `streaming` | 표시 | 미표시 | CameraGrid |
+| `analysis` | 미표시 | 표시 | Analysis mode status panel |
+
+- `analysis` 모드에서는 카메라 discovery 기능(`POST /api/cameras/discover`, `discovery:*` socket events, background discovery scheduler)이 비활성화됩니다.
+- `streaming` 모드에서는 원격 분석 응답(`tracked`, `behaviors`, `fireSmoke`, `detectedFaces`)을 기반으로 Face ID 매칭/크롭/스냅샷 저장까지 로컬에서 후처리합니다.
+- `streaming` 모드에서는 서버 기동 시 `loadFaceServiceEagerly()`를 호출하지 않아 로컬 AI 모델(PAR/ArcFace 포함)을 선로딩하지 않습니다.
 
 ### 2.1 analysisClient.js (신규)
 
@@ -350,8 +362,7 @@ if (SERVER_MODE === 'analysis') {
 
 // streaming 모드 시작 검증
 if (SERVER_MODE === 'streaming' && !process.env.ANALYSIS_SERVER_URL) {
-  console.error('[Server] ERROR: SERVER_MODE=streaming requires ANALYSIS_SERVER_URL to be set.');
-  process.exit(1);
+  console.warn('[Server] ANALYSIS_SERVER_URL is empty — monitoring-only mode (no remote AI results)');
 }
 ```
 
@@ -690,5 +701,5 @@ server/src/
 | analysis 서버 4xx 오류 | `errorFrames++`, `console.warn` | 해당 프레임만 드롭 |
 | Base64 디코딩 실패 (analysis 서버) | `400 Bad Request` 반환, 파이프라인 중단 없음 | 해당 요청만 실패 |
 | ONNX 추론 오류 (analysis 서버) | `500 Internal Server Error`, `console.error` | 해당 요청만 실패 |
-| `ANALYSIS_SERVER_URL` 미설정 (streaming 시작) | `process.exit(1)`, 에러 메시지 출력 | 서버 시작 실패 |
+| `ANALYSIS_SERVER_URL` 미설정 (streaming 시작) | 경고 로그 출력 후 원격 분석 비활성 | 영상 스트리밍 유지, AI 결과 미수신 |
 | 잘못된 `SERVER_MODE` 값 | `process.exit(1)`, 에러 메시지 출력 | 서버 시작 실패 |

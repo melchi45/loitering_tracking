@@ -217,11 +217,16 @@ async function main() {
   }
   // Defer ONNX model loading by 3 seconds so the HTTP server can accept requests
   // immediately on startup without the event loop being blocked by session creation.
-  setTimeout(() => {
-    pipelineManager.loadFaceServiceEagerly()
-      .then(() => pipelineManager.reloadPersistentGallery())
-      .catch(() => {});
-  }, 3000);
+  // Streaming mode never performs local AI inference, so skip eager model loading.
+  if (SERVER_MODE !== 'streaming') {
+    setTimeout(() => {
+      pipelineManager.loadFaceServiceEagerly()
+        .then(() => pipelineManager.reloadPersistentGallery())
+        .catch(() => {});
+    }, 3000);
+  } else {
+    console.log('[Server] Streaming mode — skipping eager AI model loading');
+  }
 
   // Cross-camera stats and person trajectories (standalone /api/faces/* routes)
   app.get('/api/faces/cross-camera-stats', (_req, res) => {
@@ -462,15 +467,16 @@ async function main() {
   });
 
   // ── Socket.IO Handlers ────────────────────────────────────────────────────
-  const discoverySvc = getDiscoveryService(io);
+  const discoveryEnabled = SERVER_MODE !== 'analysis';
+  const discoverySvc = discoveryEnabled ? getDiscoveryService(io) : null;
 
   io.on('connection', (socket) => {
     console.log(`[Socket.IO] Client connected: ${socket.id}`);
-    registerStreamHandlers(io, socket, db);
+    registerStreamHandlers(io, socket, db, { discoveryEnabled });
     registerWebRTCHandlers(io, socket);
     registerWebRTCTelemetryHandlers(io, socket);
     // Hydrate newly connected client with all known discovered devices
-    discoverySvc.hydrate(socket);
+    if (discoverySvc) discoverySvc.hydrate(socket);
 
     // ICE test trigger: relay to all browser clients so IceTestTrigger in React initiates WebRTC
     socket.on('webrtc:ice-test-start', ({ cameraId } = {}) => {
@@ -485,8 +491,12 @@ async function main() {
     });
   });
 
-  // Start background continuous discovery
-  discoverySvc.start();
+  // Start background continuous discovery except in analysis-only mode
+  if (discoverySvc) {
+    discoverySvc.start();
+  } else {
+    console.log('[Server] Analysis mode — discovery service disabled');
+  }
 
   // ── Auto-start all registered cameras on startup (deferred) ─────────────
   // Skipped in analysis-only mode — this process has no capture backend.

@@ -96,7 +96,12 @@ Each button shows a 20×20 SVG `LayoutIcon` + label. Active layout uses `bg-blue
 
 ### 4.4 Sidebar
 
-Fixed `w-72` right panel with 6 tabs: CAMERAS, ALERTS, ZONES, DETECTIONS, ANALYTICS, 🪪 FACE ID. The Alerts tab shows a red badge with unacknowledged alert count (shows `9+` when ≥ 10). Active tab: `text-blue-400 border-b-2 border-blue-400`.
+Fixed `w-72` right panel with mode-dependent tabs. The Alerts tab shows a red badge with unacknowledged alert count (shows `9+` when ≥ 10). Active tab: `text-blue-400 border-b-2 border-blue-400`.
+
+**Mode policy (`SERVER_MODE`):**
+- `combined`: CAMERAS, ALERTS, ZONES, DETECTIONS, ANALYTICS, 🪪 FACE ID
+- `streaming`: CAMERAS, ALERTS, ZONES, DETECTIONS, 🪪 FACE ID (ANALYTICS hidden)
+- `analysis`: ALERTS, ZONES, DETECTIONS, ANALYTICS, 🪪 FACE ID (CAMERAS hidden)
 
 | Tab ID | Label | Component | Notes |
 |---|---|---|---|

@@ -606,8 +606,9 @@ function Dashboard() {
       .then((r) => r.json())
       .then((data: { serverMode?: string }) => {
         if (data.serverMode) {
-          setServerMode(data.serverMode);
-          if (data.serverMode === 'analysis') setSidebarTab('alerts');
+          const normalizedMode = data.serverMode.trim().toLowerCase();
+          setServerMode(normalizedMode);
+          if (normalizedMode === 'analysis') setSidebarTab('alerts');
         }
       })
       .catch(() => {});
@@ -761,14 +762,26 @@ function Dashboard() {
 
   // ── Shared: tab nav items ───────────────────────────────────────────────────
   const isAnalysis = serverMode === 'analysis';
+  const isStreaming = serverMode === 'streaming';
   const TAB_ITEMS = [
     !isAnalysis && { id: 'cameras'    as SidebarTab, icon: '📷', label: t.tabCameras },
     { id: 'alerts'     as SidebarTab, icon: '🔔', label: t.tabAlerts },
     { id: 'zones'      as SidebarTab, icon: '🗺',  label: t.tabZones },
     { id: 'detections' as SidebarTab, icon: '👁',  label: t.tabDetections },
-    { id: 'analytics'  as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
+    !isStreaming && { id: 'analytics'  as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
     { id: 'faces'      as SidebarTab, icon: '🪪',  label: t.tabFaceGallery },
   ].filter(Boolean) as { id: SidebarTab; icon: string; label: string }[];
+
+  // If mode changes and current tab is hidden by policy, move to a valid tab.
+  useEffect(() => {
+    if (serverMode === 'analysis' && sidebarTab === 'cameras') {
+      setSidebarTab('alerts');
+      return;
+    }
+    if (serverMode === 'streaming' && sidebarTab === 'analytics') {
+      setSidebarTab('detections');
+    }
+  }, [serverMode, sidebarTab]);
 
   // ── Analysis server status panel (replaces camera grid in analysis mode) ────
   const AnalysisServerPanel = (

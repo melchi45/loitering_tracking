@@ -105,13 +105,26 @@ SERVER_MODE=analysis  → 카메라 캡처 초기화 없음 →
 
 `streaming` 모드에서 카메라 캡처(FFmpeg / GStreamer / PyAV 백엔드), WebRTC 미디어 처리, Socket.IO 프레임 전송은 `combined` 모드와 동일하게 동작해야 한다.
 
-### FR-DAP-004: analysis 모드 캡처 스킵
+### FR-DAP-004: analysis 모드 캡처/Discovery 스킵
 
-`analysis` 모드에서 카메라 캡처 백엔드 초기화, WebRTC 미디어 파이프라인 초기화, Socket.IO 스트림 이벤트 핸들러 등록을 생략해야 한다.
+`analysis` 모드에서 카메라 캡처 백엔드 초기화와 자동 discovery(UDP/ONVIF 백그라운드 스캔, discovery REST/Socket 트리거)를 생략해야 한다.
+
+### FR-DAP-006: 모드별 Dashboard 탭 정책
+
+- `combined`: Cameras, Analytics 탭 모두 표시
+- `streaming`: Cameras 탭 표시, Analytics 탭 숨김
+- `analysis`: Cameras 탭 숨김, Analytics 탭 표시, 메인 영역은 CameraGrid 대신 Analysis 모드 상태 패널 표시
 
 ### FR-DAP-005: streaming 모드 시작 검증
 
-`SERVER_MODE=streaming`으로 시작 시 `ANALYSIS_SERVER_URL` 환경변수가 비어 있으면 서버는 에러 메시지와 함께 종료해야 한다.
+`SERVER_MODE=streaming`으로 시작 시 `ANALYSIS_SERVER_URL` 환경변수가 비어 있어도 서버는 종료되지 않아야 한다.
+이 경우 서버는 monitoring-only 모드(영상 스트리밍만 활성, AI 분석 결과 비활성)로 동작해야 하며,
+원격 분석 URL이 설정된 경우에만 HTTP 분석 요청을 전송해야 한다.
+
+### FR-DAP-007: streaming 모드 로컬 AI 모델 eager-load 금지
+
+`SERVER_MODE=streaming`에서 서버 시작 시 `loadFaceServiceEagerly()` 경로를 실행하지 않아야 하며,
+AttributePipeline/Face/PAR/FireSmoke 모델 세션을 선로딩하지 않아야 한다.
 
 ---
 
@@ -136,6 +149,8 @@ SERVER_MODE=analysis  → 카메라 캡처 초기화 없음 →
 
 `analyzeFrame()` 성공 응답의 `detections`, `tracked`, `behaviors`, `fireSmoke` 데이터를 `combined` 모드에서 추론 결과를 사용하는 것과 동일한 방식으로 Socket.IO / WebRTC DataChannel에 전송해야 한다.
 
+`streaming` 모드에서는 추가로 `detectedFaces` 응답을 사용하여 Face ID 매칭(`face_match`)과 크롭 생성, 스냅샷 저장 파이프라인을 수행해야 한다.
+
 ### FR-DAP-012: 분석 요청 타임아웃
 
 각 HTTP 분석 요청은 `ANALYSIS_REQUEST_TIMEOUT_MS` (기본값 `5000`) 밀리초 이내에 완료되어야 한다. 타임아웃 초과 시 해당 프레임의 분석 결과를 폐기하고 스트리밍은 계속한다.
@@ -150,7 +165,7 @@ HTTP 연결 오류(ECONNREFUSED, ECONNRESET, EHOSTUNREACH 등) 발생 시 해당
 
 ### FR-DAP-020: 추론 엔드포인트
 
-`analysis` 모드의 Express 앱에 `POST /api/analysis/frame` 엔드포인트가 등록되어야 한다.
+`analysis` 및 `combined` 모드의 Express 앱에 `POST /api/analysis/frame` 엔드포인트가 등록되어야 한다.
 
 **요청 Content-Type:** `application/json`
 

@@ -110,24 +110,34 @@ App.tsx
 │   │   └─ DiscoveredCameraPanel (absolute overlay, conditional)
 │   └─ Sidebar (w-[sidebarWidth])
 │       ├─ Resize handle (4px drag handle)
-│       ├─ Tab bar (Cameras | Alerts | Zones | Detections | Analytics | Faces)
+│       ├─ Tab bar (mode-dependent)
 │       └─ Tab content (active tab only)
 │           ├─ cameras  → CameraList
 │           ├─ alerts   → AlertPanel
 │           ├─ zones    → ZonesPanel
 │           ├─ detections → DashboardDetectionPanel
-│           ├─ analytics → VideoAnalyticsTab
+│           ├─ analytics → VideoAnalyticsTab (hidden in streaming mode)
 │           └─ faces    → FaceGalleryTab
 │
 ├─ [Mobile Content Area]
 │   └─ Active tab content (full area)
 │
 ├─ [Mobile Bottom Nav] (fixed, 52px)
-│   └─ Tab buttons × 5 (Cameras | Alerts | Zones | Detections | Analytics)
+│   └─ Tab buttons × 5~6 (mode-dependent)
 │
 ├─ FullscreenCameraView (fixed overlay, conditional)
 └─ SettingsModal (fixed overlay, conditional)
 ```
+
+### 3.1 Mode-Dependent Navigation Policy
+
+| SERVER_MODE | Cameras Tab | Analytics Tab | Main Area |
+|---|---|---|---|
+| `combined` | 표시 | 표시 | CameraGrid |
+| `streaming` | 표시 | 숨김 | CameraGrid |
+| `analysis` | 숨김 | 표시 | Analysis status panel |
+
+- `analysis` 모드에서 카메라 레이아웃은 렌더링하지 않으며 메인 영역에 분석 서버 동작 상태 메시지를 표시합니다.
 
 ---
 
