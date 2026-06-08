@@ -187,14 +187,50 @@ router.post('/frame', express.json({ limit: '20mb' }), async (req, res) => {
     }
 
     const processingMs = Date.now() - t0;
+    const ts = timestamp || new Date().toISOString();
+
+    // ── Emit results to browser clients subscribed to this camera ────────────
+    const io           = req.app.get('io');
+    const alertService = req.app.get('alertService');
+
+    if (io) {
+      const allDetections = [
+        ...(enrichedObjects || []),
+        ...(fireSmoke || []),
+      ];
+      io.to(cameraId).emit('detections', {
+        cameraId,
+        frameId,
+        timestamp: ts,
+        detections: allDetections,
+        frameWidth,
+        frameHeight,
+      });
+    }
+
+    // ── Process behaviors: loitering alerts ──────────────────────────────────
+    const behaviors = behaviorsResult || [];
+    for (const b of behaviors) {
+      if (b.isLoitering || b.type === 'loitering') {
+        if (io)           io.to(cameraId).emit('loitering', { ...b, cameraId });
+        if (alertService) alertService.createAlert({ ...b, cameraId }).catch(() => {});
+      }
+    }
+
+    // ── Fire/smoke alerts ─────────────────────────────────────────────────────
+    if (io && fireSmoke.length > 0) {
+      for (const fs of fireSmoke) {
+        io.to(cameraId).emit('fire:alert', { cameraId, timestamp: ts, ...fs });
+      }
+    }
 
     res.json({
       cameraId,
       frameId,
-      timestamp:    timestamp || new Date().toISOString(),
+      timestamp:    ts,
       detections,
       tracked:      enrichedObjects,
-      behaviors:    behaviorsResult || [],
+      behaviors,
       fireSmoke,
       frameWidth,
       frameHeight,

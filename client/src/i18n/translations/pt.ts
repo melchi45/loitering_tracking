@@ -2,6 +2,8 @@ import type { Translations } from './en';
 
 export const pt: Translations = {
   appTitle: 'Painel de Detecção de Vadiagem',
+  serverModeAnalysis: 'Analysis Server',
+  serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
   connected: 'Conectado',
   disconnected: 'Desconectado',
   live: 'ao vivo',

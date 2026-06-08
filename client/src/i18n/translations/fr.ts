@@ -2,6 +2,8 @@ import type { Translations } from './en';
 
 export const fr: Translations = {
   appTitle: 'Tableau de Bord de Détection de Rôdeurs',
+  serverModeAnalysis: 'Analysis Server',
+  serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
   connected: 'Connecté',
   disconnected: 'Déconnecté',
   live: 'en direct',

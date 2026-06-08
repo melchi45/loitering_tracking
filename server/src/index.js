@@ -174,6 +174,7 @@ async function main() {
   // ── Services ─────────────────────────────────────────────────────────────
   const zoneManager         = new ZoneManager(db);
   const alertService        = new AlertService(db);
+  app.set('alertService', alertService); // accessible in analysisApi route handlers
   // Pass the shared ZoneManager so zone additions/deletions via REST API are
   // immediately visible to the pipeline without a server restart.
   const pipelineManager     = new PipelineManager(io, db, zoneManager);
@@ -428,10 +429,11 @@ async function main() {
   // Health check
   app.get('/health', (req, res) => {
     res.json({
-      status:    'ok',
-      uptime:    process.uptime(),
-      timestamp: new Date().toISOString(),
-      db:        'connected',
+      status:     'ok',
+      uptime:     process.uptime(),
+      timestamp:  new Date().toISOString(),
+      db:         'connected',
+      serverMode: SERVER_MODE,
     });
   });
 

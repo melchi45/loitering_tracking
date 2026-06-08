@@ -2,6 +2,8 @@ import type { Translations } from './en';
 
 export const zhCN: Translations = {
   appTitle: '徘徊检测仪表板',
+  serverModeAnalysis: 'Analysis Server',
+  serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
   connected: '已连接',
   disconnected: '已断开',
   live: '直播',

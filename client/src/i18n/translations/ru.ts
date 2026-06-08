@@ -2,6 +2,8 @@ import type { Translations } from './en';
 
 export const ru: Translations = {
   appTitle: 'Панель обнаружения бездельничества',
+  serverModeAnalysis: 'Analysis Server',
+  serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
   connected: 'Подключено',
   disconnected: 'Отключено',
   live: 'прямой эфир',

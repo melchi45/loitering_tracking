@@ -61,14 +61,21 @@ function getPidsOnWindows(ports) {
 function getPidsOnUnix(ports) {
   const pids = new Set();
   for (const port of ports) {
-    try {
-      const out = execSync(`lsof -ti tcp:${port} -sTCP:LISTEN`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
-      out.split(/\r?\n/).forEach((line) => {
-        const n = parseInt(line.trim(), 10);
-        if (Number.isFinite(n)) pids.add(n);
-      });
-    } catch {
-      // ignore per-port failures
+    // Try lsof with -sTCP:LISTEN (standard)
+    for (const cmd of [
+      `lsof -ti tcp:${port} -sTCP:LISTEN`,
+      `lsof -ti :${port}`,               // fallback: no TCP filter (catches IPv6 :::port)
+    ]) {
+      try {
+        const out = execSync(cmd, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+        out.split(/\r?\n/).forEach((line) => {
+          const n = parseInt(line.trim(), 10);
+          if (Number.isFinite(n)) pids.add(n);
+        });
+        if (pids.size > 0) break; // found with first command, no need for fallback
+      } catch {
+        // ignore per-command failures
+      }
     }
   }
   return Array.from(pids);

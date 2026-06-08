@@ -2,6 +2,8 @@ import type { Translations } from './en';
 
 export const vi: Translations = {
   appTitle: 'Bảng Điều Khiển Phát Hiện Lang Thang',
+  serverModeAnalysis: 'Analysis Server',
+  serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
   connected: 'Đã kết nối',
   disconnected: 'Mất kết nối',
   live: 'trực tiếp',

@@ -550,7 +550,8 @@ function Dashboard() {
     const saved = localStorage.getItem('lts-layout') as LayoutId | null;
     if (saved) return saved;
     return window.innerWidth < 768 ? '1' : '4';
-  });  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('cameras');
+  });
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('cameras');
 
   // Navigate to relevant sidebar tab when a search result is clicked
   const handleSearchNavigate = (result: SearchResult) => {
@@ -572,6 +573,7 @@ function Dashboard() {
   const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
   const [channelOffset, setChannelOffset] = useState(0);
   const swipeTouchStartX = useRef<number | null>(null);
+  const [serverMode, setServerMode] = useState<string | null>(null);
 
   const { socket, connected } = useSocket();
   const updateCameraStatus = useCameraStore((s) => s.updateCameraStatus);
@@ -597,6 +599,19 @@ function Dashboard() {
       })
       .catch(() => {});
   }, [setCameras]);
+
+  // Fetch server mode from health endpoint on mount
+  useEffect(() => {
+    fetch('/health')
+      .then((r) => r.json())
+      .then((data: { serverMode?: string }) => {
+        if (data.serverMode) {
+          setServerMode(data.serverMode);
+          if (data.serverMode === 'analysis') setSidebarTab('alerts');
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   // Hydrate person trajectory store on mount
   useEffect(() => {
@@ -745,14 +760,48 @@ function Dashboard() {
   }, [socket, updateCameraStatus, addAlert, addCrossCameraEvent, updatePerson]);
 
   // ── Shared: tab nav items ───────────────────────────────────────────────────
+  const isAnalysis = serverMode === 'analysis';
   const TAB_ITEMS = [
-    { id: 'cameras'    as SidebarTab, icon: '📷', label: t.tabCameras },
+    !isAnalysis && { id: 'cameras'    as SidebarTab, icon: '📷', label: t.tabCameras },
     { id: 'alerts'     as SidebarTab, icon: '🔔', label: t.tabAlerts },
     { id: 'zones'      as SidebarTab, icon: '🗺',  label: t.tabZones },
     { id: 'detections' as SidebarTab, icon: '👁',  label: t.tabDetections },
     { id: 'analytics'  as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
     { id: 'faces'      as SidebarTab, icon: '🪪',  label: t.tabFaceGallery },
-  ];
+  ].filter(Boolean) as { id: SidebarTab; icon: string; label: string }[];
+
+  // ── Analysis server status panel (replaces camera grid in analysis mode) ────
+  const AnalysisServerPanel = (
+    <div className="flex flex-col h-full items-center justify-center gap-6 p-8 text-center">
+      <div className="flex flex-col items-center gap-3">
+        <div className="w-14 h-14 rounded-full bg-amber-500/20 border border-amber-500/40 flex items-center justify-center">
+          <svg className="w-7 h-7 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
+              d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1 1 .03 2.798-1.332 2.798H4.13c-1.36 0-2.332-1.797-1.332-2.798L4 15.3" />
+          </svg>
+        </div>
+        <div>
+          <p className="text-base font-semibold text-amber-400">{t.serverModeAnalysis}</p>
+          <p className="text-xs text-gray-400 mt-1 max-w-xs">{t.serverModeAnalysisDesc}</p>
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3 w-full max-w-sm text-left">
+        <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
+          <p className="text-[10px] text-gray-500 uppercase tracking-wide mb-1">Socket</p>
+          <div className="flex items-center gap-1.5">
+            <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
+            <span className={`text-xs font-medium ${connected ? 'text-green-400' : 'text-red-400'}`}>
+              {connected ? t.connected : t.disconnected}
+            </span>
+          </div>
+        </div>
+        <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
+          <p className="text-[10px] text-gray-500 uppercase tracking-wide mb-1">Mode</p>
+          <span className="text-xs font-medium text-amber-400">analysis</span>
+        </div>
+      </div>
+    </div>
+  );
 
   // ── Shared: tab content renderer ────────────────────────────────────────────
   function renderTabContent() {
@@ -881,10 +930,17 @@ function Dashboard() {
               LTS
             </div>
             <h1 className="text-sm font-bold text-white whitespace-nowrap">{t.appTitle}</h1>
+            {serverMode === 'analysis' && (
+              <span className="px-1.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-400 text-xs font-medium whitespace-nowrap">
+                {t.serverModeAnalysis}
+              </span>
+            )}
           </div>
           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
           <div className="flex-1" />
-          <span className="text-[10px] text-gray-400">{cameras.filter(c => c.status === 'live' || c.status === 'streaming').length}/{cameras.length} {t.live}</span>
+          {!isAnalysis && (
+            <span className="text-[10px] text-gray-400">{cameras.filter(c => c.status === 'live' || c.status === 'streaming').length}/{cameras.length} {t.live}</span>
+          )}
           {statsBtn}
           {settingsBtn}
           {userMenu}
@@ -892,7 +948,7 @@ function Dashboard() {
 
         {/* Mobile content area */}
         <div className="flex-1 overflow-hidden">
-          {sidebarTab === 'cameras' ? (
+          {!isAnalysis && sidebarTab === 'cameras' ? (
             /* Cameras tab: full area swipeable (grid 58% + list 42%) */
             (() => {
               const def = LAYOUT_DEFS.find((d) => d.id === layout)!;
@@ -1019,6 +1075,14 @@ function Dashboard() {
           <h1 className="text-sm font-bold text-white whitespace-nowrap">
             {t.appTitle}
           </h1>
+          {serverMode === 'analysis' && (
+            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-400 text-xs font-medium whitespace-nowrap">
+              <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
+                <path d="M10 2a8 8 0 100 16A8 8 0 0010 2zm0 3a1 1 0 011 1v4a1 1 0 11-2 0V6a1 1 0 011-1zm0 8a1 1 0 100 2 1 1 0 000-2z" />
+              </svg>
+              {t.serverModeAnalysis}
+            </span>
+          )}
         </div>
 
         {/* Connection status */}
@@ -1038,16 +1102,20 @@ function Dashboard() {
           onFullscreen={(q) => { setSearchFullscreenQuery(q); setShowSearchFullscreen(true); }}
         />
 
-        {/* Camera count */}
-        <span className="text-xs text-gray-400">
-          {cameras.filter((c) => c.status === 'live' || c.status === 'streaming').length}/{cameras.length} {t.live}
-        </span>
+        {/* Camera count — hidden in analysis mode */}
+        {!isAnalysis && (
+          <span className="text-xs text-gray-400">
+            {cameras.filter((c) => c.status === 'live' || c.status === 'streaming').length}/{cameras.length} {t.live}
+          </span>
+        )}
 
-        {/* Layout picker */}
-        <LayoutPicker current={layout} onChange={(id) => {
-          setLayout(id); setChannelOffset(0); localStorage.setItem('lts-layout', id);
-          fetch('/api/settings/layout', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: id }) }).catch(() => {});
-        }} />
+        {/* Layout picker — hidden in analysis mode */}
+        {!isAnalysis && (
+          <LayoutPicker current={layout} onChange={(id) => {
+            setLayout(id); setChannelOffset(0); localStorage.setItem('lts-layout', id);
+            fetch('/api/settings/layout', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: id }) }).catch(() => {});
+          }} />
+        )}
 
         {statsBtn}
         {settingsBtn}
@@ -1080,9 +1148,9 @@ function Dashboard() {
           }}
         />
 
-        {/* Camera grid - main area */}
+        {/* Main area — camera grid in combined mode, status panel in analysis mode */}
         <main className="flex-1 overflow-hidden p-2 relative">
-          {(() => {
+          {isAnalysis ? AnalysisServerPanel : (() => {
             const def      = LAYOUT_DEFS.find((d) => d.id === layout)!;
             const pageSize = def.channels;
             const canPrev  = channelOffset > 0;
@@ -1094,7 +1162,6 @@ function Dashboard() {
                   onCameraDoubleClick={setFullscreenCameraId}
                   startIndex={channelOffset}
                 />
-                {/* Previous channel page button */}
                 {canPrev && (
                   <button
                     className="absolute left-3 top-1/2 -translate-y-1/2 z-20 bg-black/60 hover:bg-black/80 text-white w-8 h-14 flex items-center justify-center rounded-r-lg transition-colors shadow-lg"
@@ -1106,7 +1173,6 @@ function Dashboard() {
                     </svg>
                   </button>
                 )}
-                {/* Next channel page button */}
                 {canNext && (
                   <button
                     className="absolute right-3 top-1/2 -translate-y-1/2 z-20 bg-black/60 hover:bg-black/80 text-white w-8 h-14 flex items-center justify-center rounded-l-lg transition-colors shadow-lg"
@@ -1118,15 +1184,15 @@ function Dashboard() {
                     </svg>
                   </button>
                 )}
+                {selectedDiscovered && (
+                  <DiscoveredCameraPanel
+                    camera={selectedDiscovered}
+                    onClose={() => selectDiscovered(null)}
+                  />
+                )}
               </>
             );
           })()}
-          {selectedDiscovered && (
-            <DiscoveredCameraPanel
-              camera={selectedDiscovered}
-              onClose={() => selectDiscovered(null)}
-            />
-          )}
         </main>
 
         {/* Sidebar */}

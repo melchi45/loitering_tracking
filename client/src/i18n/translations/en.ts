@@ -3,6 +3,8 @@ export const en = {
   appTitle: 'Loitering Detection Dashboard',
   connected: 'Connected',
   disconnected: 'Disconnected',
+  serverModeAnalysis: 'Analysis Server',
+  serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
   live: 'live',
   layoutLabel: 'Layout',
   settings: 'Settings',

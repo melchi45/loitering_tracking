@@ -2,6 +2,8 @@ import type { Translations } from './en';
 
 export const hi: Translations = {
   appTitle: 'आवारागर्दी पहचान डैशबोर्ड',
+  serverModeAnalysis: 'Analysis Server',
+  serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
   connected: 'जुड़ा हुआ',
   disconnected: 'डिस्कनेक्ट',
   live: 'लाइव',

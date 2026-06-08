@@ -4,6 +4,8 @@ export const ko: Translations = {
   appTitle: '배회 감지 대시보드',
   connected: '연결됨',
   disconnected: '연결 끊김',
+  serverModeAnalysis: '분석 전용 서버',
+  serverModeAnalysisDesc: '이 서버는 AI 추론만 처리합니다. 카메라 스트림은 별도의 스트리밍 서버에서 관리됩니다.',
   live: '라이브',
   layoutLabel: '레이아웃',
   settings: '설정',
