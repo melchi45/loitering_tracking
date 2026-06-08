@@ -115,8 +115,7 @@ router.post('/frame', express.json({ limit: '20mb' }), async (req, res) => {
       frameId,
       timestamp,
       frame,
-      zones           = [],
-      analyticsConfig: remoteAnalyticsConfig,
+      zones = [],
     } = req.body;
 
     if (!cameraId || !frame) {
@@ -125,10 +124,9 @@ router.post('/frame', express.json({ limit: '20mb' }), async (req, res) => {
 
     const jpegBuffer = Buffer.from(frame, 'base64');
 
-    // Merge remote analytics config into local (remote takes precedence)
-    if (remoteAnalyticsConfig) {
-      analyticsConfig.mergeRemote(remoteAnalyticsConfig);
-    }
+    // Use the analysis server's own analyticsConfig (managed independently via its DB/settings).
+    // remoteAnalyticsConfig from the streaming server is intentionally ignored here —
+    // the analysis server admin controls which modules are enabled on this node.
 
     await _ensureServices();
 
