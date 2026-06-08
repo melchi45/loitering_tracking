@@ -106,6 +106,8 @@ npm run preview      # 빌드 결과 미리보기
 
 | 구분 | 문서 |
 |------|------|
+| RFP | [RFP_Dashboard_Layout](../../../docs/rfp/RFP_Dashboard_Layout.md) · [RFP_Dashboard_Detection_Display](../../../docs/rfp/RFP_Dashboard_Detection_Display.md) · [RFP_Dashboard_Sidebar_Cameras](../../../docs/rfp/RFP_Dashboard_Sidebar_Cameras.md) · [RFP_Dashboard_Sidebar_Alerts_Zones](../../../docs/rfp/RFP_Dashboard_Sidebar_Alerts_Zones.md) |
+| RFP | [RFP_Dashboard_Sidebar_Face_ID](../../../docs/rfp/RFP_Dashboard_Sidebar_Face_ID.md) · [RFP_Mobile_Layout](../../../docs/rfp/RFP_Mobile_Layout.md) · [RFP_Stats_Panel](../../../docs/rfp/RFP_Stats_Panel.md) · [RFP_Detection_Snapshot_Search](../../../docs/rfp/RFP_Detection_Snapshot_Search.md) |
 | PRD | [PRD_Dashboard_Layout](../../../docs/prd/PRD_Dashboard_Layout.md) · [PRD_Dashboard_Detection_Display](../../../docs/prd/PRD_Dashboard_Detection_Display.md) · [PRD_Dashboard_Sidebar_Cameras](../../../docs/prd/PRD_Dashboard_Sidebar_Cameras.md) |
 | PRD | [PRD_Dashboard_Sidebar_Alerts_Zones](../../../docs/prd/PRD_Dashboard_Sidebar_Alerts_Zones.md) · [PRD_Dashboard_Sidebar_Face_ID](../../../docs/prd/PRD_Dashboard_Sidebar_Face_ID.md) · [PRD_Dashboard_Search_Fullscreen](../../../docs/prd/PRD_Dashboard_Search_Fullscreen.md) · [PRD_Mobile_Layout](../../../docs/prd/PRD_Mobile_Layout.md) · [PRD_Stats_Panel](../../../docs/prd/PRD_Stats_Panel.md) |
 | SRS | [SRS_Dashboard_Layout](../../../docs/srs/SRS_Dashboard_Layout.md) · [SRS_Dashboard_Sidebar_Cameras](../../../docs/srs/SRS_Dashboard_Sidebar_Cameras.md) · [SRS_Dashboard_Sidebar_Alerts_Zones](../../../docs/srs/SRS_Dashboard_Sidebar_Alerts_Zones.md) · [SRS_Mobile_Layout](../../../docs/srs/SRS_Mobile_Layout.md) |

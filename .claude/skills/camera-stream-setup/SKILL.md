@@ -266,6 +266,7 @@ yt-dlp -F https://youtube.com/watch?v=...
 
 | 구분 | 문서 |
 |------|------|
+| RFP | [RFP_Video_Capture_Pipeline](../../../docs/rfp/RFP_Video_Capture_Pipeline.md) · [RFP_Camera_Discovery](../../../docs/rfp/RFP_Camera_Discovery.md) · [RFP_WebRTC_Media_Gateway](../../../docs/rfp/RFP_WebRTC_Media_Gateway.md) · [RFP_STUN_TURN_ICE](../../../docs/rfp/RFP_STUN_TURN_ICE.md) · [RFP_LTS2026_YouTube_RTSP_Ingest](../../../docs/rfp/RFP_LTS2026_YouTube_RTSP_Ingest.md) · [RFP_YouTube_RTSP_Ingest](../../../docs/rfp/RFP_YouTube_RTSP_Ingest.md) |
 | PRD | [PRD_LTS2026_YouTube_RTSP_Ingest](../../../docs/prd/PRD_LTS2026_YouTube_RTSP_Ingest.md) · [PRD_Camera_Discovery](../../../docs/prd/PRD_Camera_Discovery.md) · [PRD_WebRTC_Media_Gateway](../../../docs/prd/PRD_WebRTC_Media_Gateway.md) · [PRD_STUN_TURN_ICE](../../../docs/prd/PRD_STUN_TURN_ICE.md) |
 | SRS | [SRS_LTS2026_YouTube_RTSP_Ingest](../../../docs/srs/SRS_LTS2026_YouTube_RTSP_Ingest.md) · [SRS_Camera_Discovery](../../../docs/srs/SRS_Camera_Discovery.md) · [SRS_WebRTC_Media_Gateway](../../../docs/srs/SRS_WebRTC_Media_Gateway.md) · [SRS_STUN_TURN_ICE](../../../docs/srs/SRS_STUN_TURN_ICE.md) |
 | Design | [Design_RTSP_Capture_Backend](../../../docs/design/Design_RTSP_Capture_Backend.md) · [Design_FFmpeg_RTSP_Capture](../../../docs/design/Design_FFmpeg_RTSP_Capture.md) · [Design_WebRTC_Media_Gateway](../../../docs/design/Design_WebRTC_Media_Gateway.md) |

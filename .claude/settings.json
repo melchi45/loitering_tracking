@@ -5,7 +5,12 @@
       "Edit(*)",
       "Write(*)",
       "Read(*)",
-      "Edit(/.claude/skills/camera-stream-setup/**)"
+      "Edit(/.claude/skills/camera-stream-setup/**)",
+      "Edit(/.claude/skills/zone-alert-management/**)",
+      "Edit(/.claude/skills/cross-camera-face-reid/**)",
+      "Edit(/.claude/skills/docker-deploy/**)",
+      "Edit(/.claude/skills/api-testing/**)",
+      "Edit(/.claude/skills/jira-integration/**)"
     ],
     "additionalDirectories": [
       "/home/melchi45"

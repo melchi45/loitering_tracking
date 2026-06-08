@@ -120,6 +120,7 @@ const TC_DOC_IDS = {
 
 | 구분 | 문서 |
 |------|------|
+| RFP | [RFP_LLM_MCP_Integration](../../../docs/rfp/RFP_LLM_MCP_Integration.md) · [RFP_LTS2026_Loitering_Tracking_System](../../../docs/rfp/RFP_LTS2026_Loitering_Tracking_System.md) |
 | TC (전체) | [`docs/tc/`](../../../docs/tc/) — 모든 TC 문서; `TC_DOC_IDS` 매핑의 기준 |
 | SRS | [SRS_LTS2026_Loitering_Tracking_System](../../../docs/srs/SRS_LTS2026_Loitering_Tracking_System.md) — TC 요구사항 추적성 원본 |
 
