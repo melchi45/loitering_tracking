@@ -45,7 +45,8 @@ const registerWebRTCHandlers = require('./socket/webrtcSignaling');
 const registerWebRTCTelemetryHandlers = require('./socket/webrtcTelemetryHandlers');
 const { runOnnxStartupDiagnostics } = require('./utils/onnxOptions');
 
-const PORT = parseInt(process.env.HTTP_PORT || '3080', 10);
+const PORT        = parseInt(process.env.HTTP_PORT || '3080', 10);
+const SERVER_MODE = process.env.SERVER_MODE || 'combined';
 
 /** Resolve true if `ffmpeg` is executable, false otherwise. */
 function checkFfmpeg() {
@@ -58,23 +59,27 @@ function checkFfmpeg() {
 }
 
 async function main() {
-  // ── ffmpeg availability check ────────────────────────────────────────────
-  const hasFfmpeg = await checkFfmpeg();
-  if (!hasFfmpeg) {
-    console.error('');
-    console.error('╔══════════════════════════════════════════════════════════╗');
-    console.error('║  ERROR: ffmpeg not found                                 ║');
-    console.error('║                                                          ║');
-    console.error('║  ffmpeg is required to capture RTSP camera streams.     ║');
-    console.error('║                                                          ║');
-    console.error('║  Install ffmpeg and retry:                               ║');
-    console.error('║    Ubuntu/Debian : sudo apt install ffmpeg               ║');
-    console.error('║    macOS         : brew install ffmpeg                   ║');
-    console.error('║    Windows       : winget install ffmpeg                 ║');
-    console.error('║    Docker        : ffmpeg is included in the image       ║');
-    console.error('╚══════════════════════════════════════════════════════════╝');
-    console.error('');
-    process.exit(1);
+  console.log(`[Server] Starting in mode: ${SERVER_MODE}`);
+
+  // ── ffmpeg availability check (not required in analysis-only mode) ───────
+  if (SERVER_MODE !== 'analysis') {
+    const hasFfmpeg = await checkFfmpeg();
+    if (!hasFfmpeg) {
+      console.error('');
+      console.error('╔══════════════════════════════════════════════════════════╗');
+      console.error('║  ERROR: ffmpeg not found                                 ║');
+      console.error('║                                                          ║');
+      console.error('║  ffmpeg is required to capture RTSP camera streams.     ║');
+      console.error('║                                                          ║');
+      console.error('║  Install ffmpeg and retry:                               ║');
+      console.error('║    Ubuntu/Debian : sudo apt install ffmpeg               ║');
+      console.error('║    macOS         : brew install ffmpeg                   ║');
+      console.error('║    Windows       : winget install ffmpeg                 ║');
+      console.error('║    Docker        : ffmpeg is included in the image       ║');
+      console.error('╚══════════════════════════════════════════════════════════╝');
+      console.error('');
+      process.exit(1);
+    }
   }
 
   // ── ONNX provider startup diagnostics (CUDA/DML availability) ──────────
@@ -202,6 +207,13 @@ async function main() {
 
   // System-wide Stats Dashboard
   app.use('/api/stats',     buildStatsRouter(db));
+
+  // Analysis API — exposed when this process acts as an AI analysis server
+  if (SERVER_MODE === 'analysis' || SERVER_MODE === 'combined') {
+    const analysisApiRouter = require('./routes/analysisApi');
+    app.use('/api/analysis', analysisApiRouter);
+    console.log('[Server] Analysis API mounted at /api/analysis');
+  }
   // Defer ONNX model loading by 3 seconds so the HTTP server can accept requests
   // immediately on startup without the event loop being blocked by session creation.
   setTimeout(() => {
@@ -475,23 +487,28 @@ async function main() {
   discoverySvc.start();
 
   // ── Auto-start all registered cameras on startup (deferred) ─────────────
+  // Skipped in analysis-only mode — this process has no capture backend.
   // Delay pipeline start so HTTP server is fully ready before ONNX loading
   // blocks the event loop.  Each camera starts with a staggered 500 ms gap
   // to spread the CPU load rather than hitting it all at once.
-  try {
-    const allCameras = db.find('cameras', {});
-    if (allCameras.length > 0) {
-      console.log(`[Server] Scheduling ${allCameras.length} camera pipeline(s) (deferred 5 s)`);
-      allCameras.forEach((cam, i) => {
-        setTimeout(() => {
-          pipelineManager.startCamera(cam).catch((err) => {
-            console.error(`[Server] Auto-start failed for camera ${cam.id}:`, err.message);
-          });
-        }, 5000 + i * 500);
-      });
+  if (SERVER_MODE !== 'analysis') {
+    try {
+      const allCameras = db.find('cameras', {});
+      if (allCameras.length > 0) {
+        console.log(`[Server] Scheduling ${allCameras.length} camera pipeline(s) (deferred 5 s)`);
+        allCameras.forEach((cam, i) => {
+          setTimeout(() => {
+            pipelineManager.startCamera(cam).catch((err) => {
+              console.error(`[Server] Auto-start failed for camera ${cam.id}:`, err.message);
+            });
+          }, 5000 + i * 500);
+        });
+      }
+    } catch (err) {
+      console.warn('[Server] Could not auto-start cameras:', err.message);
     }
-  } catch (err) {
-    console.warn('[Server] Could not auto-start cameras:', err.message);
+  } else {
+    console.log('[Server] Analysis mode — skipping camera auto-start');
   }
 
   // ── Start listening ───────────────────────────────────────────────────────

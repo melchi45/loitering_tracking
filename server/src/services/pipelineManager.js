@@ -51,6 +51,8 @@ const AttributePipeline = require('./attributePipeline');
 const FireSmokeService  = require('./fireSmokeService');
 const analyticsConfig  = require('./analyticsConfig');
 
+const SERVER_MODE = process.env.SERVER_MODE || 'combined';
+
 // ─── Face gallery helpers ─────────────────────────────────────────────────────
 
 // Dot product of two L2-normalised ArcFace embeddings == cosine similarity
@@ -101,6 +103,7 @@ class PipelineManager {
     this._detector        = null;  // Shared YOLOv8n instance
     this._attrPipeline    = null;  // Shared attribute pipeline
     this._fireSmokeService = null; // Shared fire/smoke detector
+    this._analysisClient   = null; // Remote analysis client (streaming mode only)
     this._fireAlertCooldown = new Map(); // `${cameraId}:${zoneName}:${cls}` → lastAlertTs
     // Shared face gallery across all cameras — enables cross-camera Re-ID.
     // Each entry: { faceId, embedding, lastSeenAt, lastCameraId }
@@ -156,29 +159,45 @@ class PipelineManager {
       return;
     }
 
-    // Lazy-load detector (shared across cameras)
-    if (!this._detector) {
-      this._detector = new DetectionService();
-      await this._detector.load().catch((err) => {
-        console.warn('[PipelineManager] ONNX model not loaded — detection disabled:', err.message);
-        this._detector = null;
-      });
-    }
+    // In streaming mode connect to a remote AI analysis server; in combined/analysis
+    // mode load AI models locally (lazy — shared across all cameras).
+    if (SERVER_MODE === 'streaming') {
+      if (!this._analysisClient) {
+        const AnalysisClient = require('./analysisClient');
+        const url = process.env.ANALYSIS_SERVER_URL;
+        if (!url) {
+          console.error('[PipelineManager] SERVER_MODE=streaming requires ANALYSIS_SERVER_URL in .env');
+          return;
+        }
+        this._analysisClient = new AnalysisClient(url);
+        const health = await this._analysisClient.healthCheck();
+        console.log('[PipelineManager] Analysis server health:', JSON.stringify(health));
+      }
+    } else {
+      // Lazy-load detector (shared across cameras)
+      if (!this._detector) {
+        this._detector = new DetectionService();
+        await this._detector.load().catch((err) => {
+          console.warn('[PipelineManager] ONNX model not loaded — detection disabled:', err.message);
+          this._detector = null;
+        });
+      }
 
-    // Lazy-load attribute pipeline (face / PPE / color)
-    if (!this._attrPipeline) {
-      this._attrPipeline = new AttributePipeline();
-      await this._attrPipeline.load().catch((err) => {
-        console.warn('[PipelineManager] AttributePipeline load warn:', err.message);
-      });
-    }
+      // Lazy-load attribute pipeline (face / PPE / color)
+      if (!this._attrPipeline) {
+        this._attrPipeline = new AttributePipeline();
+        await this._attrPipeline.load().catch((err) => {
+          console.warn('[PipelineManager] AttributePipeline load warn:', err.message);
+        });
+      }
 
-    // Lazy-load fire/smoke service
-    if (!this._fireSmokeService) {
-      this._fireSmokeService = new FireSmokeService();
-      await this._fireSmokeService.load().catch((err) => {
-        console.warn('[PipelineManager] FireSmokeService load warn:', err.message);
-      });
+      // Lazy-load fire/smoke service
+      if (!this._fireSmokeService) {
+        this._fireSmokeService = new FireSmokeService();
+        await this._fireSmokeService.load().catch((err) => {
+          console.warn('[PipelineManager] FireSmokeService load warn:', err.message);
+        });
+      }
     }
 
     const rtspUrl  = this._buildRtspUrl(camera);
@@ -259,6 +278,38 @@ class PipelineManager {
       ctx._inferring = true;
 
       try {
+        // ── Streaming mode: delegate all AI inference to remote analysis server ──
+        if (SERVER_MODE === 'streaming' && this._analysisClient) {
+          const zones = this._zoneManager.getActiveZones(camera.id);
+          const result = await this._analysisClient.analyzeFrame({
+            cameraId:        camera.id,
+            frameId:         currentFrameId,
+            timestamp:       new Date(timestamp).toISOString(),
+            jpegBuffer,
+            zones,
+            analyticsConfig: analyticsConfig.getConfig(),
+          });
+          if (result) {
+            this._io.to(camera.id).emit('detections', {
+              cameraId:   camera.id,
+              frameId:    currentFrameId,
+              timestamp,
+              detections: [...(result.tracked || []), ...(result.fireSmoke || [])],
+              frameWidth:  result.frameWidth  || frameWidth,
+              frameHeight: result.frameHeight || frameHeight,
+            });
+            for (const b of (result.behaviors || [])) {
+              if (b.isLoitering || b.type === 'loitering') {
+                this._io.to(camera.id).emit('loitering', b);
+                this._alertService.createAlert({ ...b, cameraId: camera.id }).catch((err) => {
+                  console.error('[PipelineManager] Alert creation failed:', err.message);
+                });
+              }
+            }
+          }
+          return; // skip local inference below
+        }
+
         // 2. Run detection — skipped entirely if no detection module is enabled
         let detections = [];
         if (this._detector && analyticsConfig.anyDetectionEnabled()) {

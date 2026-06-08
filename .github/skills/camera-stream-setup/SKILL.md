@@ -278,12 +278,18 @@ yt-dlp -F https://youtube.com/watch?v=...
 | 구분 | 문서 |
 |------|------|
 | RFP | [RFP_Video_Capture_Pipeline](../../../docs/rfp/RFP_Video_Capture_Pipeline.md) · [RFP_Camera_Discovery](../../../docs/rfp/RFP_Camera_Discovery.md) · [RFP_WebRTC_Media_Gateway](../../../docs/rfp/RFP_WebRTC_Media_Gateway.md) · [RFP_STUN_TURN_ICE](../../../docs/rfp/RFP_STUN_TURN_ICE.md) · [RFP_LTS2026_YouTube_RTSP_Ingest](../../../docs/rfp/RFP_LTS2026_YouTube_RTSP_Ingest.md) · [RFP_YouTube_RTSP_Ingest](../../../docs/rfp/RFP_YouTube_RTSP_Ingest.md) |
+| RFP | [RFP_Distributed_AI_Pipeline](../../../docs/rfp/RFP_Distributed_AI_Pipeline.md) — 스트리밍/분석 서버 분리 (SERVER_MODE) |
 | PRD | [PRD_LTS2026_YouTube_RTSP_Ingest](../../../docs/prd/PRD_LTS2026_YouTube_RTSP_Ingest.md) · [PRD_Camera_Discovery](../../../docs/prd/PRD_Camera_Discovery.md) · [PRD_WebRTC_Media_Gateway](../../../docs/prd/PRD_WebRTC_Media_Gateway.md) · [PRD_STUN_TURN_ICE](../../../docs/prd/PRD_STUN_TURN_ICE.md) |
+| PRD | [PRD_Distributed_AI_Pipeline](../../../docs/prd/PRD_Distributed_AI_Pipeline.md) — 스트리밍 서버 프레임 포워딩 제품 요구사항 |
 | SRS | [SRS_LTS2026_YouTube_RTSP_Ingest](../../../docs/srs/SRS_LTS2026_YouTube_RTSP_Ingest.md) · [SRS_Camera_Discovery](../../../docs/srs/SRS_Camera_Discovery.md) · [SRS_WebRTC_Media_Gateway](../../../docs/srs/SRS_WebRTC_Media_Gateway.md) · [SRS_STUN_TURN_ICE](../../../docs/srs/SRS_STUN_TURN_ICE.md) |
+| SRS | [SRS_Distributed_AI_Pipeline](../../../docs/srs/SRS_Distributed_AI_Pipeline.md) — ANALYSIS_SERVER_URL, back-pressure, 결과 오버레이 요구사항 |
 | Design | [Design_RTSP_Capture_Backend](../../../docs/design/Design_RTSP_Capture_Backend.md) · [Design_FFmpeg_RTSP_Capture](../../../docs/design/Design_FFmpeg_RTSP_Capture.md) · [Design_WebRTC_Media_Gateway](../../../docs/design/Design_WebRTC_Media_Gateway.md) |
 | Design | [Design_Camera_Discovery](../../../docs/design/Design_Camera_Discovery.md) · [Design_YouTube_RTSP_Ingest](../../../docs/design/Design_YouTube_RTSP_Ingest.md) · [Design_STUN_TURN_ICE](../../../docs/design/Design_STUN_TURN_ICE.md) |
+| Design | [Design_Distributed_AI_Pipeline](../../../docs/design/Design_Distributed_AI_Pipeline.md) — 분산 파이프라인 아키텍처 설계 |
 | TC | [TC_RTSP_Capture_Backend](../../../docs/tc/TC_RTSP_Capture_Backend.md) · [TC_FFmpeg_RTSP_Capture](../../../docs/tc/TC_FFmpeg_RTSP_Capture.md) · [TC_WebRTC_Media_Gateway](../../../docs/tc/TC_WebRTC_Media_Gateway.md) · [TC_STUN_TURN_ICE](../../../docs/tc/TC_STUN_TURN_ICE.md) |
+| TC | [TC_Distributed_AI_Pipeline](../../../docs/tc/TC_Distributed_AI_Pipeline.md) — SERVER_MODE별 기능 테스트 케이스 |
 | Ops | [RTSP_Capture_Backend_Setup](../../../docs/ops/RTSP_Capture_Backend_Setup.md) · [FFmpeg_Installation_Compatibility](../../../docs/ops/FFmpeg_Installation_Compatibility.md) |
+| Ops | [Distributed_AI_Pipeline_Setup](../../../docs/ops/Distributed_AI_Pipeline_Setup.md) — 분산 배포 운영 가이드 |
 
 ## 코드 수정 시 문서 동기화 의무
 
@@ -299,6 +305,8 @@ yt-dlp -F https://youtube.com/watch?v=...
 | `mediamtx.yml` | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/ops/RTSP_Capture_Backend_Setup.md` |
 | ffmpeg 버전 호환성 변경 | `docs/design/Design_FFmpeg_RTSP_Capture.md`, `docs/ops/FFmpeg_Installation_Compatibility.md`, `docs/tc/TC_FFmpeg_RTSP_Capture.md` |
 | coturn / TURN 설정 변경 | `docs/design/Design_STUN_TURN_ICE.md`, `docs/tc/TC_STUN_TURN_ICE.md` |
+| `services/analysisClient.js` (back-pressure, timeout) | `docs/design/Design_Distributed_AI_Pipeline.md`, `docs/srs/SRS_Distributed_AI_Pipeline.md`, `docs/tc/TC_Distributed_AI_Pipeline.md` |
+| `.env` `SERVER_MODE`, `ANALYSIS_SERVER_URL` 변경 | `docs/design/Design_Distributed_AI_Pipeline.md`, `docs/ops/Distributed_AI_Pipeline_Setup.md` |
 
 **공통 규칙**
 - **새 기능 추가** → PRD + SRS + Design + TC 문서 모두 신규 작성 또는 기존 문서에 항목 추가
