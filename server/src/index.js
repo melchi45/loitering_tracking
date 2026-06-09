@@ -209,6 +209,13 @@ async function main() {
     const analysisApiRouter = require('./routes/analysisApi');
     app.use('/api/analysis', analysisApiRouter);
     console.log('[Server] Analysis API mounted at /api/analysis');
+  } else if (SERVER_MODE === 'streaming' && process.env.ANALYSIS_SERVER_URL) {
+    // In streaming mode, proxy read-only analysis endpoints to the remote analysis
+    // server so the dashboard can display metrics without the browser needing to
+    // know (or CORS-allow) the analysis server's origin.
+    const analysisProxyRouter = require('./routes/analysisProxy');
+    app.use('/api/analysis', analysisProxyRouter);
+    console.log('[Server] Analysis proxy mounted at /api/analysis →', process.env.ANALYSIS_SERVER_URL);
   }
   // Defer ONNX model loading by 3 seconds so the HTTP server can accept requests
   // immediately on startup without the event loop being blocked by session creation.
