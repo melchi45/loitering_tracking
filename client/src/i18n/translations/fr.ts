@@ -4,6 +4,8 @@ export const fr: Translations = {
   appTitle: 'Tableau de Bord de Détection de Rôdeurs',
   serverModeAnalysis: 'Analysis Server',
   serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
+  switchToAnalysis: "Tableau d'analyse",
+  switchToStreaming: 'Tableau de streaming',
   connected: 'Connecté',
   disconnected: 'Déconnecté',
   live: 'en direct',

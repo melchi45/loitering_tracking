@@ -4,6 +4,8 @@ export const de: Translations = {
   appTitle: 'Herumtreiben-Erkennungs-Dashboard',
   serverModeAnalysis: 'Analysis Server',
   serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
+  switchToAnalysis: 'Analyse-Dashboard',
+  switchToStreaming: 'Streaming-Dashboard',
   connected: 'Verbunden',
   disconnected: 'Getrennt',
   live: 'live',

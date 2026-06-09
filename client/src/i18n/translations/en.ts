@@ -5,6 +5,8 @@ export const en = {
   disconnected: 'Disconnected',
   serverModeAnalysis: 'Analysis Server',
   serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
+  switchToAnalysis: 'Analysis Dashboard',
+  switchToStreaming: 'Streaming Dashboard',
   live: 'live',
   layoutLabel: 'Layout',
   settings: 'Settings',

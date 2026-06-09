@@ -4,6 +4,8 @@ export const ar: Translations = {
   appTitle: 'لوحة تحكم كشف التسكع',
   serverModeAnalysis: 'Analysis Server',
   serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
+  switchToAnalysis: 'لوحة التحليل',
+  switchToStreaming: 'لوحة البث',
   connected: 'متصل',
   disconnected: 'غير متصل',
   live: 'مباشر',

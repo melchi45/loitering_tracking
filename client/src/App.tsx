@@ -577,6 +577,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
   const [channelOffset, setChannelOffset] = useState(0);
   const swipeTouchStartX = useRef<number | null>(null);
   const [serverMode, setServerMode] = useState<string | null>(null);
+  const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
 
   const { socket, connected } = useSocket();
   const updateCameraStatus = useCameraStore((s) => s.updateCameraStatus);
@@ -616,6 +617,14 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
       })
       .catch(() => {});
   }, []);
+
+  // Redirect /analysis to / when server is streaming-only
+  useEffect(() => {
+    if (serverMode === 'streaming' && currentPath === '/analysis') {
+      window.history.replaceState({}, '', '/');
+      setCurrentPath('/');
+    }
+  }, [serverMode, currentPath]);
 
   // Hydrate person trajectory store on mount
   useEffect(() => {
@@ -754,9 +763,21 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
     };
   }, [socket, updateCameraStatus, addAlert, addCrossCameraEvent, updatePerson]);
 
+  // ── Dashboard routing ────────────────────────────────────────────────────────
+  // combined + /analysis  →  show analysis dashboard
+  // analysis              →  always analysis dashboard
+  // everything else       →  streaming dashboard
+  const isAnalysis = serverMode === 'analysis' ||
+    (serverMode === 'combined' && currentPath === '/analysis');
+  const isCombined = serverMode === 'combined';
+
+  function navigateDashboard(path: '/' | '/analysis') {
+    window.history.pushState({}, '', path);
+    setCurrentPath(path);
+  }
+
   // ── Shared: tab nav items ───────────────────────────────────────────────────
-  const isAnalysis = serverMode === 'analysis';
-  const isStreaming = serverMode === 'streaming';
+  // In combined mode the analytics tab lives at /analysis — no inline tab.
   const TAB_ITEMS = isAnalysis
     ? [{ id: 'analytics' as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics }]
     : [
@@ -764,20 +785,19 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
         { id: 'alerts'     as SidebarTab, icon: '🔔', label: t.tabAlerts },
         { id: 'zones'      as SidebarTab, icon: '🗺',  label: t.tabZones },
         { id: 'detections' as SidebarTab, icon: '👁',  label: t.tabDetections },
-        !isStreaming && { id: 'analytics'  as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
         { id: 'faces'      as SidebarTab, icon: '🪪',  label: t.tabFaceGallery },
       ].filter(Boolean) as { id: SidebarTab; icon: string; label: string }[];
 
-  // If mode changes and current tab is hidden by policy, move to a valid tab.
+  // If dashboard context changes, reset to a valid tab.
   useEffect(() => {
-    if (serverMode === 'analysis' && sidebarTab !== 'analytics') {
+    if (isAnalysis && sidebarTab !== 'analytics') {
       setSidebarTab('analytics');
       return;
     }
-    if (serverMode === 'streaming' && sidebarTab === 'analytics') {
-      setSidebarTab('detections');
+    if (!isAnalysis && sidebarTab === 'analytics') {
+      setSidebarTab('cameras');
     }
-  }, [serverMode, sidebarTab]);
+  }, [isAnalysis, sidebarTab]);
 
   // ── Analysis server status panel (replaces camera grid in analysis mode) ────
   const AnalysisServerPanel = (
@@ -917,10 +937,18 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
               LTS
             </div>
             <h1 className="text-sm font-bold text-white whitespace-nowrap">{t.appTitle}</h1>
-            {serverMode === 'analysis' && (
+            {isAnalysis && (
               <span className="px-1.5 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-400 text-xs font-medium whitespace-nowrap">
                 {t.serverModeAnalysis}
               </span>
+            )}
+            {isCombined && (
+              <button
+                onClick={() => navigateDashboard(isAnalysis ? '/' : '/analysis')}
+                className="px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium transition-colors"
+              >
+                {isAnalysis ? '📹' : '🤖'}
+              </button>
             )}
           </div>
           <span className={`w-2 h-2 rounded-full flex-shrink-0 ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
@@ -1062,13 +1090,24 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
           <h1 className="text-sm font-bold text-white whitespace-nowrap">
             {t.appTitle}
           </h1>
-          {serverMode === 'analysis' && (
+          {isAnalysis && (
             <span className="flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/20 border border-amber-500/40 text-amber-400 text-xs font-medium whitespace-nowrap">
               <svg className="w-3 h-3 flex-shrink-0" viewBox="0 0 20 20" fill="currentColor">
                 <path d="M10 2a8 8 0 100 16A8 8 0 0010 2zm0 3a1 1 0 011 1v4a1 1 0 11-2 0V6a1 1 0 011-1zm0 8a1 1 0 100 2 1 1 0 000-2z" />
               </svg>
               {t.serverModeAnalysis}
             </span>
+          )}
+          {/* Dashboard toggle button — combined mode only */}
+          {isCombined && (
+            <button
+              onClick={() => navigateDashboard(isAnalysis ? '/' : '/analysis')}
+              className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-gray-700 hover:bg-gray-600 border border-gray-600 text-gray-200 text-xs font-medium transition-colors whitespace-nowrap"
+              title={isAnalysis ? t.switchToStreaming : t.switchToAnalysis}
+            >
+              <span>{isAnalysis ? '📹' : '🤖'}</span>
+              <span>{isAnalysis ? t.switchToStreaming : t.switchToAnalysis}</span>
+            </button>
           )}
         </div>
 

@@ -4,6 +4,8 @@ export const ja: Translations = {
   appTitle: '徘徊検知ダッシュボード',
   serverModeAnalysis: 'Analysis Server',
   serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
+  switchToAnalysis: '分析ダッシュボード',
+  switchToStreaming: 'ストリーミングダッシュボード',
   connected: '接続済み',
   disconnected: '未接続',
   live: 'ライブ',

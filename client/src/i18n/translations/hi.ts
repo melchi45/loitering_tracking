@@ -4,6 +4,8 @@ export const hi: Translations = {
   appTitle: 'आवारागर्दी पहचान डैशबोर्ड',
   serverModeAnalysis: 'Analysis Server',
   serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
+  switchToAnalysis: 'विश्लेषण डैशबोर्ड',
+  switchToStreaming: 'स्ट्रीमिंग डैशबोर्ड',
   connected: 'जुड़ा हुआ',
   disconnected: 'डिस्कनेक्ट',
   live: 'लाइव',

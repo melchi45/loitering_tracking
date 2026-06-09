@@ -4,6 +4,8 @@ export const ru: Translations = {
   appTitle: 'Панель обнаружения бездельничества',
   serverModeAnalysis: 'Analysis Server',
   serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
+  switchToAnalysis: 'Панель анализа',
+  switchToStreaming: 'Панель трансляции',
   connected: 'Подключено',
   disconnected: 'Отключено',
   live: 'прямой эфир',

@@ -4,6 +4,8 @@ export const tr: Translations = {
   appTitle: 'Dolaşma Algılama Paneli',
   serverModeAnalysis: 'Analysis Server',
   serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
+  switchToAnalysis: 'Analiz Panosu',
+  switchToStreaming: 'Yayın Panosu',
   connected: 'Bağlandı',
   disconnected: 'Bağlantı Kesildi',
   live: 'canlı',

@@ -4,6 +4,8 @@ export const zhTW: Translations = {
   appTitle: '徘徊偵測儀表板',
   serverModeAnalysis: 'Analysis Server',
   serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
+  switchToAnalysis: '分析儀表板',
+  switchToStreaming: '串流儀表板',
   connected: '已連線',
   disconnected: '已斷線',
   live: '直播',

@@ -4,6 +4,8 @@ export const es: Translations = {
   appTitle: 'Panel de Detección de Merodeo',
   serverModeAnalysis: 'Analysis Server',
   serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
+  switchToAnalysis: 'Panel de análisis',
+  switchToStreaming: 'Panel de streaming',
   connected: 'Conectado',
   disconnected: 'Desconectado',
   live: 'en vivo',

@@ -4,6 +4,8 @@ export const pt: Translations = {
   appTitle: 'Painel de Detecção de Vadiagem',
   serverModeAnalysis: 'Analysis Server',
   serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
+  switchToAnalysis: 'Painel de análise',
+  switchToStreaming: 'Painel de streaming',
   connected: 'Conectado',
   disconnected: 'Desconectado',
   live: 'ao vivo',

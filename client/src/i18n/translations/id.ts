@@ -4,6 +4,8 @@ export const id: Translations = {
   appTitle: 'Dasbor Deteksi Berkeliaran',
   serverModeAnalysis: 'Analysis Server',
   serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
+  switchToAnalysis: 'Dasbor Analisis',
+  switchToStreaming: 'Dasbor Streaming',
   connected: 'Terhubung',
   disconnected: 'Terputus',
   live: 'langsung',

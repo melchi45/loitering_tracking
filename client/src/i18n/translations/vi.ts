@@ -4,6 +4,8 @@ export const vi: Translations = {
   appTitle: 'Bảng Điều Khiển Phát Hiện Lang Thang',
   serverModeAnalysis: 'Analysis Server',
   serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
+  switchToAnalysis: 'Bảng phân tích',
+  switchToStreaming: 'Bảng phát trực tiếp',
   connected: 'Đã kết nối',
   disconnected: 'Mất kết nối',
   live: 'trực tiếp',

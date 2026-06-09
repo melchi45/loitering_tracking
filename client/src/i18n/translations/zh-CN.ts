@@ -4,6 +4,8 @@ export const zhCN: Translations = {
   appTitle: '徘徊检测仪表板',
   serverModeAnalysis: 'Analysis Server',
   serverModeAnalysisDesc: 'This server processes AI inference only. Camera streams are managed by a separate streaming server.',
+  switchToAnalysis: '分析仪表板',
+  switchToStreaming: '流媒体仪表板',
   connected: '已连接',
   disconnected: '已断开',
   live: '直播',
