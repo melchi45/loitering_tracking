@@ -24,12 +24,26 @@ interface DetectionsEvent {
 // (e.g. grid cell + fullscreen modal) don't unsubscribe until both unmount.
 export const subscriptionCounts = new Map<string, number>();
 
+// Module-level caches so fullscreen / secondary consumers show last-known state
+// immediately on mount rather than waiting for the next socket event.
+const detectionCache    = new Map<string, Detection[]>();
+const frameDimensions   = new Map<string, { w: number; h: number }>();
+const latestFrameCache  = new Map<string, string>(); // base64 JPEG
+
 export function useCamera(cameraId: string) {
   const { socket } = useSocket();
-  const [frame,       setFrame]       = useState<string | null>(null);
-  const [detections,  setDetections]  = useState<Detection[]>([]);
-  const [frameWidth,  setFrameWidth]  = useState<number>(640);
-  const [frameHeight, setFrameHeight] = useState<number>(640);
+  const [frame,       setFrame]       = useState<string | null>(
+    () => latestFrameCache.get(cameraId) ?? null,
+  );
+  const [detections,  setDetections]  = useState<Detection[]>(
+    () => detectionCache.get(cameraId) ?? [],
+  );
+  const [frameWidth,  setFrameWidth]  = useState<number>(
+    () => frameDimensions.get(cameraId)?.w ?? 640,
+  );
+  const [frameHeight, setFrameHeight] = useState<number>(
+    () => frameDimensions.get(cameraId)?.h ?? 640,
+  );
   const [subscribed,  setSubscribed]  = useState(false);
 
   useEffect(() => {
@@ -48,15 +62,23 @@ export function useCamera(cameraId: string) {
     const handleFrame = (event: FrameEvent) => {
       if (event.cameraId !== cameraId) return;
       setFrame(event.data);
-      if (event.frameWidth)  setFrameWidth(event.frameWidth);
-      if (event.frameHeight) setFrameHeight(event.frameHeight);
+      latestFrameCache.set(cameraId, event.data);
+      if (event.frameWidth && event.frameHeight) {
+        frameDimensions.set(cameraId, { w: event.frameWidth, h: event.frameHeight });
+        setFrameWidth(event.frameWidth);
+        setFrameHeight(event.frameHeight);
+      }
     };
 
     const handleDetections = (event: DetectionsEvent) => {
       if (event.cameraId !== cameraId) return;
       setDetections(event.detections);
-      if (event.frameWidth)  setFrameWidth(event.frameWidth);
-      if (event.frameHeight) setFrameHeight(event.frameHeight);
+      detectionCache.set(cameraId, event.detections);
+      if (event.frameWidth && event.frameHeight) {
+        frameDimensions.set(cameraId, { w: event.frameWidth, h: event.frameHeight });
+        setFrameWidth(event.frameWidth);
+        setFrameHeight(event.frameHeight);
+      }
     };
 
     socket.on('connect', handleReconnect);
@@ -71,6 +93,10 @@ export function useCamera(cameraId: string) {
       if (current <= 1) {
         socket.emit('camera:unsubscribe', { cameraId });
         subscriptionCounts.delete(cameraId);
+        // Clear caches when the last consumer leaves
+        detectionCache.delete(cameraId);
+        frameDimensions.delete(cameraId);
+        latestFrameCache.delete(cameraId);
       } else {
         subscriptionCounts.set(cameraId, current - 1);
       }
