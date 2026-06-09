@@ -278,6 +278,18 @@ class PipelineManager {
       // At most one JPEG buffer is held in memory per camera at any time.
       _pendingFrame: null,
       _analyzing:    false,
+      // Camera identity (for metrics display)
+      cameraName:         camera.name || camera.id,
+      // Analytics metrics — accumulated by local inference (combined/analysis mode)
+      framesProcessed:    0,
+      bytesReceivedTotal: 0,
+      detectionsTotal:    0,
+      trackedTotal:       0,
+      facesTotal:         0,
+      fireSmokeTotal:     0,
+      loiteringTotal:     0,
+      totalProcessingMs:  0,
+      recentSamples:      [], // { at, bytes, detections, trackedObjects, faces, fireSmoke, loitering, processingMs }
     };
 
     // ── Listen for loitering events ──────────────────────────────────────
@@ -349,6 +361,7 @@ class PipelineManager {
       // inference must be serialized per camera.
       if (ctx._inferring) return;
       ctx._inferring = true;
+      const _inferStart = Date.now();
 
       try {
 
@@ -623,7 +636,30 @@ class PipelineManager {
           frameHeight,
         });
 
-        // 8. Save detection snapshots (non-blocking via setImmediate)
+        // 8. Accumulate per-camera analytics stats
+        {
+          const _now    = Date.now();
+          const _inferMs = _now - _inferStart;
+          const _lcount  = enrichedObjects.filter(o => o.isLoitering).length;
+          ctx.framesProcessed++;
+          ctx.bytesReceivedTotal  += jpegBuffer.length;
+          ctx.detectionsTotal     += detections.length;
+          ctx.trackedTotal        += trackedObjects.length;
+          ctx.facesTotal          += faceDetObjects.length;
+          ctx.fireSmokeTotal      += fireSmokeObjects.length;
+          ctx.loiteringTotal      += _lcount;
+          ctx.totalProcessingMs   += _inferMs;
+          ctx.recentSamples.push({
+            at: _now, bytes: jpegBuffer.length, processingMs: _inferMs,
+            detections: detections.length, trackedObjects: trackedObjects.length,
+            faces: faceDetObjects.length, fireSmoke: fireSmokeObjects.length, loitering: _lcount,
+          });
+          // Keep only last 60 s
+          const _cutoff = _now - 60000;
+          while (ctx.recentSamples.length > 0 && ctx.recentSamples[0].at < _cutoff) ctx.recentSamples.shift();
+        }
+
+        // 9. Save detection snapshots (non-blocking via setImmediate)
         if (snapshotSvc.isEnabled() && _allDets.length > 0) {
           const _jpegBuf  = jpegBuffer;
           const _fw       = frameWidth;
@@ -832,6 +868,124 @@ class PipelineManager {
       face:      this._attrPipeline     ? this._attrPipeline.faceStatus  : 'not_started',
       cloth:     this._attrPipeline     ? this._attrPipeline.clothStatus : 'not_started',
       firesmoke: this._fireSmokeService ? this._fireSmokeService.status  : 'not_started',
+    };
+  }
+
+  /**
+   * Returns an analysisApi-compatible metrics snapshot built from local inference stats.
+   * Used by GET /api/analysis/metrics in combined mode.
+   */
+  getAnalysisMetrics() {
+    const now    = Date.now();
+    const RECENT = 60 * 1000;
+    const ACTIVE = 3000;
+    const cutoff = now - RECENT;
+
+    let totalFrames = 0, totalBytes = 0, totalMs = 0;
+    let totalDets = 0, totalTracked = 0, totalFaces = 0, totalFS = 0, totalLoiter = 0;
+    const allRecentSamples = [];
+    const cameras = [];
+
+    for (const [cameraId, ctx] of this._pipelines) {
+      while (ctx.recentSamples.length > 0 && ctx.recentSamples[0].at < cutoff) ctx.recentSamples.shift();
+
+      const fp = ctx.framesProcessed || 0;
+      const lastAge = ctx.lastFrameAt ? (now - ctx.lastFrameAt) : Infinity;
+      const streamPresent = isFinite(lastAge) && lastAge <= ACTIVE;
+      const framesLast1s  = ctx.recentSamples.filter(s => s.at >= now - 1000).length;
+      const zones = this._zoneManager.getActiveZones(cameraId) || [];
+
+      cameras.push({
+        cameraId,
+        cameraName:          ctx.cameraName || cameraId,
+        idleSec:             Math.round(lastAge / 1000),
+        streamPresent,
+        framesLast1s,
+        inputFps1s:          framesLast1s,
+        zoneCount:           zones.length,
+        framesTotal:         fp,
+        bytesReceivedTotal:  ctx.bytesReceivedTotal  || 0,
+        avgProcessingMs:     fp > 0 ? Number((ctx.totalProcessingMs / fp).toFixed(1)) : 0,
+        detectionsTotal:     ctx.detectionsTotal     || 0,
+        trackedObjectsTotal: ctx.trackedTotal        || 0,
+        facesTotal:          ctx.facesTotal          || 0,
+        fireSmokeTotal:      ctx.fireSmokeTotal      || 0,
+        loiteringTotal:      ctx.loiteringTotal      || 0,
+        lastFrameAt:         ctx.lastFrameAt ? new Date(ctx.lastFrameAt).toISOString() : null,
+      });
+
+      totalFrames  += fp;
+      totalBytes   += ctx.bytesReceivedTotal  || 0;
+      totalMs      += ctx.totalProcessingMs   || 0;
+      totalDets    += ctx.detectionsTotal     || 0;
+      totalTracked += ctx.trackedTotal        || 0;
+      totalFaces   += ctx.facesTotal          || 0;
+      totalFS      += ctx.fireSmokeTotal      || 0;
+      totalLoiter  += ctx.loiteringTotal      || 0;
+      allRecentSamples.push(...ctx.recentSamples);
+    }
+
+    cameras.sort((a, b) => (b.lastFrameAt || '').localeCompare(a.lastFrameAt || ''));
+
+    allRecentSamples.sort((a, b) => a.at - b.at);
+    const rt = { frames: allRecentSamples.length, bytesReceived: 0, processingMs: 0, detections: 0, trackedObjects: 0, faces: 0, fireSmoke: 0, loitering: 0 };
+    for (const s of allRecentSamples) {
+      rt.bytesReceived  += s.bytes;       rt.processingMs   += s.processingMs;
+      rt.detections     += s.detections;  rt.trackedObjects += s.trackedObjects;
+      rt.faces          += s.faces;       rt.fireSmoke      += s.fireSmoke;
+      rt.loitering      += s.loitering;
+    }
+    const windowSec = rt.frames > 0
+      ? Math.max(1, Math.round((now - allRecentSamples[0].at) / 1000))
+      : 60;
+    const recent = {
+      windowSec,
+      frames:            rt.frames,
+      framesPerSec:      Number((rt.frames / windowSec).toFixed(2)),
+      bytesReceived:     rt.bytesReceived,
+      bytesPerSec:       Number((rt.bytesReceived / windowSec).toFixed(2)),
+      megabytesReceived: Number((rt.bytesReceived / (1024 * 1024)).toFixed(2)),
+      avgProcessingMs:   Number(((rt.processingMs || 0) / Math.max(1, rt.frames)).toFixed(1)),
+      detections:        rt.detections,
+      trackedObjects:    rt.trackedObjects,
+      faces:             rt.faces,
+      fireSmoke:         rt.fireSmoke,
+      loitering:         rt.loitering,
+    };
+
+    const enabledModules = Object.entries(analyticsConfig.getConfig())
+      .filter(([, v]) => v === true).map(([k]) => k).sort();
+
+    return {
+      status:        'ok',
+      mode:          'combined',
+      uptimeSec:     Math.round(process.uptime()),
+      activeCameras: cameras.filter(c => c.streamPresent).length,
+      services: {
+        detector:         this._detector         ? 'loaded'    : 'not-loaded',
+        attrPipeline:     this._attrPipeline?.anyReady ? 'ready' : 'not-ready',
+        fireSmokeService: this._fireSmokeService  ? 'loaded'    : 'not-loaded',
+      },
+      modules: { enabled: enabledModules, count: enabledModules.length },
+      requests: {
+        total: totalFrames, inFlight: 0, errors: 0,
+        lastRequestAt: null, lastResponseAt: null,
+        avgProcessingMs: Number((totalMs / Math.max(1, totalFrames)).toFixed(1)),
+      },
+      traffic: {
+        bytesReceivedTotal: totalBytes,
+        megabytesTotal:     Number((totalBytes / (1024 * 1024)).toFixed(2)),
+      },
+      results: {
+        framesTotal:         totalFrames,
+        detectionsTotal:     totalDets,
+        trackedObjectsTotal: totalTracked,
+        facesTotal:          totalFaces,
+        fireSmokeTotal:      totalFS,
+        loiteringTotal:      totalLoiter,
+      },
+      recent,
+      cameras,
     };
   }
 

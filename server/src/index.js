@@ -173,6 +173,7 @@ async function main() {
   // Pass the shared ZoneManager so zone additions/deletions via REST API are
   // immediately visible to the pipeline without a server restart.
   const pipelineManager     = new PipelineManager(io, db, zoneManager);
+  app.set('pipelineManager', pipelineManager); // used by /api/analysis/metrics in combined mode
   const youtubeSvc          = new YouTubeStreamService(db, pipelineManager);
   youtubeSvc.init(); // Restore YouTube cameras from DB into in-memory streams Map
 

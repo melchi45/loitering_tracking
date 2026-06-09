@@ -18,11 +18,12 @@
 │  page='signin'   SignInPage   (login + register tabs)           │
 │  page='pending'  PendingPage  (awaiting admin approval)         │
 │  page='admin'    AdminUsersPage  ← admin only                   │
-│  page='dashboard' Dashboard   ← requires auth                   │
+│  page='dashboard' Dashboard   ← admin role only                 │
+│               AccessDeniedPage ← operator / viewer role         │
 │                                                                   │
 │  authStore (Zustand)  accessToken (memory)                      │
 │  HttpOnly cookie      refreshToken (cookie, 7 days)             │
-│  userMenu             logout + admin nav in dashboard header    │
+│  userMenu             logout + admin nav + dashboard toggle      │
 └──────────────────────────┬──────────────────────────────────────┘
                            │ HTTPS REST
 ┌──────────────────────────▼──────────────────────────────────────┐
@@ -95,6 +96,25 @@ client/src/
 ```
 
 > **Note:** No React Router needed. Auth state drives page rendering via `authStore.page`.
+
+### 역할별 대시보드 접근 제어
+
+`App.tsx`는 인증 후 role을 검사하여 Streaming/Analysis Dashboard 진입을 Admin 전용으로 제한한다:
+
+```tsx
+if (auth.user?.role !== 'admin') return <AccessDeniedPage />;
+return <Dashboard />;
+```
+
+| role | 접근 가능 페이지 |
+|---|---|
+| `admin` | Dashboard (Streaming + Analysis), AdminUsersPage |
+| `operator` | AccessDeniedPage |
+| `viewer` | AccessDeniedPage |
+
+`AccessDeniedPage` (`client/src/pages/AccessDeniedPage.tsx`):
+- 현재 계정 email / role 표시
+- "다른 계정으로 로그인" 버튼 → `auth.logout()`
 
 ---
 

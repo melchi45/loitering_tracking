@@ -55,9 +55,37 @@ RTSP/WebRTC 스트림
 3. 클래스 레이블 매핑 업데이트
 4. 신뢰도 임계값(`confThreshold`) 재조정
 
+### combined 모드 분석 메트릭 조회
+
+`pipelineManager.getAnalysisMetrics()` — `GET /api/analysis/metrics` 엔드포인트에서 호출됨:
+
+```js
+// 반환 구조 (analysisApi._metrics 와 동일 스키마)
+{
+  status: 'ok',
+  mode: 'combined',
+  activeCameras: N,
+  results: {
+    framesTotal, detectionsTotal, trackedObjectsTotal,
+    facesTotal, fireSmokeTotal, loiteringTotal,
+  },
+  recent: { windowSec, frames, framesPerSec, avgProcessingMs, ... },
+  cameras: [{ cameraId, cameraName, framesTotal, avgProcessingMs, ... }],
+}
+```
+
+각 카메라 ctx에 누적되는 통계 필드:
+- `framesProcessed` — 추론을 거친 프레임 수
+- `bytesReceivedTotal` — 수신 JPEG 총 바이트
+- `detectionsTotal / trackedTotal / facesTotal / fireSmokeTotal / loiteringTotal`
+- `totalProcessingMs` — 전체 추론 소요 시간
+- `recentSamples[]` — 최근 60초 샘플 (fps / avgMs 계산용)
+
+> combined/analysis 모드에서만 ctx 통계가 쌓임. streaming 모드에서는 분석 서버가 직접 관리.
+
 ### 파이프라인 성능 디버깅
 1. `server/src/services/pipelineManager.js` 로그 레벨 활성화
-2. FPS, 추론 시간 메트릭 확인 (`/api/analytics` 엔드포인트)
+2. FPS, 추론 시간 메트릭 확인 (`GET /api/analysis/metrics`)
 3. `trackerConfig.js`의 `maxAge`, `minHits` 값으로 ID 스위칭 최소화
 4. GPU/CPU 부하 확인: `nvidia-smi` 또는 시스템 모니터
 

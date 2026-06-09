@@ -451,7 +451,14 @@ router.get('/health', (_req, res) => {
   });
 });
 
-router.get('/metrics', (_req, res) => {
+router.get('/metrics', (req, res) => {
+  // In combined mode, PipelineManager accumulates local inference stats directly.
+  // Delegate to it so the Analysis Dashboard reflects real data.
+  const pm = req.app && req.app.get('pipelineManager');
+  if (pm && typeof pm.getAnalysisMetrics === 'function') {
+    return res.json(pm.getAnalysisMetrics());
+  }
+
   const now = Date.now();
   const enabledModules = _getEnabledModules();
   const recent = _buildRecentSummary(now);

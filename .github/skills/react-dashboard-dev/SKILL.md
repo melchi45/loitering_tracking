@@ -10,9 +10,11 @@ argument-hint: "수정할 UI 영역 (예: camera-grid, alert-panel, zone-editor,
 
 ```
 client/src/
-├── App.tsx                 — 라우팅 루트, 글로벌 레이아웃
+├── App.tsx                 — 라우팅 루트, 글로벌 레이아웃 (admin role gate 포함)
 ├── pages/
 │   ├── SignInPage.tsx       — 로그인 (MSAL / 로컬 인증)
+│   ├── PendingPage.tsx      — 승인 대기 화면
+│   ├── AccessDeniedPage.tsx — admin 외 역할 접근 차단
 │   └── admin/              — 관리자 페이지
 ├── components/
 │   ├── CameraGrid.tsx       — 다중 카메라 타일 그리드
@@ -128,6 +130,7 @@ npm run preview      # 빌드 결과 미리보기
 | `StatsPanelModal.tsx` | `docs/design/Design_Stats_Panel.md`, `docs/prd/PRD_Stats_Panel.md` |
 | `DashboardDetectionPanel.tsx` | `docs/design/Design_Dashboard_Detection_Display.md`, `docs/tc/TC_Dashboard_Detection_Display.md` |
 | `i18n/translations/*.ts` | 해당 UI 컴포넌트의 Design 문서 UI 텍스트 섹션 |
+| `App.tsx` (auth/role 변경) | `docs/design/Design_User_Authentication.md`, `docs/design/Design_Dashboard_Analysis_Mode.md` |
 | 새 컴포넌트 추가 | PRD + SRS + Design + TC 문서 신규 작성 또는 관련 문서에 섹션 추가 |
 
 **공통 규칙**
@@ -136,6 +139,34 @@ npm run preview      # 빌드 결과 미리보기
 - **API 연동 변경** → Design의 데이터 플로우 다이어그램 및 TC 업데이트
 - **반응형 레이아웃 변경** → `docs/design/Design_Mobile_Layout.md` + `docs/tc/TC_Mobile_Layout.md` 업데이트
 - **i18n 키 추가** → 해당 화면의 Design 문서 UI 텍스트 항목 추가
+
+## App.tsx 라우팅 구조 (현재)
+
+```tsx
+// App 컴포넌트 렌더링 분기
+if (initializing)               → 로딩 스피너
+if (auth.page === 'signin')     → SignInPage
+if (auth.page === 'pending')    → PendingPage
+if (auth.page === 'admin')      → AdminUsersPage
+if (user.role !== 'admin')      → AccessDeniedPage   // admin 전용 gate
+return                          → Dashboard
+```
+
+Dashboard 내부 URL 분기 (combined 모드):
+- `window.location.pathname === '/'`        → Streaming Dashboard
+- `window.location.pathname === '/analysis'` → Analysis Dashboard
+- `history.pushState` + `currentPath` state로 URL 전환 (react-router-dom 불필요)
+
+Profile 드롭다운 메뉴 항목 (combined 모드에서만 추가):
+```
+Profile → setShowProfile(true)
+User Management → auth.navigateTo('admin')   [admin만]
+──────────────────────────────               [combined만]
+Streaming Dashboard → navigateDashboard('/')
+Analysis Dashboard  → navigateDashboard('/analysis')
+──────────────────────────────
+Sign Out → auth.logout()
+```
 
 ## SERVER_MODE 기반 탭 노출 정책 (중요)
 

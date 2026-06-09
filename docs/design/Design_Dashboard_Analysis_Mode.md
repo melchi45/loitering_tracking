@@ -71,13 +71,51 @@ const [serverMode, setServerMode] = useState<string | null>(null);
 - `"analysis"`: 분석 모드 UI 전환
 - `"combined"` / `"streaming"`: combined UI 유지
 
-### 2.2 신규 파생 변수
+### 2.2 신규 State — URL 기반 경로
 
 ```tsx
-const isAnalysis = serverMode === 'analysis';
+const [currentPath, setCurrentPath] = useState(() => window.location.pathname);
 ```
 
-모든 조건부 렌더링은 이 단일 변수를 기준으로 한다.
+combined 모드에서 두 대시보드를 URL로 구분하기 위해 추가.
+
+```tsx
+function navigateDashboard(path: '/' | '/analysis') {
+  window.history.pushState({}, '', path);
+  setCurrentPath(path);
+}
+```
+
+`react-router-dom` 없이 `history.pushState` 패턴을 사용 — SPA fallback 라우팅과 호환.
+
+streaming 모드에서 `/analysis` 접근 시 자동으로 `/`로 리다이렉트:
+
+```tsx
+useEffect(() => {
+  if (serverMode === 'streaming' && currentPath === '/analysis') {
+    window.history.replaceState({}, '', '/');
+    setCurrentPath('/');
+  }
+}, [serverMode, currentPath]);
+```
+
+### 2.3 신규 파생 변수
+
+```tsx
+const isAnalysis = serverMode === 'analysis' ||
+  (serverMode === 'combined' && currentPath === '/analysis');
+
+const isCombined = serverMode === 'combined';
+```
+
+| 조건 | isAnalysis | 표시 UI |
+|---|---|---|
+| `serverMode === 'analysis'` | true | Analysis Dashboard |
+| `serverMode === 'combined' && path === '/analysis'` | true | Analysis Dashboard |
+| `serverMode === 'combined' && path === '/'` | false | Streaming Dashboard |
+| `serverMode === 'streaming'` | false | Streaming Dashboard |
+
+모든 조건부 렌더링은 `isAnalysis` 단일 변수를 기준으로 한다.
 
 ### 2.3 `/health` Fetch (useEffect)
 
@@ -126,7 +164,45 @@ useEffect(() => {
 }, [serverMode, sidebarTab]);
 ```
 
-### 2.5 데스크톱 헤더 조건부 렌더링
+### 2.5 Admin 전용 접근 제어
+
+`App` 컴포넌트에서 role 체크를 수행한다:
+
+```tsx
+// App.tsx — 라우팅 분기
+if (auth.page === 'signin')  return <SignInPage />;
+if (auth.page === 'pending') return <PendingPage />;
+if (auth.page === 'admin')   return <AdminUsersPage />;
+if (auth.user?.role !== 'admin') return <AccessDeniedPage />; // ← role gate
+return <Dashboard />;
+```
+
+- `role === 'admin'`인 경우에만 Streaming/Analysis Dashboard 진입 가능
+- `operator`, `viewer` 역할은 `AccessDeniedPage` 렌더링
+- `AUTH_ENABLED=false` (개발 모드)에서는 role이 `'admin'`으로 고정되므로 영향 없음
+
+`client/src/pages/AccessDeniedPage.tsx`:
+- 현재 로그인 계정(email, role) 표시
+- "다른 계정으로 로그인" 버튼 → `auth.logout()` 호출
+
+### 2.6 Profile 드롭다운 — 대시보드 전환 (combined 모드)
+
+combined 모드에서 Profile 아이콘 드롭다운 메뉴에 대시보드 전환 버튼 추가:
+
+```
+Profile 드롭다운
+├── 👤 Profile
+├── 👥 User Management   (admin만)
+├── ──────────────────── (combined 모드만)
+├── 📹 Streaming Dashboard   ← navigateDashboard('/')
+└── ⊞  Analysis Dashboard    ← navigateDashboard('/analysis')
+```
+
+- `isCombined` 조건 시에만 렌더링 (단일 모드에서는 표시 안 함)
+- 현재 활성 대시보드는 색상 강조(파란색/amber) + `●` 마커
+- 활성 대시보드 버튼은 `cursor-default` (클릭 불필요)
+
+### 2.7 데스크톱 헤더 조건부 렌더링
 
 ```tsx
 {/* Analysis 모드 배지 */}
@@ -395,7 +471,12 @@ client/src/
 
 ### 9.2 신규 파일
 
-없음 (AnalysisServerPanel은 App.tsx 내 인라인 JSX 변수)
+```
+client/src/pages/
+└── AccessDeniedPage.tsx   # admin 외 역할 접근 차단 페이지
+```
+
+AnalysisServerPanel은 App.tsx 내 인라인 JSX 변수로 별도 파일 없음.
 
 ### 9.3 영향받지 않는 파일
 
