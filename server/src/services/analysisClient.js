@@ -70,7 +70,7 @@ class AnalysisClient {
    * on the Node.js main thread, both of which would briefly block the event loop
    * and delay Socket.IO frame delivery to the browser.
    */
-  async analyzeFrame({ cameraId, frameId, timestamp, jpegBuffer, zones = [] }) {
+  async analyzeFrame({ cameraId, cameraName, frameId, timestamp, jpegBuffer, zones = [] }) {
     if (this._open) return null;
     if (this._inflight >= this._maxConc) { this._dropped++; return null; }
 
@@ -78,7 +78,7 @@ class AnalysisClient {
     this._inflight++;
     try {
       // Metadata is small (< 4 KB typically); JPEG travels as binary body.
-      const meta   = JSON.stringify({ cameraId, frameId, timestamp, zones });
+      const meta   = JSON.stringify({ cameraId, cameraName, frameId, timestamp, zones });
       const result = await this._postJpeg('/api/analysis/frame', jpegBuffer, meta);
       if (this._consecutive > 0) {
         this._consecutive = 0;

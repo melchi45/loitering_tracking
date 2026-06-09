@@ -70,6 +70,7 @@
 │                    ├─ concurrentRequests 추적                 │
 │                    ├─ backpressure 적용                       │
 │                    └─ HTTP POST /api/analysis/frame           │
+│                       (cameraId + cameraName + zones meta)    │
 │                               │                               │
 │              ◄────────────────┘ JSON 응답                     │
 │   (detections + tracked + behaviors + fireSmoke)              │
@@ -112,6 +113,7 @@
 │  Express Routes:                                              │
 │   POST /api/analysis/frame  ──► analysisApi.js               │
 │   GET  /api/analysis/health ──► analysisApi.js               │
+│   GET  /api/analysis/metrics ─► analysisApi.js               │
 │                                                                │
 │  Shared Services:                                             │
 │   DetectionService (YOLOv8 ONNX — 1개 인스턴스 공유)          │
@@ -134,11 +136,13 @@
 |---|---|---|---|
 | `combined` | 표시 | 표시 | CameraGrid |
 | `streaming` | 표시 | 미표시 | CameraGrid |
-| `analysis` | 미표시 | 표시 | Analysis mode status panel |
+| `analysis` | 미표시 | 표시 | Analysis metrics dashboard |
 
 - `analysis` 모드에서는 카메라 discovery 기능(`POST /api/cameras/discover`, `discovery:*` socket events, background discovery scheduler)이 비활성화됩니다.
 - `streaming` 모드에서는 원격 분석 응답(`tracked`, `behaviors`, `fireSmoke`, `detectedFaces`)을 기반으로 Face ID 매칭/크롭/스냅샷 저장까지 로컬에서 후처리합니다.
 - `streaming` 모드에서는 서버 기동 시 `loadFaceServiceEagerly()`를 호출하지 않아 로컬 AI 모델(PAR/ArcFace 포함)을 선로딩하지 않습니다.
+- `streaming` 모드에서는 analysis 서버로 프레임을 전송할 때 `cameraId`와 함께 `cameraName`도 메타에 포함합니다.
+- `analysis` 모드에서는 수신한 `cameraName`을 per-camera context와 `/api/analysis/metrics` 응답에 보존해 대시보드에 표시합니다.
 
 ### 2.1 analysisClient.js (신규)
 
@@ -175,7 +179,8 @@ class AnalysisClient {
     }
     this._concurrentRequests++;
     try {
-      // AbortController로 타임아웃 구현
+      // payload metadata includes both stable cameraId and human-readable
+      // cameraName so the analysis dashboard can show source names.
       const result = await this._post('/api/analysis/frame', payload);
       this._sentFrames++;
       return result;

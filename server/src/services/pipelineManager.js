@@ -852,11 +852,12 @@ class PipelineManager {
     ctx._analyzing    = true;
 
     this._analysisClient.analyzeFrame({
-      cameraId:  frame.cameraId,
-      frameId:   frame.frameId,
-      timestamp: new Date(frame.ts).toISOString(),
+      cameraId:   frame.cameraId,
+      cameraName: camera.name || frame.cameraId,
+      frameId:    frame.frameId,
+      timestamp:  new Date(frame.ts).toISOString(),
       jpegBuffer: frame.buf,
-      zones:     frame.zones,
+      zones:      frame.zones,
     }).then(result => {
       ctx._analyzing = false;
       if (!ctx.running) { ctx._pendingFrame = null; return; }

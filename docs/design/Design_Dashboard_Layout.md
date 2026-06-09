@@ -62,6 +62,7 @@ loitering_tracking/
 │       │   ├── ZonesPanel.tsx               # Zones sidebar tab (hint only)
 │       │   ├── DashboardDetectionPanel.tsx  # Detections sidebar tab
 │       │   ├── VideoAnalyticsTab.tsx        # Analytics sidebar tab
+│       │   ├── AnalysisServerDashboard.tsx  # Analysis mode traffic/result dashboard
 │       │   ├── FaceGalleryTab.tsx           # Face ID sidebar tab
 │       │   ├── FullscreenCameraView.tsx     # Fullscreen overlay
 │       │   ├── DiscoveredCameraPanel.tsx    # Discovery overlay
@@ -126,7 +127,10 @@ App.tsx
 │   └─ Tab buttons × 5~6 (mode-dependent)
 │
 ├─ FullscreenCameraView (fixed overlay, conditional)
-└─ SettingsModal (fixed overlay, conditional)
+├─ SettingsModal (fixed overlay, conditional)
+└─ Statistics Modal
+  ├─ StatsPanelModal (combined/streaming)
+  └─ AnalysisStatsModal (analysis)
 ```
 
 ### 3.1 Mode-Dependent Navigation Policy
@@ -135,9 +139,12 @@ App.tsx
 |---|---|---|---|
 | `combined` | 표시 | 표시 | CameraGrid |
 | `streaming` | 표시 | 숨김 | CameraGrid |
-| `analysis` | 숨김 | 표시 | Analysis status panel |
+| `analysis` | 숨김 | Analytics only | AnalysisServerDashboard |
 
-- `analysis` 모드에서 카메라 레이아웃은 렌더링하지 않으며 메인 영역에 분석 서버 동작 상태 메시지를 표시합니다.
+- `analysis` 모드에서 카메라 레이아웃은 렌더링하지 않으며 메인 영역에 AnalysisServerDashboard를 표시합니다.
+- `analysis` 모드의 우측/모바일 탭은 `Analytics` 단일 탭만 유지합니다.
+- `analysis` 모드에서 우측 상단 `Statistics` 버튼은 `AnalysisStatsModal`을 열어 `/api/analysis/metrics` 기반 지표만 표시합니다.
+- `analysis` 모드에서 `SettingsModal`은 언어 선택만 제공하고 WebRTC/ICE 설정 섹션은 숨깁니다.
 
 ---
 
@@ -198,6 +205,15 @@ onMouseUp: () => setIsDragging(false)
 | `crossCameraStore` | `events[]` (max 20, 60 s TTL) | DetectionPanel CROSS-CAM badge |
 | `personTrajectoryStore` | `trajectories Map` | Analytics tab |
 | `webrtcConfigStore` | `enabled`, `stunUrls`, `turns` | SettingsModal, useWebRTC |
+
+---
+
+### 4.5 Analysis Mode Dashboard
+
+- `AnalysisServerDashboard.tsx`는 `/api/analysis/metrics`를 2초 주기로 폴링합니다.
+- 메인 패널은 최근 60초 프레임 처리량, 입력 트래픽, 평균 추론 시간, 활성 컨텍스트 수를 카드로 표시합니다.
+- 활성화된 분석 모듈 목록과 누적 결과(프레임, detections, tracked, faces, fire/smoke, loitering)를 표시합니다.
+- 카메라별 zone 수, 누적 프레임 수, 입력 바이트, 평균 처리 시간, 결과 개수를 표로 표시합니다.
 
 ---
 
@@ -312,6 +328,12 @@ useEffect(() => {
     fetch('/api/webrtc/ice-config')
       .then(r => r.json())
       .then(d => webrtcConfigStore.setConfig(d.data));
+  }
+
+  if (serverMode === 'analysis') {
+    fetch('/api/analysis/metrics')
+      .then(r => r.json())
+      .then(d => setAnalysisMetrics(d));
   }
 }, []);
 ```

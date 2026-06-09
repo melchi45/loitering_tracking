@@ -58,12 +58,15 @@ A 4 px wide vertical divider between the main area and sidebar shall change colo
 The sidebar shall expose mode-dependent tabs based on `SERVER_MODE`:
 - `combined`: Cameras, Alerts, Zones, Detections, Analytics, Face Gallery
 - `streaming`: Cameras, Alerts, Zones, Detections, Face Gallery (Analytics hidden)
-- `analysis`: Alerts, Zones, Detections, Analytics, Face Gallery (Cameras hidden)
+- `analysis`: Analytics only
 
 The active tab shall be visually distinguished by a blue bottom border and blue text color. The Alerts tab shall display an unread count badge (red circle) when unacknowledged alerts exist.
 
 ### FR-DLY-007 — Camera Grid Area
-The main content area shall render a `CameraGrid` component that fills all remaining horizontal and vertical space after header and sidebar are accounted for.
+The main content area shall render a `CameraGrid` component that fills all remaining horizontal and vertical space after header and sidebar are accounted for in `combined` and `streaming` mode.
+
+### FR-DLY-007A — Analysis Dashboard Area
+When `SERVER_MODE=analysis`, the main content area shall render an analysis dashboard instead of the camera grid. The dashboard shall display current module selection, recent traffic volume, request concurrency, aggregate inference counts, and per-camera analysis load by polling `/api/analysis/metrics`.
 
 ### FR-DLY-008 — Layout Picker
 The header shall include a `LayoutPicker` dropdown showing grouped layout options: Equal Grid, 1 Main+Sub, 2 Main+Sub, 3 Main+Sub. Selecting a layout shall update the grid immediately and persist the choice to `localStorage` under key `lts-layout`.
@@ -87,7 +90,10 @@ When the active mobile tab is "Cameras," the screen shall be divided vertically:
 On the mobile Cameras tab the user shall be able to swipe left/right (minimum 40 px delta) to advance or retreat the channel page offset by one page. Page indicators (dots) and a numeric counter badge shall reflect the current page.
 
 ### FR-DLY-015 — Settings Modal
-Clicking the settings gear button shall open a modal dialog containing language selection and WebRTC STUN/TURN configuration. The modal shall close on backdrop click or the Close button.
+Clicking the settings gear button shall open a modal dialog. In `combined` and `streaming` mode, the dialog shall contain language selection and WebRTC STUN/TURN configuration. In `analysis` mode, the dialog shall contain language selection only. The modal shall close on backdrop click or the Close button.
+
+### FR-DLY-015A — Statistics Modal by Server Mode
+Clicking the statistics button shall open a mode-specific statistics modal. In `combined` and `streaming` mode, the system shall open the legacy statistics panel based on `/api/stats`. In `analysis` mode, the system shall open an analysis statistics panel based on `/api/analysis/metrics`, showing analysis throughput, inference latency, traffic volume, cumulative inference results, and per-source load.
 
 ### FR-DLY-016 — Connection Status Persistence
 The Socket.IO connection status indicator shall update in real time. When disconnected for more than 5 seconds a visible red indicator shall remain until reconnection is established.
@@ -153,6 +159,7 @@ When a discovered camera device is selected in the Found tab, a `DiscoveredCamer
 | GET    | /api/cameras          | Fetch registered cameras on mount              |
 | GET    | /api/persons/active   | Hydrate person trajectory store on mount       |
 | GET    | /api/webrtc/ice-config | Seed STUN/TURN servers if no saved config     |
+| GET    | /api/analysis/metrics | Fetch analysis dashboard metrics in analysis mode |
 
 ---
 

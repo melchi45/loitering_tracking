@@ -146,6 +146,7 @@ loitering_tracking/
 | POST | `/api/zones` | 구역 생성 |
 | PATCH | `/api/zones/:id` | 구역 수정 |
 | GET | `/api/analytics/summary` | 분석 요약 통계 |
+| GET | `/api/analysis/metrics` | 분석 서버 대시보드 메트릭 |
 | POST | `/api/faces/register` | 얼굴 등록 |
 | POST | `/api/faces/search` | 얼굴 검색 |
 | POST | `/api/streams/youtube` | YouTube 스트림 수집 |

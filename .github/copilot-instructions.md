@@ -100,6 +100,7 @@ loitering_tracking/
 | GET | `/api/events` | 이벤트 목록 조회 |
 | GET | `/api/stats` | 시스템 통계 조회 |
 | GET | `/api/search` | 전역 검색 |
+| GET | `/api/analysis/metrics` | 분석 서버 대시보드용 트래픽/모듈/결과 메트릭 조회 |
 
 ---
 

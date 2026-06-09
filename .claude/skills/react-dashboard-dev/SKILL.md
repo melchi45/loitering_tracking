@@ -142,5 +142,10 @@ npm run preview      # 빌드 결과 미리보기
 - 기준 위치: `client/src/App.tsx` (`serverMode`, `isStreaming`, `TAB_ITEMS`)
 - `combined`: Cameras/Analytics 탭 모두 표시
 - `streaming`: Analytics 탭 숨김
-- `analysis`: Cameras 탭 숨김, Analytics 탭 표시
+- `analysis`: 메인 영역은 `AnalysisServerDashboard.tsx`, 우측/모바일 탭은 `analytics` 단일 탭만 표시
 - 모드 변경으로 현재 활성 탭이 숨김 대상이 되면 유효 탭으로 자동 전환하도록 유지
+
+## Analysis Mode Dashboard
+
+- `AnalysisServerDashboard.tsx`는 `/api/analysis/metrics`를 주기적으로 조회해 현재 활성 모듈, 입력 트래픽, 요청 동시성, 최근/누적 결과, 카메라별 부하를 보여줍니다.
+- `VideoAnalyticsTab.tsx`는 분석 가능한 모듈 선택 전용으로 우측 탭에 유지하고, Alerts/Zones/Detections/Face 탭은 analysis 모드에서 숨깁니다.

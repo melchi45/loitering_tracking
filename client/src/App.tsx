@@ -16,9 +16,11 @@ import { DashboardDetectionPanel } from './components/DashboardDetectionPanel';
 import ZonesPanel from './components/ZonesPanel';
 import VideoAnalyticsTab from './components/VideoAnalyticsTab';
 import FaceGalleryTab from './components/FaceGalleryTab';
+import AnalysisServerDashboard from './components/AnalysisServerDashboard';
 import { SearchBar } from './components/SearchBar';
 import { SearchFullscreen } from './components/SearchFullscreen';
 import StatsPanelModal from './components/StatsPanelModal';
+import AnalysisStatsModal from './components/AnalysisStatsModal';
 import ProfileModal from './components/ProfileModal';
 import type { SearchResult } from './hooks/useSearch';
 import type { Alert, CrossCameraReIdEvent, PersonTrajectory } from './types';
@@ -91,7 +93,7 @@ function LayoutPicker({ current, onChange }: { current: LayoutId; onChange: (id:
   );
 }
 
-function SettingsModal({ onClose }: { onClose: () => void }) {
+function SettingsModal({ onClose, analysisMode = false }: { onClose: () => void; analysisMode?: boolean }) {
   const { lang, setLang, t } = useI18n();
   const webrtcStore = useWebRTCConfigStore();
 
@@ -308,6 +310,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
           <span className="text-sm font-bold text-white">{t.settingsTitle}</span>
           <button
             onClick={onClose}
+            title={t.settingsClose}
             className="text-gray-400 hover:text-white transition-colors p-1 rounded hover:bg-gray-700"
           >
             <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -324,6 +327,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
               <select
                 value={lang}
                 onChange={(e) => setLang(e.target.value as LangCode)}
+                title={t.settingsLanguage}
                 className="w-full appearance-none bg-gray-700 border border-gray-600 text-gray-200 text-sm rounded-lg px-3 py-2 pr-8 focus:outline-none focus:border-blue-500 cursor-pointer"
               >
                 {LANGUAGES.map((lang_meta) => (
@@ -340,7 +344,8 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
             </div>
           </div>
 
-          {/* ── WebRTC ── */}
+          {!analysisMode && (
+          <>
           <div className="border-t border-gray-700 pt-4">
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">{t.settingsWebRTC}</p>
 
@@ -349,6 +354,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
               <span className="text-sm text-gray-300">{t.settingsWebRTCEnabled}</span>
               <button
                 onClick={() => { setEnabled((v) => !v); setSaved(false); }}
+                title={t.settingsWebRTCEnabled}
                 className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors duration-200 ${
                   enabled ? 'bg-blue-600' : 'bg-gray-600'
                 }`}
@@ -382,6 +388,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
             </div>
             <button
               onClick={addStun}
+              title={t.settingsStunAdd}
               className="text-xs text-blue-400 hover:text-blue-300 transition-colors mb-4"
             >
               {t.settingsStunAdd}
@@ -428,6 +435,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
             </div>
             <button
               onClick={addTurn}
+              title={t.settingsTurnAdd}
               className="text-xs text-blue-400 hover:text-blue-300 transition-colors mb-4"
             >
               {t.settingsTurnAdd}
@@ -505,11 +513,23 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                 ref={iceLogRef}
                 readOnly
                 value={iceLog.join('\n')}
+                title="ICE Test Log"
                 className="w-full h-40 bg-black/60 text-[10px] font-mono text-green-300 px-2 py-1.5 rounded border border-gray-700 resize-none focus:outline-none"
                 spellCheck={false}
               />
             )}
           </div>
+          </>
+          )}
+
+          {analysisMode && (
+            <div className="border-t border-gray-700 pt-4">
+              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Analysis Mode</p>
+              <p className="text-sm text-gray-300 leading-6">
+                analysis 모드에서는 운영 설정을 서버 환경변수와 백엔드 구성에서 관리합니다. 대시보드 설정에서는 언어만 변경할 수 있습니다.
+              </p>
+            </div>
+          )}
         </form>
         {/* Footer */}
         <div className="px-4 py-3 border-t border-gray-700">
@@ -591,7 +611,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
         if (data.serverMode) {
           const normalizedMode = data.serverMode.trim().toLowerCase();
           setServerMode(normalizedMode);
-          if (normalizedMode === 'analysis') setSidebarTab('alerts');
+          if (normalizedMode === 'analysis') setSidebarTab('analytics');
         }
       })
       .catch(() => {});
@@ -737,19 +757,21 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
   // ── Shared: tab nav items ───────────────────────────────────────────────────
   const isAnalysis = serverMode === 'analysis';
   const isStreaming = serverMode === 'streaming';
-  const TAB_ITEMS = [
-    !isAnalysis && { id: 'cameras'    as SidebarTab, icon: '📷', label: t.tabCameras },
-    { id: 'alerts'     as SidebarTab, icon: '🔔', label: t.tabAlerts },
-    { id: 'zones'      as SidebarTab, icon: '🗺',  label: t.tabZones },
-    { id: 'detections' as SidebarTab, icon: '👁',  label: t.tabDetections },
-    !isStreaming && { id: 'analytics'  as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
-    { id: 'faces'      as SidebarTab, icon: '🪪',  label: t.tabFaceGallery },
-  ].filter(Boolean) as { id: SidebarTab; icon: string; label: string }[];
+  const TAB_ITEMS = isAnalysis
+    ? [{ id: 'analytics' as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics }]
+    : [
+        { id: 'cameras'    as SidebarTab, icon: '📷', label: t.tabCameras },
+        { id: 'alerts'     as SidebarTab, icon: '🔔', label: t.tabAlerts },
+        { id: 'zones'      as SidebarTab, icon: '🗺',  label: t.tabZones },
+        { id: 'detections' as SidebarTab, icon: '👁',  label: t.tabDetections },
+        !isStreaming && { id: 'analytics'  as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
+        { id: 'faces'      as SidebarTab, icon: '🪪',  label: t.tabFaceGallery },
+      ].filter(Boolean) as { id: SidebarTab; icon: string; label: string }[];
 
   // If mode changes and current tab is hidden by policy, move to a valid tab.
   useEffect(() => {
-    if (serverMode === 'analysis' && sidebarTab === 'cameras') {
-      setSidebarTab('alerts');
+    if (serverMode === 'analysis' && sidebarTab !== 'analytics') {
+      setSidebarTab('analytics');
       return;
     }
     if (serverMode === 'streaming' && sidebarTab === 'analytics') {
@@ -759,39 +781,16 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
 
   // ── Analysis server status panel (replaces camera grid in analysis mode) ────
   const AnalysisServerPanel = (
-    <div className="flex flex-col h-full items-center justify-center gap-6 p-8 text-center">
-      <div className="flex flex-col items-center gap-3">
-        <div className="w-14 h-14 rounded-full bg-amber-500/20 border border-amber-500/40 flex items-center justify-center">
-          <svg className="w-7 h-7 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-              d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.402 1.402c1 1 .03 2.798-1.332 2.798H4.13c-1.36 0-2.332-1.797-1.332-2.798L4 15.3" />
-          </svg>
-        </div>
-        <div>
-          <p className="text-base font-semibold text-amber-400">{t.serverModeAnalysis}</p>
-          <p className="text-xs text-gray-400 mt-1 max-w-xs">{t.serverModeAnalysisDesc}</p>
-        </div>
-      </div>
-      <div className="grid grid-cols-2 gap-3 w-full max-w-sm text-left">
-        <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
-          <p className="text-[10px] text-gray-500 uppercase tracking-wide mb-1">Socket</p>
-          <div className="flex items-center gap-1.5">
-            <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-            <span className={`text-xs font-medium ${connected ? 'text-green-400' : 'text-red-400'}`}>
-              {connected ? t.connected : t.disconnected}
-            </span>
-          </div>
-        </div>
-        <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
-          <p className="text-[10px] text-gray-500 uppercase tracking-wide mb-1">Mode</p>
-          <span className="text-xs font-medium text-amber-400">analysis</span>
-        </div>
-      </div>
-    </div>
+    <AnalysisServerDashboard
+      connected={connected}
+      title={t.serverModeAnalysis}
+      description={t.serverModeAnalysisDesc}
+    />
   );
 
   // ── Shared: tab content renderer ────────────────────────────────────────────
   function renderTabContent() {
+    if (isAnalysis) return <VideoAnalyticsTab />;
     if (sidebarTab === 'cameras')    return <CameraList />;
     if (sidebarTab === 'alerts')     return <AlertPanel />;
     if (sidebarTab === 'analytics')  return <VideoAnalyticsTab />;
@@ -891,8 +890,10 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
           <FullscreenCameraView cameraId={cam.id} cameraName={cam.name} onClose={() => setFullscreenCameraId(null)} />
         ) : null;
       })()}
-      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
-      {showStats    && <StatsPanelModal open={showStats} onClose={() => setShowStats(false)} />}
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} analysisMode={isAnalysis} />}
+      {showStats && (isAnalysis
+        ? <AnalysisStatsModal open={showStats} onClose={() => setShowStats(false)} />
+        : <StatsPanelModal open={showStats} onClose={() => setShowStats(false)} />)}
       {showProfile  && <ProfileModal onClose={() => setShowProfile(false)} />}
       {showSearchFullscreen && (
         <SearchFullscreen

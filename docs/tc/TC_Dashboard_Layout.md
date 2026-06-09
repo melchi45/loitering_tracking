@@ -95,9 +95,14 @@
 - **Acceptance:** All 6 elements visible in header
 
 ### TC-A-003 — CameraGrid in Main Content
-- **Input:** Desktop dashboard with 4-camera layout
+- **Input:** Desktop dashboard with `SERVER_MODE=combined` or `streaming`
 - **Expected:** Main content area renders `CameraGrid` filling available space
 - **Acceptance:** Camera grid fills flex-1 space; no overflow
+
+### TC-A-004 — Analysis Dashboard in Main Content
+- **Input:** Desktop dashboard with `SERVER_MODE=analysis`
+- **Expected:** Main content area renders analysis traffic/result dashboard instead of `CameraGrid`
+- **Acceptance:** 최근 처리량, 입력 트래픽, 평균 추론 시간, 활성 컨텍스트, 활성 모듈, 카메라별 부하 영역이 보인다
 
 ---
 
@@ -118,7 +123,7 @@
 - **Expected:**
   - combined: Cameras, Alerts, Zones, Detections, Analytics, Face Gallery
   - streaming: Cameras, Alerts, Zones, Detections, Face Gallery (Analytics hidden)
-  - analysis: Alerts, Zones, Detections, Analytics, Face Gallery (Cameras hidden)
+  - analysis: Analytics only
 - **Acceptance:** 각 모드별 탭 노출 정책 일치; unacknowledged alert badge visible when count > 0
 
 ---
@@ -169,7 +174,7 @@
 
   > Note: SRS_Dashboard_Layout specifies 6 tabs but SRS_Mobile_Layout specifies 5; defer to Mobile_Layout SRS for tab count.
 
-- **Acceptance:** Bottom bar present and fixed at bottom; 탭 개수는 mode-dependent 정책(analysis에서 Cameras 제거, streaming에서 Analytics 제거)을 따른다
+- **Acceptance:** Bottom bar present and fixed at bottom; 탭 개수는 mode-dependent 정책(analysis에서 Analytics 단일 탭, streaming에서 Analytics 제거)을 따른다
 
 ### TC-E-003 — Mobile Cameras Tab Split
 - **Input:** Mobile viewport; Cameras tab active
@@ -190,10 +195,20 @@
 - **Expected:** Modal opens with: language selector, WebRTC STUN/TURN config fields
 - **Acceptance:** Both sections present; language change applied immediately
 
+### TC-F-001A — Settings Modal in Analysis Mode
+- **Input:** Set `SERVER_MODE=analysis`, click settings gear icon
+- **Expected:** Modal opens with language selector only (WebRTC STUN/TURN and ICE test sections hidden)
+- **Acceptance:** Language section is present; WebRTC/ICE sections are not rendered
+
 ### TC-F-002 — Socket.IO Connection Indicator
 - **Input:** Disconnect server; wait 5 seconds
 - **Expected:** Connection status dot turns red and stays red ≥ 5 seconds
 - **Acceptance:** Red indicator maintained; reconnects on server restart
+
+### TC-F-003 — Statistics Modal in Analysis Mode
+- **Input:** Set `SERVER_MODE=analysis`, click statistics icon
+- **Expected:** Analysis statistics modal opens and shows `/api/analysis/metrics` 기반 지표(처리량, 트래픽, 평균 추론 시간, 누적 결과, 입력원별 부하)
+- **Acceptance:** Legacy `/api/stats` 중심 카드가 아닌 analysis 지표 카드/표가 표시된다
 
 ---
 
