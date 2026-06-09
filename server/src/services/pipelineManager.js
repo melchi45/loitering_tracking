@@ -52,6 +52,13 @@ const analyticsConfig  = require('./analyticsConfig');
 
 const SERVER_MODE = process.env.SERVER_MODE || 'combined';
 
+// Forwarding rate cap for streaming→analysis (frames per second per camera).
+// 0 = unlimited (latest-frame-wins naturally throttles to analysis server speed).
+// Set ANALYSIS_FPS in .env_streaming to explicitly cap forwarding, reducing
+// wasted capture + network when analysis server is CPU-bound (e.g. ANALYSIS_FPS=2).
+const _ANALYSIS_FPS        = Math.max(0, parseFloat(process.env.ANALYSIS_FPS || '0'));
+const _ANALYSIS_INTERVAL_MS = _ANALYSIS_FPS > 0 ? 1000 / _ANALYSIS_FPS : 0;
+
 // ─── Face gallery helpers ─────────────────────────────────────────────────────
 
 // Dot product of two L2-normalised ArcFace embeddings == cosine similarity
@@ -276,8 +283,9 @@ class PipelineManager {
       _inferring:   false,
       // Streaming-mode per-camera analysis queue (latest-frame-wins pattern).
       // At most one JPEG buffer is held in memory per camera at any time.
-      _pendingFrame: null,
-      _analyzing:    false,
+      _pendingFrame:        null,
+      _analyzing:           false,
+      _lastAnalysisQueueAt: 0,   // epoch ms — used by ANALYSIS_FPS rate limiter
       // Camera identity (for metrics display)
       cameraName:         camera.name || camera.id,
       // Analytics metrics — accumulated by local inference (combined/analysis mode)
@@ -340,6 +348,15 @@ class PipelineManager {
       // Always forward frames when an analysis client is configured.
       if (SERVER_MODE === 'streaming') {
         if (!this._analysisClient) return; // monitoring-only mode
+
+        // ANALYSIS_FPS rate limiter: drop this frame if we've already queued one
+        // within the target interval. Prevents sending 10 fps to an analysis server
+        // that can only process 1-2 fps, reducing wasted network + CPU on both sides.
+        if (_ANALYSIS_INTERVAL_MS > 0) {
+          if (timestamp - ctx._lastAnalysisQueueAt < _ANALYSIS_INTERVAL_MS) return;
+        }
+        ctx._lastAnalysisQueueAt = timestamp;
+
         ctx._pendingFrame = {
           cameraId: camera.id,
           frameId:  currentFrameId,

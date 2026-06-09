@@ -264,7 +264,11 @@ function setConfig(partial) {
 }
 
 function isEnabled(moduleId) {
-  return _getOrInit()[moduleId] !== false;
+  const cfg = _getOrInit();
+  // Unknown modules (not in DEFAULT_CONFIG) are always disabled — prevents
+  // stale DB keys or test keys from accidentally enabling processing.
+  if (!(moduleId in DEFAULT_CONFIG)) return false;
+  return cfg[moduleId] !== false;
 }
 
 // Attribute modules that need person detections from YOLO to function

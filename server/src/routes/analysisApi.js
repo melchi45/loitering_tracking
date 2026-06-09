@@ -143,21 +143,24 @@ function _getEnabledModules() {
     .sort();
 }
 
-// ── Shared AI services (lazy-loaded on first request) ────────────────────────
-let _detector       = null;
-let _attrPipeline   = null;
+// ── Shared AI services (eager-loaded at startup) ─────────────────────────────
+let _detector         = null;
+let _attrPipeline     = null;
 let _fireSmokeService = null;
-let _servicesLoading  = false;
 let _servicesReady    = false;
+
+// Single promise guards concurrent callers — all waiters share the same load.
+let _loadPromise = null;
 
 async function _ensureServices() {
   if (_servicesReady) return;
-  if (_servicesLoading) {
-    // Wait for in-progress load
-    await new Promise(r => setTimeout(r, 200));
-    if (_servicesReady) return;
+  if (!_loadPromise) {
+    _loadPromise = _loadServices();
   }
-  _servicesLoading = true;
+  await _loadPromise;
+}
+
+async function _loadServices() {
   try {
     _detector = new DetectionService();
     await _detector.load();
@@ -183,8 +186,13 @@ async function _ensureServices() {
     _fireSmokeService = null;
   }
   _servicesReady = true;
-  _servicesLoading = false;
 }
+
+// Start loading immediately at module load — frames arriving before load completes
+// will await the shared promise rather than timing out while models initialise.
+setImmediate(() => {
+  _ensureServices().catch(err => console.error('[AnalysisAPI] Startup model load error:', err.message));
+});
 
 // ── Per-camera stateful context (tracker + behavior) ─────────────────────────
 // key: cameraId  value: { tracker, behavior, lastSeenAt }

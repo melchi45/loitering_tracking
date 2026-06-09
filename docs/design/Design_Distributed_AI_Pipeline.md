@@ -215,7 +215,7 @@ module.exports = new AnalysisClient(); // 싱글턴
 **경로:** `server/src/routes/analysisApi.js`
 **역할:** analysis 서버의 HTTP 엔드포인트 라우터
 
-**핵심 설계:**
+**핵심 설계 — 모델 Eager Loading (Promise Mutex 패턴):**
 
 ```javascript
 'use strict';
@@ -228,6 +228,7 @@ const DetectionService  = require('../services/detection');
 const { ByteTracker }  = require('../services/tracking');
 const BehaviorEngine   = require('../services/behaviorEngine');
 const FireSmokeService = require('../services/fireSmokeService');
+const AttributePipeline = require('../services/attributePipeline');
 
 // Per-camera 컨텍스트 Map: cameraId → { tracker, behavior, lastSeenAt }
 const _cameras = new Map();
@@ -241,22 +242,43 @@ setInterval(() => {
   }
 }, 60_000);
 
-// 공유 detector (lazy 로드)
-let _detector = null;
+// 공유 서비스 인스턴스
+let _detector         = null;
+let _attrPipeline     = null;
 let _fireSmokeService = null;
 
-async function getOrCreateContext(cameraId) {
-  if (!_cameras.has(cameraId)) {
-    _cameras.set(cameraId, {
-      tracker:    new ByteTracker(),
-      behavior:   new BehaviorEngine(null /* zoneManager는 요청 zones로 대체 */),
-      lastSeenAt: Date.now(),
-    });
-  }
-  const ctx = _cameras.get(cameraId);
-  ctx.lastSeenAt = Date.now();
-  return ctx;
+// Promise mutex — 동시 다중 로드 방지
+let _servicesReady = false;
+let _loadPromise   = null;
+
+async function _ensureServices() {
+  if (_servicesReady) return;
+  if (!_loadPromise) _loadPromise = _loadServices();
+  await _loadPromise;
 }
+
+async function _loadServices() {
+  try {
+    _detector = new DetectionService();
+    await _detector.load();
+  } catch (err) { console.error('[AnalysisAPI] DetectionService load error:', err.message); }
+  try {
+    _attrPipeline = new AttributePipeline();
+    await _attrPipeline.load();
+  } catch (err) { console.error('[AnalysisAPI] AttributePipeline load error:', err.message); }
+  try {
+    _fireSmokeService = new FireSmokeService();
+    await _fireSmokeService.load();
+  } catch (err) { console.error('[AnalysisAPI] FireSmokeService load error:', err.message); }
+  _servicesReady = true;
+}
+
+// 모듈 로드 직후 즉시 모델 사전 로딩 시작 (첫 요청 대기 없음)
+setImmediate(() => {
+  _ensureServices().catch(err =>
+    console.error('[AnalysisAPI] Startup model load error:', err.message)
+  );
+});
 
 // 동시 요청 카운터
 let _concurrentRequests = 0;
@@ -266,7 +288,7 @@ const _maxConcurrent    = parseInt(process.env.ANALYSIS_MAX_CONCURRENT || '4', 1
 const _startTime        = Date.now();
 
 router.post('/frame', async (req, res) => {
-  const { cameraId, frameId, timestamp, frame, zones, analyticsConfig } = req.body;
+  const { cameraId, frameId, timestamp, frame, zones } = req.body;
   if (!cameraId || !frame) return res.status(400).json({ error: 'cameraId and frame are required' });
 
   if (_concurrentRequests >= _maxConcurrent) {
@@ -280,6 +302,9 @@ router.post('/frame', async (req, res) => {
 
   _concurrentRequests++;
   try {
+    // 서비스 준비 완료까지 대기 (최초 요청 시 로딩 중이면 여기서 블록)
+    await _ensureServices();
+
     const ctx = await getOrCreateContext(cameraId);
     const jpegBuf = Buffer.from(frame, 'base64');
 
@@ -304,6 +329,7 @@ router.get('/health', (req, res) => {
   res.json({
     status: 'ok',
     mode: 'analysis',
+    servicesReady: _servicesReady,
     activeCameras: _cameras.size,
     concurrentRequests: _concurrentRequests,
     maxConcurrent: _maxConcurrent,
@@ -317,6 +343,12 @@ router.get('/health', (req, res) => {
 module.exports = router;
 ```
 
+**Eager Loading 설계 원칙:**
+- `setImmediate()` — 이벤트 루프 첫 tick에서 모델 로딩 시작. 서버 시작 후 첫 프레임 수신 전에 ONNX 모델이 준비됨
+- Promise mutex (`_loadPromise`) — 동시에 여러 요청이 도착해도 `_loadServices()`는 한 번만 실행
+- 각 서비스는 독립적 try-catch: 한 모델이 실패해도 나머지 서비스는 계속 작동
+- `/api/analysis/health` 응답에 `servicesReady` 필드 포함 — 준비 상태 모니터링 가능
+
 ### 2.3 pipelineManager.js (수정)
 
 `frame` 이벤트 핸들러 내 AI 추론 섹션에 모드 분기 추가:
@@ -327,28 +359,40 @@ const analysisClient = SERVER_MODE === 'streaming'
   ? require('./analysisClient')
   : null;
 
+// ANALYSIS_FPS per-camera 전송 레이트 리미터
+// 0 = unlimited (latest-frame-wins 자동 조절)
+// N > 0 = 카메라당 N fps로 하드 캡
+const _ANALYSIS_FPS         = Math.max(0, parseFloat(process.env.ANALYSIS_FPS || '0'));
+const _ANALYSIS_INTERVAL_MS = _ANALYSIS_FPS > 0 ? 1000 / _ANALYSIS_FPS : 0;
+
+// per-camera ctx 초기화 시 포함
+// _lastAnalysisQueueAt: 0,   // epoch ms — ANALYSIS_FPS 레이트 리미터 기준점
+
 // frame 이벤트 핸들러 내부 (기존 코드 블록 교체)
 if (SERVER_MODE === 'streaming') {
   // ── Streaming 모드: 외부 analysis 서버로 위임 ─────────────────
-  const payload = {
-    cameraId: camera.id,
-    frameId: currentFrameId,
-    timestamp: new Date(timestamp).toISOString(),
-    frame: jpegBuffer.toString('base64'),
-    zones: this._zoneManager.getZonesForCamera(camera.id),
-    analyticsConfig: analyticsConfig.getConfig(),
-  };
-  const result = await analysisClient.analyzeFrame(payload);
-  if (result) {
-    // 분석 결과로 Socket.IO 이벤트 발행
-    this._io.to(camera.id).emit('detections', { cameraId: camera.id, ...result });
-    // AlertService 처리 (behaviors 기반)
-    for (const b of result.behaviors || []) {
-      if (b.loitering) {
-        await this._alertService.createAlert({ ...b, cameraId: camera.id });
-      }
-    }
+  if (!this._analysisClient) return;
+
+  // ANALYSIS_FPS 레이트 리미터: 이전 큐잉 후 충분한 시간이 지나지 않으면 프레임 드롭
+  if (_ANALYSIS_INTERVAL_MS > 0) {
+    if (timestamp - ctx._lastAnalysisQueueAt < _ANALYSIS_INTERVAL_MS) return;
   }
+  ctx._lastAnalysisQueueAt = timestamp;
+
+  // latest-frame-wins 패턴: 이전 inflight가 완료되기 전에 새 프레임 도착 시
+  // _pendingFrame을 덮어써서 가장 최신 프레임만 전송
+  ctx._pendingFrame = {
+    cameraId: camera.id,
+    cameraName: camera.name,
+    frameId: currentFrameId,
+    ts: timestamp,
+    buf: jpegBuffer,
+    fw: frameWidth,
+    fh: frameHeight,
+    zones: this._zoneManager.getActiveZones(camera.id),
+  };
+  if (!ctx._analyzing) this._runPendingAnalysis(ctx, camera, analyticsConfig);
+  return;
 } else {
   // ── Combined 모드: 기존 로직 100% 유지 ──────────────────────────
   // (기존 DetectionService, ByteTracker, BehaviorEngine 코드)
@@ -532,6 +576,52 @@ if (SERVER_MODE === 'streaming' && !process.env.ANALYSIS_SERVER_URL) {
 [analysis 서버 backpressure] → 503 응답으로 2차 방어
 ```
 
+### 5.3 ANALYSIS_FPS per-camera 레이트 리미터 (pipelineManager.js)
+
+streaming 서버가 analysis 서버로 프레임을 전송하는 속도를 카메라별로 제어합니다.
+
+```
+[frame 이벤트 발생]
+       │
+       ▼
+[ANALYSIS_FPS > 0?]
+       │
+  Yes ─┤  [now - ctx._lastAnalysisQueueAt < _ANALYSIS_INTERVAL_MS?]
+       │         │
+       │    Yes ─┴──► return (프레임 드롭 — 레이트 캡 적용)
+       │         │
+       │    No ──┘
+       │
+  No ──┤  (ANALYSIS_FPS=0: 레이트 캡 없음)
+       │
+       ▼
+[ctx._lastAnalysisQueueAt = timestamp]
+       │
+       ▼
+[ctx._pendingFrame 갱신 (latest-frame-wins)]
+       │
+       ▼
+[_runPendingAnalysis() 실행]
+```
+
+**ANALYSIS_FPS=0 (기본값, 권장):**
+- 레이트 리미터를 완전히 비활성화
+- analysis 서버 추론 속도가 직접 처리량을 결정 ("latest-frame-wins" 자동 조절)
+- 추론이 빨라지면 fps가 자동으로 증가; 별도 설정 변경 불필요
+
+**ANALYSIS_FPS=N (> 0):**
+- 카메라당 N fps로 하드 캡
+- 원격 분석 서버나 대역폭 제한 환경에서 부하 제어 목적으로 사용
+- N fps 이하로만 전송되므로 추론이 빨라져도 N fps 이상으로 증가하지 않음
+
+**CPU 추론 환경 실측 처리량 참고:**
+| 활성화 모듈 | 카메라 1대 | 카메라 4대 (동시) |
+|---|---|---|
+| detection only | ~5 fps | ~1.25 fps |
+| detection + face | ~1.8 fps | ~0.7 fps |
+| detection + face + fire/smoke | ~1.2 fps | ~0.5 fps |
+| GPU (ONNX_CUDA=1) | ~20 fps | ~15 fps |
+
 ---
 
 ## 6. Backward Compatibility — combined 모드
@@ -692,8 +782,9 @@ server/src/
 |---|---|---|---|
 | `SERVER_MODE` | `combined` | 전체 | 서버 운영 모드 |
 | `ANALYSIS_SERVER_URL` | (없음) | streaming | analysis 서버 기본 URL |
-| `ANALYSIS_REQUEST_TIMEOUT_MS` | `5000` | streaming | 분석 요청 타임아웃 (ms) |
+| `ANALYSIS_REQUEST_TIMEOUT_MS` | `5000` | streaming | 분석 요청 타임아웃 (ms). 최악의 경우 추론 시간보다 크게 설정 (CPU: 5000, GPU: 2000) |
 | `ANALYSIS_MAX_CONCURRENT` | `4` | streaming, analysis | 최대 동시 요청 수 |
+| `ANALYSIS_FPS` | `0` | streaming | 카메라당 analysis 서버 전송 fps 상한. `0` = unlimited (latest-frame-wins 자동 조절, 권장). `N > 0` = 하드 캡 N fps |
 
 ---
 

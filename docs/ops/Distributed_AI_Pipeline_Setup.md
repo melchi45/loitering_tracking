@@ -113,12 +113,18 @@ SERVER_MODE=streaming
 # analysis 서버 URL (필수)
 ANALYSIS_SERVER_URL=http://192.168.1.200:3001
 
-# 분석 요청 타임아웃 (ms) — analysis 서버 GPU 처리 시간에 맞게 조정
+# 분석 요청 타임아웃 (ms) — 최악의 경우 추론 시간보다 크게 설정
+# CPU 전용: 5000ms / GPU (RTX 3070+): 2000ms
 ANALYSIS_REQUEST_TIMEOUT_MS=5000
 
 # 최대 동시 분석 요청 수 — 카메라 수와 analysis 서버 GPU 용량을 고려하여 설정
 # 카메라 8대 / GPU 1개: 4~8 권장
 ANALYSIS_MAX_CONCURRENT=4
+
+# 카메라당 analysis 서버 전송 fps 상한 (0 = unlimited, 권장)
+# 0: latest-frame-wins 자동 조절 — 추론이 빨라지면 fps가 자동 증가
+# N: 하드 캡 N fps — 대역폭/부하 제한이 필요한 환경에서 사용
+ANALYSIS_FPS=0
 
 # ── 카메라 캡처 ───────────────────────────────────────────────────────────────
 CAPTURE_BACKEND=ffmpeg
@@ -260,16 +266,30 @@ npm start
 |---|---|---|---|
 | `SERVER_MODE` | `combined` | 전체 | 서버 운영 모드 (`combined` / `streaming` / `analysis`) |
 | `ANALYSIS_SERVER_URL` | (없음) | `streaming` | analysis 서버 기본 URL (필수) |
-| `ANALYSIS_REQUEST_TIMEOUT_MS` | `5000` | `streaming` | HTTP 요청 타임아웃 (밀리초, 500~30000 권장) |
+| `ANALYSIS_REQUEST_TIMEOUT_MS` | `5000` | `streaming` | HTTP 요청 타임아웃 (밀리초). 최악의 경우 추론 시간보다 크게 설정 |
 | `ANALYSIS_MAX_CONCURRENT` | `4` | `streaming`, `analysis` | 최대 동시 요청 수 |
+| `ANALYSIS_FPS` | `0` | `streaming` | 카메라당 전송 fps 상한. `0` = unlimited (권장); `N > 0` = 하드 캡 |
 
 ### 5.2 ANALYSIS_REQUEST_TIMEOUT_MS 권장값
 
 | 환경 | 권장값 | 이유 |
 |---|---|---|
 | LAN (RTT < 1ms) + RTX 3070 | 2000ms | GPU 추론 ~100ms + 여유 |
-| LAN (RTT < 1ms) + CPU 전용 | 5000ms (기본값) | CPU 추론 ~500ms + 여유 |
+| LAN (RTT < 1ms) + CPU 전용 | 5000ms (기본값) | CPU 추론 최대 ~1500ms (face+fire 활성 시) + 여유 |
 | WAN 또는 고지연 네트워크 | 8000ms | 네트워크 지연 고려 |
+
+> **주의:** 타임아웃이 너무 짧으면 (예: 100ms) ONNX 추론이 완료되기 전에 모든 요청이 실패하여
+> 분석 클라이언트 circuit breaker가 작동하고 15초 동안 요청이 차단됩니다.
+> 항상 실제 추론 시간(`/api/analysis/metrics`에서 `avgProcessingMs` 확인)보다 최소 3배 이상으로 설정하세요.
+
+### 5.4 ANALYSIS_FPS 권장값
+
+| 환경 | 권장값 | 이유 |
+|---|---|---|
+| 로컬 LAN + GPU 서버 | `0` (unlimited) | 추론 속도가 자동으로 처리량 결정 |
+| 로컬 LAN + CPU 전용, face 활성 | `0` (unlimited) | 0.7~1.8fps 수준에서 자동 수렴 |
+| 원격 WAN 연결 | `1` ~ `2` | 대역폭 절감 (frame당 ~50-200KB) |
+| 부하 테스트 / 시뮬레이션 | `1` | 재현 가능한 고정 부하 확인 |
 
 ### 5.3 ANALYSIS_MAX_CONCURRENT 권장값
 

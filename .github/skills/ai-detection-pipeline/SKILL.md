@@ -182,3 +182,64 @@ RTSP/WebRTC 스트림
 
 - `SERVER_MODE=streaming`에서 `ANALYSIS_SERVER_URL`이 비어 있어도 서버는 종료되지 않습니다.
 - 이 경우 monitoring-only(영상 스트리밍만 유지, 원격 AI 결과 미수신)로 동작합니다.
+
+## 최근 운영 변경 (2026-06-09)
+
+### 1. analysisApi.js — Eager Loading (Promise Mutex 패턴)
+
+**변경 전 문제:** 모델을 첫 요청 시 lazy 로딩했고, 로딩 중(`_servicesLoading=true`) 두 번째 요청이 200ms 대기 후 재시도하는 spin-wait 패턴이 있어 동시 요청 시 모델이 중복 로드될 경합 조건(race condition)이 존재했음. 또한 로딩 중 streaming 서버의 100ms 짧은 타임아웃 요청들이 모두 실패해 circuit breaker가 열림.
+
+**변경 후:**
+```javascript
+let _loadPromise = null;
+
+async function _ensureServices() {
+  if (_servicesReady) return;
+  if (!_loadPromise) _loadPromise = _loadServices();  // 한 번만 생성
+  await _loadPromise;                                  // 모든 호출자가 같은 Promise를 기다림
+}
+
+// 서버 시작 직후 사전 로딩 시작
+setImmediate(() => { _ensureServices().catch(...); });
+```
+- `setImmediate()` — 이벤트 루프 첫 tick에서 로딩 시작. 첫 요청 전 ONNX 모델이 준비됨
+- Promise mutex — 동시 요청 시에도 `_loadServices()`는 단 한 번만 실행
+
+### 2. pipelineManager.js — ANALYSIS_FPS per-camera 레이트 리미터
+
+```javascript
+const _ANALYSIS_FPS         = Math.max(0, parseFloat(process.env.ANALYSIS_FPS || '0'));
+const _ANALYSIS_INTERVAL_MS = _ANALYSIS_FPS > 0 ? 1000 / _ANALYSIS_FPS : 0;
+
+// frame 핸들러 내 (streaming 모드)
+if (_ANALYSIS_INTERVAL_MS > 0) {
+  if (timestamp - ctx._lastAnalysisQueueAt < _ANALYSIS_INTERVAL_MS) return;
+}
+ctx._lastAnalysisQueueAt = timestamp;
+```
+
+- `ANALYSIS_FPS=0` (기본값, 권장): 레이트 리미터 비활성 → analysis 서버 추론 속도가 직접 처리량 결정
+- `ANALYSIS_FPS=N`: 카메라당 N fps로 하드 캡 → 원격 서버/대역폭 제한 환경용
+- 추론이 빨라지면 (GPU 업그레이드, 모듈 비활성화) fps가 자동으로 증가 — 코드 변경 불필요
+
+### 3. analyticsConfig.js — isEnabled() 알 수 없는 키 버그 수정
+
+**변경 전:** `return _getOrInit()[moduleId] !== false;`
+→ DB에 존재하지 않는 키(undefined)도 `!== false` 조건을 통과해 `true` 반환. 잘못된 DB 키나 테스트 키가 활성화된 것처럼 처리되어 불필요한 추론이 실행됨.
+
+**변경 후:**
+```javascript
+function isEnabled(moduleId) {
+  const cfg = _getOrInit();
+  if (!(moduleId in DEFAULT_CONFIG)) return false;  // 알 수 없는 모듈은 항상 비활성
+  return cfg[moduleId] !== false;
+}
+```
+- `DEFAULT_CONFIG`에 없는 모듈 ID는 무조건 비활성 처리
+- DB 가비지 키(`__tc_f001_test_key__` 등)가 추론 파이프라인에 영향을 주지 않음
+
+### 4. ANALYSIS_REQUEST_TIMEOUT_MS 올바른 설정 기준
+
+- **잘못된 설정 (100ms):** ONNX 추론(150~1400ms)이 완료되기 전 타임아웃 → 모든 요청 실패 → circuit breaker 작동 (15초 차단) → 반복
+- **올바른 설정:** 최악 추론 시간의 3배 이상. CPU 전용이면 5000ms, GPU면 2000ms
+- `ANALYSIS_REQUEST_TIMEOUT_MS` < 실제 추론 시간이면 모든 프레임이 드롭되고 분석이 완전히 중단됨
