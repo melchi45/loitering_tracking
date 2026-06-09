@@ -472,22 +472,36 @@ async function main() {
   });
 
   // ── Serve React static build ──────────────────────────────────────────────
-  const clientBuildPath = path.resolve(__dirname, '..', '..', 'client', 'dist');
-  // express.static passes through silently when the directory doesn't exist yet,
-  // so register it unconditionally — no startup-time existsSync needed.
-  app.use(express.static(clientBuildPath));
-  console.log(`[Server] React UI path: ${clientBuildPath}`);
+  // Analysis-only mode is a backend AI service — no browser dashboard.
+  // Serving the SPA here causes browsers to connect Socket.IO to the analysis
+  // server instead of the streaming server, resulting in a rapid
+  // connect/transport-close loop because no camera events are emitted here.
+  if (SERVER_MODE === 'analysis') {
+    app.get('/', (_req, res) => {
+      res.json({
+        service: 'LTS-2026 Analysis Server',
+        mode: 'analysis',
+        status: 'ok',
+        endpoints: ['/api/analysis/metrics', '/api/analysis/health', '/api/analysis/frame', '/health'],
+      });
+    });
+    console.log('[Server] Analysis mode — React UI not served (API-only)');
+  } else {
+    const clientBuildPath = path.resolve(__dirname, '..', '..', 'client', 'dist');
+    app.use(express.static(clientBuildPath));
+    console.log(`[Server] React UI path: ${clientBuildPath}`);
 
-  // SPA fallback: check at request time so the server doesn't need a restart
-  // after 'npm run build' completes while the server is already running.
-  app.get(/^(?!\/api|\/auth|\/admin|\/health|\/internal|\/socket\.io).*/, (req, res) => {
-    const indexHtml = path.join(clientBuildPath, 'index.html');
-    if (fs.existsSync(indexHtml)) {
-      res.sendFile(indexHtml);
-    } else {
-      res.send('<h2>LTS Backend running. Build the client: <code>node server/src/scripts/buildClient.js</code></h2>');
-    }
-  });
+    // SPA fallback: check at request time so the server doesn't need a restart
+    // after 'npm run build' completes while the server is already running.
+    app.get(/^(?!\/api|\/auth|\/admin|\/health|\/internal|\/socket\.io).*/, (req, res) => {
+      const indexHtml = path.join(clientBuildPath, 'index.html');
+      if (fs.existsSync(indexHtml)) {
+        res.sendFile(indexHtml);
+      } else {
+        res.send('<h2>LTS Backend running. Build the client: <code>node server/src/scripts/buildClient.js</code></h2>');
+      }
+    });
+  }
 
   // Global error handler
   app.use((err, req, res, next) => {

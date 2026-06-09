@@ -401,40 +401,17 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
     cameraMetric.fireSmokeTotal += fireSmoke.length;
     cameraMetric.loiteringTotal += loiteringCount;
 
-    // ── Emit results to browser clients subscribed to this camera ────────────
-    const io           = req.app.get('io');
+    // Results are returned in the HTTP response body so the calling streaming
+    // server can emit Socket.IO events to browser clients via _processRemoteResult.
+    // Direct Socket.IO emissions from the analysis server are intentionally omitted:
+    // browsers connect to the streaming server, not here.
     const alertService = req.app.get('alertService');
 
-    if (io) {
-      const allDetections = [
-        ...(enrichedObjects || []),
-        ...(faceDetections || []),
-        ...(fireSmoke || []),
-      ];
-      io.to(cameraId).emit('detections', {
-        cameraId,
-        cameraName: ctx.cameraName || cameraName || cameraId,
-        frameId,
-        timestamp: ts,
-        detections: allDetections,
-        frameWidth,
-        frameHeight,
-      });
-    }
-
-    // ── Process behaviors: loitering alerts ──────────────────────────────────
+    // ── Process behaviors: loitering alerts (alert persistence only) ──────────
     const behaviors = behaviorsResult || [];
     for (const b of behaviors) {
-      if (b.isLoitering || b.type === 'loitering') {
-        if (io)           io.to(cameraId).emit('loitering', { ...b, cameraId });
-        if (alertService) alertService.createAlert({ ...b, cameraId }).catch(() => {});
-      }
-    }
-
-    // ── Fire/smoke alerts ─────────────────────────────────────────────────────
-    if (io && fireSmoke.length > 0) {
-      for (const fs of fireSmoke) {
-        io.to(cameraId).emit('fire:alert', { cameraId, timestamp: ts, ...fs });
+      if ((b.isLoitering || b.type === 'loitering') && alertService) {
+        alertService.createAlert({ ...b, cameraId }).catch(() => {});
       }
     }
 
