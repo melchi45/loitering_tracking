@@ -17,6 +17,69 @@ This guide describes how to switch to **MongoDB 5.0** as the primary database, w
 
 > **Tested on:** Ubuntu 18.04 LTS (Bionic) · MongoDB 5.0.33 · AVX-capable CPU required
 
+---
+
+## 빠른 시작 — `npm run install_db` (권장)
+
+MongoDB가 **별도 서버**에 설치된 경우, 대화형 설치 스크립트를 사용하면 컬렉션 생성·인덱스 초기화·`.env` 업데이트를 자동으로 처리합니다.
+
+```bash
+cd server
+npm run install_db
+```
+
+스크립트를 실행하면 다음 항목을 단계별로 입력합니다:
+
+| 프롬프트 | 기본값 | 설명 |
+|---|:---:|---|
+| MongoDB 호스트 | `127.0.0.1` | IP 주소 또는 hostname |
+| MongoDB 포트 | `27017` | MongoDB 리스닝 포트 |
+| 관리자 계정 | (없음) | 인증 없으면 Enter — 관리자 권한으로 사용자 생성 |
+| 관리자 비밀번호 | (없음) | 마스킹 입력 |
+| 데이터베이스 이름 | `lts` | 생성할 DB 이름 |
+| 전용 DB 사용자 생성 | `y` | 전용 readWrite 사용자 생성 여부 |
+| DB 사용자 이름 | `ltsuser` | 생성할 사용자 계정 |
+| DB 사용자 비밀번호 | (없음) | 마스킹 입력 |
+
+### 수행 작업
+
+1. 관리자 URI로 접속 테스트
+2. 전용 DB 사용자 생성 (이미 존재하면 비밀번호 업데이트)
+3. 컬렉션 11개 생성: `cameras`, `zones`, `events`, `alerts`, `faceGalleries`, `faceGalleryFaces`, `settings`, `detectionSnapshots`, `faceMatchHistory`, `missing_persons`, `missing_person_detections`
+4. 인덱스 17개 생성 (unique + 복합 인덱스)
+5. `server/.env` 자동 업데이트: `DB_TYPE=mongodb`, `MONGODB_URI=...`, `MONGODB_DB_NAME=...`
+6. 최종 URI로 접속 검증 (ping)
+
+### CLI 옵션 (비대화형 모드)
+
+```bash
+node src/scripts/installDb.js \
+  --host 192.168.1.100 \
+  --port 27017 \
+  --admin-user admin \
+  --admin-pwd secret \
+  --db lts \
+  --db-user ltsuser \
+  --db-pwd ltspwd
+```
+
+`--skip-user` 플래그를 추가하면 사용자 생성 단계를 건너뜁니다.
+
+### 실행 후 서버 재시작
+
+```bash
+# .env 업데이트 내용이 적용됩니다
+cd server && npm run dev
+```
+
+로그에서 확인:
+```
+[MongoDB] connected → mongodb://ltsuser:****@192.168.1.100:27017/lts
+[DB] Storage mode: MongoDB (JSON as hot-standby backup)
+```
+
+---
+
 ## Step 1 — Install MongoDB 5.0
 
 ```bash
@@ -131,6 +194,25 @@ Confirm in logs (`/tmp/lts.log`):
 | `AVX` error on start | CPU lacks AVX support | Use MongoDB 4.4 instead (does not require AVX) |
 | Data lost after server restart | `STORAGE_PATH` resolves to wrong directory | Ensure `STORAGE_PATH=./storage` and server cwd = `server/`; verify with `grep STORAGE /tmp/lts.log` |
 | `[DB] MongoDB ... empty — seeding from JSON` | Collection empty on first start | Normal behaviour — JSON fallback seeds MongoDB automatically |
+| `[DB] JSON persist error: Invalid string length` | In-memory store exceeded V8 JSON string limit | Switch to `DB_TYPE=mongodb` or check `TABLE_ROW_CAPS` in `db.js`; `faceMatchHistory` must not store base64 image data |
+| `install_db` fails with `Authentication failed` | Wrong admin credentials | Verify with `mongosh --host HOST -u ADMIN_USER -p` |
+| `install_db` fails with `Connection refused` | MongoDB not listening on host:port | Check `sudo systemctl status mongod` on the remote server; verify firewall allows port 27017 |
+
+---
+
+## db.js 메모리 제한 (TABLE_ROW_CAPS)
+
+고용량 트랜잭션 테이블은 `server/src/db.js`의 `TABLE_ROW_CAPS`로 인-메모리 행 수를 제한합니다.
+MongoDB 연결 시 해당 테이블은 JSON 백업에서 제외됩니다(`MONGO_ONLY_TABLES`).
+
+| 테이블 | 최대 행 수 (JSON 모드) | MongoDB 저장 여부 |
+|---|:---:|:---:|
+| `events` | 20,000 | ✅ |
+| `alerts` | 10,000 | ✅ |
+| `detectionSnapshots` | 2,000 | ✅ |
+| `faceMatchHistory` | 5,000 | ✅ |
+| `missing_person_detections` | 5,000 | ✅ |
+| `cameras`, `zones`, `settings` 등 | 제한 없음 | ✅ |
 
 ---
 
@@ -139,3 +221,4 @@ Confirm in logs (`/tmp/lts.log`):
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — MongoDB 5.0 installation and migration guide for Ubuntu 18.04 |
+| 1.1 | 2026-06-09 | LTS Engineering Team | Add `npm run install_db` script documentation, TABLE_ROW_CAPS reference, extended troubleshooting |

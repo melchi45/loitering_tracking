@@ -129,6 +129,13 @@ cd server && npm test
 
 # Docker로 전체 스택 실행
 docker compose up -d
+
+# MongoDB 원격 서버 초기 설정 (컬렉션·인덱스·.env 자동 구성)
+cd server && npm run install_db
+# 비대화형 모드:
+node src/scripts/installDb.js --host HOST --port 27017 \
+  --admin-user admin --admin-pwd secret \
+  --db lts --db-user ltsuser --db-pwd ltspwd
 ```
 
 ---
@@ -142,8 +149,32 @@ docker compose up -d
 - `zone-alert-management/SKILL.md` — 구역 및 경보 관리
 - `react-dashboard-dev/SKILL.md` — React UI 개발
 - `cross-camera-face-reid/SKILL.md` — 얼굴 인식 및 Re-ID
-- `docker-deploy/SKILL.md` — Docker 배포
+- `docker-deploy/SKILL.md` — Docker 배포 및 MongoDB 원격 설정
 - `api-testing/SKILL.md` — 테스트 작성 및 실행
+
+---
+
+## SDLC 문서-코드 동기화 규칙
+
+> **Copilot이 이 프로젝트에서 코드 또는 문서를 수정할 때 반드시 준수해야 합니다.**
+
+### 코드 → 문서 방향 (코드 변경 시)
+
+| 코드 변경 유형 | 업데이트 대상 문서 |
+|---|---|
+| 새 API 엔드포인트 추가/삭제 | `copilot-instructions.md` API 표, `docs/design/`, `docs/srs/` |
+| Socket.IO 이벤트 추가/변경 | `copilot-instructions.md` 이벤트 표, `docs/design/` |
+| 서비스 파일 추가/제거 | `copilot-instructions.md` 디렉토리 구조, `pipelineManager.js` 등록 |
+| DB 스키마/컬렉션 변경 | `docs/design/Design_Storage_MongoDB.md`, `docs/ops/MongoDB_Setup.md` |
+| 환경변수 추가/변경 | 관련 `docs/ops/` 가이드, `docker-deploy/SKILL.md` `.env` 예시 |
+| npm 스크립트 추가 | `copilot-instructions.md` 개발 명령어 섹션 |
+| Docker/배포 설정 변경 | `docker-deploy/SKILL.md`, `docs/ops/` |
+
+### 문서/스킬 → 코드 방향
+
+- **설계 문서(`docs/design/`)** 변경 → 해당 서비스 코드에 설계 반영 여부 확인
+- **스킬 파일 업데이트** → `.github/skills/`와 `.claude/skills/`는 항상 동일 내용으로 동기화
+- `CLAUDE.md`와 `copilot-instructions.md`의 API 표·이벤트 표·명령어는 코드 실제 상태와 항상 일치
 
 ---
 

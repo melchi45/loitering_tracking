@@ -49,23 +49,31 @@ function request(method, url, body) {
 async function addCameraPath(cameraId, rtspUrl) {
   try {
     const body = JSON.stringify({
-      source:          rtspUrl,
-      sourceOnDemand:  false,
+      source:            rtspUrl,
+      sourceOnDemand:    false,
       overridePublisher: true,
     });
-    // Try v3 API first (MediaMTX 1.0+)
+
+    // Try v3 API first (MediaMTX 1.0+), fall back to v2 on 404
     let res = await request('POST', `${MEDIAMTX_API}/v3/config/paths/add/${cameraId}`, body);
     if (res.status === 404) {
-      // Fall back to legacy v2 API path
       res = await request('POST', `${MEDIAMTX_API}/v2/config/paths/add/${cameraId}`, body);
     }
+
+    // 400 means the path already exists from a previous server run — patch it instead
+    if (res.status === 400) {
+      res = await request('PATCH', `${MEDIAMTX_API}/v3/config/paths/patch/${cameraId}`, body);
+      if (res.status === 404) {
+        res = await request('PATCH', `${MEDIAMTX_API}/v2/config/paths/patch/${cameraId}`, body);
+      }
+    }
+
     if (res.status >= 200 && res.status < 300) {
       console.log(`[MediaMTX] Path registered: /${cameraId}`);
       return true;
-    } else {
-      console.warn(`[MediaMTX] addCameraPath(${cameraId.slice(0,8)}) HTTP ${res.status}: ${res.body.slice(0,120)}`);
-      return false;
     }
+    console.warn(`[MediaMTX] addCameraPath(${cameraId.slice(0,8)}) HTTP ${res.status}: ${res.body.slice(0,120)}`);
+    return false;
   } catch (err) {
     console.warn(`[MediaMTX] addCameraPath(${cameraId.slice(0,8)}) failed (MediaMTX not running?): ${err.message}`);
     return false;
@@ -94,6 +102,31 @@ async function removeCameraPath(cameraId) {
 }
 
 /**
+ * Poll the MediaMTX runtime path endpoint until the source is ready (upstream RTSP
+ * connected) or the timeout expires.  Avoids the race where PyAV starts immediately
+ * after path registration but MediaMTX hasn't finished its upstream pull handshake.
+ *
+ * @param {string} cameraId
+ * @param {number} [maxWaitMs=8000]   Give up after this many ms (non-fatal).
+ * @param {number} [pollMs=250]       How often to poll.
+ * @returns {Promise<boolean>}        true = path became ready; false = timed out.
+ */
+async function waitForPathReady(cameraId, maxWaitMs = 8000, pollMs = 250) {
+  const deadline = Date.now() + maxWaitMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await request('GET', `${MEDIAMTX_API}/v3/paths/get/${cameraId}`);
+      if (res.status === 200) {
+        const data = JSON.parse(res.body);
+        if (data.ready === true) return true;
+      }
+    } catch (_) { /* MediaMTX not yet started — keep polling */ }
+    await new Promise(r => setTimeout(r, pollMs));
+  }
+  return false;
+}
+
+/**
  * Check MediaMTX health.
  * @returns {Promise<boolean>}
  */
@@ -106,4 +139,4 @@ async function isHealthy() {
   }
 }
 
-module.exports = { addCameraPath, removeCameraPath, isHealthy };
+module.exports = { addCameraPath, removeCameraPath, waitForPathReady, isHealthy };

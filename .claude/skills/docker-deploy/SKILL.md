@@ -108,6 +108,19 @@ cp /etc/letsencrypt/live/your-domain.com/privkey.pem server/certs/server.key
 
 ## MongoDB 설정
 
+### 원격 MongoDB 초기 설정 (`npm run install_db`)
+별도 서버에 MongoDB가 설치된 경우 — 컬렉션·인덱스·`.env` 자동 구성:
+```bash
+cd server
+npm run install_db
+# 또는 CLI 옵션:
+node src/scripts/installDb.js \
+  --host 192.168.1.100 --port 27017 \
+  --admin-user admin --admin-pwd secret \
+  --db lts --db-user ltsuser --db-pwd ltspwd
+```
+수행 내용: 관리자 접속 → DB 사용자 생성 → 컬렉션 11개 + 인덱스 17개 초기화 → `server/.env` 자동 업데이트
+
 ### 로컬 MongoDB 실행 (Docker)
 ```bash
 docker run -d \

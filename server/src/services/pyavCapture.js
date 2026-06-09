@@ -1,5 +1,6 @@
 'use strict';
 
+const os           = require('os');
 const path         = require('path');
 const { spawn, spawnSync } = require('child_process');
 const { EventEmitter }     = require('events');
@@ -7,7 +8,8 @@ const { EventEmitter }     = require('events');
 const JPEG_SOI = Buffer.from([0xff, 0xd8, 0xff]);
 const JPEG_EOI = Buffer.from([0xff, 0xd9]);
 
-const RETRY_DELAY = 1000;
+const RETRY_DELAY_BASE = 1000;
+const RETRY_DELAY_MAX  = 30000;
 
 function resolveRuntimeOs() {
   const override = (process.env.SERVER_RUNTIME_OS || 'auto').trim().toLowerCase();
@@ -23,6 +25,14 @@ function firstNonEmpty(candidates) {
   return '';
 }
 
+function expandHome(p) {
+  if (!p) return p;
+  if (p === '~' || p.startsWith('~/') || p.startsWith('~\\')) {
+    return os.homedir() + p.slice(1);
+  }
+  return p;
+}
+
 function resolvePyavPythonBin() {
   const runtimeOs = resolveRuntimeOs();
   const pyavOsDefault = runtimeOs === 'windows'
@@ -33,14 +43,14 @@ function resolvePyavPythonBin() {
     : process.env.PYTHON_EXEC_LINUX;
   const fallback = runtimeOs === 'windows' ? 'python' : 'python3';
 
-  return firstNonEmpty([
+  return expandHome(firstNonEmpty([
     process.env.PYAV_PYTHON_BIN,
     pyavOsDefault,
     process.env.PYTHON_EXEC,
     pythonOsDefault,
     process.env.PYTHON,
     fallback,
-  ]);
+  ]));
 }
 
 const PYAV_PYTHON_BIN = resolvePyavPythonBin();
@@ -172,7 +182,7 @@ class PyAVCapture extends EventEmitter {
   _onData(chunk) {
     if (!this._connected) {
       this._connected  = true;
-      this._retryCount = 0;
+      this._retryCount = 0;  // reset backoff on successful connection
     }
     this._frameBuf = Buffer.concat([this._frameBuf, chunk]);
     this._extractFrames();
@@ -215,12 +225,13 @@ class PyAVCapture extends EventEmitter {
     if (!this._running) return;
     this._retryCount++;
     this._connected = false;
-    this.emit('reconnecting', { cameraId: this.cameraId, attempt: this._retryCount, delay: RETRY_DELAY });
+    const delay = Math.min(RETRY_DELAY_BASE * Math.pow(1.5, this._retryCount - 1), RETRY_DELAY_MAX);
+    this.emit('reconnecting', { cameraId: this.cameraId, attempt: this._retryCount, delay });
     this._retryTimer = setTimeout(() => {
       this._retryTimer = null;
       this._frameBuf   = Buffer.alloc(0);
       this._spawn();
-    }, RETRY_DELAY);
+    }, delay);
   }
 }
 

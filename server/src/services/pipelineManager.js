@@ -230,6 +230,14 @@ class PipelineManager {
           `[PipelineManager][${camera.id}] MediaMTX path registration failed — ` +
           `falling back to direct RTSP source (${rtspUrl})`
         );
+      } else {
+        // Wait for MediaMTX to establish its upstream RTSP pull before the capture
+        // client connects.  Without this, the first connect attempt always gets 404
+        // because MediaMTX hasn't finished the upstream handshake yet.
+        const pathReady = await mediamtxManager.waitForPathReady(camera.id, 8000);
+        if (!pathReady) {
+          console.warn(`[PipelineManager][${camera.id}] MediaMTX upstream not ready after 8 s — capture will retry`);
+        }
       }
     }
 
@@ -422,9 +430,11 @@ class PipelineManager {
                       _io.emit('missing_person_match', fullEvt);
                     }
                     try {
+                      // eslint-disable-next-line no-unused-vars
+                      const { liveCropData: _drop, ...evtForDb } = fullEvt;
                       _db.insert('faceMatchHistory', {
                         id:        require('crypto').randomUUID(),
-                        ...fullEvt,
+                        ...evtForDb,
                         createdAt: new Date(evt.timestamp).toISOString(),
                       });
                     } catch (dbErr) {
@@ -897,9 +907,11 @@ class PipelineManager {
             _io.emit('face_match', fullEvt);
             if (fullEvt.galleryType === 'missing') _io.emit('missing_person_match', fullEvt);
             try {
+              // eslint-disable-next-line no-unused-vars
+              const { liveCropData: _drop, ...evtForDb } = fullEvt;
               _db.insert('faceMatchHistory', {
                 id:        require('crypto').randomUUID(),
-                ...fullEvt,
+                ...evtForDb,
                 createdAt: new Date(evt.timestamp).toISOString(),
               });
             } catch (dbErr) {

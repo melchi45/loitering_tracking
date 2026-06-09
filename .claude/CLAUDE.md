@@ -183,6 +183,13 @@ node test/run_all.js
 docker compose up -d
 docker compose logs -f server
 docker compose build server && docker compose up -d server
+
+# MongoDB 원격 서버 초기 설정 (컬렉션·인덱스·.env 자동 구성)
+cd server && npm run install_db
+# 비대화형 모드:
+node src/scripts/installDb.js --host HOST --port 27017 \
+  --admin-user admin --admin-pwd secret \
+  --db lts --db-user ltsuser --db-pwd ltspwd
 ```
 
 ---
@@ -230,3 +237,39 @@ Claude에서 직접 사용 가능한 LTS-2026 MCP 도구:
 | `react-dashboard-dev` | React UI·Zustand·Tailwind·i18n |
 | `api-testing` | Jest 테스트·커버리지·CI 파이프라인 |
 | `docker-deploy` | Docker 배포·TLS·MongoDB·헬스체크 |
+
+---
+
+## SDLC 문서-코드 동기화 규칙
+
+> **이 규칙은 Claude가 이 프로젝트에서 작업할 때 반드시 준수해야 합니다.**
+
+### 코드 → 문서 방향 (코드 변경 시)
+
+코드(`server/src/`, `client/src/`)를 수정하면 **같은 PR/커밋 내**에 관련 문서도 업데이트해야 합니다:
+
+| 코드 변경 유형 | 업데이트 대상 문서 |
+|---|---|
+| 새 API 엔드포인트 추가/삭제 | `CLAUDE.md` API 표, 관련 `docs/design/`, `docs/srs/` |
+| Socket.IO 이벤트 추가/변경 | `CLAUDE.md` 이벤트 표, `docs/design/` |
+| 서비스 파일 추가/제거 (`services/*.js`) | `CLAUDE.md` 디렉토리 구조, `pipelineManager.js`에 등록 |
+| DB 스키마/컬렉션 변경 (`db.js`) | `docs/design/Design_Storage_MongoDB.md`, `docs/ops/MongoDB_Setup.md` |
+| 환경변수 추가/변경 | `docs/ops/` 관련 설정 가이드, `docker-deploy/SKILL.md` `.env` 예시 |
+| npm 스크립트 추가 (`package.json`) | `CLAUDE.md` 개발 명령어, `.github/copilot-instructions.md` |
+| 새 AI 서비스 추가 | `ai-detection-pipeline/SKILL.md`, `docs/design/` |
+| 인증/보안 로직 변경 | `docs/srs/SRS_User_Authentication.md`, 보안 규칙 섹션 |
+| Docker/배포 설정 변경 | `docker-deploy/SKILL.md`, `docs/ops/` |
+
+### 문서 → 코드 방향 (문서/스킬 변경 시)
+
+`docs/` 또는 `.claude/skills/`, `.github/skills/` 파일이 변경되면:
+
+- **설계 문서(`docs/design/`)** 변경 → 해당 서비스 코드에 설계 반영 여부 확인
+- **SRS(`docs/srs/`)** 요구사항 변경 → 구현 코드와 일치하는지 검증
+- **스킬 파일 업데이트** → `.claude/skills/`와 `.github/skills/`는 항상 동일 내용으로 동기화
+
+### 양방향 동기화 원칙
+
+1. `.claude/skills/`와 `.github/skills/`는 **항상 동일**해야 합니다 — 한쪽 수정 시 반대쪽도 동시 수정
+2. `CLAUDE.md`와 `.github/copilot-instructions.md`의 API 표·이벤트 표·명령어는 **코드 실제 상태와 항상 일치**
+3. `docs/ops/MongoDB_Setup.md`와 `docker-deploy/SKILL.md`의 MongoDB 섹션은 `server/src/db.js`, `installDb.js`와 동기화

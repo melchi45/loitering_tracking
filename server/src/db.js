@@ -72,10 +72,33 @@ function persistJson() {
   }, PERSIST_DEBOUNCE_MS);
 }
 
+// Tables safe to omit from the JSON backup when MongoDB holds them — these are
+// high-volume write streams that can exceed V8's JSON string limit and are
+// already durably stored in MongoDB.
+const MONGO_ONLY_TABLES = new Set([
+  'events', 'alerts', 'detectionSnapshots', 'faceMatchHistory', 'missing_person_detections',
+]);
+
+// Max rows kept in-memory per table. Oldest records are evicted when the cap is
+// exceeded. Prevents unbounded memory growth when MongoDB is unavailable (DB_TYPE=json
+// fallback) and the process runs for an extended period.
+const TABLE_ROW_CAPS = {
+  events:                    20000,
+  alerts:                    10000,
+  detectionSnapshots:         2000,
+  faceMatchHistory:           5000,
+  missing_person_detections:  5000,
+};
+
 /** Synchronous atomic write: write to .tmp, then rename to final path. */
 function _flushJson() {
   try {
-    fs.writeFileSync(TEMP_DB_PATH, JSON.stringify(store, null, 2));
+    // When MongoDB is active, skip large transactional tables to stay under V8's
+    // ~512 MB JSON string limit. Config tables (cameras, zones, …) are always included.
+    const payload = _isMongo()
+      ? Object.fromEntries(Object.entries(store).filter(([t]) => !MONGO_ONLY_TABLES.has(t)))
+      : store;
+    fs.writeFileSync(TEMP_DB_PATH, JSON.stringify(payload, null, 2));
     fs.renameSync(TEMP_DB_PATH, DB_PATH);
   } catch (err) {
     console.error('[DB] JSON persist error:', err.message);
@@ -210,6 +233,10 @@ const db = {
     const now = new Date().toISOString();
     const inserted = { createdAt: now, updatedAt: now, ...row };
     store[table].push(inserted);
+    // Prevent unbounded in-memory growth for high-volume transactional tables.
+    // Oldest records are dropped first; MongoDB / snapshotService handle durable retention.
+    const cap = TABLE_ROW_CAPS[table];
+    if (cap && store[table].length > cap) store[table] = store[table].slice(-cap);
     afterWrite(table, inserted.id, inserted, 'insert');
   },
   update(table, id, data) {
