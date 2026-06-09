@@ -103,7 +103,27 @@ function killPids(pids) {
   }
 }
 
-function main() {
+function isPortFree(port) {
+  const net = require('net');
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => resolve(false));
+    server.once('listening', () => { server.close(); resolve(true); });
+    server.listen(port, '127.0.0.1');
+  });
+}
+
+async function waitForPortsFree(ports, timeoutMs = 10000, pollMs = 200) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const results = await Promise.all(ports.map(isPortFree));
+    if (results.every(Boolean)) return true;
+    await new Promise(r => setTimeout(r, pollMs));
+  }
+  return false;
+}
+
+async function main() {
   const ports = getTargetPorts();
   const pids = process.platform === 'win32' ? getPidsOnWindows(ports) : getPidsOnUnix(ports);
 
@@ -114,7 +134,18 @@ function main() {
 
   console.log(`[Stop] Stopping PIDs on ports ${ports.join(', ')}: ${pids.join(', ')}`);
   killPids(pids);
-  console.log('[Stop] Done');
+
+  const freed = await waitForPortsFree(ports);
+  if (freed) {
+    console.log('[Stop] Done — ports released');
+  } else {
+    console.warn('[Stop] Timeout waiting for ports to be released — forcing SIGKILL');
+    for (const pid of pids) {
+      try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+    }
+    await waitForPortsFree(ports, 3000);
+    console.log('[Stop] Done');
+  }
 }
 
-main();
+main().catch((err) => { console.error('[Stop] Error:', err.message); process.exit(1); });
