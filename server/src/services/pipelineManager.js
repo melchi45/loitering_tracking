@@ -215,15 +215,29 @@ class PipelineManager {
     }
 
     const rtspUrl  = this._buildRtspUrl(camera);
-    const useWebRTC = !!camera.webrtcEnabled;
+    const requestedWebRTC = !!camera.webrtcEnabled;
     const captureFps = parseInt(process.env.CAPTURE_FPS, 10) || 10;
 
     // Register with MediaMTX when: browser WebRTC delivery is needed, OR the
     // mediamtx capture backend is active (so MediaMTX holds the single camera
     // connection and all capture backends read from the local RTSP re-publish).
-    const needsMediaMTX = useWebRTC || CAPTURE_BACKEND === 'mediamtx';
+    const needsMediaMTX = requestedWebRTC || CAPTURE_BACKEND === 'mediamtx';
+    let mediamtxReady = false;
     if (needsMediaMTX) {
-      mediamtxManager.addCameraPath(camera.id, rtspUrl).catch(() => {});
+      mediamtxReady = await mediamtxManager.addCameraPath(camera.id, rtspUrl).catch(() => false);
+      if (!mediamtxReady) {
+        console.warn(
+          `[PipelineManager][${camera.id}] MediaMTX path registration failed — ` +
+          `falling back to direct RTSP source (${rtspUrl})`
+        );
+      }
+    }
+
+    const useWebRTC = requestedWebRTC && mediamtxReady;
+    if (requestedWebRTC && !useWebRTC) {
+      console.warn(
+        `[PipelineManager][${camera.id}] WebRTC disabled for this pipeline because MediaMTX is unavailable.`
+      );
     }
 
     const mediamtxRtspPort = parseInt(process.env.MEDIAMTX_RTSP_PORT, 10) || 8554;
@@ -231,7 +245,7 @@ class PipelineManager {
     // ALL capture backends (gstreamer, ffmpeg, pyav) should read from the
     // MediaMTX local RTSP re-publish.  This prevents a second direct connection
     // to the camera which many devices limit to one simultaneous RTSP client.
-    const captureUrl = needsMediaMTX
+    const captureUrl = mediamtxReady
       ? `rtsp://127.0.0.1:${mediamtxRtspPort}/${camera.id}`
       : rtspUrl;
 

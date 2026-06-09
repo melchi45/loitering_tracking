@@ -61,11 +61,14 @@ async function addCameraPath(cameraId, rtspUrl) {
     }
     if (res.status >= 200 && res.status < 300) {
       console.log(`[MediaMTX] Path registered: /${cameraId}`);
+      return true;
     } else {
       console.warn(`[MediaMTX] addCameraPath(${cameraId.slice(0,8)}) HTTP ${res.status}: ${res.body.slice(0,120)}`);
+      return false;
     }
   } catch (err) {
     console.warn(`[MediaMTX] addCameraPath(${cameraId.slice(0,8)}) failed (MediaMTX not running?): ${err.message}`);
+    return false;
   }
 }
 
