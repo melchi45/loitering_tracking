@@ -20,51 +20,48 @@ type WebRTCState = 'idle' | 'connecting' | 'connected' | 'failed';
 const MAX_AUTO_RETRIES   = 8;
 const AUTO_RETRY_DELAY   = 3_000;
 const CONNECT_TIMEOUT_MS = 30_000;
-// How long to wait for ICE gathering before sending the offer anyway.
 const ICE_GATHER_TIMEOUT = 5_000;
 
 // ── Shared session registry ────────────────────────────────────────────────
-// Stores the active RTCPeerConnection + MediaStream per camera so that a
-// second consumer (e.g. fullscreen modal opening over the grid) can attach
-// to the existing stream immediately instead of waiting for a new WHEP
-// negotiation.
 //
-// Lifecycle:
-//   • First consumer → negotiates WHEP, stores entry with refCount=1.
-//   • Second consumer (cache hit) → increments refCount, attaches stream.
-//   • Any consumer leaving → decrements refCount.
-//   • Last consumer leaving (refCount reaches 0) → closes PC, deletes entry.
+// One entry per cameraId. The entry is created as soon as a WHEP negotiation
+// starts (stream=null), preventing a second component from starting a duplicate
+// negotiation. When the stream becomes available, all waiting consumers are
+// notified via callbacks. RefCount tracks every active consumer; the PC is
+// closed only when the last one unmounts.
+//
 interface SessionEntry {
-  pc:       RTCPeerConnection;
-  stream:   MediaStream;
-  hasAudio: boolean;
-  refCount: number;
+  pc:        RTCPeerConnection | null;   // null while negotiating
+  stream:    MediaStream | null;         // null until ontrack fires
+  hasAudio:  boolean;
+  refCount:  number;
+  callbacks: Set<(stream: MediaStream, hasAudio: boolean) => void>;
 }
+
 const sessionRegistry = new Map<string, SessionEntry>();
 
-// ── Helpers shared between effect paths ───────────────────────────────────
-
-function detachVideoElement(videoRef: React.RefObject<HTMLVideoElement>) {
+function detachVideo(videoRef: React.RefObject<HTMLVideoElement>) {
   if (!videoRef.current) return;
   try { videoRef.current.pause(); } catch (_) {}
   videoRef.current.srcObject = null;
 }
 
-function closeEntry(cameraId: string) {
-  const entry = sessionRegistry.get(cameraId);
-  if (!entry) return;
-  try { entry.pc.close(); } catch (_) {}
-  sessionRegistry.delete(cameraId);
+function releaseEntry(cameraId: string) {
+  const e = sessionRegistry.get(cameraId);
+  if (!e) return;
+  e.refCount--;
+  if (e.refCount <= 0) {
+    if (e.pc) { try { e.pc.close(); } catch (_) {} }
+    sessionRegistry.delete(cameraId);
+  }
 }
 
 /**
- * WebRTC hook — uses MediaMTX WHEP via the Node.js proxy at
- * POST /api/webrtc/whep/:cameraId
+ * WebRTC hook — MediaMTX WHEP via /api/webrtc/whep/:cameraId
  *
- * When multiple components mount with the same cameraId (e.g. grid cell +
- * fullscreen modal), the first one negotiates WHEP and all subsequent ones
- * immediately reuse the cached MediaStream.  The RTCPeerConnection stays
- * alive until the last consumer unmounts.
+ * Multiple components sharing the same cameraId (grid cell + fullscreen) share
+ * one RTCPeerConnection; no second WHEP negotiation is ever started while one
+ * is in progress or already connected.
  */
 export function useWebRTC(cameraId: string, enabled: boolean) {
   const { socket }    = useSocket();
@@ -72,19 +69,17 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
   const videoRef      = useRef<HTMLVideoElement>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
-  // Seed initial state from registry so fullscreen shows "connected" immediately
   const [state, setState] = useState<WebRTCState>(() => {
     const e = sessionRegistry.get(cameraId);
-    return (e && e.stream.active) ? 'connected' : 'idle';
+    return e?.stream?.active ? 'connected' : 'idle';
   });
   const [hasAudio, setHasAudio] = useState<boolean>(() => {
     const e = sessionRegistry.get(cameraId);
-    return !!(e && e.stream.active && e.hasAudio);
+    return !!(e?.stream?.active && e.hasAudio);
   });
 
   const [retryCount, setRetryCount] = useState(0);
-  // Incremented when a cached stream goes inactive to force re-negotiation
-  const [retryNonce, setRetryNonce] = useState(0);
+  const [retryNonce, setRetryNonce] = useState(0); // forces re-run when cached stream dies
 
   const retry = useCallback(() => {
     setRetryCount(0);
@@ -97,50 +92,65 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
 
     let cancelled = false;
 
-    // ── Path A: reuse an existing session ─────────────────────────────────
-    const existing = sessionRegistry.get(cameraId);
-    if (existing && existing.stream.active) {
-      existing.refCount++;
+    const existingEntry = sessionRegistry.get(cameraId);
+
+    // ── Case A: active stream already in registry ──────────────────────────
+    if (existingEntry?.stream?.active) {
+      existingEntry.refCount++;
       setState('connected');
-      setHasAudio(existing.hasAudio);
+      setHasAudio(existingEntry.hasAudio);
       if (videoRef.current) {
-        videoRef.current.srcObject = existing.stream;
-        videoRef.current.play().catch((err: DOMException | Error) => {
-          const name = (err as DOMException).name ?? '';
-          if (name !== 'AbortError' && name !== 'NotAllowedError') {
-            console.warn(`[useWebRTC][${cameraId.slice(0,8)}] cached play(): ${err.message}`);
-          }
-        });
+        videoRef.current.srcObject = existingEntry.stream;
+        videoRef.current.play().catch(_ignoreAbort);
       }
 
-      // Re-negotiate when the stream owner closes the PC
       const handleInactive = () => {
-        if (sessionRegistry.get(cameraId) === existing) {
-          sessionRegistry.delete(cameraId);
-        }
-        if (!cancelled) {
-          setState('connecting');
-          setRetryNonce(n => n + 1);
-        }
+        // Stream died — force re-negotiation on next render cycle
+        if (!cancelled) { setState('connecting'); setRetryNonce(n => n + 1); }
       };
-      existing.stream.addEventListener('inactive', handleInactive);
+      existingEntry.stream.addEventListener('inactive', handleInactive);
 
       return () => {
         cancelled = true;
-        existing.stream.removeEventListener('inactive', handleInactive);
-        detachVideoElement(videoRef);
+        existingEntry.stream!.removeEventListener('inactive', handleInactive);
+        detachVideo(videoRef);
         setState('idle');
         setHasAudio(false);
-
-        const entry = sessionRegistry.get(cameraId);
-        if (entry) {
-          entry.refCount--;
-          if (entry.refCount <= 0) closeEntry(cameraId);
-        }
+        releaseEntry(cameraId);
       };
     }
 
-    // ── Path B: negotiate a new WHEP session ──────────────────────────────
+    // ── Case B: negotiation already in progress — wait for stream ──────────
+    if (existingEntry && !existingEntry.stream) {
+      existingEntry.refCount++;
+      setState('connecting');
+
+      const onStream = (stream: MediaStream, ha: boolean) => {
+        if (cancelled) return;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          videoRef.current.play().catch(_ignoreAbort);
+        }
+        setState('connected');
+        setHasAudio(ha);
+      };
+      existingEntry.callbacks.add(onStream);
+
+      return () => {
+        cancelled = true;
+        const e = sessionRegistry.get(cameraId);
+        if (e) e.callbacks.delete(onStream);
+        detachVideo(videoRef);
+        setState('idle');
+        setHasAudio(false);
+        releaseEntry(cameraId);
+      };
+    }
+
+    // ── Case C: start a fresh WHEP negotiation ─────────────────────────────
+    // Create a placeholder entry immediately to block duplicate negotiations.
+    const entry: SessionEntry = { pc: null, stream: null, hasAudio: false, refCount: 1, callbacks: new Set() };
+    sessionRegistry.set(cameraId, entry);
     setState('connecting');
 
     const connectTimeoutId = setTimeout(() => {
@@ -164,6 +174,7 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
     socket.on('camera:stream-unavailable', handleStreamUnavailable);
 
     const pc = new RTCPeerConnection({ iceServers: getIceServers() });
+    entry.pc = pc;
     pc.addTransceiver('video', { direction: 'recvonly' });
     pc.addTransceiver('audio', { direction: 'recvonly' });
 
@@ -173,22 +184,17 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
       if (!stream) return;
       const ha = stream.getAudioTracks().length > 0;
 
-      // Register (or update) the shared session entry
-      const cur = sessionRegistry.get(cameraId);
-      if (cur) {
-        cur.stream   = stream;
-        cur.hasAudio = ha;
-      } else {
-        sessionRegistry.set(cameraId, { pc, stream, hasAudio: ha, refCount: 1 });
+      // Populate the shared entry and notify waiting consumers (Case B)
+      const e = sessionRegistry.get(cameraId);
+      if (e) {
+        e.stream   = stream;
+        e.hasAudio = ha;
+        for (const cb of e.callbacks) cb(stream, ha);
+        e.callbacks.clear();
       }
 
       videoRef.current.srcObject = stream;
-      videoRef.current.play().catch((err: DOMException | Error) => {
-        const name = (err as DOMException).name ?? '';
-        if (name !== 'AbortError' && name !== 'NotAllowedError') {
-          console.warn(`[useWebRTC][${cameraId.slice(0,8)}] play(): ${err.message}`);
-        }
-      });
+      videoRef.current.play().catch(_ignoreAbort);
       if (!cancelled) setHasAudio(ha);
     };
 
@@ -199,9 +205,9 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
 
         await new Promise<void>((resolve) => {
           if (pc.iceGatheringState === 'complete') { resolve(); return; }
-          const fallback = setTimeout(resolve, ICE_GATHER_TIMEOUT);
+          const fb = setTimeout(resolve, ICE_GATHER_TIMEOUT);
           pc.onicegatheringstatechange = () => {
-            if (pc.iceGatheringState === 'complete') { clearTimeout(fallback); resolve(); }
+            if (pc.iceGatheringState === 'complete') { clearTimeout(fb); resolve(); }
           };
         });
 
@@ -243,10 +249,13 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
             }, 5_000);
           }
         };
+
       } catch (err) {
         if (!cancelled) {
-          const msg = (err as Error).message ?? '';
-          console.error(`[useWebRTC][${cameraId.slice(0,8)}] ${msg}`);
+          console.error(`[useWebRTC][${cameraId.slice(0,8)}] ${(err as Error).message}`);
+          // Remove placeholder entry so next retry starts fresh
+          const e = sessionRegistry.get(cameraId);
+          if (e && !e.stream) sessionRegistry.delete(cameraId);
           setState('failed');
           clearTimeout(connectTimeoutId);
           if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
@@ -263,21 +272,20 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
       socket.off('camera:stream-unavailable', handleStreamUnavailable);
       if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = undefined; }
 
-      detachVideoElement(videoRef);
+      detachVideo(videoRef);
       setState('idle');
       setHasAudio(false);
 
-      // Decrement refCount; only close the PC when the last consumer leaves
-      const entry = sessionRegistry.get(cameraId);
-      if (entry) {
-        entry.refCount--;
-        if (entry.refCount <= 0) {
-          try { entry.pc.close(); } catch (_) {}
+      const e = sessionRegistry.get(cameraId);
+      if (e) {
+        e.refCount--;
+        if (e.refCount <= 0) {
+          if (e.pc) { try { e.pc.close(); } catch (_) {} }
           sessionRegistry.delete(cameraId);
         }
-        // If refCount > 0: other consumers hold the stream, keep PC alive
+        // refCount > 0: other consumers keep the session alive
       } else {
-        // Connection failed before the session was registered
+        // Entry was already removed (e.g. WHEP failed before entry was useful)
         try { pc.close(); } catch (_) {}
       }
     };
@@ -285,4 +293,11 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
   }, [cameraId, enabled, socket, retryCount, retryNonce]);
 
   return { videoRef, state, hasAudio, retry, iceStats: null as IceStats | null };
+}
+
+function _ignoreAbort(err: DOMException | Error) {
+  const name = (err as DOMException).name ?? '';
+  if (name !== 'AbortError' && name !== 'NotAllowedError') {
+    console.warn('[useWebRTC] play():', err.message ?? err);
+  }
 }

@@ -49,6 +49,15 @@ export function useCamera(cameraId: string) {
   useEffect(() => {
     if (!cameraId) return;
 
+    // Restore cached state on every effect run, including StrictMode remount
+    // (the cleanup resets state to [], so we need to restore here too)
+    const cachedDets = detectionCache.get(cameraId);
+    if (cachedDets) setDetections(cachedDets);
+    const dims = frameDimensions.get(cameraId);
+    if (dims) { setFrameWidth(dims.w); setFrameHeight(dims.h); }
+    const cachedFrame = latestFrameCache.get(cameraId);
+    if (cachedFrame !== undefined) setFrame(cachedFrame);
+
     const count = subscriptionCounts.get(cameraId) ?? 0;
     if (count === 0) socket.emit('camera:subscribe', { cameraId });
     subscriptionCounts.set(cameraId, count + 1);
