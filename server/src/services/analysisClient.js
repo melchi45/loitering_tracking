@@ -16,6 +16,9 @@ const DEFAULT_MAX_CONCURRENT = 16;
 const CIRCUIT_OPEN_THRESHOLD = 3;
 // How long the circuit stays open before a health probe is attempted (ms).
 const CIRCUIT_RETRY_INTERVAL = 15_000;
+// Health probe timeout — always longer than the per-frame timeout so that
+// a slow TLS handshake after reconnect does not prevent the circuit from closing.
+const HEALTH_PROBE_TIMEOUT_MS = 8_000;
 // Log at most one error line per camera per this interval (ms).
 const ERROR_LOG_INTERVAL_MS  = 10_000;
 
@@ -101,7 +104,7 @@ class AnalysisClient {
   /** GET /api/analysis/health */
   async healthCheck() {
     try {
-      return await this._get('/api/analysis/health');
+      return await this._get('/api/analysis/health', HEALTH_PROBE_TIMEOUT_MS);
     } catch (err) {
       return { status: 'unreachable', error: err.message };
     }
@@ -242,10 +245,11 @@ class AnalysisClient {
     });
   }
 
-  _get(pathname) {
+  _get(pathname, timeoutOverride) {
     return new Promise((resolve, reject) => {
       const mod  = this._httpModule();
       const opts = this._requestOptions('GET', pathname, 0);
+      if (timeoutOverride) opts.timeout = timeoutOverride;
       delete opts.headers['Content-Type'];
       delete opts.headers['Content-Length'];
       const req  = mod.request(opts, (res) => {
