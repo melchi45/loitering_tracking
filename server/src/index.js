@@ -2,7 +2,7 @@
 
 // Load environment variables first
 try {
-  require('dotenv').config({ path: require('path').resolve(__dirname, '..', '.env') });
+  require('dotenv').config({ path: require('path').resolve(__dirname, '..', process.env.LTS_ENV_FILE || '.env') });
 } catch {
   // Continue with existing process env when dotenv is unavailable.
 }

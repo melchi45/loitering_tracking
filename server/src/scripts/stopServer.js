@@ -4,7 +4,7 @@ const path = require('path');
 const { execSync } = require('child_process');
 
 try {
-  require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
+  require('dotenv').config({ path: path.resolve(__dirname, '..', '..', process.env.LTS_ENV_FILE || '.env') });
 } catch {
   // Allow stop script to run even when dependencies are partially missing.
 }

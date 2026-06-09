@@ -20,7 +20,7 @@ const path = require('path');
 
 // Load .env BEFORE overriding anything
 try {
-  require('dotenv').config({ path: path.resolve(__dirname, '..', '..', '.env') });
+  require('dotenv').config({ path: path.resolve(__dirname, '..', '..', process.env.LTS_ENV_FILE || '.env') });
 } catch (_) {}
 
 // ── Analysis mode overrides ──────────────────────────────────────────────────
