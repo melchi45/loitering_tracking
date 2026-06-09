@@ -49,6 +49,7 @@ const AlertService     = require('./alertService');
 const AttributePipeline = require('./attributePipeline');
 const FireSmokeService  = require('./fireSmokeService');
 const analyticsConfig  = require('./analyticsConfig');
+const { getSystemMetrics } = require('./systemMetrics');
 
 const SERVER_MODE = process.env.SERVER_MODE || 'combined';
 
@@ -1003,6 +1004,7 @@ class PipelineManager {
       },
       recent,
       cameras,
+      system: getSystemMetrics(),
     };
   }
 

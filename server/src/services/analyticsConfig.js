@@ -224,7 +224,10 @@ function _getOrInit() {
 
   if (row) {
     const { id, createdAt, updatedAt, ...cfg } = row;
-    _config = { ...DEFAULT_CONFIG, ...cfg };
+    // Only copy keys defined in DEFAULT_CONFIG — purges stale/test keys on read.
+    const clean = {};
+    for (const key of Object.keys(DEFAULT_CONFIG)) clean[key] = cfg[key] ?? false;
+    _config = { ...DEFAULT_CONFIG, ...clean };
     return _config;
   }
 
@@ -232,7 +235,10 @@ function _getOrInit() {
   if (fs.existsSync(LEGACY_PATH)) {
     try {
       const saved = JSON.parse(fs.readFileSync(LEGACY_PATH, 'utf8'));
-      _config = { ...DEFAULT_CONFIG, ...saved };
+      // Filter unknown keys from legacy file too
+      const clean = {};
+      for (const key of Object.keys(DEFAULT_CONFIG)) clean[key] = saved[key] ?? false;
+      _config = { ...DEFAULT_CONFIG, ...clean };
       db.insert('settings', { id: SETTING_ID, ..._config });
       console.log('[analyticsConfig] Migrated analytics.json → settings table');
       return _config;
@@ -246,19 +252,37 @@ function _getOrInit() {
 }
 
 function getConfig() {
-  return { ..._getOrInit() };
+  const cfg = _getOrInit();
+  // Only expose keys defined in DEFAULT_CONFIG — unknown keys from stale DB
+  // rows or test entries must not leak into the API response or module list.
+  const clean = {};
+  for (const key of Object.keys(DEFAULT_CONFIG)) clean[key] = cfg[key] ?? false;
+  return clean;
 }
 
 function setConfig(partial) {
   _getOrInit(); // ensure initialised
-  _config = { ...DEFAULT_CONFIG, ..._config, ...partial };
+  // Silently drop any key not in DEFAULT_CONFIG so test / typo keys never
+  // enter the DB or appear in the enabled-modules list.
+  const sanitised = {};
+  for (const key of Object.keys(partial)) {
+    if (key in DEFAULT_CONFIG) sanitised[key] = partial[key];
+  }
+  // Rebuild from DEFAULT_CONFIG baseline — never spread unknown keys from _config.
+  const base = {};
+  for (const key of Object.keys(DEFAULT_CONFIG)) base[key] = _config[key] ?? DEFAULT_CONFIG[key];
+  _config = { ...base, ...sanitised };
 
   const db = getDB();
+  // Write only known keys to the DB row to purge any previously stored garbage.
+  const row = { id: SETTING_ID };
+  for (const key of Object.keys(DEFAULT_CONFIG)) row[key] = _config[key];
+
   const existing = db.findOne('settings', { id: SETTING_ID });
   if (existing) {
-    db.update('settings', SETTING_ID, { id: SETTING_ID, ..._config });
+    db.update('settings', SETTING_ID, row);
   } else {
-    db.insert('settings', { id: SETTING_ID, ..._config });
+    db.insert('settings', row);
   }
   return { ..._config };
 }

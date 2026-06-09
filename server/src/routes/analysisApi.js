@@ -19,6 +19,7 @@ const BehaviorEngine   = require('../services/behaviorEngine');
 const AttributePipeline = require('../services/attributePipeline');
 const FireSmokeService  = require('../services/fireSmokeService');
 const analyticsConfig   = require('../services/analyticsConfig');
+const { getSystemMetrics } = require('../services/systemMetrics');
 
 const CONTEXT_EXPIRY_MS = 5 * 60 * 1000; // prune camera context after 5 min idle
 const RECENT_WINDOW_MS  = 60 * 1000;
@@ -533,6 +534,7 @@ router.get('/metrics', (req, res) => {
     },
     recent,
     cameras,
+    system: getSystemMetrics(),
   });
 });
 

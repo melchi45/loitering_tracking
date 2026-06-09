@@ -248,8 +248,55 @@ export default function VideoAnalyticsTab() {
         body:    JSON.stringify({ [id]: next }),
       });
     } catch {
-      // rollback
       setEnabled(prev => ({ ...prev, [id]: !next }));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const _availableIdsForGroup = (group: AttrGroup) =>
+    group.items
+      .filter(item => {
+        const st = capStatus[item.id] ?? (item.pending ? 'pending' : '');
+        return caps[item.id] !== false && st !== 'pending' && st !== 'failed' && st !== 'missing';
+      })
+      .map(item => item.id);
+
+  const toggleAll = async (on: boolean) => {
+    const availableIds = GROUPS.flatMap(g => _availableIdsForGroup(g));
+    const patch = Object.fromEntries(availableIds.map(id => [id, on]));
+    setEnabled(prev => ({ ...prev, ...patch }));
+    setSaving('__all__');
+    try {
+      await fetch('/api/analytics/config', {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(patch),
+      });
+    } catch {
+      setEnabled(prev => ({ ...prev, ...Object.fromEntries(availableIds.map(id => [id, !on])) }));
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const toggleGroup = async (group: AttrGroup) => {
+    const availableIds = _availableIdsForGroup(group);
+    if (availableIds.length === 0) return;
+    // If all available items in the group are on → turn off; otherwise turn all on
+    const allOn = availableIds.every(id => enabled[id] === true);
+    const next  = !allOn;
+    const patch = Object.fromEntries(availableIds.map(id => [id, next]));
+    setEnabled(prev => ({ ...prev, ...patch }));
+    setSaving(`__group__${group.groupKey}`);
+    try {
+      await fetch('/api/analytics/config', {
+        method:  'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(patch),
+      });
+    } catch {
+      setEnabled(prev => ({ ...prev, ...Object.fromEntries(availableIds.map(id => [id, !next])) }));
     } finally {
       setSaving(null);
     }
@@ -297,19 +344,63 @@ export default function VideoAnalyticsTab() {
     );
   }
 
+  const isSavingAll  = saving === '__all__';
+  const allAvailable = GROUPS.flatMap(g => _availableIdsForGroup(g));
+  const globalAllOn  = allAvailable.some(id => enabled[id] === true);
+
   return (
     <div className="flex flex-col h-full overflow-y-auto">
       {/* Header */}
       <div className="px-3 py-2.5 border-b border-gray-700 flex-shrink-0">
-        <h2 className="text-xs font-bold text-white uppercase tracking-wide">{t.tabVideoAnalytics}</h2>
+        <div className="flex items-center justify-between">
+          <h2 className="text-xs font-bold text-white uppercase tracking-wide">{t.tabVideoAnalytics}</h2>
+          <button
+            onClick={() => toggleAll(!globalAllOn)}
+            disabled={isSavingAll}
+            className={`flex items-center gap-1.5 px-2 py-1.5 rounded text-[10px] text-left transition-colors border disabled:opacity-40 ${
+              globalAllOn
+                ? 'bg-blue-700/70 border-blue-500 text-white hover:bg-blue-700'
+                : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+            }`}
+            title={globalAllOn ? '모든 모듈 비활성화' : '사용 가능한 모든 모듈 활성화'}
+          >
+            <span className={`w-7 h-3.5 rounded-full flex-shrink-0 relative transition-colors ${globalAllOn ? 'bg-blue-500' : 'bg-gray-600'}`}>
+              <span className={`absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white shadow transition-all ${globalAllOn ? 'left-3.5' : 'left-0.5'}`} />
+            </span>
+            {isSavingAll ? '…' : 'All'}
+          </button>
+        </div>
         <p className="text-[10px] text-gray-500 mt-0.5">{t.videoAnalyticsHint}</p>
       </div>
 
       <div className="flex-1 overflow-y-auto p-3 space-y-4">
-        {GROUPS.map((group) => (
+        {GROUPS.map((group) => {
+          const groupAvailableIds = _availableIdsForGroup(group);
+          const groupAllOn        = groupAvailableIds.some(id => enabled[id] === true);
+          const isSavingGroup     = saving === `__group__${group.groupKey}`;
+          return (
           <div key={group.groupKey}>
-            <div className="text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1.5">
-              {groupLabel(group.groupKey)}
+            <div className="flex items-center justify-between mb-1.5">
+              <span className="text-[9px] text-gray-500 uppercase tracking-wide font-bold">
+                {groupLabel(group.groupKey)}
+              </span>
+              {groupAvailableIds.length > 0 && (
+                <button
+                  onClick={() => toggleGroup(group)}
+                  disabled={isSavingGroup || saving === '__all__'}
+                  className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[9px] transition-colors border disabled:opacity-40 ${
+                    groupAllOn
+                      ? 'bg-blue-700/70 border-blue-500 text-white hover:bg-blue-700'
+                      : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
+                  }`}
+                  title={groupAllOn ? '그룹 전체 비활성화' : '그룹 전체 활성화'}
+                >
+                  <span className={`w-5 h-2.5 rounded-full flex-shrink-0 relative transition-colors ${groupAllOn ? 'bg-blue-500' : 'bg-gray-600'}`}>
+                    <span className={`absolute top-0.5 w-1.5 h-1.5 rounded-full bg-white shadow transition-all ${groupAllOn ? 'left-2.5' : 'left-0.5'}`} />
+                  </span>
+                  {isSavingGroup ? '…' : (groupAllOn ? 'On' : 'Off')}
+                </button>
+              )}
             </div>
             <div className="grid grid-cols-2 gap-1">
               {group.items.map((item) => {
@@ -384,7 +475,8 @@ export default function VideoAnalyticsTab() {
               })}
             </div>
           </div>
-        ))}
+          );
+        })}
 
         {/* Appearance Weights */}
         <div className="border-t border-gray-700/50 pt-3">
