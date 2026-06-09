@@ -173,7 +173,13 @@ async function main() {
   // Pass the shared ZoneManager so zone additions/deletions via REST API are
   // immediately visible to the pipeline without a server restart.
   const pipelineManager     = new PipelineManager(io, db, zoneManager);
-  app.set('pipelineManager', pipelineManager); // used by /api/analysis/metrics in combined mode
+  // Only expose pipelineManager to route handlers in combined mode.
+  // In analysis mode, GET /api/analysis/metrics must read analysisApi._metrics
+  // (populated by POST /api/analysis/frame from the streaming server) — not
+  // pipelineManager which has no active pipelines in this mode.
+  if (SERVER_MODE === 'combined') {
+    app.set('pipelineManager', pipelineManager);
+  }
   const youtubeSvc          = new YouTubeStreamService(db, pipelineManager);
   youtubeSvc.init(); // Restore YouTube cameras from DB into in-memory streams Map
 
