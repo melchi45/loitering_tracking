@@ -473,21 +473,11 @@ async function main() {
   });
 
   // ── Serve React static build ──────────────────────────────────────────────
-  // Analysis-only mode is a backend AI service — no browser dashboard.
-  // Serving the SPA here causes browsers to connect Socket.IO to the analysis
-  // server instead of the streaming server, resulting in a rapid
-  // connect/transport-close loop because no camera events are emitted here.
-  if (SERVER_MODE === 'analysis') {
-    app.get('/', (_req, res) => {
-      res.json({
-        service: 'LTS-2026 Analysis Server',
-        mode: 'analysis',
-        status: 'ok',
-        endpoints: ['/api/analysis/metrics', '/api/analysis/health', '/api/analysis/frame', '/health'],
-      });
-    });
-    console.log('[Server] Analysis mode — React UI not served (API-only)');
-  } else {
+  // All modes (streaming / analysis / combined) serve the SPA.
+  // The client reads serverMode from GET /health and renders the appropriate
+  // dashboard. Camera subscriptions are gated by !isAnalysis in App.tsx so
+  // Socket.IO on an analysis server only idles — no connect-loop risk.
+  {
     const clientBuildPath = path.resolve(__dirname, '..', '..', 'client', 'dist');
     app.use(express.static(clientBuildPath));
     console.log(`[Server] React UI path: ${clientBuildPath}`);
@@ -499,7 +489,7 @@ async function main() {
       if (fs.existsSync(indexHtml)) {
         res.sendFile(indexHtml);
       } else {
-        res.send('<h2>LTS Backend running. Build the client: <code>node server/src/scripts/buildClient.js</code></h2>');
+        res.send('<h2>LTS Backend running. Build the client: <code>npm run build</code></h2>');
       }
     });
   }

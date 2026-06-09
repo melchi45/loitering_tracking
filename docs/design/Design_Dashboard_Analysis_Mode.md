@@ -478,7 +478,20 @@ client/src/pages/
 
 AnalysisServerPanel은 App.tsx 내 인라인 JSX 변수로 별도 파일 없음.
 
-### 9.3 영향받지 않는 파일
+### 9.3 index.js React UI 서빙 정책
+
+모든 SERVER_MODE에서 React SPA를 서빙한다. 브라우저는 `GET /health` 응답의 `serverMode` 값으로 적절한 대시보드를 렌더링한다.
+
+```js
+// 모든 모드에서 동일하게 React static 서빙
+const clientBuildPath = path.resolve(__dirname, '..', '..', 'client', 'dist');
+app.use(express.static(clientBuildPath));
+app.get(/^(?!\/api|\/auth|...).*/, (req, res) => res.sendFile(indexHtml));
+```
+
+> **과거 이슈**: analysis 모드에서 Socket.IO connect/transport-close 루프가 발생해 일시적으로 UI 서빙을 비활성화했었음. analysisApi.js의 dead `io.emit()` 제거 및 App.tsx 카메라 구독 게이팅(`!isAnalysis`) 완료 후 안전하게 재활성화.
+
+### 9.4 영향받지 않는 파일
 
 - `CameraGrid.tsx`, `CameraView.tsx` — 수정 없음 (렌더링 조건만 App.tsx에서 제어)
 - `AlertPanel.tsx`, `ZonesPanel.tsx`, `FaceGalleryTab.tsx` 등 사이드바 컴포넌트 — 수정 없음
