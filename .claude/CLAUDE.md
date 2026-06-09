@@ -176,6 +176,10 @@ cd server && npm run dev
 # 클라이언트 개발 서버 (Vite HMR)
 cd client && npm run dev
 
+# 클라이언트 프로덕션 빌드 (루트에서 실행 가능)
+npm run build          # 루트 workspace에서
+cd client && npm run build  # 또는 client 경로에서 직접
+
 # 전체 테스트 실행
 cd server && npm test
 node test/run_all.js
