@@ -109,7 +109,7 @@ loitering_tracking/
 | Method/Property | Input | Output | Notes |
 |---|---|---|---|
 | `load()` | — | `Promise<void>` | File check first; sets `_status`, `_ready` |
-| `detect(buf, origW, origH)` | JPEG Buffer, frame dims | `Array<{className, confidence, bbox}>` | Returns `[]` if not ready |
+| `detect(buf, origW, origH)` | JPEG Buffer, frame dims | `Array<{className, confidence, bbox}>` | Returns `[]` if not ready; invalid/missing frame dims fallback to JPEG metadata |
 | `get ready()` | — | `boolean` | `true` only when `_status === 'loaded'` |
 | `get status()` | — | `string` | `'not_started'` \| `'missing'` \| `'loaded'` \| `'failed'` |
 

@@ -51,6 +51,9 @@ type MetricsResponse = {
     cameraId: string;
     cameraName?: string;
     idleSec: number;
+    streamPresent: boolean;
+    framesLast1s: number;
+    inputFps1s: number;
     zoneCount: number;
     framesTotal: number;
     bytesReceivedTotal: number;
@@ -154,6 +157,9 @@ export default function AnalysisStatsModal({ open, onClose }: { open: boolean; o
   if (!open) return null;
 
   const metrics = state.status === 'ok' ? state.data : null;
+  const cameraRows = metrics?.cameras ?? [];
+  const activeInputCount = cameraRows.filter((camera) => camera.streamPresent).length;
+  const totalInputFps = cameraRows.reduce((sum, camera) => sum + camera.inputFps1s, 0);
 
   return (
     <div
@@ -250,6 +256,11 @@ export default function AnalysisStatsModal({ open, onClose }: { open: boolean; o
                 value={metrics ? `${metrics.requests.errors}` : '-'}
                 hint={metrics ? `누적 요청 ${metrics.requests.total}건` : '메트릭 수집 중'}
               />
+              <StatCard
+                label="카메라 입력"
+                value={metrics ? `${activeInputCount}/${cameraRows.length}` : '-'}
+                hint={metrics ? `총 ${totalInputFps.toFixed(1)} fps 입력 중` : '메트릭 수집 중'}
+              />
             </div>
 
             <div className="mt-5 grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -306,8 +317,10 @@ export default function AnalysisStatsModal({ open, onClose }: { open: boolean; o
           </div>
 
           <div className="mt-4 overflow-hidden rounded-2xl border border-slate-800">
-            <div className="grid grid-cols-[1.6fr_0.7fr_0.8fr_0.9fr_0.8fr_1fr] bg-slate-900/90 px-4 py-3 text-[11px] uppercase tracking-[0.18em] text-slate-500">
+            <div className="grid grid-cols-[1.4fr_0.7fr_0.7fr_0.8fr_0.8fr_0.9fr_0.8fr_1fr] bg-slate-900/90 px-4 py-3 text-[11px] uppercase tracking-[0.18em] text-slate-500">
               <span>Source</span>
+              <span>Input</span>
+              <span>FPS(1s)</span>
               <span>Idle</span>
               <span>Frames</span>
               <span>Traffic</span>
@@ -316,11 +329,15 @@ export default function AnalysisStatsModal({ open, onClose }: { open: boolean; o
             </div>
             <div className="divide-y divide-slate-800/80">
               {metrics && metrics.cameras.length > 0 ? metrics.cameras.map((camera) => (
-                <div key={camera.cameraId} className="grid grid-cols-[1.6fr_0.7fr_0.8fr_0.9fr_0.8fr_1fr] items-center gap-3 px-4 py-3 text-sm text-slate-300">
+                <div key={camera.cameraId} className="grid grid-cols-[1.4fr_0.7fr_0.7fr_0.8fr_0.8fr_0.9fr_0.8fr_1fr] items-center gap-3 px-4 py-3 text-sm text-slate-300">
                   <div className="min-w-0">
                     <p className="truncate font-medium text-slate-100">{camera.cameraName || camera.cameraId}</p>
                     <p className="mt-1 text-xs text-slate-500">{camera.cameraId} · zones {camera.zoneCount} · last {formatRelativeTime(camera.lastFrameAt)}</p>
                   </div>
+                  <span className={camera.streamPresent ? 'text-emerald-300' : 'text-slate-500'}>
+                    {camera.streamPresent ? '있음' : '없음'}
+                  </span>
+                  <span className={camera.inputFps1s > 0 ? 'text-sky-300' : 'text-slate-500'}>{camera.inputFps1s.toFixed(1)}</span>
                   <span>{camera.idleSec}s</span>
                   <span>{camera.framesTotal}</span>
                   <span>{formatBytes(camera.bytesReceivedTotal)}</span>

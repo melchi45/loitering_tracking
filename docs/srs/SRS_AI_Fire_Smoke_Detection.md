@@ -254,6 +254,12 @@ Each fire or smoke detection must produce:
 - If `_session.run()` throws during detection, the error must be caught, logged as `'[FireSmokeService] Detection error: <message>'`, and an empty array returned
 - No unhandled rejection must propagate
 
+### FR-FSD-019A — Frame Dimension Normalization
+
+- `detect(buf, origW, origH)` must normalize frame dimensions before preprocessing
+- If `origW` or `origH` is missing, non-numeric, non-finite, or <= 0, the service must derive width/height from JPEG metadata
+- If metadata is unavailable, the service must fall back to model size (`640x640`) and continue without throwing
+
 ### FR-FSD-020 — Graceful Degradation
 
 - When FireSmokeService is not ready, the main detection pipeline must continue operating normally

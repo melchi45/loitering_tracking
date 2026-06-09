@@ -297,6 +297,16 @@ HTTP 연결 오류(ECONNREFUSED, ECONNRESET, EHOSTUNREACH 등) 발생 시 해당
 [Server] SERVER_MODE=combined  | (all-in-one mode)
 ```
 
+### FR-DAP-042: Analysis Metrics 카메라 입력 지표
+
+`GET /api/analysis/metrics`의 `cameras[]` 각 항목은 아래 필드를 포함해야 한다.
+
+- `streamPresent: boolean` — 최근 입력이 존재하는지 여부
+- `inputFps1s: number` — 최근 1초 기준 카메라 입력 FPS
+- `framesLast1s: number` — 최근 1초 입력 프레임 수
+
+analysis 모드 Dashboard는 위 필드를 이용해 카메라별 영상 입력 존재 여부와 1초당 입력 프레임 수를 표시해야 한다.
+
 ---
 
 ## 8. Non-Functional Requirements

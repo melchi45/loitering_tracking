@@ -51,6 +51,9 @@ type MetricsResponse = {
     cameraId: string;
     cameraName?: string;
     idleSec: number;
+    streamPresent: boolean;
+    framesLast1s: number;
+    inputFps1s: number;
     zoneCount: number;
     framesTotal: number;
     bytesReceivedTotal: number;
@@ -152,6 +155,8 @@ export default function AnalysisServerDashboard({
 
   const enabledModules = metrics?.modules.enabled ?? [];
   const cameraRows = metrics?.cameras ?? [];
+  const activeInputCount = cameraRows.filter((camera) => camera.streamPresent).length;
+  const totalInputFps = cameraRows.reduce((sum, camera) => sum + camera.inputFps1s, 0);
 
   return (
     <div className="h-full overflow-auto rounded-[28px] border border-slate-700/70 bg-[radial-gradient(circle_at_top_left,_rgba(245,158,11,0.18),_transparent_28%),linear-gradient(180deg,_rgba(15,23,42,0.96),_rgba(2,6,23,0.98))] px-6 py-6 text-slate-100 shadow-2xl shadow-black/30">
@@ -216,7 +221,7 @@ export default function AnalysisServerDashboard({
           <StatCard
             label="활성 컨텍스트"
             value={metrics ? String(metrics.activeCameras) : '-'}
-            hint={metrics ? `누적 요청 ${metrics.requests.total}건 / 오류 ${metrics.requests.errors}건` : '메트릭 대기 중'}
+            hint={metrics ? `실시간 입력 ${activeInputCount}대 / 총 입력 ${totalInputFps.toFixed(1)} fps` : '메트릭 대기 중'}
           />
         </section>
 
@@ -297,8 +302,10 @@ export default function AnalysisServerDashboard({
           </div>
 
           <div className="mt-4 overflow-hidden rounded-2xl border border-slate-800">
-            <div className="grid grid-cols-[1.5fr_0.6fr_0.8fr_0.8fr_0.8fr_0.8fr] bg-slate-900/90 px-4 py-3 text-[11px] uppercase tracking-[0.18em] text-slate-500">
+            <div className="grid grid-cols-[1.4fr_0.7fr_0.7fr_0.8fr_0.8fr_0.8fr_0.8fr_1fr] bg-slate-900/90 px-4 py-3 text-[11px] uppercase tracking-[0.18em] text-slate-500">
               <span>Camera</span>
+              <span>Input</span>
+              <span>FPS(1s)</span>
               <span>Idle</span>
               <span>Frames</span>
               <span>Traffic</span>
@@ -307,11 +314,15 @@ export default function AnalysisServerDashboard({
             </div>
             <div className="divide-y divide-slate-800/80">
               {cameraRows.length > 0 ? cameraRows.map((camera) => (
-                <div key={camera.cameraId} className="grid grid-cols-[1.5fr_0.6fr_0.8fr_0.8fr_0.8fr_0.8fr] items-center gap-3 px-4 py-3 text-sm text-slate-300">
+                <div key={camera.cameraId} className="grid grid-cols-[1.4fr_0.7fr_0.7fr_0.8fr_0.8fr_0.8fr_0.8fr_1fr] items-center gap-3 px-4 py-3 text-sm text-slate-300">
                   <div className="min-w-0">
                     <p className="truncate font-medium text-slate-100">{camera.cameraName || camera.cameraId}</p>
                     <p className="mt-1 text-xs text-slate-500">{camera.cameraId} · zones {camera.zoneCount} · last {formatRelativeTime(camera.lastFrameAt)}</p>
                   </div>
+                  <span className={camera.streamPresent ? 'text-emerald-300' : 'text-slate-500'}>
+                    {camera.streamPresent ? '있음' : '없음'}
+                  </span>
+                  <span className={camera.inputFps1s > 0 ? 'text-sky-300' : 'text-slate-500'}>{camera.inputFps1s.toFixed(1)}</span>
                   <span>{camera.idleSec}s</span>
                   <span>{camera.framesTotal}</span>
                   <span>{formatBytes(camera.bytesReceivedTotal)}</span>

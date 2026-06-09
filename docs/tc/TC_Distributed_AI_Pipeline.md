@@ -608,7 +608,18 @@ describe('TC-DAP-008: WebRTC 스트림과 분석 결과 동시 표시', () => {
 
 ---
 
-## 15. Test Execution Order
+## 15. TC-DAP-012: analysis Dashboard 카메라 입력 상태/FPS 표시
+
+| 단계 | 테스트 항목 | 입력 | 예상 결과 |
+|---|---|---|---|
+| TC-DAP-012-01 | 분석 메트릭 카메라 입력 필드 확인 | `GET /api/analysis/metrics` | `cameras[]`에 `streamPresent`, `inputFps1s`, `framesLast1s` 필드 포함 |
+| TC-DAP-012-02 | 실시간 입력 존재 표시 | 특정 카메라에서 프레임 연속 입력 | Dashboard의 해당 카메라 `Input=있음` 표시 |
+| TC-DAP-012-03 | 입력 중단 표시 | 카메라 입력 중단 후 3초 경과 | Dashboard의 해당 카메라 `Input=없음` 표시 |
+| TC-DAP-012-04 | 카메라별 FPS 표시 | 각 카메라 입력률 상이한 상태 | Dashboard 표에 카메라별 `FPS(1s)` 값이 0 이상 숫자로 표시 |
+
+---
+
+## 16. Test Execution Order
 
 ```
 1. TC-DAP-001 — combined 모드 (가장 기본, 환경 검증)
@@ -623,7 +634,7 @@ describe('TC-DAP-008: WebRTC 스트림과 분석 결과 동시 표시', () => {
 
 ---
 
-## 16. Pass/Fail Criteria
+## 17. Pass/Fail Criteria
 
 ### 16.1 통과 기준
 

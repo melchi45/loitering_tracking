@@ -75,9 +75,20 @@ class FireSmokeService {
   async detect(jpegBuffer, origW, origH) {
     if (!this._ready || !this._session) return [];
     try {
-      const scale  = Math.min(MODEL_SIZE / origW, MODEL_SIZE / origH);
-      const scaledW = Math.round(origW * scale);
-      const scaledH = Math.round(origH * scale);
+      let safeW = Number(origW);
+      let safeH = Number(origH);
+
+      // Some callers (e.g., analysis-only flow) may omit frame dims or pass invalid values.
+      // Recover from JPEG metadata to prevent sharp.resize() NaN width/height errors.
+      if (!Number.isFinite(safeW) || !Number.isFinite(safeH) || safeW <= 0 || safeH <= 0) {
+        const meta = await sharp(jpegBuffer).metadata();
+        safeW = Number(meta.width) > 0 ? Number(meta.width) : MODEL_SIZE;
+        safeH = Number(meta.height) > 0 ? Number(meta.height) : MODEL_SIZE;
+      }
+
+      const scale  = Math.min(MODEL_SIZE / safeW, MODEL_SIZE / safeH);
+      const scaledW = Math.max(1, Math.round(safeW * scale));
+      const scaledH = Math.max(1, Math.round(safeH * scale));
       const padL   = Math.floor((MODEL_SIZE - scaledW) / 2);
       const padT   = Math.floor((MODEL_SIZE - scaledH) / 2);
 
@@ -106,7 +117,7 @@ class FireSmokeService {
       const result = await this._session.run(feeds);
       const out    = result[this._session.outputNames[0]];
 
-      return _postprocess(out.data, out.dims, origW, origH, scale, padL, padT);
+      return _postprocess(out.data, out.dims, safeW, safeH, scale, padL, padT);
     } catch (err) {
       console.error('[FireSmokeService] Detection error:', err.message);
       return [];

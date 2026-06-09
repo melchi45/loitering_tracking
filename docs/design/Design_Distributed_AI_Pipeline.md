@@ -143,6 +143,7 @@
 - `streaming` 모드에서는 서버 기동 시 `loadFaceServiceEagerly()`를 호출하지 않아 로컬 AI 모델(PAR/ArcFace 포함)을 선로딩하지 않습니다.
 - `streaming` 모드에서는 analysis 서버로 프레임을 전송할 때 `cameraId`와 함께 `cameraName`도 메타에 포함합니다.
 - `analysis` 모드에서는 수신한 `cameraName`을 per-camera context와 `/api/analysis/metrics` 응답에 보존해 대시보드에 표시합니다.
+- `analysis` 모드의 `/api/analysis/metrics` per-camera 항목은 최근 입력 상태(`streamPresent`)와 최근 1초 입력 FPS(`inputFps1s`)를 포함하며, Dashboard는 이를 통해 카메라별 영상 입력 존재 여부를 표시합니다.
 
 ### 2.1 analysisClient.js (신규)
 

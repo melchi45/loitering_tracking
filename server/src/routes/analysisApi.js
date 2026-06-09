@@ -22,6 +22,7 @@ const analyticsConfig   = require('../services/analyticsConfig');
 
 const CONTEXT_EXPIRY_MS = 5 * 60 * 1000; // prune camera context after 5 min idle
 const RECENT_WINDOW_MS  = 60 * 1000;
+const STREAM_ACTIVE_MS  = 3000;
 
 const _metrics = {
   startedAt:           Date.now(),
@@ -56,9 +57,31 @@ function _getCameraMetric(cameraId) {
     loiteringTotal:      0,
     lastFrameAt:         null,
     zoneCount:           0,
+    recentFrameTimes:    [],
   };
   _metrics.perCamera.set(cameraId, metric);
   return metric;
+}
+
+function _pruneCameraRecentFrames(metric, now = Date.now()) {
+  const cutoff = now - RECENT_WINDOW_MS;
+  while (metric.recentFrameTimes.length > 0 && metric.recentFrameTimes[0] < cutoff) {
+    metric.recentFrameTimes.shift();
+  }
+}
+
+function _buildCameraInputSummary(metric, now = Date.now()) {
+  _pruneCameraRecentFrames(metric, now);
+
+  const framesLast1s = metric.recentFrameTimes.filter((at) => at >= now - 1000).length;
+  const lastFrameAgeMs = metric.lastFrameAt ? (now - metric.lastFrameAt) : Number.POSITIVE_INFINITY;
+  const streamPresent = Number.isFinite(lastFrameAgeMs) && lastFrameAgeMs <= STREAM_ACTIVE_MS;
+
+  return {
+    framesLast1s,
+    inputFps1s: Number(framesLast1s.toFixed(2)),
+    streamPresent,
+  };
 }
 
 function _pruneRecentSamples(now = Date.now()) {
@@ -263,7 +286,10 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
     cameraMetric.cameraName = cameraName || cameraMetric.cameraName || cameraId;
     cameraMetric.framesTotal += 1;
     cameraMetric.bytesReceivedTotal += jpegBuffer.length;
-    cameraMetric.lastFrameAt = Date.now();
+    const frameAt = Date.now();
+    cameraMetric.lastFrameAt = frameAt;
+    cameraMetric.recentFrameTimes.push(frameAt);
+    _pruneCameraRecentFrames(cameraMetric, frameAt);
     cameraMetric.zoneCount = Array.isArray(zones) ? zones.length : 0;
 
     // Use the analysis server's own analyticsConfig (managed independently via its DB/settings).
@@ -334,9 +360,15 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
 
     // 6. Fire / smoke
     let fireSmoke = [];
-    if (_fireSmokeService && analyticsConfig.isEnabled('fire')) {
+    const fireEnabled = analyticsConfig.isEnabled('fire');
+    const smokeEnabled = analyticsConfig.isEnabled('smoke');
+    if (_fireSmokeService && (fireEnabled || smokeEnabled)) {
       try {
-        fireSmoke = await _fireSmokeService.detect(jpegBuffer);
+        fireSmoke = await _fireSmokeService.detect(jpegBuffer, frameWidth, frameHeight);
+        fireSmoke = fireSmoke.filter((d) =>
+          (d.className === 'fire' && fireEnabled) ||
+          (d.className === 'smoke' && smokeEnabled)
+        );
       } catch { /* non-fatal */ }
     }
 
@@ -450,10 +482,14 @@ router.get('/metrics', (_req, res) => {
 
   for (const [cameraId, ctx] of _cameraContexts) {
     const metric = _metrics.perCamera.get(cameraId) || _getCameraMetric(cameraId);
+    const input = _buildCameraInputSummary(metric, now);
     cameras.push({
       cameraId,
       cameraName: ctx.cameraName || metric.cameraName || cameraId,
       idleSec:             Math.round((now - ctx.lastSeenAt) / 1000),
+      streamPresent:       input.streamPresent,
+      framesLast1s:        input.framesLast1s,
+      inputFps1s:          input.inputFps1s,
       zoneCount:           ctx._zones.length,
       framesTotal:         metric.framesTotal,
       bytesReceivedTotal:  metric.bytesReceivedTotal,

@@ -238,6 +238,13 @@ No external test framework — built-in fetch only
 
 ## 7. Test Group E — Error Handling & Edge Cases
 
+### TC-E-004A — Invalid Frame Dimensions Do Not Break Detection
+- **SRS:** FR-FSD-019A, FR-FSD-020
+- **Steps:**
+  1. Invoke `FireSmokeService.detect(jpegBuffer, NaN, NaN)` (or route path that omits valid frame size)
+  2. Assert no exception propagates and pipeline continues
+  3. Assert returned value is an array (`[]` allowed) and server process remains healthy (`GET /health` = 200)
+
 ### TC-E-001 — Capabilities Endpoint Not Affected by Repeated Requests
 - **SRS:** FR-FSD-018
 - **Steps:**
