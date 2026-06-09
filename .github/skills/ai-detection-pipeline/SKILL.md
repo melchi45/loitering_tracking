@@ -243,3 +243,54 @@ function isEnabled(moduleId) {
 - **잘못된 설정 (100ms):** ONNX 추론(150~1400ms)이 완료되기 전 타임아웃 → 모든 요청 실패 → circuit breaker 작동 (15초 차단) → 반복
 - **올바른 설정:** 최악 추론 시간의 3배 이상. CPU 전용이면 5000ms, GPU면 2000ms
 - `ANALYSIS_REQUEST_TIMEOUT_MS` < 실제 추론 시간이면 모든 프레임이 드롭되고 분석이 완전히 중단됨
+
+### 5. analysisClient.js — X-LTS-Meta 헤더 Base64 인코딩 (2026-06-09)
+
+**증상:** YouTube 카메라(한글 이름 포함)의 프레임이 분석 서버로 전달되지 않음.
+`[AnalysisClient][yt-84b6d] frame 1 error: Invalid character in header content ["X-LTS-Meta"]`
+
+**원인:** `X-LTS-Meta` 헤더에 카메라 이름(한글 등 Non-ASCII 문자)을 raw JSON으로 전송 → Node.js HTTP 모듈이 non-ASCII 헤더 값을 거부.
+
+**수정 (analysisClient.js `_postJpeg`):**
+```javascript
+// 변경 전
+'X-LTS-Meta': metaJson,
+
+// 변경 후
+'X-LTS-Meta': Buffer.from(metaJson).toString('base64'),
+```
+
+**수정 (analysisApi.js `POST /frame`):**
+```javascript
+// 변경 전
+meta = JSON.parse(req.headers['x-lts-meta'] || '{}');
+
+// 변경 후 (base64 + legacy raw JSON 모두 지원)
+const raw = req.headers['x-lts-meta'] || '{}';
+const jsonStr = raw.startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf8');
+meta = JSON.parse(jsonStr);
+```
+
+### 6. analysisClient.js — "reconnected" 로그 스팸 수정 (2026-06-09)
+
+**증상:** `[AnalysisClient][cameraId] reconnected to analysis server`가 초당 수십 회 반복 출력됨.
+
+**원인:** `_consecutive` 카운터가 전역(global) — 어떤 카메라 하나가 단발성 실패하면 `_consecutive++`, 다음 성공 시 `_consecutive > 0`이 참이어서 즉시 "reconnected" 로그 출력. circuit breaker 개방과 무관하게 모든 단발 실패마다 발생.
+
+**수정:**
+```javascript
+// 변경 전
+if (this._consecutive > 0) {
+  this._consecutive = 0;
+  console.log(`[AnalysisClient][${cameraId?.slice(0,8)}] reconnected to analysis server`);
+}
+
+// 변경 후: circuit-open 임박 수준(≥2회 연속 실패) 이후 복구 시에만 로그
+const wasNearOpen = this._consecutive >= CIRCUIT_OPEN_THRESHOLD - 1;
+this._consecutive = 0;
+if (wasNearOpen) {
+  console.log(`[AnalysisClient][${cameraId?.slice(0,8)}] reconnected to analysis server`);
+}
+```
+- `CIRCUIT_OPEN_THRESHOLD = 3` 이므로, 2회 이상 연속 실패 후 복구될 때만 로그 출력
+- 단발성 타임아웃(네트워크 지터, 일시적 지연)은 로그 없이 조용히 처리됨

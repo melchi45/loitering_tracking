@@ -83,8 +83,9 @@ class AnalysisClient {
       // Metadata is small (< 4 KB typically); JPEG travels as binary body.
       const meta   = JSON.stringify({ cameraId, cameraName, frameId, timestamp, zones });
       const result = await this._postJpeg('/api/analysis/frame', jpegBuffer, meta);
-      if (this._consecutive > 0) {
-        this._consecutive = 0;
+      const wasNearOpen = this._consecutive >= CIRCUIT_OPEN_THRESHOLD - 1;
+      this._consecutive = 0;
+      if (wasNearOpen) {
         console.log(`[AnalysisClient][${cameraId?.slice(0, 8)}] reconnected to analysis server`);
       }
       return result;
@@ -199,7 +200,7 @@ class AnalysisClient {
         headers: {
           'Content-Type':   'image/jpeg',
           'Content-Length': jpegBuffer.byteLength,
-          'X-LTS-Meta':     metaJson,
+          'X-LTS-Meta':     Buffer.from(metaJson).toString('base64'),
         },
         timeout:            this._timeout,
         rejectUnauthorized: process.env.NODE_ENV === 'production',

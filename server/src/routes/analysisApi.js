@@ -260,7 +260,12 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
     if (ct === 'image/jpeg') {
       // Binary mode: JPEG in body, lightweight JSON metadata in X-LTS-Meta header
       let meta = {};
-      try { meta = JSON.parse(req.headers['x-lts-meta'] || '{}'); } catch { /* ignore */ }
+      try {
+        const raw = req.headers['x-lts-meta'] || '{}';
+        // Accept both base64-encoded (new, supports non-ASCII names) and raw JSON (legacy)
+        const jsonStr = raw.startsWith('{') ? raw : Buffer.from(raw, 'base64').toString('utf8');
+        meta = JSON.parse(jsonStr);
+      } catch { /* ignore */ }
       cameraId  = meta.cameraId;
       cameraName = meta.cameraName;
       frameId   = meta.frameId;
