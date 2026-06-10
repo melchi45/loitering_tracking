@@ -403,9 +403,23 @@ const ALL_TABLES = [
 ```
 
 **새 서비스 함수 (analysisApi.js):**
-- `_persistFireSmoke(db, cameraId, cameraName, ts, detections)` — 화재/연기 이벤트 저장 (쿨다운 30초)
-- `_persistLoitering(db, cameraId, cameraName, ts, behaviors)` — 배회 이벤트 저장 (쿨다운 60초)
+- `async _persistFireSmoke(db, cameraId, cameraName, ts, detections, jpegBuffer, fw, fh)` — 화재/연기 이벤트 + 크롭 이미지 저장 (쿨다운 30초)
+- `async _persistLoitering(db, cameraId, cameraName, ts, behaviors, jpegBuffer, fw, fh)` — 배회 이벤트 + 크롭 이미지 저장 (쿨다운 60초)
 - `_saveAnalysisEvent(db, event)` — 공통 저장 로직 (최대 500건 유지, 초과 시 가장 오래된 항목 삭제)
+- `async _cropThumbnail(jpegBuffer, bbox, fw, fh)` — snapshotSvc.cropJpeg 래퍼, data URI 반환
+
+**크롭 이미지 저장 패턴 (fire-and-forget):**
+```javascript
+// POST /api/analysis/process 핸들러
+res.json({ cameraId, frameId, ... });
+// res.json() 이후 비동기 저장 (응답 지연 방지)
+if (db) {
+  if (fireSmoke.length > 0) _persistFireSmoke(db, ..., jpegBuffer, frameWidth, frameHeight).catch(() => {});
+  if (behaviors.length > 0) _persistLoitering(db, ..., jpegBuffer, frameWidth, frameHeight).catch(() => {});
+}
+```
+
+`analysisEvents` 스키마에 `cropData?: string` 추가 (data:image/jpeg;base64,... 형식)
 
 **조회/삭제 API:**
 ```

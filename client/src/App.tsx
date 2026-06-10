@@ -18,7 +18,6 @@ import ZonesPanel from './components/ZonesPanel';
 import VideoAnalyticsTab from './components/VideoAnalyticsTab';
 import FaceGalleryTab from './components/FaceGalleryTab';
 import AnalysisServerDashboard from './components/AnalysisServerDashboard';
-import AnalysisDetectionPanel from './components/AnalysisDetectionPanel';
 import { SearchBar } from './components/SearchBar';
 import { SearchFullscreen } from './components/SearchFullscreen';
 import StatsPanelModal from './components/StatsPanelModal';
@@ -788,12 +787,10 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
 
   // ── Shared: tab nav items ───────────────────────────────────────────────────
   // In combined mode the analytics tab lives at /analysis — no inline tab.
-  const ANALYSIS_TABS: SidebarTab[] = ['analytics', 'detections', 'alerts'];
+  const ANALYSIS_TABS: SidebarTab[] = ['analytics'];
   const TAB_ITEMS = isAnalysis
     ? [
-        { id: 'analytics'  as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
-        { id: 'detections' as SidebarTab, icon: '👁',  label: t.tabDetections },
-        { id: 'alerts'     as SidebarTab, icon: '🔔', label: t.tabAlerts },
+        { id: 'analytics' as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
       ]
     : [
         { id: 'cameras'    as SidebarTab, icon: '📷', label: t.tabCameras },
@@ -821,15 +818,12 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
       connected={connected}
       title={t.serverModeAnalysis}
       description={t.serverModeAnalysisDesc}
-      onNavigateToTab={(tab) => setSidebarTab(tab as SidebarTab)}
     />
   );
 
   // ── Shared: tab content renderer ────────────────────────────────────────────
   function renderTabContent() {
     if (isAnalysis) {
-      if (sidebarTab === 'detections') return <AnalysisDetectionPanel />;
-      if (sidebarTab === 'alerts')     return <AlertPanel />;
       return <VideoAnalyticsTab />;
     }
     if (sidebarTab === 'cameras')    return <CameraList />;

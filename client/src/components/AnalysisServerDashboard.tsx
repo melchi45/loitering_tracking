@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import AnalysisDetectionPanel from './AnalysisDetectionPanel';
 
 type GpuInfo = {
   index: number;
@@ -228,16 +229,15 @@ export default function AnalysisServerDashboard({
   connected,
   title,
   description,
-  onNavigateToTab,
 }: {
   connected: boolean;
   title: string;
   description: string;
-  onNavigateToTab?: (tab: string) => void;
 }) {
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fpsHistory, setFpsHistory] = useState<Map<string, number[]>>(new Map());
+  const [showEventHistory, setShowEventHistory] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -277,7 +277,14 @@ export default function AnalysisServerDashboard({
   const cameraRows = metrics?.cameras ?? [];
 
   return (
-    <div className="h-full overflow-auto rounded-[28px] border border-slate-700/70 bg-[radial-gradient(circle_at_top_left,_rgba(245,158,11,0.18),_transparent_28%),linear-gradient(180deg,_rgba(15,23,42,0.96),_rgba(2,6,23,0.98))] px-6 py-6 text-slate-100 shadow-2xl shadow-black/30">
+    <div className="relative h-full overflow-auto rounded-[28px] border border-slate-700/70 bg-[radial-gradient(circle_at_top_left,_rgba(245,158,11,0.18),_transparent_28%),linear-gradient(180deg,_rgba(15,23,42,0.96),_rgba(2,6,23,0.98))] px-6 py-6 text-slate-100 shadow-2xl shadow-black/30">
+
+      {/* ── Event History overlay ── */}
+      {showEventHistory && (
+        <div className="absolute inset-0 z-20 rounded-[28px] overflow-hidden">
+          <AnalysisDetectionPanel onClose={() => setShowEventHistory(false)} />
+        </div>
+      )}
       <div className="flex flex-col gap-6">
         <section className="rounded-[24px] border border-amber-400/20 bg-slate-950/40 px-6 py-5">
           <div className="flex flex-wrap items-start justify-between gap-4">
@@ -336,14 +343,14 @@ export default function AnalysisServerDashboard({
             value={metrics ? String(metrics.results.detectionsTotal + metrics.results.fireSmokeTotal) : '-'}
             hint={metrics ? `배회 ${metrics.results.loiteringTotal}건 · 화재/연기 ${metrics.results.fireSmokeTotal}건` : '메트릭 대기 중'}
             accentClass="text-amber-300"
-            onClick={onNavigateToTab ? () => onNavigateToTab('detections') : undefined}
+            onClick={() => setShowEventHistory(true)}
           />
           <StatCard
-            label="알림 (누적)"
+            label="알림 (배회 누적)"
             value={metrics ? String(metrics.results.loiteringTotal) : '-'}
             hint={metrics ? `배회 감지 알림 누적 건수` : '메트릭 대기 중'}
             accentClass="text-rose-300"
-            onClick={onNavigateToTab ? () => onNavigateToTab('alerts') : undefined}
+            onClick={() => setShowEventHistory(true)}
           />
         </section>
 
@@ -408,15 +415,15 @@ export default function AnalysisServerDashboard({
                   <div><p className="text-slate-500">Detections</p><p className="mt-1 text-lg font-semibold text-slate-100">{metrics?.recent.detections ?? 0}</p></div>
                   <div><p className="text-slate-500">Tracked</p><p className="mt-1 text-lg font-semibold text-slate-100">{metrics?.recent.trackedObjects ?? 0}</p></div>
                   <div
-                    className={onNavigateToTab ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}
-                    onClick={onNavigateToTab ? () => onNavigateToTab('detections') : undefined}
+                    className="cursor-pointer hover:opacity-80 transition-opacity"
+                    onClick={() => setShowEventHistory(true)}
                   >
                     <p className="text-slate-500">Fire/Smoke</p>
                     <p className="mt-1 text-lg font-semibold text-orange-300">{metrics?.recent.fireSmoke ?? 0}</p>
                   </div>
                   <div
-                    className={onNavigateToTab ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}
-                    onClick={onNavigateToTab ? () => onNavigateToTab('alerts') : undefined}
+                    className="cursor-pointer hover:opacity-80 transition-opacity"
+                    onClick={() => setShowEventHistory(true)}
                   >
                     <p className="text-slate-500">Loitering</p>
                     <p className="mt-1 text-lg font-semibold text-amber-300">{metrics?.recent.loitering ?? 0}</p>
@@ -431,24 +438,23 @@ export default function AnalysisServerDashboard({
             <h3 className="mt-1 text-lg font-semibold text-slate-100">누적 분석 결과</h3>
             <div className="mt-5 space-y-3">
               {([
-                { label: 'Frames',          value: metrics?.results.framesTotal ?? 0,          tab: null,         valueClass: 'text-slate-100' },
-                { label: 'Detections',      value: metrics?.results.detectionsTotal ?? 0,       tab: 'detections', valueClass: 'text-sky-200' },
-                { label: 'Tracked Objects', value: metrics?.results.trackedObjectsTotal ?? 0,   tab: null,         valueClass: 'text-slate-100' },
-                { label: 'Faces',           value: metrics?.results.facesTotal ?? 0,            tab: 'detections', valueClass: 'text-slate-100' },
-                { label: 'Fire / Smoke',    value: metrics?.results.fireSmokeTotal ?? 0,        tab: 'detections', valueClass: 'text-orange-300' },
-                { label: 'Loitering',       value: metrics?.results.loiteringTotal ?? 0,        tab: 'alerts',     valueClass: 'text-amber-300' },
-              ] as const).map(({ label, value, tab, valueClass }) => {
-                const clickable = onNavigateToTab && tab;
+                { label: 'Frames',          value: metrics?.results.framesTotal ?? 0,          showHist: false, valueClass: 'text-slate-100' },
+                { label: 'Detections',      value: metrics?.results.detectionsTotal ?? 0,       showHist: true,  valueClass: 'text-sky-200' },
+                { label: 'Tracked Objects', value: metrics?.results.trackedObjectsTotal ?? 0,   showHist: false, valueClass: 'text-slate-100' },
+                { label: 'Faces',           value: metrics?.results.facesTotal ?? 0,            showHist: false, valueClass: 'text-slate-100' },
+                { label: 'Fire / Smoke',    value: metrics?.results.fireSmokeTotal ?? 0,        showHist: true,  valueClass: 'text-orange-300' },
+                { label: 'Loitering',       value: metrics?.results.loiteringTotal ?? 0,        showHist: true,  valueClass: 'text-amber-300' },
+              ] as const).map(({ label, value, showHist, valueClass }) => {
                 return (
                   <div
                     key={label}
-                    className={`flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-3 ${clickable ? 'cursor-pointer hover:border-slate-600 transition-colors' : ''}`}
-                    onClick={clickable ? () => onNavigateToTab(tab) : undefined}
+                    className={`flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-3 ${showHist ? 'cursor-pointer hover:border-slate-600 transition-colors' : ''}`}
+                    onClick={showHist ? () => setShowEventHistory(true) : undefined}
                   >
                     <span className="text-sm text-slate-400">{label}</span>
                     <div className="flex items-center gap-2">
                       <span className={`text-lg font-semibold ${valueClass}`}>{value}</span>
-                      {clickable && <span className="text-[10px] text-slate-600">→</span>}
+                      {showHist && <span className="text-[10px] text-slate-600">→</span>}
                     </div>
                   </div>
                 );

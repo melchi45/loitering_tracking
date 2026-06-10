@@ -23,6 +23,7 @@ const AttributePipeline = require('../services/attributePipeline');
 const FireSmokeService  = require('../services/fireSmokeService');
 const analyticsConfig   = require('../services/analyticsConfig');
 const { getSystemMetrics } = require('../services/systemMetrics');
+const snapshotSvc      = require('../services/snapshotService');
 
 const CONTEXT_EXPIRY_MS         = 5 * 60 * 1000; // prune camera context after 5 min idle
 const RECENT_WINDOW_MS          = 60 * 1000;
@@ -258,12 +259,23 @@ function _saveAnalysisEvent(db, event) {
   }
 }
 
-function _persistFireSmoke(db, cameraId, cameraName, ts, detections) {
+async function _cropThumbnail(jpegBuffer, bbox, fw, fh) {
+  if (!jpegBuffer || !bbox || !fw || !fh) return null;
+  try {
+    const { data } = await snapshotSvc.cropJpeg(jpegBuffer, bbox, fw, fh);
+    return 'data:image/jpeg;base64,' + data.toString('base64');
+  } catch {
+    return null;
+  }
+}
+
+async function _persistFireSmoke(db, cameraId, cameraName, ts, detections, jpegBuffer, fw, fh) {
   const now = Date.now();
   for (const det of detections) {
     const key = `${cameraId}:${det.className}`;
     if (now - (_fireSmokeEventCooldown.get(key) || 0) < FIRE_SMOKE_SAVE_COOLDOWN) continue;
     _fireSmokeEventCooldown.set(key, now);
+    const cropData = await _cropThumbnail(jpegBuffer, det.bbox, fw, fh);
     _saveAnalysisEvent(db, {
       id:         crypto.randomUUID(),
       type:       det.className, // 'fire' | 'smoke'
@@ -272,11 +284,12 @@ function _persistFireSmoke(db, cameraId, cameraName, ts, detections) {
       timestamp:  ts,
       confidence: det.confidence,
       bbox:       det.bbox,
+      cropData,
     });
   }
 }
 
-function _persistLoitering(db, cameraId, cameraName, ts, behaviors) {
+async function _persistLoitering(db, cameraId, cameraName, ts, behaviors, jpegBuffer, fw, fh) {
   const now = Date.now();
   for (const b of behaviors) {
     if (!b.isLoitering && b.type !== 'loitering') continue;
@@ -284,6 +297,7 @@ function _persistLoitering(db, cameraId, cameraName, ts, behaviors) {
     const key = `${cameraId}:${objectId}`;
     if (now - (_loiteringEventCooldown.get(key) || 0) < LOITERING_SAVE_COOLDOWN) continue;
     _loiteringEventCooldown.set(key, now);
+    const cropData = await _cropThumbnail(jpegBuffer, b.bbox, fw, fh);
     _saveAnalysisEvent(db, {
       id:         crypto.randomUUID(),
       type:       'loitering',
@@ -295,6 +309,8 @@ function _persistLoitering(db, cameraId, cameraName, ts, behaviors) {
       zoneId:     b.zoneId,
       zoneName:   b.zoneName,
       riskScore:  b.riskScore,
+      bbox:       b.bbox,
+      cropData,
     });
   }
 }
@@ -546,10 +562,6 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
       }
     }
 
-    // ── Persist fire/smoke and loitering events to DB ─────────────────────────
-    if (fireSmoke.length > 0) _persistFireSmoke(db, cameraId, cameraName, ts, fireSmoke);
-    if (behaviors.length > 0) _persistLoitering(db, cameraId, cameraName, ts, behaviors);
-
     res.json({
       cameraId,
       frameId,
@@ -563,6 +575,12 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
       frameHeight,
       processingMs,
     });
+
+    // ── Persist fire/smoke and loitering events (after response — non-blocking) ─
+    if (db) {
+      if (fireSmoke.length > 0) _persistFireSmoke(db, cameraId, cameraName, ts, fireSmoke, jpegBuffer, frameWidth, frameHeight).catch(() => {});
+      if (behaviors.length > 0) _persistLoitering(db, cameraId, cameraName, ts, behaviors, jpegBuffer, frameWidth, frameHeight).catch(() => {});
+    }
   } catch (err) {
     _metrics.errorsTotal += 1;
     console.error('[AnalysisAPI] Unhandled error:', err.message);

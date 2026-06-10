@@ -174,25 +174,53 @@ Sign Out → auth.logout()
 - 기준 위치: `client/src/App.tsx` (`serverMode`, `isStreaming`, `TAB_ITEMS`)
 - `combined`: Cameras/Analytics 탭 모두 표시
 - `streaming`: Analytics 탭 숨김
-- `analysis`: 메인 영역은 `AnalysisServerDashboard.tsx`, 우측/모바일 탭은 **3개 탭** 표시:
+- `analysis`: 메인 영역은 `AnalysisServerDashboard.tsx`, 우측/모바일 탭은 **1개 탭** 표시:
   - `analytics` (VideoAnalyticsTab — 모듈 설정)
-  - `detections` (AnalysisDetectionPanel — analysisEvents DB 조회)
-  - `alerts` (AlertPanel — socket `alert:new` 이벤트)
+  - 이벤트 히스토리는 대시보드 카드 클릭 → `AnalysisDetectionPanel` 인라인 오버레이로 표시
 - 모드 변경으로 현재 활성 탭이 유효하지 않으면 `analytics`로 자동 전환
 
 ```typescript
-// App.tsx — analysis 탭 가드
-const ANALYSIS_TABS: SidebarTab[] = ['analytics', 'detections', 'alerts'];
+// App.tsx — analysis 탭 가드 (v1.7)
+const ANALYSIS_TABS: SidebarTab[] = ['analytics'];
 if (isAnalysis && !ANALYSIS_TABS.includes(sidebarTab)) {
   setSidebarTab('analytics');
+}
+
+// renderTabContent — analysis 분기
+if (isAnalysis) {
+  return <VideoAnalyticsTab />;
 }
 ```
 
 ## Analysis Mode Dashboard
 
 - `AnalysisServerDashboard.tsx`는 `/api/analysis/metrics`를 주기적으로 조회해 현재 활성 모듈, 입력 트래픽, 요청 동시성, 최근/누적 결과, 카메라별 부하를 보여줍니다.
-- `onNavigateToTab` prop으로 대시보드 카드 클릭 시 `detections` 또는 `alerts` 탭으로 이동 가능.
-- 클릭 가능한 대시보드 카드: "감지 이벤트" → detections 탭, "알림" → alerts 탭.
+- 대시보드 카드 클릭 시 **AnalysisDetectionPanel 오버레이** 표시 (사이드바 탭 이동 없음).
+- `showEventHistory` 상태로 오버레이 제어; `onNavigateToTab` prop 제거.
+
+```typescript
+// AnalysisServerDashboard.tsx
+const [showEventHistory, setShowEventHistory] = useState(false);
+
+{showEventHistory && (
+  <div className="absolute inset-0 z-20 rounded-[28px] overflow-hidden">
+    <AnalysisDetectionPanel onClose={() => setShowEventHistory(false)} />
+  </div>
+)}
+```
+
+## AnalysisDetectionPanel — 날짜 그룹별 히스토리 브라우저 (v1.7)
+
+**Props**: `{ onClose?: () => void }`
+
+**기능**:
+- `GET /api/analysis/events?limit=200` 폴링 (5초, 자동/일시정지 토글)
+- `useMemo`로 날짜별 그룹핑, 최신 날짜 순 정렬
+- `EventRow`: 클릭 시 확장, 메타 정보 + `cropData` 이미지 표시
+- 이벤트 타입 필터 (전체/화재/연기/배회)
+- `DELETE /api/analysis/events` 전체 삭제
+- `onClose` prop 있을 때 닫기 버튼 표시 (오버레이 모드)
+- 크롭 이미지 클릭 → 새 탭에서 원본 확대
 
 ### alertService EventEmitter 연결 (index.js 버그 수정)
 

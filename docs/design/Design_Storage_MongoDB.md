@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-STORAGE-001 |
-| **Version** | 1.1 |
+| **Version** | 1.3 |
 | **Status** | Active — amended 2026-05-27 |
 | **Date** | 2026-05-27 |
 | **Parent SRS** | srs/SRS_Storage_MongoDB.md |
@@ -824,6 +824,7 @@ Analysis 서버(`SERVER_MODE=analysis` / `combined`)가 감지한 화재·연기
 | `zoneId` | string | 구역 ID (loitering만) |
 | `zoneName` | string | 구역 이름 (loitering만) |
 | `riskScore` | number 0-1 | 위험 점수 (loitering만) |
+| `cropData` | string? | 감지 영역 JPEG Base64 data URI (fire/smoke/loitering 공통, 없을 수 있음) |
 
 **저장 정책**: 화재/연기 30초 쿨다운, 배회 60초 쿨다운, 컬렉션 최대 500건 유지.
 **조회**: `GET /api/analysis/events?limit=N&type=fire,smoke,loitering`
@@ -837,3 +838,4 @@ Analysis 서버(`SERVER_MODE=analysis` / `combined`)가 감지한 화재·연기
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Storage MongoDB |
 | 1.2 | 2026-06-10 | LTS Engineering Team | Section 15.8 추가: analysisEvents 컬렉션 스키마 및 저장 정책, ALL_TABLES v1.2 업데이트 |
+| 1.3 | 2026-06-10 | LTS Engineering Team | analysisEvents 스키마에 `cropData` 필드 추가 (감지 영역 JPEG Base64) |
