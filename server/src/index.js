@@ -171,6 +171,10 @@ async function main() {
   const alertService        = new AlertService(db);
   app.set('alertService', alertService); // accessible in analysisApi route handlers
   app.set('db', db);                     // accessible in analysisApi route handlers for event persistence
+  // In analysis mode, pipelineManager._alertService is a separate instance that
+  // holds the socket.io forwarding listener. Wire the shared app alertService
+  // directly so alert:new events reach browser clients in all server modes.
+  alertService.on('alert', (alert) => io.emit('alert:new', alert));
   // Pass the shared ZoneManager so zone additions/deletions via REST API are
   // immediately visible to the pipeline without a server restart.
   const pipelineManager     = new PipelineManager(io, db, zoneManager);
