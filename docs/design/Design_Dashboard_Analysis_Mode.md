@@ -534,3 +534,14 @@ app.get(/^(?!\/api|\/auth|...).*/, (req, res) => res.sendFile(indexHtml));
 - `AlertPanel.tsx`, `ZonesPanel.tsx`, `FaceGalleryTab.tsx` 등 사이드바 컴포넌트 — 수정 없음
 - Zustand 스토어 — 수정 없음
 - `useSocket.ts` 훅 — 수정 없음
+
+---
+
+## Revision History
+
+| 버전 | 날짜 | 변경 내용 |
+|---|---|---|
+| 1.0 | 2026-06-08 | 초기 작성 — Analysis Mode UI 분기, AnalysisServerPanel 인라인 컴포넌트, i18n, /health API |
+| 1.1 | 2026-06-09 | combined 모드 URL 분기(`/analysis`), AccessDeniedPage, Profile 드롭다운 대시보드 전환 추가 |
+| 1.2 | 2026-06-10 | Section 5 재작성: AnalysisServerDashboard.tsx 분리, ONNX 모델 섹션(5.2·5.3) 추가 |
+

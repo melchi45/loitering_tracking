@@ -278,3 +278,34 @@ Claude에서 직접 사용 가능한 LTS-2026 MCP 도구:
 1. `.claude/skills/`와 `.github/skills/`는 **항상 동일**해야 합니다 — 한쪽 수정 시 반대쪽도 동시 수정
 2. `CLAUDE.md`와 `.github/copilot-instructions.md`의 API 표·이벤트 표·명령어는 **코드 실제 상태와 항상 일치**
 3. `docs/ops/MongoDB_Setup.md`와 `docker-deploy/SKILL.md`의 MongoDB 섹션은 `server/src/db.js`, `installDb.js`와 동기화
+
+### 문서 개정 이력 (Revision History) 규칙
+
+> **모든 `docs/` 하위 문서를 생성하거나 수정할 때 반드시 이 규칙을 따릅니다.**
+
+#### 표 형식
+
+모든 `docs/design/`, `docs/srs/`, `docs/prd/`, `docs/ops/` 문서 **맨 아래**에 다음 표를 유지합니다:
+
+```markdown
+---
+
+## Revision History
+
+| 버전 | 날짜 | 변경 내용 |
+|---|---|---|
+| 1.0 | YYYY-MM-DD | 초기 작성 |
+```
+
+#### 적용 규칙
+
+| 상황 | 조치 |
+|---|---|
+| 문서 최초 생성 | `v1.0` 행 추가, 날짜 = 작성일 |
+| 문서 내용 일부 수정 | 마이너 버전 +0.1 행 추가 (예: 1.0 → 1.1) |
+| 구조적 대규모 개편 | 메이저 버전 +1.0 행 추가 (예: 1.x → 2.0) |
+| 오타·서식 교정만 | 이력 추가 불필요 |
+
+- 헤더의 `**Version**` 필드 값과 이력 표의 **최신 버전은 항상 일치**해야 합니다
+- 변경 내용은 1~2줄 요약 (예: `ONNX 모델 섹션 추가`, `reconnected 로그 스팸 수정 반영`)
+- 날짜는 `YYYY-MM-DD` 형식 사용
