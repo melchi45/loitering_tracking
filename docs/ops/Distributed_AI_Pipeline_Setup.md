@@ -824,9 +824,35 @@ FIRE_SMOKE_CONF_THRESHOLD=0.20   # 기본값 0.35 → 감도 상향
 
 ---
 
+### 9.9 analysis 서버에 `BadRequestError: request aborted` 반복 출력
+
+**증상:**
+```
+[Express] Unhandled error: BadRequestError: request aborted
+  code: 'ECONNABORTED', expected: 56945, received: 16044
+```
+
+**원인:** streaming 서버가 JPEG 바디를 전송하는 도중 `ANALYSIS_REQUEST_TIMEOUT_MS` 타임아웃이 만료되어 소켓을 `destroy()`합니다. analysis 서버의 `express.raw()` body 파서가 이를 에러(`ECONNABORTED`)로 감지하고 `next(err)`를 호출하는데, 에러 핸들러가 없어서 Express 전역 에러로 올라갑니다.
+
+이 에러는 **기능상 무해**합니다. streaming 서버가 이미 연결을 끊었으므로 해당 프레임 결과를 보낼 수 없고, 다음 프레임에서 정상 재개됩니다.
+
+**해결 (코드 수정 적용됨 — 별도 설정 불필요):**  
+`analysisApi.js`의 `_parseFrameBody` 미들웨어에서 `ECONNABORTED` / `request.aborted` 에러를 감지하면 로그 없이 조용히 드롭합니다. `_metrics.errorsTotal`에만 카운트됩니다.
+
+**재발 빈도를 줄이려면:**  
+`ANALYSIS_REQUEST_TIMEOUT_MS`를 늘려 streaming 서버가 body 전송을 완료할 충분한 시간을 줍니다.
+
+```env
+# server/.env (streaming 서버)
+ANALYSIS_REQUEST_TIMEOUT_MS=8000   # 네트워크가 느리거나 프레임이 큰 경우
+```
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-08 | 초기 작성 — 분산 AI 파이프라인 설정 가이드 |
 | 1.1 | 2026-06-10 | 환경변수 표에 `FIRE_SMOKE_CONF_THRESHOLD`, `FIRE_SMOKE_NMS_THRESHOLD` 추가; 섹션 5.5 감도 조정 가이드 추가; 섹션 9.8 화재/연기 트러블슈팅 추가 |
+| 1.2 | 2026-06-10 | 섹션 9.9 추가: `ECONNABORTED` / `request aborted` 반복 에러 원인 및 해결 |

@@ -277,13 +277,25 @@ setInterval(() => {
 // Accepts two content-types:
 //   image/jpeg  — binary JPEG body + JSON metadata in X-LTS-Meta header (preferred)
 //   application/json — legacy: { cameraId, frameId, timestamp, frame: base64, zones }
+function _isAbortError(err) {
+  return err?.type === 'request.aborted' || err?.code === 'ECONNABORTED';
+}
+
 function _parseFrameBody(req, res, next) {
   const ct = (req.headers['content-type'] || '').split(';')[0].trim();
-  if (ct === 'image/jpeg') {
-    express.raw({ type: 'image/jpeg', limit: '10mb' })(req, res, next);
-  } else {
-    express.json({ limit: '20mb' })(req, res, next);
-  }
+  const parser = ct === 'image/jpeg'
+    ? express.raw({ type: 'image/jpeg', limit: '10mb' })
+    : express.json({ limit: '20mb' });
+
+  parser(req, res, (err) => {
+    if (err && _isAbortError(err)) {
+      // Streaming server closed the socket before finishing body transfer
+      // (timeout fired mid-send). Frame is irrelevant — drop silently.
+      _metrics.errorsTotal++;
+      return;
+    }
+    next(err);
+  });
 }
 
 router.post('/frame', _parseFrameBody, async (req, res) => {
@@ -593,6 +605,21 @@ router.get('/contexts', (_req, res) => {
     });
   }
   res.json({ count: contexts.length, contexts });
+});
+
+// ── Router-level error handler ────────────────────────────────────────────────
+// Belt-and-suspenders: catch any abort errors that escape _parseFrameBody
+// (e.g. abort during async inference, not just body parsing).
+// eslint-disable-next-line no-unused-vars
+router.use((err, req, res, next) => {
+  if (_isAbortError(err)) {
+    _metrics.errorsTotal++;
+    return; // socket already closed — no response possible
+  }
+  _metrics.errorsTotal++;
+  if (!res.headersSent) {
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 module.exports = router;

@@ -295,7 +295,43 @@ if (wasNearOpen) {
 - `CIRCUIT_OPEN_THRESHOLD = 3` 이므로, 2회 이상 연속 실패 후 복구될 때만 로그 출력
 - 단발성 타임아웃(네트워크 지터, 일시적 지연)은 로그 없이 조용히 처리됨
 
-### 7. fireSmokeService.js — 감도 조정 환경변수 (2026-06-10)
+### 7. analysisApi.js — ECONNABORTED (request aborted) 에러 핸들링 (2026-06-10)
+
+**증상:** analysis 서버 로그에 `BadRequestError: request aborted (ECONNABORTED)` 반복 출력.
+
+**원인:** streaming 서버가 JPEG 바디 전송 중 `ANALYSIS_REQUEST_TIMEOUT_MS` 만료 → 소켓 `destroy()` → analysis 서버 `express.raw()` 에서 `ECONNABORTED` 발생 → 에러 핸들러 없음 → Express 전역 에러.
+
+**수정 1 — `_parseFrameBody` 미들웨어:**
+```javascript
+function _isAbortError(err) {
+  return err?.type === 'request.aborted' || err?.code === 'ECONNABORTED';
+}
+
+function _parseFrameBody(req, res, next) {
+  const parser = ct === 'image/jpeg'
+    ? express.raw({ type: 'image/jpeg', limit: '10mb' })
+    : express.json({ limit: '20mb' });
+  parser(req, res, (err) => {
+    if (err && _isAbortError(err)) { _metrics.errorsTotal++; return; }
+    next(err);
+  });
+}
+```
+
+**수정 2 — router 말단 에러 핸들러 (belt-and-suspenders):**
+```javascript
+router.use((err, req, res, next) => {
+  if (_isAbortError(err)) { _metrics.errorsTotal++; return; }
+  _metrics.errorsTotal++;
+  if (!res.headersSent) res.status(500).json({ error: 'Internal server error' });
+});
+```
+
+- 기능상 무해한 에러 — streaming 서버는 이미 연결을 끊었으므로 응답 불필요
+- `errorsTotal` 카운터에만 집계 (대시보드에서 모니터링 가능)
+- 재발 빈도 감소: `ANALYSIS_REQUEST_TIMEOUT_MS` 증가로 body 전송 완료 시간 확보
+
+### 8. fireSmokeService.js — 감도 조정 환경변수 (2026-06-10)
 
 **문제:** `CONF_THRESHOLD = 0.35`가 하드코딩되어 역광·야간·초기 단계 연기 환경에서 감지 누락.
 
