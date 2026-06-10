@@ -153,6 +153,7 @@ loitering_tracking/
 | PATCH | `/api/zones/:id` | 구역 수정 |
 | GET | `/api/analytics/summary` | 분석 요약 통계 |
 | GET | `/api/analysis/metrics` | 분석 서버 대시보드 메트릭 |
+| GET | `/api/analysis/client-status` | 분석 클라이언트 상태 (streaming 모드 전용 — 회로차단기 상태·통계) |
 | GET | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 조회 |
 | PATCH | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 런타임 변경 |
 | GET | `/api/analysis/events` | 분석 이벤트 조회 (query: limit, type) |

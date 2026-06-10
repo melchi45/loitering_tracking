@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-SA-01 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Active |
 | **Date** | 2026-06-10 |
 | **Author** | LTS-2026 Engineering |
@@ -252,6 +252,7 @@ sequenceDiagram
 - `AnalysisClient`가 회로 차단기(Circuit Breaker) + 백프레셔 관리
 - Analysis 서버 장애 시 자동 재연결 (15 s 간격 health probe)
 - `/api/analysis/*` GET은 `analysisProxy`로 analysis 서버에 프록시
+- `GET /api/analysis/client-status` — 로컬 circuit-breaker 상태·통계 (프록시 전에 처리, streaming 전용)
 
 **활성화 서비스:**
 
@@ -876,3 +877,4 @@ if (subscribedRef.current.size > 0 && !subscribedRef.current.has(ev.cameraId)) r
 |---|---|---|
 | 1.0 | 2026-06-10 | 초기 작성 — combined/streaming/analysis 모드 분리, DB/MCP 아키텍처, 배포 시나리오 5종, Mermaid 다이어그램 포함 |
 | 1.1 | 2026-06-10 | Section 8 추가: 실시간 감지 데이터 흐름(SERVER_MODE별), analysis 모드 Socket.IO 활성화, useAllDetections 전체 수신 메커니즘, snapshotSvc로 일반 person 크롭 지원 |
+| 1.2 | 2026-06-10 | streaming 모드 `GET /api/analysis/client-status` 엔드포인트 추가 — circuit-breaker 상태·통계 노출, DashboardDetectionPanel 분석 서버 연결 상태 배너 |
