@@ -175,12 +175,12 @@ export function DetectionRow({ det, isCrossCamera }: { det: Detection; isCrossCa
 
       {/* Core metrics */}
       <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-[10px] text-gray-400 font-mono">
-        <span>conf  <span className="text-gray-200">{(confidence * 100).toFixed(0)}%</span></span>
-        <span>dwell <span className={dwellTime > 5 ? 'text-yellow-300' : 'text-gray-200'}>{dwellTime.toFixed(1)}s</span></span>
-        <span>x <span className="text-gray-200">{bbox.x.toFixed(0)}</span></span>
-        <span>y <span className="text-gray-200">{bbox.y.toFixed(0)}</span></span>
-        <span>w <span className="text-gray-200">{bbox.width.toFixed(0)}</span></span>
-        <span>h <span className="text-gray-200">{bbox.height.toFixed(0)}</span></span>
+        <span>conf  <span className="text-gray-200">{((confidence ?? 0) * 100).toFixed(0)}%</span></span>
+        <span>dwell <span className={(dwellTime ?? 0) > 5 ? 'text-yellow-300' : 'text-gray-200'}>{(dwellTime ?? 0).toFixed(1)}s</span></span>
+        <span>x <span className="text-gray-200">{(bbox?.x ?? 0).toFixed(0)}</span></span>
+        <span>y <span className="text-gray-200">{(bbox?.y ?? 0).toFixed(0)}</span></span>
+        <span>w <span className="text-gray-200">{(bbox?.width ?? 0).toFixed(0)}</span></span>
+        <span>h <span className="text-gray-200">{(bbox?.height ?? 0).toFixed(0)}</span></span>
       </div>
 
       {/* Adaptive multi-feature metrics (zone-matched objects only) */}
@@ -243,7 +243,7 @@ export function DetectionRow({ det, isCrossCamera }: { det: Detection; isCrossCa
       {/* Face recognition info — on person objects (face attribute) */}
       {face && (
         <div className="mt-0.5 text-[10px] text-blue-400 font-mono flex items-center gap-1.5 flex-wrap">
-          face {(face.score * 100).toFixed(0)}%
+          face {((face.score ?? 0) * 100).toFixed(0)}%
           {face.faceId && <span className="text-blue-300 font-bold">[{face.faceId}]</span>}
           {personAlias && <span className="text-[8px] font-bold bg-teal-700/70 text-teal-100 rounded px-1 py-0.5">{personAlias}</span>}
           {face.identity && <span className="text-blue-200">{face.identity}</span>}
