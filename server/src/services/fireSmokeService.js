@@ -45,6 +45,14 @@ class FireSmokeService {
     this._ready       = false;
     // 'not_started' | 'missing' | 'loaded' | 'failed'
     this._status      = 'not_started';
+    // Runtime-tunable thresholds (initialised from env vars; updated via setThresholds())
+    this.confThreshold = CONF_THRESHOLD;
+    this.nmsThreshold  = NMS_THRESHOLD;
+  }
+
+  setThresholds({ confThreshold, nmsThreshold } = {}) {
+    if (confThreshold != null) this.confThreshold = Math.min(1, Math.max(0, Number(confThreshold)));
+    if (nmsThreshold  != null) this.nmsThreshold  = Math.min(1, Math.max(0, Number(nmsThreshold)));
   }
 
   async load() {
@@ -119,7 +127,8 @@ class FireSmokeService {
       const result = await this._session.run(feeds);
       const out    = result[this._session.outputNames[0]];
 
-      return _postprocess(out.data, out.dims, safeW, safeH, scale, padL, padT);
+      return _postprocess(out.data, out.dims, safeW, safeH, scale, padL, padT,
+                          this.confThreshold, this.nmsThreshold);
     } catch (err) {
       console.error('[FireSmokeService] Detection error:', err.message);
       return [];
@@ -129,7 +138,7 @@ class FireSmokeService {
 
 // ─── Post-processing ──────────────────────────────────────────────────────────
 
-function _postprocess(data, dims, origW, origH, scale, padL, padT) {
+function _postprocess(data, dims, origW, origH, scale, padL, padT, confThreshold, nmsThreshold) {
   const numBoxes = dims[2];  // 8400
   const boxes = [];
 
@@ -139,7 +148,7 @@ function _postprocess(data, dims, origW, origH, scale, padL, padT) {
       const score = data[(4 + c) * numBoxes + i];
       if (score > maxScore) { maxScore = score; classIdx = c; }
     }
-    if (maxScore < CONF_THRESHOLD) continue;
+    if (maxScore < confThreshold) continue;
 
     const rawName = CLASS_NAMES[classIdx];
     if (SKIP_CLASSES.has(rawName)) continue;  // skip 'default' class
@@ -166,10 +175,10 @@ function _postprocess(data, dims, origW, origH, scale, padL, padT) {
     });
   }
 
-  return _nms(boxes);
+  return _nms(boxes, nmsThreshold);
 }
 
-function _nms(boxes) {
+function _nms(boxes, nmsThreshold) {
   boxes.sort((a, b) => b.confidence - a.confidence);
   const keep = [];
   const suppressed = new Set();
@@ -178,7 +187,7 @@ function _nms(boxes) {
     keep.push(boxes[i]);
     for (let j = i + 1; j < boxes.length; j++) {
       if (suppressed.has(j)) continue;
-      if (_iou(boxes[i].bbox, boxes[j].bbox) > NMS_THRESHOLD) suppressed.add(j);
+      if (_iou(boxes[i].bbox, boxes[j].bbox) > nmsThreshold) suppressed.add(j);
     }
   }
   return keep;

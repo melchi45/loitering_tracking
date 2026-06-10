@@ -101,6 +101,8 @@ loitering_tracking/
 | GET | `/api/stats` | 시스템 통계 조회 |
 | GET | `/api/search` | 전역 검색 |
 | GET | `/api/analysis/metrics` | 분석 서버 대시보드용 트래픽/모듈/결과 메트릭 조회 |
+| GET | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 조회 |
+| PATCH | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 런타임 변경 |
 
 ---
 

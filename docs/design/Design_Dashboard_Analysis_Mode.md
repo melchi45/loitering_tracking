@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UI-DAM-01 |
-| **Version** | 1.3 |
+| **Version** | 1.4 |
 | **Status** | Active |
 | **Date** | 2026-06-10 |
 | **Parent SRS** | [srs/SRS_Dashboard_Analysis_Mode.md](../srs/SRS_Dashboard_Analysis_Mode.md) |
@@ -449,6 +449,58 @@ setFpsHistory(prev => {
 
 ---
 
+### 5.5 VideoAnalyticsTab — 🔥 Fire / Smoke Sensitivity 패널 (신규)
+
+`VideoAnalyticsTab.tsx` 우측 사이드바의 Analytics 탭에 화재/연기 감지 임계값을 런타임으로 조정하는 접이식 패널을 추가한다.
+
+#### 새 엔드포인트
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| `GET` | `/api/analysis/config/fire-smoke` | 현재 conf/NMS 임계값 조회 |
+| `PATCH` | `/api/analysis/config/fire-smoke` | conf/NMS 임계값 업데이트 |
+
+응답/요청 스키마:
+```json
+{ "confThreshold": 0.35, "nmsThreshold": 0.45, "available": true }
+```
+
+`available: false` 또는 404 응답 시 패널은 렌더링되지 않는다.
+
+#### FireSmokeService 변경
+
+`fireSmokeService.js`의 `CONF_THRESHOLD` / `NMS_THRESHOLD` 모듈 상수를 **인스턴스 프로퍼티**로 승격:
+
+```javascript
+// 인스턴스 초기값 (env var에서)
+this.confThreshold = CONF_THRESHOLD;
+this.nmsThreshold  = NMS_THRESHOLD;
+
+// 런타임 업데이트
+setThresholds({ confThreshold, nmsThreshold }) { ... }
+```
+
+`_postprocess(data, dims, origW, origH, scale, padL, padT, confThreshold, nmsThreshold)` — 임계값을 파라미터로 전달.
+
+#### VideoAnalyticsTab 상태 및 UI
+
+```typescript
+const [fireSmokeConfig, setFireSmokeConfig] = useState<FireSmokeConfig>({ confThreshold: 0.35, nmsThreshold: 0.45 });
+const [fireSmokeOpen, setFireSmokeOpen]     = useState(false);
+const [fireSmokeAvailable, setFireSmokeAvailable] = useState(false);
+```
+
+| 슬라이더 | 범위 | 스텝 | 기본값 | 설명 |
+|---|---|---|---|---|
+| Conf Threshold | 0.05 ~ 0.95 | 0.05 | 0.35 | 낮을수록 감도 ↑ (false positive 증가) |
+| NMS IoU Threshold | 0.10 ~ 0.90 | 0.05 | 0.45 | 낮을수록 겹치는 박스 적게 유지 |
+
+- 슬라이더 변경 시 **300ms debounce** 후 `PATCH /api/analysis/config/fire-smoke` 자동 호출
+- Reset Defaults 버튼: `{ confThreshold: 0.35, nmsThreshold: 0.45 }` 으로 복원
+- `fireSmokeAvailable = false` (analysis 서버 미연결 또는 모델 없음) 시 패널 비표시
+
+---
+
 ## 6. i18n 변경
 
 ### 6.1 신규 키
@@ -602,4 +654,5 @@ app.get(/^(?!\/api|\/auth|...).*/, (req, res) => res.sendFile(indexHtml));
 | 1.1 | 2026-06-09 | combined 모드 URL 분기(`/analysis`), AccessDeniedPage, Profile 드롭다운 대시보드 전환 추가 |
 | 1.2 | 2026-06-10 | Section 5 재작성: AnalysisServerDashboard.tsx 분리, ONNX 모델 섹션(5.2·5.3) 추가 |
 | 1.3 | 2026-06-10 | Section 5.4 추가: Per-source 테이블에 FpsSparkline 그래프 컬럼 추가 |
+| 1.4 | 2026-06-10 | Section 5.5 추가: VideoAnalyticsTab Fire/Smoke Sensitivity 슬라이더 패널, `/api/analysis/config/fire-smoke` 엔드포인트, fireSmokeService 인스턴스 프로퍼티 승격 |
 

@@ -147,6 +147,8 @@ loitering_tracking/
 | PATCH | `/api/zones/:id` | 구역 수정 |
 | GET | `/api/analytics/summary` | 분석 요약 통계 |
 | GET | `/api/analysis/metrics` | 분석 서버 대시보드 메트릭 |
+| GET | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 조회 |
+| PATCH | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 런타임 변경 |
 | POST | `/api/faces/register` | 얼굴 등록 |
 | POST | `/api/faces/search` | 얼굴 검색 |
 | POST | `/api/streams/youtube` | YouTube 스트림 수집 |

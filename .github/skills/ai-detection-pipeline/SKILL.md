@@ -384,3 +384,41 @@ setFpsHistory(prev => {
 - `max = Math.max(...data, 1)` — 전체 0fps 상태에서 divide-by-zero 방지
 - 데이터 2개 미만 시 `—` 텍스트 표시
 - 그리드 컬럼 `0.7fr → 1.4fr`로 확장, 헤더 `FPS(1s) → FPS / 추이`로 변경
+
+### 9. fireSmokeService.js — 임계값 런타임 변경 (2026-06-10)
+
+**배경:** 환경변수 방식은 서버 재시작이 필요. UI에서 실시간으로 감도를 조정할 수 있도록 임계값을 인스턴스 프로퍼티로 승격.
+
+**변경 내용 (`fireSmokeService.js`):**
+```javascript
+class FireSmokeService {
+  constructor(options = {}) {
+    // ...
+    this.confThreshold = CONF_THRESHOLD;  // FIRE_SMOKE_CONF_THRESHOLD env var에서 초기화
+    this.nmsThreshold  = NMS_THRESHOLD;   // FIRE_SMOKE_NMS_THRESHOLD env var에서 초기화
+  }
+
+  setThresholds({ confThreshold, nmsThreshold } = {}) {
+    if (confThreshold != null) this.confThreshold = Math.min(1, Math.max(0, Number(confThreshold)));
+    if (nmsThreshold  != null) this.nmsThreshold  = Math.min(1, Math.max(0, Number(nmsThreshold)));
+  }
+}
+
+// _postprocess / _nms: 모듈 상수 대신 파라미터로 받음
+function _postprocess(data, dims, origW, origH, scale, padL, padT, confThreshold, nmsThreshold) { ... }
+function _nms(boxes, nmsThreshold) { ... }
+```
+
+**새 API 엔드포인트 (`analysisApi.js`):**
+```
+GET  /api/analysis/config/fire-smoke  → { confThreshold, nmsThreshold, available }
+PATCH /api/analysis/config/fire-smoke → body: { confThreshold?, nmsThreshold? }
+```
+
+**UI (`VideoAnalyticsTab.tsx`):**
+- `fireSmokeAvailable` 상태 → GET 결과의 `available` 필드로 결정; false시 패널 비표시
+- "🔥 Fire / Smoke Sensitivity" 접이식 섹션 (Appearance Weights 아래, Kalman 위)
+- Conf Threshold 슬라이더: 0.05~0.95, step 0.05
+- NMS IoU Threshold 슬라이더: 0.10~0.90, step 0.05
+- 300ms debounce 후 자동 PATCH, "Reset Defaults" 버튼 제공
+- `accent-orange-500` 색상 테마 (화재/연기 강조)

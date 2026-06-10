@@ -591,6 +591,35 @@ router.get('/metrics', (req, res) => {
   });
 });
 
+// ── GET /api/analysis/config/fire-smoke ──────────────────────────────────────
+router.get('/config/fire-smoke', (_req, res) => {
+  res.json({
+    confThreshold: _fireSmokeService?.confThreshold ?? 0.35,
+    nmsThreshold:  _fireSmokeService?.nmsThreshold  ?? 0.45,
+    available:     !!_fireSmokeService,
+  });
+});
+
+// ── PATCH /api/analysis/config/fire-smoke ─────────────────────────────────────
+router.patch('/config/fire-smoke', express.json({ limit: '10kb' }), (req, res) => {
+  if (!_fireSmokeService) {
+    return res.status(503).json({ error: 'FireSmokeService not loaded' });
+  }
+  const { confThreshold, nmsThreshold } = req.body || {};
+  if (confThreshold != null && (typeof confThreshold !== 'number' || confThreshold < 0 || confThreshold > 1)) {
+    return res.status(400).json({ error: 'confThreshold must be a number between 0 and 1' });
+  }
+  if (nmsThreshold != null && (typeof nmsThreshold !== 'number' || nmsThreshold < 0 || nmsThreshold > 1)) {
+    return res.status(400).json({ error: 'nmsThreshold must be a number between 0 and 1' });
+  }
+  _fireSmokeService.setThresholds({ confThreshold, nmsThreshold });
+  console.log(`[AnalysisAPI] Fire/smoke thresholds updated: conf=${_fireSmokeService.confThreshold} nms=${_fireSmokeService.nmsThreshold}`);
+  res.json({
+    confThreshold: _fireSmokeService.confThreshold,
+    nmsThreshold:  _fireSmokeService.nmsThreshold,
+  });
+});
+
 // ── GET /api/analysis/contexts ────────────────────────────────────────────────
 // Returns per-camera context summary (for debugging)
 router.get('/contexts', (_req, res) => {

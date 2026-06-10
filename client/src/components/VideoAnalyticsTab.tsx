@@ -4,6 +4,13 @@ import { useI18n } from '../i18n';
 interface AttrItem  { id: string; label: string; labelKo: string; model?: string; pending?: boolean; installHint?: string; }
 interface AttrGroup { groupKey: string; items: AttrItem[]; }
 
+interface FireSmokeConfig {
+  confThreshold: number;
+  nmsThreshold:  number;
+}
+
+const FIRE_SMOKE_DEFAULTS: FireSmokeConfig = { confThreshold: 0.35, nmsThreshold: 0.45 };
+
 interface KalmanConfig {
   maxAge:             number;
   iouThreshold:       number;
@@ -222,17 +229,32 @@ export default function VideoAnalyticsTab() {
   const [appearOpen, setAppearOpen]     = useState(false);
   const kalmanDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Fire / Smoke sensitivity
+  const [fireSmokeConfig, setFireSmokeConfig] = useState<FireSmokeConfig>({ ...FIRE_SMOKE_DEFAULTS });
+  const [fireSmokeOpen, setFireSmokeOpen]     = useState(false);
+  const [fireSmokeSaving, setFireSmokeSaving] = useState(false);
+  const [fireSmokeAvailable, setFireSmokeAvailable] = useState(false);
+  const fireSmokeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   useEffect(() => {
     Promise.all([
       fetch('/api/analytics/config').then(r => r.json()),
       fetch('/api/capabilities').then(r => r.json()),
       fetch('/api/tracker/config').then(r => r.json()),
+      fetch('/api/analysis/config/fire-smoke').then(r => r.ok ? r.json() : null).catch(() => null),
     ])
-      .then(([cfg, cap, kfg]) => {
+      .then(([cfg, cap, kfg, fsCfg]) => {
         if (cfg.success) setEnabled(cfg.data);
         if (cap.ai)      setCaps(cap.ai);
         if (cap.status)  setCapStatus(cap.status);
         if (kfg.success) setKalman(prev => ({ ...prev, ...kfg.data }));
+        if (fsCfg) {
+          setFireSmokeAvailable(fsCfg.available !== false);
+          setFireSmokeConfig({
+            confThreshold: fsCfg.confThreshold ?? FIRE_SMOKE_DEFAULTS.confThreshold,
+            nmsThreshold:  fsCfg.nmsThreshold  ?? FIRE_SMOKE_DEFAULTS.nmsThreshold,
+          });
+        }
       })
       .catch(() => setLoadError(true));
   }, []);
@@ -328,6 +350,38 @@ export default function VideoAnalyticsTab() {
       setKalman(data);
     } finally {
       setKalmanSaving(false);
+    }
+  };
+
+  const handleFireSmokeChange = (key: keyof FireSmokeConfig, value: number) => {
+    const next = { ...fireSmokeConfig, [key]: value };
+    setFireSmokeConfig(next);
+    if (fireSmokeDebounce.current) clearTimeout(fireSmokeDebounce.current);
+    fireSmokeDebounce.current = setTimeout(async () => {
+      setFireSmokeSaving(true);
+      try {
+        await fetch('/api/analysis/config/fire-smoke', {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ [key]: value }),
+        });
+      } finally {
+        setFireSmokeSaving(false);
+      }
+    }, 300);
+  };
+
+  const resetFireSmoke = async () => {
+    setFireSmokeSaving(true);
+    try {
+      await fetch('/api/analysis/config/fire-smoke', {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(FIRE_SMOKE_DEFAULTS),
+      });
+      setFireSmokeConfig({ ...FIRE_SMOKE_DEFAULTS });
+    } finally {
+      setFireSmokeSaving(false);
     }
   };
 
@@ -551,6 +605,76 @@ export default function VideoAnalyticsTab() {
             </div>
           )}
         </div>
+
+        {/* Fire / Smoke Sensitivity */}
+        {fireSmokeAvailable && (
+          <div className="border-t border-gray-700/50 pt-3">
+            <button
+              onClick={() => setFireSmokeOpen(prev => !prev)}
+              className="flex items-center justify-between w-full text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1.5 hover:text-gray-400"
+            >
+              <span>🔥 Fire / Smoke Sensitivity</span>
+              <span className="text-[10px]">{fireSmokeOpen ? '▲' : '▼'}</span>
+            </button>
+
+            {fireSmokeOpen && (
+              <div className="bg-gray-900/70 rounded-md p-2 space-y-2.5">
+                {/* Conf Threshold */}
+                <div>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <label className="text-[10px] text-gray-400">Conf Threshold</label>
+                    <span className="text-[10px] text-white font-semibold font-mono">
+                      {fireSmokeConfig.confThreshold.toFixed(2)}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.05} max={0.95} step={0.05}
+                    value={fireSmokeConfig.confThreshold}
+                    onChange={(e) => handleFireSmokeChange('confThreshold', Number(e.target.value))}
+                    className="w-full accent-orange-500 h-1"
+                  />
+                  <p className="text-[9px] text-gray-600 mt-0.5">
+                    낮을수록 감도 ↑ (false positive 증가). 기본값: 0.35
+                  </p>
+                </div>
+
+                {/* NMS IoU Threshold */}
+                <div>
+                  <div className="flex items-center justify-between mb-0.5">
+                    <label className="text-[10px] text-gray-400">NMS IoU Threshold</label>
+                    <span className="text-[10px] text-white font-semibold font-mono">
+                      {fireSmokeConfig.nmsThreshold.toFixed(2)}
+                    </span>
+                  </div>
+                  <input
+                    type="range"
+                    min={0.10} max={0.90} step={0.05}
+                    value={fireSmokeConfig.nmsThreshold}
+                    onChange={(e) => handleFireSmokeChange('nmsThreshold', Number(e.target.value))}
+                    className="w-full accent-orange-500 h-1"
+                  />
+                  <p className="text-[9px] text-gray-600 mt-0.5">
+                    낮을수록 겹치는 박스 더 적게 유지. 기본값: 0.45
+                  </p>
+                </div>
+
+                <div className="flex gap-1 pt-1 border-t border-gray-700/50">
+                  <button
+                    onClick={resetFireSmoke}
+                    disabled={fireSmokeSaving}
+                    className="flex-1 py-1 rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-[10px] text-gray-400"
+                  >
+                    Reset Defaults
+                  </button>
+                  {fireSmokeSaving && (
+                    <span className="text-[9px] text-orange-400 animate-pulse self-center">saving…</span>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Kalman / Tracker Settings */}
         <div className="border-t border-gray-700/50 pt-3">
