@@ -11,7 +11,11 @@
 - **카메라 수집**: IP 카메라(RTSP/ONVIF/WebRTC) + YouTube 스트림 → MediaMTX 프록시
 - **AI 파이프라인**: YOLOv8 ONNX 객체 감지 → ByteTrack 다중 추적 → 배회 행동 분석 → 알림 발생
 - **크로스 카메라**: 얼굴 임베딩 Re-ID로 카메라 간 동일인 추적
-- **서버**: Node.js 18+ (Express + Socket.IO + MediaSoup)
+- **서버**: Node.js 18+ (Express + Socket.IO + MediaMTX WHEP WebRTC)
+  - `SERVER_MODE=combined` — 캡처+AI+WebRTC+REST 올인원 (기본값)
+  - `SERVER_MODE=streaming` — 카메라 캡처·WebRTC, AI는 원격 analysis 서버로 전달
+  - `SERVER_MODE=analysis` — AI 추론 전용 (GPU 서버, 카메라 없음)
+  - 아키텍처 상세: `docs/design/Design_Server_Architecture.md`
 - **클라이언트**: React 18 + TypeScript + Tailwind CSS + Zustand
 - **저장소**: JSON 파일 DB (`storage/lts.json`) + 선택적 MongoDB Atlas
 - **MCP 서버**: LLM 연동용 별도 프로세스 (`mcp-server/`)
@@ -23,7 +27,7 @@
 ```
 loitering_tracking/
 ├── server/src/
-│   ├── index.js                    # Express 진입점 (포트 3001)
+│   ├── index.js                    # Express 진입점 (SERVER_MODE별 분기)
 │   ├── db.js                       # JSON DB 추상화 (직접 파일 I/O 금지)
 │   ├── services/
 │   │   ├── detection.js            # YOLOv8 ONNX 추론 (640×640)
@@ -35,7 +39,8 @@ loitering_tracking/
 │   │   ├── attributePipeline.js    # 의상·색상·PPE 속성 분석
 │   │   ├── faceService.js          # 얼굴 인식·임베딩·Re-ID
 │   │   ├── rtspCapture.js          # RTSP 스트림 캡처 (10 FPS)
-│   │   ├── webrtcGateway.js        # WebRTC SDP/ICE 협상
+│   │   ├── mediamtxManager.js      # MediaMTX 경로 등록/해제 (WebRTC WHEP)
+│   │   ├── analysisClient.js       # streaming→analysis HTTP 클라이언트 (회로차단기)
 │   │   ├── fireSmokeService.js     # 화재·연기 감지
 │   │   ├── colorClothService.js    # 색상·의류 분석
 │   │   ├── protectiveEquipService.js # 안전모·마스크 감지
@@ -52,12 +57,11 @@ loitering_tracking/
 │   │   └── analyticsConfig.js      # 분석 설정
 │   ├── routes/
 │   │   ├── admin.js                # 관리자 라우터
-│   │   └── auth.js                 # 인증 라우터
+│   │   ├── auth.js                 # 인증 라우터
+│   │   ├── analysisApi.js          # AI 분석 API (analysis/combined 모드)
+│   │   └── analysisProxy.js        # 분석 API 프록시 (streaming 모드)
 │   ├── socket/
-│   │   ├── streamHandler.js        # Socket.IO 스트림 이벤트
-│   │   ├── webrtcSignaling.js      # WebRTC 시그널링
-│   │   ├── webrtcTelemetry.js      # WebRTC 품질 메트릭
-│   │   └── webrtcTelemetryHandlers.js
+│   │   └── streamHandler.js        # Socket.IO 스트림 이벤트
 │   ├── middleware/
 │   │   ├── auth.js                 # JWT 인증 미들웨어
 │   │   └── role.js                 # 역할 기반 접근 제어
@@ -118,7 +122,9 @@ loitering_tracking/
 - 비동기는 `async/await` 사용, Promise 체인(`.then()`) 지양
 - `server/src/db.js`를 통해서만 `storage/lts.json` 접근 (직접 파일 I/O 금지)
 - 환경변수는 `server/.env`에서 `dotenv`로 로드
-- 포트 기본값 `3001`; `process.env.PORT`로 재정의
+- HTTP 포트 기본값 `3080`; HTTPS 포트 기본값 `3443`
+- `SERVER_MODE` = `combined`(기본) | `streaming` | `analysis` — 역할 분리
+- `DB_TYPE` = `json`(기본) | `mongodb` — 스토리지 백엔드 선택
 - Socket.IO 이벤트명은 `camelCase` (예: `frameData`, `newAlert`)
 - 새 AI 서비스 추가 시 반드시 `pipelineManager.js`에 등록
 
@@ -176,31 +182,45 @@ loitering_tracking/
 ## 개발 명령어
 
 ```bash
-# 서버 개발 모드 (nodemon 자동 재시작)
-cd server && npm run dev
+# ── 서버 모드별 개발 명령어 ─────────────────────────────────────────────────
+cd server
 
-# 클라이언트 개발 서버 (Vite HMR)
-cd client && npm run dev
+npm run dev              # combined 모드 (캡처+AI+WebRTC, .env)
+npm run dev:streaming    # streaming 모드 (캡처 전용, .env_streaming)
+npm run dev:analysis     # analysis 모드  (AI 전용,   .env_analysis)
 
-# 클라이언트 프로덕션 빌드 (루트에서 실행 가능)
-npm run build          # 루트 workspace에서
-cd client && npm run build  # 또는 client 경로에서 직접
+# 프로덕션 시작/중지
+npm run start            # combined
+npm run streaming        # streaming
+npm run analysis         # analysis
+npm run stop             # combined 중지
+npm run stop:streaming   # streaming 중지
+npm run stop:analysis    # analysis 중지
 
-# 전체 테스트 실행
+# ── 클라이언트 ──────────────────────────────────────────────────────────────
+cd client && npm run dev          # Vite HMR 개발 서버
+npm run build                     # 루트 workspace에서 프로덕션 빌드
+cd client && npm run build        # 또는 client 경로에서 직접
+
+# ── 테스트 ──────────────────────────────────────────────────────────────────
 cd server && npm test
 node test/run_all.js
 
-# Docker 전체 스택
+# ── Docker 전체 스택 ─────────────────────────────────────────────────────────
 docker compose up -d
 docker compose logs -f server
 docker compose build server && docker compose up -d server
 
-# MongoDB 원격 서버 초기 설정 (컬렉션·인덱스·.env 자동 구성)
+# ── MongoDB 원격 서버 초기 설정 ──────────────────────────────────────────────
 cd server && npm run install_db
 # 비대화형 모드:
 node src/scripts/installDb.js --host HOST --port 27017 \
   --admin-user admin --admin-pwd secret \
   --db lts --db-user ltsuser --db-pwd ltspwd
+
+# ── MCP 서버 ─────────────────────────────────────────────────────────────────
+cd mcp-server && npm start           # stdio 모드 (Claude Code 연동)
+cd mcp-server && npm run start:http  # HTTP+SSE 모드 (원격 LLM 연동)
 ```
 
 ---
@@ -249,6 +269,12 @@ Claude에서 직접 사용 가능한 LTS-2026 MCP 도구:
 | `api-testing` | Jest 테스트·커버리지·CI 파이프라인 |
 | `docker-deploy` | Docker 배포·TLS·MongoDB·헬스체크 |
 
+**서버 아키텍처 참조 문서:** `docs/design/Design_Server_Architecture.md`
+- combined / streaming / analysis 모드 설명
+- DB 서버 (JSON / MongoDB) 구성
+- MCP 서버 연동 방법
+- 5가지 배포 시나리오 및 Mermaid 다이어그램
+
 ---
 
 ## SDLC 문서-코드 동기화 규칙
@@ -270,6 +296,9 @@ Claude에서 직접 사용 가능한 LTS-2026 MCP 도구:
 | 새 AI 서비스 추가 | `ai-detection-pipeline/SKILL.md`, `docs/design/` |
 | 인증/보안 로직 변경 | `docs/srs/SRS_User_Authentication.md`, 보안 규칙 섹션 |
 | Docker/배포 설정 변경 | `docker-deploy/SKILL.md`, `docs/ops/` |
+| `SERVER_MODE` 동작 변경 | `docs/design/Design_Server_Architecture.md`, `CLAUDE.md` 개발 명령어 |
+| MediaMTX 설정 변경 (`mediamtx.yml`) | `docs/design/Design_Server_Architecture.md` 포트 요약 |
+| MCP 도구 추가/삭제 | `CLAUDE.md` MCP 도구 목록, `docs/design/Design_LLM_MCP_Server.md` |
 
 ### 문서 → 코드 방향 (문서/스킬 변경 시)
 

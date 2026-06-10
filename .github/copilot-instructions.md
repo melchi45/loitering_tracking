@@ -6,7 +6,11 @@
 
 - IP 카메라(RTSP/ONVIF/WebRTC)에서 영상을 수집하고 YOLOv8 ONNX 모델로 실시간 객체 감지
 - ByteTrack MOT으로 다중 객체 추적, 배회 행동 분석 후 경보 발생
-- **서버**: Node.js 18+ (Express + Socket.IO + mediasoup)
+- **서버**: Node.js 18+ (Express + Socket.IO + MediaMTX WHEP WebRTC)
+  - `SERVER_MODE=combined` — 캡처+AI+WebRTC+REST 올인원 (기본값)
+  - `SERVER_MODE=streaming` — 카메라 캡처·WebRTC, AI는 원격 analysis 서버로 전달
+  - `SERVER_MODE=analysis` — AI 추론 전용 (GPU 서버, 카메라 없음)
+  - 아키텍처 상세: `docs/design/Design_Server_Architecture.md`
 - **클라이언트**: React 18 + TypeScript + Tailwind CSS + Zustand
 - **저장소**: JSON 파일 DB (`storage/lts.json`) + 선택적 MongoDB Atlas
 - **MCP 서버**: LLM 연동용 별도 프로세스 (`mcp-server/`)
@@ -18,7 +22,7 @@
 ```
 loitering_tracking/
 ├── server/src/            # Node.js 백엔드
-│   ├── index.js           # Express 앱 진입점 (기본 HTTP 포트 3080)
+│   ├── index.js           # Express 앱 진입점 (SERVER_MODE별 분기)
 │   ├── db.js              # JSON 파일 DB 추상화 레이어
 │   ├── services/          # 핵심 비즈니스 로직
 │   │   ├── detection.js        # YOLOv8n ONNX 추론 (640×640)
@@ -30,10 +34,13 @@ loitering_tracking/
 │   │   ├── attributePipeline.js # 얼굴/PPE/색상/의류 분석
 │   │   ├── faceService.js      # 얼굴 인식 및 Re-ID
 │   │   ├── rtspCapture.js      # RTSP 스트림 캡처 (10 FPS)
-│   │   ├── webrtcGateway.js    # WebRTC 미디어 게이트웨이
+│   │   ├── mediamtxManager.js  # MediaMTX 경로 등록/해제 (WebRTC WHEP)
+│   │   ├── analysisClient.js   # streaming→analysis HTTP 클라이언트
 │   │   └── fireSmokeService.js # 화재/연기 감지
 │   ├── api/               # Express API 라우터
-│   ├── routes/            # 인증/관리자 라우터
+│   ├── routes/            # 인증/관리자/분석 라우터
+│   │   ├── analysisApi.js      # AI 분석 API (analysis/combined 모드)
+│   │   └── analysisProxy.js    # 분석 프록시 (streaming 모드)
 │   ├── socket/            # Socket.IO 이벤트 핸들러
 │   └── middleware/        # 인증, 에러 핸들링
 ├── client/src/            # React 프론트엔드
@@ -123,28 +130,37 @@ loitering_tracking/
 ## 개발 명령어
 
 ```bash
-# 서버 개발 모드 (nodemon)
-cd server && npm run dev
+# ── 서버 모드별 개발 ─────────────────────────────────────────────────────────
+cd server
+npm run dev              # combined 모드 (캡처+AI+WebRTC, .env)
+npm run dev:streaming    # streaming 모드 (캡처 전용, .env_streaming)
+npm run dev:analysis     # analysis 모드  (AI 전용,   .env_analysis)
 
-# 클라이언트 개발 서버
+# 프로덕션
+npm run start            # combined
+npm run streaming        # streaming  (LTS_ENV_FILE=.env_streaming)
+npm run analysis         # analysis   (LTS_ENV_FILE=.env_analysis)
+
+# ── 클라이언트 ──────────────────────────────────────────────────────────────
 cd client && npm run dev
+npm run build                     # 루트 workspace에서
+cd client && npm run build        # 또는 client 경로에서
 
-# 클라이언트 프로덕션 빌드 (루트에서 실행 가능)
-npm run build          # 루트 workspace에서
-cd client && npm run build  # 또는 client 경로에서 직접
-
-# 전체 테스트 실행
+# ── 테스트 ──────────────────────────────────────────────────────────────────
 cd server && npm test
 
-# Docker로 전체 스택 실행
+# ── Docker 전체 스택 ─────────────────────────────────────────────────────────
 docker compose up -d
 
-# MongoDB 원격 서버 초기 설정 (컬렉션·인덱스·.env 자동 구성)
+# ── MongoDB 원격 서버 초기 설정 ──────────────────────────────────────────────
 cd server && npm run install_db
-# 비대화형 모드:
 node src/scripts/installDb.js --host HOST --port 27017 \
   --admin-user admin --admin-pwd secret \
   --db lts --db-user ltsuser --db-pwd ltspwd
+
+# ── MCP 서버 ─────────────────────────────────────────────────────────────────
+cd mcp-server && npm start           # stdio 모드 (Claude Code)
+cd mcp-server && npm run start:http  # HTTP+SSE 모드 (원격 LLM)
 ```
 
 ---
@@ -160,6 +176,9 @@ node src/scripts/installDb.js --host HOST --port 27017 \
 - `cross-camera-face-reid/SKILL.md` — 얼굴 인식 및 Re-ID
 - `docker-deploy/SKILL.md` — Docker 배포 및 MongoDB 원격 설정
 - `api-testing/SKILL.md` — 테스트 작성 및 실행
+
+**서버 아키텍처 참조 문서:** `docs/design/Design_Server_Architecture.md`
+- combined / streaming / analysis 모드, DB 서버, MCP 서버, 5가지 배포 시나리오, Mermaid 다이어그램
 
 ---
 
@@ -178,6 +197,9 @@ node src/scripts/installDb.js --host HOST --port 27017 \
 | 환경변수 추가/변경 | 관련 `docs/ops/` 가이드, `docker-deploy/SKILL.md` `.env` 예시 |
 | npm 스크립트 추가 | `copilot-instructions.md` 개발 명령어 섹션 |
 | Docker/배포 설정 변경 | `docker-deploy/SKILL.md`, `docs/ops/` |
+| `SERVER_MODE` 동작 변경 | `docs/design/Design_Server_Architecture.md`, `copilot-instructions.md` 개발 명령어 |
+| MediaMTX 설정 변경 (`mediamtx.yml`) | `docs/design/Design_Server_Architecture.md` 포트 요약 |
+| MCP 도구 추가/삭제 | `docs/design/Design_LLM_MCP_Server.md` |
 
 ### 문서/스킬 → 코드 방향
 
