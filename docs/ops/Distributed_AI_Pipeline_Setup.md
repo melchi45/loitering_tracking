@@ -269,6 +269,8 @@ npm start
 | `ANALYSIS_REQUEST_TIMEOUT_MS` | `5000` | `streaming` | HTTP 요청 타임아웃 (밀리초). 최악의 경우 추론 시간보다 크게 설정 |
 | `ANALYSIS_MAX_CONCURRENT` | `4` | `streaming`, `analysis` | 최대 동시 요청 수 |
 | `ANALYSIS_FPS` | `0` | `streaming` | 카메라당 전송 fps 상한. `0` = unlimited (권장); `N > 0` = 하드 캡 |
+| `FIRE_SMOKE_CONF_THRESHOLD` | `0.35` | `analysis`, `combined` | 화재/연기 감지 신뢰도 하한. 낮출수록 감도 증가, 오탐 증가 |
+| `FIRE_SMOKE_NMS_THRESHOLD` | `0.45` | `analysis`, `combined` | 화재/연기 NMS IoU 임계값. 낮출수록 겹치는 박스 제거 강화 |
 
 ### 5.2 ANALYSIS_REQUEST_TIMEOUT_MS 권장값
 
@@ -290,6 +292,27 @@ npm start
 | 로컬 LAN + CPU 전용, face 활성 | `0` (unlimited) | 0.7~1.8fps 수준에서 자동 수렴 |
 | 원격 WAN 연결 | `1` ~ `2` | 대역폭 절감 (frame당 ~50-200KB) |
 | 부하 테스트 / 시뮬레이션 | `1` | 재현 가능한 고정 부하 확인 |
+
+### 5.5 FIRE_SMOKE_CONF_THRESHOLD 감도 조정 가이드
+
+| 값 | 감도 | 적합 상황 |
+|---|---|---|
+| `0.50` 이상 | 낮음 | 직접 연소, 짙은 연기 등 명확한 경우만 감지 |
+| `0.35` (기본값) | 보통 | 대부분의 실외 CCTV 환경 |
+| `0.20` | 높음 | 초기 단계 화재, 옅은 연기, 역광·야간 환경 |
+| `0.10` | 매우 높음 | 최대 감도. 오탐 비율 높아짐; 운영 전 검증 필수 |
+
+> **설정 예시 (`server/.env`):**
+> ```env
+> # 감도를 높여 초기 연기도 감지
+> FIRE_SMOKE_CONF_THRESHOLD=0.20
+> FIRE_SMOKE_NMS_THRESHOLD=0.45
+> ```
+>
+> 변경 후 **analysis 서버만 재시작**하면 됩니다. 로그에서 다음처럼 확인:
+> ```
+> [FireSmokeService] yolov8s_fire_smoke.onnx loaded (conf=0.2 nms=0.45)
+> ```
 
 ### 5.3 ANALYSIS_MAX_CONCURRENT 권장값
 
@@ -764,3 +787,46 @@ ONNXRUNTIME_NODE_BUILD_FROM_SOURCE=1 npm install onnxruntime-node
 ```
 
 ONNX Runtime CUDA 설치에 대한 자세한 내용은 [ONNX_Runtime_Provider_Diagnostics.md](ONNX_Runtime_Provider_Diagnostics.md) 참조.
+
+---
+
+### 9.8 화재/연기 감지가 작동하지 않음
+
+**증상:** analyticsConfig에서 `fire` / `smoke`가 활성화되어 있고 영상에 화재·연기가 있음에도 감지 결과가 없음.
+
+**원인 1 — 신뢰도 임계값(`CONF_THRESHOLD`) 초과**
+
+모델이 화재를 감지했더라도 confidence 점수가 기본값 `0.35` 미만이면 결과에서 제외됩니다. 역광, 야간, 초기 단계 연기, 소규모 화원에서 주로 발생합니다.
+
+**해결:** `FIRE_SMOKE_CONF_THRESHOLD`를 낮춰 감도를 높입니다.
+
+```env
+# server/.env (analysis 서버 또는 combined 서버)
+FIRE_SMOKE_CONF_THRESHOLD=0.20   # 기본값 0.35 → 감도 상향
+```
+
+설정 적용 확인 (서버 재시작 후 로그):
+```
+[FireSmokeService] yolov8s_fire_smoke.onnx loaded (conf=0.2 nms=0.45)
+```
+
+**원인 2 — 모델 파일 누락**
+
+```
+[FireSmokeService] yolov8s_fire_smoke.onnx not found — fire/smoke detection disabled
+```
+
+모델 파일이 `server/models/yolov8s_fire_smoke.onnx`에 없으면 서비스 자체가 비활성화됩니다. [Design_AI_Fire_Smoke_Detection.md](../design/Design_AI_Fire_Smoke_Detection.md)의 모델 다운로드 절차를 참조하세요.
+
+**원인 3 — analyticsConfig `smoke` 키 비활성**
+
+`/api/analysis/metrics` 응답의 `modules.enabled` 배열에 `fire` 또는 `smoke`가 포함되어 있는지 확인합니다. 포함되지 않았다면 대시보드의 Analytics 탭에서 활성화하세요.
+
+---
+
+## Revision History
+
+| 버전 | 날짜 | 변경 내용 |
+|---|---|---|
+| 1.0 | 2026-06-08 | 초기 작성 — 분산 AI 파이프라인 설정 가이드 |
+| 1.1 | 2026-06-10 | 환경변수 표에 `FIRE_SMOKE_CONF_THRESHOLD`, `FIRE_SMOKE_NMS_THRESHOLD` 추가; 섹션 5.5 감도 조정 가이드 추가; 섹션 9.8 화재/연기 트러블슈팅 추가 |

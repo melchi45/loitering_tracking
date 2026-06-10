@@ -7,8 +7,10 @@ const sharp = require('sharp');
 const { createOnnxSession } = require('../utils/onnxOptions');
 
 const MODEL_SIZE     = 640;
-const CONF_THRESHOLD = 0.35;
-const NMS_THRESHOLD  = 0.45;
+// Override via FIRE_SMOKE_CONF_THRESHOLD (0~1). Lower = more sensitive, more false-positives.
+const CONF_THRESHOLD = Math.min(1, Math.max(0, parseFloat(process.env.FIRE_SMOKE_CONF_THRESHOLD ?? '0.35')));
+// Override via FIRE_SMOKE_NMS_THRESHOLD (0~1). Lower = fewer overlapping boxes kept.
+const NMS_THRESHOLD  = Math.min(1, Math.max(0, parseFloat(process.env.FIRE_SMOKE_NMS_THRESHOLD  ?? '0.45')));
 
 // Model classes mapped by index position (3-class output [1,7,8400])
 // Index 1 ('other'/'default') is ignored — only fire and smoke are reported.
@@ -55,7 +57,7 @@ class FireSmokeService {
       this._session = await createOnnxSession(ort, this.modelPath, 'FireSmokeService');
       this._ready  = true;
       this._status = 'loaded';
-      console.log('[FireSmokeService] yolov8s_fire_smoke.onnx loaded');
+      console.log(`[FireSmokeService] yolov8s_fire_smoke.onnx loaded (conf=${CONF_THRESHOLD} nms=${NMS_THRESHOLD})`);
     } catch (err) {
       this._status = 'failed';
       console.warn('[FireSmokeService] Failed to load model:', err.message);

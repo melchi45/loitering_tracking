@@ -295,7 +295,32 @@ if (wasNearOpen) {
 - `CIRCUIT_OPEN_THRESHOLD = 3` 이므로, 2회 이상 연속 실패 후 복구될 때만 로그 출력
 - 단발성 타임아웃(네트워크 지터, 일시적 지연)은 로그 없이 조용히 처리됨
 
-### 7. AnalysisServerDashboard.tsx — FPS 스파크라인 그래프 (2026-06-10)
+### 7. fireSmokeService.js — 감도 조정 환경변수 (2026-06-10)
+
+**문제:** `CONF_THRESHOLD = 0.35`가 하드코딩되어 역광·야간·초기 단계 연기 환경에서 감지 누락.
+
+**수정:** 환경변수로 재정의 가능하게 변경:
+
+```javascript
+// server/src/services/fireSmokeService.js
+const CONF_THRESHOLD = Math.min(1, Math.max(0,
+  parseFloat(process.env.FIRE_SMOKE_CONF_THRESHOLD ?? '0.35')));
+const NMS_THRESHOLD  = Math.min(1, Math.max(0,
+  parseFloat(process.env.FIRE_SMOKE_NMS_THRESHOLD  ?? '0.45')));
+```
+
+**감도 조정 기준:**
+
+| 환경 | 권장값 |
+|---|---|
+| 기본 (실외 낮, 명확한 화염) | `0.35` (기본) |
+| 초기 단계 연기, 역광, 야간 | `0.20` |
+| 최대 감도 (오탐 허용) | `0.10` |
+
+- 서버 재시작 후 로그: `[FireSmokeService] loaded (conf=0.2 nms=0.45)` 로 확인
+- `FIRE_SMOKE_NMS_THRESHOLD`: 낮을수록 겹치는 박스 억제 강화 (기본 0.45 권장)
+
+### 8. AnalysisServerDashboard.tsx — FPS 스파크라인 그래프 (2026-06-10)
 
 Per-source 테이블의 FPS 컬럼에 60초 롤링 히스토리 스파크라인을 추가했다.
 
