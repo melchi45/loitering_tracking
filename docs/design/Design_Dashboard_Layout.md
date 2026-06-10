@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UI-DL-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent SRS** | srs/SRS_Dashboard_Layout.md |
@@ -109,16 +109,17 @@ App.tsx
 │   │   ├─ Camera cells × N (layout dependent)
 │   │   ├─ ‹ prev / next › paging buttons
 │   │   └─ DiscoveredCameraPanel (absolute overlay, conditional)
-│   └─ Sidebar (w-[sidebarWidth])
-│       ├─ Resize handle (4px drag handle)
-│       ├─ Tab bar (mode-dependent)
-│       └─ Tab content (active tab only)
-│           ├─ cameras  → CameraList
-│           ├─ alerts   → AlertPanel
-│           ├─ zones    → ZonesPanel
-│           ├─ detections → DashboardDetectionPanel
-│           ├─ analytics → VideoAnalyticsTab (hidden in streaming mode)
-│           └─ faces    → FaceGalleryTab
+│   └─ Sidebar (w-[sidebarWidth] or 44px when collapsed)
+│       ├─ Resize handle (4px drag handle, hidden when collapsed)
+│       ├─ [Expanded] Tab bar (mode-dependent) + ✕ collapse button
+│       ├─ [Expanded] Tab content (active tab only)
+│       │   ├─ cameras  → CameraList
+│       │   ├─ alerts   → AlertPanel
+│       │   ├─ zones    → ZonesPanel
+│       │   ├─ detections → DashboardDetectionPanel
+│       │   ├─ analytics → VideoAnalyticsTab (hidden in streaming mode)
+│       │   └─ faces    → FaceGalleryTab
+│       └─ [Collapsed] Icon strip (44px) + Hover flyout panel
 │
 ├─ [Mobile Content Area]
 │   └─ Active tab content (full area)
@@ -146,6 +147,61 @@ App.tsx
 - `analysis` 모드에서 우측 상단 `Statistics` 버튼은 `AnalysisStatsModal`을 열어 `/api/analysis/metrics` 기반 지표만 표시합니다.
 - `analysis` 모드에서 `SettingsModal`은 언어 선택만 제공하고 WebRTC/ICE 설정 섹션은 숨깁니다.
 
+### 3.2 Sidebar Collapse / Expand (모든 모드 공통)
+
+사이드바는 **탭 전체 표시(Expanded)** 와 **아이콘 전용 스트립(Collapsed)** 두 가지 상태를 갖습니다.
+
+#### 상태 전환
+
+| 동작 | 결과 |
+|------|------|
+| 탭 바 우측 **✕** 버튼 클릭 | Expanded → Collapsed (너비 44px) |
+| 축소 상태에서 **아이콘 클릭** | Collapsed → Expanded (해당 탭 활성화) |
+| 축소 상태에서 **아이콘 hover** | Flyout 패널 표시 (해당 탭 콘텐츠 미리보기) |
+| Flyout 패널 **"열기 →"** 클릭 | Collapsed → Expanded (해당 탭 활성화) |
+
+#### Collapsed 상태 (44px 아이콘 스트립)
+
+```
+┌────┐
+│ 📷 │  ← 활성 탭: 파란 배경
+│ 🔔 │  ← 알림 뱃지 유지
+│ 🗺 │
+│ 👁 │
+│ 🪪 │
+└────┘
+```
+
+- `sidebarCollapsed = true` 시 `<aside>` 너비 44px, Resize handle 비활성화
+- 각 아이콘은 `title` 속성으로 툴팁 레이블 표시
+- 알림 뱃지(`unreadAlerts > 0`)는 축소 상태에서도 표시 유지
+
+#### Hover Flyout 패널
+
+```
+┌─────────────────────────┬────┐
+│  [탭 레이블]  [열기 →]  │    │
+├─────────────────────────│ 아 │
+│                         │ 이 │
+│   hoveredTab 콘텐츠     │ 콘 │
+│                         │ 스 │
+│                         │ 트 │
+└─────────────────────────│ 립 │
+                          └────┘
+```
+
+- `hoveredTab` state: 마우스 진입 시 세팅, 퇴장 시 `null`
+- Flyout 패널 자체에도 `onMouseEnter`/`onMouseLeave` 적용 — 패널 위로 마우스 이동 시 사라지지 않음
+- `renderTabContent(hoveredTab)` 호출로 선택된 탭만 렌더링
+- `z-50`, `absolute right-full` 위치 — 메인 콘텐츠 영역 위에 오버레이
+
+#### 구현 파일
+
+| 파일 | 변경 내용 |
+|------|---------|
+| `client/src/App.tsx` | `sidebarCollapsed`, `hoveredTab` state 추가; 조건부 렌더링 |
+| `renderTabContent(overrideTab?)` | 선택적 override 파라미터로 flyout에서 특정 탭 렌더링 |
+
 ---
 
 ## 4. State Management Design
@@ -156,6 +212,8 @@ App.tsx
 |---|---|---|---|
 | `isMobile` | `boolean` | `window.innerWidth < 768` | Desktop/mobile mode switch |
 | `sidebarTab` | `SidebarTab` | `'cameras'` | Active sidebar tab |
+| `sidebarCollapsed` | `boolean` | `false` | Sidebar collapsed to icon-only strip |
+| `hoveredTab` | `SidebarTab \| null` | `null` | Tab being hovered in collapsed mode (flyout trigger) |
 | `sidebarWidth` | `number` | `288` | Sidebar width in px (desktop only) |
 | `isDragging` | `boolean` | `false` | Sidebar resize drag state |
 | `layoutId` | `LayoutId` | from localStorage or `'4'` | Current camera grid layout |
@@ -435,3 +493,4 @@ ESC keydown || close button click
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Dashboard Layout |
+| 1.1 | 2026-06-10 | Youngho Kim | 사이드바 Collapse/Expand 기능 추가 — ✕ 버튼으로 아이콘 스트립 축소, 클릭 시 복원, hover flyout 패널 |

@@ -169,6 +169,43 @@ Analysis Dashboard  → navigateDashboard('/analysis')
 Sign Out → auth.logout()
 ```
 
+## 사이드바 Collapse / Expand (모든 모드 공통)
+
+탭 바 우측 **✕** 버튼으로 사이드바를 44px 아이콘 스트립으로 축소할 수 있습니다.
+
+```
+[Expanded]                   [Collapsed — 44px]
+┌──────────────────────┐     ┌────┐
+│ 📷 Cameras  ✕        │     │ 📷 │ ← 클릭: 해당 탭으로 복원
+│ 🔔 Alerts            │     │ 🔔 │ ← hover: flyout 미리보기 패널
+│ 🗺 Zones             │     │ 🗺 │
+│ 👁 Detections        │     │ 👁 │
+│ 🪪 Face Gallery      │     │ 🪪 │
+├──────────────────────┤     └────┘
+│  탭 콘텐츠           │
+└──────────────────────┘
+```
+
+### 관련 state (App.tsx)
+| state | 타입 | 설명 |
+|-------|------|------|
+| `sidebarCollapsed` | `boolean` | 아이콘 스트립 모드 여부 |
+| `hoveredTab` | `SidebarTab \| null` | hover 중인 탭 (flyout 트리거) |
+
+### 핵심 동작 요약
+- `sidebarCollapsed = true` 시 `<aside>` 너비 44px, resize handle 비활성화
+- Collapsed 아이콘 클릭 → 해당 탭 선택 + 복원
+- Collapsed 아이콘 hover → `hoveredTab` 세팅 → `absolute right-full` flyout 패널 (너비 = `sidebarWidth`)
+- Flyout 패널 자체에도 `onMouseEnter`/`onMouseLeave` 적용 (마우스 이동 시 유지)
+- Flyout 안 **"열기 →"** 버튼 → 완전 복원
+- `renderTabContent(overrideTab?)` — 선택적 override로 flyout에 특정 탭 렌더링
+
+### 코드 수정 시 유의
+- Collapse 상태 변경 시 `docs/design/Design_Dashboard_Layout.md` Section 3.2 업데이트
+- 새 탭 추가 시 `TAB_ITEMS` 배열과 `renderTabContent()` 동시 수정
+
+---
+
 ## SERVER_MODE 기반 탭 노출 정책 (중요)
 
 - 기준 위치: `client/src/App.tsx` (`serverMode`, `isStreaming`, `TAB_ITEMS`)

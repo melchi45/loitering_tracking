@@ -558,6 +558,8 @@ function Dashboard() {
     return window.innerWidth < 768 ? '1' : '4';
   });
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('cameras');
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [hoveredTab, setHoveredTab] = useState<SidebarTab | null>(null);
 
   // Navigate to relevant sidebar tab when a search result is clicked
   const handleSearchNavigate = (result: SearchResult) => {
@@ -822,16 +824,17 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
   );
 
   // ── Shared: tab content renderer ────────────────────────────────────────────
-  function renderTabContent() {
+  function renderTabContent(overrideTab?: SidebarTab) {
+    const tab = overrideTab ?? sidebarTab;
     if (isAnalysis) {
       return <VideoAnalyticsTab />;
     }
-    if (sidebarTab === 'cameras')    return <CameraList />;
-    if (sidebarTab === 'alerts')     return <AlertPanel />;
-    if (sidebarTab === 'analytics')  return <VideoAnalyticsTab />;
-    if (sidebarTab === 'detections') return <DashboardDetectionPanel />;
-    if (sidebarTab === 'zones')      return <ZonesPanel onOpenCamera={setFullscreenCameraId} />;
-    if (sidebarTab === 'faces')      return <FaceGalleryTab />;
+    if (tab === 'cameras')    return <CameraList />;
+    if (tab === 'alerts')     return <AlertPanel />;
+    if (tab === 'analytics')  return <VideoAnalyticsTab />;
+    if (tab === 'detections') return <DashboardDetectionPanel />;
+    if (tab === 'zones')      return <ZonesPanel onOpenCamera={setFullscreenCameraId} />;
+    if (tab === 'faces')      return <FaceGalleryTab />;
     return null;
   }
 
@@ -1198,9 +1201,9 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
 
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar resize handle */}
+        {/* Sidebar resize handle — hidden when collapsed */}
         <div
-          className="w-1 cursor-col-resize flex-shrink-0 bg-gray-700 hover:bg-blue-500 active:bg-blue-400 transition-colors z-10 order-last"
+          className={`w-1 flex-shrink-0 bg-gray-700 hover:bg-blue-500 active:bg-blue-400 transition-colors z-10 order-last ${sidebarCollapsed ? 'cursor-default pointer-events-none opacity-0' : 'cursor-col-resize'}`}
           onMouseDown={(e) => {
             e.preventDefault();
             isResizingRef.current = true;
@@ -1271,39 +1274,100 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
 
         {/* Sidebar */}
         <aside
-          className="flex flex-col bg-gray-800 border-l border-gray-700 flex-shrink-0 overflow-hidden"
-          style={{ width: sidebarWidth }}
+          className="flex flex-col bg-gray-800 border-l border-gray-700 flex-shrink-0 overflow-hidden relative"
+          style={{ width: sidebarCollapsed ? 44 : sidebarWidth }}
         >
-          {/* Sidebar tabs */}
-          <div className="flex border-b border-gray-700 flex-shrink-0 overflow-x-auto scrollbar-none">
-            {TAB_ITEMS.map(({ id, icon, label }) => (
-              <button
-                key={id}
-                title={label}
-                onClick={() => setSidebarTab(id)}
-                className={`flex-1 min-w-[36px] flex flex-col items-center justify-center py-1.5 gap-0.5 transition-colors relative ${
-                  sidebarTab === id
-                    ? 'text-blue-400 border-b-2 border-blue-400'
-                    : 'text-gray-500 hover:text-gray-300'
-                }`}
-              >
-                <span className="text-sm leading-none">{icon}</span>
-                <span className="text-[9px] font-semibold uppercase tracking-wide leading-none truncate w-full text-center px-0.5">
-                  {label}
-                </span>
-                {id === 'alerts' && unreadAlerts > 0 && (
-                  <span className="absolute top-0.5 right-0.5 w-3.5 h-3.5 text-[8px] font-bold bg-red-600 text-white rounded-full flex items-center justify-center">
-                    {unreadAlerts > 9 ? '9+' : unreadAlerts}
-                  </span>
-                )}
-              </button>
-            ))}
-          </div>
+          {sidebarCollapsed ? (
+            /* ── Collapsed: icon-only strip ── */
+            <div className="flex flex-col items-center pt-2 gap-1 w-full">
+              {TAB_ITEMS.map(({ id, icon, label }) => (
+                <button
+                  key={id}
+                  title={label}
+                  onClick={() => { setSidebarTab(id); setSidebarCollapsed(false); }}
+                  onMouseEnter={() => setHoveredTab(id)}
+                  onMouseLeave={() => setHoveredTab(null)}
+                  className={`relative w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${
+                    sidebarTab === id
+                      ? 'text-blue-400 bg-blue-500/20'
+                      : 'text-gray-500 hover:text-gray-300 hover:bg-gray-700'
+                  }`}
+                >
+                  <span className="text-base leading-none">{icon}</span>
+                  {id === 'alerts' && unreadAlerts > 0 && (
+                    <span className="absolute top-0.5 right-0.5 w-3 h-3 text-[7px] font-bold bg-red-600 text-white rounded-full flex items-center justify-center">
+                      {unreadAlerts > 9 ? '9+' : unreadAlerts}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          ) : (
+            /* ── Expanded: tab header + content ── */
+            <>
+              <div className="flex border-b border-gray-700 flex-shrink-0 overflow-x-auto scrollbar-none">
+                {TAB_ITEMS.map(({ id, icon, label }) => (
+                  <button
+                    key={id}
+                    title={label}
+                    onClick={() => setSidebarTab(id)}
+                    className={`flex-1 min-w-[36px] flex flex-col items-center justify-center py-1.5 gap-0.5 transition-colors relative ${
+                      sidebarTab === id
+                        ? 'text-blue-400 border-b-2 border-blue-400'
+                        : 'text-gray-500 hover:text-gray-300'
+                    }`}
+                  >
+                    <span className="text-sm leading-none">{icon}</span>
+                    <span className="text-[9px] font-semibold uppercase tracking-wide leading-none truncate w-full text-center px-0.5">
+                      {label}
+                    </span>
+                    {id === 'alerts' && unreadAlerts > 0 && (
+                      <span className="absolute top-0.5 right-0.5 w-3.5 h-3.5 text-[8px] font-bold bg-red-600 text-white rounded-full flex items-center justify-center">
+                        {unreadAlerts > 9 ? '9+' : unreadAlerts}
+                      </span>
+                    )}
+                  </button>
+                ))}
+                {/* Collapse button */}
+                <button
+                  onClick={() => setSidebarCollapsed(true)}
+                  title="탭 숨기기"
+                  className="px-2.5 flex-shrink-0 text-gray-500 hover:text-white hover:bg-gray-700 transition-colors text-xs font-bold"
+                >
+                  ✕
+                </button>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                {renderTabContent()}
+              </div>
+            </>
+          )}
 
-          {/* Sidebar content */}
-          <div className="flex-1 overflow-hidden">
-            {renderTabContent()}
-          </div>
+          {/* Hover flyout — only in collapsed mode */}
+          {sidebarCollapsed && hoveredTab && (
+            <div
+              className="absolute right-full top-0 h-full bg-gray-800 border border-gray-700 shadow-2xl z-50 overflow-hidden flex flex-col"
+              style={{ width: sidebarWidth }}
+              onMouseEnter={() => setHoveredTab(hoveredTab)}
+              onMouseLeave={() => setHoveredTab(null)}
+            >
+              {/* Flyout header */}
+              <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-700 flex-shrink-0 bg-gray-800/95">
+                <span className="text-xs font-semibold text-gray-300">
+                  {TAB_ITEMS.find(t => t.id === hoveredTab)?.label}
+                </span>
+                <button
+                  onClick={() => { setSidebarTab(hoveredTab); setSidebarCollapsed(false); setHoveredTab(null); }}
+                  className="text-[10px] text-blue-400 hover:text-blue-300 transition-colors"
+                >
+                  열기 →
+                </button>
+              </div>
+              <div className="flex-1 overflow-hidden">
+                {renderTabContent(hoveredTab)}
+              </div>
+            </div>
+          )}
         </aside>
       </div>
 
