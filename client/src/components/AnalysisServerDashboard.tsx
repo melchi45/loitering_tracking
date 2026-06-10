@@ -327,6 +327,88 @@ export default function AnalysisServerDashboard({
           </div>
         )}
 
+        {metrics?.system && (
+          <section className="rounded-[24px] border border-slate-700/70 bg-slate-950/45 px-5 py-5">
+            <div className="mb-4">
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-500">System resources</p>
+              <h3 className="mt-1 text-lg font-semibold text-slate-100">서버 리소스 사용률</h3>
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <UsageGauge
+                label="CPU"
+                pct={metrics.system.cpu.usagePct}
+                sub={`${metrics.system.cpu.cores}코어`}
+                colorClass={
+                  (metrics.system.cpu.usagePct ?? 0) >= 90 ? 'bg-rose-500' :
+                  (metrics.system.cpu.usagePct ?? 0) >= 70 ? 'bg-amber-400' :
+                  'bg-sky-500'
+                }
+              />
+              <UsageGauge
+                label="System RAM"
+                pct={metrics.system.memory.usedPct}
+                sub={`${formatBytes(metrics.system.memory.totalBytes - metrics.system.memory.freeBytes)} / ${formatBytes(metrics.system.memory.totalBytes)}`}
+                colorClass={
+                  metrics.system.memory.usedPct >= 90 ? 'bg-rose-500' :
+                  metrics.system.memory.usedPct >= 75 ? 'bg-amber-400' :
+                  'bg-emerald-500'
+                }
+              />
+              <UsageGauge
+                label="Process RSS"
+                pct={Math.round(metrics.system.memory.processRss / metrics.system.memory.totalBytes * 100)}
+                sub={formatBytes(metrics.system.memory.processRss)}
+                colorClass="bg-violet-500"
+              />
+              {metrics.system.gpu && metrics.system.gpu.length > 0 ? (
+                metrics.system.gpu.map(gpu => (
+                  <div key={gpu.index} className="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-4">
+                    <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">
+                      GPU {gpu.index}
+                    </p>
+                    <div className="mt-2 space-y-2">
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] text-slate-500">Util</span>
+                          <span className="text-xs font-semibold text-slate-100">{gpu.utilization}%</span>
+                        </div>
+                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-700/60">
+                          <div
+                            className={`h-full rounded-full transition-all duration-500 ${
+                              gpu.utilization >= 90 ? 'bg-rose-500' :
+                              gpu.utilization >= 70 ? 'bg-amber-400' : 'bg-green-500'
+                            }`}
+                            style={{ width: `${Math.min(100, gpu.utilization)}%` }}
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-[10px] text-slate-500">VRAM</span>
+                          <span className="text-xs font-semibold text-slate-100">
+                            {Math.round(gpu.memUsed / gpu.memTotal * 100)}%
+                          </span>
+                        </div>
+                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-700/60">
+                          <div
+                            className="h-full rounded-full bg-purple-500 transition-all duration-500"
+                            style={{ width: `${Math.min(100, Math.round(gpu.memUsed / gpu.memTotal * 100))}%` }}
+                          />
+                        </div>
+                        <p className="mt-1 text-[10px] text-slate-500">{gpu.memUsed} / {gpu.memTotal} MiB</p>
+                      </div>
+                    </div>
+                  </div>
+                ))
+              ) : (
+                <div className="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-4 flex items-center">
+                  <p className="text-xs text-slate-500">GPU 정보 없음<br />(nvidia-smi 미감지)</p>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+
         <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label="최근 처리량"
@@ -509,88 +591,6 @@ export default function AnalysisServerDashboard({
                   </div>
                 );
               })}
-            </div>
-          </section>
-        )}
-
-        {metrics?.system && (
-          <section className="rounded-[24px] border border-slate-700/70 bg-slate-950/45 px-5 py-5">
-            <div className="mb-4">
-              <p className="text-xs uppercase tracking-[0.24em] text-slate-500">System resources</p>
-              <h3 className="mt-1 text-lg font-semibold text-slate-100">서버 리소스 사용률</h3>
-            </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
-              <UsageGauge
-                label="CPU"
-                pct={metrics.system.cpu.usagePct}
-                sub={`${metrics.system.cpu.cores}코어`}
-                colorClass={
-                  (metrics.system.cpu.usagePct ?? 0) >= 90 ? 'bg-rose-500' :
-                  (metrics.system.cpu.usagePct ?? 0) >= 70 ? 'bg-amber-400' :
-                  'bg-sky-500'
-                }
-              />
-              <UsageGauge
-                label="System RAM"
-                pct={metrics.system.memory.usedPct}
-                sub={`${formatBytes(metrics.system.memory.totalBytes - metrics.system.memory.freeBytes)} / ${formatBytes(metrics.system.memory.totalBytes)}`}
-                colorClass={
-                  metrics.system.memory.usedPct >= 90 ? 'bg-rose-500' :
-                  metrics.system.memory.usedPct >= 75 ? 'bg-amber-400' :
-                  'bg-emerald-500'
-                }
-              />
-              <UsageGauge
-                label="Process RSS"
-                pct={Math.round(metrics.system.memory.processRss / metrics.system.memory.totalBytes * 100)}
-                sub={formatBytes(metrics.system.memory.processRss)}
-                colorClass="bg-violet-500"
-              />
-              {metrics.system.gpu && metrics.system.gpu.length > 0 ? (
-                metrics.system.gpu.map(gpu => (
-                  <div key={gpu.index} className="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-4">
-                    <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">
-                      GPU {gpu.index}
-                    </p>
-                    <div className="mt-2 space-y-2">
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-[10px] text-slate-500">Util</span>
-                          <span className="text-xs font-semibold text-slate-100">{gpu.utilization}%</span>
-                        </div>
-                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-700/60">
-                          <div
-                            className={`h-full rounded-full transition-all duration-500 ${
-                              gpu.utilization >= 90 ? 'bg-rose-500' :
-                              gpu.utilization >= 70 ? 'bg-amber-400' : 'bg-green-500'
-                            }`}
-                            style={{ width: `${Math.min(100, gpu.utilization)}%` }}
-                          />
-                        </div>
-                      </div>
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-[10px] text-slate-500">VRAM</span>
-                          <span className="text-xs font-semibold text-slate-100">
-                            {Math.round(gpu.memUsed / gpu.memTotal * 100)}%
-                          </span>
-                        </div>
-                        <div className="h-1.5 w-full overflow-hidden rounded-full bg-slate-700/60">
-                          <div
-                            className="h-full rounded-full bg-purple-500 transition-all duration-500"
-                            style={{ width: `${Math.min(100, Math.round(gpu.memUsed / gpu.memTotal * 100))}%` }}
-                          />
-                        </div>
-                        <p className="mt-1 text-[10px] text-slate-500">{gpu.memUsed} / {gpu.memTotal} MiB</p>
-                      </div>
-                    </div>
-                  </div>
-                ))
-              ) : (
-                <div className="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-4 flex items-center">
-                  <p className="text-xs text-slate-500">GPU 정보 없음<br />(nvidia-smi 미감지)</p>
-                </div>
-              )}
             </div>
           </section>
         )}
