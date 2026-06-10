@@ -294,3 +294,32 @@ if (wasNearOpen) {
 ```
 - `CIRCUIT_OPEN_THRESHOLD = 3` 이므로, 2회 이상 연속 실패 후 복구될 때만 로그 출력
 - 단발성 타임아웃(네트워크 지터, 일시적 지연)은 로그 없이 조용히 처리됨
+
+### 7. AnalysisServerDashboard.tsx — FPS 스파크라인 그래프 (2026-06-10)
+
+Per-source 테이블의 FPS 컬럼에 60초 롤링 히스토리 스파크라인을 추가했다.
+
+**구현 포인트:**
+
+```tsx
+const FPS_HISTORY_MAX = 30; // 30 samples × 2s poll = 60s
+
+// 폴링 콜백에서 기존 setMetrics와 함께 배치 업데이트
+setFpsHistory(prev => {
+  const next = new Map(prev);
+  for (const cam of data.cameras) {
+    const hist = next.get(cam.cameraId) ?? [];
+    const updated = [...hist, cam.inputFps1s];
+    next.set(cam.cameraId, updated.length > FPS_HISTORY_MAX
+      ? updated.slice(-FPS_HISTORY_MAX) : updated);
+  }
+  return next;
+});
+```
+
+**FpsSparkline SVG 렌더링:**
+- 외부 차트 라이브러리 없이 순수 SVG — `<polyline>` 라인 + `<path>` area fill + 마지막 점 `<circle>`
+- 그라디언트 ID 충돌 방지: gradient 대신 `fill="rgba(56,189,248,0.08)"` 사용
+- `max = Math.max(...data, 1)` — 전체 0fps 상태에서 divide-by-zero 방지
+- 데이터 2개 미만 시 `—` 텍스트 표시
+- 그리드 컬럼 `0.7fr → 1.4fr`로 확장, 헤더 `FPS(1s) → FPS / 추이`로 변경

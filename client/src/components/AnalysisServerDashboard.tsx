@@ -130,6 +130,42 @@ function formatModuleLabel(name: string) {
     .replace(/_/g, ' ');
 }
 
+const FPS_HISTORY_MAX = 30; // 30 samples × 2s poll = 60s rolling window
+
+function FpsSparkline({ data }: { data: number[] }) {
+  const W = 88, H = 26;
+  if (data.length < 2) {
+    return <span className="text-[10px] text-slate-600">—</span>;
+  }
+  const max = Math.max(...data, 1);
+  const step = W / (data.length - 1);
+  const pts = data.map((v, i): [number, number] => [
+    +(i * step).toFixed(1),
+    +(H - 2 - (v / max) * (H - 4)).toFixed(1),
+  ]);
+  const linePts = pts.map(([x, y]) => `${x},${y}`).join(' ');
+  const areaPath =
+    `M${pts[0][0]},${H} ` +
+    pts.map(([x, y]) => `L${x},${y}`).join(' ') +
+    ` L${pts[pts.length - 1][0]},${H} Z`;
+  const [lx, ly] = pts[pts.length - 1];
+  const dotColor = data[data.length - 1] > 0 ? 'rgb(56,189,248)' : 'rgb(100,116,139)';
+  return (
+    <svg width={W} height={H} className="overflow-visible">
+      <path d={areaPath} fill="rgba(56,189,248,0.08)" />
+      <polyline
+        points={linePts}
+        fill="none"
+        stroke="rgba(56,189,248,0.75)"
+        strokeWidth={1.5}
+        strokeLinejoin="round"
+        strokeLinecap="round"
+      />
+      <circle cx={lx} cy={ly} r={2.5} fill={dotColor} />
+    </svg>
+  );
+}
+
 function StatCard({
   label,
   value,
@@ -190,6 +226,7 @@ export default function AnalysisServerDashboard({
 }) {
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [fpsHistory, setFpsHistory] = useState<Map<string, number[]>>(new Map());
 
   useEffect(() => {
     let active = true;
@@ -201,6 +238,15 @@ export default function AnalysisServerDashboard({
         const data = await response.json() as MetricsResponse;
         if (!active) return;
         setMetrics(data);
+        setFpsHistory(prev => {
+          const next = new Map(prev);
+          for (const cam of data.cameras) {
+            const hist = next.get(cam.cameraId) ?? [];
+            const updated = [...hist, cam.inputFps1s];
+            next.set(cam.cameraId, updated.length > FPS_HISTORY_MAX ? updated.slice(-FPS_HISTORY_MAX) : updated);
+          }
+          return next;
+        });
         setError(null);
       } catch (err) {
         if (!active) return;
@@ -518,10 +564,10 @@ export default function AnalysisServerDashboard({
           </div>
 
           <div className="mt-4 overflow-hidden rounded-2xl border border-slate-800">
-            <div className="grid grid-cols-[1.4fr_0.7fr_0.7fr_0.8fr_0.8fr_0.8fr_0.8fr_1fr] bg-slate-900/90 px-4 py-3 text-[11px] uppercase tracking-[0.18em] text-slate-500">
+            <div className="grid grid-cols-[1.4fr_0.7fr_1.4fr_0.8fr_0.8fr_0.8fr_0.8fr_1fr] bg-slate-900/90 px-4 py-3 text-[11px] uppercase tracking-[0.18em] text-slate-500">
               <span>Camera</span>
               <span>Input</span>
-              <span>FPS(1s)</span>
+              <span>FPS / 추이</span>
               <span>Idle</span>
               <span>Frames</span>
               <span>Traffic</span>
@@ -530,7 +576,7 @@ export default function AnalysisServerDashboard({
             </div>
             <div className="divide-y divide-slate-800/80">
               {cameraRows.length > 0 ? cameraRows.map((camera) => (
-                <div key={camera.cameraId} className="grid grid-cols-[1.4fr_0.7fr_0.7fr_0.8fr_0.8fr_0.8fr_0.8fr_1fr] items-center gap-3 px-4 py-3 text-sm text-slate-300">
+                <div key={camera.cameraId} className="grid grid-cols-[1.4fr_0.7fr_1.4fr_0.8fr_0.8fr_0.8fr_0.8fr_1fr] items-center gap-3 px-4 py-3 text-sm text-slate-300">
                   <div className="min-w-0">
                     <p className="truncate font-medium text-slate-100">{camera.cameraName || camera.cameraId}</p>
                     <p className="mt-1 text-xs text-slate-500">{camera.cameraId} · zones {camera.zoneCount} · last {formatRelativeTime(camera.lastFrameAt)}</p>
@@ -538,7 +584,12 @@ export default function AnalysisServerDashboard({
                   <span className={camera.streamPresent ? 'text-emerald-300' : 'text-slate-500'}>
                     {camera.streamPresent ? '있음' : '없음'}
                   </span>
-                  <span className={camera.inputFps1s > 0 ? 'text-sky-300' : 'text-slate-500'}>{camera.inputFps1s.toFixed(1)}</span>
+                  <div className="flex flex-col gap-1">
+                    <span className={camera.inputFps1s > 0 ? 'text-sky-300 tabular-nums' : 'text-slate-500'}>
+                      {camera.inputFps1s.toFixed(1)} fps
+                    </span>
+                    <FpsSparkline data={fpsHistory.get(camera.cameraId) ?? []} />
+                  </div>
                   <span>{camera.idleSec}s</span>
                   <span>{camera.framesTotal}</span>
                   <span>{formatBytes(camera.bytesReceivedTotal)}</span>
