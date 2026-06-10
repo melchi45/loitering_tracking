@@ -99,12 +99,32 @@ export interface FaceMatchEvent {
 }
 
 export interface CrossCameraReIdEvent {
-  faceId:       string;
-  alias?:       string | null;  // canonical person alias e.g. "P3"
+  faceId:              string;
+  alias?:              string | null;  // canonical person alias e.g. "P3"
+  prevCameraId:        string;
+  newCameraId:         string;
+  newObjectId?:        string | number | null;
+  similarity:          number;
+  timestamp:           number;
+}
+
+/** Clothing colour/type feature vector used in appearance Re-ID */
+export interface ClothingFeature {
+  upper?:    string | null;  // PAR cloth type (e.g. 'jacket') — null when model not loaded
+  lower?:    string | null;
+  upperRgb?: [number, number, number] | null;
+  lowerRgb?: [number, number, number] | null;
+}
+
+/** Emitted by server when the same outfit is detected on a different camera */
+export interface ClothingReIdEvent {
+  clothingId:   string;        // 'C1', 'C2', … gallery-assigned appearance ID
+  faceId?:      string | null; // linked face ID when face was also detected
   prevCameraId: string;
   newCameraId:  string;
-  newObjectId?: string | number | null;  // tracker objectId of the person in newCameraId
-  similarity:   number;
+  similarity:   number;        // _clothingAppearSim score [0, 1]
+  objectId?:    string | number | null;
+  feature:      ClothingFeature;
   timestamp:    number;
 }
 
@@ -136,6 +156,8 @@ export interface Detection {
   faceId?:       string;   // stable ID assigned by cosine-similarity gallery
   matchScore?:   number;   // cosine similarity vs. previous gallery entry (0–1)
   crossCamera?:  { prevCameraId: string };  // present when face matched across cameras
+  // Clothing appearance Re-ID
+  clothingId?:   string;   // 'C1', 'C2', … — cross-camera appearance tracking ID
   // Adaptive Multi-Feature Tracking metrics (present only for zone-matched objects)
   revisitCount?: number;
   velocity?:     number;

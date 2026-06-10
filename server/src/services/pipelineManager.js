@@ -81,9 +81,48 @@ function _bboxClose(a, b, tol = 3) {
   );
 }
 
-const FACE_MATCH_THRESH   = 0.35;  // cosine similarity threshold for same-person
-const FACE_EXPIRY_MS      = 30000; // forget a face after 30s of absence
-const FACE_TRACKING_PATH  = path.join(__dirname, '../../../storage/face_tracking.json');
+// ─── Clothing appearance gallery helpers ──────────────────────────────────────
+
+// Weighted similarity for cross-camera clothing Re-ID.
+// Combines upper/lower RGB Euclidean distance with PAR cloth-type exact-match.
+// Returns [0, 1]; 1 = identical appearance.
+function _clothingAppearSim(a, b) {
+  const MAX_DIST = 441.67; // sqrt(3) × 255 — max possible RGB Euclidean distance
+  let score = 0, w = 0;
+  if (a.upperRgb && b.upperRgb) {
+    const dr = a.upperRgb[0] - b.upperRgb[0];
+    const dg = a.upperRgb[1] - b.upperRgb[1];
+    const db = a.upperRgb[2] - b.upperRgb[2];
+    const colorSim = 1 - Math.sqrt(dr * dr + dg * dg + db * db) / MAX_DIST;
+    let typeSim = 0.5; // neutral when type unknown (PAR model not loaded)
+    if (a.upper && b.upper && a.upper !== 'unknown' && b.upper !== 'unknown') {
+      typeSim = a.upper === b.upper ? 1 : 0;
+    }
+    score += 0.60 * (0.55 * colorSim + 0.45 * typeSim); // upper = 60% total weight
+    w += 0.60;
+  }
+  if (a.lowerRgb && b.lowerRgb) {
+    const dr = a.lowerRgb[0] - b.lowerRgb[0];
+    const dg = a.lowerRgb[1] - b.lowerRgb[1];
+    const db = a.lowerRgb[2] - b.lowerRgb[2];
+    const colorSim = 1 - Math.sqrt(dr * dr + dg * dg + db * db) / MAX_DIST;
+    let typeSim = 0.5;
+    if (a.lower && b.lower && a.lower !== 'unknown' && b.lower !== 'unknown') {
+      typeSim = a.lower === b.lower ? 1 : 0;
+    }
+    score += 0.40 * (0.50 * colorSim + 0.50 * typeSim); // lower = 40% total weight
+    w += 0.40;
+  }
+  return w > 0 ? score / w : 0;
+}
+
+const FACE_MATCH_THRESH     = 0.35;     // cosine similarity threshold for same-person
+const FACE_EXPIRY_MS        = 30000;    // forget a face after 30s of absence
+const FACE_TRACKING_PATH    = path.join(__dirname, '../../../storage/face_tracking.json');
+const CLOTHING_MATCH_THRESH = 0.75;     // weighted colour+type threshold for same-clothing
+const CLOTHING_EXPIRY_MS    = 300_000;  // 5 min — outfit doesn't change between rooms
+const CLOTHING_FACE_W       = 0.70;     // face weight in combined Re-ID confidence
+const CLOTHING_APPEAR_W     = 0.30;     // clothing weight in combined Re-ID confidence
 
 // Maximum number of concurrent camera pipelines (each = 1 capture backend process).
 // Configurable via MAX_PIPELINES env var; 0 = unlimited.
@@ -138,6 +177,15 @@ class PipelineManager {
     this._personTrajectory   = new Map();
     this._personAliasCounter = 0;
     this._faceTrackingSaveTimer = null; // debounce timer for face_tracking.json
+
+    // Shared clothing gallery for cross-camera appearance Re-ID.
+    // Entry: { clothingId, feature: {upperRgb, lowerRgb, upper, lower},
+    //          lastSeenAt, lastCameraId, faceId }
+    // TTL = CLOTHING_EXPIRY_MS (5 min). Persists across gallery entry expiry.
+    this._sharedClothingGallery = [];
+    this._clothingCounter       = 1;
+    // Per-clothing cross-camera stats: clothingId → { clothingId, firstCameraId, lastCameraId, transitionCount, lastSeenAt }
+    this._crossClothingStats    = new Map();
 
     // Restore persisted trajectory state
     this._loadFaceTracking();
@@ -414,8 +462,9 @@ class PipelineManager {
         // 4. Attribute enrichment (face / PPE / color) — runs BEFORE behavior so that
         //    face embeddings, mask/hat status, and clothing color are available for
         //    appearance-based revisit detection and risk scoring in the behavior engine.
-        let attrObjects    = trackedObjects;
-        let faceDetObjects = [];
+        let attrObjects      = trackedObjects;
+        let faceDetObjects   = [];
+        let clothingAssignMap = new Map(); // String(objectId) → { clothingId, matchScore }
         const anyAttrEnabled = analyticsConfig.isEnabled('face') ||
                                analyticsConfig.isEnabled('mask') ||
                                analyticsConfig.isEnabled('hat')  ||
@@ -566,6 +615,49 @@ class PipelineManager {
                 dwellTime:   0,
               }));
             }
+
+            // ── Clothing appearance Re-ID ──────────────────────────────────────────
+            // Runs after face assignment so faceId → objectId links are available.
+            // Works even when face module is disabled (color module gate only).
+            if (analyticsConfig.isEnabled('color')) {
+              // Build objectId → faceId from faceDetObjects ↔ attrObjects (via face bbox proximity)
+              const _oIdToFaceId = new Map();
+              for (const fd of faceDetObjects) {
+                const p = attrObjects.find(o =>
+                  o.className === 'person' && o.face && _bboxClose(o.face.bbox, fd.bbox)
+                );
+                if (p) _oIdToFaceId.set(String(p.objectId), fd.faceId);
+              }
+
+              const { assignments: _ca, crossCameraTransitions: _clothCCT } =
+                this._assignClothingIds(camera.id, attrObjects, timestamp, _oIdToFaceId);
+
+              for (const a of _ca) clothingAssignMap.set(String(a.objectId), a);
+
+              for (const ct of _clothCCT) {
+                this._io.emit('clothing:reidentified', {
+                  clothingId:   ct.clothingId,
+                  faceId:       ct.faceId ?? null,
+                  prevCameraId: ct.prevCameraId,
+                  newCameraId:  ct.newCameraId,
+                  similarity:   ct.similarity,
+                  objectId:     ct.objectId,
+                  feature: {
+                    upper:    ct.feature.upper,
+                    lower:    ct.feature.lower,
+                    upperRgb: ct.feature.upperRgb,
+                    lowerRgb: ct.feature.lowerRgb,
+                  },
+                  timestamp: ct.timestamp,
+                });
+                console.log(
+                  `[PipelineManager] Clothing Re-ID: ${ct.clothingId} ` +
+                  `${ct.prevCameraId.slice(0, 8)}→${ct.newCameraId.slice(0, 8)} ` +
+                  `sim=${ct.similarity.toFixed(3)}` +
+                  (ct.faceId ? ` [${ct.faceId}]` : '')
+                );
+              }
+            }
           } catch (err) {
             console.error(`[PipelineManager][${camera.id}] Attribute pipeline error:`, err.message);
           }
@@ -590,6 +682,14 @@ class PipelineManager {
         //    mask/hat status, and clothing color are available for appearance-based
         //    revisit detection and composite risk scoring.
         const enrichedObjects = behavior.update(camera.id, attrObjects, timestamp);
+
+        // Propagate clothingId from clothing Re-ID assignments to behavior-enriched detections
+        if (clothingAssignMap.size > 0) {
+          for (const obj of enrichedObjects) {
+            const ca = clothingAssignMap.get(String(obj.objectId));
+            if (ca) obj.clothingId = ca.clothingId;
+          }
+        }
 
         // 6. Fire/smoke detection — gated by analytics config
         let fireSmokeObjects = [];
@@ -1360,6 +1460,105 @@ class PipelineManager {
     });
 
     return { faces: result, crossCameraTransitions, pendingMatchEvents };
+  }
+
+  /**
+   * Assign clothing IDs to detected persons and detect cross-camera appearance transitions.
+   *
+   * For each person detection that has color data (upperRgb), search the shared clothing
+   * gallery using _clothingAppearSim(). Entries expire after CLOTHING_EXPIRY_MS (5 min).
+   * When a match is found on a DIFFERENT camera, a cross-camera clothing transition is recorded.
+   *
+   * @param {string} cameraId        - Camera that captured the frame
+   * @param {Array}  enrichedObjects - Tracked person objects with color/cloth attributes
+   * @param {number} timestamp       - Frame timestamp (ms)
+   * @param {Map}    objectIdToFaceId - Optional objectId→faceId link from face Re-ID
+   * @returns {{ assignments, crossCameraTransitions }}
+   */
+  _assignClothingIds(cameraId, enrichedObjects, timestamp, objectIdToFaceId = new Map()) {
+    // Prune expired gallery entries
+    this._sharedClothingGallery = this._sharedClothingGallery.filter(
+      g => timestamp - g.lastSeenAt < CLOTHING_EXPIRY_MS
+    );
+
+    const assignments          = [];
+    const crossCameraTransitions = [];
+
+    for (const obj of enrichedObjects) {
+      if (obj.className !== 'person') continue;
+      if (!obj.color?.upperRgb) continue; // need at least upper colour to match
+
+      const feature = {
+        upperRgb: obj.color.upperRgb,
+        lowerRgb: obj.color.lowerRgb ?? null,
+        upper:    obj.cloth?.upper   ?? null,
+        lower:    obj.cloth?.lower   ?? null,
+      };
+      const linkedFaceId = objectIdToFaceId.get(String(obj.objectId)) ?? null;
+
+      let bestEntry = null, bestScore = CLOTHING_MATCH_THRESH;
+      for (const g of this._sharedClothingGallery) {
+        const sim = _clothingAppearSim(feature, g.feature);
+        if (sim > bestScore) { bestScore = sim; bestEntry = g; }
+      }
+
+      if (bestEntry) {
+        const prevCameraId = bestEntry.lastCameraId;
+
+        if (prevCameraId !== cameraId) {
+          // Update per-clothing cross-camera stats
+          const stats = this._crossClothingStats.get(bestEntry.clothingId) || {
+            clothingId:      bestEntry.clothingId,
+            firstCameraId:   prevCameraId,
+            lastCameraId:    prevCameraId,
+            transitionCount: 0,
+            lastSeenAt:      bestEntry.lastSeenAt,
+          };
+          stats.transitionCount++;
+          stats.lastCameraId = cameraId;
+          stats.lastSeenAt   = timestamp;
+          this._crossClothingStats.set(bestEntry.clothingId, stats);
+
+          crossCameraTransitions.push({
+            clothingId:  bestEntry.clothingId,
+            faceId:      linkedFaceId || bestEntry.faceId || null,
+            prevCameraId,
+            newCameraId: cameraId,
+            similarity:  bestScore,
+            objectId:    obj.objectId,
+            timestamp,
+            feature,
+          });
+        }
+
+        bestEntry.lastSeenAt   = timestamp;
+        bestEntry.lastCameraId = cameraId;
+        if (linkedFaceId && !bestEntry.faceId) bestEntry.faceId = linkedFaceId;
+
+        assignments.push({ objectId: obj.objectId, clothingId: bestEntry.clothingId, matchScore: bestScore });
+      } else {
+        // New clothing profile — enroll in shared gallery
+        const clothingId = `C${this._clothingCounter++}`;
+        this._sharedClothingGallery.push({
+          clothingId,
+          feature,
+          lastSeenAt:   timestamp,
+          lastCameraId: cameraId,
+          faceId:       linkedFaceId,
+        });
+        assignments.push({ objectId: obj.objectId, clothingId, matchScore: 1.0 });
+      }
+    }
+
+    return { assignments, crossCameraTransitions };
+  }
+
+  /**
+   * Return clothing cross-camera Re-ID statistics for the current server session.
+   * @returns {Array<{ clothingId, firstCameraId, lastCameraId, transitionCount, lastSeenAt }>}
+   */
+  getCrossClothingReIdStats() {
+    return [...this._crossClothingStats.values()];
   }
 
   /**

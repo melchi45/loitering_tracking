@@ -5,6 +5,7 @@ import { useAlertStore } from './stores/alertStore';
 import { useDiscoveryStore } from './stores/discoveryStore';
 import { useCrossCameraStore } from './stores/crossCameraStore';
 import { usePersonTrajectoryStore } from './stores/personTrajectoryStore';
+import { useClothingReIdStore } from './stores/clothingReIdStore';
 import { useI18n, LANGUAGES, type LangCode } from './i18n';
 import { useWebRTCConfigStore, type WebRTCConfig, type TurnServer } from './stores/webrtcConfigStore';
 import CameraGrid, { LayoutId, LAYOUT_DEFS, LAYOUT_GROUPS, LayoutIcon } from './components/CameraGrid';
@@ -24,7 +25,7 @@ import StatsPanelModal from './components/StatsPanelModal';
 import AnalysisStatsModal from './components/AnalysisStatsModal';
 import ProfileModal from './components/ProfileModal';
 import type { SearchResult } from './hooks/useSearch';
-import type { Alert, CrossCameraReIdEvent, PersonTrajectory } from './types';
+import type { Alert, CrossCameraReIdEvent, ClothingReIdEvent, PersonTrajectory } from './types';
 import { useAuthStore } from './stores/authStore';
 import SignInPage from './pages/SignInPage';
 import PendingPage from './pages/PendingPage';
@@ -590,6 +591,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
   const selectedDiscovered = useDiscoveryStore((s) => s.selected);
   const selectDiscovered   = useDiscoveryStore((s) => s.select);
   const addCrossCameraEvent  = useCrossCameraStore((s) => s.addEvent);
+  const addClothingReIdEvent = useClothingReIdStore((s) => s.addEvent);
   const updatePerson         = usePersonTrajectoryStore((s) => s.updatePerson);
   const hydratePerson        = usePersonTrajectoryStore((s) => s.hydrate);
   const { t } = useI18n();
@@ -745,25 +747,31 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
       addCrossCameraEvent(event);
     };
 
+    const handleClothingReidentified = (event: ClothingReIdEvent) => {
+      addClothingReIdEvent(event);
+    };
+
     const handlePersonTrajectory = (p: PersonTrajectory) => {
       updatePerson(p);
     };
 
-    socket.on('camera:status',           handleCameraStatus);
-    socket.on('alert:new',               handleAlert);
-    socket.on('face:reidentified',       handleFaceReidentified);
+    socket.on('camera:status',            handleCameraStatus);
+    socket.on('alert:new',                handleAlert);
+    socket.on('face:reidentified',        handleFaceReidentified);
+    socket.on('clothing:reidentified',    handleClothingReidentified);
     socket.on('person:trajectory-update', handlePersonTrajectory);
 
     // Expose socket globally so FaceGalleryTab can subscribe to face_match events
     (window as unknown as Record<string, unknown>).__ltsSocket = socket;
 
     return () => {
-      socket.off('camera:status',           handleCameraStatus);
-      socket.off('alert:new',               handleAlert);
-      socket.off('face:reidentified',       handleFaceReidentified);
+      socket.off('camera:status',            handleCameraStatus);
+      socket.off('alert:new',                handleAlert);
+      socket.off('face:reidentified',        handleFaceReidentified);
+      socket.off('clothing:reidentified',    handleClothingReidentified);
       socket.off('person:trajectory-update', handlePersonTrajectory);
     };
-  }, [socket, updateCameraStatus, addAlert, addCrossCameraEvent, updatePerson]);
+  }, [socket, updateCameraStatus, addAlert, addCrossCameraEvent, addClothingReIdEvent, updatePerson]);
 
   // ── Dashboard routing ────────────────────────────────────────────────────────
   // combined + /analysis  →  show analysis dashboard

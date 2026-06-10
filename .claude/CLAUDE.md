@@ -167,6 +167,8 @@ loitering_tracking/
 | `alert:acknowledged` | Server → Client | 알림 확인 처리됨 |
 | `objectTracked` | Server → Client | 추적 객체 업데이트 |
 | `cameraStatus` | Server → Client | 카메라 연결 상태 변경 |
+| `face:reidentified` | Server → Client | 얼굴 Re-ID 크로스카메라 전환 감지 |
+| `clothing:reidentified` | Server → Client | 의상 Appearance Re-ID 크로스카메라 전환 감지 |
 | `subscribeCamera` | Client → Server | 카메라 스트림 구독 |
 
 ---

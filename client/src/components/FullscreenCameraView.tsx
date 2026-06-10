@@ -1,11 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { useCamera } from '../hooks/useCamera';
 import { useCrossCameraStore } from '../stores/crossCameraStore';
+import { useClothingReIdStore } from '../stores/clothingReIdStore';
 import { useCameraStore } from '../stores/cameraStore';
 import { usePersonTrajectoryStore } from '../stores/personTrajectoryStore';
 import { useI18n } from '../i18n';
 import CameraView from './CameraView';
-import type { Detection } from '../types';
+import type { Detection, ClothingFeature } from '../types';
 
 interface Props {
   cameraId: string;
@@ -301,15 +302,38 @@ export function getCategoryKey(className: string): CategoryKey | 'other' {
   return 'other';
 }
 
+/** Small colour swatch for clothing RGB display */
+function RgbSwatch({ rgb }: { rgb: [number, number, number] | null | undefined }) {
+  if (!rgb) return null;
+  const hex = `#${rgb.map(v => v.toString(16).padStart(2, '0')).join('')}`;
+  return (
+    <span
+      className="inline-block w-2.5 h-2.5 rounded-sm border border-gray-600 flex-shrink-0"
+      style={{ backgroundColor: hex }}
+      title={hex}
+    />
+  );
+}
+
+/** Format clothing feature as a short label */
+function clothingLabel(f: ClothingFeature): string {
+  const parts: string[] = [];
+  if (f.upper && f.upper !== 'unknown') parts.push(f.upper);
+  if (f.lower && f.lower !== 'unknown') parts.push(f.lower);
+  return parts.length > 0 ? parts.join('/') : 'colour match';
+}
+
 export function DetectionPanel({ cameraId }: { cameraId: string }) {
   const { detections } = useCamera(cameraId);
-  const crossCameraEvents = useCrossCameraStore((s) => s.events);
+  const crossCameraEvents  = useCrossCameraStore((s) => s.events);
+  const clothingReIdEvents = useClothingReIdStore((s) => s.events);
   const allPersons = usePersonTrajectoryStore((s) => s.persons);
   const cameras = useCameraStore((s) => s.cameras);
   const listRef = useRef<HTMLDivElement>(null);
   const { t } = useI18n();
   const [showLegend, setShowLegend] = useState(false);
   const [showCrossCamera, setShowCrossCamera] = useState(true);
+  const [showAppearance, setShowAppearance] = useState(true);
   const [showPersonTrails, setShowPersonTrails] = useState(true);
   const [hiddenCats, setHiddenCats] = useState<Set<string>>(new Set());
 
@@ -340,10 +364,26 @@ export function DetectionPanel({ cameraId }: { cameraId: string }) {
       .map((ev) => ev.faceId)
   );
 
-  // Recent cross-camera events where this camera is involved (as source or destination)
+  // Recent cross-camera face events where this camera is involved
   const localEvents = crossCameraEvents.filter(
     (ev) => ev.prevCameraId === cameraId || ev.newCameraId === cameraId
   );
+
+  // Recent clothing Re-ID events where this camera is involved
+  const localClothingEvents = clothingReIdEvents.filter(
+    (ev) => ev.prevCameraId === cameraId || ev.newCameraId === cameraId
+  );
+
+  // Combined confidence: look up face sim for clothing events that have a linked faceId
+  const combinedConfidence = (clothingSim: number, faceId: string | null | undefined): number | null => {
+    if (!faceId) return null;
+    const facEv = crossCameraEvents.find(
+      (e) => e.faceId === faceId &&
+             Math.abs(e.timestamp - Date.now()) < 10_000
+    );
+    if (!facEv) return null;
+    return 0.70 * facEv.similarity + 0.30 * clothingSim;
+  };
 
   // Persons whose trajectory includes this camera (sorted: currently here first)
   const personTrails = [...allPersons.values()].filter((p) =>
@@ -474,8 +514,8 @@ export function DetectionPanel({ cameraId }: { cameraId: string }) {
         </div>
       )}
 
-      {/* Cross-Camera Re-ID feed — collapsible */}
-      {localEvents.length > 0 && (
+      {/* Cross-Camera Re-ID feed — face + clothing events merged, collapsible */}
+      {(localEvents.length > 0 || localClothingEvents.length > 0) && (
         <div className="border-t border-gray-700 flex-shrink-0">
           <button
             onClick={() => setShowCrossCamera(v => !v)}
@@ -483,29 +523,95 @@ export function DetectionPanel({ cameraId }: { cameraId: string }) {
           >
             <span className="text-[8px] text-blue-400 uppercase tracking-wide font-bold">
               Cross-Camera Re-ID
-              <span className="ml-1 text-blue-600 font-normal">({localEvents.length})</span>
+              <span className="ml-1 text-blue-600 font-normal">
+                ({localEvents.length + localClothingEvents.length})
+              </span>
             </span>
             <span className="text-[8px] text-gray-500">{showCrossCamera ? '▲' : '▼'}</span>
           </button>
           {showCrossCamera && (
-            <div className="px-3 pb-2 space-y-0.5 max-h-20 overflow-y-auto">
-              {localEvents.slice(0, 5).map((ev, i) => (
-                <div key={i} className="text-[9px] font-mono text-gray-400">
+            <div className="px-3 pb-2 space-y-0.5 max-h-24 overflow-y-auto">
+              {/* Face Re-ID events */}
+              {localEvents.slice(0, 4).map((ev, i) => (
+                <div key={`f-${i}`} className="flex items-center gap-1 text-[9px] font-mono text-gray-400">
+                  <span className="text-blue-400" title="Face Re-ID">👤</span>
                   <span className="text-blue-300 font-bold">[{ev.faceId}]</span>
-                  {' '}<span className="text-gray-200" title={ev.prevCameraId}>{camName(ev.prevCameraId)}</span>
-                  {' '}&#8594;{' '}
+                  {ev.alias && <span className="text-teal-300 font-bold">{ev.alias}</span>}
+                  <span className="text-gray-200" title={ev.prevCameraId}>{camName(ev.prevCameraId)}</span>
+                  <span>→</span>
                   <span className="text-gray-200" title={ev.newCameraId}>{camName(ev.newCameraId)}</span>
-                  {ev.alias && (
-                    <span className="text-teal-300 font-bold ml-1">{ev.alias}</span>
-                  )}
-                  {ev.newObjectId != null && (
-                    <span className="text-yellow-400 ml-0.5" title={String(ev.newObjectId)}>
-                      #{typeof ev.newObjectId === 'string' ? ev.newObjectId.slice(0, 6) : ev.newObjectId}
-                    </span>
-                  )}
-                  {' '}<span className="text-gray-500">{(ev.similarity * 100).toFixed(0)}%</span>
+                  <span className="text-gray-500 ml-auto">{(ev.similarity * 100).toFixed(0)}%</span>
                 </div>
               ))}
+              {/* Clothing Re-ID events */}
+              {localClothingEvents.slice(0, 3).map((ev, i) => {
+                const combined = combinedConfidence(ev.similarity, ev.faceId);
+                return (
+                  <div key={`c-${i}`} className="flex items-center gap-1 text-[9px] font-mono text-gray-400">
+                    <span className="text-orange-400" title="Appearance Re-ID">👕</span>
+                    <span className="text-orange-300 font-bold">[{ev.clothingId}]</span>
+                    {ev.faceId && <span className="text-blue-500 text-[8px]">{ev.faceId}</span>}
+                    <span className="text-gray-200" title={ev.prevCameraId}>{camName(ev.prevCameraId)}</span>
+                    <span>→</span>
+                    <span className="text-gray-200" title={ev.newCameraId}>{camName(ev.newCameraId)}</span>
+                    <span className="ml-auto text-gray-500">
+                      {combined != null
+                        ? <span className="text-purple-400 font-bold">{(combined * 100).toFixed(0)}%</span>
+                        : <span>{(ev.similarity * 100).toFixed(0)}%</span>
+                      }
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Appearance Re-ID panel — clothing details, collapsible */}
+      {localClothingEvents.length > 0 && (
+        <div className="border-t border-gray-700 flex-shrink-0">
+          <button
+            onClick={() => setShowAppearance(v => !v)}
+            className="w-full flex items-center justify-between px-3 py-1.5 hover:bg-gray-700/40 transition-colors"
+          >
+            <span className="text-[8px] text-orange-400 uppercase tracking-wide font-bold">
+              Appearance Re-ID
+              <span className="ml-1 text-orange-600 font-normal">({localClothingEvents.length})</span>
+            </span>
+            <span className="text-[8px] text-gray-500">{showAppearance ? '▲' : '▼'}</span>
+          </button>
+          {showAppearance && (
+            <div className="px-3 pb-2 space-y-1 max-h-28 overflow-y-auto">
+              {localClothingEvents.slice(0, 5).map((ev, i) => {
+                const combined = combinedConfidence(ev.similarity, ev.faceId);
+                const isHere   = ev.newCameraId === cameraId;
+                return (
+                  <div key={i} className="flex items-start gap-1.5 text-[9px] font-mono">
+                    <span className={`mt-0.5 w-1.5 h-1.5 rounded-full flex-shrink-0 ${isHere ? 'bg-orange-400' : 'bg-gray-600'}`} />
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-1">
+                        <span className="text-orange-300 font-bold">{ev.clothingId}</span>
+                        {ev.faceId && <span className="text-blue-400 text-[8px]">[{ev.faceId}]</span>}
+                        <RgbSwatch rgb={ev.feature.upperRgb as [number,number,number] | null} />
+                        <RgbSwatch rgb={ev.feature.lowerRgb as [number,number,number] | null} />
+                        <span className="text-gray-500 truncate">{clothingLabel(ev.feature)}</span>
+                      </div>
+                      <div className="text-gray-500">
+                        {camName(ev.prevCameraId)} → {camName(ev.newCameraId)}
+                        {' '}
+                        {combined != null
+                          ? <span className="text-purple-400 font-bold">comb {(combined * 100).toFixed(0)}%</span>
+                          : <span>appear {(ev.similarity * 100).toFixed(0)}%</span>
+                        }
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+              <div className="text-[8px] text-gray-600 pt-0.5">
+                purple = face×0.7 + appear×0.3 combined confidence
+              </div>
             </div>
           )}
         </div>
