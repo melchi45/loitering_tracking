@@ -4,10 +4,14 @@
  * Analysis API — used when SERVER_MODE=analysis
  *
  * Exposes:
- *   POST /api/analysis/frame       — receive JPEG frame, run AI, return results
- *   GET  /api/analysis/health      — liveness probe for streaming servers
- *   GET  /api/analysis/events      — recent analysis events (fire/smoke/loitering)
- *   DELETE /api/analysis/events    — clear all persisted analysis events
+ *   POST /api/analysis/frame               — receive JPEG frame, run AI, return results
+ *   GET  /api/analysis/health              — liveness probe for streaming servers
+ *   GET  /api/analysis/events              — recent analysis events (fire/smoke/loitering)
+ *   DELETE /api/analysis/events            — clear all persisted analysis events
+ *   GET  /api/analysis/models              — list YOLO model catalog with download/active status
+ *   POST /api/analysis/models/switch       — hot-swap active YOLO model
+ *   POST /api/analysis/models/download     — download a YOLO model from Ultralytics
+ *   GET  /api/analysis/models/download-progress/:id — SSE stream for download progress
  *
  * Per-camera state (tracker + behavior engine) is kept in memory.
  * Stale contexts (> CONTEXT_EXPIRY_MS of inactivity) are pruned automatically.
@@ -24,6 +28,26 @@ const FireSmokeService  = require('../services/fireSmokeService');
 const analyticsConfig   = require('../services/analyticsConfig');
 const { getSystemMetrics } = require('../services/systemMetrics');
 const snapshotSvc      = require('../services/snapshotService');
+
+// ── YOLO Model catalog ────────────────────────────────────────────────────────
+// Each entry = one downloadable ONNX model.  file is relative to server/models/.
+const MODEL_CATALOG = [
+  // YOLO11 series (Ultralytics 2024)
+  { id: 'yolo11n', label: 'YOLO11n', series: 'YOLO11', size: 640, mAP: 39.5, cpuMs: 56.1,  t4Ms: 1.5,  params: '2.6M',  flops: '6.5B',   file: 'yolo11n.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.onnx' },
+  { id: 'yolo11s', label: 'YOLO11s', series: 'YOLO11', size: 640, mAP: 47.0, cpuMs: 90.0,  t4Ms: 2.5,  params: '9.4M',  flops: '21.5B',  file: 'yolo11s.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s.onnx' },
+  { id: 'yolo11m', label: 'YOLO11m', series: 'YOLO11', size: 640, mAP: 51.5, cpuMs: 183.2, t4Ms: 4.7,  params: '20.1M', flops: '68.0B',  file: 'yolo11m.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11m.onnx' },
+  { id: 'yolo11l', label: 'YOLO11l', series: 'YOLO11', size: 640, mAP: 53.4, cpuMs: 238.6, t4Ms: 6.2,  params: '25.3M', flops: '86.9B',  file: 'yolo11l.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11l.onnx' },
+  { id: 'yolo11x', label: 'YOLO11x', series: 'YOLO11', size: 640, mAP: 54.7, cpuMs: 462.8, t4Ms: 11.3, params: '56.9M', flops: '194.9B', file: 'yolo11x.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11x.onnx' },
+  // YOLOv8 series
+  { id: 'yolov8n', label: 'YOLOv8n', series: 'YOLOv8', size: 640, mAP: 37.3, cpuMs: 80.4,  t4Ms: 1.47, params: '3.2M',  flops: '8.7B',   file: 'yolov8n.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.onnx' },
+  { id: 'yolov8s', label: 'YOLOv8s', series: 'YOLOv8', size: 640, mAP: 44.9, cpuMs: 128.4, t4Ms: 2.66, params: '11.2M', flops: '28.6B',  file: 'yolov8s.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8s.onnx' },
+  { id: 'yolov8m', label: 'YOLOv8m', series: 'YOLOv8', size: 640, mAP: 50.2, cpuMs: 234.7, t4Ms: 5.86, params: '25.9M', flops: '78.9B',  file: 'yolov8m.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8m.onnx' },
+  { id: 'yolov8l', label: 'YOLOv8l', series: 'YOLOv8', size: 640, mAP: 52.9, cpuMs: 375.2, t4Ms: 9.06, params: '43.7M', flops: '165.2B', file: 'yolov8l.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8l.onnx' },
+  { id: 'yolov8x', label: 'YOLOv8x', series: 'YOLOv8', size: 640, mAP: 53.9, cpuMs: 479.1, t4Ms: 14.37,params: '68.2M', flops: '257.8B', file: 'yolov8x.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8x.onnx' },
+];
+
+// Download progress state: id → { percent, status, error }
+const _downloadProgress = new Map();
 
 const CONTEXT_EXPIRY_MS         = 5 * 60 * 1000; // prune camera context after 5 min idle
 const RECENT_WINDOW_MS          = 60 * 1000;
@@ -779,7 +803,6 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
     cameraMetric.loiteringTotal += loiteringCount;
 
     const alertService = req.app.get('alertService');
-    const io  = req.app.get('io');
     const db  = req.app.get('db');
 
     // ── Process behaviors: loitering alerts (alert persistence only) ──────────
@@ -1041,6 +1064,138 @@ router.get('/contexts', (_req, res) => {
     });
   }
   res.json({ count: contexts.length, contexts });
+});
+
+// ── GET /api/analysis/models ─────────────────────────────────────────────────
+// Returns the full model catalog with per-model download status and active flag.
+router.get('/models', (req, res) => {
+  const fs   = require('fs');
+  const path = require('path');
+  const modelsDir = path.resolve(__dirname, '..', '..', 'models');
+  const activeFile = _detector ? path.basename(_detector.modelPath) : null;
+
+  const catalog = MODEL_CATALOG.map(m => {
+    const filePath = path.join(modelsDir, m.file);
+    const exists   = fs.existsSync(filePath);
+    const stat     = exists ? fs.statSync(filePath) : null;
+    const progress = _downloadProgress.get(m.id);
+    return {
+      ...m,
+      url: undefined,           // don't expose raw GitHub URL to client
+      exists,
+      active:   activeFile === m.file,
+      sizeBytes: stat ? stat.size : null,
+      downloading: progress?.status === 'downloading',
+      downloadPercent: progress?.percent ?? null,
+      downloadError:   progress?.status === 'error' ? progress.error : null,
+    };
+  });
+
+  res.json({ activeFile, catalog });
+});
+
+// ── POST /api/analysis/models/switch ─────────────────────────────────────────
+// Hot-swap the active YOLO detection model.  Body: { modelId: string }
+router.post('/models/switch', express.json({ limit: '1kb' }), async (req, res) => {
+  const { modelId } = req.body || {};
+  const fs   = require('fs');
+  const path = require('path');
+  const entry = MODEL_CATALOG.find(m => m.id === modelId);
+  if (!entry) return res.status(400).json({ error: 'Unknown modelId' });
+
+  const filePath = path.resolve(__dirname, '..', '..', 'models', entry.file);
+  if (!fs.existsSync(filePath)) {
+    return res.status(409).json({ error: 'Model file not downloaded yet', file: entry.file });
+  }
+
+  try {
+    if (!_detector) {
+      const DetectionService = require('../services/detection');
+      _detector = new DetectionService({ modelPath: filePath });
+      await _detector.load();
+    } else {
+      await _detector.reload(filePath);
+    }
+    console.log(`[AnalysisAPI] Switched YOLO model → ${entry.label}`);
+    res.json({ ok: true, active: entry.label, file: entry.file });
+  } catch (err) {
+    console.error('[AnalysisAPI] Model switch failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── POST /api/analysis/models/download ───────────────────────────────────────
+// Trigger async download of a model from Ultralytics GitHub releases.
+// Body: { modelId: string }  — responds immediately; progress via polling GET /models
+router.post('/models/download', express.json({ limit: '1kb' }), async (req, res) => {
+  const { modelId } = req.body || {};
+  const fs   = require('fs');
+  const path = require('path');
+  const https = require('https');
+  const http  = require('http');
+
+  const entry = MODEL_CATALOG.find(m => m.id === modelId);
+  if (!entry) return res.status(400).json({ error: 'Unknown modelId' });
+
+  const modelsDir = path.resolve(__dirname, '..', '..', 'models');
+  const filePath  = path.join(modelsDir, entry.file);
+
+  if (_downloadProgress.get(modelId)?.status === 'downloading') {
+    return res.status(409).json({ error: 'Download already in progress' });
+  }
+
+  _downloadProgress.set(modelId, { status: 'downloading', percent: 0, error: null });
+  res.json({ ok: true, message: `Download started for ${entry.label}` });
+
+  // Async download with redirect support
+  const doDownload = (url, destPath, cb) => {
+    const proto = url.startsWith('https') ? https : http;
+    const tmpPath = destPath + '.tmp';
+    const file = fs.createWriteStream(tmpPath);
+
+    const req2 = proto.get(url, (response) => {
+      if (response.statusCode === 301 || response.statusCode === 302) {
+        file.destroy();
+        fs.unlink(tmpPath, () => {});
+        return doDownload(response.headers.location, destPath, cb);
+      }
+      if (response.statusCode !== 200) {
+        file.destroy();
+        fs.unlink(tmpPath, () => {});
+        return cb(new Error(`HTTP ${response.statusCode}`));
+      }
+      const total = parseInt(response.headers['content-length'] || '0', 10);
+      let received = 0;
+      response.on('data', chunk => {
+        received += chunk.length;
+        if (total > 0) {
+          _downloadProgress.set(modelId, { status: 'downloading', percent: Math.round(received / total * 100), error: null });
+        }
+      });
+      response.pipe(file);
+      file.on('finish', () => {
+        file.close(() => {
+          fs.rename(tmpPath, destPath, (err) => cb(err));
+        });
+      });
+    });
+    req2.on('error', (err) => {
+      file.destroy();
+      fs.unlink(tmpPath, () => {});
+      cb(err);
+    });
+    req2.setTimeout(300_000, () => { req2.destroy(); cb(new Error('Download timeout')); });
+  };
+
+  try {
+    if (!fs.existsSync(modelsDir)) fs.mkdirSync(modelsDir, { recursive: true });
+    await new Promise((resolve, reject) => doDownload(entry.url, filePath, (err) => err ? reject(err) : resolve()));
+    _downloadProgress.set(modelId, { status: 'done', percent: 100, error: null });
+    console.log(`[AnalysisAPI] Downloaded ${entry.label} → ${entry.file}`);
+  } catch (err) {
+    _downloadProgress.set(modelId, { status: 'error', percent: 0, error: err.message });
+    console.error(`[AnalysisAPI] Download failed for ${entry.label}:`, err.message);
+  }
 });
 
 // ── Router-level error handler ────────────────────────────────────────────────

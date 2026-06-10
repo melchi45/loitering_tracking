@@ -143,6 +143,20 @@ class DetectionService {
   }
 
   /**
+   * Hot-swap the ONNX model at runtime without restarting the server.
+   * The new session is fully loaded before replacing the current one.
+   * @param {string} newModelPath  Absolute path to the new .onnx file
+   * @returns {Promise<void>}
+   */
+  async reload(newModelPath) {
+    if (newModelPath === this.modelPath && this._session) return;
+    const newSession = await createOnnxSession(ort, newModelPath, 'Detection');
+    this._session   = newSession;
+    this.modelPath  = newModelPath;
+    this._numClasses = null; // re-inferred on first inference
+  }
+
+  /**
    * Run detection on a JPEG frame buffer.
    * @param {Buffer} jpegBuffer  Raw JPEG bytes
    * @param {object} [originalSize]  { width, height } of original frame; defaults to INPUT_SIZE
