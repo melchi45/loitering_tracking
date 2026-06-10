@@ -1237,11 +1237,69 @@ class PipelineManager {
         });
       }
 
+      // ── Step A: update trajectory for first-seen faces (no camera transition) ─
+      const crossCameraFaceIds = new Set((crossCameraTransitions || []).map(ev => ev.faceId));
+      for (const f of namedFaces) {
+        if (crossCameraFaceIds.has(f.faceId)) continue;
+        const person = remoteTracked.find(obj =>
+          obj.className === 'person' && obj.face && _bboxClose(obj.face.bbox, f.bbox)
+        );
+        const objectId = person?.objectId ?? null;
+        const traj = this._personTrajectory.get(f.faceId);
+        if (!traj) {
+          const alias = `P${++this._personAliasCounter}`;
+          const newTraj = {
+            faceId: f.faceId, alias,
+            firstSeenAt: _ts, lastSeenAt: _ts,
+            currentCameraId: _cameraId,
+            segments: [{ cameraId: _cameraId, objectId, entryTime: _ts, exitTime: _ts }],
+          };
+          this._personTrajectory.set(f.faceId, newTraj);
+          this._scheduleFaceTrackingSave();
+          this._io.emit('person:trajectory-update', newTraj);
+        } else {
+          const lastSeg = traj.segments[traj.segments.length - 1];
+          if (lastSeg.cameraId === _cameraId) {
+            lastSeg.exitTime = _ts;
+            if (objectId !== null) lastSeg.objectId = objectId;
+          }
+          traj.lastSeenAt = _ts;
+        }
+      }
+
+      // ── Step B: handle cross-camera transitions with full trajectory management ─
       for (const ev of (crossCameraTransitions || [])) {
+        const person = remoteTracked.find(obj =>
+          obj.className === 'person' && obj.face && _bboxClose(obj.face.bbox, ev.faceBbox)
+        );
+        const newObjectId = person?.objectId ?? null;
+
+        let traj = this._personTrajectory.get(ev.faceId);
+        if (!traj) {
+          const alias = `P${++this._personAliasCounter}`;
+          traj = {
+            faceId: ev.faceId, alias,
+            firstSeenAt: ev.timestamp, lastSeenAt: ev.timestamp,
+            currentCameraId: ev.newCameraId,
+            segments: [{ cameraId: ev.newCameraId, objectId: newObjectId, entryTime: ev.timestamp, exitTime: ev.timestamp }],
+          };
+          this._personTrajectory.set(ev.faceId, traj);
+        } else {
+          const lastSeg = traj.segments[traj.segments.length - 1];
+          lastSeg.exitTime = ev.timestamp;
+          traj.segments.push({ cameraId: ev.newCameraId, objectId: newObjectId, entryTime: ev.timestamp, exitTime: ev.timestamp });
+          traj.currentCameraId = ev.newCameraId;
+          traj.lastSeenAt      = ev.timestamp;
+        }
+        this._scheduleFaceTrackingSave();
+        this._io.emit('person:trajectory-update', traj);
+
         this._io.emit('face:reidentified', {
           faceId:       ev.faceId,
+          alias:        traj.alias,
           prevCameraId: ev.prevCameraId,
           newCameraId:  ev.newCameraId,
+          newObjectId,
           similarity:   ev.similarity,
           timestamp:    ev.timestamp,
         });
@@ -1253,10 +1311,43 @@ class PipelineManager {
         confidence:  f.score,
         bbox:        f.bbox,
         faceId:      f.faceId,
+        alias:       this._personTrajectory.get(f.faceId)?.alias ?? null,
         matchScore:  f.matchScore,
         isLoitering: false,
         dwellTime:   0,
       }));
+    }
+
+    // ── Clothing appearance Re-ID (streaming mode) ────────────────────────────
+    if (analyticsConfig.isEnabled('color') && remoteTracked.length > 0) {
+      const _oIdToFaceId = new Map();
+      for (const fd of faceDetObjects) {
+        const p = remoteTracked.find(o =>
+          o.className === 'person' && o.face && _bboxClose(o.face.bbox, fd.bbox)
+        );
+        if (p) _oIdToFaceId.set(String(p.objectId), fd.faceId);
+      }
+
+      const { crossCameraTransitions: _clothCCT } =
+        this._assignClothingIds(_cameraId, remoteTracked, _ts, _oIdToFaceId);
+
+      for (const ct of _clothCCT) {
+        this._io.emit('clothing:reidentified', {
+          clothingId:   ct.clothingId,
+          faceId:       ct.faceId ?? null,
+          prevCameraId: ct.prevCameraId,
+          newCameraId:  ct.newCameraId,
+          similarity:   ct.similarity,
+          objectId:     ct.objectId,
+          feature: {
+            upper:    ct.feature.upper,
+            lower:    ct.feature.lower,
+            upperRgb: ct.feature.upperRgb,
+            lowerRgb: ct.feature.lowerRgb,
+          },
+          timestamp: ct.timestamp,
+        });
+      }
     }
 
     const allDetections = [...remoteTracked, ...faceDetObjects, ...remoteFireSmoke];

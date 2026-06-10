@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CCFR-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent SRS** | srs/SRS_CrossCamera_Face_Tracking.md |
@@ -640,7 +640,87 @@ const EXPIRY_MS   = 120_000;      // 2 min zone gallery appearance memory
 
 ---
 
-## 9. Error Handling
+## 9. SERVER_MODE별 궤적 관리 적용 범위
+
+### 9.1 combined 모드 (`_processFrame`)
+
+`_processFrame()`에서 `_assignFaceIds()` → `_updatePersonRegistry()` 순으로 호출되어
+얼굴 감지 즉시 궤적이 갱신되고 `person:trajectory-update`가 emit됩니다.
+
+### 9.2 streaming 모드 (`_processRemoteResult`)
+
+streaming 서버는 analysis 서버로부터 HTTP 응답을 수신한 뒤 `_processRemoteResult()`를 실행합니다.
+analysis 서버는 자체 `_assignFaceIds()`를 실행하고 결과를 응답에 포함시키며,
+streaming 서버의 `_processRemoteResult()`는 반환된 `namedFaces`와 `crossCameraTransitions`를
+사용해 로컬 `_personTrajectory`를 갱신합니다.
+
+```javascript
+// _processRemoteResult() — streaming 모드 궤적 갱신 흐름
+
+// Step A: 크로스카메라 전환이 아닌 첫 감지 처리
+const crossCameraFaceIds = new Set((crossCameraTransitions || []).map(ev => ev.faceId));
+for (const f of namedFaces) {
+  if (crossCameraFaceIds.has(f.faceId)) continue;          // Step B에서 처리
+  const person = remoteTracked.find(obj =>
+    obj.className === 'person' && obj.face && _bboxClose(obj.face.bbox, f.bbox)
+  );
+  const objectId = person?.objectId ?? null;
+  const traj = this._personTrajectory.get(f.faceId);
+  if (!traj) {
+    // 신규 인물 — alias 부여
+    const alias = `P${++this._personAliasCounter}`;
+    const newTraj = { faceId: f.faceId, alias, firstSeenAt, lastSeenAt,
+      currentCameraId, segments: [{ cameraId, objectId, entryTime, exitTime }] };
+    this._personTrajectory.set(f.faceId, newTraj);
+    this._io.emit('person:trajectory-update', newTraj);
+  } else {
+    // 기존 인물 — 현재 세그먼트 exitTime 갱신
+    const lastSeg = traj.segments[traj.segments.length - 1];
+    if (lastSeg.cameraId === cameraId) { lastSeg.exitTime = ts; }
+    traj.lastSeenAt = ts;
+  }
+}
+
+// Step B: 크로스카메라 전환 처리
+for (const ev of (crossCameraTransitions || [])) {
+  const newObjectId = person?.objectId ?? null;
+  let traj = this._personTrajectory.get(ev.faceId);
+  if (!traj) {
+    // 첫 감지가 크로스카메라 전환으로 시작하는 경우
+    traj = { faceId, alias, segments: [{ cameraId: ev.newCameraId, ... }] };
+    this._personTrajectory.set(ev.faceId, traj);
+  } else {
+    traj.segments[traj.segments.length - 1].exitTime = ev.timestamp;
+    traj.segments.push({ cameraId: ev.newCameraId, objectId: newObjectId, ... });
+    traj.currentCameraId = ev.newCameraId;
+  }
+  this._io.emit('person:trajectory-update', traj);
+  this._io.emit('face:reidentified', { faceId, alias: traj.alias,
+    prevCameraId, newCameraId, newObjectId, similarity, timestamp });
+}
+```
+
+**combined vs streaming 비교:**
+
+| 항목 | combined | streaming |
+|------|----------|-----------|
+| 궤적 관리 위치 | `_processFrame` → `_updatePersonRegistry()` | `_processRemoteResult` — Step A/B 인라인 |
+| namedFaces 출처 | 로컬 `_assignFaceIds()` 결과 | analysis 서버 HTTP 응답 (`namedFaces`) |
+| `face:reidentified` emit | `_updatePersonRegistry()` 내부 | `_processRemoteResult` Step B |
+| alias 정보 | `_updatePersonRegistry()` 반환값 | traj.alias 조회 |
+| `_scheduleFaceTrackingSave()` | `_updatePersonRegistry()` 내부 | Step A, B 각각 호출 |
+
+### 9.3 analysis 모드
+
+analysis 모드는 카메라 캡처 없이 HTTP API(`/api/analysis/frame`)로 프레임을 수신합니다.
+`analysisApi.js`에서 자체 `_assignFaceIds()`를 호출하여 크로스카메라 전환을 감지하고,
+결과를 HTTP 응답에 포함합니다. streaming 서버가 이 응답을 받아 Step A/B를 실행합니다.
+analysis 서버 단독 운영 시에는 streaming 서버의 `_processRemoteResult()`가 없으므로
+`person:trajectory-update`는 emit되지 않습니다 (향후 analysis 모드 직접 emit 지원 예정).
+
+---
+
+## 10. Error Handling
 
 | Scenario | Location | Behavior |
 |----------|----------|----------|
@@ -661,3 +741,4 @@ const EXPIRY_MS   = 120_000;      // 2 min zone gallery appearance memory
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for CrossCamera Face Tracking |
+| 1.1 | 2026-06-10 | Youngho Kim | Section 9 추가: SERVER_MODE별 궤적 관리 적용 범위 — streaming 모드 `_processRemoteResult` Step A/B 인라인 궤적 갱신 설계 반영 |
