@@ -22,6 +22,14 @@ type SystemMetrics = {
   gpu: GpuInfo[] | null;
 };
 
+type OnnxModel = {
+  name: string;
+  path: string;
+  service: string;
+  loaded: boolean;
+  exists: boolean;
+};
+
 type MetricsResponse = {
   mode: string;
   uptimeSec: number;
@@ -35,6 +43,7 @@ type MetricsResponse = {
     enabled: string[];
     count: number;
   };
+  models?: OnnxModel[];
   requests: {
     total: number;
     inFlight: number;
@@ -314,6 +323,27 @@ export default function AnalysisServerDashboard({
                 </div>
               </div>
               <div className="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-4">
+                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">로드된 ONNX 모델</p>
+                <div className="mt-3 space-y-1.5">
+                  {metrics?.models && metrics.models.length > 0 ? metrics.models.map((m) => (
+                    <div key={m.service} className="flex items-center justify-between gap-2">
+                      <span className="truncate text-xs text-slate-300" title={m.path}>{m.name}</span>
+                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${
+                        m.loaded && m.exists
+                          ? 'bg-emerald-500/15 text-emerald-300'
+                          : !m.exists
+                          ? 'bg-rose-500/15 text-rose-300'
+                          : 'bg-amber-500/15 text-amber-300'
+                      }`}>
+                        {m.loaded && m.exists ? 'loaded' : !m.exists ? 'missing' : 'not ready'}
+                      </span>
+                    </div>
+                  )) : (
+                    <p className="text-xs text-slate-500">{metrics ? '로드된 모델 없음' : '대기 중…'}</p>
+                  )}
+                </div>
+              </div>
+              <div className="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-4">
                 <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">최근 1분 결과</p>
                 <div className="mt-3 grid grid-cols-2 gap-3 text-sm text-slate-300">
                   <div><p className="text-slate-500">Detections</p><p className="mt-1 text-lg font-semibold text-slate-100">{metrics?.recent.detections ?? 0}</p></div>
@@ -345,6 +375,56 @@ export default function AnalysisServerDashboard({
             </div>
           </div>
         </section>
+
+        {metrics?.models && metrics.models.length > 0 && (
+          <section className="rounded-[24px] border border-slate-700/70 bg-slate-950/45 px-5 py-5">
+            <div className="mb-4">
+              <p className="text-xs uppercase tracking-[0.24em] text-slate-500">ONNX Models</p>
+              <h3 className="mt-1 text-lg font-semibold text-slate-100">로드된 AI 모델</h3>
+            </div>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
+              {metrics.models.map((model) => {
+                const serviceLabel: Record<string, string> = {
+                  detector:        'YOLOv8 — 객체 감지',
+                  ppe:             'PPE — 안전모/마스크',
+                  'face-detect':   'SCRFD — 얼굴 감지',
+                  'face-embed':    'ArcFace — 얼굴 임베딩',
+                  'fire-smoke':    '화재/연기 감지',
+                };
+                const label = serviceLabel[model.service] ?? model.service;
+                const ok   = model.loaded && model.exists;
+                const warn = model.exists && !model.loaded;
+                return (
+                  <div
+                    key={model.path}
+                    className={`flex items-start gap-3 rounded-2xl border px-4 py-3 ${
+                      ok   ? 'border-emerald-500/20 bg-emerald-950/20' :
+                      warn ? 'border-amber-500/20 bg-amber-950/20' :
+                             'border-rose-500/20 bg-rose-950/20'
+                    }`}
+                  >
+                    <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${
+                      ok   ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' :
+                      warn ? 'bg-amber-400' :
+                             'bg-rose-500'
+                    }`} />
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium text-slate-100" title={model.path}>{model.name}</p>
+                      <p className="mt-0.5 text-xs text-slate-400">{label}</p>
+                      <p className={`mt-0.5 text-[10px] ${
+                        ok   ? 'text-emerald-400' :
+                        warn ? 'text-amber-400' :
+                               'text-rose-400'
+                      }`}>
+                        {!model.exists ? '파일 없음' : !model.loaded ? '로딩 실패' : '정상 로드'}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </section>
+        )}
 
         {metrics?.system && (
           <section className="rounded-[24px] border border-slate-700/70 bg-slate-950/45 px-5 py-5">

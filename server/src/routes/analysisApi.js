@@ -144,6 +144,41 @@ function _getEnabledModules() {
     .sort();
 }
 
+function _getLoadedModels() {
+  const path = require('path');
+  const fs   = require('fs');
+  const models = [];
+
+  if (_detector) {
+    const mp = _detector.modelPath;
+    models.push({ name: path.basename(mp), path: mp, service: 'detector', loaded: true, exists: fs.existsSync(mp) });
+  }
+
+  if (_attrPipeline) {
+    const ppe = _attrPipeline._ppe;
+    if (ppe?.modelPath) {
+      const mp = ppe.modelPath;
+      models.push({ name: path.basename(mp), path: mp, service: 'ppe', loaded: ppe.ready ?? false, exists: fs.existsSync(mp) });
+    }
+    const face = _attrPipeline._face;
+    if (face?.scrfdPath) {
+      const mp = face.scrfdPath;
+      models.push({ name: path.basename(mp), path: mp, service: 'face-detect', loaded: face.ready ?? false, exists: fs.existsSync(mp) });
+    }
+    if (face?.arcfacePath) {
+      const mp = face.arcfacePath;
+      models.push({ name: path.basename(mp), path: mp, service: 'face-embed', loaded: face.ready ?? false, exists: fs.existsSync(mp) });
+    }
+  }
+
+  if (_fireSmokeService) {
+    const mp = _fireSmokeService.modelPath;
+    models.push({ name: path.basename(mp), path: mp, service: 'fire-smoke', loaded: true, exists: fs.existsSync(mp) });
+  }
+
+  return models;
+}
+
 // ── Shared AI services (eager-loaded at startup) ─────────────────────────────
 let _detector         = null;
 let _attrPipeline     = null;
@@ -458,7 +493,7 @@ router.get('/health', (_req, res) => {
     mode:            'analysis',
     servicesReady:   _servicesReady,
     activeCameras:   _cameraContexts.size,
-    detector:        _detector ? 'loaded' : (_servicesLoading ? 'loading' : 'not-loaded'),
+    detector:        _detector ? 'loaded' : (_loadPromise ? 'loading' : 'not-loaded'),
     attrPipeline:    _attrPipeline?.anyReady ? 'ready' : 'not-ready',
     fireSmokeService: _fireSmokeService ? 'loaded' : 'not-loaded',
     uptime:          process.uptime(),
@@ -509,7 +544,7 @@ router.get('/metrics', (req, res) => {
     uptimeSec: Math.round(process.uptime()),
     activeCameras: _cameraContexts.size,
     services: {
-      detector:         _detector ? 'loaded' : (_servicesLoading ? 'loading' : 'not-loaded'),
+      detector:         _detector ? 'loaded' : (_loadPromise ? 'loading' : 'not-loaded'),
       attrPipeline:     _attrPipeline?.anyReady ? 'ready' : 'not-ready',
       fireSmokeService: _fireSmokeService ? 'loaded' : 'not-loaded',
     },
@@ -539,6 +574,7 @@ router.get('/metrics', (req, res) => {
     },
     recent,
     cameras,
+    models: _getLoadedModels(),
     system: getSystemMetrics(),
   });
 });
