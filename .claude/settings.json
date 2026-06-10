@@ -11,7 +11,10 @@
       "Edit(/.claude/skills/docker-deploy/**)",
       "Edit(/.claude/skills/api-testing/**)",
       "Edit(/.claude/skills/jira-integration/**)",
-      "Edit(/.claude/skills/react-dashboard-dev/**)"
+      "Edit(/.claude/skills/react-dashboard-dev/**)",
+      "Edit(/.claude/skills/ai-detection-pipeline/**)",
+      "Bash(cp /data6/youngho/workspace/loitering_tracking/.claude/skills/react-dashboard-dev/SKILL.md /data6/youngho/workspace/loitering_tracking/.github/skills/react-dashboard-dev/SKILL.md)",
+      "Bash(cp /data6/youngho/workspace/loitering_tracking/.claude/skills/ai-detection-pipeline/SKILL.md /data6/youngho/workspace/loitering_tracking/.github/skills/ai-detection-pipeline/SKILL.md)"
     ],
     "additionalDirectories": [
       "/home/melchi45"

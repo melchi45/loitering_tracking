@@ -222,6 +222,22 @@ async function main() {
     app.use('/api/analysis', analysisApiRouter);
     console.log('[Server] Analysis API mounted at /api/analysis');
   } else if (SERVER_MODE === 'streaming' && process.env.ANALYSIS_SERVER_URL) {
+    // Expose local circuit-breaker stats BEFORE the proxy so this route wins
+    // over the proxy's catch-all 404 handler.
+    app.get('/api/analysis/client-status', (_req, res) => {
+      const stats = pipelineManager.getAnalysisClientStats();
+      if (!stats) return res.json({ connected: false, error: 'Analysis client not yet initialised' });
+      res.json({
+        connected:   !stats.circuitOpen,
+        circuitOpen: stats.circuitOpen,
+        total:       stats.total,
+        errors:      stats.errors,
+        dropped:     stats.dropped,
+        inflight:    stats.inflight,
+        analysisServerUrl: process.env.ANALYSIS_SERVER_URL,
+      });
+    });
+
     // In streaming mode, proxy read-only analysis endpoints to the remote analysis
     // server so the dashboard can display metrics without the browser needing to
     // know (or CORS-allow) the analysis server's origin.

@@ -8,6 +8,38 @@ import { DetectionRow, CATEGORIES, getCategoryKey } from './FullscreenCameraView
 import { useI18n } from '../i18n';
 import type { Detection } from '../types';
 
+// ── Analysis server status (streaming mode only) ──────────────────────────────
+
+interface AnalysisClientStatus {
+  connected:   boolean;
+  circuitOpen: boolean;
+  total:       number;
+  errors:      number;
+  dropped:     number;
+  analysisServerUrl?: string;
+}
+
+function useAnalysisClientStatus(): AnalysisClientStatus | null {
+  const [status, setStatus] = useState<AnalysisClientStatus | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await fetch('/api/analysis/client-status');
+        if (!res.ok) { setStatus(null); return; } // not streaming mode — endpoint absent
+        const data: AnalysisClientStatus = await res.json();
+        if (!cancelled) setStatus(data);
+      } catch { if (!cancelled) setStatus(null); }
+    };
+    poll();
+    const id = setInterval(poll, 5000);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  return status;
+}
+
 interface MergedDetection extends Detection {
   _cameraId:   string;
   _cameraName: string;
@@ -228,6 +260,7 @@ export function DashboardDetectionPanel() {
   const cameras = useCameraStore((s) => s.cameras);
   const { t }   = useI18n();
   const { socket } = useSocket();
+  const analysisStatus = useAnalysisClientStatus();
 
   // ── Snapshot crop thumbnails: key = 'cameraId:objectId' → base64 data URL
   const [cropMap, setCropMap] = useState<Record<string, string>>({});
@@ -366,6 +399,26 @@ export function DashboardDetectionPanel() {
           {showLegend && <ColorLegendPopup onClose={() => setShowLegend(false)} />}
         </div>
       </div>
+
+      {/* ── Analysis server status banner (streaming mode only) ── */}
+      {analysisStatus !== null && (
+        <div className={`flex items-center gap-1.5 px-2 py-1 flex-shrink-0 text-[9px] border-b ${
+          analysisStatus.connected
+            ? 'bg-green-900/20 border-green-800/40 text-green-400'
+            : 'bg-red-900/30 border-red-800/40 text-red-400'
+        }`}>
+          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${analysisStatus.connected ? 'bg-green-400' : 'bg-red-500 animate-pulse'}`} />
+          {analysisStatus.connected
+            ? `Analysis server connected · ${analysisStatus.total} frames processed`
+            : `Analysis server disconnected${analysisStatus.circuitOpen ? ' (circuit open)' : ''} · ${analysisStatus.errors} errors`
+          }
+          {!analysisStatus.connected && analysisStatus.analysisServerUrl && (
+            <span className="text-gray-500 truncate ml-1" title={analysisStatus.analysisServerUrl}>
+              {analysisStatus.analysisServerUrl.replace(/^https?:\/\//, '')}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* ── Category filter bar ── */}
       <div className="flex flex-wrap gap-1 px-2 py-1.5 border-b border-gray-700/60 flex-shrink-0">

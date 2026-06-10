@@ -54,7 +54,11 @@
         "-y",
         "@modelcontextprotocol/server-sequential-thinking"
       ]
-    }
+    },
+    "caveman-mode": {
+      "type": "sse",
+      "url": "http://55.101.57.105:3100/sse?mode=lite"
+    }    
   },
   "skills": [
     "project-setup-info-local",

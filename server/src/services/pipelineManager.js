@@ -963,6 +963,12 @@ class PipelineManager {
     return result;
   }
 
+  /** Returns analysis client circuit-breaker stats, or null in non-streaming mode. */
+  getAnalysisClientStats() {
+    if (!this._analysisClient) return null;
+    return this._analysisClient.getStats();
+  }
+
   /** Stop all pipelines (for graceful shutdown). */
   async stopAll() {
     const ids = [...this._pipelines.keys()];
