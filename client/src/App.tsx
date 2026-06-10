@@ -560,6 +560,18 @@ function Dashboard() {
   const [sidebarTab, setSidebarTab] = useState<SidebarTab>('cameras');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [hoveredTab, setHoveredTab] = useState<SidebarTab | null>(null);
+  const hoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const openFlyout = (id: SidebarTab) => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+    setHoveredTab(id);
+  };
+  const closeFlyout = () => {
+    hoverTimerRef.current = setTimeout(() => setHoveredTab(null), 120);
+  };
+  const keepFlyout = () => {
+    if (hoverTimerRef.current) clearTimeout(hoverTimerRef.current);
+  };
 
   // Navigate to relevant sidebar tab when a search result is clicked
   const handleSearchNavigate = (result: SearchResult) => {
@@ -1200,7 +1212,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
       </header>
 
       {/* Main content */}
-      <div className="flex flex-1 overflow-hidden">
+      <div className="flex flex-1 overflow-hidden relative">
         {/* Sidebar resize handle — hidden when collapsed */}
         <div
           className={`w-1 flex-shrink-0 bg-gray-700 hover:bg-blue-500 active:bg-blue-400 transition-colors z-10 order-last ${sidebarCollapsed ? 'cursor-default pointer-events-none opacity-0' : 'cursor-col-resize'}`}
@@ -1274,7 +1286,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
 
         {/* Sidebar */}
         <aside
-          className="flex flex-col bg-gray-800 border-l border-gray-700 flex-shrink-0 overflow-hidden relative"
+          className="flex flex-col bg-gray-800 border-l border-gray-700 flex-shrink-0 overflow-hidden"
           style={{ width: sidebarCollapsed ? 44 : sidebarWidth }}
         >
           {sidebarCollapsed ? (
@@ -1284,9 +1296,9 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
                 <button
                   key={id}
                   title={label}
-                  onClick={() => { setSidebarTab(id); setSidebarCollapsed(false); }}
-                  onMouseEnter={() => setHoveredTab(id)}
-                  onMouseLeave={() => setHoveredTab(null)}
+                  onClick={() => { setSidebarTab(id); setSidebarCollapsed(false); setHoveredTab(null); }}
+                  onMouseEnter={() => openFlyout(id)}
+                  onMouseLeave={closeFlyout}
                   className={`relative w-9 h-9 flex items-center justify-center rounded-lg transition-colors ${
                     sidebarTab === id
                       ? 'text-blue-400 bg-blue-500/20'
@@ -1342,33 +1354,33 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
               </div>
             </>
           )}
-
-          {/* Hover flyout — only in collapsed mode */}
-          {sidebarCollapsed && hoveredTab && (
-            <div
-              className="absolute right-full top-0 h-full bg-gray-800 border border-gray-700 shadow-2xl z-50 overflow-hidden flex flex-col"
-              style={{ width: sidebarWidth }}
-              onMouseEnter={() => setHoveredTab(hoveredTab)}
-              onMouseLeave={() => setHoveredTab(null)}
-            >
-              {/* Flyout header */}
-              <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-700 flex-shrink-0 bg-gray-800/95">
-                <span className="text-xs font-semibold text-gray-300">
-                  {TAB_ITEMS.find(t => t.id === hoveredTab)?.label}
-                </span>
-                <button
-                  onClick={() => { setSidebarTab(hoveredTab); setSidebarCollapsed(false); setHoveredTab(null); }}
-                  className="text-[10px] text-blue-400 hover:text-blue-300 transition-colors"
-                >
-                  열기 →
-                </button>
-              </div>
-              <div className="flex-1 overflow-hidden">
-                {renderTabContent(hoveredTab)}
-              </div>
-            </div>
-          )}
         </aside>
+
+        {/* Hover flyout — rendered as sibling outside the aside so overflow-hidden doesn't clip it */}
+        {sidebarCollapsed && hoveredTab && (
+          <div
+            className="absolute top-0 bottom-0 right-[45px] bg-gray-800 border-l border-t border-b border-gray-700 shadow-2xl z-50 overflow-hidden flex flex-col"
+            style={{ width: sidebarWidth }}
+            onMouseEnter={keepFlyout}
+            onMouseLeave={closeFlyout}
+          >
+            {/* Flyout header */}
+            <div className="flex items-center justify-between px-3 py-1.5 border-b border-gray-700 flex-shrink-0">
+              <span className="text-xs font-semibold text-gray-300">
+                {TAB_ITEMS.find(t => t.id === hoveredTab)?.label}
+              </span>
+              <button
+                onClick={() => { setSidebarTab(hoveredTab); setSidebarCollapsed(false); setHoveredTab(null); }}
+                className="text-[10px] text-blue-400 hover:text-blue-300 transition-colors"
+              >
+                열기 →
+              </button>
+            </div>
+            <div className="flex-1 overflow-hidden">
+              {renderTabContent(hoveredTab)}
+            </div>
+          </div>
+        )}
       </div>
 
       {overlays}
