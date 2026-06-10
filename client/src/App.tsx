@@ -839,9 +839,6 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
   // ── Shared: tab content renderer ────────────────────────────────────────────
   function renderTabContent(overrideTab?: SidebarTab) {
     const tab = overrideTab ?? sidebarTab;
-    if (isAnalysis) {
-      return <VideoAnalyticsTab />;
-    }
     if (tab === 'cameras')    return <CameraList />;
     if (tab === 'alerts')     return <AlertPanel />;
     if (tab === 'analytics')  return <VideoAnalyticsTab />;
