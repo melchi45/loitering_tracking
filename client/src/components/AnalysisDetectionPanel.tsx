@@ -38,11 +38,13 @@ const TYPE_ROW: Record<string, string> = {
   loitering: 'border-amber-500/30 bg-amber-950/20 hover:bg-amber-950/40',
 };
 
-function fmt(iso: string, mode: 'time' | 'dateKey' | 'dateLabel') {
+function fmt(iso: string, mode: 'time' | 'dateKey' | 'dateLabel' | 'hourKey' | 'hourLabel') {
   try {
     const d = new Date(iso);
     if (mode === 'time')      return d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
     if (mode === 'dateKey')   return d.toISOString().slice(0, 10);
+    if (mode === 'hourKey')   return String(d.getHours()).padStart(2, '0');
+    if (mode === 'hourLabel') return `${d.getHours()}시`;
     return d.toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric', weekday: 'short' });
   } catch {
     return iso;
@@ -169,16 +171,34 @@ export default function AnalysisDetectionPanel({ onClose }: Props) {
     finally { setClearing(false); }
   }
 
-  // Group events by date
+  const [collapsedHours, setCollapsedHours] = useState<Set<string>>(new Set());
+
+  const toggleHour = (key: string) =>
+    setCollapsedHours(prev => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+
+  // Group events by date → hour (both sorted descending)
   const grouped = useMemo(() => {
-    const map = new Map<string, AnalysisEvent[]>();
+    const dateMap = new Map<string, Map<string, AnalysisEvent[]>>();
     for (const ev of events) {
-      const key = fmt(ev.timestamp, 'dateKey');
-      if (!map.has(key)) map.set(key, []);
-      map.get(key)!.push(ev);
+      const dk = fmt(ev.timestamp, 'dateKey');
+      const hk = fmt(ev.timestamp, 'hourKey');
+      if (!dateMap.has(dk)) dateMap.set(dk, new Map());
+      const hm = dateMap.get(dk)!;
+      if (!hm.has(hk)) hm.set(hk, []);
+      hm.get(hk)!.push(ev);
     }
-    // Sort dates descending (newest date first)
-    return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0]));
+    return [...dateMap.entries()]
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([dk, hm]) => ({
+        dk,
+        hours: [...hm.entries()]
+          .sort((a, b) => b[0].localeCompare(a[0]))
+          .map(([hk, evs]) => ({ hk, evs })),
+      }));
   }, [events]);
 
   return (
@@ -267,31 +287,55 @@ export default function AnalysisDetectionPanel({ onClose }: Props) {
           </div>
         )}
 
-        {!loading && !error && grouped.map(([dateKey, dayEvents]) => (
-          <div key={dateKey} className="px-3 pt-3">
-            {/* Date header */}
-            <div className="flex items-center gap-2 mb-2">
-              <div className="h-px flex-1 bg-gray-700/60" />
-              <span className="text-[10px] font-semibold text-gray-400 bg-gray-900 px-2 rounded">
-                {fmt(dayEvents[0].timestamp, 'dateLabel')}
-                <span className="ml-1.5 text-gray-600">({dayEvents.length}건)</span>
-              </span>
-              <div className="h-px flex-1 bg-gray-700/60" />
-            </div>
+        {!loading && !error && grouped.map(({ dk, hours }) => {
+          const dateTotalCount = hours.reduce((s, h) => s + h.evs.length, 0);
+          return (
+            <div key={dk} className="px-3 pt-3">
+              {/* Date header */}
+              <div className="flex items-center gap-2 mb-2">
+                <div className="h-px flex-1 bg-gray-700/60" />
+                <span className="text-[10px] font-semibold text-gray-400 bg-gray-900 px-2 rounded">
+                  {fmt(hours[0].evs[0].timestamp, 'dateLabel')}
+                  <span className="ml-1.5 text-gray-600">({dateTotalCount}건)</span>
+                </span>
+                <div className="h-px flex-1 bg-gray-700/60" />
+              </div>
 
-            {/* Event rows for this day */}
-            <div className="space-y-1.5 pb-1">
-              {dayEvents.map(ev => (
-                <EventRow
-                  key={ev.id}
-                  event={ev}
-                  selected={selectedId === ev.id}
-                  onSelect={setSelectedId}
-                />
-              ))}
+              {/* Hour groups within this date */}
+              {hours.map(({ hk, evs }) => {
+                const groupKey = `${dk}-${hk}`;
+                const collapsed = collapsedHours.has(groupKey);
+                return (
+                  <div key={hk} className="mb-3">
+                    {/* Hour header — clickable to collapse */}
+                    <button
+                      onClick={() => toggleHour(groupKey)}
+                      className="flex items-center gap-2 w-full text-left mb-1.5 px-0.5 group"
+                    >
+                      <span className="w-1 h-3.5 rounded-full bg-sky-500/60 flex-shrink-0" />
+                      <span className="text-[10px] text-sky-400 font-semibold">{fmt(evs[0].timestamp, 'hourLabel')}</span>
+                      <span className="text-[10px] text-gray-600">({evs.length}건)</span>
+                      <span className={`text-[9px] text-gray-600 ml-auto transition-transform ${collapsed ? '' : 'rotate-180'}`}>▾</span>
+                    </button>
+
+                    {!collapsed && (
+                      <div className="space-y-1.5 pl-3">
+                        {evs.map(ev => (
+                          <EventRow
+                            key={ev.id}
+                            event={ev}
+                            selected={selectedId === ev.id}
+                            onSelect={setSelectedId}
+                          />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
-          </div>
-        ))}
+          );
+        })}
 
         {/* Bottom padding */}
         <div className="h-4" />
