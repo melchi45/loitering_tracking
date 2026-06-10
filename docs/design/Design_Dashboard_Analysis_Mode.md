@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UI-DAM-01 |
-| **Version** | 1.0 |
+| **Version** | 1.2 |
 | **Status** | Active |
-| **Date** | 2026-06-08 |
+| **Date** | 2026-06-10 |
 | **Parent SRS** | [srs/SRS_Dashboard_Analysis_Mode.md](../srs/SRS_Dashboard_Analysis_Mode.md) |
 | **Parent PRD** | [prd/PRD_Dashboard_Analysis_Mode.md](../prd/PRD_Dashboard_Analysis_Mode.md) |
 
@@ -316,44 +316,79 @@ app.get('/health', (req, res) => {
 
 ---
 
-## 5. AnalysisServerPanel 인라인 컴포넌트
+## 5. AnalysisServerDashboard 컴포넌트
 
-`AnalysisServerPanel`은 별도 파일이 아닌 `App.tsx` 내 인라인 JSX 변수로 정의된다. 이 패널은 재사용될 용도가 없고 `connected`, `t` 등 Dashboard 컴포넌트 스코프 변수를 직접 참조하기 때문이다.
+`client/src/components/AnalysisServerDashboard.tsx` — Analysis 모드 메인 패널 전용 컴포넌트.  
+App.tsx 인라인 JSX 변수(`AnalysisServerPanel`)에서 별도 파일로 분리되었으며, `/api/analysis/metrics`를 2초 간격으로 폴링하여 실시간 AI 서버 상태를 표시한다.
 
-```tsx
-const AnalysisServerPanel = (
-  <div className="flex flex-col h-full items-center justify-center gap-6 p-8 text-center">
-    {/* 아이콘 + 타이틀 */}
-    <div className="flex flex-col items-center gap-3">
-      <div className="w-14 h-14 rounded-full bg-amber-500/20 border border-amber-500/40
-        flex items-center justify-center">
-        <svg className="w-7 h-7 text-amber-400" ...파이프라인 아이콘... />
-      </div>
-      <div>
-        <p className="text-base font-semibold text-amber-400">{t.serverModeAnalysis}</p>
-        <p className="text-xs text-gray-400 mt-1 max-w-xs">{t.serverModeAnalysisDesc}</p>
-      </div>
-    </div>
+### 5.1 섹션 구성
 
-    {/* 상태 카드 2개 */}
-    <div className="grid grid-cols-2 gap-3 w-full max-w-sm text-left">
-      <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
-        <p className="text-[10px] text-gray-500 uppercase tracking-wide mb-1">Socket</p>
-        <div className="flex items-center gap-1.5">
-          <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
-          <span className={`text-xs font-medium ${connected ? 'text-green-400' : 'text-red-400'}`}>
-            {connected ? t.connected : t.disconnected}
-          </span>
-        </div>
-      </div>
-      <div className="bg-gray-800 rounded-lg p-3 border border-gray-700">
-        <p className="text-[10px] text-gray-500 uppercase tracking-wide mb-1">Mode</p>
-        <span className="text-xs font-medium text-amber-400">analysis</span>
-      </div>
-    </div>
-  </div>
-);
+| 순서 | 섹션 | 설명 |
+|---|---|---|
+| 1 | ANALYSIS FABRIC 헤더 | 소켓 상태, 마지막 응답 시각, 서버 타이틀 |
+| 2 | KPI 카드 4개 | 처리량(fps), 입력 트래픽, 평균 추론 시간, 활성 컨텍스트 수 |
+| 3 | 현재 분석 중인 항목 | 활성화된 분석 모듈 배지 목록 + 서비스 상태 + 최근 1분 결과 |
+| 4 | 누적 분석 결과 | Frames / Detections / Tracked / Faces / Fire-Smoke / Loitering 총계 |
+| **5** | **로드된 AI 모델** | **ONNX 모델 목록 — 이름·서비스·로드 상태 표시 (신규)** |
+| 6 | 서버 리소스 사용률 | CPU·RAM·Process RSS·GPU 게이지 |
+| 7 | 스트림별 부하 테이블 | 카메라별 fps / 트래픽 / 추론 시간 / 결과 카운트 |
+
+### 5.2 로드된 AI 모델 섹션 (신규)
+
+`/api/analysis/metrics` 응답의 `models` 배열(`OnnxModel[]`)을 렌더링한다.  
+`metrics.models`가 비어있으면 섹션 자체가 숨겨진다.
+
+```typescript
+type OnnxModel = {
+  name:    string;   // 파일명 (예: "yolov8s.onnx")
+  path:    string;   // 절대 경로 (hover tooltip)
+  service: string;   // 'detector' | 'ppe' | 'face-detect' | 'face-embed' | 'fire-smoke'
+  loaded:  boolean;  // ONNX 세션 로드 성공 여부
+  exists:  boolean;  // 파일 시스템 존재 여부
+};
 ```
+
+**서비스 레이블 매핑:**
+
+| `service` | 표시 레이블 |
+|---|---|
+| `detector` | YOLOv8 — 객체 감지 |
+| `ppe` | PPE — 안전모/마스크 |
+| `face-detect` | SCRFD — 얼굴 감지 |
+| `face-embed` | ArcFace — 얼굴 임베딩 |
+| `fire-smoke` | 화재/연기 감지 |
+
+**상태 인디케이터:**
+
+| 조건 | 색상 | 텍스트 |
+|---|---|---|
+| `loaded && exists` | 초록 (glow) | 정상 로드 |
+| `exists && !loaded` | 주황 | 로딩 실패 |
+| `!exists` | 빨강 | 파일 없음 |
+
+### 5.3 `/api/analysis/metrics` — `models` 필드
+
+`analysisApi.js`의 `_getLoadedModels()` 함수가 생성한다:
+
+```javascript
+function _getLoadedModels() {
+  const models = [];
+  // detector (YOLOv8)
+  if (_detector) {
+    const mp = _detector.modelPath;
+    models.push({ name: path.basename(mp), path: mp,
+                  service: 'detector', loaded: true, exists: fs.existsSync(mp) });
+  }
+  // attrPipeline → ppe, face-detect, face-embed
+  // fireSmokeService → fire-smoke
+  return models;
+}
+```
+
+`services.detector` 필드의 값:
+- `'loaded'` — `_detector` 인스턴스 존재
+- `'loading'` — `_loadPromise` 진행 중
+- `'not-loaded'` — 인스턴스 없음 + 로드 미시작
 
 ---
 
@@ -473,10 +508,12 @@ client/src/
 
 ```
 client/src/pages/
-└── AccessDeniedPage.tsx   # admin 외 역할 접근 차단 페이지
-```
+└── AccessDeniedPage.tsx            # admin 외 역할 접근 차단 페이지
 
-AnalysisServerPanel은 App.tsx 내 인라인 JSX 변수로 별도 파일 없음.
+client/src/components/
+└── AnalysisServerDashboard.tsx     # analysis 모드 전용 대시보드 컴포넌트
+                                    # (App.tsx 인라인 AnalysisServerPanel에서 분리)
+```
 
 ### 9.3 index.js React UI 서빙 정책
 
