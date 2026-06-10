@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UI-DAM-01 |
-| **Version** | 1.5 |
+| **Version** | 1.6 |
 | **Status** | Active |
 | **Date** | 2026-06-10 |
 | **Parent SRS** | [srs/SRS_Dashboard_Analysis_Mode.md](../srs/SRS_Dashboard_Analysis_Mode.md) |
@@ -734,4 +734,5 @@ Analysis 모드 탭: [ 🤖 Analytics ] [ 👁 Detections ] [ 🔔 Alerts ]
 | 1.3 | 2026-06-10 | Section 5.4 추가: Per-source 테이블에 FpsSparkline 그래프 컬럼 추가 |
 | 1.4 | 2026-06-10 | Section 5.5 추가: VideoAnalyticsTab Fire/Smoke Sensitivity 슬라이더 패널, `/api/analysis/config/fire-smoke` 엔드포인트, fireSmokeService 인스턴스 프로퍼티 승격 |
 | 1.5 | 2026-06-10 | Section 10 추가: Analysis Mode Detections/Alerts 사이드바 탭, AnalysisDetectionPanel, 이벤트 DB 저장, /api/analysis/events 엔드포인트, AnalysisServerDashboard 클릭 가능 카드 |
+| 1.6 | 2026-06-10 | 버그 수정 반영: `db.js` ALL_TABLES에 `analysisEvents` 추가 (HTTP 500 수정), `index.js`에서 alertService EventEmitter를 socket.io에 직접 연결 (Alerts 탭 실시간 전파 수정), `app.set('db', db)` 추가 |
 

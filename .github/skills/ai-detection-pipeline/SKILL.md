@@ -385,6 +385,36 @@ setFpsHistory(prev => {
 - 데이터 2개 미만 시 `—` 텍스트 표시
 - 그리드 컬럼 `0.7fr → 1.4fr`로 확장, 헤더 `FPS(1s) → FPS / 추이`로 변경
 
+### 10. db.js — analysisEvents 컬렉션 등록 (2026-06-10)
+
+**배경:** `routes/analysisApi.js`가 화재·연기·배회 이벤트를 `analysisEvents` 컬렉션에 저장하는 기능이 추가됨.
+
+**필수 조건:** `db.js`의 `ALL_TABLES`에 컬렉션 이름이 없으면 `store[table]`이 `undefined`이어서 `db.find()` 호출 시 `TypeError`가 발생함.
+
+**수정 (db.js `ALL_TABLES`):**
+```javascript
+const ALL_TABLES = [
+  'cameras', 'zones', 'events', 'alerts',
+  'faceGalleries', 'faceGalleryFaces', 'settings',
+  'detectionSnapshots', 'faceMatchHistory',
+  'missing_persons', 'missing_person_detections',
+  'analysisEvents',   // ← 추가: Analysis Mode 이벤트 영구 저장
+];
+```
+
+**새 서비스 함수 (analysisApi.js):**
+- `_persistFireSmoke(db, cameraId, cameraName, ts, detections)` — 화재/연기 이벤트 저장 (쿨다운 30초)
+- `_persistLoitering(db, cameraId, cameraName, ts, behaviors)` — 배회 이벤트 저장 (쿨다운 60초)
+- `_saveAnalysisEvent(db, event)` — 공통 저장 로직 (최대 500건 유지, 초과 시 가장 오래된 항목 삭제)
+
+**조회/삭제 API:**
+```
+GET    /api/analysis/events?limit=N&type=fire,smoke,loitering
+DELETE /api/analysis/events
+```
+
+> **규칙:** 새 컬렉션을 `db.find/insert/update/delete`로 사용하려면 반드시 `ALL_TABLES`에 먼저 추가해야 합니다. 추가하지 않으면 HTTP 500 에러 발생.
+
 ### 9. fireSmokeService.js — 임계값 런타임 변경 (2026-06-10)
 
 **배경:** 환경변수 방식은 서버 재시작이 필요. UI에서 실시간으로 감도를 조정할 수 있도록 임계값을 인스턴스 프로퍼티로 승격.

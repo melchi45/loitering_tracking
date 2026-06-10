@@ -25,7 +25,8 @@ client/src/
 │   ├── FaceGalleryTab.tsx   — 등록 얼굴 갤러리
 │   ├── SearchFullscreen.tsx — 전체화면 감지 검색
 │   ├── StatsPanelModal.tsx  — 분석 통계 모달
-│   └── DashboardDetectionPanel.tsx — 감지 결과 패널
+│   ├── DashboardDetectionPanel.tsx — 감지 결과 패널 (combined/streaming)
+│   └── AnalysisDetectionPanel.tsx  — Analysis 모드 감지 이벤트 목록 (analysisEvents DB 조회)
 ├── stores/                 — Zustand 상태 스토어
 ├── hooks/                  — 커스텀 훅
 └── i18n/                   — 다국어 리소스
@@ -173,10 +174,37 @@ Sign Out → auth.logout()
 - 기준 위치: `client/src/App.tsx` (`serverMode`, `isStreaming`, `TAB_ITEMS`)
 - `combined`: Cameras/Analytics 탭 모두 표시
 - `streaming`: Analytics 탭 숨김
-- `analysis`: 메인 영역은 `AnalysisServerDashboard.tsx`, 우측/모바일 탭은 `analytics` 단일 탭만 표시
-- 모드 변경으로 현재 활성 탭이 숨김 대상이 되면 유효 탭으로 자동 전환하도록 유지
+- `analysis`: 메인 영역은 `AnalysisServerDashboard.tsx`, 우측/모바일 탭은 **3개 탭** 표시:
+  - `analytics` (VideoAnalyticsTab — 모듈 설정)
+  - `detections` (AnalysisDetectionPanel — analysisEvents DB 조회)
+  - `alerts` (AlertPanel — socket `alert:new` 이벤트)
+- 모드 변경으로 현재 활성 탭이 유효하지 않으면 `analytics`로 자동 전환
+
+```typescript
+// App.tsx — analysis 탭 가드
+const ANALYSIS_TABS: SidebarTab[] = ['analytics', 'detections', 'alerts'];
+if (isAnalysis && !ANALYSIS_TABS.includes(sidebarTab)) {
+  setSidebarTab('analytics');
+}
+```
 
 ## Analysis Mode Dashboard
 
 - `AnalysisServerDashboard.tsx`는 `/api/analysis/metrics`를 주기적으로 조회해 현재 활성 모듈, 입력 트래픽, 요청 동시성, 최근/누적 결과, 카메라별 부하를 보여줍니다.
-- `VideoAnalyticsTab.tsx`는 분석 가능한 모듈 선택 전용으로 우측 탭에 유지하고, Alerts/Zones/Detections/Face 탭은 analysis 모드에서 숨깁니다.
+- `onNavigateToTab` prop으로 대시보드 카드 클릭 시 `detections` 또는 `alerts` 탭으로 이동 가능.
+- 클릭 가능한 대시보드 카드: "감지 이벤트" → detections 탭, "알림" → alerts 탭.
+
+### alertService EventEmitter 연결 (index.js 버그 수정)
+
+**문제:** Analysis 모드에서 `pipelineManager._alertService`와 `app.get('alertService')`가 **별개의 AlertService 인스턴스**였습니다. `analysisApi.js`가 `app.get('alertService').createAlert()`를 호출해도 socket.io로 전달되지 않아 Alerts 탭이 비어 있었습니다.
+
+**수정 (index.js):**
+```javascript
+app.set('alertService', alertService);
+app.set('db', db);
+
+// index.js 인스턴스의 alert 이벤트를 socket.io로 직접 브로드캐스트
+alertService.on('alert', (alert) => io.emit('alert:new', alert));
+```
+
+> `app.set('db', db)`도 함께 추가해야 `analysisApi.js` 라우트 핸들러에서 `req.app.get('db')`로 DB에 접근 가능합니다. 빠진 경우 `GET /api/analysis/events`가 503 에러를 반환합니다.

@@ -802,8 +802,32 @@ const ALL_TABLES = [
   'faceGalleries', 'faceGalleryFaces', 'settings',
   'detectionSnapshots',  // added in v1.0
   'faceMatchHistory',    // added in v1.1 (Face ID Live Match)
+  'analysisEvents',      // added in v1.2 (Analysis Mode Event Persistence)
 ];
 ```
+
+### 15.8 `analysisEvents` 컬렉션 (v1.2)
+
+Analysis 서버(`SERVER_MODE=analysis` / `combined`)가 감지한 화재·연기·배회 이벤트를 영구 저장합니다.
+
+| 필드 | 타입 | 설명 |
+|---|---|---|
+| `id` | string (UUID) | 이벤트 식별자 |
+| `type` | `'fire' \| 'smoke' \| 'loitering'` | 이벤트 유형 |
+| `cameraId` | string | 출처 카메라 ID |
+| `cameraName` | string | 출처 카메라 이름 |
+| `timestamp` | ISO 8601 | 이벤트 발생 시각 |
+| `confidence` | number 0-1 | 감지 신뢰도 (fire/smoke만) |
+| `bbox` | object | 감지 영역 (fire/smoke만) |
+| `objectId` | number | 추적 객체 ID (loitering만) |
+| `dwellTime` | number | 체류 시간 초 (loitering만) |
+| `zoneId` | string | 구역 ID (loitering만) |
+| `zoneName` | string | 구역 이름 (loitering만) |
+| `riskScore` | number 0-1 | 위험 점수 (loitering만) |
+
+**저장 정책**: 화재/연기 30초 쿨다운, 배회 60초 쿨다운, 컬렉션 최대 500건 유지.
+**조회**: `GET /api/analysis/events?limit=N&type=fire,smoke,loitering`
+**삭제**: `DELETE /api/analysis/events`
 
 ---
 
@@ -812,3 +836,4 @@ const ALL_TABLES = [
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Storage MongoDB |
+| 1.2 | 2026-06-10 | LTS Engineering Team | Section 15.8 추가: analysisEvents 컬렉션 스키마 및 저장 정책, ALL_TABLES v1.2 업데이트 |
