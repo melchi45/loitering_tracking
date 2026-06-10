@@ -262,6 +262,9 @@ export function DashboardDetectionPanel() {
   const { socket } = useSocket();
   const analysisStatus = useAnalysisClientStatus();
 
+  // analysis mode = no registered cameras; detections still arrive via global io.emit
+  const isAnalysisMode = cameras.length === 0;
+
   // ── Snapshot crop thumbnails: key = 'cameraId:objectId' → base64 data URL
   const [cropMap, setCropMap] = useState<Record<string, string>>({});
 
@@ -284,6 +287,7 @@ export function DashboardDetectionPanel() {
     });
   }, [cameras]);
 
+  // When no cameras are registered (analysis mode), pass [] so useAllDetections accepts ALL global events
   const enabledList  = cameras.filter((c) => enabledIds.has(c.id)).map((c) => c.id);
   const detectionMap = useAllDetections(enabledList);
 
@@ -321,6 +325,7 @@ export function DashboardDetectionPanel() {
         : new Set(cameras.map((c) => c.id))
     );
 
+
   const toggleCat = (key: string) =>
     setHiddenCats(prev => {
       const next = new Set(prev);
@@ -352,7 +357,8 @@ export function DashboardDetectionPanel() {
   const crossCamFaceIds = new Set(crossCameraEvents.map((ev) => ev.faceId));
 
   // Camera names resolver
-  const camName = (id: string) => cameras.find((c) => c.id === id)?.name ?? id.slice(0, 8);
+  const camName = (id: string) =>
+    cameras.find((c) => c.id === id)?.name ?? id.slice(0, 8);
 
   // Person Trails — all active persons
   const personTrails = [...allPersons.values()].sort(
@@ -370,13 +376,19 @@ export function DashboardDetectionPanel() {
 
       {/* ── Top bar: camera filter + stats ── */}
       <div className="flex items-center gap-2 px-2 py-1.5 border-b border-gray-700 flex-shrink-0 bg-gray-800/60">
-        <span className="text-[9px] text-gray-500 uppercase tracking-wide flex-shrink-0">Camera</span>
-        <CameraFilter
-          cameras={cameras}
-          enabled={enabledIds}
-          onToggle={toggleCam}
-          onToggleAll={toggleAll}
-        />
+        {isAnalysisMode ? (
+          <span className="text-[9px] text-blue-400 uppercase tracking-wide flex-shrink-0 font-bold">Analysis</span>
+        ) : (
+          <>
+            <span className="text-[9px] text-gray-500 uppercase tracking-wide flex-shrink-0">Camera</span>
+            <CameraFilter
+              cameras={cameras}
+              enabled={enabledIds}
+              onToggle={toggleCam}
+              onToggleAll={toggleAll}
+            />
+          </>
+        )}
         <div className="flex items-center gap-1.5 flex-shrink-0">
           <span className="text-[9px] text-gray-400">{t.objCount(merged.length)}</span>
           {loiteringCount > 0 && (
@@ -450,11 +462,16 @@ export function DashboardDetectionPanel() {
 
       {/* ── Merged detection list ── */}
       <div className="flex-1 overflow-y-auto">
-        {cameras.length === 0 ? (
+        {/* analysis mode: no cameras registered but no data yet */}
+        {isAnalysisMode && detectionMap.size === 0 ? (
+          <div className="flex flex-col items-center justify-center h-full gap-2 text-gray-600 px-4 text-center">
+            <span className="text-xs">분석 데이터 수신 대기 중...</span>
+          </div>
+        ) : !isAnalysisMode && cameras.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-2 text-gray-600 px-4 text-center">
             <span className="text-xs">{t.addCameraFirst}</span>
           </div>
-        ) : enabledIds.size === 0 ? (
+        ) : !isAnalysisMode && enabledIds.size === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-2 text-gray-600 px-4 text-center">
             <span className="text-xs">No cameras selected</span>
           </div>

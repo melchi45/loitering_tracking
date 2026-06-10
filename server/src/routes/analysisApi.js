@@ -190,7 +190,141 @@ function _getLoadedModels() {
   return models;
 }
 
-// ── Shared AI services (eager-loaded at startup) ─────────────────────────────
+// ── Re-ID utilities (shared with pipelineManager logic) ───────────────────────
+
+const FACE_MATCH_THRESH     = 0.35;
+const FACE_EXPIRY_MS        = 30_000;
+const CLOTHING_MATCH_THRESH = 0.75;
+const CLOTHING_EXPIRY_MS    = 300_000;
+
+function _cosineSim(a, b) {
+  let dot = 0;
+  for (let i = 0; i < a.length; i++) dot += a[i] * b[i];
+  return dot;
+}
+
+function _bboxClose(a, b, tol = 3) {
+  if (!a || !b) return false;
+  return (
+    Math.abs(a.x      - b.x)      <= tol &&
+    Math.abs(a.y      - b.y)      <= tol &&
+    Math.abs(a.width  - b.width)  <= tol &&
+    Math.abs(a.height - b.height) <= tol
+  );
+}
+
+function _clothingAppearSim(a, b) {
+  const MAX_DIST = 441.67;
+  let score = 0, w = 0;
+  if (a.upperRgb && b.upperRgb) {
+    const dr = a.upperRgb[0]-b.upperRgb[0], dg = a.upperRgb[1]-b.upperRgb[1], db = a.upperRgb[2]-b.upperRgb[2];
+    const colorSim = 1 - Math.sqrt(dr*dr+dg*dg+db*db)/MAX_DIST;
+    let typeSim = 0.5;
+    if (a.upper && b.upper && a.upper !== 'unknown' && b.upper !== 'unknown') typeSim = a.upper === b.upper ? 1 : 0;
+    score += 0.60*(0.55*colorSim+0.45*typeSim); w += 0.60;
+  }
+  if (a.lowerRgb && b.lowerRgb) {
+    const dr = a.lowerRgb[0]-b.lowerRgb[0], dg = a.lowerRgb[1]-b.lowerRgb[1], db = a.lowerRgb[2]-b.lowerRgb[2];
+    const colorSim = 1 - Math.sqrt(dr*dr+dg*dg+db*db)/MAX_DIST;
+    let typeSim = 0.5;
+    if (a.lower && b.lower && a.lower !== 'unknown' && b.lower !== 'unknown') typeSim = a.lower === b.lower ? 1 : 0;
+    score += 0.40*(0.50*colorSim+0.50*typeSim); w += 0.40;
+  }
+  return w > 0 ? score/w : 0;
+}
+
+// ── Face Re-ID + Person Trajectory state (analysis mode, module-level) ────────
+let _sharedFaceGallery    = [];
+let _faceCounter          = 1;
+let _crossCameraFaceStats = new Map();
+let _personTrajectory     = new Map();
+let _personAliasCounter   = 0;
+
+// ── Clothing Re-ID state (analysis mode, module-level) ────────────────────────
+let _sharedClothingGallery = [];
+let _clothingCounter       = 1;
+let _crossClothingStats    = new Map();
+
+/**
+ * Perform cross-camera face Re-ID for analysis mode.
+ * Mirrors pipelineManager._assignFaceIds() but uses module-level gallery state.
+ * @returns {{ namedFaces, crossCameraTransitions }}
+ */
+function _assignFaceIdsAnalysis(cameraId, detectedFaces, now) {
+  _sharedFaceGallery = _sharedFaceGallery.filter(g => now - g.lastSeenAt < FACE_EXPIRY_MS);
+  const usedIds = new Set();
+  const crossCameraTransitions = [];
+
+  const namedFaces = detectedFaces.map(face => {
+    if (!face.embedding) return { ...face, faceId: `F${_faceCounter++}` };
+
+    let bestEntry = null, bestScore = FACE_MATCH_THRESH;
+    for (const g of _sharedFaceGallery) {
+      if (usedIds.has(g.faceId)) continue;
+      const sim = _cosineSim(face.embedding, g.embedding);
+      if (sim > bestScore) { bestScore = sim; bestEntry = g; }
+    }
+
+    if (bestEntry) {
+      const prevCameraId = bestEntry.lastCameraId;
+      if (prevCameraId !== cameraId) {
+        const stats = _crossCameraFaceStats.get(bestEntry.faceId) || { faceId: bestEntry.faceId, firstCameraId: prevCameraId, lastCameraId: prevCameraId, transitionCount: 0, lastSeenAt: bestEntry.lastSeenAt };
+        stats.transitionCount++; stats.lastCameraId = cameraId; stats.lastSeenAt = now;
+        _crossCameraFaceStats.set(bestEntry.faceId, stats);
+        crossCameraTransitions.push({ faceId: bestEntry.faceId, prevCameraId, newCameraId: cameraId, similarity: bestScore, timestamp: now, faceBbox: face.bbox });
+      }
+      bestEntry.lastSeenAt = now; bestEntry.lastCameraId = cameraId;
+      usedIds.add(bestEntry.faceId);
+      return { ...face, faceId: bestEntry.faceId, matchScore: bestScore };
+    }
+
+    const newId = `F${_faceCounter++}`;
+    _sharedFaceGallery.push({ faceId: newId, embedding: face.embedding, lastSeenAt: now, lastCameraId: cameraId });
+    return { ...face, faceId: newId };
+  });
+
+  return { namedFaces, crossCameraTransitions };
+}
+
+/**
+ * Perform cross-camera clothing Re-ID for analysis mode.
+ * Mirrors pipelineManager._assignClothingIds().
+ */
+function _assignClothingIdsAnalysis(cameraId, enrichedObjects, now, oIdToFaceId = new Map()) {
+  _sharedClothingGallery = _sharedClothingGallery.filter(g => now - g.lastSeenAt < CLOTHING_EXPIRY_MS);
+  const crossCameraTransitions = [];
+
+  for (const obj of enrichedObjects) {
+    if (obj.className !== 'person' || !obj.color?.upperRgb) continue;
+    const feature = { upperRgb: obj.color.upperRgb, lowerRgb: obj.color.lowerRgb ?? null, upper: obj.cloth?.upper ?? null, lower: obj.cloth?.lower ?? null };
+    const linkedFaceId = oIdToFaceId.get(String(obj.objectId)) ?? null;
+
+    let bestEntry = null, bestScore = CLOTHING_MATCH_THRESH;
+    for (const g of _sharedClothingGallery) {
+      const sim = _clothingAppearSim(feature, g.feature);
+      if (sim > bestScore) { bestScore = sim; bestEntry = g; }
+    }
+
+    if (bestEntry) {
+      const prevCameraId = bestEntry.lastCameraId;
+      if (prevCameraId !== cameraId) {
+        const stats = _crossClothingStats.get(bestEntry.clothingId) || { clothingId: bestEntry.clothingId, firstCameraId: prevCameraId, lastCameraId: prevCameraId, transitionCount: 0, lastSeenAt: bestEntry.lastSeenAt };
+        stats.transitionCount++; stats.lastCameraId = cameraId; stats.lastSeenAt = now;
+        _crossClothingStats.set(bestEntry.clothingId, stats);
+        crossCameraTransitions.push({ clothingId: bestEntry.clothingId, faceId: linkedFaceId || bestEntry.faceId || null, prevCameraId, newCameraId: cameraId, similarity: bestScore, objectId: obj.objectId, timestamp: now, feature });
+      }
+      bestEntry.lastSeenAt = now; bestEntry.lastCameraId = cameraId;
+      if (linkedFaceId && !bestEntry.faceId) bestEntry.faceId = linkedFaceId;
+    } else {
+      const clothingId = `C${_clothingCounter++}`;
+      _sharedClothingGallery.push({ clothingId, feature, lastSeenAt: now, lastCameraId: cameraId, faceId: linkedFaceId });
+    }
+  }
+
+  return { crossCameraTransitions };
+}
+
+// ── Shared AI services (eager-loaded at startup) ───────────────────────────────
 let _detector         = null;
 let _attrPipeline     = null;
 let _fireSmokeService = null;
@@ -509,11 +643,90 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
       }
     }
 
-    const faceDetections = detectedFaces.map((f, i) => ({
+    // 4.5 Face Re-ID + Person Trajectory (analysis mode — uses module-level gallery state)
+    const now_reid = Date.now();
+    let namedFaces = detectedFaces;
+    let crossCameraFaceTransitions = [];
+    const io = req.app.get('io');
+
+    if (io && analyticsConfig.isEnabled('face') && detectedFaces.some(f => f.embedding)) {
+      const reid = _assignFaceIdsAnalysis(cameraId, detectedFaces, now_reid);
+      namedFaces = reid.namedFaces;
+      crossCameraFaceTransitions = reid.crossCameraTransitions;
+
+      // Step A: update trajectory for non-cross-camera faces
+      const ccFaceIds = new Set(crossCameraFaceTransitions.map(ev => ev.faceId));
+      for (const f of namedFaces) {
+        if (ccFaceIds.has(f.faceId) || !f.faceId) continue;
+        const person = enrichedObjects.find(o => o.className === 'person' && o.face && _bboxClose(o.face.bbox, f.bbox));
+        const objectId = person?.objectId ?? null;
+        const traj = _personTrajectory.get(f.faceId);
+        if (!traj) {
+          const alias = `P${++_personAliasCounter}`;
+          const newTraj = { faceId: f.faceId, alias, firstSeenAt: now_reid, lastSeenAt: now_reid, currentCameraId: cameraId, segments: [{ cameraId, objectId, entryTime: now_reid, exitTime: now_reid }] };
+          _personTrajectory.set(f.faceId, newTraj);
+          io.emit('person:trajectory-update', newTraj);
+        } else {
+          const lastSeg = traj.segments[traj.segments.length - 1];
+          if (lastSeg.cameraId === cameraId) { lastSeg.exitTime = now_reid; if (objectId !== null) lastSeg.objectId = objectId; }
+          traj.lastSeenAt = now_reid;
+        }
+      }
+
+      // Step B: cross-camera transitions
+      for (const ev of crossCameraFaceTransitions) {
+        const person = enrichedObjects.find(o => o.className === 'person' && o.face && _bboxClose(o.face.bbox, ev.faceBbox));
+        const newObjectId = person?.objectId ?? null;
+        let traj = _personTrajectory.get(ev.faceId);
+        if (!traj) {
+          const alias = `P${++_personAliasCounter}`;
+          traj = { faceId: ev.faceId, alias, firstSeenAt: ev.timestamp, lastSeenAt: ev.timestamp, currentCameraId: ev.newCameraId, segments: [{ cameraId: ev.newCameraId, objectId: newObjectId, entryTime: ev.timestamp, exitTime: ev.timestamp }] };
+          _personTrajectory.set(ev.faceId, traj);
+        } else {
+          const lastSeg = traj.segments[traj.segments.length - 1];
+          lastSeg.exitTime = ev.timestamp;
+          traj.segments.push({ cameraId: ev.newCameraId, objectId: newObjectId, entryTime: ev.timestamp, exitTime: ev.timestamp });
+          traj.currentCameraId = ev.newCameraId;
+          traj.lastSeenAt = ev.timestamp;
+        }
+        io.emit('person:trajectory-update', traj);
+        io.emit('face:reidentified', { faceId: ev.faceId, alias: traj.alias, prevCameraId: ev.prevCameraId, newCameraId: ev.newCameraId, newObjectId, similarity: ev.similarity, timestamp: ev.timestamp });
+      }
+
+      // Annotate enriched persons with faceId + alias from Re-ID
+      for (const obj of enrichedObjects) {
+        if (obj.className !== 'person' || !obj.face) continue;
+        const match = namedFaces.find(f => _bboxClose(f.bbox, obj.face.bbox));
+        if (match?.faceId) {
+          obj.faceId = match.faceId;
+          obj.face.faceId = match.faceId;
+          obj.face.matchScore = match.matchScore ?? 0;
+          obj.alias = _personTrajectory.get(match.faceId)?.alias ?? null;
+        }
+      }
+    }
+
+    // 4.6 Clothing Re-ID (analysis mode)
+    if (io && analyticsConfig.isEnabled('color') && enrichedObjects.length > 0) {
+      const oIdToFaceId = new Map();
+      for (const f of namedFaces) {
+        if (!f.faceId) continue;
+        const p = enrichedObjects.find(o => o.className === 'person' && o.face && _bboxClose(o.face.bbox, f.bbox));
+        if (p) oIdToFaceId.set(String(p.objectId), f.faceId);
+      }
+      const { crossCameraTransitions: clothCCT } = _assignClothingIdsAnalysis(cameraId, enrichedObjects, now_reid, oIdToFaceId);
+      for (const ct of clothCCT) {
+        io.emit('clothing:reidentified', { clothingId: ct.clothingId, faceId: ct.faceId ?? null, prevCameraId: ct.prevCameraId, newCameraId: ct.newCameraId, similarity: ct.similarity, objectId: ct.objectId, feature: ct.feature, timestamp: ct.timestamp });
+      }
+    }
+
+    const faceDetections = namedFaces.map((f, i) => ({
       objectId:  90000 + (Number(frameId || 0) % 1000) * 10 + i,
       className: 'face',
       confidence: f.score,
       bbox: f.bbox,
+      faceId:    f.faceId ?? null,
+      alias:     f.faceId ? (_personTrajectory.get(f.faceId)?.alias ?? null) : null,
       isLoitering: false,
       dwellTime: 0,
     }));
