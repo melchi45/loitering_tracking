@@ -25,8 +25,11 @@ client/src/
 │   ├── FaceGalleryTab.tsx   — 등록 얼굴 갤러리
 │   ├── SearchFullscreen.tsx — 전체화면 감지 검색
 │   ├── StatsPanelModal.tsx  — 분석 통계 모달
-│   ├── DashboardDetectionPanel.tsx — 감지 결과 패널 (combined/streaming)
-│   └── AnalysisDetectionPanel.tsx  — Analysis 모드 감지 이벤트 목록 (analysisEvents DB 조회)
+│   ├── DashboardDetectionPanel.tsx — 실시간 감지 피드 (combined/streaming + analysis 모드 오버레이)
+│   ├── AnalysisServerDashboard.tsx — analysis 모드 메인 대시보드 (stat 카드·오버레이 제어)
+│   ├── AnalysisLivePanel.tsx       — 실시간 감지 피드 오버레이 (analysis 모드, "감지 이벤트" 카드)
+│   ├── AnalysisDetectionPanel.tsx  — 이벤트 히스토리 오버레이 (analysisEvents DB, "알림" 카드)
+│   └── AnalysisEventsTab.tsx       — Detections 탭 이벤트 히스토리 (analysis 모드)
 ├── stores/                 — Zustand 상태 스토어
 ├── hooks/                  — 커스텀 훅
 └── i18n/                   — 다국어 리소스
@@ -213,52 +216,50 @@ Sign Out → auth.logout()
 - `streaming`: Analytics 탭 숨김
 - `analysis`: 메인 영역은 `AnalysisServerDashboard.tsx`, 우측/모바일 탭은 **2개 탭** 표시:
   - `analytics` (VideoAnalyticsTab — 모듈 설정)
-  - `detections` (DashboardDetectionPanel — 실시간 감지, `io.emit()` global 수신)
-  - 이벤트 히스토리는 대시보드 카드 클릭 → `AnalysisDetectionPanel` 인라인 오버레이로 표시
+  - `detections` (**AnalysisEventsTab** — 이벤트 히스토리 날짜 그룹)
+  - 실시간 감지 피드는 대시보드 "감지 이벤트" 카드 클릭 → `AnalysisLivePanel` 오버레이로 표시
+  - 이벤트 히스토리는 대시보드 "알림" 카드 클릭 → `AnalysisDetectionPanel` 오버레이로 표시
 - 모드 변경으로 현재 활성 탭이 유효하지 않으면 `analytics`로 자동 전환
 
 ```typescript
-// App.tsx — analysis 탭 가드
-const ANALYSIS_TABS: SidebarTab[] = ['analytics', 'detections'];
-if (isAnalysis && !ANALYSIS_TABS.includes(sidebarTab)) {
-  setSidebarTab('analytics');
-}
-
-// TAB_ITEMS — analysis 모드
-const TAB_ITEMS = isAnalysis
-  ? [
-      { id: 'analytics'  as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
-      { id: 'detections' as SidebarTab, icon: '👁',  label: t.tabDetections },
-    ]
-  : [ /* combined/streaming tabs */ ];
-
-// renderTabContent — analysis 분기 (tab override 지원)
-function renderTabContent(overrideTab?: SidebarTab) {
-  const tab = overrideTab ?? sidebarTab;
-  if (isAnalysis) {
-    if (tab === 'detections') return <DashboardDetectionPanel />;
-    return <VideoAnalyticsTab />;
-  }
-  // ...
-}
+// renderTabContent — analysis 분기
+if (tab === 'detections') return isAnalysis ? <AnalysisEventsTab /> : <DashboardDetectionPanel />;
 ```
 
 ## Analysis Mode Dashboard
 
 - `AnalysisServerDashboard.tsx`는 `/api/analysis/metrics`를 주기적으로 조회해 현재 활성 모듈, 입력 트래픽, 요청 동시성, 최근/누적 결과, 카메라별 부하를 보여줍니다.
-- 대시보드 카드 클릭 시 **AnalysisDetectionPanel 오버레이** 표시 (사이드바 탭 이동 없음).
-- `showEventHistory` 상태로 오버레이 제어; `onNavigateToTab` prop 제거.
+- **두 가지 오버레이** 상태로 인라인 패널 제어:
+
+| stat 카드 | 열리는 오버레이 | 컴포넌트 |
+|---|---|---|
+| 감지 이벤트 (누적) | `showLiveDetections` | `AnalysisLivePanel` (실시간 감지 피드) |
+| 알림 (배회 누적) | `showEventHistory` | `AnalysisDetectionPanel` (이벤트 히스토리) |
 
 ```typescript
 // AnalysisServerDashboard.tsx
-const [showEventHistory, setShowEventHistory] = useState(false);
+const [showEventHistory,   setShowEventHistory]   = useState(false);
+const [showLiveDetections, setShowLiveDetections] = useState(false);
 
+{showLiveDetections && (
+  <div className="absolute inset-0 z-20 rounded-[28px] overflow-hidden">
+    <AnalysisLivePanel onClose={() => setShowLiveDetections(false)} />
+  </div>
+)}
 {showEventHistory && (
   <div className="absolute inset-0 z-20 rounded-[28px] overflow-hidden">
     <AnalysisDetectionPanel onClose={() => setShowEventHistory(false)} />
   </div>
 )}
 ```
+
+## AnalysisLivePanel — 실시간 감지 피드 오버레이 (신규)
+
+**Props**: `{ onClose?: () => void }`
+
+**역할**: `DashboardDetectionPanel`을 analysis 대시보드 내부 오버레이로 래핑. "감지 이벤트 (누적)" stat 카드와 연결.
+
+**포함 기능**: 실시간 탐지 목록 · 스냅샷 썸네일 · Person Trails · Cross-Camera Re-ID · 의상 Re-ID
 
 ## AnalysisDetectionPanel — 날짜 그룹별 히스토리 브라우저 (v1.7)
 

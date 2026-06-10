@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UI-DAM-01 |
-| **Version** | 1.8 |
+| **Version** | 1.9 |
 | **Status** | Active |
 | **Date** | 2026-06-10 |
 | **Parent SRS** | [srs/SRS_Dashboard_Analysis_Mode.md](../srs/SRS_Dashboard_Analysis_Mode.md) |
@@ -673,23 +673,18 @@ const TAB_ITEMS = isAnalysis
   : [...]; // combined/streaming 탭
 ```
 
-`renderTabContent()` (analysis 분기):
+`renderTabContent()` (analysis 분기, v1.9):
 ```typescript
 function renderTabContent(overrideTab?: SidebarTab) {
   const tab = overrideTab ?? sidebarTab;
-  if (isAnalysis) {
-    if (tab === 'detections') return <DashboardDetectionPanel />;
-    return <VideoAnalyticsTab />;
-  }
+  if (tab === 'detections') return isAnalysis ? <AnalysisEventsTab /> : <DashboardDetectionPanel />;
   // ...
 }
 ```
 
-**Detections 탭 동작 (analysis 모드)**:
-- `DashboardDetectionPanel`이 `useAllDetections` 훅으로 `detections` Socket.IO 이벤트 수신
-- Analysis 서버는 `io.emit()` global로 브로드캐스트 → 카메라 구독 없이도 수신 가능
-- 카메라 이름: DB에 카메라 없으므로 `cameraId.slice(0, 8)` 약칭 표시
-- `/api/analysis/client-status` 엔드포인트 미존재(analysis 모드) → `useAnalysisClientStatus` null 반환 → streaming 연결 배너 자동 숨김
+**Detections 탭 동작 (analysis 모드, v1.9)**:
+- `AnalysisEventsTab`이 `/api/analysis/events` 폴링 → 날짜·시간별 이벤트 히스토리 표시 (배회/화재/연기)
+- 실시간 감지 피드(`DashboardDetectionPanel`)는 **별도 UI**로 이동 → `AnalysisLivePanel` 오버레이 참조 (Section 10.4a)
 
 ### 10.3 AnalysisDetectionPanel — 이벤트 히스토리 브라우저 (v1.7 재작성)
 
@@ -732,24 +727,88 @@ function renderTabContent(overrideTab?: SidebarTab) {
 └─────────────────────────────────────────┘
 ```
 
-### 10.4 AnalysisServerDashboard 오버레이 (v1.7)
+### 10.4 AnalysisServerDashboard 오버레이 (v1.9)
 
-이벤트 히스토리를 사이드바 탭 대신 **대시보드 내부 오버레이**로 표시합니다.
+v1.9부터 두 가지 오버레이가 공존합니다:
+
+| 오버레이 | 컴포넌트 | 트리거 stat 카드 | 내용 |
+|---|---|---|---|
+| 이벤트 히스토리 | `AnalysisDetectionPanel` | 알림 (배회 누적) | DB 저장 이벤트 (배회/화재/연기) |
+| 실시간 감지 피드 | `AnalysisLivePanel` | **감지 이벤트 (누적)** | 실시간 감지 피드 (`DashboardDetectionPanel`) |
 
 ```typescript
-// AnalysisServerDashboard.tsx
-const [showEventHistory, setShowEventHistory] = useState(false);
+// AnalysisServerDashboard.tsx (v1.9)
+const [showEventHistory,   setShowEventHistory]   = useState(false);
+const [showLiveDetections, setShowLiveDetections] = useState(false);
 
-// 오버레이 렌더링
+// 이벤트 히스토리 오버레이
 {showEventHistory && (
   <div className="absolute inset-0 z-20 rounded-[28px] overflow-hidden">
     <AnalysisDetectionPanel onClose={() => setShowEventHistory(false)} />
   </div>
 )}
+
+// 실시간 감지 피드 오버레이
+{showLiveDetections && (
+  <div className="absolute inset-0 z-20 rounded-[28px] overflow-hidden">
+    <AnalysisLivePanel onClose={() => setShowLiveDetections(false)} />
+  </div>
+)}
 ```
 
-- 대시보드의 Detections/FireSmoke/Loitering 통계 카드/행 클릭 → `setShowEventHistory(true)`
-- `onNavigateToTab` prop 제거 (App.tsx 상태 리프팅 불필요)
+- "감지 이벤트 (누적)" 카드 → `setShowLiveDetections(true)` (v1.9 변경)
+- "알림 (배회 누적)" 카드 → `setShowEventHistory(true)` (유지)
+
+### 10.4a AnalysisLivePanel — 실시간 감지 피드 오버레이 (v1.9 신규)
+
+**파일**: `client/src/components/AnalysisLivePanel.tsx`
+
+**Props**: `{ onClose?: () => void }`
+
+**역할**: `DashboardDetectionPanel`을 analysis 대시보드 내부 전체화면 오버레이로 감싸는 래퍼 컴포넌트.  
+실시간 감지 피드를 Detections 탭이 아닌 stat 카드 클릭으로 접근하도록 연결합니다.
+
+**기능 (DashboardDetectionPanel 포함)**:
+- 실시간 탐지 목록: `detections` Socket.IO 이벤트 → `useAllDetections` 훅
+- 스냅샷 썸네일: `snapshot:new` 이벤트 → `cropMap` 인메모리 캐시
+- Person Trails: `person:trajectory-update` 이벤트 → `usePersonTrajectoryStore`
+- Cross-Camera Re-ID 피드: `face:reidentified` → `useCrossCameraStore`
+- 의상 Re-ID: `clothing:reidentified` → `useClothingReIdStore`
+- 카메라 미등록(analysis 모드) 시 `cameraId.slice(0, 8)` 약칭으로 표시
+
+**구현 패턴**:
+```tsx
+// AnalysisLivePanel.tsx
+export default function AnalysisLivePanel({ onClose }: Props) {
+  return (
+    <div className="relative flex flex-col h-full bg-gray-950 overflow-hidden">
+      {onClose && (
+        <button onClick={onClose} className="absolute top-2 right-2 z-10 ...">✕</button>
+      )}
+      <DashboardDetectionPanel />
+    </div>
+  );
+}
+```
+
+**UI 레이아웃**:
+```
+┌─────────────────────────────────────────────────┐
+│  [카메라 필터]  obj:12  loiter:2            ✕   │ ← DashboardDetectionPanel 상단 바 + 오른쪽 상단 닫기 버튼
+├─────────────────────────────────────────────────┤
+│  [PERSON] [FIRE] [FACE] [ALL]                   │ ← 카테고리 필터
+├─────────────────────────────────────────────────┤
+│  [thumbnail] person·1s  P1 X-CAM                │
+│  [thumbnail] person·5s  LOITER                  │
+│  ...                                            │ ← 실시간 감지 목록
+├─────────────────────────────────────────────────┤
+│  ▼ Person Trails (3)                            │
+│    P1 [F123] cam1 → ►cam2  total 2m30s          │
+├─────────────────────────────────────────────────┤
+│  ▼ Cross-Camera Re-ID (2)                       │
+│    P1 [F123] cam1 → cam2  92%                   │
+└─────────────────────────────────────────────────┘
+```
 
 ### 10.5 analysisEvents 크롭 이미지 저장 (v1.7)
 
@@ -823,4 +882,5 @@ if (db) {
 | 1.6 | 2026-06-10 | 버그 수정 반영: `db.js` ALL_TABLES에 `analysisEvents` 추가 (HTTP 500 수정), `index.js`에서 alertService EventEmitter를 socket.io에 직접 연결 (Alerts 탭 실시간 전파 수정), `app.set('db', db)` 추가 |
 | 1.7 | 2026-06-10 | Section 10 전면 재작성: analysis 모드 탭 analytics 단일화, AnalysisDetectionPanel 날짜 그룹별 히스토리 브라우저로 재구현, AnalysisServerDashboard 내부 오버레이 방식, cropData 크롭 이미지 저장·표시 |
 | 1.8 | 2026-06-10 | Section 10.2 업데이트: analysis 모드에 Detections 탭 재도입 (`DashboardDetectionPanel` + global `io.emit()` 수신) |
+| 1.9 | 2026-06-10 | Section 10.2/10.4/10.4a 업데이트: 실시간 감지 피드를 Detections 탭에서 분리 — `AnalysisLivePanel` 신규 컴포넌트 도입, "감지 이벤트 (누적)" 카드 클릭 시 오버레이로 표시. Detections 탭은 `AnalysisEventsTab` (히스토리)으로 복귀 |
 

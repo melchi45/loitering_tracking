@@ -48,9 +48,14 @@ loitering_tracking/
 │   ├── components/        # UI 컴포넌트
 │   │   ├── CameraGrid.tsx      # 멀티 카메라 그리드 뷰
 │   │   ├── AlertPanel.tsx      # 경보 목록 패널
-│   │   ├── ZoneEditor.tsx      # 구역 다각형 편집기
-│   │   ├── ZonesPanel.tsx      # 구역 목록 사이드바
-│   │   └── CameraView.tsx      # 단일 카메라 뷰
+│   │   ├── ZoneEditor.tsx          # 구역 다각형 편집기
+│   │   ├── ZonesPanel.tsx          # 구역 목록 사이드바
+│   │   ├── CameraView.tsx          # 단일 카메라 뷰
+│   │   ├── DashboardDetectionPanel.tsx
+│   │   ├── AnalysisServerDashboard.tsx # analysis 모드 메인 대시보드
+│   │   ├── AnalysisLivePanel.tsx   # 실시간 감지 피드 오버레이 (analysis 모드)
+│   │   ├── AnalysisDetectionPanel.tsx  # 이벤트 히스토리 오버레이 (배회/화재/연기)
+│   │   └── AnalysisEventsTab.tsx   # Detections 탭 — 이벤트 히스토리 (analysis 모드)
 │   ├── stores/            # Zustand 상태 관리
 │   ├── hooks/             # 커스텀 React 훅
 │   ├── i18n/              # 다국어(ko/en) 리소스

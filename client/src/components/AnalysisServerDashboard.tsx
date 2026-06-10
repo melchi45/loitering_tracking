@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import AnalysisDetectionPanel from './AnalysisDetectionPanel';
+import AnalysisLivePanel from './AnalysisLivePanel';
 
 type GpuInfo = {
   index: number;
@@ -237,7 +238,8 @@ export default function AnalysisServerDashboard({
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fpsHistory, setFpsHistory] = useState<Map<string, number[]>>(new Map());
-  const [showEventHistory, setShowEventHistory] = useState(false);
+  const [showEventHistory,   setShowEventHistory]   = useState(false);
+  const [showLiveDetections, setShowLiveDetections] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -279,10 +281,17 @@ export default function AnalysisServerDashboard({
   return (
     <div className="relative h-full overflow-auto rounded-[28px] border border-slate-700/70 bg-[radial-gradient(circle_at_top_left,_rgba(245,158,11,0.18),_transparent_28%),linear-gradient(180deg,_rgba(15,23,42,0.96),_rgba(2,6,23,0.98))] px-6 py-6 text-slate-100 shadow-2xl shadow-black/30">
 
-      {/* ── Event History overlay ── */}
+      {/* ── Event History overlay (배회/화재/연기 이벤트 DB 히스토리) ── */}
       {showEventHistory && (
         <div className="absolute inset-0 z-20 rounded-[28px] overflow-hidden">
           <AnalysisDetectionPanel onClose={() => setShowEventHistory(false)} />
+        </div>
+      )}
+
+      {/* ── Live Detections overlay (실시간 감지 피드) ── */}
+      {showLiveDetections && (
+        <div className="absolute inset-0 z-20 rounded-[28px] overflow-hidden">
+          <AnalysisLivePanel onClose={() => setShowLiveDetections(false)} />
         </div>
       )}
       <div className="flex flex-col gap-6">
@@ -425,7 +434,7 @@ export default function AnalysisServerDashboard({
             value={metrics ? String(metrics.results.detectionsTotal + metrics.results.fireSmokeTotal) : '-'}
             hint={metrics ? `배회 ${metrics.results.loiteringTotal}건 · 화재/연기 ${metrics.results.fireSmokeTotal}건` : '메트릭 대기 중'}
             accentClass="text-amber-300"
-            onClick={() => setShowEventHistory(true)}
+            onClick={() => setShowLiveDetections(true)}
           />
           <StatCard
             label="알림 (배회 누적)"

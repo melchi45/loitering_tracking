@@ -78,7 +78,11 @@ loitering_tracking/
 │   │   ├── FaceGalleryTab.tsx      # 얼굴 갤러리
 │   │   ├── SearchFullscreen.tsx    # 전체화면 검색
 │   │   ├── StatsPanelModal.tsx     # 통계 모달
-│   │   └── DashboardDetectionPanel.tsx
+│   │   ├── DashboardDetectionPanel.tsx
+│   │   ├── AnalysisServerDashboard.tsx # analysis 모드 메인 대시보드
+│   │   ├── AnalysisLivePanel.tsx   # 실시간 감지 피드 오버레이 (analysis 모드)
+│   │   ├── AnalysisDetectionPanel.tsx  # 이벤트 히스토리 오버레이 (배회/화재/연기)
+│   │   └── AnalysisEventsTab.tsx   # Detections 탭 — 이벤트 히스토리 (analysis 모드)
 │   ├── stores/                     # Zustand 상태 스토어
 │   ├── hooks/                      # 커스텀 React 훅
 │   ├── i18n/                       # 다국어(ko/en) 리소스
