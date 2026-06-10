@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UI-DAM-01 |
-| **Version** | 1.4 |
+| **Version** | 1.5 |
 | **Status** | Active |
 | **Date** | 2026-06-10 |
 | **Parent SRS** | [srs/SRS_Dashboard_Analysis_Mode.md](../srs/SRS_Dashboard_Analysis_Mode.md) |
@@ -23,6 +23,7 @@
 7. [Data Flow](#7-data-flow)
 8. [Sequence Diagrams](#8-sequence-diagrams)
 9. [File & Module Layout](#9-file--module-layout)
+10. [Analysis Mode Detections & Alerts 탭 (v1.5)](#10-analysis-mode-detections--alerts-탭-v15)
 
 ---
 
@@ -646,6 +647,83 @@ app.get(/^(?!\/api|\/auth|...).*/, (req, res) => res.sendFile(indexHtml));
 
 ---
 
+## 10. Analysis Mode Detections & Alerts 탭 (v1.5)
+
+### 10.1 개요
+
+Analysis 모드에서 AI가 감지한 이벤트(화재, 연기, 배회)를 영구 저장하고, 사이드바의 별도 탭으로 시각화합니다.
+
+### 10.2 사이드바 탭 변경
+
+**기존 (`v1.4`)**:
+```
+Analysis 모드 탭: [ 🤖 Analytics ]
+```
+
+**신규 (`v1.5`)**:
+```
+Analysis 모드 탭: [ 🤖 Analytics ] [ 👁 Detections ] [ 🔔 Alerts ]
+```
+
+- `Detections` 탭: `AnalysisDetectionPanel` 컴포넌트 렌더링 (화재/연기/배회 이벤트 목록)
+- `Alerts` 탭: 기존 `AlertPanel` 컴포넌트 재사용 (배회 알림 목록)
+- 탭 리셋 로직: `isAnalysis` 전환 시 유효 탭이 `['analytics', 'detections', 'alerts']` 중 하나이면 유지
+
+### 10.3 AnalysisDetectionPanel 컴포넌트
+
+**파일**: `client/src/components/AnalysisDetectionPanel.tsx`
+
+**기능**:
+- `GET /api/analysis/events` 폴링 (5초 간격, 실시간/일시정지 토글)
+- 이벤트 타입 필터 (`전체 / 🔥 화재 / 💨 연기 / 🚶 배회`)
+- 타입별 색상 구분 카드 UI
+- 이벤트 전체 삭제 (`DELETE /api/analysis/events`)
+- 수동 새로고침 버튼
+
+### 10.4 이벤트 DB 저장 (서버)
+
+**`server/src/index.js`**: `app.set('db', db)` 추가 — analysisApi 라우터에서 DB 접근 가능
+
+**`server/src/routes/analysisApi.js`**:
+- `_persistFireSmoke(db, cameraId, cameraName, ts, detections)` — 화재/연기 이벤트를 `analysisEvents` 컬렉션에 저장 (30초 쿨다운)
+- `_persistLoitering(db, cameraId, cameraName, ts, behaviors)` — 배회 이벤트를 `analysisEvents` 컬렉션에 저장 (60초 쿨다운)
+- `_saveAnalysisEvent(db, event)` — 컬렉션 크기 500개 제한 후 저장
+
+**이벤트 스키마** (`analysisEvents` 컬렉션):
+```json
+{
+  "id": "uuid",
+  "type": "fire | smoke | loitering",
+  "cameraId": "string",
+  "cameraName": "string",
+  "timestamp": "ISO 8601",
+  "confidence": 0.0-1.0,       // fire/smoke만
+  "bbox": { "x", "y", "width", "height" },  // fire/smoke만
+  "objectId": 0,               // loitering만
+  "dwellTime": 0.0,            // loitering만
+  "zoneId": "string",          // loitering만
+  "zoneName": "string",        // loitering만
+  "riskScore": 0.0-1.0         // loitering만
+}
+```
+
+### 10.5 신규 API 엔드포인트
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| GET | `/api/analysis/events` | 최근 분석 이벤트 조회 (query: `limit`, `type`) |
+| DELETE | `/api/analysis/events` | 모든 분석 이벤트 삭제 |
+
+**analysisProxy.js** (streaming 모드): `GET /api/analysis/events` 프록시 추가
+
+### 10.6 AnalysisServerDashboard 변경
+
+- `onNavigateToTab?: (tab: string) => void` prop 추가
+- "감지 이벤트" / "알림" 통계 카드 클릭 시 해당 탭으로 이동
+- Totals 섹션의 Detections/FireSmoke/Loitering 행 클릭 가능
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
@@ -655,4 +733,5 @@ app.get(/^(?!\/api|\/auth|...).*/, (req, res) => res.sendFile(indexHtml));
 | 1.2 | 2026-06-10 | Section 5 재작성: AnalysisServerDashboard.tsx 분리, ONNX 모델 섹션(5.2·5.3) 추가 |
 | 1.3 | 2026-06-10 | Section 5.4 추가: Per-source 테이블에 FpsSparkline 그래프 컬럼 추가 |
 | 1.4 | 2026-06-10 | Section 5.5 추가: VideoAnalyticsTab Fire/Smoke Sensitivity 슬라이더 패널, `/api/analysis/config/fire-smoke` 엔드포인트, fireSmokeService 인스턴스 프로퍼티 승격 |
+| 1.5 | 2026-06-10 | Section 10 추가: Analysis Mode Detections/Alerts 사이드바 탭, AnalysisDetectionPanel, 이벤트 DB 저장, /api/analysis/events 엔드포인트, AnalysisServerDashboard 클릭 가능 카드 |
 

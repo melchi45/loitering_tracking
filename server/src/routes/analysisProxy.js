@@ -74,9 +74,14 @@ function proxyGet(targetPath, req, res) {
   proxyReq.end();
 }
 
-router.get('/metrics',  (req, res) => proxyGet('/api/analysis/metrics',  req, res));
-router.get('/health',   (req, res) => proxyGet('/api/analysis/health',   req, res));
-router.get('/contexts', (req, res) => proxyGet('/api/analysis/contexts', req, res));
+router.get('/metrics',           (req, res) => proxyGet('/api/analysis/metrics',           req, res));
+router.get('/health',            (req, res) => proxyGet('/api/analysis/health',            req, res));
+router.get('/contexts',          (req, res) => proxyGet('/api/analysis/contexts',          req, res));
+router.get('/config/fire-smoke', (req, res) => proxyGet('/api/analysis/config/fire-smoke', req, res));
+router.get('/events',            (req, res) => {
+  const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  proxyGet(`/api/analysis/events${qs}`, req, res);
+});
 
 // All other methods / paths are not proxied
 router.use((_req, res) => {

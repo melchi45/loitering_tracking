@@ -170,16 +170,25 @@ function StatCard({
   label,
   value,
   hint,
+  onClick,
+  accentClass,
 }: {
   label: string;
   value: string;
   hint: string;
+  onClick?: () => void;
+  accentClass?: string;
 }) {
+  const base = 'rounded-2xl border border-slate-700/70 bg-slate-900/70 px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]';
+  const interactive = onClick ? 'cursor-pointer hover:border-amber-400/40 hover:bg-slate-800/80 transition-colors' : '';
   return (
-    <div className="rounded-2xl border border-slate-700/70 bg-slate-900/70 px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]">
+    <div className={`${base} ${interactive}`} onClick={onClick}>
       <p className="text-[10px] uppercase tracking-[0.24em] text-slate-500">{label}</p>
-      <p className="mt-2 text-2xl font-semibold text-slate-100">{value}</p>
+      <p className={`mt-2 text-2xl font-semibold ${accentClass ?? 'text-slate-100'}`}>{value}</p>
       <p className="mt-2 text-xs text-slate-400">{hint}</p>
+      {onClick && (
+        <p className="mt-1 text-[10px] text-amber-400/60">클릭하여 자세히 보기 →</p>
+      )}
     </div>
   );
 }
@@ -219,10 +228,12 @@ export default function AnalysisServerDashboard({
   connected,
   title,
   description,
+  onNavigateToTab,
 }: {
   connected: boolean;
   title: string;
   description: string;
+  onNavigateToTab?: (tab: string) => void;
 }) {
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -264,8 +275,6 @@ export default function AnalysisServerDashboard({
 
   const enabledModules = metrics?.modules.enabled ?? [];
   const cameraRows = metrics?.cameras ?? [];
-  const activeInputCount = cameraRows.filter((camera) => camera.streamPresent).length;
-  const totalInputFps = cameraRows.reduce((sum, camera) => sum + camera.inputFps1s, 0);
 
   return (
     <div className="h-full overflow-auto rounded-[28px] border border-slate-700/70 bg-[radial-gradient(circle_at_top_left,_rgba(245,158,11,0.18),_transparent_28%),linear-gradient(180deg,_rgba(15,23,42,0.96),_rgba(2,6,23,0.98))] px-6 py-6 text-slate-100 shadow-2xl shadow-black/30">
@@ -323,14 +332,18 @@ export default function AnalysisServerDashboard({
             hint={metrics ? `누적 ${formatBytes(metrics.traffic.bytesReceivedTotal)}` : '메트릭 대기 중'}
           />
           <StatCard
-            label="평균 추론 시간"
-            value={metrics ? `${metrics.requests.avgProcessingMs.toFixed(1)} ms` : '-'}
-            hint={metrics ? `현재 처리 중 ${metrics.requests.inFlight}건` : '메트릭 대기 중'}
+            label="감지 이벤트 (누적)"
+            value={metrics ? String(metrics.results.detectionsTotal + metrics.results.fireSmokeTotal) : '-'}
+            hint={metrics ? `배회 ${metrics.results.loiteringTotal}건 · 화재/연기 ${metrics.results.fireSmokeTotal}건` : '메트릭 대기 중'}
+            accentClass="text-amber-300"
+            onClick={onNavigateToTab ? () => onNavigateToTab('detections') : undefined}
           />
           <StatCard
-            label="활성 컨텍스트"
-            value={metrics ? String(metrics.activeCameras) : '-'}
-            hint={metrics ? `실시간 입력 ${activeInputCount}대 / 총 입력 ${totalInputFps.toFixed(1)} fps` : '메트릭 대기 중'}
+            label="알림 (누적)"
+            value={metrics ? String(metrics.results.loiteringTotal) : '-'}
+            hint={metrics ? `배회 감지 알림 누적 건수` : '메트릭 대기 중'}
+            accentClass="text-rose-300"
+            onClick={onNavigateToTab ? () => onNavigateToTab('alerts') : undefined}
           />
         </section>
 
@@ -394,8 +407,20 @@ export default function AnalysisServerDashboard({
                 <div className="mt-3 grid grid-cols-2 gap-3 text-sm text-slate-300">
                   <div><p className="text-slate-500">Detections</p><p className="mt-1 text-lg font-semibold text-slate-100">{metrics?.recent.detections ?? 0}</p></div>
                   <div><p className="text-slate-500">Tracked</p><p className="mt-1 text-lg font-semibold text-slate-100">{metrics?.recent.trackedObjects ?? 0}</p></div>
-                  <div><p className="text-slate-500">Faces</p><p className="mt-1 text-lg font-semibold text-slate-100">{metrics?.recent.faces ?? 0}</p></div>
-                  <div><p className="text-slate-500">Loitering</p><p className="mt-1 text-lg font-semibold text-amber-300">{metrics?.recent.loitering ?? 0}</p></div>
+                  <div
+                    className={onNavigateToTab ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}
+                    onClick={onNavigateToTab ? () => onNavigateToTab('detections') : undefined}
+                  >
+                    <p className="text-slate-500">Fire/Smoke</p>
+                    <p className="mt-1 text-lg font-semibold text-orange-300">{metrics?.recent.fireSmoke ?? 0}</p>
+                  </div>
+                  <div
+                    className={onNavigateToTab ? 'cursor-pointer hover:opacity-80 transition-opacity' : ''}
+                    onClick={onNavigateToTab ? () => onNavigateToTab('alerts') : undefined}
+                  >
+                    <p className="text-slate-500">Loitering</p>
+                    <p className="mt-1 text-lg font-semibold text-amber-300">{metrics?.recent.loitering ?? 0}</p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -405,19 +430,29 @@ export default function AnalysisServerDashboard({
             <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Totals</p>
             <h3 className="mt-1 text-lg font-semibold text-slate-100">누적 분석 결과</h3>
             <div className="mt-5 space-y-3">
-              {[
-                ['Frames', metrics?.results.framesTotal ?? 0],
-                ['Detections', metrics?.results.detectionsTotal ?? 0],
-                ['Tracked Objects', metrics?.results.trackedObjectsTotal ?? 0],
-                ['Faces', metrics?.results.facesTotal ?? 0],
-                ['Fire / Smoke', metrics?.results.fireSmokeTotal ?? 0],
-                ['Loitering', metrics?.results.loiteringTotal ?? 0],
-              ].map(([label, value]) => (
-                <div key={label} className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-3">
-                  <span className="text-sm text-slate-400">{label}</span>
-                  <span className="text-lg font-semibold text-slate-100">{value}</span>
-                </div>
-              ))}
+              {([
+                { label: 'Frames',          value: metrics?.results.framesTotal ?? 0,          tab: null,         valueClass: 'text-slate-100' },
+                { label: 'Detections',      value: metrics?.results.detectionsTotal ?? 0,       tab: 'detections', valueClass: 'text-sky-200' },
+                { label: 'Tracked Objects', value: metrics?.results.trackedObjectsTotal ?? 0,   tab: null,         valueClass: 'text-slate-100' },
+                { label: 'Faces',           value: metrics?.results.facesTotal ?? 0,            tab: 'detections', valueClass: 'text-slate-100' },
+                { label: 'Fire / Smoke',    value: metrics?.results.fireSmokeTotal ?? 0,        tab: 'detections', valueClass: 'text-orange-300' },
+                { label: 'Loitering',       value: metrics?.results.loiteringTotal ?? 0,        tab: 'alerts',     valueClass: 'text-amber-300' },
+              ] as const).map(({ label, value, tab, valueClass }) => {
+                const clickable = onNavigateToTab && tab;
+                return (
+                  <div
+                    key={label}
+                    className={`flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-3 ${clickable ? 'cursor-pointer hover:border-slate-600 transition-colors' : ''}`}
+                    onClick={clickable ? () => onNavigateToTab(tab) : undefined}
+                  >
+                    <span className="text-sm text-slate-400">{label}</span>
+                    <div className="flex items-center gap-2">
+                      <span className={`text-lg font-semibold ${valueClass}`}>{value}</span>
+                      {clickable && <span className="text-[10px] text-slate-600">→</span>}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </section>

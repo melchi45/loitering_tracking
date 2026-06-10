@@ -170,6 +170,7 @@ async function main() {
   const zoneManager         = new ZoneManager(db);
   const alertService        = new AlertService(db);
   app.set('alertService', alertService); // accessible in analysisApi route handlers
+  app.set('db', db);                     // accessible in analysisApi route handlers for event persistence
   // Pass the shared ZoneManager so zone additions/deletions via REST API are
   // immediately visible to the pipeline without a server restart.
   const pipelineManager     = new PipelineManager(io, db, zoneManager);

@@ -103,6 +103,8 @@ loitering_tracking/
 | GET | `/api/analysis/metrics` | 분석 서버 대시보드용 트래픽/모듈/결과 메트릭 조회 |
 | GET | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 조회 |
 | PATCH | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 런타임 변경 |
+| GET | `/api/analysis/events` | 분석 이벤트 조회 (query: limit, type) |
+| DELETE | `/api/analysis/events` | 분석 이벤트 전체 삭제 |
 
 ---
 

@@ -4,13 +4,16 @@
  * Analysis API — used when SERVER_MODE=analysis
  *
  * Exposes:
- *   POST /api/analysis/frame  — receive JPEG frame, run AI, return results
- *   GET  /api/analysis/health — liveness probe for streaming servers
+ *   POST /api/analysis/frame       — receive JPEG frame, run AI, return results
+ *   GET  /api/analysis/health      — liveness probe for streaming servers
+ *   GET  /api/analysis/events      — recent analysis events (fire/smoke/loitering)
+ *   DELETE /api/analysis/events    — clear all persisted analysis events
  *
  * Per-camera state (tracker + behavior engine) is kept in memory.
  * Stale contexts (> CONTEXT_EXPIRY_MS of inactivity) are pruned automatically.
  */
 
+const crypto        = require('crypto');
 const express       = require('express');
 const router        = express.Router();
 const DetectionService = require('../services/detection');
@@ -21,9 +24,16 @@ const FireSmokeService  = require('../services/fireSmokeService');
 const analyticsConfig   = require('../services/analyticsConfig');
 const { getSystemMetrics } = require('../services/systemMetrics');
 
-const CONTEXT_EXPIRY_MS = 5 * 60 * 1000; // prune camera context after 5 min idle
-const RECENT_WINDOW_MS  = 60 * 1000;
-const STREAM_ACTIVE_MS  = 3000;
+const CONTEXT_EXPIRY_MS         = 5 * 60 * 1000; // prune camera context after 5 min idle
+const RECENT_WINDOW_MS          = 60 * 1000;
+const STREAM_ACTIVE_MS          = 3000;
+const MAX_PERSISTED_EVENTS      = 500;            // cap DB collection size
+const FIRE_SMOKE_SAVE_COOLDOWN  = 30_000;         // ms between saves for same camera+class
+const LOITERING_SAVE_COOLDOWN   = 60_000;         // ms between saves for same camera+objectId
+
+// Per-camera+class cooldown maps — prevent burst writes on every frame
+const _fireSmokeEventCooldown = new Map(); // key: `${cameraId}:${className}`
+const _loiteringEventCooldown = new Map(); // key: `${cameraId}:${objectId}`
 
 const _metrics = {
   startedAt:           Date.now(),
@@ -229,6 +239,65 @@ async function _loadServices() {
 setImmediate(() => {
   _ensureServices().catch(err => console.error('[AnalysisAPI] Startup model load error:', err.message));
 });
+
+// ── DB persistence helpers ─────────────────────────────────────────────────────
+function _saveAnalysisEvent(db, event) {
+  if (!db) return;
+  try {
+    const all = db.find('analysisEvents', {});
+    if (all.length >= MAX_PERSISTED_EVENTS) {
+      // Delete oldest entry to keep collection bounded
+      const oldest = all.slice().sort((a, b) =>
+        new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+      )[0];
+      if (oldest?.id) db.delete('analysisEvents', oldest.id);
+    }
+    db.insert('analysisEvents', event);
+  } catch (err) {
+    console.warn('[AnalysisAPI] Failed to persist event:', err.message);
+  }
+}
+
+function _persistFireSmoke(db, cameraId, cameraName, ts, detections) {
+  const now = Date.now();
+  for (const det of detections) {
+    const key = `${cameraId}:${det.className}`;
+    if (now - (_fireSmokeEventCooldown.get(key) || 0) < FIRE_SMOKE_SAVE_COOLDOWN) continue;
+    _fireSmokeEventCooldown.set(key, now);
+    _saveAnalysisEvent(db, {
+      id:         crypto.randomUUID(),
+      type:       det.className, // 'fire' | 'smoke'
+      cameraId,
+      cameraName: cameraName || cameraId,
+      timestamp:  ts,
+      confidence: det.confidence,
+      bbox:       det.bbox,
+    });
+  }
+}
+
+function _persistLoitering(db, cameraId, cameraName, ts, behaviors) {
+  const now = Date.now();
+  for (const b of behaviors) {
+    if (!b.isLoitering && b.type !== 'loitering') continue;
+    const objectId = b.objectId ?? b.trackId;
+    const key = `${cameraId}:${objectId}`;
+    if (now - (_loiteringEventCooldown.get(key) || 0) < LOITERING_SAVE_COOLDOWN) continue;
+    _loiteringEventCooldown.set(key, now);
+    _saveAnalysisEvent(db, {
+      id:         crypto.randomUUID(),
+      type:       'loitering',
+      cameraId,
+      cameraName: cameraName || cameraId,
+      timestamp:  ts,
+      objectId,
+      dwellTime:  b.dwellTime,
+      zoneId:     b.zoneId,
+      zoneName:   b.zoneName,
+      riskScore:  b.riskScore,
+    });
+  }
+}
 
 // ── Per-camera stateful context (tracker + behavior) ─────────────────────────
 // key: cameraId  value: { tracker, behavior, lastSeenAt }
@@ -470,11 +539,16 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
 
     // ── Process behaviors: loitering alerts (alert persistence only) ──────────
     const behaviors = behaviorsResult || [];
+    const db = req.app.get('db');
     for (const b of behaviors) {
       if ((b.isLoitering || b.type === 'loitering') && alertService) {
         alertService.createAlert({ ...b, cameraId }).catch(() => {});
       }
     }
+
+    // ── Persist fire/smoke and loitering events to DB ─────────────────────────
+    if (fireSmoke.length > 0) _persistFireSmoke(db, cameraId, cameraName, ts, fireSmoke);
+    if (behaviors.length > 0) _persistLoitering(db, cameraId, cameraName, ts, behaviors);
 
     res.json({
       cameraId,
@@ -618,6 +692,43 @@ router.patch('/config/fire-smoke', express.json({ limit: '10kb' }), (req, res) =
     confThreshold: _fireSmokeService.confThreshold,
     nmsThreshold:  _fireSmokeService.nmsThreshold,
   });
+});
+
+// ── GET /api/analysis/events ──────────────────────────────────────────────────
+// Returns recent persisted analysis events (fire/smoke/loitering).
+// Query params: limit (default 100, max 200), type (comma-separated, e.g. fire,smoke,loitering)
+router.get('/events', (req, res) => {
+  const db = req.app.get('db');
+  if (!db) return res.status(503).json({ error: 'DB not available' });
+
+  const limit      = Math.min(200, Math.max(1, parseInt(String(req.query.limit || '100'), 10) || 100));
+  const typeFilter = req.query.type ? String(req.query.type).split(',').map(t => t.trim()).filter(Boolean) : null;
+
+  let events = db.find('analysisEvents', {});
+  if (typeFilter && typeFilter.length > 0) {
+    events = events.filter(e => typeFilter.includes(e.type));
+  }
+  events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  events = events.slice(0, limit);
+
+  res.json({ events, total: events.length });
+});
+
+// ── DELETE /api/analysis/events ───────────────────────────────────────────────
+// Clears all persisted analysis events.
+router.delete('/events', (req, res) => {
+  const db = req.app.get('db');
+  if (!db) return res.status(503).json({ error: 'DB not available' });
+
+  try {
+    const all = db.find('analysisEvents', {});
+    for (const event of all) {
+      if (event.id) db.delete('analysisEvents', event.id);
+    }
+    res.json({ deleted: all.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ── GET /api/analysis/contexts ────────────────────────────────────────────────
