@@ -612,6 +612,39 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
     if (db) {
       if (fireSmoke.length > 0) _persistFireSmoke(db, io, cameraId, cameraName, ts, fireSmoke, jpegBuffer, frameWidth, frameHeight).catch(() => {});
       if (behaviors.length > 0) _persistLoitering(db, io, cameraId, cameraName, ts, behaviors, jpegBuffer, frameWidth, frameHeight).catch(() => {});
+
+      // ── snapshot:new for regular tracked objects (isFirstSeen / isLoitering / hasFaceMatch) ─
+      // Uses the same snapshotSvc.shouldSave() logic as combined/streaming modes so that
+      // DashboardDetectionPanel shows person crops in analysis server mode too.
+      if (snapshotSvc.isEnabled() && enrichedObjects.length > 0 && io) {
+        const _buf = jpegBuffer; const _fw = frameWidth; const _fh = frameHeight;
+        const _db = db; const _io = io; const _camId = cameraId; const _ts = ts;
+        const _cam = { id: cameraId, name: cameraName || cameraId };
+        setImmediate(async () => {
+          for (const det of enrichedObjects) {
+            try {
+              const hasFaceMatch = !!(det.face && det.face.matchScore > 0) || !!det.matchScore;
+              if (!snapshotSvc.shouldSave(_camId, det.objectId, {
+                isLoitering: det.isLoitering,
+                hasFaceMatch,
+                isFireSmoke: false,
+                timestamp:   new Date(_ts).getTime(),
+              })) continue;
+              const { data: cropBuf, width: cw, height: ch } =
+                await snapshotSvc.cropJpeg(_buf, det.bbox, _fw, _fh);
+              const snapId = await snapshotSvc.saveSnapshot(_db, _cam, det, cropBuf, cw, ch, _fw, _fh, _ts);
+              _io.emit('snapshot:new', {
+                cameraId:   _camId,
+                snapshotId: snapId,
+                objectId:   det.objectId,
+                className:  det.className,
+                timestamp:  _ts,
+                cropData:   'data:image/jpeg;base64,' + cropBuf.toString('base64'),
+              });
+            } catch (_) { /* non-fatal */ }
+          }
+        });
+      }
     }
   } catch (err) {
     _metrics.errorsTotal += 1;

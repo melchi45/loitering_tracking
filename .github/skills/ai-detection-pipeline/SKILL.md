@@ -441,6 +441,34 @@ if (io && cropData) io.emit('snapshot:new', { cameraId, objectId: det.className,
 if (io && cropData) io.emit('snapshot:new', { cameraId, objectId, className: 'person', timestamp: ts, cropData });
 ```
 
+**일반 tracked person 크롭 (snapshotSvc 경로):**
+
+analysis 모드에서 combined/streaming과 동일하게 일반 person 크롭을 지원합니다.
+
+```javascript
+// res.json() 이후 setImmediate (non-blocking)
+if (snapshotSvc.isEnabled() && enrichedObjects.length > 0 && io) {
+  setImmediate(async () => {
+    for (const det of enrichedObjects) {
+      const hasFaceMatch = !!(det.face?.matchScore > 0) || !!det.matchScore;
+      if (!snapshotSvc.shouldSave(cameraId, det.objectId, {
+        isLoitering: det.isLoitering,
+        hasFaceMatch,
+        isFireSmoke: false,
+        timestamp: new Date(ts).getTime(),
+      })) continue;
+      const { data: cropBuf } = await snapshotSvc.cropJpeg(buf, det.bbox, fw, fh);
+      const snapId = await snapshotSvc.saveSnapshot(db, cam, det, cropBuf, ...);
+      io.emit('snapshot:new', { cameraId, snapshotId: snapId, objectId: det.objectId,
+                                className: det.className, timestamp: ts,
+                                cropData: 'data:image/jpeg;base64,' + cropBuf.toString('base64') });
+    }
+  });
+}
+```
+
+조건: `isFirstSeen` (새 객체 첫 등장) | `isLoitering` | `hasFaceMatch` | 또는 SNAPSHOT_INTERVAL_SEC 경과
+
 `analysisEvents` 스키마에 `cropData?: string` 추가 (data:image/jpeg;base64,... 형식)
 
 **조회/삭제 API:**

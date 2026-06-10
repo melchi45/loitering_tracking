@@ -801,13 +801,15 @@ PipelineManager._processRemoteResult (analysis 서버 HTTP 응답 수신 후)
 analysisApi.js POST /api/analysis/process
   └─► io.emit('detections', { cameraId, detections: [...tracked, ...faces, ...fireSmoke] })
            │ (global broadcast — 카메라 룸 없음)
+  └─► [setImmediate] snapshotSvc.shouldSave() → io.emit('snapshot:new', { objectId, cropData })
+           │ (isFirstSeen | isLoitering | hasFaceMatch — combined/streaming과 동일 조건)
   └─► _persistFireSmoke → io.emit('snapshot:new', { objectId: 'fire'|'smoke', cropData })
   └─► _persistLoitering → io.emit('snapshot:new', { objectId: trackId, cropData })
 ```
 
 - **global emit** (`io.emit()`) 사용 — DB에 카메라 없어 룸 구독 불가
-- 크롭 지원: fire/smoke (30s 쿨다운) + loitering (60s 쿨다운)
-- 일반 tracked person 크롭: 미지원 (loitering 전환 시 크롭 생성)
+- **tracked person 크롭**: `snapshotSvc.shouldSave()` 사용 — isFirstSeen/isLoitering/hasFaceMatch 조건 지원
+- fire/smoke 크롭: 30s 쿨다운, loitering 크롭: 60s 쿨다운 (persist 함수 경로)
 
 ### 8.5 클라이언트 구독 메커니즘
 
@@ -822,7 +824,7 @@ if (subscribedRef.current.size > 0 && !subscribedRef.current.has(ev.cameraId)) r
 |---|---|---|---|
 | combined | camera:subscribe → 룸 join | ✅ | snapshotSvc (모든 조건) |
 | streaming | camera:subscribe → 룸 join | ✅ (analysis 서버 연결 필요) | snapshotSvc (모든 조건) |
-| analysis | 없음 (global 수신) | ✅ | _persistFireSmoke/Loitering |
+| analysis | 없음 (global 수신) | ✅ | snapshotSvc + _persistFireSmoke/Loitering |
 
 ---
 
@@ -873,4 +875,4 @@ if (subscribedRef.current.size > 0 && !subscribedRef.current.has(ev.cameraId)) r
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-10 | 초기 작성 — combined/streaming/analysis 모드 분리, DB/MCP 아키텍처, 배포 시나리오 5종, Mermaid 다이어그램 포함 |
-| 1.1 | 2026-06-10 | Section 8 추가: 실시간 감지 데이터 흐름(SERVER_MODE별), analysis 모드 Socket.IO 활성화, useAllDetections 전체 수신 메커니즘 |
+| 1.1 | 2026-06-10 | Section 8 추가: 실시간 감지 데이터 흐름(SERVER_MODE별), analysis 모드 Socket.IO 활성화, useAllDetections 전체 수신 메커니즘, snapshotSvc로 일반 person 크롭 지원 |
