@@ -4,16 +4,17 @@ const http  = require('http');
 const https = require('https');
 const { URL } = require('url');
 
-// 2 s is aggressive enough to detect a dead server quickly while still allowing
-// a slow inference pass to complete. Override via ANALYSIS_REQUEST_TIMEOUT_MS.
-const DEFAULT_TIMEOUT_MS     = 2_000;
+// 10 s accommodates CPU-based YOLOv8 inference (1–8 s on typical server hardware).
+// GPU inference completes in <1 s so this is still tight enough to detect a dead server.
+// Override via ANALYSIS_REQUEST_TIMEOUT_MS env var.
+const DEFAULT_TIMEOUT_MS     = 10_000;
 // Each camera uses one concurrent slot (per-camera pending-slot pattern).
 // Set high enough to cover typical camera counts without artificial back-pressure.
 const DEFAULT_MAX_CONCURRENT = 16;
 
 // Circuit breaker: open after this many consecutive failures.
-// 3 × 2 s = 6 s total before the circuit trips and all frame traffic stops.
-const CIRCUIT_OPEN_THRESHOLD = 3;
+// Raised to 5 to avoid flapping on transient inference spikes.
+const CIRCUIT_OPEN_THRESHOLD = 5;
 // How long the circuit stays open before a health probe is attempted (ms).
 const CIRCUIT_RETRY_INTERVAL = 15_000;
 // Health probe timeout — always longer than the per-frame timeout so that
@@ -52,6 +53,7 @@ class AnalysisClient {
 
     // Per-camera error log throttle: cameraId → last log timestamp
     this._lastErrLog = new Map();
+    this._lastError  = null;  // last error message for UI diagnostics
 
     // Keep-alive agents reuse TCP/TLS connections across requests, avoiding
     // per-request handshake overhead when forwarding frames at high fps.
@@ -92,6 +94,7 @@ class AnalysisClient {
     } catch (err) {
       this._errors++;
       this._consecutive++;
+      this._lastError = err.message;
       this._logError(cameraId, frameId, err.message);
       if (this._consecutive >= CIRCUIT_OPEN_THRESHOLD && !this._open) {
         this._openCircuit();
@@ -113,11 +116,13 @@ class AnalysisClient {
 
   getStats() {
     return {
-      total:      this._total,
-      inflight:   this._inflight,
-      dropped:    this._dropped,
-      errors:     this._errors,
+      total:       this._total,
+      inflight:    this._inflight,
+      dropped:     this._dropped,
+      errors:      this._errors,
       circuitOpen: this._open,
+      lastError:   this._lastError,
+      timeoutMs:   this._timeout,
     };
   }
 

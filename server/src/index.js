@@ -228,12 +228,14 @@ async function main() {
       const stats = pipelineManager.getAnalysisClientStats();
       if (!stats) return res.json({ connected: false, error: 'Analysis client not yet initialised' });
       res.json({
-        connected:   !stats.circuitOpen,
-        circuitOpen: stats.circuitOpen,
-        total:       stats.total,
-        errors:      stats.errors,
-        dropped:     stats.dropped,
-        inflight:    stats.inflight,
+        connected:         !stats.circuitOpen,
+        circuitOpen:       stats.circuitOpen,
+        total:             stats.total,
+        errors:            stats.errors,
+        dropped:           stats.dropped,
+        inflight:          stats.inflight,
+        lastError:         stats.lastError,
+        timeoutMs:         stats.timeoutMs,
         analysisServerUrl: process.env.ANALYSIS_SERVER_URL,
       });
     });

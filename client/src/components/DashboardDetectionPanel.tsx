@@ -11,11 +11,13 @@ import type { Detection } from '../types';
 // ── Analysis server status (streaming mode only) ──────────────────────────────
 
 interface AnalysisClientStatus {
-  connected:   boolean;
-  circuitOpen: boolean;
-  total:       number;
-  errors:      number;
-  dropped:     number;
+  connected:         boolean;
+  circuitOpen:       boolean;
+  total:             number;
+  errors:            number;
+  dropped:           number;
+  lastError?:        string;
+  timeoutMs?:        number;
   analysisServerUrl?: string;
 }
 
@@ -414,20 +416,27 @@ export function DashboardDetectionPanel() {
 
       {/* ── Analysis server status banner (streaming mode only) ── */}
       {analysisStatus !== null && (
-        <div className={`flex items-center gap-1.5 px-2 py-1 flex-shrink-0 text-[9px] border-b ${
+        <div className={`flex flex-col gap-0.5 px-2 py-1 flex-shrink-0 text-[9px] border-b ${
           analysisStatus.connected
             ? 'bg-green-900/20 border-green-800/40 text-green-400'
             : 'bg-red-900/30 border-red-800/40 text-red-400'
         }`}>
-          <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${analysisStatus.connected ? 'bg-green-400' : 'bg-red-500 animate-pulse'}`} />
-          {analysisStatus.connected
-            ? `Analysis server connected · ${analysisStatus.total} frames processed`
-            : `Analysis server disconnected${analysisStatus.circuitOpen ? ' (circuit open)' : ''} · ${analysisStatus.errors} errors`
-          }
-          {!analysisStatus.connected && analysisStatus.analysisServerUrl && (
-            <span className="text-gray-500 truncate ml-1" title={analysisStatus.analysisServerUrl}>
-              {analysisStatus.analysisServerUrl.replace(/^https?:\/\//, '')}
-            </span>
+          <div className="flex items-center gap-1.5">
+            <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${analysisStatus.connected ? 'bg-green-400' : 'bg-red-500 animate-pulse'}`} />
+            {analysisStatus.connected
+              ? `Analysis server connected · ${analysisStatus.total} frames · timeout ${analysisStatus.timeoutMs ?? '?'}ms`
+              : `Analysis server disconnected${analysisStatus.circuitOpen ? ' (circuit open)' : ''} · ${analysisStatus.errors} errors`
+            }
+            {!analysisStatus.connected && analysisStatus.analysisServerUrl && (
+              <span className="text-gray-500 truncate ml-1" title={analysisStatus.analysisServerUrl}>
+                {analysisStatus.analysisServerUrl.replace(/^https?:\/\//, '')}
+              </span>
+            )}
+          </div>
+          {!analysisStatus.connected && analysisStatus.lastError && (
+            <div className="text-red-600/80 pl-3 truncate" title={analysisStatus.lastError}>
+              {analysisStatus.lastError}
+            </div>
           )}
         </div>
       )}
