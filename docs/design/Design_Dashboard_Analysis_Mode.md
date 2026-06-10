@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UI-DAM-01 |
-| **Version** | 1.7 |
+| **Version** | 1.8 |
 | **Status** | Active |
 | **Date** | 2026-06-10 |
 | **Parent SRS** | [srs/SRS_Dashboard_Analysis_Mode.md](../srs/SRS_Dashboard_Analysis_Mode.md) |
@@ -653,28 +653,43 @@ app.get(/^(?!\/api|\/auth|...).*/, (req, res) => res.sendFile(indexHtml));
 
 Analysis 모드에서 AI가 감지한 이벤트(화재, 연기, 배회)를 영구 저장하고, 대시보드 카드 클릭 시 날짜·시간 그룹별 이벤트 히스토리를 오버레이로 표시합니다. 크롭 이미지도 함께 저장·표시됩니다.
 
-### 10.2 사이드바 탭 — analysis 모드 (v1.7 변경)
+### 10.2 사이드바 탭 — analysis 모드 (v1.8 변경)
 
-**v1.5 → v1.7 변경**:
+**변경 이력**:
 ```
 v1.5: [ 🤖 Analytics ] [ 👁 Detections ] [ 🔔 Alerts ]
-v1.7: [ 🤖 Analytics ]   ← Analytics 탭 1개만
+v1.7: [ 🤖 Analytics ]                   ← Analytics 탭 1개만
+v1.8: [ 🤖 Analytics ] [ 👁 Detections ] ← Detections 탭 재도입 (실시간 감지)
 ```
 
 `App.tsx`:
 ```typescript
-const ANALYSIS_TABS: SidebarTab[] = ['analytics'];
+const ANALYSIS_TABS: SidebarTab[] = ['analytics', 'detections'];
 const TAB_ITEMS = isAnalysis
-  ? [{ id: 'analytics', icon: '🤖', label: t.tabVideoAnalytics }]
+  ? [
+      { id: 'analytics'  as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
+      { id: 'detections' as SidebarTab, icon: '👁',  label: t.tabDetections },
+    ]
   : [...]; // combined/streaming 탭
 ```
 
 `renderTabContent()` (analysis 분기):
 ```typescript
-if (isAnalysis) {
-  return <VideoAnalyticsTab />;
+function renderTabContent(overrideTab?: SidebarTab) {
+  const tab = overrideTab ?? sidebarTab;
+  if (isAnalysis) {
+    if (tab === 'detections') return <DashboardDetectionPanel />;
+    return <VideoAnalyticsTab />;
+  }
+  // ...
 }
 ```
+
+**Detections 탭 동작 (analysis 모드)**:
+- `DashboardDetectionPanel`이 `useAllDetections` 훅으로 `detections` Socket.IO 이벤트 수신
+- Analysis 서버는 `io.emit()` global로 브로드캐스트 → 카메라 구독 없이도 수신 가능
+- 카메라 이름: DB에 카메라 없으므로 `cameraId.slice(0, 8)` 약칭 표시
+- `/api/analysis/client-status` 엔드포인트 미존재(analysis 모드) → `useAnalysisClientStatus` null 반환 → streaming 연결 배너 자동 숨김
 
 ### 10.3 AnalysisDetectionPanel — 이벤트 히스토리 브라우저 (v1.7 재작성)
 
@@ -807,4 +822,5 @@ if (db) {
 | 1.5 | 2026-06-10 | Section 10 추가: Analysis Mode Detections/Alerts 사이드바 탭, AnalysisDetectionPanel, 이벤트 DB 저장, /api/analysis/events 엔드포인트, AnalysisServerDashboard 클릭 가능 카드 |
 | 1.6 | 2026-06-10 | 버그 수정 반영: `db.js` ALL_TABLES에 `analysisEvents` 추가 (HTTP 500 수정), `index.js`에서 alertService EventEmitter를 socket.io에 직접 연결 (Alerts 탭 실시간 전파 수정), `app.set('db', db)` 추가 |
 | 1.7 | 2026-06-10 | Section 10 전면 재작성: analysis 모드 탭 analytics 단일화, AnalysisDetectionPanel 날짜 그룹별 히스토리 브라우저로 재구현, AnalysisServerDashboard 내부 오버레이 방식, cropData 크롭 이미지 저장·표시 |
+| 1.8 | 2026-06-10 | Section 10.2 업데이트: analysis 모드에 Detections 탭 재도입 (`DashboardDetectionPanel` + global `io.emit()` 수신) |
 

@@ -211,21 +211,35 @@ Sign Out → auth.logout()
 - 기준 위치: `client/src/App.tsx` (`serverMode`, `isStreaming`, `TAB_ITEMS`)
 - `combined`: Cameras/Analytics 탭 모두 표시
 - `streaming`: Analytics 탭 숨김
-- `analysis`: 메인 영역은 `AnalysisServerDashboard.tsx`, 우측/모바일 탭은 **1개 탭** 표시:
+- `analysis`: 메인 영역은 `AnalysisServerDashboard.tsx`, 우측/모바일 탭은 **2개 탭** 표시:
   - `analytics` (VideoAnalyticsTab — 모듈 설정)
+  - `detections` (DashboardDetectionPanel — 실시간 감지, `io.emit()` global 수신)
   - 이벤트 히스토리는 대시보드 카드 클릭 → `AnalysisDetectionPanel` 인라인 오버레이로 표시
 - 모드 변경으로 현재 활성 탭이 유효하지 않으면 `analytics`로 자동 전환
 
 ```typescript
-// App.tsx — analysis 탭 가드 (v1.7)
-const ANALYSIS_TABS: SidebarTab[] = ['analytics'];
+// App.tsx — analysis 탭 가드
+const ANALYSIS_TABS: SidebarTab[] = ['analytics', 'detections'];
 if (isAnalysis && !ANALYSIS_TABS.includes(sidebarTab)) {
   setSidebarTab('analytics');
 }
 
-// renderTabContent — analysis 분기
-if (isAnalysis) {
-  return <VideoAnalyticsTab />;
+// TAB_ITEMS — analysis 모드
+const TAB_ITEMS = isAnalysis
+  ? [
+      { id: 'analytics'  as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
+      { id: 'detections' as SidebarTab, icon: '👁',  label: t.tabDetections },
+    ]
+  : [ /* combined/streaming tabs */ ];
+
+// renderTabContent — analysis 분기 (tab override 지원)
+function renderTabContent(overrideTab?: SidebarTab) {
+  const tab = overrideTab ?? sidebarTab;
+  if (isAnalysis) {
+    if (tab === 'detections') return <DashboardDetectionPanel />;
+    return <VideoAnalyticsTab />;
+  }
+  // ...
 }
 ```
 

@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UI-DL-01 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent SRS** | srs/SRS_Dashboard_Layout.md |
@@ -140,10 +140,10 @@ App.tsx
 |---|---|---|---|
 | `combined` | 표시 | 표시 | CameraGrid |
 | `streaming` | 표시 | 숨김 | CameraGrid |
-| `analysis` | 숨김 | Analytics only | AnalysisServerDashboard |
+| `analysis` | 숨김 | Analytics + Detections | AnalysisServerDashboard |
 
 - `analysis` 모드에서 카메라 레이아웃은 렌더링하지 않으며 메인 영역에 AnalysisServerDashboard를 표시합니다.
-- `analysis` 모드의 우측/모바일 탭은 `Analytics` 단일 탭만 유지합니다.
+- `analysis` 모드의 우측/모바일 탭은 `Analytics`(모듈 설정)와 `Detections`(실시간 감지) 두 개 탭을 제공합니다.
 - `analysis` 모드에서 우측 상단 `Statistics` 버튼은 `AnalysisStatsModal`을 열어 `/api/analysis/metrics` 기반 지표만 표시합니다.
 - `analysis` 모드에서 `SettingsModal`은 언어 선택만 제공하고 WebRTC/ICE 설정 섹션은 숨깁니다.
 
@@ -494,3 +494,4 @@ ESC keydown || close button click
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Dashboard Layout |
 | 1.1 | 2026-06-10 | Youngho Kim | 사이드바 Collapse/Expand 기능 추가 — ✕ 버튼으로 아이콘 스트립 축소, 클릭 시 복원, hover flyout 패널 |
+| 1.2 | 2026-06-10 | Youngho Kim | analysis 모드에 Detections 탭 추가 — `DashboardDetectionPanel` 전역 `detections` 이벤트 수신 |

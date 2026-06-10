@@ -801,10 +801,11 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
 
   // ── Shared: tab nav items ───────────────────────────────────────────────────
   // In combined mode the analytics tab lives at /analysis — no inline tab.
-  const ANALYSIS_TABS: SidebarTab[] = ['analytics'];
+  const ANALYSIS_TABS: SidebarTab[] = ['analytics', 'detections'];
   const TAB_ITEMS = isAnalysis
     ? [
-        { id: 'analytics' as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
+        { id: 'analytics'  as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
+        { id: 'detections' as SidebarTab, icon: '👁',  label: t.tabDetections },
       ]
     : [
         { id: 'cameras'    as SidebarTab, icon: '📷', label: t.tabCameras },
