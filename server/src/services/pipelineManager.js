@@ -1004,8 +1004,44 @@ class PipelineManager {
       },
       recent,
       cameras,
+      models: this._getLoadedModels(),
       system: getSystemMetrics(),
     };
+  }
+
+  _getLoadedModels() {
+    const path = require('path');
+    const fs   = require('fs');
+    const models = [];
+
+    if (this._detector) {
+      const mp = this._detector.modelPath;
+      models.push({ name: path.basename(mp), path: mp, service: 'detector', loaded: true, exists: fs.existsSync(mp) });
+    }
+
+    if (this._attrPipeline) {
+      const ppe = this._attrPipeline._ppe;
+      if (ppe?.modelPath) {
+        const mp = ppe.modelPath;
+        models.push({ name: path.basename(mp), path: mp, service: 'ppe', loaded: ppe.ready ?? false, exists: fs.existsSync(mp) });
+      }
+      const face = this._attrPipeline._face;
+      if (face?.scrfdPath) {
+        const mp = face.scrfdPath;
+        models.push({ name: path.basename(mp), path: mp, service: 'face-detect', loaded: face.ready ?? false, exists: fs.existsSync(mp) });
+      }
+      if (face?.arcfacePath) {
+        const mp = face.arcfacePath;
+        models.push({ name: path.basename(mp), path: mp, service: 'face-embed', loaded: face.ready ?? false, exists: fs.existsSync(mp) });
+      }
+    }
+
+    if (this._fireSmokeService) {
+      const mp = this._fireSmokeService.modelPath;
+      models.push({ name: path.basename(mp), path: mp, service: 'fire-smoke', loaded: true, exists: fs.existsSync(mp) });
+    }
+
+    return models;
   }
 
   // ─── Private ──────────────────────────────────────────────────────────────
