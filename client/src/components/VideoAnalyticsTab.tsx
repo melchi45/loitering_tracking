@@ -1,24 +1,18 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react'; // eslint-disable-line
 import { useI18n } from '../i18n';
 
 // ── YOLO Model catalog types ───────────────────────────────────────────────────
 interface ModelEntry {
-  id:               string;
-  label:            string;
-  series:           string;
-  size:             number;
-  mAP:              number;
-  cpuMs:            number;
-  t4Ms:             number;
-  params:           string;
-  flops:            string;
-  file:             string;
-  exists:           boolean;
-  active:           boolean;
-  sizeBytes:        number | null;
-  downloading:      boolean;
-  downloadPercent:  number | null;
-  downloadError:    string | null;
+  id:        string;
+  label:     string;
+  series:    string;
+  mAP:       number;
+  cpuMs:     number;
+  params:    string;
+  file:      string;
+  exists:    boolean;
+  active:    boolean;
+  sizeBytes: number | null;
 }
 
 interface AttrItem  { id: string; label: string; labelKo: string; model?: string; pending?: boolean; installHint?: string; }
@@ -246,7 +240,6 @@ export default function VideoAnalyticsTab() {
   const [models, setModels]             = useState<ModelEntry[]>([]);
   const [modelOpen, setModelOpen]       = useState(true);
   const [modelSwitching, setModelSwitching] = useState<string | null>(null);
-  const [modelDownloading, setModelDownloading] = useState<Set<string>>(new Set());
   const modelPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const fetchModels = useCallback(async () => {
@@ -255,12 +248,6 @@ export default function VideoAnalyticsTab() {
       if (!r.ok) return;
       const data = await r.json();
       setModels(data.catalog ?? []);
-      // stop polling once no downloads are in flight
-      const anyDownloading = (data.catalog ?? []).some((m: ModelEntry) => m.downloading);
-      if (!anyDownloading && modelPollRef.current) {
-        clearInterval(modelPollRef.current);
-        modelPollRef.current = null;
-      }
     } catch { /* ignore */ }
   }, []);
 
@@ -276,29 +263,6 @@ export default function VideoAnalyticsTab() {
     } finally {
       setModelSwitching(null);
     }
-  };
-
-  const downloadModel = async (id: string) => {
-    setModelDownloading(prev => new Set(prev).add(id));
-    try {
-      await fetch('/api/analysis/models/download', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ modelId: id }),
-      });
-      // Start polling for progress
-      if (!modelPollRef.current) {
-        modelPollRef.current = setInterval(fetchModels, 1500);
-      }
-      await fetchModels();
-    } finally {
-      setModelDownloading(prev => { const s = new Set(prev); s.delete(id); return s; });
-    }
-  };
-
-  const downloadAll = async () => {
-    const missing = models.filter(m => !m.exists && !m.downloading);
-    for (const m of missing) await downloadModel(m.id);
   };
 
   // Kalman / Tracker settings
@@ -528,22 +492,8 @@ export default function VideoAnalyticsTab() {
                     {models.find(m => m.active)!.label}
                   </span>
                 )}
-                {models.some(m => m.downloading) && (
-                  <span className="text-[9px] text-yellow-400 animate-pulse">⬇ 다운로드 중...</span>
-                )}
               </div>
-              <div className="flex items-center gap-2">
-                {models.some(m => !m.exists && !m.downloading) && (
-                  <button
-                    onClick={e => { e.stopPropagation(); downloadAll(); }}
-                    className="text-[8px] bg-blue-700/60 hover:bg-blue-700 text-blue-200 rounded px-2 py-0.5 border border-blue-600/40 transition-colors"
-                    title="전체 미다운로드 모델 다운로드"
-                  >
-                    전체 다운
-                  </button>
-                )}
-                <span className="text-[8px] text-gray-500">{modelOpen ? '▲' : '▼'}</span>
-              </div>
+              <span className="text-[8px] text-gray-500">{modelOpen ? '▲' : '▼'}</span>
             </button>
 
             {modelOpen && (
@@ -555,7 +505,7 @@ export default function VideoAnalyticsTab() {
                   <span className="text-right">mAP</span>
                   <span className="text-right">CPU ms</span>
                   <span className="text-right">Params</span>
-                  <span className="text-right w-16" />
+                  <span className="text-right">Size</span>
                 </div>
 
                 {/* Group by series */}
@@ -565,59 +515,33 @@ export default function VideoAnalyticsTab() {
                       <span className="text-[8px] text-gray-600 uppercase tracking-wide font-bold">{series}</span>
                     </div>
                     {models.filter(m => m.series === series).map(m => {
-                      const isSwitching  = modelSwitching === m.id;
-                      const isDownloading = m.downloading || modelDownloading.has(m.id);
+                      const isSwitching = modelSwitching === m.id;
                       return (
                         <div
                           key={m.id}
+                          onClick={() => m.exists && !isSwitching && !modelSwitching && switchModel(m.id)}
                           className={`grid grid-cols-[auto_1fr_auto_auto_auto_auto] gap-x-2 items-center px-3 py-1.5 border-b border-gray-800/60 last:border-0 transition-colors ${
-                            m.active ? 'bg-indigo-900/20' : 'hover:bg-gray-800/40'
+                            m.active
+                              ? 'bg-indigo-900/20'
+                              : m.exists
+                                ? 'hover:bg-gray-800/40 cursor-pointer'
+                                : 'opacity-40 cursor-not-allowed'
                           }`}
+                          title={m.exists ? (m.active ? '현재 활성 모델' : '클릭하여 이 모델로 전환') : '파일 없음'}
                         >
-                          {/* Radio selector */}
-                          <button
-                            onClick={() => m.exists && !isSwitching && switchModel(m.id)}
-                            disabled={!m.exists || !!modelSwitching}
-                            className={`w-3.5 h-3.5 rounded-full border-2 flex-shrink-0 transition-colors ${
-                              m.active
-                                ? 'border-indigo-400 bg-indigo-400'
-                                : m.exists
-                                  ? 'border-gray-500 hover:border-indigo-400 bg-transparent'
-                                  : 'border-gray-700 bg-transparent cursor-not-allowed'
-                            }`}
-                            title={m.exists ? (m.active ? '현재 활성 모델' : '이 모델로 전환') : '먼저 다운로드 필요'}
-                          >
-                            {isSwitching && (
-                              <span className="block w-1.5 h-1.5 rounded-full bg-yellow-400 mx-auto animate-pulse" />
-                            )}
-                          </button>
-
-                          {/* Label + status */}
-                          <div className="min-w-0">
-                            <span className={`text-[10px] font-mono font-bold ${m.active ? 'text-indigo-300' : m.exists ? 'text-gray-200' : 'text-gray-600'}`}>
-                              {m.label}
-                            </span>
-                            {m.active && <span className="ml-1 text-[8px] text-indigo-500">● 활성</span>}
-                            {!m.exists && !isDownloading && (
-                              <span className="ml-1 text-[8px] text-gray-700">미다운로드</span>
-                            )}
-                            {isDownloading && (
-                              <span className="ml-1 text-[8px] text-yellow-400">
-                                ⬇ {m.downloadPercent != null ? `${m.downloadPercent}%` : '...'}
-                              </span>
-                            )}
-                            {m.downloadError && (
-                              <span className="ml-1 text-[8px] text-red-400" title={m.downloadError}>오류</span>
-                            )}
-                            {isDownloading && m.downloadPercent != null && (
-                              <div className="mt-0.5 h-0.5 bg-gray-700 rounded overflow-hidden w-full max-w-20">
-                                <div
-                                  className="h-full bg-yellow-400 transition-all"
-                                  style={{ width: `${m.downloadPercent}%` }}
-                                />
-                              </div>
-                            )}
+                          {/* Radio indicator */}
+                          <div className={`w-3 h-3 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${
+                            m.active ? 'border-indigo-400 bg-indigo-400' : 'border-gray-500'
+                          }`}>
+                            {isSwitching && <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />}
                           </div>
+
+                          {/* Label */}
+                          <span className={`text-[10px] font-mono font-bold ${m.active ? 'text-indigo-300' : 'text-gray-200'}`}>
+                            {m.label}
+                            {m.active && <span className="ml-1 text-[8px] text-indigo-500 font-normal">● 활성</span>}
+                            {isSwitching && <span className="ml-1 text-[8px] text-yellow-400 font-normal">전환 중...</span>}
+                          </span>
 
                           {/* mAP */}
                           <span className={`text-[9px] font-mono text-right ${m.mAP >= 51 ? 'text-green-400' : m.mAP >= 44 ? 'text-yellow-400' : 'text-gray-400'}`}>
@@ -630,28 +554,12 @@ export default function VideoAnalyticsTab() {
                           </span>
 
                           {/* Params */}
-                          <span className="text-[9px] font-mono text-right text-gray-500">
-                            {m.params}
-                          </span>
+                          <span className="text-[9px] font-mono text-right text-gray-500">{m.params}</span>
 
-                          {/* Download / size */}
-                          <div className="flex justify-end w-16">
-                            {m.exists ? (
-                              <span className="text-[8px] text-gray-600">
-                                {m.sizeBytes ? `${(m.sizeBytes / 1024 / 1024).toFixed(0)}MB` : '✓'}
-                              </span>
-                            ) : isDownloading ? (
-                              <span className="text-[8px] text-yellow-500 animate-pulse">⬇</span>
-                            ) : (
-                              <button
-                                onClick={() => downloadModel(m.id)}
-                                disabled={!!modelSwitching}
-                                className="text-[8px] bg-gray-700 hover:bg-blue-700/60 text-gray-300 hover:text-blue-200 rounded px-1.5 py-0.5 border border-gray-600 hover:border-blue-600/60 transition-colors disabled:opacity-40"
-                              >
-                                ⬇ 다운
-                              </button>
-                            )}
-                          </div>
+                          {/* File size */}
+                          <span className="text-[8px] font-mono text-right text-gray-600">
+                            {m.sizeBytes ? `${(m.sizeBytes / 1024 / 1024).toFixed(0)}MB` : '—'}
+                          </span>
                         </div>
                       );
                     })}
