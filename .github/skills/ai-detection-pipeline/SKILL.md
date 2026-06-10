@@ -403,20 +403,42 @@ const ALL_TABLES = [
 ```
 
 **새 서비스 함수 (analysisApi.js):**
-- `async _persistFireSmoke(db, cameraId, cameraName, ts, detections, jpegBuffer, fw, fh)` — 화재/연기 이벤트 + 크롭 이미지 저장 (쿨다운 30초)
-- `async _persistLoitering(db, cameraId, cameraName, ts, behaviors, jpegBuffer, fw, fh)` — 배회 이벤트 + 크롭 이미지 저장 (쿨다운 60초)
+- `async _persistFireSmoke(db, io, cameraId, cameraName, ts, detections, jpegBuffer, fw, fh)` — 화재/연기 이벤트 + 크롭 저장 + `snapshot:new` Socket.IO emit (쿨다운 30초)
+- `async _persistLoitering(db, io, cameraId, cameraName, ts, behaviors, jpegBuffer, fw, fh)` — 배회 이벤트 + 크롭 저장 + `snapshot:new` Socket.IO emit (쿨다운 60초)
 - `_saveAnalysisEvent(db, event)` — 공통 저장 로직 (최대 500건 유지, 초과 시 가장 오래된 항목 삭제)
 - `async _cropThumbnail(jpegBuffer, bbox, fw, fh)` — snapshotSvc.cropJpeg 래퍼, data URI 반환
 
-**크롭 이미지 저장 패턴 (fire-and-forget):**
+**실시간 감지 Socket.IO emit 패턴 (analysis 서버):**
 ```javascript
 // POST /api/analysis/process 핸들러
-res.json({ cameraId, frameId, ... });
-// res.json() 이후 비동기 저장 (응답 지연 방지)
-if (db) {
-  if (fireSmoke.length > 0) _persistFireSmoke(db, ..., jpegBuffer, frameWidth, frameHeight).catch(() => {});
-  if (behaviors.length > 0) _persistLoitering(db, ..., jpegBuffer, frameWidth, frameHeight).catch(() => {});
+const io = req.app.get('io');
+
+// 1. Global emit — 카메라 룸 없이 연결된 모든 클라이언트에 전달
+if (io) {
+  const fireSmokeWithId = fireSmoke.map(d => ({ ...d, objectId: d.objectId ?? d.className }));
+  io.emit('detections', {
+    cameraId, frameId, timestamp: ts,
+    detections: [...enrichedObjects, ...faceDetections, ...fireSmokeWithId],
+    frameWidth, frameHeight,
+  });
 }
+
+res.json({ cameraId, frameId, ... });
+
+// 2. Fire-and-forget persist + snapshot:new emit
+if (db) {
+  if (fireSmoke.length > 0) _persistFireSmoke(db, io, ...).catch(() => {});
+  if (behaviors.length > 0) _persistLoitering(db, io, ...).catch(() => {});
+}
+```
+
+**크롭 emit (persist 함수 내):**
+```javascript
+// _persistFireSmoke — fire/smoke objectId는 className('fire'|'smoke')을 pseudo-ID로 사용
+if (io && cropData) io.emit('snapshot:new', { cameraId, objectId: det.className, className: det.className, timestamp: ts, cropData });
+
+// _persistLoitering — 실제 trackId 사용
+if (io && cropData) io.emit('snapshot:new', { cameraId, objectId, className: 'person', timestamp: ts, cropData });
 ```
 
 `analysisEvents` 스키마에 `cropData?: string` 추가 (data:image/jpeg;base64,... 형식)

@@ -269,7 +269,7 @@ async function _cropThumbnail(jpegBuffer, bbox, fw, fh) {
   }
 }
 
-async function _persistFireSmoke(db, cameraId, cameraName, ts, detections, jpegBuffer, fw, fh) {
+async function _persistFireSmoke(db, io, cameraId, cameraName, ts, detections, jpegBuffer, fw, fh) {
   const now = Date.now();
   for (const det of detections) {
     const key = `${cameraId}:${det.className}`;
@@ -286,10 +286,19 @@ async function _persistFireSmoke(db, cameraId, cameraName, ts, detections, jpegB
       bbox:       det.bbox,
       cropData,
     });
+    if (io && cropData) {
+      io.emit('snapshot:new', {
+        cameraId,
+        objectId:  det.className, // pseudo-objectId: 'fire' | 'smoke'
+        className: det.className,
+        timestamp: ts,
+        cropData,
+      });
+    }
   }
 }
 
-async function _persistLoitering(db, cameraId, cameraName, ts, behaviors, jpegBuffer, fw, fh) {
+async function _persistLoitering(db, io, cameraId, cameraName, ts, behaviors, jpegBuffer, fw, fh) {
   const now = Date.now();
   for (const b of behaviors) {
     if (!b.isLoitering && b.type !== 'loitering') continue;
@@ -312,6 +321,15 @@ async function _persistLoitering(db, cameraId, cameraName, ts, behaviors, jpegBu
       bbox:       b.bbox,
       cropData,
     });
+    if (io && cropData) {
+      io.emit('snapshot:new', {
+        cameraId,
+        objectId,
+        className: 'person',
+        timestamp: ts,
+        cropData,
+      });
+    }
   }
 }
 
@@ -547,19 +565,33 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
     cameraMetric.fireSmokeTotal += fireSmoke.length;
     cameraMetric.loiteringTotal += loiteringCount;
 
-    // Results are returned in the HTTP response body so the calling streaming
-    // server can emit Socket.IO events to browser clients via _processRemoteResult.
-    // Direct Socket.IO emissions from the analysis server are intentionally omitted:
-    // browsers connect to the streaming server, not here.
     const alertService = req.app.get('alertService');
+    const io  = req.app.get('io');
+    const db  = req.app.get('db');
 
     // ── Process behaviors: loitering alerts (alert persistence only) ──────────
     const behaviors = behaviorsResult || [];
-    const db = req.app.get('db');
     for (const b of behaviors) {
       if ((b.isLoitering || b.type === 'loitering') && alertService) {
         alertService.createAlert({ ...b, cameraId }).catch(() => {});
       }
+    }
+
+    // ── Emit real-time detections to connected browser clients ────────────────
+    // In streaming mode: streaming server calls _processRemoteResult which emits to
+    // camera rooms (.to(cameraId)) after receiving our HTTP response.
+    // In analysis mode (direct browser connection): we emit globally here so the
+    // dashboard can show live detections without camera room subscriptions.
+    if (io) {
+      const fireSmokeWithId = fireSmoke.map(d => ({ ...d, objectId: d.objectId ?? d.className }));
+      io.emit('detections', {
+        cameraId,
+        frameId,
+        timestamp:  ts,
+        detections: [...enrichedObjects, ...faceDetections, ...fireSmokeWithId],
+        frameWidth,
+        frameHeight,
+      });
     }
 
     res.json({
@@ -578,8 +610,8 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
 
     // ── Persist fire/smoke and loitering events (after response — non-blocking) ─
     if (db) {
-      if (fireSmoke.length > 0) _persistFireSmoke(db, cameraId, cameraName, ts, fireSmoke, jpegBuffer, frameWidth, frameHeight).catch(() => {});
-      if (behaviors.length > 0) _persistLoitering(db, cameraId, cameraName, ts, behaviors, jpegBuffer, frameWidth, frameHeight).catch(() => {});
+      if (fireSmoke.length > 0) _persistFireSmoke(db, io, cameraId, cameraName, ts, fireSmoke, jpegBuffer, frameWidth, frameHeight).catch(() => {});
+      if (behaviors.length > 0) _persistLoitering(db, io, cameraId, cameraName, ts, behaviors, jpegBuffer, frameWidth, frameHeight).catch(() => {});
     }
   } catch (err) {
     _metrics.errorsTotal += 1;

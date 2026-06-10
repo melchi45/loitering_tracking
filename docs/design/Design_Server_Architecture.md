@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-SA-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-06-10 |
 | **Author** | LTS-2026 Engineering |
@@ -758,7 +758,75 @@ graph TB
 
 ---
 
-## 8. 포트 요약
+## 8. 실시간 감지 데이터 흐름 (SERVER_MODE별)
+
+`DashboardDetectionPanel`이 실시간 감지 객체·크롭 이미지를 표시하기 위해서는 서버에서 아래 Socket.IO 이벤트가 올바르게 전달되어야 합니다.
+
+### 8.1 이벤트 구조
+
+| 이벤트 | 방향 | 설명 |
+|---|---|---|
+| `detections` | Server→Client | 프레임당 추적 객체·얼굴·화재/연기 목록 |
+| `snapshot:new` | Server→Client | 감지 크롭 이미지 (Base64 JPEG) |
+
+### 8.2 combined 모드 흐름
+
+```
+PipelineManager (로컬 AI 추론)
+  └─► io.to(camera.id).emit('detections', { cameraId, detections, frameWidth, frameHeight })
+  └─► io.to(camera.id).emit('snapshot:new', { cameraId, objectId, cropData })
+           │ (snapshotSvc.shouldSave: isLoitering | isFirstSeen | hasFaceMatch | isFireSmoke)
+```
+
+- 카메라 룸(`.to(camera.id)`)으로 emit
+- 클라이언트가 `camera:subscribe` → socket.join(cameraId)로 수신
+- 모든 객체 유형의 크롭 지원
+
+### 8.3 streaming 모드 흐름
+
+```
+PipelineManager._processRemoteResult (analysis 서버 HTTP 응답 수신 후)
+  └─► io.to(_cameraId).emit('detections', { ... })
+  └─► io.to(_cameraId).emit('snapshot:new', { ..., cropData })
+           │ (snapshotSvc.shouldSave와 동일 조건)
+```
+
+- **전제조건**: analysis 서버가 연결되어 HTTP 응답을 반환해야 함
+- analysis 서버 미연결(회로차단기 오픈) 시 `_processRemoteResult` 미호출 → 이벤트 없음
+- 크롭 조건: isLoitering | isFirstSeen | hasFaceMatch | isFireSmoke
+
+### 8.4 analysis 모드 흐름 (v1.1 신규)
+
+```
+analysisApi.js POST /api/analysis/process
+  └─► io.emit('detections', { cameraId, detections: [...tracked, ...faces, ...fireSmoke] })
+           │ (global broadcast — 카메라 룸 없음)
+  └─► _persistFireSmoke → io.emit('snapshot:new', { objectId: 'fire'|'smoke', cropData })
+  └─► _persistLoitering → io.emit('snapshot:new', { objectId: trackId, cropData })
+```
+
+- **global emit** (`io.emit()`) 사용 — DB에 카메라 없어 룸 구독 불가
+- 크롭 지원: fire/smoke (30s 쿨다운) + loitering (60s 쿨다운)
+- 일반 tracked person 크롭: 미지원 (loitering 전환 시 크롭 생성)
+
+### 8.5 클라이언트 구독 메커니즘
+
+```typescript
+// useAllDetections.ts
+// combined/streaming: subscribed 카메라만 수신
+if (subscribedRef.current.size > 0 && !subscribedRef.current.has(ev.cameraId)) return;
+// analysis 모드: 구독 없음(size=0) → 전체 수신
+```
+
+| 모드 | 카메라 구독 | DashboardDetectionPanel | 크롭 소스 |
+|---|---|---|---|
+| combined | camera:subscribe → 룸 join | ✅ | snapshotSvc (모든 조건) |
+| streaming | camera:subscribe → 룸 join | ✅ (analysis 서버 연결 필요) | snapshotSvc (모든 조건) |
+| analysis | 없음 (global 수신) | ✅ | _persistFireSmoke/Loitering |
+
+---
+
+## 9. 포트 요약
 
 | 포트 | 프로토콜 | 컴포넌트 | 용도 |
 |---|---|---|---|
@@ -775,7 +843,7 @@ graph TB
 
 ---
 
-## 9. 모드별 기능 매트릭스
+## 10. 모드별 기능 매트릭스
 
 | 기능 | combined | streaming | analysis |
 |---|---|---|---|
@@ -790,7 +858,7 @@ graph TB
 | 의상·PPE 분석 | ✅ | ❌ | ✅ |
 | 원격 분석 서버 전송 | ❌ | ✅ | ❌ |
 | WebRTC WHEP 프록시 | ✅ | ✅ | ✅ |
-| Socket.IO 실시간 | ✅ | ✅ | (비활성) |
+| Socket.IO 실시간 | ✅ | ✅ | ✅ |
 | REST API 전체 | ✅ | ✅ | 일부 |
 | `/api/analysis/*` | ✅ | 프록시 | ✅ |
 | 분석 메트릭 집계 | 로컬 | 원격 | 로컬 |
@@ -805,3 +873,4 @@ graph TB
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-10 | 초기 작성 — combined/streaming/analysis 모드 분리, DB/MCP 아키텍처, 배포 시나리오 5종, Mermaid 다이어그램 포함 |
+| 1.1 | 2026-06-10 | Section 8 추가: 실시간 감지 데이터 흐름(SERVER_MODE별), analysis 모드 Socket.IO 활성화, useAllDetections 전체 수신 메커니즘 |

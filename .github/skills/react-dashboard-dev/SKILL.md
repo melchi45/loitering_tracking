@@ -222,6 +222,33 @@ const [showEventHistory, setShowEventHistory] = useState(false);
 - `onClose` prop 있을 때 닫기 버튼 표시 (오버레이 모드)
 - 크롭 이미지 클릭 → 새 탭에서 원본 확대
 
+## DashboardDetectionPanel — 실시간 감지 (SERVER_MODE별)
+
+`DashboardDetectionPanel`은 `useAllDetections` 훅으로 `detections` Socket.IO 이벤트를 수신합니다.
+
+| 모드 | 이벤트 소스 | 크롭 소스 | 카메라 구독 필요 |
+|---|---|---|---|
+| combined | PipelineManager 로컬 추론 → `.to(cameraId)` | snapshotSvc (isLoitering/isFirstSeen/hasFaceMatch/isFireSmoke) | ✅ |
+| streaming | `_processRemoteResult` → `.to(cameraId)` | snapshotSvc (동일 조건) | ✅ (analysis 서버 연결 필수) |
+| analysis | `analysisApi.js` → `io.emit()` global | `_persistFireSmoke`/`_persistLoitering` | ❌ (global 수신) |
+
+**주의사항 (streaming 모드)**: analysis 서버가 연결되어 있지 않으면 `_processRemoteResult`가 호출되지 않아 `detections` 이벤트가 발생하지 않습니다.
+
+## useAllDetections — 전체 수신 모드 (analysis 서버 지원)
+
+```typescript
+// client/src/hooks/useAllDetections.ts
+const handleDetections = (ev: DetectionsEvent) => {
+  // analysis 서버 모드: 카메라 없음 → subscribedRef.size = 0 → 전체 수신
+  if (subscribedRef.current.size > 0 && !subscribedRef.current.has(ev.cameraId)) return;
+  setDetMap(prev => { ... });
+};
+```
+
+- `combined`/`streaming`: 구독된 카메라 ID만 필터링 (기존 동작 유지)
+- `analysis`: 구독 없음(size=0) → 모든 `detections` 이벤트 수용 (global emit 대응)
+- 카메라 이름: analysis 모드에서는 카메라가 DB에 없어 `cameraId.slice(0, 8)` 약칭 표시
+
 ### alertService EventEmitter 연결 (index.js 버그 수정)
 
 **문제:** Analysis 모드에서 `pipelineManager._alertService`와 `app.get('alertService')`가 **별개의 AlertService 인스턴스**였습니다. `analysisApi.js`가 `app.get('alertService').createAlert()`를 호출해도 socket.io로 전달되지 않아 Alerts 탭이 비어 있었습니다.
@@ -230,9 +257,10 @@ const [showEventHistory, setShowEventHistory] = useState(false);
 ```javascript
 app.set('alertService', alertService);
 app.set('db', db);
+app.set('io', io);  // analysisApi에서 Socket.IO emit 가능하도록
 
 // index.js 인스턴스의 alert 이벤트를 socket.io로 직접 브로드캐스트
 alertService.on('alert', (alert) => io.emit('alert:new', alert));
 ```
 
-> `app.set('db', db)`도 함께 추가해야 `analysisApi.js` 라우트 핸들러에서 `req.app.get('db')`로 DB에 접근 가능합니다. 빠진 경우 `GET /api/analysis/events`가 503 에러를 반환합니다.
+> `app.set('io', io)` — `analysisApi.js`가 `req.app.get('io')`로 Socket.IO에 접근해 `detections`/`snapshot:new` 이벤트를 emit합니다.

@@ -63,7 +63,9 @@ export function useAllDetections(enabledCameraIds: string[]): Map<string, Detect
   // Socket event listeners — stable across renders
   useEffect(() => {
     const handleDetections = (ev: DetectionsEvent) => {
-      if (!subscribedRef.current.has(ev.cameraId)) return;
+      // In analysis server mode no cameras are registered, so subscribedRef is empty.
+      // Accept all incoming events in that case (global io.emit from analysisApi).
+      if (subscribedRef.current.size > 0 && !subscribedRef.current.has(ev.cameraId)) return;
       setDetMap(prev => {
         const m = new Map(prev);
         m.set(ev.cameraId, ev.detections);
