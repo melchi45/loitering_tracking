@@ -309,17 +309,14 @@ class PipelineManager {
     const captureFps = parseInt(process.env.CAPTURE_FPS, 10) || 10;
 
     // Register with MediaMTX when:
-    //   (a) WEBRTC_ENGINE=mediamtx and browser WebRTC delivery is requested — always register,
-    //       even with CAPTURE_BACKEND=ingest-daemon (MediaMTX owns the single RTSP connection;
-    //       the ingest-daemon connects to MediaMTX loopback instead of camera directly), OR
-    //   (b) WEBRTC_ENGINE=mediasoup and not analysis mode — MediaMTX acts as single-connection
-    //       relay (only when ingest-daemon is NOT the capture backend, since without ffmpeg
-    //       mediasoup has no RTP source anyway), OR
+    //   (a) WEBRTC_ENGINE=mediamtx and browser WebRTC delivery is requested, OR
+    //   (b) WEBRTC_ENGINE=mediasoup and not analysis mode — MediaMTX holds the single
+    //       upstream RTSP connection; ingest-daemon reads from MediaMTX loopback to
+    //       feed both AI JPEG and RTP paths without a second camera connection, OR
     //   (c) the mediamtx capture backend is active.
     const needsMediaMTX = (requestedWebRTC && WEBRTC_ENGINE === 'mediamtx')
-                       || (CAPTURE_BACKEND !== 'ingest-daemon' && (
-                              (WEBRTC_ENGINE === 'mediasoup' && SERVER_MODE !== 'analysis')
-                           || CAPTURE_BACKEND === 'mediamtx'));
+                       || (WEBRTC_ENGINE === 'mediasoup' && SERVER_MODE !== 'analysis')
+                       || CAPTURE_BACKEND === 'mediamtx';
     let mediamtxReady = false;
     if (needsMediaMTX) {
       mediamtxReady = await mediamtxManager.addCameraPath(camera.id, rtspUrl).catch(() => false);
@@ -348,34 +345,37 @@ class PipelineManager {
       ? `rtsp://127.0.0.1:${mediamtxRtspPort}/${camera.id}`
       : rtspUrl;
 
-    // For non-mediamtx WebRTC engines, register the stream with the selected engine.
-    // ingest-daemon handles its own RTSP connection for AI-only frames (no WebRTC RTP
-    // path); register it directly with the daemon below instead of via the WebRTC engine.
+    // For non-mediamtx WebRTC engines (mediasoup), register the stream with the engine.
+    // mediasoupEngine.addCameraStream() internally calls ingest-daemon with both the
+    // AI callbackUrl AND the mediasoup RTP ports, so we skip the separate ingest-daemon
+    // registration below when WEBRTC_ENGINE=mediasoup.
     let altWebRTCReady = false;
-    const registerAltEngine = CAPTURE_BACKEND !== 'ingest-daemon' &&
-      WEBRTC_ENGINE !== 'mediamtx' &&
+    const registerAltEngine = WEBRTC_ENGINE !== 'mediamtx' &&
       (requestedWebRTC || WEBRTC_ENGINE === 'mediasoup');
     if (registerAltEngine) {
       altWebRTCReady = await getWebRTCEngine().addCameraStream(camera.id, captureUrl).catch(() => false);
     }
 
-    // When using ingest-daemon: register camera directly for AI RTSP capture.
-    // When MediaMTX is ready (WebRTC path), pass the loopback re-publish URL so
-    // the daemon connects to MediaMTX (single camera connection) instead of the
-    // camera directly (which would create a second RTSP connection).
+    // When using ingest-daemon with mediamtx engine: register for AI JPEG only.
+    // When using mediasoup engine: mediasoupEngine.addCameraStream() already registered
+    // ingest-daemon (AI + RTP). Fall back to AI-only registration if mediasoup failed.
     if (CAPTURE_BACKEND === 'ingest-daemon') {
-      const isHttps = (process.env.HTTPS_ENABLED || '').toLowerCase() === 'true';
+      const isHttps     = (process.env.HTTPS_ENABLED || '').toLowerCase() === 'true';
       const serverProto = isHttps ? 'https' : 'http';
       const serverPort  = isHttps
         ? parseInt(process.env.HTTPS_PORT || '3443', 10)
         : parseInt(process.env.HTTP_PORT || process.env.PORT || '3080', 10);
-      const callbackUrl  = `${serverProto}://127.0.0.1:${serverPort}/api/internal/frame/${camera.id}`;
+      const callbackUrl   = `${serverProto}://127.0.0.1:${serverPort}/api/internal/frame/${camera.id}`;
       const daemonRtspUrl = mediamtxReady ? captureUrl : rtspUrl;
-      const daemonReady  = await _ingestRegisterCamera(camera.id, daemonRtspUrl, callbackUrl);
-      if (!daemonReady) {
-        console.error(`[PipelineManager][${camera.id}] Ingest daemon registration failed — no AI frames for this camera`);
-      } else {
-        console.log(`[PipelineManager][${camera.id}] Ingest daemon registered → ${daemonRtspUrl} callback ${callbackUrl}`);
+
+      const needsDirectIngestReg = WEBRTC_ENGINE !== 'mediasoup' || !altWebRTCReady;
+      if (needsDirectIngestReg) {
+        const daemonReady = await _ingestRegisterCamera(camera.id, daemonRtspUrl, callbackUrl);
+        if (!daemonReady) {
+          console.error(`[PipelineManager][${camera.id}] Ingest daemon registration failed — no AI frames for this camera`);
+        } else {
+          console.log(`[PipelineManager][${camera.id}] Ingest daemon registered (AI-only) → ${daemonRtspUrl}`);
+        }
       }
     }
 
@@ -989,9 +989,11 @@ class PipelineManager {
     ctx.capture.stop();
     ctx.behavior.reset();
     ctx.behavior.removeAllListeners();
-    const needsMediaMTXCleanup = (ctx.useWebRTC && WEBRTC_ENGINE === 'mediamtx') || CAPTURE_BACKEND === 'mediamtx';
+    const needsMediaMTXCleanup = (ctx.useWebRTC && WEBRTC_ENGINE === 'mediamtx')
+      || CAPTURE_BACKEND === 'mediamtx'
+      || (WEBRTC_ENGINE === 'mediasoup' && SERVER_MODE !== 'analysis');
     if (needsMediaMTXCleanup) mediamtxManager.removeCameraPath(cameraId).catch(() => {});
-    if (ctx.useWebRTC && WEBRTC_ENGINE !== 'mediamtx') getWebRTCEngine().removeCameraStream(cameraId).catch(() => {});
+    if (WEBRTC_ENGINE !== 'mediamtx') getWebRTCEngine().removeCameraStream(cameraId).catch(() => {});
     if (CAPTURE_BACKEND === 'ingest-daemon') _ingestRemoveCamera(cameraId).catch(() => {});
     this._pipelines.delete(cameraId);
     this._updateCameraStatus(cameraId, 'offline');

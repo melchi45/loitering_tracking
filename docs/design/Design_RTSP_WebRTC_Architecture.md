@@ -20,16 +20,38 @@
 
 ### 0.2 ingest-daemon 팬아웃 설계
 
-ingest-daemon은 단일 RTSP 세션에서 아래 경로를 동시에 공급한다. 어느 WebRTC 엔진을 선택해도 수집 레이어는 ingest-daemon으로 고정된다.
+ingest-daemon은 MediaMTX RTSP loopback에 연결하여 아래 경로를 동시에 공급한다.  
+어느 WebRTC 엔진을 선택해도 수집 레이어는 ingest-daemon으로 고정된다.
 
 ```
 MediaMTX RTSP loopback (rtsp://127.0.0.1:8554/{id})
     │
-    └── ingest_daemon.py (단일 PyAV 세션)
-            ├── ① JPEG → HTTP POST → Node.js AI pipeline   (항상 활성)
-            ├── ② H.264 RTP → UDP:{videoPort}              (WEBRTC_ENGINE=mediasoup 시 활성)
-            └── ③ Opus  RTP → UDP:{audioPort}              (WEBRTC_ENGINE=mediasoup 시 활성)
+    └── ingest_daemon.py (PyAV 기반)
+            ├── ① JPEG        → HTTP POST → Node.js /api/internal/frame/:id  (항상 활성)
+            │                   → AI pipeline (YOLO/ByteTrack)
+            │
+            ├── ② H.264 RTP  → UDP:{mediasoupPort}          (WEBRTC_ENGINE=mediasoup 시 활성)
+            │                   → mediasoup PlainTransport → 비디오 Producer → 브라우저 <video>
+            │
+            ├── ③ Opus RTP   → UDP:{mediasoupAudioPort}     (WEBRTC_ENGINE=mediasoup 시 활성)
+            │                   → mediasoup PlainTransport → 오디오 Producer → 브라우저 <audio>
+            │
+            └── ④ App RTP    → (소스 PT 96~127, 비 비디오/오디오 트랙)
+                    ├── WEBRTC_ENGINE=mediamtx: HTTP POST → /api/internal/apprtp/:id
+                    │   → Node.js → Socket.IO emit('appRtp', {cameraId, pt, payload})
+                    └── WEBRTC_ENGINE=mediasoup: 서버 DataProducer.send() → DataConsumer → 브라우저 DataChannel
 ```
+
+### 0.3 WEBRTC_ENGINE별 데이터 전달 경로
+
+| 트랙 | mediamtx 모드 | mediasoup 모드 |
+|---|---|---|
+| 비디오 (H.264) | MediaMTX WHEP → SRTP | mediasoup WebRtcTransport → SRTP |
+| 오디오 (Opus) | MediaMTX WHEP → SRTP | mediasoup WebRtcTransport → SRTP |
+| Application RTP (PT 96~127) | Socket.IO `appRtp` 이벤트 | WebRTC DataChannel (SCTP) |
+
+> **mediamtx 모드**: MediaMTX가 WHEP으로 비디오/오디오를 직접 브라우저에 전달. App RTP는 ingest-daemon이 HTTP POST → Socket.IO 경유.  
+> **mediasoup 모드**: ingest-daemon이 RTP를 mediasoup PlainTransport로 공급. App RTP는 DirectTransport DataProducer → DataConsumer → DataChannel 경유.
 
 ### 0.3 금지 사항
 
@@ -1377,3 +1399,4 @@ GET http://localhost:9997/v3/whepsessions/list
 | 1.3 | 2026-06-11 | §10 미구현 항목 Milestone 추가 — M1(영상 녹화), M2(Playback), M3(Qdrant Re-ID), M4(RTCP 피드백), M5(분산 클러스터) |
 | 1.4 | 2026-06-11 | §3.7 Application RTP → WebRTC DataChannel 브리지 추가 — 프로토콜 비교, 변환 경로, DataChannel 신뢰성 설정, MediaMTX WHEP 한계 명시 |
 | 1.5 | 2026-06-11 | §0 수집 레이어 불변 원칙 추가 — ingest-daemon 우선 원칙, 팬아웃 설계, FFmpeg 금지 범위 명시 |
+| 1.6 | 2026-06-11 | §0.2/§0.3 이중 엔진 데이터 경로 상세화 — 비디오/오디오/App RTP 팬아웃 다이어그램, WEBRTC_ENGINE별 전달 경로 표 추가 |

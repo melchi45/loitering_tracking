@@ -1,50 +1,64 @@
 'use strict';
 
 /**
- * mediasoup WebRTC engine.
+ * mediasoup WebRTC engine — Audio + Video + DataChannel.
  *
  * Architecture:
  *   - One mediasoup Worker + Router (shared across all cameras and viewers)
- *   - Per-camera: PlainTransport ← ffmpeg RTP (H.264 video only)
- *   - Per-browser-viewer: WebRtcTransport + Consumer (WHEP-style SDP exchange)
+ *   - Per-camera PlainTransports:
+ *       videoPlain ← H.264 RTP from ingest-daemon UDP:{mediasoupPort}
+ *       audioPlain ← Opus  RTP from ingest-daemon UDP:{mediasoupAudioPort}
+ *   - Per-camera DirectTransport → DataProducer (App RTP / server-push events)
+ *   - Per-browser-viewer: WebRtcTransport (enableSctp=true) + video Consumer
+ *       + audio Consumer + DataConsumer (WHEP-style SDP exchange)
  *
  * Env vars consumed:
- *   SERVER_IP          — local IP announced to browsers in ICE candidates
- *   SERVER_PUBLIC_IP   — public IP announced (falls back to SERVER_IP)
- *   MEDIASOUP_MIN_PORT — start of RTC UDP port range (default 40000)
- *   MEDIASOUP_MAX_PORT — end of RTC UDP port range   (default 49999)
+ *   SERVER_IP            — local IP announced to browsers in ICE candidates
+ *   SERVER_PUBLIC_IP     — public IP announced (falls back to SERVER_IP)
+ *   MEDIASOUP_MIN_PORT   — start of RTC UDP port range (default 40000)
+ *   MEDIASOUP_MAX_PORT   — end of RTC UDP port range   (default 49999)
+ *   INGEST_DAEMON_URL    — ingest-daemon base URL (default http://127.0.0.1:7070)
+ *   MEDIAMTX_RTSP_PORT   — MediaMTX RTSP loopback port (default 8554)
+ *   HTTP_PORT / PORT     — server HTTP port for callback URLs (default 3080)
+ *   HTTPS_ENABLED        — 'true' to use HTTPS for callback URLs
+ *   HTTPS_PORT           — server HTTPS port (default 3443)
  */
 
 const mediasoup = require('mediasoup');
 const http      = require('http');
 
-const ENGINE_NAME      = 'mediasoup';
-const SERVER_IP        = (process.env.SERVER_IP || '127.0.0.1').trim();
-const ANNOUNCED_IP     = (process.env.SERVER_PUBLIC_IP || process.env.SERVER_IP || '127.0.0.1').trim();
-const RTC_MIN_PORT     = parseInt(process.env.MEDIASOUP_MIN_PORT || '40000', 10);
-const RTC_MAX_PORT     = parseInt(process.env.MEDIASOUP_MAX_PORT || '49999', 10);
+const ENGINE_NAME       = 'mediasoup';
+const ANNOUNCED_IP      = (process.env.SERVER_PUBLIC_IP || process.env.SERVER_IP || '127.0.0.1').trim();
+const RTC_MIN_PORT      = parseInt(process.env.MEDIASOUP_MIN_PORT || '40000', 10);
+const RTC_MAX_PORT      = parseInt(process.env.MEDIASOUP_MAX_PORT || '49999', 10);
 const INGEST_DAEMON_URL = (process.env.INGEST_DAEMON_URL || 'http://127.0.0.1:7070').replace(/\/$/, '');
 
 const VIDEO_PT   = 96;
+const AUDIO_PT   = 111;
 const VIDEO_SSRC = 0x22334455;
+const AUDIO_SSRC = 0x33445566;
 
 // ── Singleton worker / router ─────────────────────────────────────────────────
 let _worker = null;
 let _router = null;
 let _initP  = null;
 
-// Per-camera state
-const _cameras = new Map(); // cameraId → { producer, plainTransport }
+// Per-camera state map
+// cameraId → { videoPlain, videoProducer, audioPlain, audioProducer, directTransport, dataProducer }
+const _cameras = new Map();
 
-// ── Go ingest daemon helpers ──────────────────────────────────────────────────
+// ── ingest-daemon HTTP helpers ────────────────────────────────────────────────
 
 function _ingestPost(path, body) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
     const url  = new URL(INGEST_DAEMON_URL + path);
     const req  = http.request(
-      { hostname: url.hostname, port: url.port, path: url.pathname, method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } },
+      {
+        hostname: url.hostname, port: url.port, path: url.pathname,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) },
+      },
       res => { res.resume(); resolve(res.statusCode); }
     );
     req.on('error', reject);
@@ -64,6 +78,8 @@ function _ingestDelete(cameraId) {
     req.end();
   });
 }
+
+// ── Router boot ───────────────────────────────────────────────────────────────
 
 async function _ensureRouter() {
   if (_router && !_router.closed) return _router;
@@ -100,12 +116,17 @@ async function _boot() {
           'level-asymmetry-allowed': 1,
         },
       },
+      {
+        kind:      'audio',
+        mimeType:  'audio/opus',
+        clockRate: 48000,
+        channels:  2,
+      },
     ],
   });
 
   console.log(
-    `[WebRTC][mediasoup] ready  announced=${ANNOUNCED_IP}` +
-    `  rtcPorts=${RTC_MIN_PORT}-${RTC_MAX_PORT}`
+    `[WebRTC][mediasoup] ready  announced=${ANNOUNCED_IP}  rtcPorts=${RTC_MIN_PORT}-${RTC_MAX_PORT}`
   );
   return _router;
 }
@@ -113,8 +134,12 @@ async function _boot() {
 function _closeCam(cam, cameraId) {
   if (!cam) return;
   if (cameraId) _ingestDelete(cameraId).catch(() => {});
-  try { cam.producer?.close(); }       catch (_) {}
-  try { cam.plainTransport?.close(); } catch (_) {}
+  try { cam.videoProducer?.close(); }    catch (_) {}
+  try { cam.audioProducer?.close(); }    catch (_) {}
+  try { cam.dataProducer?.close(); }     catch (_) {}
+  try { cam.videoPlain?.close(); }       catch (_) {}
+  try { cam.audioPlain?.close(); }       catch (_) {}
+  try { cam.directTransport?.close(); }  catch (_) {}
 }
 
 // ── Camera stream management ───────────────────────────────────────────────────
@@ -122,18 +147,17 @@ function _closeCam(cam, cameraId) {
 async function addCameraStream(cameraId, rtspUrl) {
   try {
     const router = await _ensureRouter();
-    await removeCameraStream(cameraId); // clean any prior state
+    await removeCameraStream(cameraId);
 
-    // PlainTransport: loopback RTP from ffmpeg
-    const plainTransport = await router.createPlainTransport({
+    // ── Video PlainTransport ─────────────────────────────────────────────────
+    const videoPlain = await router.createPlainTransport({
       listenIp: { ip: '127.0.0.1' },
       rtcpMux:  true,
-      comedia:  true, // auto-detect remote address from first incoming RTP
+      comedia:  true,
     });
-    const rtpPort = plainTransport.tuple.localPort;
+    const videoPort = videoPlain.tuple.localPort;
 
-    // Producer: expects H.264 / PT 96 / fixed SSRC from ffmpeg
-    const producer = await plainTransport.produce({
+    const videoProducer = await videoPlain.produce({
       kind: 'video',
       rtpParameters: {
         codecs: [{
@@ -150,23 +174,68 @@ async function addCameraStream(cameraId, rtspUrl) {
       },
     });
 
-    // Go ingest daemon: single RTSP connection → internal goroutine fan-out
-    //   WebRTC goroutine: RTP → UDP → PlainTransport (rtpPort)
-    //   AI goroutine:     H264 decode → JPEG → HTTP → Node.js /api/internal/frame/:id
-    const serverPort = process.env.HTTP_PORT || process.env.PORT || 3080;
-    const callbackUrl = `http://127.0.0.1:${serverPort}/api/internal/frame/${cameraId}`;
-    const status = await _ingestPost('/cameras', {
-      id:            cameraId,
-      rtspUrl,
-      mediasoupPort: rtpPort,
-      callbackUrl,
+    // ── Audio PlainTransport ─────────────────────────────────────────────────
+    const audioPlain = await router.createPlainTransport({
+      listenIp: { ip: '127.0.0.1' },
+      rtcpMux:  true,
+      comedia:  true,
     });
+    const audioPort = audioPlain.tuple.localPort;
+
+    const audioProducer = await audioPlain.produce({
+      kind: 'audio',
+      rtpParameters: {
+        codecs: [{
+          mimeType:    'audio/opus',
+          payloadType: AUDIO_PT,
+          clockRate:   48000,
+          channels:    2,
+          parameters:  { minptime: 10, useinbandfec: 1 },
+        }],
+        encodings: [{ ssrc: AUDIO_SSRC }],
+      },
+    });
+
+    // ── DirectTransport + DataProducer (App RTP data from camera) ────────────
+    const directTransport = await router.createDirectTransport({ maxMessageSize: 262144 });
+
+    const dataProducer = await directTransport.produceData({
+      label:    `apprtp-${cameraId.slice(0, 8)}`,
+      protocol: 'json',
+      ordered:  false,
+    });
+
+    // ── Register with ingest-daemon ──────────────────────────────────────────
+    const isHttps = (process.env.HTTPS_ENABLED || '').toLowerCase() === 'true';
+    const serverPort = isHttps
+      ? (process.env.HTTPS_PORT || '3443')
+      : (process.env.HTTP_PORT || process.env.PORT || '3080');
+    const proto = isHttps ? 'https' : 'http';
+    const base  = `${proto}://127.0.0.1:${serverPort}`;
+
+    const status = await _ingestPost('/cameras', {
+      id:                 cameraId,
+      rtspUrl,
+      callbackUrl:        `${base}/api/internal/frame/${cameraId}`,
+      appRtpCallbackUrl:  `${base}/api/internal/apprtp/${cameraId}`,
+      mediasoupPort:      videoPort,
+      mediasoupAudioPort: audioPort,
+    });
+
     if (status !== 200 && status !== 201) {
-      throw new Error(`ingest-daemon returned HTTP ${status} for camera ${cameraId}`);
+      throw new Error(`ingest-daemon returned HTTP ${status}`);
     }
 
-    _cameras.set(cameraId, { producer, plainTransport });
-    console.log(`[WebRTC][mediasoup] addCameraStream ${cameraId.slice(0, 8)} → RTP :${rtpPort} (ingest-daemon)`);
+    _cameras.set(cameraId, {
+      videoPlain, videoProducer,
+      audioPlain, audioProducer,
+      directTransport, dataProducer,
+    });
+
+    console.log(
+      `[WebRTC][mediasoup] ${cameraId.slice(0, 8)} ` +
+      `video:${videoPort} audio:${audioPort} (ingest-daemon)`
+    );
     return true;
   } catch (err) {
     console.error(`[WebRTC][mediasoup] addCameraStream failed: ${err.message}`);
@@ -185,12 +254,22 @@ async function waitForStreamReady(cameraId, maxWaitMs = 8000) {
   const deadline = Date.now() + maxWaitMs;
   while (Date.now() < deadline) {
     const cam = _cameras.get(cameraId);
-    if (!cam || cam.producer.closed) return false;
-    if (cam.producer.score && cam.producer.score.length > 0) return true;
+    if (!cam) return false;
+    if (cam.videoProducer.score?.length > 0) return true;
     await new Promise(r => setTimeout(r, 250));
   }
-  // Return true if camera entry still exists (ffmpeg may have just started)
   return _cameras.has(cameraId);
+}
+
+// ── Application RTP / server-push event forwarding ───────────────────────────
+
+function sendAppRtp(cameraId, payload) {
+  const cam = _cameras.get(cameraId);
+  if (!cam?.dataProducer || cam.dataProducer.closed) return;
+  try {
+    const msg = typeof payload === 'string' ? payload : JSON.stringify(payload);
+    cam.dataProducer.send(msg);
+  } catch (_) {}
 }
 
 // ── SDP helpers ───────────────────────────────────────────────────────────────
@@ -200,92 +279,133 @@ function _parseOffer(sdp) {
   const result = {
     videoMid:    '0',
     audioMid:    '1',
+    dataMid:     '2',
     fingerprint: { algorithm: 'sha-256', value: '' },
     hasAudio:    false,
+    hasData:     false,
   };
 
   let section = 'session';
-  let gotVideoMid = false;
-  let gotAudioMid = false;
 
   for (const rawLine of lines) {
     const line = rawLine.trim();
     if (!line) continue;
 
-    if (line.startsWith('m=video')) { section = 'video'; continue; }
-    if (line.startsWith('m=audio')) { section = 'audio'; result.hasAudio = true; continue; }
-    if (line.startsWith('m='))      { section = 'other'; continue; }
+    if (line.startsWith('m=video'))       { section = 'video'; continue; }
+    if (line.startsWith('m=audio'))       { section = 'audio'; result.hasAudio = true; continue; }
+    if (line.startsWith('m=application')) { section = 'data';  result.hasData  = true; continue; }
+    if (line.startsWith('m='))            { section = 'other'; continue; }
 
     if (line.startsWith('a=fingerprint:') && !result.fingerprint.value) {
-      const parts = line.slice('a=fingerprint:'.length).split(' ');
-      result.fingerprint = { algorithm: parts[0], value: parts[1] };
+      const [algo, val] = line.slice('a=fingerprint:'.length).split(' ');
+      result.fingerprint = { algorithm: algo, value: val };
     }
 
     if (line.startsWith('a=mid:')) {
       const mid = line.slice('a=mid:'.length);
-      if (section === 'video' && !gotVideoMid) { result.videoMid = mid; gotVideoMid = true; }
-      if (section === 'audio' && !gotAudioMid) { result.audioMid = mid; gotAudioMid = true; }
+      if (section === 'video') result.videoMid = mid;
+      if (section === 'audio') result.audioMid = mid;
+      if (section === 'data')  result.dataMid  = mid;
     }
   }
   return result;
 }
 
-function _buildAnswer({ videoMid, audioMid, hasAudio, transport, consumer }) {
-  const { iceParameters, iceCandidates, dtlsParameters } = transport;
-  const { rtpParameters } = consumer;
-
-  const fp        = dtlsParameters.fingerprints[dtlsParameters.fingerprints.length - 1];
-  const mainCodec = rtpParameters.codecs.find(c => !c.mimeType.toLowerCase().includes('rtx'));
-  const rtxCodec  = rtpParameters.codecs.find(c =>  c.mimeType.toLowerCase().includes('rtx'));
-  const encoding  = rtpParameters.encodings[0] || {};
-
-  const payloadTypes = rtpParameters.codecs.map(c => c.payloadType).join(' ');
-
-  const codecLines = [
-    `a=rtpmap:${mainCodec.payloadType} ${mainCodec.mimeType.split('/')[1]}/${mainCodec.clockRate}`,
-  ];
-  if (mainCodec.parameters && Object.keys(mainCodec.parameters).length > 0) {
-    const fmtp = Object.entries(mainCodec.parameters).map(([k, v]) => `${k}=${v}`).join(';');
-    codecLines.push(`a=fmtp:${mainCodec.payloadType} ${fmtp}`);
-  }
-  if (rtxCodec) {
-    codecLines.push(`a=rtpmap:${rtxCodec.payloadType} rtx/${rtxCodec.clockRate}`);
-    codecLines.push(`a=fmtp:${rtxCodec.payloadType} apt=${mainCodec.payloadType}`);
-  }
-
-  const extLines = (rtpParameters.headerExtensions || []).map(
-    ext => `a=extmap:${ext.id} ${ext.uri}`
-  );
-
-  const ssrcLines = [];
-  if (encoding.ssrc) {
-    ssrcLines.push(`a=ssrc:${encoding.ssrc} cname:mediasoup`);
-    ssrcLines.push(`a=ssrc:${encoding.ssrc} msid:mediasoup-video mediasoup-video-track`);
-    ssrcLines.push(`a=ssrc:${encoding.ssrc} mslabel:mediasoup-video`);
-    ssrcLines.push(`a=ssrc:${encoding.ssrc} label:mediasoup-video-track`);
-    if (encoding.rtx?.ssrc && rtxCodec) {
-      ssrcLines.push(`a=ssrc:${encoding.rtx.ssrc} cname:mediasoup`);
-      ssrcLines.push(`a=ssrc-group:FID ${encoding.ssrc} ${encoding.rtx.ssrc}`);
-    }
-  }
+function _buildAnswer({ parsed, transport, videoConsumer, audioConsumer, dataConsumer }) {
+  const { iceParameters, iceCandidates, dtlsParameters, sctpParameters } = transport;
+  const fp = dtlsParameters.fingerprints[dtlsParameters.fingerprints.length - 1];
 
   const candidateLines = iceCandidates.map(c =>
     `a=candidate:${c.foundation} 1 ${c.protocol.toLowerCase()} ${c.priority} ${c.ip} ${c.port} typ ${c.type}`
   );
 
-  const bundleMids = hasAudio ? `${videoMid} ${audioMid}` : videoMid;
+  // ── Video codec lines ──────────────────────────────────────────────────────
+  const vParams   = videoConsumer.rtpParameters;
+  const vCodec    = vParams.codecs.find(c => !c.mimeType.toLowerCase().includes('rtx'));
+  const vRtx      = vParams.codecs.find(c =>  c.mimeType.toLowerCase().includes('rtx'));
+  const vEnc      = vParams.encodings[0] || {};
+  const vPTs      = vParams.codecs.map(c => c.payloadType).join(' ');
+
+  const vCodecLines = [
+    `a=rtpmap:${vCodec.payloadType} ${vCodec.mimeType.split('/')[1]}/${vCodec.clockRate}`,
+  ];
+  if (vCodec.parameters && Object.keys(vCodec.parameters).length) {
+    const fmtp = Object.entries(vCodec.parameters).map(([k, v]) => `${k}=${v}`).join(';');
+    vCodecLines.push(`a=fmtp:${vCodec.payloadType} ${fmtp}`);
+  }
+  if (vRtx) {
+    vCodecLines.push(`a=rtpmap:${vRtx.payloadType} rtx/${vRtx.clockRate}`);
+    vCodecLines.push(`a=fmtp:${vRtx.payloadType} apt=${vCodec.payloadType}`);
+  }
+
+  const vExtLines  = (vParams.headerExtensions || []).map(
+    ext => `a=extmap:${ext.id} ${ext.uri}`
+  );
+  const vSsrcLines = [];
+  if (vEnc.ssrc) {
+    vSsrcLines.push(`a=ssrc:${vEnc.ssrc} cname:mediasoup`);
+    if (vEnc.rtx?.ssrc && vRtx) {
+      vSsrcLines.push(`a=ssrc:${vEnc.rtx.ssrc} cname:mediasoup`);
+      vSsrcLines.push(`a=ssrc-group:FID ${vEnc.ssrc} ${vEnc.rtx.ssrc}`);
+    }
+  }
+
+  // ── Audio section ──────────────────────────────────────────────────────────
+  const aLines = [];
+  if (audioConsumer) {
+    const aParams = audioConsumer.rtpParameters;
+    const aCodec  = aParams.codecs[0];
+    const aEnc    = aParams.encodings[0] || {};
+    aLines.push(
+      `m=audio 9 UDP/TLS/RTP/SAVPF ${aCodec.payloadType}`,
+      `c=IN IP4 ${ANNOUNCED_IP}`,
+      'a=bundle-only',
+      `a=mid:${parsed.audioMid}`,
+      'a=recvonly',
+      'a=rtcp-mux',
+      `a=rtpmap:${aCodec.payloadType} opus/${aCodec.clockRate}/2`,
+      `a=fmtp:${aCodec.payloadType} minptime=10;useinbandfec=1`,
+    );
+    if (aEnc.ssrc) aLines.push(`a=ssrc:${aEnc.ssrc} cname:mediasoup`);
+  } else {
+    aLines.push(
+      `m=audio 0 UDP/TLS/RTP/SAVPF 0`,
+      `c=IN IP4 0.0.0.0`,
+      'a=bundle-only',
+      `a=mid:${parsed.audioMid}`,
+      'a=inactive',
+    );
+  }
+
+  // ── DataChannel section (m=application) ───────────────────────────────────
+  const dLines = [];
+  if (dataConsumer && parsed.hasData) {
+    const sctpPort = sctpParameters?.port || 5000;
+    dLines.push(
+      `m=application 9 UDP/DTLS/SCTP webrtc-datachannel`,
+      `c=IN IP4 ${ANNOUNCED_IP}`,
+      'a=bundle-only',
+      `a=mid:${parsed.dataMid}`,
+      `a=sctp-port:${sctpPort}`,
+      `a=max-message-size:262144`,
+    );
+  }
+
+  // ── BUNDLE group ───────────────────────────────────────────────────────────
+  const bundleMids = [parsed.videoMid, parsed.audioMid];
+  if (dLines.length) bundleMids.push(parsed.dataMid);
 
   const lines = [
     'v=0',
     `o=mediasoup 10000 10000 IN IP4 ${ANNOUNCED_IP}`,
     's=-',
     't=0 0',
-    `a=group:BUNDLE ${bundleMids}`,
+    `a=group:BUNDLE ${bundleMids.join(' ')}`,
     'a=extmap-allow-mixed',
     'a=msid-semantic: WMS',
 
-    // ── video ───────────────────────────────────────────────────────────────
-    `m=video 7 UDP/TLS/RTP/SAVPF ${payloadTypes}`,
+    // ── Video ────────────────────────────────────────────────────────────────
+    `m=video 7 UDP/TLS/RTP/SAVPF ${vPTs}`,
     `c=IN IP4 ${ANNOUNCED_IP}`,
     'a=rtcp:9 IN IP4 0.0.0.0',
     `a=ice-ufrag:${iceParameters.usernameFragment}`,
@@ -293,28 +413,21 @@ function _buildAnswer({ videoMid, audioMid, hasAudio, transport, consumer }) {
     'a=ice-options:trickle',
     `a=fingerprint:${fp.algorithm} ${fp.value}`,
     'a=setup:passive',
-    `a=mid:${videoMid}`,
+    `a=mid:${parsed.videoMid}`,
     'a=sendonly',
     'a=rtcp-mux',
     'a=rtcp-rsize',
-    ...codecLines,
-    ...extLines,
-    ...ssrcLines,
+    ...vCodecLines,
+    ...vExtLines,
+    ...vSsrcLines,
     ...candidateLines,
-  ];
 
-  // ── audio: bundle-only, inactive ──────────────────────────────────────────
-  if (hasAudio) {
-    lines.push(
-      `m=audio 9 UDP/TLS/RTP/SAVPF 111`,
-      `c=IN IP4 ${ANNOUNCED_IP}`,
-      'a=bundle-only',
-      `a=mid:${audioMid}`,
-      'a=inactive',
-      'a=rtpmap:111 opus/48000/2',
-      'a=fmtp:111 minptime=10;useinbandfec=1'
-    );
-  }
+    // ── Audio ────────────────────────────────────────────────────────────────
+    ...aLines,
+
+    // ── DataChannel ──────────────────────────────────────────────────────────
+    ...dLines,
+  ];
 
   return lines.join('\r\n') + '\r\n';
 }
@@ -326,7 +439,7 @@ async function negotiate(cameraId, sdpOffer) {
   if (!cam) {
     return {
       status:    503,
-      sdpAnswer: `Camera ${cameraId} is not streaming via mediasoup. Start the camera first.`,
+      sdpAnswer: `Camera ${cameraId} is not streaming via mediasoup.`,
       headers:   {},
     };
   }
@@ -339,43 +452,56 @@ async function negotiate(cameraId, sdpOffer) {
       return { status: 400, sdpAnswer: 'Could not parse DTLS fingerprint from SDP offer', headers: {} };
     }
 
-    // Create a WebRtcTransport for this browser viewer
+    // WebRtcTransport with SCTP enabled for DataChannel
     const transport = await router.createWebRtcTransport({
-      listenIps: [{ ip: '0.0.0.0', announcedIp: ANNOUNCED_IP }],
-      enableUdp: true,
-      enableTcp: true,
-      preferUdp: true,
+      listenIps:          [{ ip: '0.0.0.0', announcedIp: ANNOUNCED_IP }],
+      enableUdp:          true,
+      enableTcp:          true,
+      preferUdp:          true,
+      enableSctp:         true,
+      numSctpStreams:      { OS: 1024, MIS: 1024 },
+      maxSctpMessageSize: 262144,
     });
 
-    // Provide the browser's DTLS fingerprint so mediasoup can verify the handshake
     await transport.connect({
       dtlsParameters: {
-        role:         'client', // browser is DTLS client (we answer with a=setup:passive)
+        role:         'client',
         fingerprints: [parsed.fingerprint],
       },
     });
 
-    // Create a Consumer: router bridges Producer → Consumer across transports
-    const consumer = await transport.consume({
-      producerId:      cam.producer.id,
+    // Video Consumer
+    const videoConsumer = await transport.consume({
+      producerId:      cam.videoProducer.id,
       rtpCapabilities: router.rtpCapabilities,
       paused:          false,
     });
 
-    // Clean up when browser disconnects
+    // Audio Consumer (non-fatal if audio hasn't started yet)
+    let audioConsumer = null;
+    if (!cam.audioProducer.closed) {
+      audioConsumer = await transport.consume({
+        producerId:      cam.audioProducer.id,
+        rtpCapabilities: router.rtpCapabilities,
+        paused:          false,
+      }).catch(() => null);
+    }
+
+    // DataConsumer (only if browser included m=application in offer)
+    let dataConsumer = null;
+    if (parsed.hasData && !cam.dataProducer.closed) {
+      dataConsumer = await transport.consumeData({
+        dataProducerId: cam.dataProducer.id,
+      }).catch(() => null);
+    }
+
     transport.on('dtlsstatechange', state => {
       if (state === 'failed' || state === 'closed') {
         try { transport.close(); } catch (_) {}
       }
     });
 
-    const sdpAnswer = _buildAnswer({
-      videoMid: parsed.videoMid,
-      audioMid: parsed.audioMid,
-      hasAudio: parsed.hasAudio,
-      transport,
-      consumer,
-    });
+    const sdpAnswer = _buildAnswer({ parsed, transport, videoConsumer, audioConsumer, dataConsumer });
 
     return { status: 201, sdpAnswer, headers: {} };
   } catch (err) {
@@ -398,10 +524,9 @@ async function isHealthy() {
 function getEngineInfo() {
   return {
     engine:      'mediasoup',
-    transportId: `mediasoup-sfu  rtcPorts=${RTC_MIN_PORT}-${RTC_MAX_PORT}`,
-    iceCandidates: [],
-    whepProxy:   '/api/webrtc/whep/:cameraId',
     announcedIp: ANNOUNCED_IP,
+    rtcPorts:    `${RTC_MIN_PORT}-${RTC_MAX_PORT}`,
+    cameras:     _cameras.size,
   };
 }
 
@@ -413,4 +538,5 @@ module.exports = {
   negotiate,
   isHealthy,
   getEngineInfo,
+  sendAppRtp,
 };

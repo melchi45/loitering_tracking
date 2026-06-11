@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useSocket } from './useSocket';
 import { useWebRTCConfigStore } from '../stores/webrtcConfigStore';
+import { useDataChannelStore } from '../stores/dataChannelStore';
 
 // Kept for backwards compatibility with components that import this type
 export interface IceStats {
@@ -66,6 +67,7 @@ function releaseEntry(cameraId: string) {
 export function useWebRTC(cameraId: string, enabled: boolean) {
   const { socket }    = useSocket();
   const getIceServers = useWebRTCConfigStore((s) => s.getIceServers);
+  const pushDCMessage = useDataChannelStore((s) => s.pushMessage);
   const videoRef      = useRef<HTMLVideoElement>(null);
   const retryTimerRef = useRef<ReturnType<typeof setTimeout>>();
 
@@ -177,6 +179,21 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
     entry.pc = pc;
     pc.addTransceiver('video', { direction: 'recvonly' });
     pc.addTransceiver('audio', { direction: 'recvonly' });
+
+    // Create an outgoing DataChannel so the SDP offer includes m=application (SCTP).
+    // The server's mediasoup DataConsumer feeds data back through its own server-side
+    // DataChannel, which the browser receives via ondatachannel below.
+    pc.createDataChannel('init', { ordered: false, maxRetransmits: 0 });
+
+    pc.ondatachannel = (event) => {
+      const dc = event.channel;
+      dc.onmessage = (e) => {
+        try {
+          const msg = JSON.parse(e.data as string);
+          pushDCMessage({ cameraId, ...msg });
+        } catch (_) {}
+      };
+    };
 
     pc.ontrack = (event) => {
       if (cancelled || !videoRef.current) return;

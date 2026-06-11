@@ -67,7 +67,7 @@ MediaMTX (mediamtx.yml)
     └── WebRTC WHEP :8889/{cameraId}/whep  ──► 브라우저
 ```
 
-### WEBRTC_ENGINE=mediasoup (DataChannel 지원)
+### WEBRTC_ENGINE=mediasoup (Audio + Video + DataChannel)
 
 ```
 IP 카메라 (RTSP)
@@ -77,24 +77,35 @@ MediaMTX (mediamtx.yml)
     └── RTSP loopback :8554/{cameraId}
             │
             ▼
-        ingest_daemon.py  (단일 RTSP 세션 → 3-way 팬아웃)
-            ├── JPEG → HTTP POST → Node.js AI pipeline
-            ├── H.264 RTP → UDP:{videoPort} → mediasoup PlainTransport → 비디오 Producer
-            └── Opus RTP  → UDP:{audioPort} → mediasoup PlainTransport → 오디오 Producer
-                                                    │
-                                                    ▼
-                                            mediasoup WebRtcTransport
-                                                    │
-                                            브라우저 RTCPeerConnection
-                                                ├── <video> 트랙 (H.264 SRTP)
-                                                ├── <audio> 트랙 (Opus SRTP)
-                                                └── DataChannel (AI 검출 결과 JSON)
+        ingest_daemon.py  (MediaMTX loopback → 3개 독립 PyAV 세션)
+            ├── ① JPEG → HTTP POST → /api/internal/frame/:id → AI pipeline (YOLO/ByteTrack)
+            ├── ② H.264 RTP → UDP:{mediasoupPort}      → mediasoup video PlainTransport → Producer
+            └── ③ Opus RTP  → UDP:{mediasoupAudioPort} → mediasoup audio PlainTransport → Producer
+                   (카메라 오디오가 Opus가 아니면 PyAV로 트랜스코딩)
+
+mediasoupEngine.js  →  WebRtcTransport (enableSctp=true)
+    ├── video Consumer  → 브라우저 <video> (H.264 SRTP)
+    ├── audio Consumer  → 브라우저 <audio> (Opus SRTP)
+    └── DataConsumer   ← DirectTransport.DataProducer
+                                └── App RTP / server-push JSON → DataChannel (SCTP)
+
+App RTP 전달 경로:
+  WEBRTC_ENGINE=mediamtx: ingest-daemon → POST /api/internal/apprtp/:id → Socket.IO emit('appRtp')
+  WEBRTC_ENGINE=mediasoup: ingest-daemon → POST /api/internal/apprtp/:id → DataProducer.send()
 
 YouTube / RTMP  ──► yt-dlp → ffmpeg → MediaMTX 내부 경로  ← FFmpeg 허용 구간
 ONVIF 자동 탐색 ──► discoveryService.js ──► RTSP 주소 → ingest-daemon
 ```
 
 > **현재 기본 구성:** `CAPTURE_BACKEND=ingest-daemon` + `WEBRTC_ENGINE=mediamtx`
+
+### WEBRTC_ENGINE별 트랙 전달 요약
+
+| 트랙 | mediamtx 모드 | mediasoup 모드 |
+|---|---|---|
+| 비디오 (H.264) | MediaMTX WHEP → SRTP | mediasoup WebRtcTransport → SRTP |
+| 오디오 (Opus) | MediaMTX WHEP → SRTP | mediasoup WebRtcTransport → SRTP |
+| Application RTP (PT 96~127) | Socket.IO `appRtp` 이벤트 | WebRTC DataChannel (SCTP) |
 
 ## 핵심 파일 위치
 
