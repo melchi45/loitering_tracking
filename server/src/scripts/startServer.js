@@ -143,9 +143,11 @@ function main() {
     let ingestArgs;
     let ingestExec;
     if (ingestBinRaw.endsWith('.py')) {
-      ingestExec = pythonExec;
+      // Prefer PYAV_PYTHON_BIN (points to the Python that has PyAV installed)
+      // over the generic PYTHON_EXEC which may be a system Python without PyAV.
+      ingestExec = (childEnv.PYAV_PYTHON_BIN || '').trim() || pythonExec;
       // __dirname = server/src/scripts — two levels up reaches server/, where the relative path in .env is anchored
-    ingestArgs = [path.resolve(__dirname, '..', '..', ingestBinRaw), '--addr', ingestAddr];
+      ingestArgs = [path.resolve(__dirname, '..', '..', ingestBinRaw), '--addr', ingestAddr];
     } else {
       ingestExec = ingestBinRaw || 'ingest-daemon';
       ingestArgs = ['--addr', ingestAddr];
