@@ -17,6 +17,7 @@
     "stop": "cd server && npm run stop",
     "start": "cd server && npm start",
     "restart": "npm run stop --if-present; npm start",
+    "ingest:restart": "cd server && npm run ingest:restart",
     "dev:server": "cd server && npm run dev",
     "setup": "npm run install:all && npm run build:client",
     "clean": "rm -rf server/node_modules client/node_modules client/dist"
