@@ -208,6 +208,60 @@ H.264 B-프레임 카메라에서 빈 프레임 발생 시: ingest-daemon은 모
 
 `rtspCapture.js`에서 `ffmpeg -version`으로 Major 버전 자동 감지 후 플래그 선택.
 
+## .env* 파일 관리 규칙
+
+> `CAPTURE_BACKEND`·`WEBRTC_ENGINE`·`INGEST_DAEMON_*` 등 캡처 관련 환경변수 설명(주석)을 **하나의 파일에서 수정하면 반드시 나머지 모든 `.env*` 파일에도 동기화**해야 합니다.
+
+### 동기화 대상 파일 목록
+
+| 파일 | 용도 |
+|---|---|
+| `server/.env` | 개발/운영 실제 값 (git 미추적) |
+| `server/.env_streaming` | streaming 모드 전용 설정 |
+| `server/.env_analysis` | analysis 모드 전용 설정 |
+| `server/.env.example` | 신규 설치 템플릿 (git 추적) |
+
+### CAPTURE_BACKEND 설명 블록 표준 형식
+
+모든 `.env*` 파일의 `CAPTURE_BACKEND` 설명은 아래 형식을 유지합니다:
+
+```env
+# ── RTSP Capture Backend ─────────────────────────────────────────────────────
+# Selects the capture engine used to ingest RTSP camera frames for the AI pipeline.
+#
+# ingest-daemon (default) — External Python PyAV daemon (ingest_daemon.py, :7070).
+#                       The daemon pulls from MediaMTX RTSP loopback
+#                       (rtsp://127.0.0.1:MEDIAMTX_RTSP_PORT/{cameraId}) and
+#                       POSTs JPEG frames to Node.js via HTTP.
+#                       MediaMTX holds ONE connection to the camera; WebRTC (WHEP)
+#                       and AI frames share it without a second RTSP pull.
+#                       Requires: MediaMTX running + ingest_daemon.py
+#                       Config: INGEST_DAEMON_BIN, INGEST_DAEMON_ADDR, INGEST_DAEMON_URL
+# mediamtx            — Polls MediaMTX snapshot REST API for JPEG frames.
+#                       GET /v3/paths/{id}/get-snapshot → JPEG. No subprocess.
+#                       Requires MediaMTX ≥ 1.2.0 with api: yes in mediamtx.yml.
+# ffmpeg              — FFmpeg subprocess connects directly to the camera RTSP URL.
+#                       Widest codec/OS compatibility. Requires: ffmpeg ≥ 3.4
+# gstreamer           — GStreamer pipeline. Lower latency; supports hardware decode
+#                       (NVIDIA nvdec, Intel/AMD VA-API).
+#                       Requires: gstreamer1.0-tools gstreamer1.0-plugins-*
+# pyav                — Python PyAV sidecar. Best CUDA utilisation; future path for
+#                       Python-side GPU inference. Requires: pip3 install av Pillow
+#
+CAPTURE_BACKEND=ingest-daemon
+```
+
+### Ingest Daemon 섹션 표준 제목
+
+```env
+# ── Ingest Daemon (CAPTURE_BACKEND=ingest-daemon 전용) ───────────────────────
+```
+
+> **주의**: `WEBRTC_ENGINE=mediasoup 전용`이라고 적힌 구형 주석은 **잘못된 설명**입니다.  
+> `ingest-daemon`은 `mediamtx`(기본)·`mediasoup` 양쪽 WEBRTC_ENGINE과 함께 사용 가능합니다.
+
+---
+
 ## server/.env 필수 설정 체크리스트
 
 > **이 섹션을 먼저 확인하세요.** 잘못된 환경 변수 설정이 스트림 오류의 가장 흔한 원인입니다.
