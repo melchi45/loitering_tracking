@@ -12,7 +12,7 @@ HTTP API (default :7070):
   GET    /health    → { "status": "ok", "cameras": N }
 
 Environment:
-  AI_FRAME_INTERVAL — decode every Nth packet for AI (default: 3, ~3 fps AI at 10 fps input)
+  AI_FRAME_INTERVAL — push every Nth decoded frame to AI (default: 3, ~3 fps AI at 10 fps input)
   JPEG_QUALITY      — JPEG encode quality 1-95 (default: 85)
   AI_MAX_WIDTH      — resize AI frames to at most this width (default: 640)
   IDR_WAIT_TIMEOUT  — seconds to wait for first IDR keyframe (default: 10)
@@ -133,7 +133,13 @@ class CameraSession:
             idr_seen     = False
             idr_deadline = time.monotonic() + IDR_WAIT_TIMEOUT
 
-            idx = 0
+            # Count OUTPUT frames (not input packets) for rate-limiting.
+            # IMPORTANT: decode() must be called for EVERY packet — the H264 decoder
+            # needs all packets to maintain B-frame reference state.  Skipping input
+            # packets breaks the decoder for cameras with B-frames, causing decode()
+            # to return no frames at all.  Rate-limiting is applied to the decoded
+            # output instead.
+            frame_counter = 0
             for packet in container.demux(video_stream):
                 if self._stop_event.is_set():
                     break
@@ -149,14 +155,12 @@ class CameraSession:
                     else:
                         continue
 
-                idx += 1
-                if idx % AI_FRAME_INTERVAL != 0:
-                    continue
-
                 try:
                     for frame in packet.decode():
-                        self._push_jpeg(frame)
-                        break  # one frame per packet is enough
+                        frame_counter += 1
+                        if frame_counter % AI_FRAME_INTERVAL == 0:
+                            self._push_jpeg(frame)
+                        break  # one frame per decode call is enough
                 except Exception as dec_err:
                     log.debug("[%s] decode: %s", self.id[:8], dec_err)
         finally:

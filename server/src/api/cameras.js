@@ -3,7 +3,8 @@
 const { Router } = require('express');
 const { v4: uuidv4 } = require('uuid');
 
-const SERVER_MODE = process.env.SERVER_MODE || 'combined';
+const SERVER_MODE      = process.env.SERVER_MODE      || 'combined';
+const CAPTURE_BACKEND  = (process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase();
 
 function normalizeRtspUrl(rtspUrl) {
   if (typeof rtspUrl !== 'string' || !rtspUrl.trim()) {
@@ -59,6 +60,9 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
           bitrate,
           password:       undefined, // Never expose password in list
           pipelineStatus: pipelineStatus || null,
+          // ingest-daemon has no RTP/WebRTC path — override any stale DB value
+          // so the client always starts in JPEG/Socket.IO mode.
+          ...(CAPTURE_BACKEND === 'ingest-daemon' && { webrtcEnabled: false }),
         };
       });
       res.json({ success: true, data: result });
@@ -144,7 +148,12 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       const pipelineStatus = pipelineManager.getCameraStatus(camera.id);
       res.json({
         success: true,
-        data: { ...camera, password: undefined, pipelineStatus: pipelineStatus || null },
+        data: {
+          ...camera,
+          password:       undefined,
+          pipelineStatus: pipelineStatus || null,
+          ...(CAPTURE_BACKEND === 'ingest-daemon' && { webrtcEnabled: false }),
+        },
       });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
