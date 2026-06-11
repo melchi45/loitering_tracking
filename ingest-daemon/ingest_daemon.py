@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 """
-LTS-2026 Ingest Daemon — Python implementation (Pattern C-hybrid).
+LTS-2026 Ingest Daemon — Python implementation (AI-only path).
 
-Per-camera: one RTSP connection for AI + one ffmpeg subprocess for WebRTC RTP.
-  AI thread   : RTSP → PyAV H264 decode → resize 640 → JPEG → HTTP POST to Node.js
-  WebRTC proc : ffmpeg subprocess rtsp → rtp://127.0.0.1:{mediasoupPort}
+Per-camera: one RTSP connection for AI.
+  AI thread: RTSP → PyAV H264 decode → resize 640 → JPEG → HTTP POST to Node.js
 
 HTTP API (default :7070):
-  POST   /cameras   { "id", "rtspUrl", "mediasoupPort", "callbackUrl" }
+  POST   /cameras   { "id", "rtspUrl", "callbackUrl" }
   DELETE /cameras/:id
   GET    /cameras   → { "count": N }
   GET    /health    → { "status": "ok", "cameras": N }
 
 Environment:
-  FFMPEG_BIN   — path to ffmpeg binary (default: ffmpeg)
   AI_FRAME_INTERVAL — decode every Nth packet for AI (default: 3, ~3 fps AI at 10 fps input)
   JPEG_QUALITY      — JPEG encode quality 1-95 (default: 85)
   AI_MAX_WIDTH      — resize AI frames to at most this width (default: 640)
+  IDR_WAIT_TIMEOUT  — seconds to wait for first IDR keyframe (default: 10)
 """
 
 import argparse
@@ -24,8 +23,7 @@ import io
 import json
 import logging
 import os
-import queue
-import subprocess
+import ssl
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -35,6 +33,10 @@ from urllib.request import urlopen, Request
 import av
 from PIL import Image
 
+# Suppress libav/ffmpeg internal decoder messages (H264 reference-frame errors
+# during the initial GOP are noisy but harmless — Python-level exceptions still fire).
+av.logging.set_level(av.logging.CRITICAL)
+
 logging.basicConfig(
     level=logging.INFO,
     format="[Ingest] %(asctime)s %(levelname)s %(message)s",
@@ -43,10 +45,15 @@ logging.basicConfig(
 log = logging.getLogger("ingest")
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-FFMPEG_BIN         = os.environ.get("FFMPEG_BIN", "ffmpeg")
 AI_FRAME_INTERVAL  = int(os.environ.get("AI_FRAME_INTERVAL", "3"))   # AI every N packets
 JPEG_QUALITY       = int(os.environ.get("JPEG_QUALITY", "85"))
 AI_MAX_WIDTH       = int(os.environ.get("AI_MAX_WIDTH", "640"))
+IDR_WAIT_TIMEOUT   = float(os.environ.get("IDR_WAIT_TIMEOUT", "10")) # seconds
+
+# Reusable SSL context for loopback HTTPS callbacks (self-signed cert OK).
+_SSL_CTX_NOVERIFY = ssl.create_default_context()
+_SSL_CTX_NOVERIFY.check_hostname = False
+_SSL_CTX_NOVERIFY.verify_mode = ssl.CERT_NONE
 
 
 def _resize_frame(img: Image.Image, max_width: int) -> Image.Image:
@@ -61,29 +68,21 @@ def _resize_frame(img: Image.Image, max_width: int) -> Image.Image:
 # ── Camera session ────────────────────────────────────────────────────────────
 
 class CameraSession:
-    """Manages one camera: AI (PyAV in-process) + WebRTC (ffmpeg subprocess)."""
+    """Manages one camera: AI path only (PyAV in-process decode → JPEG → HTTP POST)."""
 
     def __init__(self, cfg: dict):
-        self.id             = cfg["id"]
-        self.rtsp_url       = cfg["rtspUrl"]
-        self.mediasoup_port = int(cfg["mediasoupPort"])
-        self.callback_url   = cfg["callbackUrl"]
+        self.id           = cfg["id"]
+        self.rtsp_url     = cfg["rtspUrl"]
+        self.callback_url = cfg["callbackUrl"]
 
-        self._stop_event     = threading.Event()
-        self._ai_thread      = threading.Thread(
+        self._stop_event  = threading.Event()
+        self._ai_thread   = threading.Thread(
             target=self._ai_loop, daemon=True, name=f"ai-{self.id[:8]}")
-        self._ffmpeg_proc    = None
-        self._ffmpeg_thread  = threading.Thread(
-            target=self._ffmpeg_loop, daemon=True, name=f"rtp-{self.id[:8]}")
-
         self._ai_thread.start()
-        self._ffmpeg_thread.start()
 
     def stop(self):
         self._stop_event.set()
-        self._kill_ffmpeg()
         self._ai_thread.join(timeout=5)
-        self._ffmpeg_thread.join(timeout=5)
         log.info("[%s] Stopped", self.id[:8])
 
     # ── AI path: PyAV in-process ──────────────────────────────────────────────
@@ -117,10 +116,8 @@ class CameraSession:
             if video_stream is None:
                 raise RuntimeError("No video stream in RTSP source")
 
-            # Force single-thread decoding: reduces "reference frame unavailable"
-            # errors on high-resolution streams (2K/4K cameras) at the cost of
-            # slightly higher per-frame latency. Multi-threaded H264 decode often
-            # produces cascading errors when the initial GOP is received mid-stream.
+            # Single-thread decoding reduces "reference frame unavailable" errors
+            # on high-resolution streams (2K/4K cameras).
             video_stream.codec_context.thread_type = "NONE"
             video_stream.codec_context.thread_count = 1
 
@@ -130,12 +127,27 @@ class CameraSession:
                      video_stream.codec_context.width,
                      video_stream.codec_context.height)
 
+            # Wait for the first IDR (keyframe) before decoding P/B frames.
+            # Without this, the decoder produces corrupt frames and log spam until
+            # the first clean reference frame arrives.
+            idr_seen     = False
+            idr_deadline = time.monotonic() + IDR_WAIT_TIMEOUT
+
             idx = 0
             for packet in container.demux(video_stream):
                 if self._stop_event.is_set():
                     break
                 if packet.size == 0:
                     continue
+
+                if not idr_seen:
+                    if packet.is_keyframe:
+                        idr_seen = True
+                    elif time.monotonic() > idr_deadline:
+                        # Camera rarely sends IDR — give up waiting and decode anyway.
+                        idr_seen = True
+                    else:
+                        continue
 
                 idx += 1
                 if idx % AI_FRAME_INTERVAL != 0:
@@ -164,8 +176,12 @@ class CameraSession:
                 headers={"Content-Type": "image/jpeg"},
                 method="POST",
             )
-            with urlopen(req, timeout=3) as resp:
+
+            # Disable SSL verification for loopback HTTPS (self-signed cert).
+            ctx = _SSL_CTX_NOVERIFY if self.callback_url.startswith("https://") else None
+            with urlopen(req, timeout=3, context=ctx) as resp:
                 code = resp.getcode()
+
             if not hasattr(self, '_push_count'):
                 self._push_count = 0
             self._push_count += 1
@@ -175,77 +191,6 @@ class CameraSession:
                          img.width, img.height, len(jpeg_bytes), code)
         except Exception as e:
             log.warning("[%s] push_jpeg failed: %s", self.id[:8], e)
-
-    # ── WebRTC path: ffmpeg subprocess ────────────────────────────────────────
-
-    def _ffmpeg_loop(self):
-        """Keep ffmpeg alive for WebRTC RTP forwarding to mediasoup."""
-        retry_delay = 2.0
-        while not self._stop_event.is_set():
-            self._run_ffmpeg_once()
-            if self._stop_event.is_set():
-                break
-            log.warning("[%s] ffmpeg exited — retry in %.0fs", self.id[:8], retry_delay)
-            self._stop_event.wait(retry_delay)
-            retry_delay = min(retry_delay * 1.5, 30.0)
-
-    def _run_ffmpeg_once(self):
-        """
-        ffmpeg command: RTSP → RTP/H264 → UDP → mediasoup PlainTransport
-        Uses SSRC 0x22334455 (573522005) and PT 96 to match mediasoupEngine.js.
-        """
-        cmd = [
-            FFMPEG_BIN,
-            "-loglevel",   "warning",
-            "-rtsp_transport", "tcp",
-            "-i",          self.rtsp_url,
-            # Video only: H264 stream-copy, no re-encode
-            "-vn",         "-an",           # disable audio first
-            "-map",        "0:v:0",
-            "-c:v",        "copy",
-            # RTP output
-            "-f",          "rtp",
-            "-payload_type", "96",
-            "-ssrc",       "573522005",     # 0x22334455
-            f"rtp://127.0.0.1:{self.mediasoup_port}?localrtcpport={self.mediasoup_port + 1}",
-        ]
-        log.info("[%s] ffmpeg RTP → UDP ::%d  cmd: %s",
-                 self.id[:8], self.mediasoup_port, " ".join(cmd[4:8]))
-        try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.PIPE,
-            )
-            self._ffmpeg_proc = proc
-            # Stream stderr for warnings
-            for line in proc.stderr:
-                if self._stop_event.is_set():
-                    break
-                line = line.decode(errors="replace").rstrip()
-                if line:
-                    log.debug("[%s] ffmpeg: %s", self.id[:8], line)
-            proc.wait()
-        except FileNotFoundError:
-            log.error("[%s] ffmpeg not found at '%s' — WebRTC disabled", self.id[:8], FFMPEG_BIN)
-            self._stop_event.wait()  # don't retry if binary missing
-        except Exception as e:
-            log.warning("[%s] ffmpeg error: %s", self.id[:8], e)
-        finally:
-            self._ffmpeg_proc = None
-
-    def _kill_ffmpeg(self):
-        proc = self._ffmpeg_proc
-        if proc and proc.poll() is None:
-            try:
-                proc.terminate()
-                proc.wait(timeout=3)
-            except Exception:
-                try:
-                    proc.kill()
-                except Exception:
-                    pass
-        self._ffmpeg_proc = None
 
 
 # ── Camera manager ────────────────────────────────────────────────────────────
@@ -323,7 +268,7 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 self._json(400, {"error": "invalid JSON"})
                 return
-            for k in ("id", "rtspUrl", "mediasoupPort", "callbackUrl"):
+            for k in ("id", "rtspUrl", "callbackUrl"):
                 if k not in body:
                     self._json(400, {"error": f"missing field: {k}"})
                     return

@@ -607,6 +607,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
 
   const { socket, connected } = useSocket();
   const updateCameraStatus = useCameraStore((s) => s.updateCameraStatus);
+  const updateCamera = useCameraStore((s) => s.updateCamera);
   const setCameras = useCameraStore((s) => s.setCameras);
   const cameras = useCameraStore((s) => s.cameras);
   const addAlert = useAlertStore((s) => s.addAlert);
@@ -737,6 +738,14 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
       updateCameraStatus(event.cameraId, event.status);
     };
 
+    // Server signals that this camera has no WebRTC path (e.g. ingest-daemon mode).
+    // Update the in-memory store so CameraView switches to JPEG/Socket.IO mode.
+    const handleCameraCapabilities = (event: { cameraId: string; webrtcEnabled?: boolean }) => {
+      if (event.webrtcEnabled === false) {
+        updateCamera(event.cameraId, { webrtcEnabled: false });
+      }
+    };
+
     const handleAlert = (event: {
       id?: string;
       cameraId: string;
@@ -779,6 +788,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
     };
 
     socket.on('camera:status',            handleCameraStatus);
+    socket.on('camera:capabilities',      handleCameraCapabilities);
     socket.on('alert:new',                handleAlert);
     socket.on('face:reidentified',        handleFaceReidentified);
     socket.on('clothing:reidentified',    handleClothingReidentified);
@@ -789,12 +799,13 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
 
     return () => {
       socket.off('camera:status',            handleCameraStatus);
+      socket.off('camera:capabilities',      handleCameraCapabilities);
       socket.off('alert:new',                handleAlert);
       socket.off('face:reidentified',        handleFaceReidentified);
       socket.off('clothing:reidentified',    handleClothingReidentified);
       socket.off('person:trajectory-update', handlePersonTrajectory);
     };
-  }, [socket, updateCameraStatus, addAlert, addCrossCameraEvent, addClothingReIdEvent, updatePerson]);
+  }, [socket, updateCameraStatus, updateCamera, addAlert, addCrossCameraEvent, addClothingReIdEvent, updatePerson]);
 
   // ── Dashboard routing ────────────────────────────────────────────────────────
   // combined + /analysis  →  show analysis dashboard
