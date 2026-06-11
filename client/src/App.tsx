@@ -242,9 +242,9 @@ function SettingsModal({ onClose, analysisMode = false }: { onClose: () => void;
 
       if (iceAbortRef.current) { log('Aborted.'); return; }
 
-      // ── Phase 2: MediaMTX WebRTC relay test ──────────────────────────────
+      // ── Phase 2: WebRTC engine health check ──────────────────────────────
       log('');
-      log('=== Phase 2: MediaMTX WebRTC Relay ===');
+      log('=== Phase 2: WebRTC Engine ===');
 
       try {
         const resp = await fetch('/api/webrtc/ice-test', { method: 'POST' });
@@ -254,14 +254,23 @@ function SettingsModal({ onClose, analysisMode = false }: { onClose: () => void;
         } else {
           const data = await resp.json();
           if (!resp.ok || data.error) {
-            log(`  ✗ MediaMTX unreachable: ${data.error ?? `HTTP ${resp.status}`}`);
-            log('    → Run: npm run dev  (starts MediaMTX automatically)');
+            const engineName = data.engine ?? 'webrtc';
+            log(`  ✗ Engine unreachable [${engineName}]: ${data.error ?? `HTTP ${resp.status}`}`);
+            if (data.hint) log(`    → ${data.hint}`);
           } else {
-            log(`  ✓ MediaMTX reachable  engine=${data.engine ?? 'mediamtx-whep'}  UDP port=${data.udpPort ?? 8189}`);
+            const engineLabel = data.engine ?? 'webrtc';
+            const portInfo    = data.udpPort ? `  UDP port=${data.udpPort}` : '';
+            log(`  ✓ Engine ready  engine=${engineLabel}${portInfo}`);
+            if (data.transportId) log(`  Transport: ${data.transportId}`);
             log(`  WHEP proxy: ${data.whepProxy ?? '/api/webrtc/whep/:cameraId'}`);
             const cands: Array<{ type: string; ip: string; port: number; protocol: string }> = data.iceCandidates ?? [];
-            if (cands.length === 0) {
+            // mediasoup uses announcedIp instead of fixed candidates
+            const announcedIp: string | undefined = data.announcedIp;
+            if (cands.length === 0 && !announcedIp) {
               log('  ⚠ No server IPs configured — set SERVER_IP in server/.env');
+            } else if (cands.length === 0 && announcedIp) {
+              const warn = announcedIp === '127.0.0.1' ? '  ⚠ loopback! Set SERVER_IP in .env' : '';
+              log(`  Announced IP: ${announcedIp}${warn}`);
             } else {
               log(`  Server ICE candidates (${cands.length}):`);
               cands.forEach(c => {
