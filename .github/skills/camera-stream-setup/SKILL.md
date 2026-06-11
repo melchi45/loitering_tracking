@@ -6,25 +6,92 @@ argument-hint: "카메라 소스 유형 (RTSP / ONVIF / YouTube / WebRTC) 또는
 
 # Camera Stream Setup
 
+## ⚡ 핵심 아키텍처 원칙 (반드시 준수)
+
+> **이 원칙은 LTS-2026의 수집 레이어 설계 근간입니다. 모든 코드 수정 시 이를 우선합니다.**
+
+### 1. RTSP 스트림은 ingest-daemon이 유일한 수집 계층
+
+- **RTSP로 연결 가능한 모든 카메라는 ingest-daemon(`ingest_daemon.py`)을 통해서만 수집합니다.**
+- ingest-daemon은 단일 RTSP 세션에서 다음 세 경로를 동시에 팬아웃합니다:
+  - **JPEG → HTTP POST** → Node.js AI 파이프라인 (YOLOv8/ByteTrack)
+  - **H.264 RTP → UDP** → mediasoup PlainTransport (WebRTC 비디오 트랙)
+  - **Opus RTP → UDP** → mediasoup PlainTransport (WebRTC 오디오 트랙)
+- `CAPTURE_BACKEND=ingest-daemon`이 모든 배포 환경의 기본값입니다.
+
+### 2. FFmpeg 사용 금지 범위 (RTSP 수집)
+
+- **RTSP 카메라 수집에 FFmpeg subprocess를 사용하지 않습니다.**
+- FFmpeg은 아래 불가피한 경우에만 허용됩니다:
+  - YouTube 스트림 (`yt-dlp | ffmpeg → MediaMTX` 파이프라인)
+  - RTSP를 지원하지 않는 특수 소스 (RTMP, HLS 등 RTSP 변환 전 단계)
+- `rtspCapture.js`, `gstreamerCapture.js`, `pyavCapture.js`는 레거시입니다. 신규 카메라에 사용하지 않습니다.
+
+### 3. mediasoup WebRTC도 ingest-daemon이 RTP 공급
+
+- `WEBRTC_ENGINE=mediasoup` 환경에서도 ingest-daemon이 비디오/오디오 RTP를 공급합니다.
+- mediasoup이 스스로 FFmpeg subprocess를 띄우는 구현은 금지입니다.
+- `mediasoupEngine.js`의 `addCameraStream()`은 반드시 ingest-daemon의 `/cameras` API를 호출하고 `mediasoupPort`(video) + `mediasoupAudioPort`(audio)를 전달해야 합니다.
+
+### 4. 수집 우선순위 결정 트리
+
+```
+카메라 소스 유형?
+├── RTSP / ONVIF (IP 카메라)
+│     └── 항상 ingest-daemon  ← WEBRTC_ENGINE=mediamtx OR mediasoup 무관
+├── YouTube / RTMP / HLS
+│     └── yt-dlp → ffmpeg → MediaMTX  (불가피한 경우)
+└── ONVIF 탐색 후 RTSP 확인
+      └── RTSP 주소 추출 → ingest-daemon
+```
+
+---
+
 ## 스트림 수집 아키텍처
+
+### WEBRTC_ENGINE=mediamtx (현재 기본)
 
 ```
 IP 카메라 (RTSP)
     │ 단일 RTSP 연결
     ▼
 MediaMTX (mediamtx.yml)
-    ├── RTSP loopback :8554/{cameraId}          ──► ingest_daemon.py
-    │                                                  │ HTTP POST JPEG
-    │                                                  ▼
-    │                                           Node.js /api/internal/frame/:id
-    │                                                  │ injectFrame()
-    │                                                  ▼
-    │                                           IngestDaemonCapture → detection pipeline
+    ├── RTSP loopback :8554/{cameraId}
+    │       │
+    │       ▼
+    │   ingest_daemon.py
+    │       ├── JPEG → HTTP POST → Node.js /api/internal/frame/:id
+    │       │        → IngestDaemonCapture → AI pipeline (YOLO/ByteTrack)
+    │       │   (WEBRTC_ENGINE=mediamtx 시 RTP 경로 미사용)
     │
-    └── WebRTC WHEP :8889/{cameraId}/whep  ──► 브라우저 (직접 수신)
+    └── WebRTC WHEP :8889/{cameraId}/whep  ──► 브라우저
+```
 
-YouTube / RTMP  ──► youtubeStreamService.js ──► MediaMTX 내부 경로
-ONVIF 자동 탐색 ──► discoveryService.js ──► 카메라 DB 등록
+### WEBRTC_ENGINE=mediasoup (DataChannel 지원)
+
+```
+IP 카메라 (RTSP)
+    │ 단일 RTSP 연결
+    ▼
+MediaMTX (mediamtx.yml)
+    └── RTSP loopback :8554/{cameraId}
+            │
+            ▼
+        ingest_daemon.py  (단일 RTSP 세션 → 3-way 팬아웃)
+            ├── JPEG → HTTP POST → Node.js AI pipeline
+            ├── H.264 RTP → UDP:{videoPort} → mediasoup PlainTransport → 비디오 Producer
+            └── Opus RTP  → UDP:{audioPort} → mediasoup PlainTransport → 오디오 Producer
+                                                    │
+                                                    ▼
+                                            mediasoup WebRtcTransport
+                                                    │
+                                            브라우저 RTCPeerConnection
+                                                ├── <video> 트랙 (H.264 SRTP)
+                                                ├── <audio> 트랙 (Opus SRTP)
+                                                └── DataChannel (AI 검출 결과 JSON)
+
+YouTube / RTMP  ──► yt-dlp → ffmpeg → MediaMTX 내부 경로  ← FFmpeg 허용 구간
+ONVIF 자동 탐색 ──► discoveryService.js ──► RTSP 주소 → ingest-daemon
 ```
 
 > **현재 기본 구성:** `CAPTURE_BACKEND=ingest-daemon` + `WEBRTC_ENGINE=mediamtx`

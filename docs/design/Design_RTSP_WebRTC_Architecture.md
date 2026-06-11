@@ -1,7 +1,44 @@
 # RTSP → WebRTC 실시간 AI 스트리밍 아키텍처 설계서
 
-**Version:** 1.4  
+**Version:** 1.5  
 **대상:** 언어·런타임에 독립적인 구현 가이드 (Node.js / Go / Python / Rust / C++ / Java)
+
+---
+
+## 0. 수집 레이어 불변 원칙 (Architecture Invariants)
+
+> **이 원칙은 LTS-2026의 핵심 설계 결정입니다. 구현 선택 시 항상 이 원칙을 최우선으로 합니다.**
+
+### 0.1 ingest-daemon 우선 원칙
+
+**RTSP로 연결 가능한 모든 카메라 스트림은 `ingest-daemon`(Python PyAV)을 유일한 수집 계층으로 사용한다.**
+
+| 소스 유형 | 수집 수단 | FFmpeg 사용 여부 |
+|---|---|---|
+| RTSP / ONVIF IP 카메라 | **ingest-daemon 전용** | ❌ 금지 |
+| YouTube / RTMP / HLS | yt-dlp → ffmpeg → MediaMTX | ✅ 불가피한 경우만 허용 |
+
+### 0.2 ingest-daemon 팬아웃 설계
+
+ingest-daemon은 단일 RTSP 세션에서 아래 경로를 동시에 공급한다. 어느 WebRTC 엔진을 선택해도 수집 레이어는 ingest-daemon으로 고정된다.
+
+```
+MediaMTX RTSP loopback (rtsp://127.0.0.1:8554/{id})
+    │
+    └── ingest_daemon.py (단일 PyAV 세션)
+            ├── ① JPEG → HTTP POST → Node.js AI pipeline   (항상 활성)
+            ├── ② H.264 RTP → UDP:{videoPort}              (WEBRTC_ENGINE=mediasoup 시 활성)
+            └── ③ Opus  RTP → UDP:{audioPort}              (WEBRTC_ENGINE=mediasoup 시 활성)
+```
+
+### 0.3 금지 사항
+
+- **RTSP 수집에 FFmpeg subprocess를 직접 사용하지 않는다.**
+  - `rtspCapture.js`, `gstreamerCapture.js`, `pyavCapture.js`는 레거시이며 신규 카메라에 사용 금지.
+  - `mediasoupEngine.js`가 WebRTC용 RTP가 필요할 때도 FFmpeg을 직접 spawn하지 않는다.
+    → ingest-daemon `POST /cameras { mediasoupPort, mediasoupAudioPort }` API로 요청.
+- **MediaMTX WHEP은 영상/음성만 브라우저로 전달하며 DataChannel을 지원하지 않는다.**
+  → DataChannel(AI 검출 결과 전송)이 필요하면 `WEBRTC_ENGINE=mediasoup`으로 전환해야 한다.
 
 ---
 
@@ -1339,3 +1376,4 @@ GET http://localhost:9997/v3/whepsessions/list
 | 1.2 | 2026-06-11 | ffmpeg subprocess 전면 제거 — 인프로세스 라이브러리(libav/GStreamer/gortsplib)로 대체; 3.1 표·권장 재작성, 7.1 녹화 방법 교체 |
 | 1.3 | 2026-06-11 | §10 미구현 항목 Milestone 추가 — M1(영상 녹화), M2(Playback), M3(Qdrant Re-ID), M4(RTCP 피드백), M5(분산 클러스터) |
 | 1.4 | 2026-06-11 | §3.7 Application RTP → WebRTC DataChannel 브리지 추가 — 프로토콜 비교, 변환 경로, DataChannel 신뢰성 설정, MediaMTX WHEP 한계 명시 |
+| 1.5 | 2026-06-11 | §0 수집 레이어 불변 원칙 추가 — ingest-daemon 우선 원칙, 팬아웃 설계, FFmpeg 금지 범위 명시 |
