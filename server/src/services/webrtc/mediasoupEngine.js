@@ -33,11 +33,12 @@ const RTC_MIN_PORT      = parseInt(process.env.MEDIASOUP_MIN_PORT || '40000', 10
 const RTC_MAX_PORT      = parseInt(process.env.MEDIASOUP_MAX_PORT || '49999', 10);
 const INGEST_DAEMON_URL = (process.env.INGEST_DAEMON_URL || 'http://127.0.0.1:7070').replace(/\/$/, '');
 
-const VIDEO_PT = 96;
-const AUDIO_PT = 111;
-// SSRC is NOT specified in Producer encodings — mediasoup auto-detects the SSRC
-// from the first incoming RTP packet (comedia=true).  Fixing SSRC here would cause
-// all packets from PyAV (which uses a random SSRC) to be silently discarded.
+const VIDEO_PT   = 96;
+const AUDIO_PT   = 111;
+// These SSRCs must match _MEDIASOUP_VIDEO_SSRC / _MEDIASOUP_AUDIO_SSRC in ingest_daemon.py.
+// mediasoup requires ssrc (or rid/mid) in PlainTransport Producer encodings.
+const VIDEO_SSRC = 0x22334455;  // 573785173 decimal
+const AUDIO_SSRC = 0x33445566;  // 860116326 decimal
 
 // ── Singleton worker / router ─────────────────────────────────────────────────
 let _worker = null;
@@ -171,7 +172,7 @@ async function addCameraStream(cameraId, rtspUrl) {
             'level-asymmetry-allowed': 1,
           },
         }],
-        encodings: [{}],
+        encodings: [{ ssrc: VIDEO_SSRC }],
       },
     });
 
@@ -193,7 +194,7 @@ async function addCameraStream(cameraId, rtspUrl) {
           channels:    2,
           parameters:  { minptime: 10, useinbandfec: 1 },
         }],
-        encodings: [{}],
+        encodings: [{ ssrc: AUDIO_SSRC }],
       },
     });
 

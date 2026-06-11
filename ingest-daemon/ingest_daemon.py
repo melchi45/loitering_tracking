@@ -62,6 +62,12 @@ _RTSP_OPTIONS = {
     "max_delay":      "500000",
 }
 
+# Must match VIDEO_SSRC / AUDIO_SSRC in server/src/services/webrtc/mediasoupEngine.js.
+# mediasoup PlainTransport (comedia=true) filters incoming RTP by SSRC; packets with
+# a different SSRC are silently discarded.
+_MEDIASOUP_VIDEO_SSRC = 573785173   # 0x22334455
+_MEDIASOUP_AUDIO_SSRC = 860116326   # 0x33445566
+
 # Reusable SSL context for loopback HTTPS callbacks (self-signed cert OK).
 _SSL_CTX_NOVERIFY = ssl.create_default_context()
 _SSL_CTX_NOVERIFY.check_hostname = False
@@ -236,10 +242,12 @@ class CameraSession:
             out = av.open(
                 f"rtp://127.0.0.1:{self.mediasoup_video_port}",
                 "w", format="rtp",
+                options={"ssrc": str(_MEDIASOUP_VIDEO_SSRC)},
             )
             out_vs = out.add_stream(template=vs)
-            log.info("[%s] Video RTP: %s → rtp://127.0.0.1:%d",
-                     self.id[:8], vs.codec_context.name, self.mediasoup_video_port)
+            log.info("[%s] Video RTP: %s → rtp://127.0.0.1:%d (ssrc=0x%08x)",
+                     self.id[:8], vs.codec_context.name,
+                     self.mediasoup_video_port, _MEDIASOUP_VIDEO_SSRC)
             try:
                 idr_seen     = False
                 idr_deadline = time.monotonic() + IDR_WAIT_TIMEOUT
@@ -299,6 +307,7 @@ class CameraSession:
             out    = av.open(
                 f"rtp://127.0.0.1:{self.mediasoup_audio_port}",
                 "w", format="rtp",
+                options={"ssrc": str(_MEDIASOUP_AUDIO_SSRC)},
             )
 
             # Pass through if already Opus; transcode everything else.
