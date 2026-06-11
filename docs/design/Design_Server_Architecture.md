@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-SA-01 |
-| **Version** | 1.2 |
+| **Version** | 1.3 |
 | **Status** | Active |
-| **Date** | 2026-06-10 |
+| **Date** | 2026-06-11 |
 | **Author** | LTS-2026 Engineering |
 
 ---
@@ -196,7 +196,7 @@ graph LR
 
 | 서비스 | 활성 여부 |
 |---|---|
-| RTSPCapture (ffmpeg/mediamtx/pyav) | ✅ |
+| CaptureBackend (ingest-daemon/gstreamer/ffmpeg/pyav) | ✅ |
 | PipelineManager (AI 추론) | ✅ |
 | analysisApi 마운트 | ✅ (`/api/analysis/*`) |
 | analysisProxy 마운트 | ❌ |
@@ -258,7 +258,7 @@ sequenceDiagram
 
 | 서비스 | 활성 여부 |
 |---|---|
-| RTSPCapture (ffmpeg/mediamtx/pyav) | ✅ |
+| CaptureBackend (ingest-daemon/gstreamer/ffmpeg/pyav) | ✅ |
 | PipelineManager | ✅ (캡처 + 결과 처리만) |
 | analysisApi 마운트 | ❌ |
 | analysisProxy 마운트 | ✅ (`/api/analysis/*` → 원격 서버) |
@@ -750,7 +750,7 @@ graph TB
 | `ANALYSIS_MAX_CONCURRENT` | `100` | 미사용 | ✅ | ✅ |
 | `ONNX_CUDA` | `0` | ✅ | ❌ | ✅ |
 | `ONNX_THREADS_PROD` | `0` | ✅ | ❌ | ✅ |
-| `CAPTURE_BACKEND` | `mediamtx` | ✅ | ✅ | ❌ |
+| `CAPTURE_BACKEND` | `ingest-daemon` | ✅ | ✅ | ❌ |
 | `CAPTURE_FPS` | `10` | ✅ | ✅ | ❌ |
 | `MEDIAMTX_RTSP_PORT` | `8554` | ✅ | ✅ | ❌ |
 | `DB_TYPE` | `json` | ✅ | ✅ | ✅ |
@@ -878,3 +878,4 @@ if (subscribedRef.current.size > 0 && !subscribedRef.current.has(ev.cameraId)) r
 | 1.0 | 2026-06-10 | 초기 작성 — combined/streaming/analysis 모드 분리, DB/MCP 아키텍처, 배포 시나리오 5종, Mermaid 다이어그램 포함 |
 | 1.1 | 2026-06-10 | Section 8 추가: 실시간 감지 데이터 흐름(SERVER_MODE별), analysis 모드 Socket.IO 활성화, useAllDetections 전체 수신 메커니즘, snapshotSvc로 일반 person 크롭 지원 |
 | 1.2 | 2026-06-10 | streaming 모드 `GET /api/analysis/client-status` 엔드포인트 추가 — circuit-breaker 상태·통계 노출, DashboardDetectionPanel 분석 서버 연결 상태 배너 |
+| 1.3 | 2026-06-11 | CAPTURE_BACKEND 기본값 `ingest-daemon`으로 변경; RTSPCapture 표기를 CaptureBackend로 일반화 |

@@ -1,7 +1,7 @@
 ---
 name: camera-stream-setup
-description: "LTS-2026 카메라 스트림 설정 및 관리. Use when: RTSP 카메라 추가/연결, ONVIF 카메라 자동 탐색, YouTube/RTMP 스트림 RTSP 변환 ingestion, WebRTC 미디어 게이트웨이 설정, MediaMTX 프록시 설정, ICE/STUN/TURN 연결 문제 해결, 카메라 스트림 끊김 디버깅, 새 카메라 소스 지원 추가, CAPTURE_BACKEND 전환(ffmpeg/gstreamer/pyav), GStreamer 하드웨어 가속 설정(nvdec/vaapi), PyAV Python 사이드카 설정. Covers: captureFactory.js, rtspCapture.js, gstreamerCapture.js, pyavCapture.js, pyav_capture.py, rtpIngestion.js, webrtcGateway.js, discoveryService.js, onvifDiscovery.js, youtubeStreamService.js, mediamtx.yml."
-argument-hint: "카메라 소스 유형 (RTSP / ONVIF / YouTube / WebRTC) 또는 백엔드 (ffmpeg / gstreamer / pyav)"
+description: "LTS-2026 카메라 스트림 설정 및 관리. Use when: RTSP 카메라 추가/연결, ONVIF 카메라 자동 탐색, YouTube/RTMP 스트림 RTSP 변환 ingestion, WebRTC 미디어 게이트웨이 설정, MediaMTX 프록시/WHEP 설정, ICE/STUN/TURN 연결 문제 해결, 카메라 스트림 끊김 디버깅, 새 카메라 소스 지원 추가, CAPTURE_BACKEND 전환(ingest-daemon/gstreamer/ffmpeg), WEBRTC_ENGINE 선택(mediamtx/mediasoup), ingest-daemon 설정 및 재시작(ingest:restart), GStreamer 하드웨어 가속 설정(nvdec/vaapi), B-프레임 H264 카메라 처리, camera:capabilities 소켓 이벤트. Covers: captureFactory.js, ingestDaemonCapture.js, ingest_daemon.py, rtspCapture.js, gstreamerCapture.js, pyavCapture.js, discoveryService.js, onvifDiscovery.js, youtubeStreamService.js, mediamtx.yml, streamHandler.js."
+argument-hint: "카메라 소스 유형 (RTSP / ONVIF / YouTube / WebRTC) 또는 백엔드 (ingest-daemon / gstreamer / ffmpeg)"
 ---
 
 # Camera Stream Setup
@@ -9,29 +9,43 @@ argument-hint: "카메라 소스 유형 (RTSP / ONVIF / YouTube / WebRTC) 또는
 ## 스트림 수집 아키텍처
 
 ```
-IP 카메라 (RTSP)   ──┐
-YouTube / RTMP     ──┼─► MediaMTX (mediamtx.yml)  ──► captureFactory.js ──► detection pipeline
-WebRTC 브라우저    ──┘       ↓                          ├── rtspCapture.js      (CAPTURE_BACKEND=ffmpeg)
-ONVIF 자동 탐색             webrtcGateway.js           ├── gstreamerCapture.js  (CAPTURE_BACKEND=gstreamer)
-    └──► discoveryService.js ──► 카메라 목록 등록       └── pyavCapture.js       (CAPTURE_BACKEND=pyav)
-                                                               └── python/pyav_capture.py
+IP 카메라 (RTSP)
+    │ 단일 RTSP 연결
+    ▼
+MediaMTX (mediamtx.yml)
+    ├── RTSP loopback :8554/{cameraId}          ──► ingest_daemon.py
+    │                                                  │ HTTP POST JPEG
+    │                                                  ▼
+    │                                           Node.js /api/internal/frame/:id
+    │                                                  │ injectFrame()
+    │                                                  ▼
+    │                                           IngestDaemonCapture → detection pipeline
+    │
+    └── WebRTC WHEP :8889/{cameraId}/whep  ──► 브라우저 (직접 수신)
+
+YouTube / RTMP  ──► youtubeStreamService.js ──► MediaMTX 내부 경로
+ONVIF 자동 탐색 ──► discoveryService.js ──► 카메라 DB 등록
 ```
+
+> **현재 기본 구성:** `CAPTURE_BACKEND=ingest-daemon` + `WEBRTC_ENGINE=mediamtx`
 
 ## 핵심 파일 위치
 
 | 파일 | 역할 |
 |---|---|
 | `server/src/services/captureFactory.js` | **캡처 백엔드 팩토리** — CAPTURE_BACKEND env로 선택 |
-| `server/src/services/rtspCapture.js` | FFmpeg 기반 RTSP 프레임 캡처 (기본값) |
+| `server/src/services/ingestDaemonCapture.js` | Ingest-Daemon 수신 래퍼 (**현재 기본**) — 패시브 EventEmitter |
+| `ingest-daemon/ingest_daemon.py` | Python PyAV 독립 HTTP 데몬 — RTSP → JPEG → POST |
+| `server/src/services/rtspCapture.js` | FFmpeg 기반 캡처 *(레거시)* |
 | `server/src/services/gstreamerCapture.js` | GStreamer 파이프라인 캡처 (nvdec/vaapi 지원) |
-| `server/src/services/pyavCapture.js` | Python PyAV 사이드카 캡처 (CUDA 지원) |
-| `server/src/python/pyav_capture.py` | Python PyAV 사이드카 스크립트 |
-| `server/src/services/rtpIngestion.js` | RTP 패킷 스트림 수신 |
-| `server/src/services/webrtcGateway.js` | WebRTC SDP/ICE 협상, 브라우저 스트림 수신 |
+| `server/src/services/pyavCapture.js` | Python PyAV 인라인 사이드카 캡처 |
+| `server/src/python/pyav_capture.py` | PyAV 인라인 사이드카 스크립트 |
+| `server/src/socket/streamHandler.js` | Socket.IO 핸들러 — `camera:capabilities` 이벤트 |
+| `server/src/scripts/restartIngestDaemon.js` | Ingest 데몬 핫 재시작 스크립트 |
 | `server/src/services/discoveryService.js` | 네트워크 카메라 자동 탐색 조율 |
 | `server/src/services/onvifDiscovery.js` | ONVIF WS-Discovery 프로토콜 |
 | `server/src/services/youtubeStreamService.js` | yt-dlp로 YouTube 스트림 → RTSP 변환 |
-| `mediamtx.yml` | MediaMTX 프록시 경로·인증·HLS/WebRTC 설정 |
+| `mediamtx.yml` | MediaMTX 프록시 경로·인증·WebRTC WHEP 설정 |
 
 ## 주요 작업 절차
 
@@ -47,34 +61,55 @@ ONVIF 자동 탐색             webrtcGateway.js           ├── gstreamerCa
 - `ANALYSIS_SERVER_URL`이 비어 있어도 스트리밍 서버는 monitoring-only로 동작해야 하며 영상 송출은 유지됩니다.
 - 이 상태에서는 AI 결과(detections/alerts/face_match)만 비활성입니다.
 
-### CAPTURE_BACKEND 전환 (ffmpeg / gstreamer / pyav)
+### CAPTURE_BACKEND 전환
 
-`server/.env`에서 선택:
+`server/.env`에서 선택 (기본값: `ingest-daemon`):
+
 ```env
-# ffmpeg (기본) — 가장 넓은 호환성
-CAPTURE_BACKEND=ffmpeg
+# ingest-daemon (기본 · 권장) — Python PyAV 독립 데몬 + MediaMTX WebRTC
+CAPTURE_BACKEND=ingest-daemon
+WEBRTC_ENGINE=mediamtx
+PYAV_PYTHON_BIN=/home/user/.local/bin/python3
+INGEST_DAEMON_BIN=../ingest-daemon/ingest_daemon.py
+INGEST_DAEMON_ADDR=:7070
 
-# gstreamer — 낮은 지연, 하드웨어 가속
+# gstreamer — 저레이턴시, 하드웨어 가속 (레거시)
 CAPTURE_BACKEND=gstreamer
+WEBRTC_ENGINE=mediamtx
 GSTREAMER_HW_ACCEL=auto   # auto | nvdec | vaapi | software
 
-# pyav — Python PyAV 사이드카, CUDA 최적
-CAPTURE_BACKEND=pyav
-PYAV_PYTHON_BIN=/usr/bin/python3
-PYAV_HW_ACCEL=none         # none | cuda | vaapi | videotoolbox
+# ffmpeg — 레거시 호환 (단일 RTSP 연결 원칙 위반)
+CAPTURE_BACKEND=ffmpeg
+WEBRTC_ENGINE=mediamtx
 ```
 
 백엔드별 의존성 확인:
 ```bash
-# GStreamer
-gst-launch-1.0 --version
-gst-inspect-1.0 decodebin
-gst-inspect-1.0 nvdec      # NVIDIA 확인
-gst-inspect-1.0 vaapidecodebin  # Intel/AMD 확인
-
-# PyAV
+# ingest-daemon (기본)
 python3 -c "import av, PIL; print('OK')"
+ls ingest-daemon/ingest_daemon.py
+
+# GStreamer (레거시)
+gst-launch-1.0 --version
+gst-inspect-1.0 nvdec           # NVIDIA 확인
+gst-inspect-1.0 vaapidecodebin  # Intel/AMD 확인
 ```
+
+### Ingest Daemon 재시작 (서버 전체 재시작 없이)
+
+```bash
+# workspace 루트에서
+npm run ingest:restart
+
+# server/ 에서
+npm run ingest:restart -- --dry-run  # 설정 확인만
+```
+
+재시작 과정:
+1. 기존 daemon 프로세스 종료 (포트 7070 kill + `pkill ingest_daemon.py`)
+2. 새 데몬 기동 (백그라운드)
+3. `/health` 폴링으로 기동 확인 (최대 10초)
+4. DB에서 카메라 목록 읽어 daemon에 재등록
 
 ### RTSP 카메라 추가
 1. 카메라의 RTSP URL 확인 (예: `rtsp://admin:pass@192.168.1.100:554/stream1`)
@@ -124,60 +159,54 @@ paths:
     readPass: password
 ```
 
-## ffmpeg 버전 호환성
+## Ingest Daemon 설정 및 진단
 
-> **개발/커밋 환경과 운영 환경의 Ubuntu 버전이 다르면 ffmpeg 플래그가 다르게 동작합니다.**
-> 특히 `-timeout` vs `-stimeout` 차이는 RTSP 스트림이 아예 열리지 않는 무증상 장애를 유발합니다.
+### ingest_daemon.py HTTP API
 
-### Ubuntu 버전별 ffmpeg 매트릭스
-
-| Ubuntu | ffmpeg | RTSP timeout 플래그 | `-stimeout` | `-timeout` | 비고 |
-|--------|--------|---------------------|-------------|------------|------|
-| 18.04 LTS | 3.4.x | **`-stimeout`** | ✅ 사용 | ❌ 글로벌 옵션 충돌 | `-timeout` 사용 시 "Unable to open RTSP for listening" 오류 |
-| 20.04 LTS | 4.2.x | `-timeout` 권장 | ✅ 호환 | ✅ 사용 | 둘 다 동작 |
-| 22.04 LTS | 4.4.x | `-timeout` 권장 | ✅ 호환 | ✅ 사용 | 둘 다 동작 |
-| 24.04 LTS | 6.1.x | **`-timeout`** | ⚠️ deprecated | ✅ 사용 | `-stimeout` 경고 발생 |
-| 26.04 LTS | 7.x | **`-timeout`** | ❌ 제거됨 | ✅ 사용 | `-stimeout` 옵션 없음 |
-
-### 코드에서의 처리 방식 (`rtspCapture.js`)
-
-```javascript
-// 서버 기동 시 ffmpeg 버전 자동 감지
-const FFMPEG_MAJOR = _detectFfmpegMajor(); // spawnSync('ffmpeg', ['-version'])
-
-const RTSP_TIMEOUT_ARGS = FFMPEG_MAJOR < 4
-  ? ['-stimeout', '5000000']   // ffmpeg 3.x (Ubuntu 18.04)
-  : ['-timeout',  '5000000'];  // ffmpeg 4+  (Ubuntu 20.04+)
-```
-
-### ffmpeg 버전 확인 명령
+| 엔드포인트 | 설명 |
+|---|---|
+| `GET /health` | `{"status":"ok","cameras":N}` |
+| `POST /cameras` | `{"id","rtspUrl","callbackUrl"}` 카메라 등록 |
+| `DELETE /cameras/:id` | 카메라 등록 해제 |
 
 ```bash
-ffmpeg -version | head -1
-# → ffmpeg version 3.4.11  (Ubuntu 18.04)
-# → ffmpeg version 4.4.2   (Ubuntu 22.04)
-# → ffmpeg version 6.1.1   (Ubuntu 24.04)
-# → ffmpeg version 7.x.x   (Ubuntu 26.04)
+# 데몬 상태 확인
+curl http://127.0.0.1:7070/health
 
-# 설치된 버전으로 RTSP 연결 직접 테스트 (timeout 플래그 없이)
-ffmpeg -rtsp_transport tcp -i 'rtsp://user:pass@IP/path' -frames:v 1 /tmp/test.jpg
+# 카메라 등록 수동 테스트
+curl -X POST http://127.0.0.1:7070/cameras \
+  -H 'Content-Type: application/json' \
+  -d '{"id":"test","rtspUrl":"rtsp://...","callbackUrl":"https://127.0.0.1:3443/api/internal/frame/test"}'
+
+# MediaMTX 등록 경로 확인
+curl http://127.0.0.1:9997/v3/paths/list
 ```
 
-### 자주 발생하는 버전 관련 장애
+### B-프레임 H264 카메라 처리
 
-| 증상 | 원인 | 해결 |
-|------|------|------|
-| `Unable to open RTSP for listening` + `Cannot assign requested address` | Ubuntu 18.04 ffmpeg 3.4에서 `-timeout` 글로벌 옵션이 RTSP 리스닝 모드로 해석됨 | `FFMPEG_MAJOR` 자동 감지 → `-stimeout` 사용 |
-| 스트림이 시작되지만 3~5초 후 끊김 | `-timeout`을 `-i` 뒤에 배치 (출력 옵션으로 해석) | `-i` 앞에 배치 (입력 AVOption) |
-| `Option stimeout not found` | ffmpeg 7.x에서 `-stimeout` 제거됨 | `-timeout` 사용 |
+H.264 B-프레임 카메라에서 빈 프레임 발생 시: ingest-daemon은 모든 패킷을 디코딩 후 N번째 프레임만 전송합니다 (`AI_FRAME_INTERVAL`). 구 서브프로세스 백엔드에서 패킷 자체를 스킵하던 방식과 다릅니다.
 
-### 참조 문서
-- [Design_FFmpeg_RTSP_Capture.md](../../../docs/design/Design_FFmpeg_RTSP_Capture.md)
-- [Design_RTSP_Capture_Backend.md](../../../docs/design/Design_RTSP_Capture_Backend.md)
-- [FFmpeg_Installation_Compatibility.md](../../../docs/ops/FFmpeg_Installation_Compatibility.md)
-- [RTSP_Capture_Backend_Setup.md](../../../docs/ops/RTSP_Capture_Backend_Setup.md)
-- [TC_FFmpeg_RTSP_Capture.md](../../../docs/tc/TC_FFmpeg_RTSP_Capture.md)
-- [TC_RTSP_Capture_Backend.md](../../../docs/tc/TC_RTSP_Capture_Backend.md)
+### `camera:capabilities` 소켓 이벤트
+
+`streamHandler.js`에서 클라이언트가 `camera:subscribe`를 보낼 때:
+- `CAPTURE_BACKEND=ingest-daemon` + `WEBRTC_ENGINE=mediasoup`: `{webrtcEnabled: false}` 전송 (RTP 소스 없음)
+- `CAPTURE_BACKEND=ingest-daemon` + `WEBRTC_ENGINE=mediamtx`: 이벤트 미전송 (DB 값 사용)
+- 다른 조합: 이벤트 미전송
+
+> **주의:** 이 이벤트는 클라이언트의 Zustand 스토어를 즉시 덮어씁니다. WEBRTC_ENGINE 체크 없이 보내면 WebRTC가 동작 중에도 JPEG 모드로 강제됩니다.
+
+## ffmpeg 버전 호환성 *(레거시 참조)*
+
+> `CAPTURE_BACKEND=ffmpeg`는 레거시입니다. 신규 배포에는 `ingest-daemon`을 사용하세요.  
+> 상세 내용: [Design_FFmpeg_RTSP_Capture.md](../../../docs/design/Design_FFmpeg_RTSP_Capture.md) (Deprecated)
+
+| Ubuntu | ffmpeg | RTSP timeout 플래그 |
+|--------|--------|---------------------|
+| 18.04 LTS | 3.4.x | `-stimeout` |
+| 20.04~22.04 | 4.x | `-timeout` (권장) |
+| 24.04+ | 6.x~7.x | `-timeout` |
+
+`rtspCapture.js`에서 `ffmpeg -version`으로 Major 버전 자동 감지 후 플래그 선택.
 
 ## server/.env 필수 설정 체크리스트
 
@@ -190,17 +219,19 @@ ffmpeg -rtsp_transport tcp -i 'rtsp://user:pass@IP/path' -frames:v 1 /tmp/test.j
 | `PORT` | `HTTP_PORT` | Express HTTP 포트 |
 | `TURN_USER` / `TURN_PASS` | `TURN_USERNAME` / `TURN_CREDENTIAL` | TURN 인증 |
 
-### 캡처 백엔드 필수 변수
+### 캡처 백엔드 + WebRTC 엔진 필수 변수
 
 ```env
-CAPTURE_BACKEND=ffmpeg        # ffmpeg | gstreamer | pyav
+# ingest-daemon + mediamtx (기본 · 권장)
+CAPTURE_BACKEND=ingest-daemon
+WEBRTC_ENGINE=mediamtx
+PYAV_PYTHON_BIN=/home/user/.local/bin/python3
+INGEST_DAEMON_BIN=../ingest-daemon/ingest_daemon.py
+INGEST_DAEMON_ADDR=:7070
 
-# gstreamer 사용 시
+# gstreamer (레거시)
+CAPTURE_BACKEND=gstreamer
 GSTREAMER_HW_ACCEL=auto       # auto | nvdec | vaapi | software
-
-# pyav 사용 시
-PYAV_PYTHON_BIN=/usr/bin/python3
-PYAV_HW_ACCEL=none            # none | cuda | vaapi | videotoolbox
 ```
 
 ### YouTube 스트림 필수 변수
@@ -241,12 +272,15 @@ TURN_CREDENTIAL_2=test1234
 
 | 증상 | 원인 | 해결책 |
 |---|---|---|
-| YouTube 스트림이 `error` 상태로 전환 | `YTDLP_BIN` 또는 `MEDIAMTX_BIN` 공란 또는 경로 오류 | 절대경로 지정 및 실행 권한 확인 |
+| Edit Camera에서 WebRTC toggle이 항상 OFF | `camera:capabilities` 이벤트가 WEBRTC_ENGINE 체크 없이 전송됨 | `streamHandler.js` — `WEBRTC_ENGINE=mediasoup`일 때만 이벤트 전송 |
+| WebRTC 설정 후에도 JPEG 모드로 동작 | `WEBRTC_ENGINE` 미설정 (기본값 mediamtx) + 소켓 이벤트 충돌 | `.env` 에 `WEBRTC_ENGINE=mediamtx` 명시 |
+| Ingest daemon 등록 실패 | `PYAV_PYTHON_BIN` 경로 오류 또는 `av` 미설치 | `PYAV_PYTHON_BIN` 절대경로 확인, `pip3 install av Pillow` |
+| 카메라 구독 후 프레임 없음 | ingest daemon 미기동 | `npm run ingest:restart` |
+| YouTube 스트림이 `error` 상태 | `YTDLP_BIN` 또는 `MEDIAMTX_BIN` 공란 | 절대경로 지정 및 실행 권한 확인 |
 | WebRTC ICE 연결 실패 | `SERVER_IP`가 브라우저와 다른 서브넷 | 서버의 실제 LAN IP로 수정 |
 | TURN 인증 오류 | `TURN_USER` / `TURN_PASS` 사용 (구 키명) | `TURN_USERNAME` / `TURN_CREDENTIAL`로 교체 |
 | HTTP 서버 미기동 | `PORT` 사용 (구 키명) | `HTTP_PORT`로 교체 |
 | GStreamer 스트림 미동작 | `gst-launch-1.0` 미설치 | `apt install gstreamer1.0-tools gstreamer1.0-plugins-good` |
-| PyAV import 오류 | PyAV/Pillow 미설치 | `pip3 install av Pillow` |
 
 ### .env 빠른 검증 스크립트
 
@@ -307,18 +341,19 @@ yt-dlp -F https://youtube.com/watch?v=...
 
 | 변경 파일 | 업데이트 필요 문서 |
 |-----------|------------------|
-| `rtspCapture.js`, `captureFactory.js` | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/design/Design_FFmpeg_RTSP_Capture.md`, `docs/tc/TC_RTSP_Capture_Backend.md` |
+| `ingestDaemonCapture.js`, `ingest_daemon.py` | `docs/design/Design_RTSP_Capture_Backend.md` §6, `docs/ops/RTSP_Capture_Backend_Setup.md` |
+| `captureFactory.js` | `docs/design/Design_RTSP_Capture_Backend.md` §2 코드스니펫 |
+| `socket/streamHandler.js` (camera:capabilities) | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/design/Design_Server_Architecture.md` |
+| `scripts/restartIngestDaemon.js` | `CLAUDE.md` 개발 명령어, `docs/ops/RTSP_Capture_Backend_Setup.md` |
+| `api/cameras.js` (FORCE_NO_WEBRTC) | `docs/design/Design_RTSP_WebRTC_Architecture.md` |
+| `rtspCapture.js` *(레거시)* | `docs/design/Design_FFmpeg_RTSP_Capture.md` (Deprecated) |
 | `gstreamerCapture.js` | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/ops/RTSP_Capture_Backend_Setup.md` |
-| `pyavCapture.js`, `python/pyav_capture.py` | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/ops/RTSP_Capture_Backend_Setup.md` |
-| `webrtcGateway.js`, `rtpIngestion.js` | `docs/design/Design_WebRTC_Media_Gateway.md`, `docs/srs/SRS_WebRTC_Media_Gateway.md`, `docs/tc/TC_WebRTC_Media_Gateway.md` |
-| `socket/webrtcSignaling.js` | `docs/design/Design_WebRTC_Media_Gateway.md`, `docs/tc/TC_WebRTC_Media_Gateway.md` |
-| `discoveryService.js`, `onvifDiscovery.js` | `docs/design/Design_Camera_Discovery.md`, `docs/srs/SRS_Camera_Discovery.md`, `docs/tc/TC_Camera_Discovery.md` |
-| `youtubeStreamService.js` | `docs/design/Design_YouTube_RTSP_Ingest.md`, `docs/srs/SRS_LTS2026_YouTube_RTSP_Ingest.md`, `docs/tc/TC_LTS2026_YouTube_RTSP_Ingest.md` |
+| `webrtcGateway.js`, `rtpIngestion.js` | `docs/design/Design_WebRTC_Media_Gateway.md` (Historical) |
+| `discoveryService.js`, `onvifDiscovery.js` | `docs/design/Design_Camera_Discovery.md`, `docs/srs/SRS_Camera_Discovery.md` |
+| `youtubeStreamService.js` | `docs/design/Design_YouTube_RTSP_Ingest.md`, `docs/srs/SRS_LTS2026_YouTube_RTSP_Ingest.md` |
 | `mediamtx.yml` | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/ops/RTSP_Capture_Backend_Setup.md` |
-| ffmpeg 버전 호환성 변경 | `docs/design/Design_FFmpeg_RTSP_Capture.md`, `docs/ops/FFmpeg_Installation_Compatibility.md`, `docs/tc/TC_FFmpeg_RTSP_Capture.md` |
 | coturn / TURN 설정 변경 | `docs/design/Design_STUN_TURN_ICE.md`, `docs/tc/TC_STUN_TURN_ICE.md` |
-| `services/analysisClient.js` (back-pressure, timeout) | `docs/design/Design_Distributed_AI_Pipeline.md`, `docs/srs/SRS_Distributed_AI_Pipeline.md`, `docs/tc/TC_Distributed_AI_Pipeline.md` |
-| `.env` `SERVER_MODE`, `ANALYSIS_SERVER_URL` 변경 | `docs/design/Design_Distributed_AI_Pipeline.md`, `docs/ops/Distributed_AI_Pipeline_Setup.md` |
+| `services/analysisClient.js` | `docs/design/Design_Distributed_AI_Pipeline.md`, `docs/ops/Distributed_AI_Pipeline_Setup.md` |
 
 **공통 규칙**
 - **새 기능 추가** → PRD + SRS + Design + TC 문서 모두 신규 작성 또는 기존 문서에 항목 추가

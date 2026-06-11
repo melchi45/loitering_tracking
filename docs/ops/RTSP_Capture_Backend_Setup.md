@@ -18,9 +18,10 @@ LTS-2026은 RTSP 카메라 스트림 프레임 수집 백엔드를 **3가지 중
 
 | 백엔드 | 프로세스 | 특징 |
 |---|---|---|
-| `ffmpeg` (기본) | `ffmpeg` 바이너리 | 범용, Ubuntu 18.04~ 지원 |
+| `ingest-daemon` **(기본·권장)** | `python3 ingest_daemon.py` | 단일 RTSP 연결, MediaMTX WebRTC 통합, B-프레임 처리 |
 | `gstreamer` | `gst-launch-1.0` | 낮은 레이턴시, nvdec/vaapi GPU 가속 |
-| `pyav` | `python3 pyav_capture.py` | Python ML 통합, CUDA 경로 |
+| `pyav` | `python3 pyav_capture.py` | Python ML 통합, CUDA 경로 (인라인 사이드카) |
+| `ffmpeg` *(레거시)* | `ffmpeg` 바이너리 | 범용 호환성, 단일 RTSP 연결 원칙 위반 |
 
 백엔드 선택은 `server/.env`의 `CAPTURE_BACKEND` 값으로 결정됩니다.
 서버를 재시작하면 즉시 적용됩니다.
@@ -459,23 +460,74 @@ PYAV_HW_ACCEL=none
 
 ---
 
+## Ingest-Daemon 백엔드 설치 (권장)
+
+### 의존성 설치
+
+```bash
+pip3 install av Pillow
+
+# 설치 확인
+python3 -c "import av, PIL; print('OK')"
+```
+
+### `server/.env` 설정
+
+```env
+CAPTURE_BACKEND=ingest-daemon
+WEBRTC_ENGINE=mediamtx
+PYAV_PYTHON_BIN=/home/user/.local/bin/python3   # PyAV가 설치된 Python 경로
+INGEST_DAEMON_BIN=../ingest-daemon/ingest_daemon.py
+INGEST_DAEMON_ADDR=:7070
+```
+
+### 데몬 시작 확인
+
+서버 시작 시 자동으로 기동됩니다. 수동 확인:
+
+```bash
+# 데몬 상태
+curl http://127.0.0.1:7070/health
+# {"status":"ok","cameras":N}
+
+# 데몬 단독 재시작 (서버 재시작 불필요)
+npm run ingest:restart             # workspace 루트
+cd server && npm run ingest:restart  # server/ 경로
+```
+
+### 문제 해결
+
+| 증상 | 원인 | 해결 |
+|---|---|---|
+| `ingest-daemon register failed: fetch failed` | 데몬 미기동 또는 포트 충돌 | `fuser 7070/tcp` 확인, `npm run ingest:restart` |
+| 프레임 미수신 (MediaMTX ready=false) | MediaMTX 경로 미등록 | 서버 재시작 또는 `npm run ingest:restart` |
+| `ModuleNotFoundError: av` | PyAV 미설치 | `pip3 install av Pillow` |
+| 빈 프레임 (B-프레임 카메라) | 구 버전 패킷 스킵 코드 | `ingest_daemon.py` 최신 버전 확인 |
+
+---
+
 ## 환경변수 (관련 `.env` 항목)
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `CAPTURE_BACKEND` | `ffmpeg` | 캡처 백엔드 선택: `ffmpeg` / `gstreamer` / `pyav` |
+| `CAPTURE_BACKEND` | `ingest-daemon` | 캡처 백엔드: `ingest-daemon` / `gstreamer` / `pyav` / `ffmpeg` |
+| `WEBRTC_ENGINE` | `mediamtx` | WebRTC 엔진: `mediamtx` (권장) / `mediasoup` |
+| `INGEST_DAEMON_BIN` | `../ingest-daemon/ingest_daemon.py` | Python 데몬 스크립트 경로 |
+| `INGEST_DAEMON_ADDR` | `:7070` | 데몬 HTTP bind 주소 |
+| `INGEST_DAEMON_URL` | `http://127.0.0.1:7070` | Node.js → 데몬 URL |
+| `PYAV_PYTHON_BIN` | `python3` | Python 바이너리 경로 (ingest-daemon과 pyav 공용) |
 | `GSTREAMER_HW_ACCEL` | `auto` | GStreamer 하드웨어 가속: `auto` / `nvdec` / `vaapi` / `software` |
-| `PYAV_PYTHON_BIN` | `python3` | Python 바이너리 경로 |
-| `PYAV_HW_ACCEL` | `none` | PyAV 하드웨어 가속: `none` / `cuda` / `videotoolbox` |
-| `MAX_PIPELINES` | `0` | 동시 캡처 프로세스 최대 수 (0=무제한) |
-| `YTDLP_BIN` | _(empty)_ | yt-dlp 바이너리 경로. 비워두면 PATH 탐색 |
-| `MEDIAMTX_BIN` | _(empty)_ | mediamtx 바이너리 경로. 비워두면 PATH 탐색 |
+| `PYAV_HW_ACCEL` | `none` | PyAV 인라인 사이드카 가속: `none` / `cuda` / `videotoolbox` |
+| `MAX_PIPELINES` | `0` | 동시 캡처 파이프라인 최대 수 (0=무제한) |
+| `YTDLP_BIN` | _(empty)_ | yt-dlp 바이너리 경로 |
+| `MEDIAMTX_BIN` | _(empty)_ | mediamtx 바이너리 경로 |
 
 ---
 
 ## 관련 문서
 
-- [Design_RTSP_Capture_Backend.md](../design/Design_RTSP_Capture_Backend.md) — 3-backend 추상화 설계
-- [Design_FFmpeg_RTSP_Capture.md](../design/Design_FFmpeg_RTSP_Capture.md) — FFmpeg 버전 호환성 상세 설계
-- [FFmpeg_Installation_Compatibility.md](../ops/FFmpeg_Installation_Compatibility.md) — FFmpeg 전용 설치 가이드
+- [Design_RTSP_Capture_Backend.md](../design/Design_RTSP_Capture_Backend.md) — 4-backend 추상화 설계 (ingest-daemon §6)
+- [Design_RTSP_WebRTC_Architecture.md](../design/Design_RTSP_WebRTC_Architecture.md) — WebRTC 아키텍처 (MediaMTX WHEP)
+- [Design_FFmpeg_RTSP_Capture.md](../design/Design_FFmpeg_RTSP_Capture.md) — FFmpeg 설계 (Deprecated)
+- [FFmpeg_Installation_Compatibility.md](../ops/FFmpeg_Installation_Compatibility.md) — FFmpeg 호환성 (레거시)
 - [Design_LTS2026_YouTube_RTSP_Ingest.md](../design/Design_LTS2026_YouTube_RTSP_Ingest.md) — YouTube 스트림 설계

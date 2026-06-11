@@ -158,7 +158,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
           ...camera,
           password:       undefined,
           pipelineStatus: pipelineStatus || null,
-          ...(CAPTURE_BACKEND === 'ingest-daemon' && { webrtcEnabled: false }),
+          ...(FORCE_NO_WEBRTC && { webrtcEnabled: false }),
         },
       });
     } catch (err) {

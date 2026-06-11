@@ -30,9 +30,12 @@ function registerStreamHandlers(io, socket, db, options = {}) {
     console.log(`[Socket.IO] ${socket.id.slice(0,8)} subscribed to camera ${cameraId.slice(0,8)}`);
     socket.emit('camera:subscribed', { cameraId });
 
-    // When the ingest-daemon backend is active, there is no WebRTC RTP path —
-    // tell the client to use JPEG (Socket.IO frame) mode for this camera.
-    if ((process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase() === 'ingest-daemon') {
+    // With ingest-daemon + mediasoup there is no RTP source for WebRTC, so force
+    // JPEG/Socket.IO mode.  With ingest-daemon + mediamtx, MediaMTX provides
+    // WebRTC WHEP directly — do NOT override the camera's webrtcEnabled value.
+    const _captureBackend = (process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase();
+    const _webrtcEngine   = (process.env.WEBRTC_ENGINE   || 'mediamtx').toLowerCase();
+    if (_captureBackend === 'ingest-daemon' && _webrtcEngine === 'mediasoup') {
       socket.emit('camera:capabilities', { cameraId, webrtcEnabled: false });
     }
   });
