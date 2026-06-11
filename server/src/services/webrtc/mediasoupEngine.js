@@ -33,10 +33,11 @@ const RTC_MIN_PORT      = parseInt(process.env.MEDIASOUP_MIN_PORT || '40000', 10
 const RTC_MAX_PORT      = parseInt(process.env.MEDIASOUP_MAX_PORT || '49999', 10);
 const INGEST_DAEMON_URL = (process.env.INGEST_DAEMON_URL || 'http://127.0.0.1:7070').replace(/\/$/, '');
 
-const VIDEO_PT   = 96;
-const AUDIO_PT   = 111;
-const VIDEO_SSRC = 0x22334455;
-const AUDIO_SSRC = 0x33445566;
+const VIDEO_PT = 96;
+const AUDIO_PT = 111;
+// SSRC is NOT specified in Producer encodings — mediasoup auto-detects the SSRC
+// from the first incoming RTP packet (comedia=true).  Fixing SSRC here would cause
+// all packets from PyAV (which uses a random SSRC) to be silently discarded.
 
 // ── Singleton worker / router ─────────────────────────────────────────────────
 let _worker = null;
@@ -170,7 +171,7 @@ async function addCameraStream(cameraId, rtspUrl) {
             'level-asymmetry-allowed': 1,
           },
         }],
-        encodings: [{ ssrc: VIDEO_SSRC }],
+        encodings: [{}],
       },
     });
 
@@ -192,7 +193,7 @@ async function addCameraStream(cameraId, rtspUrl) {
           channels:    2,
           parameters:  { minptime: 10, useinbandfec: 1 },
         }],
-        encodings: [{ ssrc: AUDIO_SSRC }],
+        encodings: [{}],
       },
     });
 
@@ -367,7 +368,8 @@ function _buildAnswer({ parsed, transport, videoConsumer, audioConsumer, dataCon
       `a=fmtp:${aCodec.payloadType} minptime=10;useinbandfec=1`,
     );
     if (aEnc.ssrc) aLines.push(`a=ssrc:${aEnc.ssrc} cname:mediasoup`);
-  } else {
+  } else if (parsed.hasAudio) {
+    // Reject audio (offer had m=audio but we have no audio Consumer yet)
     aLines.push(
       `m=audio 0 UDP/TLS/RTP/SAVPF 0`,
       `c=IN IP4 0.0.0.0`,
@@ -378,22 +380,36 @@ function _buildAnswer({ parsed, transport, videoConsumer, audioConsumer, dataCon
   }
 
   // ── DataChannel section (m=application) ───────────────────────────────────
+  // SDP answer must have the same number of m-sections as the offer.
+  // If the offer contains m=application but we cannot create a DataConsumer,
+  // reject it with port=0 rather than omitting the section (omission = invalid SDP).
   const dLines = [];
-  if (dataConsumer && parsed.hasData) {
-    const sctpPort = sctpParameters?.port || 5000;
-    dLines.push(
-      `m=application 9 UDP/DTLS/SCTP webrtc-datachannel`,
-      `c=IN IP4 ${ANNOUNCED_IP}`,
-      'a=bundle-only',
-      `a=mid:${parsed.dataMid}`,
-      `a=sctp-port:${sctpPort}`,
-      `a=max-message-size:262144`,
-    );
+  if (parsed.hasData) {
+    if (dataConsumer) {
+      const sctpPort = sctpParameters?.port || 5000;
+      dLines.push(
+        `m=application 9 UDP/DTLS/SCTP webrtc-datachannel`,
+        `c=IN IP4 ${ANNOUNCED_IP}`,
+        'a=bundle-only',
+        `a=mid:${parsed.dataMid}`,
+        `a=sctp-port:${sctpPort}`,
+        `a=max-message-size:262144`,
+      );
+    } else {
+      dLines.push(
+        `m=application 0 UDP/DTLS/SCTP webrtc-datachannel`,
+        `c=IN IP4 0.0.0.0`,
+        'a=bundle-only',
+        `a=mid:${parsed.dataMid}`,
+        'a=inactive',
+      );
+    }
   }
 
-  // ── BUNDLE group ───────────────────────────────────────────────────────────
-  const bundleMids = [parsed.videoMid, parsed.audioMid];
-  if (dLines.length) bundleMids.push(parsed.dataMid);
+  // ── BUNDLE group (only include non-rejected mids) ─────────────────────────
+  const bundleMids = [parsed.videoMid];
+  if (audioConsumer) bundleMids.push(parsed.audioMid);
+  if (dataConsumer && parsed.hasData) bundleMids.push(parsed.dataMid);
 
   const lines = [
     'v=0',
