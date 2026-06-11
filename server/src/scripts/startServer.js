@@ -96,10 +96,16 @@ function main() {
   const webrtcEngine   = (childEnv.WEBRTC_ENGINE    || 'mediamtx').toLowerCase();
   const captureBackend = (childEnv.CAPTURE_BACKEND  || 'ffmpeg').toLowerCase();
   const serverMode     = (childEnv.SERVER_MODE       || 'combined').toLowerCase();
-  const needsMediaMTX  = ((webrtcEngine === 'mediamtx' || webrtcEngine === 'mediasoup') && serverMode !== 'analysis')
-                       || captureBackend === 'mediamtx';
 
-  let mediamtxChild = null;
+  // mediasoup engine uses Go ingest daemon — MediaMTX not needed for that path.
+  const needsMediaMTX = (webrtcEngine === 'mediamtx' && serverMode !== 'analysis')
+                      || captureBackend === 'mediamtx';
+
+  const needsIngestDaemon = webrtcEngine === 'mediasoup' && serverMode !== 'analysis';
+
+  let mediamtxChild    = null;
+  let ingestDaemonChild = null;
+
   if (needsMediaMTX) {
     const mediamtxBin    = resolveByRuntime(runtimeOs, 'MEDIAMTX_BIN') || 'mediamtx';
     const mediamtxConfig = path.resolve(__dirname, '..', '..', '..', 'mediamtx.yml');
@@ -128,6 +134,34 @@ function main() {
     }
   }
 
+  if (needsIngestDaemon) {
+    const ingestBin  = resolveByRuntime(runtimeOs, 'INGEST_DAEMON_BIN') || 'ingest-daemon';
+    const ingestAddr = childEnv.INGEST_DAEMON_ADDR || ':7070';
+
+    try {
+      ingestDaemonChild = spawn(ingestBin, ['--addr', ingestAddr], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: childEnv,
+      });
+
+      ingestDaemonChild.stdout.on('data', (d) => process.stdout.write(`[Ingest] ${d}`));
+      ingestDaemonChild.stderr.on('data', (d) => process.stderr.write(`[Ingest] ${d}`));
+
+      ingestDaemonChild.on('error', (e) => {
+        console.warn(`[Start] ingest-daemon failed to start: ${e.message} — WebRTC/AI capture unavailable`);
+        ingestDaemonChild = null;
+      });
+      ingestDaemonChild.on('exit', (code) => {
+        ingestDaemonChild = null;
+        if (code !== 0 && code !== null) {
+          console.warn(`[Start] ingest-daemon exited (code=${code})`);
+        }
+      });
+    } catch (e) {
+      console.warn(`[Start] Could not start ingest-daemon: ${e.message}`);
+    }
+  }
+
   const child = spawn(nodeExec, [serverEntry], {
     stdio: 'inherit',
     env: childEnv,
@@ -140,7 +174,8 @@ function main() {
   });
 
   child.on('exit', (code, signal) => {
-    if (mediamtxChild) try { mediamtxChild.kill(); } catch (_) {}
+    if (mediamtxChild)     try { mediamtxChild.kill();     } catch (_) {}
+    if (ingestDaemonChild) try { ingestDaemonChild.kill(); } catch (_) {}
     if (signal) {
       process.kill(process.pid, signal);
       return;
@@ -148,9 +183,10 @@ function main() {
     process.exit(code || 0);
   });
 
-  // Forward SIGTERM/SIGINT to both child processes
+  // Forward SIGTERM/SIGINT to all child processes
   const shutdown = (sig) => {
-    if (mediamtxChild) try { mediamtxChild.kill(sig); } catch (_) {}
+    if (mediamtxChild)     try { mediamtxChild.kill(sig);     } catch (_) {}
+    if (ingestDaemonChild) try { ingestDaemonChild.kill(sig); } catch (_) {}
     try { child.kill(sig); } catch (_) {}
   };
   process.on('SIGTERM', () => shutdown('SIGTERM'));

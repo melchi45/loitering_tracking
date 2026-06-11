@@ -16,16 +16,17 @@
  */
 
 const mediasoup = require('mediasoup');
-const { spawn } = require('child_process');
+const http      = require('http');
 
-const ENGINE_NAME  = 'mediasoup';
-const SERVER_IP    = (process.env.SERVER_IP || '127.0.0.1').trim();
-const ANNOUNCED_IP = (process.env.SERVER_PUBLIC_IP || process.env.SERVER_IP || '127.0.0.1').trim();
-const RTC_MIN_PORT = parseInt(process.env.MEDIASOUP_MIN_PORT || '40000', 10);
-const RTC_MAX_PORT = parseInt(process.env.MEDIASOUP_MAX_PORT || '49999', 10);
+const ENGINE_NAME      = 'mediasoup';
+const SERVER_IP        = (process.env.SERVER_IP || '127.0.0.1').trim();
+const ANNOUNCED_IP     = (process.env.SERVER_PUBLIC_IP || process.env.SERVER_IP || '127.0.0.1').trim();
+const RTC_MIN_PORT     = parseInt(process.env.MEDIASOUP_MIN_PORT || '40000', 10);
+const RTC_MAX_PORT     = parseInt(process.env.MEDIASOUP_MAX_PORT || '49999', 10);
+const INGEST_DAEMON_URL = (process.env.INGEST_DAEMON_URL || 'http://127.0.0.1:7070').replace(/\/$/, '');
 
-const VIDEO_PT   = 96;          // H.264 dynamic payload type (ffmpeg default)
-const VIDEO_SSRC = 0x22334455; // fixed SSRC used with ffmpeg -ssrc
+const VIDEO_PT   = 96;
+const VIDEO_SSRC = 0x22334455;
 
 // ── Singleton worker / router ─────────────────────────────────────────────────
 let _worker = null;
@@ -33,7 +34,36 @@ let _router = null;
 let _initP  = null;
 
 // Per-camera state
-const _cameras = new Map(); // cameraId → { producer, plainTransport, ffmpegProcess }
+const _cameras = new Map(); // cameraId → { producer, plainTransport }
+
+// ── Go ingest daemon helpers ──────────────────────────────────────────────────
+
+function _ingestPost(path, body) {
+  return new Promise((resolve, reject) => {
+    const data = JSON.stringify(body);
+    const url  = new URL(INGEST_DAEMON_URL + path);
+    const req  = http.request(
+      { hostname: url.hostname, port: url.port, path: url.pathname, method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) } },
+      res => { res.resume(); resolve(res.statusCode); }
+    );
+    req.on('error', reject);
+    req.write(data);
+    req.end();
+  });
+}
+
+function _ingestDelete(cameraId) {
+  return new Promise((resolve) => {
+    const url = new URL(`${INGEST_DAEMON_URL}/cameras/${encodeURIComponent(cameraId)}`);
+    const req = http.request(
+      { hostname: url.hostname, port: url.port, path: url.pathname, method: 'DELETE' },
+      res => { res.resume(); resolve(res.statusCode); }
+    );
+    req.on('error', () => resolve(0));
+    req.end();
+  });
+}
 
 async function _ensureRouter() {
   if (_router && !_router.closed) return _router;
@@ -54,7 +84,7 @@ async function _boot() {
     _worker = null;
     _router = null;
     _initP  = null;
-    for (const cam of _cameras.values()) _closeCam(cam);
+    for (const [id, cam] of _cameras.entries()) _closeCam(cam, id);
     _cameras.clear();
   });
 
@@ -80,11 +110,11 @@ async function _boot() {
   return _router;
 }
 
-function _closeCam(cam) {
+function _closeCam(cam, cameraId) {
   if (!cam) return;
-  try { cam.ffmpegProcess?.kill('SIGKILL'); } catch (_) {}
-  try { cam.producer?.close(); }             catch (_) {}
-  try { cam.plainTransport?.close(); }       catch (_) {}
+  if (cameraId) _ingestDelete(cameraId).catch(() => {});
+  try { cam.producer?.close(); }       catch (_) {}
+  try { cam.plainTransport?.close(); } catch (_) {}
 }
 
 // ── Camera stream management ───────────────────────────────────────────────────
@@ -120,41 +150,23 @@ async function addCameraStream(cameraId, rtspUrl) {
       },
     });
 
-    // ffmpeg: transcode to H.264 baseline and push via RTP
-    const ffmpegArgs = [
-      '-loglevel', 'warning',
-      '-rtsp_transport', 'tcp',
-      '-i', rtspUrl,
-      '-map', '0:v:0',
-      '-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'zerolatency',
-      '-pix_fmt', 'yuv420p',
-      '-b:v', '1500k',
-      '-maxrate', '1500k',
-      '-bufsize', '3000k',
-      '-g', '60',
-      '-sc_threshold', '0',
-      '-an',
-      '-f', 'rtp',
-      '-ssrc', String(VIDEO_SSRC),
-      '-payload_type', String(VIDEO_PT),
-      `rtp://127.0.0.1:${rtpPort}?pkt_size=1200`,
-    ];
+    // Go ingest daemon: single RTSP connection → internal goroutine fan-out
+    //   WebRTC goroutine: RTP → UDP → PlainTransport (rtpPort)
+    //   AI goroutine:     H264 decode → JPEG → HTTP → Node.js /api/internal/frame/:id
+    const serverPort = process.env.PORT || 3080;
+    const callbackUrl = `http://127.0.0.1:${serverPort}/api/internal/frame/${cameraId}`;
+    const status = await _ingestPost('/cameras', {
+      id:            cameraId,
+      rtspUrl,
+      mediasoupPort: rtpPort,
+      callbackUrl,
+    });
+    if (status !== 200 && status !== 201) {
+      throw new Error(`ingest-daemon returned HTTP ${status} for camera ${cameraId}`);
+    }
 
-    const ffmpegProc = spawn('ffmpeg', ffmpegArgs, {
-      stdio: ['ignore', 'ignore', 'pipe'],
-    });
-    ffmpegProc.stderr.on('data', d => {
-      const s = d.toString().trim();
-      if (s && /error|failed|invalid/i.test(s))
-        console.error(`[mediasoup][ffmpeg][${cameraId.slice(0, 8)}] ${s}`);
-    });
-    ffmpegProc.on('exit', code => {
-      if (code !== 0 && code !== null)
-        console.warn(`[mediasoup][ffmpeg][${cameraId.slice(0, 8)}] exited code=${code}`);
-    });
-
-    _cameras.set(cameraId, { producer, plainTransport, ffmpegProcess: ffmpegProc });
-    console.log(`[WebRTC][mediasoup] addCameraStream ${cameraId.slice(0, 8)} → RTP :${rtpPort}`);
+    _cameras.set(cameraId, { producer, plainTransport });
+    console.log(`[WebRTC][mediasoup] addCameraStream ${cameraId.slice(0, 8)} → RTP :${rtpPort} (ingest-daemon)`);
     return true;
   } catch (err) {
     console.error(`[WebRTC][mediasoup] addCameraStream failed: ${err.message}`);
@@ -166,7 +178,7 @@ async function removeCameraStream(cameraId) {
   const cam = _cameras.get(cameraId);
   if (!cam) return;
   _cameras.delete(cameraId);
-  _closeCam(cam);
+  _closeCam(cam, cameraId);
 }
 
 async function waitForStreamReady(cameraId, maxWaitMs = 8000) {
