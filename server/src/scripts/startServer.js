@@ -135,11 +135,24 @@ function main() {
   }
 
   if (needsIngestDaemon) {
-    const ingestBin  = resolveByRuntime(runtimeOs, 'INGEST_DAEMON_BIN') || 'ingest-daemon';
-    const ingestAddr = childEnv.INGEST_DAEMON_ADDR || ':7070';
+    // INGEST_DAEMON_BIN may be a Python script (e.g. ../ingest-daemon/ingest_daemon.py)
+    // or a compiled Go/native binary.  Detect by extension.
+    const ingestBinRaw = resolveByRuntime(runtimeOs, 'INGEST_DAEMON_BIN') || '';
+    const ingestAddr   = childEnv.INGEST_DAEMON_ADDR || ':7070';
+
+    let ingestArgs;
+    let ingestExec;
+    if (ingestBinRaw.endsWith('.py')) {
+      ingestExec = pythonExec;
+      // __dirname = server/src/scripts — two levels up reaches server/, where the relative path in .env is anchored
+    ingestArgs = [path.resolve(__dirname, '..', '..', ingestBinRaw), '--addr', ingestAddr];
+    } else {
+      ingestExec = ingestBinRaw || 'ingest-daemon';
+      ingestArgs = ['--addr', ingestAddr];
+    }
 
     try {
-      ingestDaemonChild = spawn(ingestBin, ['--addr', ingestAddr], {
+      ingestDaemonChild = spawn(ingestExec, ingestArgs, {
         stdio: ['ignore', 'pipe', 'pipe'],
         env: childEnv,
       });

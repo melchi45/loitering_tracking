@@ -153,7 +153,7 @@ async function addCameraStream(cameraId, rtspUrl) {
     // Go ingest daemon: single RTSP connection → internal goroutine fan-out
     //   WebRTC goroutine: RTP → UDP → PlainTransport (rtpPort)
     //   AI goroutine:     H264 decode → JPEG → HTTP → Node.js /api/internal/frame/:id
-    const serverPort = process.env.PORT || 3080;
+    const serverPort = process.env.HTTP_PORT || process.env.PORT || 3080;
     const callbackUrl = `http://127.0.0.1:${serverPort}/api/internal/frame/${cameraId}`;
     const status = await _ingestPost('/cameras', {
       id:            cameraId,

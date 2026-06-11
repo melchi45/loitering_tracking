@@ -280,9 +280,12 @@ class PipelineManager {
     //   (b) WEBRTC_ENGINE=mediasoup (MediaMTX acts as single-connection relay so
     //       both the AI capture and mediasoup's ffmpeg share one upstream), OR
     //   (c) the mediamtx capture backend is active.
-    const needsMediaMTX = (requestedWebRTC && WEBRTC_ENGINE === 'mediamtx')
+    // Exception: CAPTURE_BACKEND=ingest-daemon manages its own RTSP connection
+    // and internal fan-out — MediaMTX is not needed and would create a second connection.
+    const needsMediaMTX = CAPTURE_BACKEND !== 'ingest-daemon' && (
+                        (requestedWebRTC && WEBRTC_ENGINE === 'mediamtx')
                        || (WEBRTC_ENGINE === 'mediasoup' && SERVER_MODE !== 'analysis')
-                       || CAPTURE_BACKEND === 'mediamtx';
+                       || CAPTURE_BACKEND === 'mediamtx');
     let mediamtxReady = false;
     if (needsMediaMTX) {
       mediamtxReady = await mediamtxManager.addCameraPath(camera.id, rtspUrl).catch(() => false);
@@ -317,8 +320,10 @@ class PipelineManager {
     // Also register when mediamtxReady even if webrtcEnabled=false, so WHEP is
     // available for all cameras (matches the previous mediamtx engine behaviour).
     let altWebRTCReady = false;
+    // Always register with the ingest-daemon engine — it manages the RTSP connection
+    // and needs to know about every camera regardless of webrtcEnabled or mediamtxReady.
     const registerAltEngine = WEBRTC_ENGINE !== 'mediamtx' &&
-      (requestedWebRTC || (WEBRTC_ENGINE === 'mediasoup' && mediamtxReady));
+      (requestedWebRTC || (WEBRTC_ENGINE === 'mediasoup' && (mediamtxReady || CAPTURE_BACKEND === 'ingest-daemon')));
     if (registerAltEngine) {
       altWebRTCReady = await getWebRTCEngine().addCameraStream(camera.id, captureUrl).catch(() => false);
     }
@@ -964,6 +969,20 @@ class PipelineManager {
   setAiEnabled(cameraId, enabled) {
     const ctx = this._pipelines.get(cameraId);
     if (ctx) ctx.aiEnabled = enabled;
+  }
+
+  /**
+   * Inject a JPEG frame from the external ingest daemon into the pipeline.
+   * Called by POST /api/internal/frame/:cameraId when CAPTURE_BACKEND=ingest-daemon.
+   * @param {string} cameraId
+   * @param {Buffer} jpegBuffer
+   */
+  onIngestFrame(cameraId, jpegBuffer) {
+    const ctx = this._pipelines.get(cameraId);
+    if (!ctx || !ctx.running) return;
+    if (typeof ctx.capture.injectFrame === 'function') {
+      ctx.capture.injectFrame(jpegBuffer);
+    }
   }
 
   /** Returns status snapshot of all active pipelines for the dev monitor. */

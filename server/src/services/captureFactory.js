@@ -19,6 +19,12 @@
  *   pyav      — Python PyAV sidecar (best CUDA utilisation, GPU-inference path).
  *               Requires: pip3 install av Pillow
  *
+ *   ingest-daemon — External daemon (Python PyAV or Go gortsplib) pushes decoded
+ *               JPEG frames via HTTP POST /api/internal/frame/:cameraId.
+ *               Single RTSP connection per camera with internal thread fan-out
+ *               for WebRTC RTP forwarding + AI frame extraction (Pattern C).
+ *               Requires: WEBRTC_ENGINE=mediasoup, INGEST_DAEMON_BIN set.
+ *
  * MEDIAMTX_FRAME_BACKEND env var (only used when CAPTURE_BACKEND=mediamtx):
  *   snapshot  — Poll MediaMTX REST snapshot API. No subprocess. (default)
  *               GET http://localhost:{MEDIAMTX_API_PORT}/v3/paths/{id}/get-snapshot
@@ -59,6 +65,9 @@ function createCapture(cameraId, rtspUrl, opts = {}) {
 
     case 'pyav':
       return new (require('./pyavCapture'))(cameraId, rtspUrl, opts);
+
+    case 'ingest-daemon':
+      return new (require('./ingestDaemonCapture'))(cameraId, rtspUrl, opts);
 
     case 'ffmpeg':
       return new (require('./rtspCapture'))(cameraId, rtspUrl, opts);

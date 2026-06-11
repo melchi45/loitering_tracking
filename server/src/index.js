@@ -31,6 +31,7 @@ const settingsRouter         = require('./api/settings');
 const missingPersonsRouter   = require('./api/missingPersons');
 const youtubeStreamsRouter    = require('./api/youtubeStreams');
 const internalRouter         = require('./api/internal');
+const { router: ingestFrameRouter, setPipelineManager: setIngestPM } = require('./routes/internalApi');
 const faceGalleryRouter      = require('./api/faceGallery');
 const { buildRouter: buildSnapshotsRouter } = require('./api/snapshots');
 const { buildRouter: buildSearchRouter }    = require('./api/search');
@@ -60,8 +61,9 @@ function checkFfmpeg() {
 async function main() {
   console.log(`[Server] Starting in mode: ${SERVER_MODE}`);
 
-  // ── ffmpeg availability check (not required in analysis-only mode) ───────
-  if (SERVER_MODE !== 'analysis') {
+  // ── ffmpeg availability check (not required in analysis-only mode or ingest-daemon mode) ───────
+  const CAPTURE_BACKEND_CHECK = (process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase();
+  if (SERVER_MODE !== 'analysis' && CAPTURE_BACKEND_CHECK !== 'ingest-daemon') {
     const hasFfmpeg = await checkFfmpeg();
     if (!hasFfmpeg) {
       console.error('');
@@ -205,6 +207,11 @@ async function main() {
   app.use('/api/missing-persons', missingPersonsRouter());
   app.use('/api/youtube-streams', youtubeStreamsRouter(youtubeSvc));
   app.use('/internal',            internalRouter(youtubeSvc));
+
+  // Ingest daemon frame callback — receives JPEG frames from the external ingest daemon.
+  // Only used when CAPTURE_BACKEND=ingest-daemon (WEBRTC_ENGINE=mediasoup path).
+  setIngestPM(pipelineManager);
+  app.use('/api/internal',        ingestFrameRouter);
 
   // Face gallery — getter always resolves to the live FaceService once models are loaded
   const getFaceService = () => pipelineManager._attrPipeline?._face ?? null;
