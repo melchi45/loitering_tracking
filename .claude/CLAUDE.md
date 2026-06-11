@@ -38,7 +38,12 @@ loitering_tracking/
 │   │   ├── pipelineManager.js      # AI 서비스 생명주기 오케스트레이션
 │   │   ├── attributePipeline.js    # 의상·색상·PPE 속성 분석
 │   │   ├── faceService.js          # 얼굴 인식·임베딩·Re-ID
-│   │   ├── rtspCapture.js          # RTSP 스트림 캡처 (10 FPS)
+│   │   ├── captureFactory.js       # CAPTURE_BACKEND별 캡처 인스턴스 팩토리
+│   │   ├── ingestDaemonCapture.js  # ingest-daemon 수신 EventEmitter (권장)
+│   │   ├── rtspCapture.js          # ffmpeg RTSP 캡처 (레거시)
+│   │   ├── gstreamerCapture.js     # GStreamer 캡처 (GPU 하드웨어 가속)
+│   │   ├── pyavCapture.js          # Python PyAV 직접 캡처
+│   │   ├── mediamtxSnapshotCapture.js # MediaMTX JPEG 스냅샷 캡처
 │   │   ├── mediamtxManager.js      # MediaMTX 경로 등록/해제 (WebRTC WHEP)
 │   │   ├── analysisClient.js       # streaming→analysis HTTP 클라이언트 (회로차단기)
 │   │   ├── fireSmokeService.js     # 화재·연기 감지
@@ -88,6 +93,8 @@ loitering_tracking/
 │   ├── i18n/                       # 다국어(ko/en) 리소스
 │   ├── pages/                      # 페이지 컴포넌트
 │   └── types/                      # TypeScript 타입 정의
+├── ingest-daemon/
+│   └── ingest_daemon.py            # Python PyAV 독립 캡처 데몬 (:7070)
 ├── mcp-server/                     # MCP LLM 통합 서버
 ├── test/                           # Jest 테스트
 │   ├── api/                        # API 단위 테스트
@@ -183,6 +190,7 @@ loitering_tracking/
 | `cameraStatus` | Server → Client | 카메라 연결 상태 변경 |
 | `face:reidentified` | Server → Client | 얼굴 Re-ID 크로스카메라 전환 감지 |
 | `clothing:reidentified` | Server → Client | 의상 Appearance Re-ID 크로스카메라 전환 감지 |
+| `camera:capabilities` | Server → Client | 카메라 WebRTC 지원 여부 오버라이드 (mediasoup 모드 전용) |
 | `subscribeCamera` | Client → Server | 카메라 스트림 구독 |
 
 ---
@@ -225,6 +233,10 @@ cd server && npm run install_db
 node src/scripts/installDb.js --host HOST --port 27017 \
   --admin-user admin --admin-pwd secret \
   --db lts --db-user ltsuser --db-pwd ltspwd
+
+# ── Ingest Daemon (CAPTURE_BACKEND=ingest-daemon) ──────────────────────────
+cd server
+npm run ingest:restart   # ingest-daemon만 핫 재시작 (전체 서버 재시작 불필요)
 
 # ── MCP 서버 ─────────────────────────────────────────────────────────────────
 cd mcp-server && npm start           # stdio 모드 (Claude Code 연동)

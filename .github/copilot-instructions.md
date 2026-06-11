@@ -33,7 +33,12 @@ loitering_tracking/
 │   │   ├── pipelineManager.js  # AI 파이프라인 오케스트레이션
 │   │   ├── attributePipeline.js # 얼굴/PPE/색상/의류 분석
 │   │   ├── faceService.js      # 얼굴 인식 및 Re-ID
-│   │   ├── rtspCapture.js      # RTSP 스트림 캡처 (10 FPS)
+│   │   ├── captureFactory.js   # CAPTURE_BACKEND별 캡처 인스턴스 팩토리
+│   │   ├── ingestDaemonCapture.js # ingest-daemon 수신 EventEmitter (권장)
+│   │   ├── rtspCapture.js      # ffmpeg RTSP 캡처 (레거시)
+│   │   ├── gstreamerCapture.js # GStreamer 캡처 (GPU 가속)
+│   │   ├── pyavCapture.js      # Python PyAV 직접 캡처
+│   │   ├── mediamtxSnapshotCapture.js # MediaMTX JPEG 스냅샷 캡처
 │   │   ├── mediamtxManager.js  # MediaMTX 경로 등록/해제 (WebRTC WHEP)
 │   │   ├── analysisClient.js   # streaming→analysis HTTP 클라이언트
 │   │   └── fireSmokeService.js # 화재/연기 감지
@@ -60,6 +65,8 @@ loitering_tracking/
 │   ├── hooks/             # 커스텀 React 훅
 │   ├── i18n/              # 다국어(ko/en) 리소스
 │   └── types/             # TypeScript 타입 정의
+├── ingest-daemon/
+│   └── ingest_daemon.py   # Python PyAV 독립 캡처 데몬 (:7070)
 ├── mcp-server/            # LLM MCP 통합 서버
 ├── test/                  # Jest 테스트 (api/ integration/ e2e/)
 ├── docs/                  # 설계 문서 (design/ srs/ prd/ rfp/)
@@ -128,6 +135,7 @@ loitering_tracking/
 | `alert:new` | Server → Client | 신규 경보 발생 |
 | `person:trajectory-update` | Server → Client | 인물 궤적 업데이트 |
 | `camera:status` | Server → Client | 카메라 상태 변경 |
+| `camera:capabilities` | Server → Client | 카메라 WebRTC 지원 여부 오버라이드 (mediasoup 모드 전용) |
 | `camera:subscribe` | Client → Server | 카메라 룸 구독 |
 
 ---
@@ -162,6 +170,10 @@ cd server && npm run install_db
 node src/scripts/installDb.js --host HOST --port 27017 \
   --admin-user admin --admin-pwd secret \
   --db lts --db-user ltsuser --db-pwd ltspwd
+
+# ── Ingest Daemon (CAPTURE_BACKEND=ingest-daemon) ──────────────────────────
+cd server
+npm run ingest:restart   # ingest-daemon만 핫 재시작 (전체 서버 재시작 불필요)
 
 # ── MCP 서버 ─────────────────────────────────────────────────────────────────
 cd mcp-server && npm start           # stdio 모드 (Claude Code)

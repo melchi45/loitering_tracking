@@ -76,6 +76,12 @@ JWT_EXPIRY=24h
 MSAL_CLIENT_ID=
 MSAL_TENANT_ID=
 
+# 캡처 백엔드 (권장: ingest-daemon)
+CAPTURE_BACKEND=ingest-daemon
+WEBRTC_ENGINE=mediamtx
+INGEST_DAEMON_BIN=../ingest-daemon/ingest_daemon.py
+INGEST_DAEMON_ADDR=:7070
+
 # TURN 서버 (WebRTC NAT 통과)
 TURN_URL=turn:your-turn-server.com:3478
 TURN_USER=username
