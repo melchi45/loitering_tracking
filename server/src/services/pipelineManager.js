@@ -309,16 +309,17 @@ class PipelineManager {
     const captureFps = parseInt(process.env.CAPTURE_FPS, 10) || 10;
 
     // Register with MediaMTX when:
-    //   (a) WEBRTC_ENGINE=mediamtx and browser WebRTC delivery is requested, OR
-    //   (b) WEBRTC_ENGINE=mediasoup (MediaMTX acts as single-connection relay so
-    //       both the AI capture and mediasoup's ffmpeg share one upstream), OR
+    //   (a) WEBRTC_ENGINE=mediamtx and browser WebRTC delivery is requested — always register,
+    //       even with CAPTURE_BACKEND=ingest-daemon (MediaMTX owns the single RTSP connection;
+    //       the ingest-daemon connects to MediaMTX loopback instead of camera directly), OR
+    //   (b) WEBRTC_ENGINE=mediasoup and not analysis mode — MediaMTX acts as single-connection
+    //       relay (only when ingest-daemon is NOT the capture backend, since without ffmpeg
+    //       mediasoup has no RTP source anyway), OR
     //   (c) the mediamtx capture backend is active.
-    // Exception: CAPTURE_BACKEND=ingest-daemon manages its own RTSP connection
-    // and internal fan-out — MediaMTX is not needed and would create a second connection.
-    const needsMediaMTX = CAPTURE_BACKEND !== 'ingest-daemon' && (
-                        (requestedWebRTC && WEBRTC_ENGINE === 'mediamtx')
-                       || (WEBRTC_ENGINE === 'mediasoup' && SERVER_MODE !== 'analysis')
-                       || CAPTURE_BACKEND === 'mediamtx');
+    const needsMediaMTX = (requestedWebRTC && WEBRTC_ENGINE === 'mediamtx')
+                       || (CAPTURE_BACKEND !== 'ingest-daemon' && (
+                              (WEBRTC_ENGINE === 'mediasoup' && SERVER_MODE !== 'analysis')
+                           || CAPTURE_BACKEND === 'mediamtx'));
     let mediamtxReady = false;
     if (needsMediaMTX) {
       mediamtxReady = await mediamtxManager.addCameraPath(camera.id, rtspUrl).catch(() => false);

@@ -97,11 +97,14 @@ function main() {
   const captureBackend = (childEnv.CAPTURE_BACKEND  || 'ffmpeg').toLowerCase();
   const serverMode     = (childEnv.SERVER_MODE       || 'combined').toLowerCase();
 
-  // mediasoup engine uses Go ingest daemon — MediaMTX not needed for that path.
+  // MediaMTX: needed for mediamtx WebRTC WHEP engine, or when mediamtx is the capture backend.
+  // Independent of CAPTURE_BACKEND — ingest-daemon + mediamtx is a valid combination where
+  // MediaMTX handles WebRTC and the ingest-daemon connects to its loopback RTSP for AI.
   const needsMediaMTX = (webrtcEngine === 'mediamtx' && serverMode !== 'analysis')
                       || captureBackend === 'mediamtx';
 
-  const needsIngestDaemon = webrtcEngine === 'mediasoup' && serverMode !== 'analysis';
+  // Ingest daemon: started whenever CAPTURE_BACKEND=ingest-daemon regardless of WebRTC engine.
+  const needsIngestDaemon = captureBackend === 'ingest-daemon' && serverMode !== 'analysis';
 
   let mediamtxChild    = null;
   let ingestDaemonChild = null;
