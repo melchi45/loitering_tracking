@@ -41,6 +41,7 @@ const { passport: configuredPassport, setup: setupPassport } = require('./config
 const YouTubeStreamService   = require('./services/youtubeStreamService');
 const registerStreamHandlers = require('./socket/streamHandler');
 const mediamtxManager        = require('./services/mediamtxManager');
+const { getEngine: getWebRTCEngine, WEBRTC_ENGINE } = require('./services/webrtcEngineFactory');
 const { runOnnxStartupDiagnostics } = require('./utils/onnxOptions');
 
 const PORT        = parseInt(process.env.HTTP_PORT || '3080', 10);
@@ -305,46 +306,34 @@ async function main() {
     res.json({ stunUrls, turns });
   });
 
-  // ── WebRTC ICE test (MediaMTX-based) ─────────────────────────────────────
-  // Replaces the old mediasoup transport test. Returns MediaMTX health status
-  // and the ICE candidate IPs that MediaMTX will announce to browsers.
-  // Used by the Web UI ICE test panel (Phase 2).
+  // ── WebRTC ICE test ───────────────────────────────────────────────────────
+  // Returns the health status and ICE candidate info for the active WebRTC engine
+  // (selected by WEBRTC_ENGINE in .env). Used by the Web UI ICE test panel.
   app.post('/api/webrtc/ice-test', async (req, res) => {
-    const healthy = await mediamtxManager.isHealthy().catch(() => false);
+    const engine  = getWebRTCEngine();
+    const healthy = await engine.isHealthy().catch(() => false);
     if (!healthy) {
       return res.status(503).json({
-        error: 'MediaMTX not reachable — make sure MediaMTX is running (npm run dev starts it automatically)',
-        engine: 'mediamtx-whep',
+        error:  `WebRTC engine "${WEBRTC_ENGINE}" is not reachable or not yet implemented.`,
+        engine: WEBRTC_ENGINE,
+        hint:   WEBRTC_ENGINE === 'mediamtx'
+          ? 'Make sure MediaMTX is running (npm run dev starts it automatically).'
+          : `Set WEBRTC_ENGINE=mediamtx in .env to use the default engine, or implement the ${WEBRTC_ENGINE} adapter.`,
       });
     }
-    const serverIp       = process.env.SERVER_IP        || '';
-    const serverPublicIp = process.env.SERVER_PUBLIC_IP || '';
-    const udpPort        = parseInt(process.env.MEDIAMTX_WEBRTC_UDP_PORT || '8189', 10);
-    const iceCandidates  = [];
-    if (serverIp) iceCandidates.push({ type: 'host', ip: serverIp,       port: udpPort, protocol: 'udp' });
-    if (serverPublicIp && serverPublicIp !== serverIp) {
-      iceCandidates.push({ type: 'host', ip: serverPublicIp, port: udpPort, protocol: 'udp' });
-    }
+    const info = engine.getEngineInfo();
     res.json({
-      testId:      `mediamtx-${Date.now()}`,
-      engine:      'mediamtx-whep',
-      transportId: 'MediaMTX WHEP',
-      iceCandidates,
-      whepProxy:   '/api/webrtc/whep/:cameraId',
-      udpPort,
+      testId: `${WEBRTC_ENGINE}-${Date.now()}`,
+      ...info,
     });
   });
 
-  // DELETE is a no-op (MediaMTX test has no server-side resource to clean up)
+  // DELETE is a no-op (no server-side resource to clean up for any engine)
   app.delete('/api/webrtc/ice-test/:testId', (req, res) => res.json({ ok: true }));
 
   // ── WebRTC WHEP proxy ─────────────────────────────────────────────────────
-  // Browser sends SDP offer → Node.js forwards to MediaMTX → returns SDP answer.
-  // Keeping the proxy on the same port as Node.js means the browser only needs
-  // to reach one host:port. ICE media (UDP) flows directly between browser and
-  // MediaMTX on port 8189 using the LAN IP from the ICE candidates.
-  const MEDIAMTX_WEBRTC = process.env.MEDIAMTX_WEBRTC_URL || 'http://127.0.0.1:8889';
-
+  // Browser POSTs SDP offer → Node.js delegates to the active WebRTC engine →
+  // returns SDP answer.  The active engine is selected by WEBRTC_ENGINE in .env.
   app.post('/api/webrtc/whep/:cameraId',
     express.text({ type: 'application/sdp', limit: '64kb' }),
     async (req, res) => {
@@ -352,22 +341,13 @@ async function main() {
       const sdpOffer = typeof req.body === 'string' ? req.body : '';
       if (!sdpOffer) return res.status(400).json({ error: 'Missing SDP offer body (Content-Type: application/sdp)' });
       try {
-        const whepUrl = `${MEDIAMTX_WEBRTC}/${cameraId}/whep`;
-        const upstream = await fetch(whepUrl, {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/sdp' },
-          body:    sdpOffer,
-        });
-        const sdpAnswer = await upstream.text();
+        const { status, sdpAnswer, headers } = await getWebRTCEngine().negotiate(cameraId, sdpOffer);
         // Forward WHEP spec headers (Location, Link, ETag) if present
-        for (const hdr of ['location', 'link', 'etag', 'access-control-expose-headers']) {
-          const val = upstream.headers.get(hdr);
-          if (val) res.setHeader(hdr, val);
-        }
-        res.status(upstream.status).type('application/sdp').send(sdpAnswer);
+        for (const [hdr, val] of Object.entries(headers)) res.setHeader(hdr, val);
+        res.status(status).type('application/sdp').send(sdpAnswer);
       } catch (err) {
-        console.error(`[WHEP-proxy][${cameraId.slice(0,8)}] ${err.message}`);
-        res.status(503).json({ error: `MediaMTX unreachable: ${err.message}` });
+        console.error(`[WHEP-proxy][${cameraId.slice(0,8)}][${WEBRTC_ENGINE}] ${err.message}`);
+        res.status(503).json({ error: `WebRTC engine "${WEBRTC_ENGINE}" unreachable: ${err.message}` });
       }
     }
   );
@@ -481,12 +461,13 @@ async function main() {
     if (process.env.NODE_ENV !== 'development' && !isLocal) {
       return res.status(403).json({ error: 'monitor endpoint is dev-only' });
     }
-    const mediamtxStatus = await mediamtxManager.isHealthy().then(ok => ({ ok })).catch(() => ({ ok: false }));
+    const engineHealthy = await getWebRTCEngine().isHealthy().catch(() => false);
     res.json({
-      serverMode: SERVER_MODE,
-      timestamp:  Date.now(),
-      pipelines:  pipelineManager.getAllPipelineStatus(),
-      mediamtx:   mediamtxStatus,
+      serverMode:   SERVER_MODE,
+      webrtcEngine: WEBRTC_ENGINE,
+      timestamp:    Date.now(),
+      pipelines:    pipelineManager.getAllPipelineStatus(),
+      webrtc:       { engine: WEBRTC_ENGINE, ok: engineHealthy },
     });
   });
 

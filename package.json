@@ -14,7 +14,9 @@
     "stop:streaming": "cd server && npm run stop:streaming",
     "stop:analysis": "cd server && npm run stop:analysis",
     "build:client": "node server/src/scripts/buildClient.js",
+    "stop": "cd server && npm run stop",
     "start": "cd server && npm start",
+    "restart": "npm run stop --if-present; npm start",
     "dev:server": "cd server && npm run dev",
     "setup": "npm run install:all && npm run build:client",
     "clean": "rm -rf server/node_modules client/node_modules client/dist"

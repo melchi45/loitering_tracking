@@ -307,11 +307,12 @@ export default function CameraView({ cameraId, cameraName }: Props) {
   const [isMuted,      setIsMuted]      = useState(true);
   const [showIcePanel, setShowIcePanel] = useState(false);
 
-  // React's `muted` prop only sets defaultMuted — cannot be toggled via props.
-  // Control the live `muted` DOM property directly whenever isMuted or connection state changes.
+  // Sync muted state when WebRTC reconnects (stream re-attached).
+  // Note: user-initiated unmute must be set synchronously in the click handler (not here)
+  // because useEffect runs after render, outside the browser's user-gesture activation window.
   useEffect(() => {
     if (videoRef.current) videoRef.current.muted = isMuted;
-  }, [isMuted, videoRef, webrtcState]);
+  }, [webrtcState]); // eslint-disable-line react-hooks/exhaustive-deps
   const status    = camera?.status ?? 'idle';
   const { t }     = useI18n();
 
@@ -403,7 +404,13 @@ export default function CameraView({ cameraId, cameraName }: Props) {
           {/* Audio mute/unmute button — only when connected and audio track exists */}
           {webrtcState === 'connected' && hasAudio && (
             <button
-              onClick={() => setIsMuted((m) => !m)}
+              onClick={() => {
+                const newMuted = !isMuted;
+                setIsMuted(newMuted);
+                // Must set DOM property synchronously inside the click handler —
+                // browsers require an active user gesture to unmute a video element.
+                if (videoRef.current) videoRef.current.muted = newMuted;
+              }}
               title={isMuted ? 'Unmute audio' : 'Mute audio'}
               className="absolute bottom-2 left-2 z-10 flex items-center justify-center w-7 h-7 rounded-full bg-black/50 hover:bg-black/75 text-white transition-colors"
             >

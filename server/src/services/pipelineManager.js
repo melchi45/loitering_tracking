@@ -41,6 +41,7 @@ function _pointInPolygon(pt, poly) {
 
 const { createCapture, CAPTURE_BACKEND } = require('./captureFactory');
 const mediamtxManager  = require('./mediamtxManager');
+const { getEngine: getWebRTCEngine, WEBRTC_ENGINE } = require('./webrtcEngineFactory');
 const DetectionService = require('./detection');
 const { ByteTracker }  = require('./tracking');
 const BehaviorEngine   = require('./behaviorEngine');
@@ -274,10 +275,11 @@ class PipelineManager {
     const requestedWebRTC = !!camera.webrtcEnabled;
     const captureFps = parseInt(process.env.CAPTURE_FPS, 10) || 10;
 
-    // Register with MediaMTX when: browser WebRTC delivery is needed, OR the
-    // mediamtx capture backend is active (so MediaMTX holds the single camera
-    // connection and all capture backends read from the local RTSP re-publish).
-    const needsMediaMTX = requestedWebRTC || CAPTURE_BACKEND === 'mediamtx';
+    // Register with MediaMTX when:
+    //   (a) WEBRTC_ENGINE=mediamtx and browser WebRTC delivery is requested, OR
+    //   (b) the mediamtx capture backend is active (MediaMTX holds the single
+    //       camera connection; all capture backends read its RTSP re-publish).
+    const needsMediaMTX = (requestedWebRTC && WEBRTC_ENGINE === 'mediamtx') || CAPTURE_BACKEND === 'mediamtx';
     let mediamtxReady = false;
     if (needsMediaMTX) {
       mediamtxReady = await mediamtxManager.addCameraPath(camera.id, rtspUrl).catch(() => false);
@@ -297,10 +299,17 @@ class PipelineManager {
       }
     }
 
-    const useWebRTC = requestedWebRTC && mediamtxReady;
+    // For non-mediamtx WebRTC engines, register the stream with the selected engine.
+    let altWebRTCReady = false;
+    if (requestedWebRTC && WEBRTC_ENGINE !== 'mediamtx') {
+      altWebRTCReady = await getWebRTCEngine().addCameraStream(camera.id, rtspUrl).catch(() => false);
+    }
+
+    const useWebRTC = requestedWebRTC && (WEBRTC_ENGINE === 'mediamtx' ? mediamtxReady : altWebRTCReady);
     if (requestedWebRTC && !useWebRTC) {
       console.warn(
-        `[PipelineManager][${camera.id}] WebRTC disabled for this pipeline because MediaMTX is unavailable.`
+        `[PipelineManager][${camera.id}] WebRTC disabled for this pipeline ` +
+        `(engine: ${WEBRTC_ENGINE}, ready: ${WEBRTC_ENGINE === 'mediamtx' ? mediamtxReady : altWebRTCReady}).`
       );
     }
 
@@ -915,7 +924,9 @@ class PipelineManager {
     ctx.capture.stop();
     ctx.behavior.reset();
     ctx.behavior.removeAllListeners();
-    if (ctx.useWebRTC || CAPTURE_BACKEND === 'mediamtx') mediamtxManager.removeCameraPath(cameraId).catch(() => {});
+    const needsMediaMTXCleanup = (ctx.useWebRTC && WEBRTC_ENGINE === 'mediamtx') || CAPTURE_BACKEND === 'mediamtx';
+    if (needsMediaMTXCleanup) mediamtxManager.removeCameraPath(cameraId).catch(() => {});
+    if (ctx.useWebRTC && WEBRTC_ENGINE !== 'mediamtx') getWebRTCEngine().removeCameraStream(cameraId).catch(() => {});
     this._pipelines.delete(cameraId);
     this._updateCameraStatus(cameraId, 'offline');
   }
