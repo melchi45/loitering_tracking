@@ -89,6 +89,45 @@ function main() {
     childEnv.PYAV_PYTHON_BIN = pythonExec;
   }
 
+  // ── MediaMTX — start when needed for WebRTC or capture ──────────────────
+  // devServer.js always starts MediaMTX (dev mode). startServer.js starts it
+  // only when the active configuration actually needs it so that analysis-only
+  // deployments (which never serve WebRTC) don't require MediaMTX.
+  const webrtcEngine   = (childEnv.WEBRTC_ENGINE    || 'mediamtx').toLowerCase();
+  const captureBackend = (childEnv.CAPTURE_BACKEND  || 'ffmpeg').toLowerCase();
+  const serverMode     = (childEnv.SERVER_MODE       || 'combined').toLowerCase();
+  const needsMediaMTX  = (webrtcEngine === 'mediamtx' && serverMode !== 'analysis')
+                       || captureBackend === 'mediamtx';
+
+  let mediamtxChild = null;
+  if (needsMediaMTX) {
+    const mediamtxBin    = resolveByRuntime(runtimeOs, 'MEDIAMTX_BIN') || 'mediamtx';
+    const mediamtxConfig = path.resolve(__dirname, '..', '..', '..', 'mediamtx.yml');
+
+    try {
+      mediamtxChild = spawn(mediamtxBin, [mediamtxConfig], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+        env: childEnv,
+      });
+
+      mediamtxChild.stdout.on('data', (d) => process.stdout.write(`[MediaMTX] ${d}`));
+      mediamtxChild.stderr.on('data', (d) => process.stderr.write(`[MediaMTX] ${d}`));
+
+      mediamtxChild.on('error', (e) => {
+        console.warn(`[Start] MediaMTX failed to start: ${e.message} — WebRTC delivery will be unavailable`);
+        mediamtxChild = null;
+      });
+      mediamtxChild.on('exit', (code) => {
+        mediamtxChild = null;
+        if (code !== 0 && code !== null) {
+          console.warn(`[Start] MediaMTX exited (code=${code})`);
+        }
+      });
+    } catch (e) {
+      console.warn(`[Start] Could not start MediaMTX: ${e.message}`);
+    }
+  }
+
   const child = spawn(nodeExec, [serverEntry], {
     stdio: 'inherit',
     env: childEnv,
@@ -96,16 +135,26 @@ function main() {
 
   child.on('error', (err) => {
     console.error(`[Start] Failed to launch server with "${nodeExec}": ${err.message}`);
+    if (mediamtxChild) try { mediamtxChild.kill(); } catch (_) {}
     process.exit(1);
   });
 
   child.on('exit', (code, signal) => {
+    if (mediamtxChild) try { mediamtxChild.kill(); } catch (_) {}
     if (signal) {
       process.kill(process.pid, signal);
       return;
     }
     process.exit(code || 0);
   });
+
+  // Forward SIGTERM/SIGINT to both child processes
+  const shutdown = (sig) => {
+    if (mediamtxChild) try { mediamtxChild.kill(sig); } catch (_) {}
+    try { child.kill(sig); } catch (_) {}
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT',  () => shutdown('SIGINT'));
 }
 
 main();
