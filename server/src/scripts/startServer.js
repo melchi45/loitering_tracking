@@ -96,7 +96,7 @@ function main() {
   const webrtcEngine   = (childEnv.WEBRTC_ENGINE    || 'mediamtx').toLowerCase();
   const captureBackend = (childEnv.CAPTURE_BACKEND  || 'ffmpeg').toLowerCase();
   const serverMode     = (childEnv.SERVER_MODE       || 'combined').toLowerCase();
-  const needsMediaMTX  = (webrtcEngine === 'mediamtx' && serverMode !== 'analysis')
+  const needsMediaMTX  = ((webrtcEngine === 'mediamtx' || webrtcEngine === 'mediasoup') && serverMode !== 'analysis')
                        || captureBackend === 'mediamtx';
 
   let mediamtxChild = null;

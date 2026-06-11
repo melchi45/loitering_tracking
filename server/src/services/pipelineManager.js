@@ -277,9 +277,12 @@ class PipelineManager {
 
     // Register with MediaMTX when:
     //   (a) WEBRTC_ENGINE=mediamtx and browser WebRTC delivery is requested, OR
-    //   (b) the mediamtx capture backend is active (MediaMTX holds the single
-    //       camera connection; all capture backends read its RTSP re-publish).
-    const needsMediaMTX = (requestedWebRTC && WEBRTC_ENGINE === 'mediamtx') || CAPTURE_BACKEND === 'mediamtx';
+    //   (b) WEBRTC_ENGINE=mediasoup (MediaMTX acts as single-connection relay so
+    //       both the AI capture and mediasoup's ffmpeg share one upstream), OR
+    //   (c) the mediamtx capture backend is active.
+    const needsMediaMTX = (requestedWebRTC && WEBRTC_ENGINE === 'mediamtx')
+                       || (WEBRTC_ENGINE === 'mediasoup' && SERVER_MODE !== 'analysis')
+                       || CAPTURE_BACKEND === 'mediamtx';
     let mediamtxReady = false;
     if (needsMediaMTX) {
       mediamtxReady = await mediamtxManager.addCameraPath(camera.id, rtspUrl).catch(() => false);
@@ -299,10 +302,25 @@ class PipelineManager {
       }
     }
 
+    const mediamtxRtspPort = parseInt(process.env.MEDIAMTX_RTSP_PORT, 10) || 8554;
+    // When MediaMTX holds the camera stream (WebRTC mode or mediamtx backend),
+    // ALL capture backends (gstreamer, ffmpeg, pyav) should read from the
+    // MediaMTX local RTSP re-publish.  This prevents a second direct connection
+    // to the camera which many devices limit to one simultaneous RTSP client.
+    const captureUrl = mediamtxReady
+      ? `rtsp://127.0.0.1:${mediamtxRtspPort}/${camera.id}`
+      : rtspUrl;
+
     // For non-mediamtx WebRTC engines, register the stream with the selected engine.
+    // Pass captureUrl (MediaMTX re-publish when available) so mediasoup's ffmpeg
+    // shares the same upstream as the AI capture backend — one camera connection only.
+    // Also register when mediamtxReady even if webrtcEnabled=false, so WHEP is
+    // available for all cameras (matches the previous mediamtx engine behaviour).
     let altWebRTCReady = false;
-    if (requestedWebRTC && WEBRTC_ENGINE !== 'mediamtx') {
-      altWebRTCReady = await getWebRTCEngine().addCameraStream(camera.id, rtspUrl).catch(() => false);
+    const registerAltEngine = WEBRTC_ENGINE !== 'mediamtx' &&
+      (requestedWebRTC || (WEBRTC_ENGINE === 'mediasoup' && mediamtxReady));
+    if (registerAltEngine) {
+      altWebRTCReady = await getWebRTCEngine().addCameraStream(camera.id, captureUrl).catch(() => false);
     }
 
     const useWebRTC = requestedWebRTC && (WEBRTC_ENGINE === 'mediamtx' ? mediamtxReady : altWebRTCReady);
@@ -312,15 +330,6 @@ class PipelineManager {
         `(engine: ${WEBRTC_ENGINE}, ready: ${WEBRTC_ENGINE === 'mediamtx' ? mediamtxReady : altWebRTCReady}).`
       );
     }
-
-    const mediamtxRtspPort = parseInt(process.env.MEDIAMTX_RTSP_PORT, 10) || 8554;
-    // When MediaMTX holds the camera stream (WebRTC mode or mediamtx backend),
-    // ALL capture backends (gstreamer, ffmpeg, pyav) should read from the
-    // MediaMTX local RTSP re-publish.  This prevents a second direct connection
-    // to the camera which many devices limit to one simultaneous RTSP client.
-    const captureUrl = mediamtxReady
-      ? `rtsp://127.0.0.1:${mediamtxRtspPort}/${camera.id}`
-      : rtspUrl;
 
     const capture = createCapture(camera.id, captureUrl, { fps: captureFps, width: 640 });
 
