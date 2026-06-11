@@ -238,18 +238,21 @@ All modules defined below correspond to completed SDLC chains (RFP → PRD → S
 
 ### 6.4 Planned Modules (Roadmap)
 
-| Module | Target Phase | Planned Date |
-|---|:---:|---|
-| Video Recording (DVR/NVR) | Phase 12 | Jul 28, 2026 |
-| PTZ Control (ONVIF) | Phase 13 | Aug 11, 2026 |
-| Notification Hub (Email/SMS/Slack/Teams) | Phase 14 | Aug 25, 2026 |
-| Heatmap & Path Visualization | Phase 15 | Sep 8, 2026 |
-| Advanced AI (Fall / Fight / Running) | Phase 16 | Sep 22, 2026 |
-| Auto Reports (PDF / Excel) | Phase 17 | Oct 6, 2026 |
-| Map Layout (Floor plan / Satellite) | Phase 18 | Oct 20, 2026 |
-| Privacy & Audit (GDPR, Face Blur) | Phase 19 | Nov 3, 2026 |
-| AI Model Management | Phase 20 | Nov 17, 2026 |
-| Production Deployment Package | Phase 21 | Dec 1, 2026 |
+| Module | Target Phase | Planned Date | Milestone Ref |
+|---|:---:|---|---|
+| Video Recording (DVR/NVR) + Playback API | Phase 12 | Jul 28, 2026 | [M1, M2](../design/Design_RTSP_WebRTC_Architecture.md#milestone-1--영상-녹화-및-세그먼트-저장-p1) |
+| Vector DB Face Re-ID (Qdrant/pgvector) | Phase 12b | Aug 11, 2026 | [M3](../design/Design_RTSP_WebRTC_Architecture.md#milestone-3--qdrant-벡터-db-기반-얼굴-re-id-고도화-p2) |
+| RTCP Adaptive Streaming (PLI/NACK/REMB) | Phase 12c | Aug 25, 2026 | [M4](../design/Design_RTSP_WebRTC_Architecture.md#milestone-4--rtcp-피드백-처리-nack--pli--remb-p2) |
+| Distributed Cluster Mode (Kafka + GPU Pool) | Phase 12d | Sep 8, 2026 | [M5](../design/Design_RTSP_WebRTC_Architecture.md#milestone-5--분산-클러스터-모드-p3) |
+| PTZ Control (ONVIF) | Phase 13 | Sep 22, 2026 | — |
+| Notification Hub (Email/SMS/Slack/Teams) | Phase 14 | Oct 6, 2026 | — |
+| Heatmap & Path Visualization | Phase 15 | Oct 20, 2026 | — |
+| Advanced AI (Fall / Fight / Running) | Phase 16 | Nov 3, 2026 | — |
+| Auto Reports (PDF / Excel) | Phase 17 | Nov 17, 2026 | — |
+| Map Layout (Floor plan / Satellite) | Phase 18 | Dec 1, 2026 | — |
+| Privacy & Audit (GDPR, Face Blur) | Phase 19 | Dec 15, 2026 | — |
+| AI Model Management | Phase 20 | Jan 5, 2027 | — |
+| Production Deployment Package | Phase 21 | Jan 19, 2027 | — |
 
 ---
 
@@ -436,6 +439,12 @@ The following table maps planned market releases to engineering phases and targe
 | Ops — MongoDB Setup | `docs/ops/MongoDB_Setup.md` | Deployment guide |
 | Ops — HTTPS / TLS Setup | `docs/ops/HTTPS_TLS_Setup.md` | Deployment guide |
 | Ops — MCP Server Setup | `docs/ops/MCP_Server_Setup.md` | Integration guide |
+| Design — RTSP/WebRTC Architecture | `docs/design/Design_RTSP_WebRTC_Architecture.md` | 현재 ingest-daemon + MediaMTX WHEP 아키텍처 및 M1–M5 Milestone |
+| RFP — RTSP/WebRTC Architecture | `docs/rfp/RFP_RTSP_WebRTC_Architecture.md` | 캡처 백엔드·릴레이·Object Storage·Vector DB 기술 선정 근거 |
+| PRD — RTSP/WebRTC Architecture | `docs/prd/PRD_RTSP_WebRTC_Architecture.md` | M1–M5 제품 요구사항 |
+| SRS — RTSP/WebRTC Architecture | `docs/srs/SRS_RTSP_WebRTC_Architecture.md` | 기능 요구사항 상세 명세 |
+| TC — RTSP/WebRTC Architecture | `docs/tc/TC_RTSP_WebRTC_Architecture.md` | 테스트 케이스 33개 |
+| Ops — RTSP/WebRTC Architecture Setup | `docs/ops/RTSP_WebRTC_Architecture_Setup.md` | ingest-daemon·MediaMTX·MinIO·Qdrant 운영 가이드 |
 | Root README | `README.md` | System overview and quick start |
 | SDLC Index | `docs/README.md` | Documentation hierarchy |
 
@@ -446,3 +455,4 @@ The following table maps planned market releases to engineering phases and targe
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — MRD synthesized from all docs/rfp, docs/prd, and codebase status as of Phase 1–11 completion |
+| 1.1 | 2026-06-11 | LTS Engineering Team | §6.4 Phase 12b/12c/12d 추가 (M3 Qdrant, M4 RTCP, M5 Cluster); §13 RTSP/WebRTC Architecture 문서 6종 참조 추가 |

@@ -1,6 +1,6 @@
 # SRS — Video Capture Pipeline Architecture
 **Document ID**: SRS-LTS-VCP-01  
-**Version**: 1.0  
+**Version**: 1.1  
 **Date**: 2026-06-05  
 **Project**: Loitering Detection & Tracking System (LTS-2026)  
 **Status**: Active  
@@ -10,6 +10,7 @@
 | Ver | Date | Summary |
 |---|---|---|
 | 1.0 | 2026-06-05 | Initial specification — covers Phase 0, 1, 2 |
+| 1.1 | 2026-06-11 | WEBRTC_ENGINE → WEBRTC_ENGINE 전면 교체; ingest-daemon FR-VCP-CUR-007~009 추가; §1 Scope에 ingestDaemonCapture.js 추가 |
 
 ---
 
@@ -33,9 +34,11 @@
 
 **범위 내**:
 - `captureFactory.js`, `rtspCapture.js`, `gstreamerCapture.js`, `pyavCapture.js`
-- `rtpIngestion.js` (현재 FFmpeg RTP+JPEG)
+- `ingestDaemonCapture.js` (ingest-daemon 수신 EventEmitter — 현재 기본 백엔드)
+- `mediamtxManager.js` (MediaMTX 경로 등록/해제 — 현재 WebRTC 엔진)
+- `rtpIngestion.js` (레거시 FFmpeg RTP+JPEG)
 - `pipelineManager.js` 내 capture 백엔드 선택 로직
-- `webrtcGateway.js` ICE/전송 설정
+- `webrtcGateway.js` ICE/전송 설정 (레거시 mediasoup 모드)
 - `mediamtx.yml` WebRTC 바인딩
 - `server/.env` ICE 관련 설정
 
@@ -54,9 +57,11 @@
 
 | CAPTURE_BACKEND 값 | 반환 클래스 | 소스 파일 |
 |---|---|---|
-| `ffmpeg` (기본값 또는 미설정) | `RTSPCapture` | `rtspCapture.js` |
+| `ingest-daemon` (현재 기본값) | `IngestDaemonCapture` | `ingestDaemonCapture.js` |
+| `ffmpeg` | `RTSPCapture` | `rtspCapture.js` |
 | `gstreamer` | `GStreamerCapture` | `gstreamerCapture.js` |
 | `pyav` | `PyAVCapture` | `pyavCapture.js` |
+| `mediamtx-snapshot` | `MediaMTXSnapshotCapture` | `mediamtxSnapshotCapture.js` |
 | 기타 알 수 없는 값 | `RTSPCapture` (폴백, 경고 출력) | `rtspCapture.js` |
 
 ### FR-VCP-CUR-002: WebRTC 모드에서 captureFactory 무시
@@ -87,6 +92,45 @@
 ### FR-VCP-CUR-006: PyAV Python 사이드카
 
 `pyavCapture.js`는 Python 인터프리터를 서브프로세스로 실행하여 `pyav_capture.py` 스크립트를 구동한다. Python 프로세스는 JPEG 스트림을 stdout에 출력하며 Node.js가 SOI/EOI 마커로 파싱한다.
+
+### FR-VCP-CUR-007: IngestDaemonCapture — 수동 EventEmitter
+
+`ingestDaemonCapture.js`는 외부 프로세스를 직접 생성하지 않는 **수동 EventEmitter**다.  
+- `ingestDaemonCapture.injectFrame(buffer)` 호출 시 `'frame'` 이벤트를 즉시 발생시킨다.
+- 외부 ingest-daemon(`ingest_daemon.py`, `:7070`)이 JPEG 버퍼를 HTTP POST로 전달하면 서버 라우터가 `injectFrame(buf)`을 호출한다.
+- `CAPTURE_BACKEND=ingest-daemon` 설정 시 `captureFactory.createCapture()`는 이 클래스를 반환한다.
+
+```javascript
+// pipelineManager.js 내 실제 호출 흐름
+const capture = captureFactory.createCapture(camera); // IngestDaemonCapture 반환
+capture.on('frame', (buf) => pipeline.processFrame(buf));
+// ingest-daemon → POST /ingest/frame → injectFrame(buf) → 'frame' 이벤트
+```
+
+### FR-VCP-CUR-008: FORCE_NO_WEBRTC 조건
+
+`pipelineManager.js`에서 `FORCE_NO_WEBRTC` 플래그는 다음 조건에서만 `true`가 된다:
+
+```javascript
+const FORCE_NO_WEBRTC = (process.env.CAPTURE_BACKEND === 'ingest-daemon')
+                     && (process.env.WEBRTC_ENGINE === 'mediasoup');
+```
+
+- `WEBRTC_ENGINE=mediamtx` 환경(현재 기본값)에서는 `FORCE_NO_WEBRTC=false` — MediaMTX가 WebRTC를 처리한다.
+- `FORCE_NO_WEBRTC=true`인 경우 `camera.webrtcEnabled`를 강제로 `false`로 오버라이드하고, `camera:capabilities` Socket.IO 이벤트로 클라이언트에 통지한다.
+
+### FR-VCP-CUR-009: useWebRTC 판별 로직
+
+카메라 파이프라인 시작 시 `useWebRTC` 플래그는 다음 로직으로 결정된다:
+
+```javascript
+const useWebRTC = camera.webrtcEnabled
+               && !FORCE_NO_WEBRTC
+               && (WEBRTC_ENGINE === 'mediamtx' || webrtcGateway.enabled);
+```
+
+- `WEBRTC_ENGINE=mediamtx` (현재 기본): `mediamtxManager.js`가 MediaMTX REST API로 경로를 등록하고, 브라우저는 `http://<host>:8889/<cameraId>/whep`에 직접 WHEP 연결한다.
+- `WEBRTC_ENGINE=mediasoup`: `webrtcGateway.js`가 mediasoup Worker를 생성하고 PlainTransport를 통해 RTP 수신한다 (레거시 경로).
 
 ---
 
@@ -203,15 +247,15 @@ FR-VCP-022: `CAPTURE_BACKEND=gstreamer`이지만 WebRTC OFF(`camera.webrtcEnable
 
 ## 5. Functional Requirements — Phase 2 (MediaMTX Direct)
 
-### FR-VCP-030: WEBRTC_MODE 환경변수
+### FR-VCP-030: WEBRTC_ENGINE 환경변수
 
-신규 환경변수 `WEBRTC_MODE` 도입:
+신규 환경변수 `WEBRTC_ENGINE` 도입:
 - `mediasoup` (기본값, 미설정 시): 현재 동작 그대로
 - `mediamtx`: MediaMTX WebRTC 직접 경로 활성화
 
 ### FR-VCP-031: MediaMTX 카메라 경로 등록
 
-`WEBRTC_MODE=mediamtx` 시 카메라 시작 시:
+`WEBRTC_ENGINE=mediamtx` 시 카메라 시작 시:
 1. MediaMTX REST API (`POST /v3/config/paths/add/{cameraId}`) 로 RTSP 소스 등록
 2. MediaMTX가 RTSP → WebRTC 변환 처리
 
@@ -236,18 +280,18 @@ async registerMediaMTXPath(cameraId, rtspUrl) {
 }
 ```
 
-클라이언트는 `WEBRTC_MODE=mediamtx` 시 해당 URL로 WebRTC 연결.
+클라이언트는 `WEBRTC_ENGINE=mediamtx` 시 해당 URL로 WebRTC 연결.
 
 ### FR-VCP-033: AI 파이프라인 MediaMTX RTSP 재스트림 소비
 
-`WEBRTC_MODE=mediamtx` 시 AI 추론 경로:
+`WEBRTC_ENGINE=mediamtx` 시 AI 추론 경로:
 - 원본 RTSP URL 대신 `rtsp://localhost:8554/{cameraId}` (MediaMTX 재스트림) 소비
 - `captureFactory.js`를 통한 기존 방식 유지 (ffmpeg/gstreamer/pyav 선택 가능)
 - `RtpIngestion` 사용 안 함 (mediasoup PlainTransport 불필요)
 
 ### FR-VCP-034: mediasoup 선택적 비활성화
 
-`WEBRTC_MODE=mediamtx` 시 `webrtcGateway.js`에서 mediasoup Worker 생성을 건너뛸 수 있도록 옵션 제공. 기존 mediasoup 코드는 제거하지 않고 조건부로 비활성화.
+`WEBRTC_ENGINE=mediamtx` 시 `webrtcGateway.js`에서 mediasoup Worker 생성을 건너뛸 수 있도록 옵션 제공. 기존 mediasoup 코드는 제거하지 않고 조건부로 비활성화.
 
 ---
 
@@ -299,7 +343,7 @@ RTP Ingestion 계열의 mediasoup 설정은 통일한다:
 | `GSTREAMER_HW_ACCEL` | `auto` | 1 | GStreamer 하드웨어 가속 모드 |
 | `SERVER_IP` | `127.0.0.1` | 0 | mediasoup ICE 후보 IP |
 | `STUN_URLS` | *(empty)* | 0 | STUN 서버 목록 |
-| `WEBRTC_MODE` | `mediasoup` | 2 | WebRTC 백엔드 선택 |
+| `WEBRTC_ENGINE` | `mediasoup` | 2 | WebRTC 백엔드 선택 |
 | `MEDIAMTX_API_URL` | `http://localhost:9997` | 2 | MediaMTX REST API URL |
 | `MEDIAMTX_WEBRTC_URL` | *(empty)* | 2 | 브라우저용 MediaMTX WebRTC 기본 URL |
 
@@ -340,8 +384,8 @@ RTP Ingestion 계열의 mediasoup 설정은 통일한다:
 
 ### FR-VCP-ERR-004: MediaMTX API 응답 없음
 
-**시나리오**: `WEBRTC_MODE=mediamtx` 상태에서 MediaMTX REST API 요청 실패  
-**요구사항**: 오류 로그 출력 후 `WEBRTC_MODE=mediasoup` 폴백 또는 해당 카메라를 오류 상태로 마킹. 서버 전체 중단 없음.
+**시나리오**: `WEBRTC_ENGINE=mediamtx` 상태에서 MediaMTX REST API 요청 실패  
+**요구사항**: 오류 로그 출력 후 `WEBRTC_ENGINE=mediasoup` 폴백 또는 해당 카메라를 오류 상태로 마킹. 서버 전체 중단 없음.
 
 ### FR-VCP-ERR-005: RTSP 연결 실패 재시도
 
@@ -390,7 +434,7 @@ GSTREAMER_HW_ACCEL=auto
 ```bash
 # server/.env
 # ── MediaMTX WebRTC 모드 ────────────────────────────────
-WEBRTC_MODE=mediamtx
+WEBRTC_ENGINE=mediamtx
 MEDIAMTX_API_URL=http://localhost:9997
 MEDIAMTX_WEBRTC_URL=http://192.168.1.100:8889
 ```
@@ -404,13 +448,13 @@ apiAddress: :9997        # REST API 활성화
 ### 9.4 전체 설정 우선순위
 
 ```
-WEBRTC_MODE=mediamtx
+WEBRTC_ENGINE=mediamtx
   → Phase 2 경로: MediaMTX WebRTC + captureFactory(AI 경로)
 
-WEBRTC_MODE=mediasoup (기본값), camera.webrtcEnabled=true, CAPTURE_BACKEND=gstreamer
+WEBRTC_ENGINE=mediasoup (기본값), camera.webrtcEnabled=true, CAPTURE_BACKEND=gstreamer
   → Phase 1 경로: GStreamerRtpIngestion + mediasoup
 
-WEBRTC_MODE=mediasoup (기본값), camera.webrtcEnabled=true, CAPTURE_BACKEND=ffmpeg (기본값)
+WEBRTC_ENGINE=mediasoup (기본값), camera.webrtcEnabled=true, CAPTURE_BACKEND=ffmpeg (기본값)
   → 현재 경로: RtpIngestion(FFmpeg) + mediasoup
 
 camera.webrtcEnabled=false, CAPTURE_BACKEND=gstreamer
