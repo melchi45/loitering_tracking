@@ -358,21 +358,23 @@ class PipelineManager {
       altWebRTCReady = await getWebRTCEngine().addCameraStream(camera.id, captureUrl).catch(() => false);
     }
 
-    // When using ingest-daemon: register camera directly for AI-only RTSP capture.
-    // The daemon's HTTP API accepts { id, rtspUrl, callbackUrl } and starts a PyAV
-    // decode thread that posts JPEG frames to callbackUrl.
+    // When using ingest-daemon: register camera directly for AI RTSP capture.
+    // When MediaMTX is ready (WebRTC path), pass the loopback re-publish URL so
+    // the daemon connects to MediaMTX (single camera connection) instead of the
+    // camera directly (which would create a second RTSP connection).
     if (CAPTURE_BACKEND === 'ingest-daemon') {
       const isHttps = (process.env.HTTPS_ENABLED || '').toLowerCase() === 'true';
       const serverProto = isHttps ? 'https' : 'http';
       const serverPort  = isHttps
         ? parseInt(process.env.HTTPS_PORT || '3443', 10)
         : parseInt(process.env.HTTP_PORT || process.env.PORT || '3080', 10);
-      const callbackUrl = `${serverProto}://127.0.0.1:${serverPort}/api/internal/frame/${camera.id}`;
-      const daemonReady = await _ingestRegisterCamera(camera.id, rtspUrl, callbackUrl);
+      const callbackUrl  = `${serverProto}://127.0.0.1:${serverPort}/api/internal/frame/${camera.id}`;
+      const daemonRtspUrl = mediamtxReady ? captureUrl : rtspUrl;
+      const daemonReady  = await _ingestRegisterCamera(camera.id, daemonRtspUrl, callbackUrl);
       if (!daemonReady) {
         console.error(`[PipelineManager][${camera.id}] Ingest daemon registration failed — no AI frames for this camera`);
       } else {
-        console.log(`[PipelineManager][${camera.id}] Ingest daemon registered → callback ${callbackUrl}`);
+        console.log(`[PipelineManager][${camera.id}] Ingest daemon registered → ${daemonRtspUrl} callback ${callbackUrl}`);
       }
     }
 
