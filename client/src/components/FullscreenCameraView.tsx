@@ -9,6 +9,7 @@ import type { AppRtpMessage } from '../stores/dataChannelStore';
 import { useI18n } from '../i18n';
 import CameraView from './CameraView';
 import OnvifTimelineInline from './OnvifTimelineInline';
+import DetectionsTimelineInline from './DetectionsTimelineInline';
 import type { Detection, ClothingFeature } from '../types';
 
 interface Props {
@@ -838,6 +839,7 @@ export function CameraEventsTab({ cameraId }: { cameraId: string }) {
 
 export default function FullscreenCameraView({ cameraId, cameraName, onClose }: Props) {
   const [videoTab, setVideoTab] = useState<'events' | 'onvif' | 'detections'>('onvif');
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const { t } = useI18n();
 
   // Close on Escape key
@@ -847,15 +849,25 @@ export default function FullscreenCameraView({ cameraId, cameraName, onClose }: 
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
+  // Responsive breakpoint
+  useEffect(() => {
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  const tabHeight = videoTab === 'detections' ? 300 : videoTab === 'onvif' ? 200 : 160;
+
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/90 flex flex-col"
+      className="fixed inset-0 z-50 bg-black/90"
+      style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      {/* Video area — full height minus bottom tab panel */}
+      {/* ── Video column (left on desktop, top on mobile) ─────────────── */}
       <div
-        className="flex flex-col overflow-hidden"
-        style={{ flex: 1 }}
+        className="flex flex-col overflow-hidden min-h-0"
+        style={isMobile ? { flex: '0 0 60%' } : { flex: 1, minWidth: 0 }}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2 bg-gray-900/80 flex-shrink-0">
@@ -871,18 +883,18 @@ export default function FullscreenCameraView({ cameraId, cameraName, onClose }: 
           </button>
         </div>
 
-        {/* Video — min-h-0 lets flex-1 shrink when tab panel is present */}
+        {/* Video */}
         <div className="flex-1 min-h-0 overflow-hidden p-2">
           <CameraView cameraId={cameraId} cameraName={cameraName} />
         </div>
 
-        {/* ── Bottom tab bar + content ─────────────────────────────────── */}
+        {/* ── Bottom tab bar + content ───────────────────────────────── */}
         <div
           className="flex-shrink-0 flex flex-col border-t border-gray-700 bg-gray-900"
-          style={{ height: videoTab === 'onvif' ? 300 : videoTab === 'detections' ? 300 : 160 }}
+          style={{ height: tabHeight }}
         >
           {/* Tab bar */}
-          <div className="flex items-center gap-0 border-b border-gray-700/60 flex-shrink-0 bg-gray-900/80">
+          <div className="flex items-center border-b border-gray-700/60 flex-shrink-0 bg-gray-900/80">
             <button
               onClick={() => setVideoTab('events')}
               className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide transition-colors border-b-2 ${
@@ -911,37 +923,31 @@ export default function FullscreenCameraView({ cameraId, cameraName, onClose }: 
                   : 'border-transparent text-gray-500 hover:text-gray-300'
               }`}
             >
-              {t.detections}
+              Detections
             </button>
           </div>
 
-          {/* Tab content
-              onvif tab: split view — ONVIF timeline (left) + Detections (right 224px)
-              detections tab: full-width Detections panel
-              events tab: full-width Camera Events panel */}
-          <div className="flex-1 min-h-0 overflow-hidden flex flex-row">
-            {videoTab === 'events' && (
-              <div className="flex-1 min-w-0 overflow-hidden">
-                <CameraEventsTab cameraId={cameraId} />
-              </div>
-            )}
-            {videoTab === 'onvif' && (
-              <>
-                <div className="flex-1 min-w-0 overflow-hidden">
-                  <OnvifTimelineInline cameraId={cameraId} />
-                </div>
-                <div className="flex-shrink-0 border-l border-gray-700 overflow-hidden" style={{ width: 224 }}>
-                  <DetectionPanel cameraId={cameraId} />
-                </div>
-              </>
-            )}
-            {videoTab === 'detections' && (
-              <div className="flex-1 min-w-0 overflow-hidden">
-                <DetectionPanel cameraId={cameraId} />
-              </div>
-            )}
+          {/* Tab content:
+              events     → Camera Events (DataChannel RTP messages)
+              onvif      → ONVIF Timeline (DB-persisted events)
+              detections → Analysis Events history (fire/smoke/loitering stored in DB) */}
+          <div className="flex-1 min-h-0 overflow-hidden">
+            {videoTab === 'events' && <CameraEventsTab cameraId={cameraId} />}
+            {videoTab === 'onvif'  && <OnvifTimelineInline cameraId={cameraId} />}
+            {videoTab === 'detections' && <DetectionsTimelineInline cameraId={cameraId} />}
           </div>
         </div>
+      </div>
+
+      {/* ── Right panel — real-time AI detections (always visible) ───── */}
+      <div
+        className="flex flex-col overflow-hidden border-gray-700"
+        style={isMobile
+          ? { flex: '0 0 40%', borderTop: '1px solid rgb(55 65 81)' }
+          : { width: 288, flexShrink: 0, borderLeft: '1px solid rgb(55 65 81)' }
+        }
+      >
+        <DetectionPanel cameraId={cameraId} />
       </div>
     </div>
   );

@@ -30,6 +30,9 @@ client/src/
 │   ├── AnalysisLivePanel.tsx       — 실시간 감지 피드 오버레이 (analysis 모드, "감지 이벤트" 카드)
 │   ├── AnalysisDetectionPanel.tsx  — 이벤트 히스토리 오버레이 (analysisEvents DB, "알림" 카드)
 │   ├── AnalysisEventsTab.tsx       — Detections 탭 이벤트 히스토리 (analysis 모드)
+│   ├── AnalysisHistoryTab.tsx      — 저장된 분석 이벤트 이력 (레거시 — FullscreenCameraView에서 미사용)
+│   ├── OnvifTimelineInline.tsx     — ONVIF 이벤트 Gantt 타임라인 + 커스텀 날짜 범위 (FullscreenCameraView ONVIF 탭)
+│   ├── DetectionsTimelineInline.tsx — ByteTracker 트랙 Gantt 타임라인 (FullscreenCameraView Detections 탭)
 │   └── FullscreenCameraView.tsx    — 전체화면 카메라 뷰 (3탭: Camera Events / ONVIF Timeline / Detections)
 ├── stores/                 — Zustand 상태 스토어
 ├── hooks/                  — 커스텀 훅
@@ -139,6 +142,8 @@ npm run preview      # 빌드 결과 미리보기
 | `StatsPanelModal.tsx` | `docs/design/Design_Stats_Panel.md`, `docs/prd/PRD_Stats_Panel.md` |
 | `DashboardDetectionPanel.tsx` | `docs/design/Design_Dashboard_Detection_Display.md`, `docs/tc/TC_Dashboard_Detection_Display.md` |
 | `FullscreenCameraView.tsx` | `docs/design/Design_Fullscreen_Camera_View.md`, `docs/design/Design_DataChannel_CameraEvents.md`, `docs/design/Design_Dashboard_Layout.md`, `docs/design/Design_ONVIF_Timeline.md` |
+| `DetectionsTimelineInline.tsx` | `docs/design/Design_Fullscreen_Camera_View.md` §3.3, `docs/tc/TC_Fullscreen_Camera_View.md` TC-04~09 |
+| `OnvifTimelineInline.tsx` | `docs/design/Design_ONVIF_Timeline.md` §5.3, `docs/design/Design_Fullscreen_Camera_View.md` §3.2 |
 | `dataChannelStore.ts` | `docs/design/Design_DataChannel_CameraEvents.md` |
 | `OnvifTimelineOverlay.tsx` | `docs/design/Design_ONVIF_Timeline.md` |
 | `onvifEventStore.ts` | `docs/design/Design_ONVIF_Timeline.md` §4.3 |
@@ -631,3 +636,76 @@ DELETE /api/onvif-events?cameraId=   (생략 시 전체 삭제)
 | `onvifApi.js` (API 파라미터) | `Design_ONVIF_Timeline.md` §3.3, `CLAUDE.md` API 표 |
 | `onvifParser.js` (TOPIC_MAP) | `Design_ONVIF_Metadata_Pipeline.md` §2 |
 | `db.js` (`onvif_events` 스키마) | `Design_ONVIF_Timeline.md` §2.1 |
+
+---
+
+## Detections Timeline (`DetectionsTimelineInline`)
+
+**설계 문서:** [Design_Fullscreen_Camera_View.md §3.3](../../../docs/design/Design_Fullscreen_Camera_View.md)  
+**TC:** [TC_Fullscreen_Camera_View.md TC-04~15](../../../docs/tc/TC_Fullscreen_Camera_View.md)
+
+### 개요
+
+FullscreenCameraView의 "Detections" 탭에 표시되는 Gantt 스타일 타임라인. ByteTracker 트랙 생명주기(`firstSeenAt` → `lastSeenAt`)를 수평 막대로 시각화합니다.
+
+**ONVIF Timeline과의 차이점:**
+
+| 항목 | ONVIF Timeline | Detections Timeline |
+|------|---------------|---------------------|
+| 데이터 | 순간 이벤트 (점) | 객체 존재 구간 (막대) |
+| API | `/api/onvif-events` | `/api/analysis/detection-tracks` |
+| 서버 소스 | ONVIF XML 파싱 | ByteTracker `popRemovedTracks()` |
+| 저장 기준 | 모든 상태 변화 | isLoitering=true 또는 riskScore≥0.3 |
+
+### detectionTracks DB 스키마
+
+```javascript
+{
+  id: string,           // UUID
+  cameraId: string,
+  cameraName: string,
+  objectId: number,     // ByteTracker trackId
+  className: string,    // 'person', 'car', ...
+  firstSeenAt: number,  // Unix ms (Track 생성 시각)
+  lastSeenAt: number,   // Unix ms (TrackState.Removed 시각)
+  dwellTime: number,    // ms
+  maxRiskScore: number, // 0~1
+  isLoitering: boolean,
+  confidence: number,
+  faceId: string | null,
+  identity: string | null,
+  zoneId: string | null,
+  zoneName: string | null,
+  color: string | null,
+  cloth: string | null,
+  createdAt: string     // ISO 8601
+}
+```
+
+DB cap: 10,000 rows (FIFO 삭제).
+
+### 서버 구현 파일
+
+| 파일 | 역할 |
+|------|------|
+| `server/src/services/tracking.js` | `Track.firstSeenAt`, `ByteTracker.popRemovedTracks()` |
+| `server/src/services/pipelineManager.js` | `ctx._trackMeta` Map, 트랙 종료 시 DB 저장 |
+| `server/src/routes/analysisApi.js` | `GET/DELETE /api/analysis/detection-tracks` |
+
+### REST API
+
+```
+GET  /api/analysis/detection-tracks?cameraId=&class=&from=ISO&to=ISO&limit=1000
+DELETE /api/analysis/detection-tracks
+```
+
+응답: `{ tracks: DetectionTrack[], total: number }`
+
+### 코드 수정 시 문서 동기화
+
+| 변경 파일 | 업데이트 필요 문서 |
+|-----------|------------------|
+| `DetectionsTimelineInline.tsx` (UI 변경) | `Design_Fullscreen_Camera_View.md` §3.3, `TC_Fullscreen_Camera_View.md` §2 |
+| `tracking.js` (`popRemovedTracks` 변경) | `Design_Fullscreen_Camera_View.md` §3.3 서버 구현 표 |
+| `pipelineManager.js` (저장 기준 변경) | `Design_Fullscreen_Camera_View.md` §3.3 저장 기준 설명 |
+| `analysisApi.js` (API 파라미터 변경) | `CLAUDE.md` API 표, `Design_Fullscreen_Camera_View.md` §3.3 |

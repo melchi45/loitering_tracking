@@ -1015,18 +1015,28 @@ router.patch('/config/fire-smoke', express.json({ limit: '10kb' }), (req, res) =
 
 // ── GET /api/analysis/events ──────────────────────────────────────────────────
 // Returns recent persisted analysis events (fire/smoke/loitering).
-// Query params: limit (default 100, max 200), type (comma-separated, e.g. fire,smoke,loitering)
+// Query params:
+//   limit    (default 100, max 500)
+//   type     comma-separated: fire,smoke,loitering
+//   cameraId single camera filter
+//   from     ISO timestamp — include events at or after this time
+//   to       ISO timestamp — include events at or before this time
 router.get('/events', (req, res) => {
   const db = req.app.get('db');
   if (!db) return res.status(503).json({ error: 'DB not available' });
 
-  const limit      = Math.min(200, Math.max(1, parseInt(String(req.query.limit || '100'), 10) || 100));
-  const typeFilter = req.query.type ? String(req.query.type).split(',').map(t => t.trim()).filter(Boolean) : null;
+  const limit        = Math.min(500, Math.max(1, parseInt(String(req.query.limit || '100'), 10) || 100));
+  const typeFilter   = req.query.type     ? String(req.query.type).split(',').map(t => t.trim()).filter(Boolean) : null;
+  const cameraFilter = req.query.cameraId ? String(req.query.cameraId) : null;
+  const fromTs       = req.query.from     ? new Date(String(req.query.from)).getTime() : null;
+  const toTs         = req.query.to       ? new Date(String(req.query.to)).getTime()   : null;
 
   let events = db.find('analysisEvents', {});
-  if (typeFilter && typeFilter.length > 0) {
-    events = events.filter(e => typeFilter.includes(e.type));
-  }
+  if (typeFilter   && typeFilter.length > 0) events = events.filter(e => typeFilter.includes(e.type));
+  if (cameraFilter) events = events.filter(e => e.cameraId === cameraFilter);
+  if (fromTs)       events = events.filter(e => new Date(e.timestamp).getTime() >= fromTs);
+  if (toTs)         events = events.filter(e => new Date(e.timestamp).getTime() <= toTs);
+
   events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   events = events.slice(0, limit);
 
@@ -1043,6 +1053,52 @@ router.delete('/events', (req, res) => {
     const all = db.find('analysisEvents', {});
     for (const event of all) {
       if (event.id) db.delete('analysisEvents', event.id);
+    }
+    res.json({ deleted: all.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/detection-tracks ────────────────────────────────────────────────
+// Returns persisted detection track lifecycles (배회 위험 기준 저장됨)
+// Query: cameraId, from (ISO), to (ISO), class, limit (default 500, max 1000)
+router.get('/detection-tracks', (req, res) => {
+  const db = req.app.get('db');
+  if (!db) return res.status(503).json({ error: 'DB not available' });
+
+  try {
+    const limit        = Math.min(1000, Math.max(1, parseInt(String(req.query.limit || '500'), 10) || 500));
+    const cameraFilter = req.query.cameraId ? String(req.query.cameraId) : null;
+    const classFilter  = req.query.class    ? String(req.query.class)    : null;
+    const fromTs       = req.query.from     ? new Date(String(req.query.from)).getTime() : null;
+    const toTs         = req.query.to       ? new Date(String(req.query.to)).getTime()   : null;
+
+    let tracks = db.find('detectionTracks', {});
+    if (cameraFilter) tracks = tracks.filter(t => t.cameraId === cameraFilter);
+    if (classFilter)  tracks = tracks.filter(t => t.className === classFilter);
+    // Overlap filter: include tracks whose interval [firstSeenAt, lastSeenAt] overlaps [fromTs, toTs]
+    if (fromTs) tracks = tracks.filter(t => new Date(t.lastSeenAt).getTime()  >= fromTs);
+    if (toTs)   tracks = tracks.filter(t => new Date(t.firstSeenAt).getTime() <= toTs);
+
+    tracks.sort((a, b) => new Date(b.firstSeenAt).getTime() - new Date(a.firstSeenAt).getTime());
+    tracks = tracks.slice(0, limit);
+
+    res.json({ tracks, total: tracks.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── DELETE /api/detection-tracks ─────────────────────────────────────────────
+router.delete('/detection-tracks', (req, res) => {
+  const db = req.app.get('db');
+  if (!db) return res.status(503).json({ error: 'DB not available' });
+
+  try {
+    const all = db.find('detectionTracks', {});
+    for (const t of all) {
+      if (t.id) db.delete('detectionTracks', t.id);
     }
     res.json({ deleted: all.length });
   } catch (err) {

@@ -33,7 +33,7 @@ const RANGE_OPTIONS = [
   { label: '1M', ms: 30 * 24 * 60 * 60 * 1000 },
   { label: '1Y', ms: 365 * 24 * 60 * 60 * 1000 },
 ] as const;
-type RangeLabel = '1D' | '1W' | '1M' | '1Y';
+type RangeLabel = '1D' | '1W' | '1M' | '1Y' | 'custom';
 
 const SEVERITY_BG: Record<OnvifSeverity, string> = {
   info:     'bg-blue-500',
@@ -81,24 +81,42 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
   const [loading, setLoading]     = useState(false);
   const [showRaw, setShowRaw]     = useState(false);
   const [isDragging, setIsDragging] = useState(false);
+  const [customStart, setCustomStart] = useState('');
+  const [customEnd,   setCustomEnd]   = useState('');
+  const [customApplied, setCustomApplied] = useState<{ from: string; to: string } | null>(null);
 
   const containerRef  = useRef<HTMLDivElement>(null);
   const dragRef       = useRef<DragState | null>(null);
   const hasDraggedRef = useRef(false);
 
-  const rangeMs = RANGE_OPTIONS.find(r => r.label === range)!.ms;
+  const rangeMs = range === 'custom' && customApplied
+    ? Math.max(1, new Date(customApplied.to).getTime() - new Date(customApplied.from).getTime())
+    : (RANGE_OPTIONS.find(r => r.label === range)?.ms ?? 86400_000);
+
+  // End anchor for viewport: custom range ends at customApplied.to; others end at now
+  const viewRangeEnd = range === 'custom' && customApplied
+    ? new Date(customApplied.to).getTime()
+    : Date.now();
 
   // ── Fetch on range / camera change ─────────────────────────────────────────
   useEffect(() => {
+    if (range === 'custom' && !customApplied) return; // wait for Apply
     setLoading(true);
     setSelected(null);
-    const from = new Date(Date.now() - rangeMs).toISOString();
-    fetch(`/api/onvif-events?cameraId=${cameraId}&from=${encodeURIComponent(from)}&limit=1000`)
+    const params = new URLSearchParams({ cameraId, limit: '1000' });
+    if (range === 'custom' && customApplied) {
+      params.set('from', customApplied.from);
+      params.set('to',   customApplied.to);
+    } else {
+      const ms = RANGE_OPTIONS.find(r => r.label === range)?.ms ?? 86400_000;
+      params.set('from', new Date(Date.now() - ms).toISOString());
+    }
+    fetch(`/api/onvif-events?${params}`)
       .then(r => r.json())
       .then(d => { if (Array.isArray(d.events)) setEvents(d.events); })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [cameraId, rangeMs, setEvents]);
+  }, [cameraId, range, customApplied, setEvents]);
 
   // ── Fetch global event type registry (once on mount) ───────────────────────
   useEffect(() => {
@@ -172,9 +190,8 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
   };
 
   // ── Viewport ────────────────────────────────────────────────────────────────
-  const now       = Date.now();
   const viewSpan  = rangeMs / zoom;
-  const viewEnd   = now - pan * rangeMs;
+  const viewEnd   = viewRangeEnd - pan * rangeMs;
   const viewStart = viewEnd - viewSpan;
 
   // ── Event type options — from global registry, not derived from current events ─
@@ -237,6 +254,16 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
               {label}
             </button>
           ))}
+          <button
+            onClick={() => { setRange('custom'); setZoom(1); setPan(0); }}
+            className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-colors ${
+              range === 'custom'
+                ? 'bg-purple-600 text-white'
+                : 'text-gray-500 hover:text-gray-300 hover:bg-gray-700'
+            }`}
+          >
+            Custom
+          </button>
         </div>
 
         {/* Event Type combobox */}
@@ -260,9 +287,56 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
             ×{zoom.toFixed(1)}
           </span>
         )}
-        {loading && <span className="text-gray-500 animate-pulse">…</span>}
+        {loading && (
+          <svg className="w-4 h-4 animate-spin text-blue-400" fill="none" viewBox="0 0 24 24">
+            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+          </svg>
+        )}
         <span className="text-gray-600">{items.length}/{totalFiltered}</span>
       </div>
+
+      {/* ── Custom date picker row (shown when Custom is selected) ──────────── */}
+      {range === 'custom' && (
+        <div className="flex items-center gap-1 px-2 py-1 border-b border-gray-700/40
+                        flex-shrink-0 bg-gray-900/40 flex-wrap">
+          <span className="text-gray-500 text-[9px]">From</span>
+          <input
+            type="datetime-local"
+            value={customStart}
+            onChange={e => setCustomStart(e.target.value)}
+            className="bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-[9px]
+                       text-gray-300 focus:outline-none focus:border-purple-500"
+          />
+          <span className="text-gray-500 text-[9px]">To</span>
+          <input
+            type="datetime-local"
+            value={customEnd}
+            onChange={e => setCustomEnd(e.target.value)}
+            className="bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-[9px]
+                       text-gray-300 focus:outline-none focus:border-purple-500"
+          />
+          <button
+            onClick={() => {
+              if (!customStart || !customEnd) return;
+              setCustomApplied({ from: new Date(customStart).toISOString(), to: new Date(customEnd).toISOString() });
+              setZoom(1); setPan(0);
+            }}
+            disabled={!customStart || !customEnd}
+            className="px-2 py-0.5 bg-purple-700 hover:bg-purple-600 disabled:opacity-40
+                       text-white rounded text-[9px] font-bold transition-colors"
+          >
+            Apply
+          </button>
+          {customApplied && (
+            <button
+              onClick={() => { setCustomApplied(null); setCustomStart(''); setCustomEnd(''); }}
+              className="text-gray-500 hover:text-gray-300 text-[9px] transition-colors"
+              title="Clear custom range"
+            >✕</button>
+          )}
+        </div>
+      )}
 
       {/* ── Main split area ───────────────────────────────────────────────────── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">

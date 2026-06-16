@@ -430,6 +430,9 @@ class PipelineManager {
       loiteringTotal:     0,
       totalProcessingMs:  0,
       recentSamples:      [], // { at, bytes, detections, trackedObjects, faces, fireSmoke, loitering, processingMs }
+      // Track lifecycle meta — keyed by objectId, used to persist ended tracks to DB
+      // Only objects with riskScore >= 0.3 or isLoitering are saved (배회 위험 기준)
+      _trackMeta:         new Map(), // objectId → { firstSeenAt, lastSeenAt, className, maxRiskScore, isLoitering, confidence, faceId, identity, zoneId, zoneName, color, cloth }
     };
 
     // ── Listen for loitering events ──────────────────────────────────────
@@ -836,6 +839,90 @@ class PipelineManager {
           frameWidth,
           frameHeight,
         });
+
+        // 7b. Update track lifecycle meta + persist ended tracks to DB
+        {
+          const _nowMs = timestamp;
+
+          // Update meta for all currently enriched (active) objects
+          for (const obj of enrichedObjects) {
+            const id = String(obj.objectId);
+            const existing = ctx._trackMeta.get(id);
+            if (existing) {
+              existing.lastSeenAt = _nowMs;
+              if ((obj.riskScore ?? 0) > (existing.maxRiskScore ?? 0)) existing.maxRiskScore = obj.riskScore;
+              if (obj.isLoitering) existing.isLoitering = true;
+              if (obj.faceId)      existing.faceId      = obj.faceId;
+              if (obj.identity)    existing.identity    = obj.identity;
+              if (obj.zoneId)      existing.zoneId      = obj.zoneId;
+              if (obj.zoneName)    existing.zoneName    = obj.zoneName;
+              if (obj.color)       existing.color       = obj.color;
+              if (obj.cloth)       existing.cloth       = obj.cloth;
+              existing.confidence = Math.max(existing.confidence, obj.confidence ?? 0);
+            } else {
+              ctx._trackMeta.set(id, {
+                firstSeenAt:  obj.firstSeenAt ?? _nowMs,
+                lastSeenAt:   _nowMs,
+                className:    obj.className,
+                maxRiskScore: obj.riskScore ?? 0,
+                isLoitering:  obj.isLoitering ?? false,
+                confidence:   obj.confidence ?? 0,
+                faceId:       obj.faceId      ?? null,
+                identity:     obj.identity    ?? null,
+                zoneId:       obj.zoneId      ?? null,
+                zoneName:     obj.zoneName    ?? null,
+                color:        obj.color       ?? null,
+                cloth:        obj.cloth       ?? null,
+              });
+            }
+          }
+
+          // Flush removed tracks → save to DB if they meet the risk threshold
+          const removedTracks = ctx.tracker.popRemovedTracks();
+          if (removedTracks.length > 0) {
+            const { v4: _uuid } = require('uuid');
+            for (const rt of removedTracks) {
+              const meta = ctx._trackMeta.get(String(rt.objectId));
+              if (!meta) continue;
+              ctx._trackMeta.delete(String(rt.objectId));
+
+              const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
+
+              // Persist condition: loitering flag OR zone-based risk OR dwell >= 5s
+              const meetsRisk = meta.isLoitering || (meta.maxRiskScore ?? 0) >= 0.3;
+              const meetsDwell = dwellMs >= 5000; // 5-second minimum dwell (zone-less cameras)
+              if (!meetsRisk && !meetsDwell) continue;
+              this._db.insert('detectionTracks', {
+                id:          _uuid(),
+                cameraId:    camera.id,
+                cameraName:  camera.name || camera.id,
+                objectId:    String(rt.objectId),
+                className:   meta.className,
+                firstSeenAt: new Date(meta.firstSeenAt).toISOString(),
+                lastSeenAt:  new Date(meta.lastSeenAt).toISOString(),
+                dwellTime:   dwellMs,
+                maxRiskScore: meta.maxRiskScore,
+                isLoitering: meta.isLoitering,
+                confidence:  meta.confidence,
+                faceId:      meta.faceId,
+                identity:    meta.identity,
+                zoneId:      meta.zoneId,
+                zoneName:    meta.zoneName,
+                color:       meta.color,
+                cloth:       meta.cloth,
+                createdAt:   new Date().toISOString(),
+              });
+            }
+            // Cap collection at 10,000 rows (oldest first)
+            const allTracks = this._db.find('detectionTracks', {});
+            if (allTracks.length > 10000) {
+              const toRemove = allTracks
+                .sort((a, b) => new Date(a.firstSeenAt).getTime() - new Date(b.firstSeenAt).getTime())
+                .slice(0, allTracks.length - 10000);
+              for (const t of toRemove) this._db.delete('detectionTracks', t.id);
+            }
+          }
+        }
 
         // 8. Accumulate per-camera analytics stats
         {

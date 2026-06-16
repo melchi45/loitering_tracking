@@ -89,7 +89,9 @@ loitering_tracking/
 │   │   ├── AnalysisLivePanel.tsx   # 실시간 감지 피드 오버레이 (analysis 모드)
 │   │   ├── AnalysisDetectionPanel.tsx  # 이벤트 히스토리 오버레이 (배회/화재/연기)
 │   │   ├── AnalysisEventsTab.tsx   # Detections 탭 — 이벤트 히스토리 (analysis 모드)
-│   │   └── OnvifTimelineOverlay.tsx # ONVIF 이벤트 타임라인 오버레이 (줌/팬/상세/Raw XML)
+│   │   ├── OnvifTimelineOverlay.tsx # ONVIF 이벤트 타임라인 오버레이 (줌/팬/상세/Raw XML)
+│   │   ├── DetectionsTimelineInline.tsx # 감지 트랙 Gantt 타임라인 (FullscreenCameraView Detections 탭)
+│   │   └── AnalysisHistoryTab.tsx  # 분석 이벤트 이력 탭 (저장된 fire/smoke/loitering)
 │   ├── stores/                     # Zustand 상태 스토어
 │   ├── hooks/                      # 커스텀 React 훅
 │   ├── i18n/                       # 다국어(ko/en) 리소스
@@ -190,8 +192,10 @@ loitering_tracking/
 | GET | `/api/analysis/client-status` | 분석 클라이언트 상태 (streaming 모드 전용 — 회로차단기 상태·통계) |
 | GET | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 조회 |
 | PATCH | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 런타임 변경 |
-| GET | `/api/analysis/events` | 분석 이벤트 조회 (query: limit, type) |
+| GET | `/api/analysis/events` | 분석 이벤트 조회 (query: limit, type, cameraId, from, to — max 500) |
 | DELETE | `/api/analysis/events` | 분석 이벤트 전체 삭제 |
+| GET | `/api/analysis/detection-tracks` | 감지 트랙 이력 조회 (query: cameraId, from, to, class, limit — 배회위험 객체만 저장) |
+| DELETE | `/api/analysis/detection-tracks` | 감지 트랙 이력 전체 삭제 |
 | GET | `/api/analysis/models` | YOLO 모델 카탈로그 조회 (다운로드 상태·활성 모델 포함) |
 | POST | `/api/analysis/models/switch` | 활성 YOLO 탐지 모델 런타임 전환 (body: modelId) |
 | POST | `/api/analysis/models/download` | YOLO 모델 다운로드 시작 (body: modelId) |

@@ -1,6 +1,6 @@
 # Design: ONVIF Event Timeline
 
-**Version:** 1.3
+**Version:** 1.4
 **Status:** Implemented
 **Related:** [Design_ONVIF_Metadata_Pipeline.md](Design_ONVIF_Metadata_Pipeline.md) · [Design_DataChannel_CameraEvents.md](Design_DataChannel_CameraEvents.md)
 
@@ -272,6 +272,41 @@ newPan = startPan + (currentX − startX) / containerWidth / zoom
 | Reset 버튼 | zoom=1, pan=0 |
 | Escape | 오버레이 닫기 |
 
+### 5.3b Custom Date Range (OnvifTimelineInline)
+
+`OnvifTimelineInline`에 `Custom` 버튼이 추가되었습니다.
+
+```
+[1D][1W][1M][1Y][Custom]  [Event Type ▾]    ⟳  5/12
+─────────────────────────────────────── (Custom 선택 시 아래 행 추가)
+From [datetime-local] To [datetime-local] [Apply] [✕]
+```
+
+| 상태 | 설명 |
+|------|------|
+| `range: 'custom'` | `RangeLabel` 타입에 추가된 값 |
+| `customStart` | `datetime-local` 입력값 (ISO 문자열) |
+| `customEnd` | `datetime-local` 입력값 (ISO 문자열) |
+| `customApplied` | Apply 버튼 클릭 시 확정된 `{ from, to }` ISO 쌍 |
+
+**동작 흐름:**
+1. `[Custom]` 버튼 클릭 → `range = 'custom'`, 날짜 입력 행 표시
+2. From / To 날짜 입력 → Apply 클릭 → `customApplied` 확정
+3. fetch effect 재실행: `GET /api/onvif-events?cameraId=…&from=…&to=…&limit=1000`
+4. Apply 전까지 fetch 중단 (`if (range === 'custom' && !customApplied) return`)
+5. `✕` 버튼 → `customApplied = null`, 입력 초기화
+
+**Viewport 계산 (custom 모드):**
+
+```
+rangeMs       = customApplied.to - customApplied.from
+viewRangeEnd  = new Date(customApplied.to).getTime()  // 프리셋 모드는 Date.now()
+viewEnd       = viewRangeEnd - pan × rangeMs
+viewStart     = viewEnd - viewSpan
+```
+
+**로딩 표시**: `…` 텍스트 → SVG 스피너(`animate-spin text-blue-400`)로 교체
+
 ### 5.4 Event Detail Panel
 
 이벤트 아이콘 클릭 시:
@@ -394,3 +429,4 @@ User action:
 | 1.1 | 2026-06-16 | OnvifTimelineInline 추가 (인라인 탭), 마우스 드래그 패닝 수식 문서화, FullscreenCameraView 탭 구조 업데이트 |
 | 1.2 | 2026-06-16 | OnvifTimelineInline 우측 분할 상세 패널 추가 (이벤트 선택 시에만 표시, 192px), Event Type 필터 콤보박스, 기본 탭 ONVIF Timeline 으로 변경 |
 | 1.3 | 2026-06-16 | ONVIF 이벤트 타입 전역 레지스트리 추가 (`onvif_event_types` DB 테이블, GET/DELETE /api/onvif-event-types, `onvif:type-registered` 소켓 이벤트, Admin Dashboard ONVIF 섹션) |
+| 1.4 | 2026-06-16 | OnvifTimelineInline Custom 날짜 범위 기능 추가 (Custom 버튼, datetime-local 입력, Apply, viewRangeEnd), SVG 로딩 스피너 교체 |

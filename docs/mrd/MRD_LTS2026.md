@@ -235,6 +235,9 @@ All modules defined below correspond to completed SDLC chains (RFP → PRD → S
 | Stats Panel | ✅ Complete | Full-screen stats dashboard; drill-down navigation (Overview → Section → HourList → ItemDetail) |
 | Search & Fullscreen | ✅ Complete | Full-screen search; type filter chips; date/time range; i18n |
 | Mobile Layout | ✅ Complete | Touch-optimized responsive layout; swipe navigation |
+| Fullscreen Camera View | ✅ Complete | 3-tab panel (Camera Events / ONVIF Timeline / Detections); real-time DetectionPanel (right); mobile-adaptive |
+| Detections Timeline | ✅ Complete | Gantt-style ByteTracker lifecycle history (loitering-risk tracks only); zoom/pan; custom date range |
+| ONVIF Timeline (Custom Range) | ✅ Complete | Custom datetime-local range picker added to OnvifTimelineInline; SVG spinner; `Custom` button |
 
 ### 6.4 Planned Modules (Roadmap)
 
@@ -456,3 +459,4 @@ The following table maps planned market releases to engineering phases and targe
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — MRD synthesized from all docs/rfp, docs/prd, and codebase status as of Phase 1–11 completion |
 | 1.1 | 2026-06-11 | LTS Engineering Team | §6.4 Phase 12b/12c/12d 추가 (M3 Qdrant, M4 RTCP, M5 Cluster); §13 RTSP/WebRTC Architecture 문서 6종 참조 추가 |
+| 1.2 | 2026-06-16 | LTS Engineering Team | §6.3 Fullscreen Camera View·Detections Timeline·ONVIF Custom Range 3개 모듈 신규 등재 (DetectionsTimelineInline + ByteTracker 생명주기 DB 저장 + detectionTracks API) |

@@ -60,7 +60,9 @@ loitering_tracking/
 │   │   ├── AnalysisServerDashboard.tsx # analysis 모드 메인 대시보드
 │   │   ├── AnalysisLivePanel.tsx   # 실시간 감지 피드 오버레이 (analysis 모드)
 │   │   ├── AnalysisDetectionPanel.tsx  # 이벤트 히스토리 오버레이 (배회/화재/연기)
-│   │   └── AnalysisEventsTab.tsx   # Detections 탭 — 이벤트 히스토리 (analysis 모드)
+│   │   ├── AnalysisEventsTab.tsx   # Detections 탭 — 이벤트 히스토리 (analysis 모드)
+│   │   ├── DetectionsTimelineInline.tsx # 감지 트랙 Gantt 타임라인 (FullscreenCameraView Detections 탭)
+│   │   └── AnalysisHistoryTab.tsx  # 분석 이벤트 이력 탭 (저장된 fire/smoke/loitering)
 │   ├── stores/            # Zustand 상태 관리
 │   ├── hooks/             # 커스텀 React 훅
 │   ├── i18n/              # 다국어(ko/en) 리소스
@@ -141,8 +143,10 @@ loitering_tracking/
 | GET | `/api/analysis/metrics` | 분석 서버 대시보드용 트래픽/모듈/결과 메트릭 조회 |
 | GET | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 조회 |
 | PATCH | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 런타임 변경 |
-| GET | `/api/analysis/events` | 분석 이벤트 조회 (query: limit, type) |
+| GET | `/api/analysis/events` | 분석 이벤트 조회 (query: limit, type, cameraId, from, to — max 500) |
 | DELETE | `/api/analysis/events` | 분석 이벤트 전체 삭제 |
+| GET | `/api/analysis/detection-tracks` | 감지 트랙 이력 조회 (query: cameraId, from, to, class, limit — 배회위험 객체만) |
+| DELETE | `/api/analysis/detection-tracks` | 감지 트랙 이력 전체 삭제 |
 | GET | `/api/client-logs` | 브라우저 콘솔 로그 조회 |
 | DELETE | `/api/client-logs` | 콘솔 로그 전체 삭제 |
 | GET | `/api/client-logs/webrtc` | WebRTC PeerConnection 통계 조회 |

@@ -74,6 +74,36 @@ function proxyGet(targetPath, req, res) {
   proxyReq.end();
 }
 
+function proxyMethod(method, targetPath, res) {
+  if (!ANALYSIS_URL) {
+    return res.status(503).json({ error: 'ANALYSIS_SERVER_URL not configured' });
+  }
+  let base;
+  try { base = new URL(ANALYSIS_URL); } catch {
+    return res.status(503).json({ error: 'Invalid ANALYSIS_SERVER_URL' });
+  }
+  const isHttps = base.protocol === 'https:';
+  const mod     = isHttps ? https : http;
+  const opts    = {
+    hostname: base.hostname,
+    port:     base.port || (isHttps ? 443 : 80),
+    path:     targetPath,
+    method,
+    timeout:  PROXY_TIMEOUT,
+    agent:    isHttps ? httpsAgent : httpAgent,
+  };
+  const proxyReq = mod.request(opts, (proxyRes) => {
+    let raw = '';
+    proxyRes.on('data', c => { raw += c; });
+    proxyRes.on('end', () => {
+      res.status(proxyRes.statusCode).set('Content-Type', 'application/json').send(raw);
+    });
+  });
+  proxyReq.on('timeout', () => { proxyReq.destroy(); if (!res.headersSent) res.status(504).json({ error: 'Analysis server timeout' }); });
+  proxyReq.on('error', (err) => { if (!res.headersSent) res.status(502).json({ error: `Analysis server unreachable: ${err.message}` }); });
+  proxyReq.end();
+}
+
 router.get('/metrics',           (req, res) => proxyGet('/api/analysis/metrics',           req, res));
 router.get('/health',            (req, res) => proxyGet('/api/analysis/health',            req, res));
 router.get('/contexts',          (req, res) => proxyGet('/api/analysis/contexts',          req, res));
@@ -81,6 +111,16 @@ router.get('/config/fire-smoke', (req, res) => proxyGet('/api/analysis/config/fi
 router.get('/events',            (req, res) => {
   const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
   proxyGet(`/api/analysis/events${qs}`, req, res);
+});
+router.get('/detection-tracks',  (req, res) => {
+  const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  proxyGet(`/api/analysis/detection-tracks${qs}`, req, res);
+});
+router.delete('/detection-tracks', (_req, res) => {
+  proxyMethod('DELETE', '/api/analysis/detection-tracks', res);
+});
+router.delete('/events', (_req, res) => {
+  proxyMethod('DELETE', '/api/analysis/events', res);
 });
 
 // All other methods / paths are not proxied
