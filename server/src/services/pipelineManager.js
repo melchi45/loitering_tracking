@@ -845,6 +845,7 @@ class PipelineManager {
           const _nowMs = timestamp;
 
           // Update meta for all currently enriched (active) objects
+          // enrichedObjects use objectId (= track.id UUID from toResult())
           for (const obj of enrichedObjects) {
             const id = String(obj.objectId);
             const existing = ctx._trackMeta.get(id);
@@ -882,9 +883,11 @@ class PipelineManager {
           if (removedTracks.length > 0) {
             const { v4: _uuid } = require('uuid');
             for (const rt of removedTracks) {
-              const meta = ctx._trackMeta.get(String(rt.objectId));
+              // Track objects use rt.id (UUID); enrichedObjects expose it as objectId
+              const trackKey = String(rt.id);
+              const meta = ctx._trackMeta.get(trackKey);
               if (!meta) continue;
-              ctx._trackMeta.delete(String(rt.objectId));
+              ctx._trackMeta.delete(trackKey);
 
               const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
 
@@ -896,7 +899,7 @@ class PipelineManager {
                 id:          _uuid(),
                 cameraId:    camera.id,
                 cameraName:  camera.name || camera.id,
-                objectId:    String(rt.objectId),
+                objectId:    trackKey,
                 className:   meta.className,
                 firstSeenAt: new Date(meta.firstSeenAt).toISOString(),
                 lastSeenAt:  new Date(meta.lastSeenAt).toISOString(),
