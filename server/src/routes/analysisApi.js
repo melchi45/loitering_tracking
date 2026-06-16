@@ -518,6 +518,7 @@ function _getOrCreateContext(cameraId, zonesArray, cameraName) {
     cameraName: cameraName || cameraId,
     _zones:     zonesArray || [],
     lastSeenAt: Date.now(),
+    _trackMeta: new Map(), // trackId → { firstSeenAt, lastSeenAt, className, maxRiskScore, isLoitering, ... }
   };
   _cameraContexts.set(cameraId, ctx);
   return ctx;
@@ -533,6 +534,50 @@ setInterval(() => {
     }
   }
 }, 60_000).unref();
+
+// Lazily cached db reference (set on first frame processed)
+let _db = null;
+
+// Active track flush: upsert long-running in-frame tracks every 30s
+// so they appear in the Timeline even when the subject never leaves the camera view.
+const { v4: _trackUuid } = require('uuid');
+setInterval(() => {
+  if (!_db) return;
+  const nowMs = Date.now();
+  for (const [camId, ctx] of _cameraContexts) {
+    if (!ctx._trackMeta || ctx._trackMeta.size === 0) continue;
+    for (const [trackKey, meta] of ctx._trackMeta.entries()) {
+      const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
+      if (dwellMs < 5000) continue;
+      if (nowMs - meta.lastSeenAt > 15_000) continue; // stale — removal imminent
+      const fields = {
+        cameraId:    camId,
+        cameraName:  ctx.cameraName || camId,
+        objectId:    trackKey,
+        className:   meta.className,
+        firstSeenAt: new Date(meta.firstSeenAt).toISOString(),
+        lastSeenAt:  new Date(meta.lastSeenAt).toISOString(),
+        dwellTime:   dwellMs,
+        maxRiskScore: meta.maxRiskScore,
+        isLoitering: meta.isLoitering,
+        confidence:  meta.confidence,
+        faceId:      meta.faceId,
+        identity:    meta.identity,
+        zoneId:      meta.zoneId,
+        zoneName:    meta.zoneName,
+        color:       meta.color,
+        cloth:       meta.cloth,
+        inProgress:  true,
+      };
+      const _ex = _db.findOne('detectionTracks', { objectId: trackKey, cameraId: camId });
+      if (_ex) {
+        _db.update('detectionTracks', _ex.id, fields);
+      } else {
+        _db.insert('detectionTracks', { id: _trackUuid(), ...fields, createdAt: new Date().toISOString() });
+      }
+    }
+  }
+}, 30_000).unref();
 
 // ── POST /api/analysis/frame ──────────────────────────────────────────────────
 // Accepts two content-types:
@@ -649,6 +694,8 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
 
     // 3. Tracking
     const trackedObjects = ctx.tracker.update(detections);
+    // Capture removed tracks immediately (before any concurrent update can overwrite _removedTracks)
+    const _removedBatch = ctx.tracker.popRemovedTracks();
 
     // 4. Attribute enrichment (face / PPE / color)
     let enrichedObjects = trackedObjects;
@@ -846,6 +893,80 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
 
     // ── Persist fire/smoke and loitering events (after response — non-blocking) ─
     if (db) {
+      if (!_db) _db = db; // cache for active-flush interval
+
+      // ── Track lifecycle: update _trackMeta + flush removed tracks to DB ──────
+      if (!ctx._trackMeta) ctx._trackMeta = new Map();
+      const _nowMs = typeof timestamp === 'number' ? timestamp : Date.now();
+
+      for (const obj of enrichedObjects) {
+        const id = String(obj.objectId);
+        const existing = ctx._trackMeta.get(id);
+        if (existing) {
+          existing.lastSeenAt = _nowMs;
+          if ((obj.riskScore ?? 0) > (existing.maxRiskScore ?? 0)) existing.maxRiskScore = obj.riskScore;
+          if (obj.isLoitering) existing.isLoitering = true;
+          if (obj.faceId)      existing.faceId      = obj.faceId;
+          if (obj.identity)    existing.identity    = obj.identity;
+          if (obj.zoneId)      existing.zoneId      = obj.zoneId;
+          if (obj.zoneName)    existing.zoneName    = obj.zoneName;
+          if (obj.color)       existing.color       = obj.color;
+          if (obj.cloth)       existing.cloth       = obj.cloth;
+          existing.confidence = Math.max(existing.confidence, obj.confidence ?? 0);
+        } else {
+          ctx._trackMeta.set(id, {
+            firstSeenAt:  obj.firstSeenAt ?? _nowMs,
+            lastSeenAt:   _nowMs,
+            className:    obj.className,
+            maxRiskScore: obj.riskScore   ?? 0,
+            isLoitering:  obj.isLoitering ?? false,
+            confidence:   obj.confidence  ?? 0,
+            faceId:       obj.faceId      ?? null,
+            identity:     obj.identity    ?? null,
+            zoneId:       obj.zoneId      ?? null,
+            zoneName:     obj.zoneName    ?? null,
+            color:        obj.color       ?? null,
+            cloth:        obj.cloth       ?? null,
+          });
+        }
+      }
+
+      for (const rt of _removedBatch) {
+        const trackKey = String(rt.id);
+        const meta = ctx._trackMeta.get(trackKey);
+        if (!meta) continue;
+        ctx._trackMeta.delete(trackKey);
+        const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
+        const meetsRisk = meta.isLoitering || (meta.maxRiskScore ?? 0) >= 0.3;
+        const meetsDwell = dwellMs >= 1000;
+        if (!meetsRisk && !meetsDwell) continue;
+        const _completedFields = {
+          cameraId:    cameraId,
+          cameraName:  cameraName || cameraId,
+          objectId:    trackKey,
+          className:   meta.className,
+          firstSeenAt: new Date(meta.firstSeenAt).toISOString(),
+          lastSeenAt:  new Date(meta.lastSeenAt).toISOString(),
+          dwellTime:   dwellMs,
+          maxRiskScore: meta.maxRiskScore,
+          isLoitering: meta.isLoitering,
+          confidence:  meta.confidence,
+          faceId:      meta.faceId,
+          identity:    meta.identity,
+          zoneId:      meta.zoneId,
+          zoneName:    meta.zoneName,
+          color:       meta.color,
+          cloth:       meta.cloth,
+          inProgress:  false,
+        };
+        const _ex = db.findOne('detectionTracks', { objectId: trackKey, cameraId });
+        if (_ex) {
+          db.update('detectionTracks', _ex.id, _completedFields);
+        } else {
+          db.insert('detectionTracks', { id: _trackUuid(), ..._completedFields, createdAt: new Date().toISOString() });
+        }
+      }
+
       if (fireSmoke.length > 0) _persistFireSmoke(db, io, cameraId, cameraName, ts, fireSmoke, jpegBuffer, frameWidth, frameHeight).catch(() => {});
       if (behaviors.length > 0) _persistLoitering(db, io, cameraId, cameraName, ts, behaviors, jpegBuffer, frameWidth, frameHeight).catch(() => {});
 
