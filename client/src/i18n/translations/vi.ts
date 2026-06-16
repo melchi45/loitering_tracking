@@ -151,7 +151,19 @@ export const vi: Translations = {
   zoneVertexDeleteMin: 'Minimum 3 vertices required.',
   zoneEnterName: 'Enter zone name.',
 
-  cameraName: 'Tên Camera',
+  // Camera Events Tab (DataChannel — RTSP application RTP metadata stream)
+  cameraEventsTab:    'Camera Events',
+  cameraEventsNoData: 'No events — waiting for RTSP metadata stream…',
+
+  // ONVIF Timeline
+  onvifTimelineOpen:  'ONVIF Timeline',
+  onvifTimelineTitle: 'ONVIF Event Timeline',
+  onvifTimelineEmpty: 'No ONVIF events in this range',
+  onvifTimelineHint:  '↑↓ Zoom  ←→ Pan',
+  onvifTimelineCount: (shown: number, total: number) =>
+    `${shown} event${shown !== 1 ? 's' : ''} visible  /  ${total} total`,
+
+    cameraName: 'Tên Camera',
   cameraRtspUrl: 'URL RTSP',
   cameraSave: 'Lưu',
   cameraCancel: 'Hủy',

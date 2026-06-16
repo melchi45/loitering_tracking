@@ -353,7 +353,16 @@ class PipelineManager {
     const registerAltEngine = WEBRTC_ENGINE !== 'mediamtx' &&
       (requestedWebRTC || WEBRTC_ENGINE === 'mediasoup');
     if (registerAltEngine) {
-      altWebRTCReady = await getWebRTCEngine().addCameraStream(camera.id, captureUrl).catch(() => false);
+      // Retry up to 3 times with a 2-second delay — ingest-daemon may still be
+      // binding its port when the first addCameraStream call arrives on startup.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        altWebRTCReady = await getWebRTCEngine().addCameraStream(camera.id, captureUrl).catch(() => false);
+        if (altWebRTCReady) break;
+        if (attempt < 2) {
+          console.warn(`[PipelineManager][${camera.id.slice(0,8)}] addCameraStream attempt ${attempt + 1} failed — retrying in 2s`);
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
     }
 
     // When using ingest-daemon with mediamtx engine: register for AI JPEG only.

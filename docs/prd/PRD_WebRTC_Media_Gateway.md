@@ -70,6 +70,10 @@ The WebRTC Media Gateway replaces the FFmpeg → JPEG → Socket.IO streaming pa
 
 The gateway must forward the H.264 video RTP track from each camera to every subscribed browser session without re-encoding. Cameras that stream H.265 (HEVC) must be transcoded to H.264 via FFmpeg before mediasoup injection. The browser `<video>` element replaces the current `<img>` JPEG display and must render at the camera's native frame rate (up to 30 FPS). The AI inference pipeline (YOLOv8, ByteTrack) must continue to receive decoded frames; the `RtpIngestion` component tees the H.264 bitstream — one path to mediasoup, one path to the existing JPEG decoder for inference. RTCP PLI / FIR keyframe requests from mediasoup must be forwarded back to the camera via the RTSP/RTP path.
 
+**RTP Payload Type Constraint (mediasoup mode)**: The mediasoup Router must be created with `preferredPayloadType: 109` for H.264 (not 108). mediasoup v3.19+ hard-pins the Consumer PT to the Router's `preferredPayloadType`. Edge browser assigns PT=109 to H264/CBP/pm=1; if the server answer carries PT=108, Edge discards all SRTP packets at the media layer, resulting in black video despite a successfully connected ICE/DTLS session. Chrome offers PT=108 but accepts PT=109 in the answer per RFC 8829 (JSEP).
+
+**ICE Listen IP Constraint (mediasoup mode)**: The `WebRtcTransport` listenIps list must be built exclusively from `SERVER_IP` / `SERVER_PUBLIC_IP` environment variables — never from `os.networkInterfaces()`. Advertising all NIC IPs as ICE host candidates causes the browser's ICE agent to select the server's own public IP as a shared local candidate, routing SRTP in a loopback path back to the server process instead of delivering it to the browser.
+
 ### 4.2 Audio Track
 
 The gateway must receive audio RTP from cameras that carry audio (G.711 µ-law/A-law, AAC, or G.722). Non-Opus codecs must be transcoded to Opus 48 kHz mono. Audio must be delivered to the browser alongside the video track. The operator UI must expose a per-camera mute button (implemented client-side via `track.enabled = false`). Cameras without an audio track must continue to work without error.
@@ -356,3 +360,4 @@ All DataChannel messages are UTF-8 JSON with a `type` discriminator field.
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for WebRTC Media Gateway |
 | 1.1 | 2026-06-11 | LTS Engineering Team | §1 현재 구현(MediaMTX WHEP) 반영; §8 M5 추가(WHEP 완료), M3/M4 DataChannel 참조 추가; Status → Active |
+| 1.2 | 2026-06-16 | LTS Engineering Team | §4.1 RTP PT=109 제약 및 ICE listenIps env-var 전용 제약 추가 (mediasoup 모드 Edge 검은 화면 + ICE loopback 근본 원인 명시) |

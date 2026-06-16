@@ -169,8 +169,25 @@ interface DiscoveryStore {
 |---|---|---|
 | `subTab` | `'added' \| 'found'` | Active sub-tab |
 | `autoSwitched` | `boolean` | One-time auto-switch to Found tab flag |
+| `prevCamerasLen` | `React.MutableRefObject<number>` | Previous camera count for Found→Added auto-switch |
 | `searchQuery` | `string` | Found tab search input value |
 | `reconnectingId` | `string \| null` | Camera showing "Reconnecting…" indicator |
+
+**Found → Added 자동 전환 규칙:**  
+`cameras.length`가 증가하고 현재 탭이 `'found'`이면 `setSubTab('added')`를 자동 실행합니다.  
+이로 인해 `DiscoveredCameraPanel`에서 "Add to System"을 클릭해 카메라를 추가하면  
+별도 콜백 없이 Added 탭으로 즉시 전환됩니다.
+
+```typescript
+// CameraList.tsx
+const prevCamerasLen = useRef(cameras.length);
+useEffect(() => {
+  if (cameras.length > prevCamerasLen.current && tab === 'found') {
+    setTab('added');
+  }
+  prevCamerasLen.current = cameras.length;
+}, [cameras.length, tab]);
+```
 
 ### 4.4 CameraEditModal Local State
 
@@ -419,6 +436,20 @@ Server starts ONVIF/UDP scan
   → discovery:scanning (false) → DiscoveryStore.setScanning(false)
 ```
 
+### 9.4 Found → Added Auto-Switch on Camera Add
+
+```
+User clicks device row in Found tab
+  → DiscoveredCameraPanel opens (overlay over CameraGrid)
+User clicks "Add to System"
+  → POST /api/cameras → 201 { data: camera }
+  → cameraStore.addCamera(camera)           ← cameras.length increases
+  → [CameraList useEffect]: cameras.length > prevCamerasLen.current && tab === 'found'
+  → setTab('added')                         ← auto-switch back to Added tab
+  → prevCamerasLen.current = cameras.length
+  [Added tab now shows newly added camera]
+```
+
 ### 9.3 Edit Camera with Reconnect
 
 ```
@@ -453,3 +484,4 @@ User changes RTSP URL → clicks "Save & Reconnect"
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Dashboard Sidebar Cameras |
+| 1.1 | 2026-06-16 | LTS Engineering Team | §4.3 Found→Added 자동 전환 규칙 및 코드 스니펫 추가, §9.4 시퀀스 다이어그램 추가 |

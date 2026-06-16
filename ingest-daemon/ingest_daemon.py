@@ -3,15 +3,17 @@
 LTS-2026 Ingest Daemon — Python implementation.
 
 Per-camera fan-out from a single MediaMTX RTSP loopback connection:
-  ① AI  thread : RTSP → PyAV H264 decode → resize 640 → JPEG → HTTP POST to Node.js
-  ② vRTP thread: RTSP → PyAV H264 passthrough → RTP → UDP:{mediasoupPort}  (optional)
-  ③ aRTP thread: RTSP → PyAV audio → Opus RTP → UDP:{mediasoupAudioPort}    (optional)
+  ① AI    thread : RTSP → PyAV H264 decode → resize 640 → JPEG → HTTP POST to Node.js
+  ② vRTP  thread: RTSP → PyAV H264 passthrough → RTP → UDP:{mediasoupPort}  (optional)
+  ③ aRTP  thread: RTSP → PyAV audio → Opus RTP → UDP:{mediasoupAudioPort}    (optional)
+  ④ apprtp thread: RTSP → PyAV data/subtitle track → JSON → HTTP POST to Node.js (optional)
+                   Payload forwarded as base64 → mediasoup DataProducer → browser DataChannel
 
 HTTP API (default :7070):
   POST   /cameras   { "id", "rtspUrl", "callbackUrl",
                       "mediasoupPort"?,      # H264 RTP → mediasoup video PlainTransport
                       "mediasoupAudioPort"?, # Opus RTP → mediasoup audio PlainTransport
-                      "appRtpCallbackUrl"?   # App RTP forwarding (future use)
+                      "appRtpCallbackUrl"?   # App RTP → server → DataChannel
                     }
   DELETE /cameras/:id
   GET    /cameras   → { "count": N }
@@ -25,6 +27,7 @@ Environment:
 """
 
 import argparse
+import base64
 import io
 import json
 import logging
@@ -62,11 +65,12 @@ _RTSP_OPTIONS = {
     "max_delay":      "500000",
 }
 
-# Must match VIDEO_SSRC / AUDIO_SSRC in server/src/services/webrtc/mediasoupEngine.js.
-# mediasoup PlainTransport (comedia=true) filters incoming RTP by SSRC; packets with
-# a different SSRC are silently discarded.
+# Must match VIDEO_SSRC / AUDIO_SSRC / AUDIO_PT in server/src/services/webrtc/mediasoupEngine.js.
+# mediasoup PlainTransport (comedia=true) matches incoming RTP by both SSRC and payload type;
+# packets with mismatched SSRC or PT are silently discarded by the Producer.
 _MEDIASOUP_VIDEO_SSRC = 573785173   # 0x22334455
 _MEDIASOUP_AUDIO_SSRC = 860116326   # 0x33445566
+_MEDIASOUP_AUDIO_PT   = 111         # must match AUDIO_PT constant in mediasoupEngine.js
 
 # Reusable SSL context for loopback HTTPS callbacks (self-signed cert OK).
 _SSL_CTX_NOVERIFY = ssl.create_default_context()
@@ -110,6 +114,8 @@ class CameraSession:
             self._start_thread("vrtp", self._video_rtp_loop)
         if self.mediasoup_audio_port:
             self._start_thread("artp", self._audio_rtp_loop)
+        if self.app_rtp_callback_url:
+            self._start_thread("apprtp", self._app_rtp_loop)
 
     def _start_thread(self, label: str, target) -> None:
         t = threading.Thread(
@@ -251,6 +257,7 @@ class CameraSession:
             try:
                 idr_seen     = False
                 idr_deadline = time.monotonic() + IDR_WAIT_TIMEOUT
+                last_dts     = None
 
                 for pkt in inp.demux(vs):
                     if self._stop.is_set():
@@ -266,8 +273,19 @@ class CameraSession:
                         else:
                             continue
 
+                    # Enforce monotonically increasing DTS — RTP muxer requires it.
+                    if pkt.dts is not None:
+                        if last_dts is not None and pkt.dts <= last_dts:
+                            pkt.dts = last_dts + 1
+                            if pkt.pts is not None and pkt.pts < pkt.dts:
+                                pkt.pts = pkt.dts
+                        last_dts = pkt.dts
+
                     pkt.stream = out_vs
-                    out.mux(pkt)
+                    try:
+                        out.mux(pkt)
+                    except av.AVError:
+                        pass  # Skip malformed packet; keep stream alive
             finally:
                 out.close()
         finally:
@@ -307,7 +325,10 @@ class CameraSession:
             out    = av.open(
                 f"rtp://127.0.0.1:{self.mediasoup_audio_port}",
                 "w", format="rtp",
-                options={"ssrc": str(_MEDIASOUP_AUDIO_SSRC)},
+                options={
+                    "ssrc":         str(_MEDIASOUP_AUDIO_SSRC),
+                    "payload_type": str(_MEDIASOUP_AUDIO_PT),
+                },
             )
 
             # Pass through if already Opus; transcode everything else.
@@ -316,17 +337,27 @@ class CameraSession:
                 log.info("[%s] Audio RTP passthrough opus → rtp://127.0.0.1:%d",
                          self.id[:8], self.mediasoup_audio_port)
                 try:
+                    last_dts = None
                     for pkt in inp.demux(as_):
                         if self._stop.is_set():
                             break
                         if pkt.size == 0:
                             continue
+                        if pkt.dts is not None:
+                            if last_dts is not None and pkt.dts <= last_dts:
+                                pkt.dts = last_dts + 1
+                                if pkt.pts is not None and pkt.pts < pkt.dts:
+                                    pkt.pts = pkt.dts
+                            last_dts = pkt.dts
                         pkt.stream = out_as
-                        out.mux(pkt)
+                        try:
+                            out.mux(pkt)
+                        except av.AVError:
+                            pass
                 finally:
                     out.close()
             else:
-                out_as     = out.add_stream("opus", rate=48000)
+                out_as     = out.add_stream("libopus", rate=48000)
                 out_as.layout = "stereo"
                 resampler  = av.AudioResampler(format="fltp", layout="stereo", rate=48000)
                 log.info("[%s] Audio RTP transcode %s → opus → rtp://127.0.0.1:%d",
@@ -349,6 +380,83 @@ class CameraSession:
                         out.mux(out_pkt)
                 finally:
                     out.close()
+        finally:
+            inp.close()
+
+    # ── App RTP path (RTSP data/subtitle track → server HTTP callback → DataChannel) ──
+
+    def _app_rtp_loop(self):
+        log.info("[%s] App RTP loop starting → %s",
+                 self.id[:8], self.app_rtp_callback_url[:60])
+        retry_delay = 2.0
+        while not self._stop.is_set():
+            try:
+                self._app_rtp_ingest_once()
+                retry_delay = 2.0
+            except RuntimeError as exc:
+                if "No application stream" in str(exc):
+                    log.info("[%s] No application stream — app RTP thread exiting", self.id[:8])
+                    return
+                raise
+            except Exception as exc:
+                if self._stop.is_set():
+                    break
+                log.warning("[%s] App RTP error: %s — retry in %.0fs",
+                            self.id[:8], exc, retry_delay)
+                self._stop.wait(retry_delay)
+                retry_delay = min(retry_delay * 1.5, 30.0)
+
+    def _app_rtp_ingest_once(self):
+        inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS, timeout=10)
+        try:
+            # Find non-video, non-audio streams (data, subtitle, application tracks).
+            # Samsung / ONVIF metadata is typically exposed as a "data" or "subtitle"
+            # stream by FFmpeg's RTSP demuxer.
+            app_streams = [s for s in inp.streams if s.type not in ("video", "audio")]
+            if not app_streams:
+                raise RuntimeError("No application stream")
+
+            ds = app_streams[0]
+            try:
+                codec_name = ds.codec_context.name
+            except Exception:
+                codec_name = "unknown"
+            log.info("[%s] App RTP stream: type=%s codec=%s",
+                     self.id[:8], ds.type, codec_name)
+
+            ctx   = _SSL_CTX_NOVERIFY if self.app_rtp_callback_url.startswith("https://") else None
+            seq   = 0
+            push_count = 0
+
+            for pkt in inp.demux(ds):
+                if self._stop.is_set():
+                    break
+                if pkt.size == 0:
+                    continue
+
+                payload_b64 = base64.b64encode(bytes(pkt)).decode("ascii")
+                body = json.dumps({
+                    "pt":        ds.index,          # stream index as surrogate PT
+                    "timestamp": int(pkt.pts or 0),
+                    "seq":       seq,
+                    "payload":   payload_b64,
+                }).encode("utf-8")
+                seq += 1
+
+                req = Request(
+                    self.app_rtp_callback_url,
+                    data=body,
+                    headers={"Content-Type": "application/json"},
+                    method="POST",
+                )
+                try:
+                    urlopen(req, timeout=1, context=ctx)
+                    push_count += 1
+                    if push_count == 1 or push_count % 500 == 0:
+                        log.info("[%s] App RTP #%d: %dB payload",
+                                 self.id[:8], push_count, len(payload_b64))
+                except Exception as e:
+                    log.debug("[%s] App RTP callback failed: %s", self.id[:8], e)
         finally:
             inp.close()
 
@@ -438,6 +546,8 @@ class Handler(BaseHTTPRequestHandler):
                 mode_parts.append(f"vRTP:{body['mediasoupPort']}")
             if body.get("mediasoupAudioPort"):
                 mode_parts.append(f"aRTP:{body['mediasoupAudioPort']}")
+            if body.get("appRtpCallbackUrl"):
+                mode_parts.append("appRTP")
             log.info("Camera added: %s [%s]", body["id"][:8], "+".join(mode_parts))
             self._json(201, {"ok": True, "id": body["id"]})
         else:

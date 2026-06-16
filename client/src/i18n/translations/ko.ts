@@ -151,6 +151,18 @@ export const ko: Translations = {
   zoneVertexDeleteMin: '꼭짓점이 3개이면 더 이상 삭제할 수 없습니다. Zone 전체를 삭제하려면 "Zone 삭제"를 사용하세요.',
   zoneEnterName: 'Zone 이름을 입력하세요.',
 
+  // Camera Events Tab (DataChannel — RTSP application RTP metadata stream)
+  cameraEventsTab:    '카메라 이벤트',
+  cameraEventsNoData: '이벤트 없음 — RTSP 메타데이터 스트림 대기 중…',
+
+  // ONVIF Timeline
+  onvifTimelineOpen:  'ONVIF 타임라인',
+  onvifTimelineTitle: 'ONVIF 이벤트 타임라인',
+  onvifTimelineEmpty: '이 범위에 ONVIF 이벤트가 없습니다',
+  onvifTimelineHint:  '↑↓ 확대/축소  ←→ 이동',
+  onvifTimelineCount: (shown: number, total: number) =>
+    `${shown}개 이벤트 표시  /  전체 ${total}개`,
+
   cameraName: '카메라 이름',
   cameraRtspUrl: 'RTSP URL',
   cameraSave: '저장',

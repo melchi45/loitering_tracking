@@ -9,6 +9,9 @@
 | **Date** | 2026-05-26 |
 | **Parent PRD** | prd/PRD_Dashboard_Sidebar_Cameras.md |
 | **Parent RFP** | rfp/RFP_Dashboard_Sidebar_Cameras.md |
+| **Child Design** | design/Design_Dashboard_Sidebar_Cameras.md |
+| **Child TC** | tc/TC_Dashboard_Sidebar_Cameras.md |
+| **Test Script** | test/api/sidebar_cameras.test.js |
 
 ---
 
@@ -97,6 +100,14 @@ A blue animated ping dot (`w-1.5 h-1.5 bg-blue-400 animate-ping`) shall appear i
 ### FR-UI-CAM-003 — Auto Tab Switch on Discovery
 
 When the first `discovery:result` Socket.IO event is received, the panel shall automatically switch to the Found tab. This auto-switch shall occur only once per discovery session (controlled by `autoSwitched` flag).
+
+### FR-UI-CAM-004 — Auto Tab Switch Back to Added on Camera Registration
+
+When the number of registered cameras increases (i.e., a new camera is successfully added) while the Found sub-tab is currently active, the panel shall automatically switch back to the Added sub-tab.
+
+- Implementation: `CameraList.tsx` maintains a `prevCamerasLen` ref; a `useEffect` that depends on `[cameras.length, tab]` detects the count increase and calls `setTab('added')`.
+- Condition: Applies only when `tab === 'found'` at the moment the count increases.
+- No switch occurs if the user is already on the Added tab when the camera is added.
 
 ---
 
@@ -342,3 +353,4 @@ interface CameraAddRequest {
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for Dashboard Sidebar Cameras |
+| 1.1 | 2026-06-16 | LTS Engineering Team | FR-UI-CAM-004 추가 — Found 탭 활성 상태에서 카메라 등록 시 Added 탭 자동 전환 요구사항 |

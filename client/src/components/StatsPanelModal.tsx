@@ -1,4 +1,6 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { getWebRTCSnapshotAsync, type WebRTCPCSummary } from '../clientLogger';
+import { useCameraStore } from '../stores/cameraStore';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -341,11 +343,131 @@ function OverviewCard({ title, icon, drillable, onDoubleClick, children }: {
   );
 }
 
+// ── WebRTC Stats Card ─────────────────────────────────────────────────────────
+
+function fmtBytes(b: number): string {
+  if (b < 1024) return `${b} B`;
+  if (b < 1024 * 1024) return `${(b / 1024).toFixed(1)} KB`;
+  return `${(b / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function WebRTCStatsCard({ refreshTick }: { refreshTick: number }) {
+  const [sessions, setSessions] = useState<WebRTCPCSummary[]>([]);
+  const [loading, setLoading] = useState(false);
+  const cameras = useCameraStore(s => s.cameras);
+
+  useEffect(() => {
+    setLoading(true);
+    getWebRTCSnapshotAsync()
+      .then(setSessions)
+      .finally(() => setLoading(false));
+  }, [refreshTick]);
+
+  const cameraName = (id: string | null) =>
+    cameras.find(c => c.id === id)?.name ?? id?.slice(0, 8) ?? '—';
+
+  const connected = sessions.filter(s => s.connectionState === 'connected').length;
+  const failed    = sessions.filter(s =>
+    s.connectionState === 'failed' || s.connectionState === 'disconnected').length;
+
+  const stateColor = (s: WebRTCPCSummary) => {
+    if (s.connectionState === 'connected')    return 'text-green-400';
+    if (s.connectionState === 'connecting')   return 'text-yellow-400';
+    if (s.connectionState === 'failed')       return 'text-red-400';
+    if (s.connectionState === 'disconnected') return 'text-orange-400';
+    return 'text-gray-400';
+  };
+  const stateDot = (s: WebRTCPCSummary) => {
+    if (s.connectionState === 'connected')    return 'bg-green-400';
+    if (s.connectionState === 'connecting')   return 'bg-yellow-400 animate-pulse';
+    if (s.connectionState === 'failed')       return 'bg-red-500';
+    if (s.connectionState === 'disconnected') return 'bg-orange-400';
+    return 'bg-gray-500';
+  };
+
+  const avgRtt = sessions.length
+    ? sessions.filter(s => s.rttMs != null).reduce((a, s) => a + (s.rttMs ?? 0), 0) /
+      (sessions.filter(s => s.rttMs != null).length || 1)
+    : null;
+
+  return (
+    <OverviewCard title="WebRTC" icon="📡">
+      {loading ? (
+        <p className="text-[10px] text-gray-500 animate-pulse">Collecting stats…</p>
+      ) : sessions.length === 0 ? (
+        <p className="text-[10px] text-gray-600">No active WebRTC connections</p>
+      ) : (
+        <>
+          {/* Summary chips */}
+          <div className="flex gap-2 flex-wrap">
+            <StatChip label="Sessions"  value={sessions.length} color="text-white" />
+            <StatChip label="Connected" value={connected}        color="text-green-400" />
+            {failed > 0 && <StatChip label="Failed" value={failed} color="text-red-400" />}
+            {avgRtt != null && (
+              <span className="flex flex-col items-center bg-gray-800/60 rounded px-2 py-1">
+                <span className="text-[9px] text-gray-400">Avg RTT</span>
+                <span className={`text-sm font-bold tabular-nums ${avgRtt < 50 ? 'text-green-400' : avgRtt < 150 ? 'text-yellow-400' : 'text-red-400'}`}>
+                  {Math.round(avgRtt)} ms
+                </span>
+              </span>
+            )}
+          </div>
+
+          {/* Per-connection rows */}
+          <div className="space-y-1.5 mt-1">
+            {sessions.map(s => (
+              <div key={s.pcId} className="flex items-center gap-2 text-[10px]">
+                <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${stateDot(s)}`} />
+                <span className="text-gray-300 truncate flex-1 max-w-[120px]" title={s.cameraId ?? ''}>
+                  {cameraName(s.cameraId)}
+                </span>
+                <span className={`font-medium w-20 ${stateColor(s)}`}>
+                  {s.connectionState}
+                </span>
+                {s.rttMs != null && (
+                  <span className="text-gray-400 w-12 text-right">
+                    {s.rttMs} ms
+                  </span>
+                )}
+                {s.framesPerSecond != null && (
+                  <span className="text-blue-300 w-12 text-right">
+                    {s.framesPerSecond} fps
+                  </span>
+                )}
+                {s.packetLoss != null && s.packetLoss > 0 && (
+                  <span className="text-orange-400 w-12 text-right">
+                    {(s.packetLoss * 100).toFixed(1)}% loss
+                  </span>
+                )}
+                {s.bytesReceived > 0 && (
+                  <span className="text-gray-500 w-14 text-right">
+                    {fmtBytes(s.bytesReceived)}
+                  </span>
+                )}
+                {s.localCandidateType && (
+                  <span className={`px-1 rounded text-[8px] ${
+                    s.localCandidateType === 'host'  ? 'bg-green-900/60 text-green-300' :
+                    s.localCandidateType === 'srflx' ? 'bg-blue-900/60 text-blue-300'  :
+                    s.localCandidateType === 'relay' ? 'bg-yellow-900/60 text-yellow-300' :
+                    'bg-gray-800 text-gray-400'}`}>
+                    {s.localCandidateType}
+                  </span>
+                )}
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+    </OverviewCard>
+  );
+}
+
 // ── Overview Grid (Level 0) ───────────────────────────────────────────────────
 
-function OverviewGrid({ state, hourlyState, selectedDate, onDrillIn }: {
+function OverviewGrid({ state, hourlyState, selectedDate, onDrillIn, refreshTick }: {
   state: FetchState; hourlyState: HourlyFetchState;
   selectedDate: string; onDrillIn: (s: DrillSection) => void;
+  refreshTick: number;
 }) {
   if (state.status === 'loading') {
     return (
@@ -482,6 +604,9 @@ function OverviewGrid({ state, hourlyState, selectedDate, onDrillIn }: {
           <span className="text-[10px] text-gray-500">Updated {fmtTime(generatedAt)}</span>
         </div>
       </OverviewCard>
+
+      {/* WebRTC connection status */}
+      <WebRTCStatsCard refreshTick={refreshTick} />
     </div>
   );
 }
@@ -732,6 +857,7 @@ export default function StatsPanelModal({ open, onClose }: StatsPanelModalProps)
   const [drill, setDrill]             = useState<DrillState>({ level: 'overview' });
   const [itemsState, setItemsState]   = useState<ItemsFetchState>({ status: 'idle' });
   const [activeItemType, setActiveItemType] = useState<string>('');
+  const [refreshTick, setRefreshTick] = useState(0);
   const panelRef = useRef<HTMLDivElement>(null);
 
   const fetchStats = useCallback(() => {
@@ -839,7 +965,7 @@ export default function StatsPanelModal({ open, onClose }: StatsPanelModalProps)
           <BreadcrumbNav drill={drill} selectedDate={selectedDate} onNavigate={handleNavigate} />
         </div>
         <div className="flex items-center gap-1 flex-shrink-0">
-          <button onClick={() => { fetchStats(); fetchHourly(selectedDate); }}
+          <button onClick={() => { fetchStats(); fetchHourly(selectedDate); setRefreshTick(t => t + 1); }}
             disabled={state.status === 'loading'}
             className="p-1.5 rounded hover:bg-gray-700 text-gray-400 hover:text-white transition-colors disabled:opacity-40"
             title="Refresh">
@@ -864,7 +990,7 @@ export default function StatsPanelModal({ open, onClose }: StatsPanelModalProps)
       <div className="flex-1 overflow-y-auto">
         {drill.level === 'overview' && (
           <OverviewGrid state={state} hourlyState={hourlyState}
-            selectedDate={selectedDate} onDrillIn={handleDrillIn} />
+            selectedDate={selectedDate} onDrillIn={handleDrillIn} refreshTick={refreshTick} />
         )}
         {drill.level === 'section' && (
           <SectionDrillView section={drill.section} hourlyState={hourlyState}

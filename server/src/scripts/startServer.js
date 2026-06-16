@@ -65,7 +65,7 @@ function resolveByRuntime(runtimeOs, baseKey) {
   return osVal && String(osVal).trim() ? String(osVal).trim() : '';
 }
 
-function main() {
+async function main() {
   const runtimeOs = resolveRuntimeOs();
   const nodeExec = resolveNodeExec(runtimeOs);
   const pythonExec = resolvePythonExec(runtimeOs);
@@ -142,41 +142,86 @@ function main() {
     // or a compiled Go/native binary.  Detect by extension.
     const ingestBinRaw = resolveByRuntime(runtimeOs, 'INGEST_DAEMON_BIN') || '';
     const ingestAddr   = childEnv.INGEST_DAEMON_ADDR || ':7070';
+    const ingestPort   = parseInt(ingestAddr.replace(':', '') || '7070', 10);
 
-    let ingestArgs;
-    let ingestExec;
-    if (ingestBinRaw.endsWith('.py')) {
-      // Prefer PYAV_PYTHON_BIN (points to the Python that has PyAV installed)
-      // over the generic PYTHON_EXEC which may be a system Python without PyAV.
-      ingestExec = (childEnv.PYAV_PYTHON_BIN || '').trim() || pythonExec;
-      // __dirname = server/src/scripts — two levels up reaches server/, where the relative path in .env is anchored
-      ingestArgs = [path.resolve(__dirname, '..', '..', ingestBinRaw), '--addr', ingestAddr];
+    // Check if ingest-daemon is already listening on its port (same check as devServer.js).
+    const net = require('net');
+    const alreadyRunning = await new Promise(resolve => {
+      const sock = new net.Socket();
+      sock.setTimeout(500);
+      sock.on('connect', () => { sock.destroy(); resolve(true); });
+      sock.on('timeout', () => { sock.destroy(); resolve(false); });
+      sock.on('error',   () => resolve(false));
+      sock.connect(ingestPort, '127.0.0.1');
+    });
+
+    if (alreadyRunning) {
+      console.log(`[Start] ingest-daemon already running on :${ingestPort} — skipping start`);
     } else {
-      ingestExec = ingestBinRaw || 'ingest-daemon';
-      ingestArgs = ['--addr', ingestAddr];
-    }
+      let ingestArgs;
+      let ingestExec;
+      if (ingestBinRaw.endsWith('.py')) {
+        // Prefer PYAV_PYTHON_BIN (points to the Python that has PyAV installed)
+        // over the generic PYTHON_EXEC which may be a system Python without PyAV.
+        ingestExec = (childEnv.PYAV_PYTHON_BIN || '').trim() || pythonExec;
+        // __dirname = server/src/scripts — two levels up reaches server/, where the relative path in .env is anchored
+        ingestArgs = [path.resolve(__dirname, '..', '..', ingestBinRaw), '--addr', ingestAddr];
+      } else {
+        ingestExec = ingestBinRaw || 'ingest-daemon';
+        ingestArgs = ['--addr', ingestAddr];
+      }
 
-    try {
-      ingestDaemonChild = spawn(ingestExec, ingestArgs, {
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: childEnv,
-      });
+      try {
+        ingestDaemonChild = spawn(ingestExec, ingestArgs, {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: childEnv,
+        });
 
-      ingestDaemonChild.stdout.on('data', (d) => process.stdout.write(`[Ingest] ${d}`));
-      ingestDaemonChild.stderr.on('data', (d) => process.stderr.write(`[Ingest] ${d}`));
+        ingestDaemonChild.stdout.on('data', (d) => process.stdout.write(`[Ingest] ${d}`));
+        ingestDaemonChild.stderr.on('data', (d) => process.stderr.write(`[Ingest] ${d}`));
 
-      ingestDaemonChild.on('error', (e) => {
-        console.warn(`[Start] ingest-daemon failed to start: ${e.message} — WebRTC/AI capture unavailable`);
-        ingestDaemonChild = null;
-      });
-      ingestDaemonChild.on('exit', (code) => {
-        ingestDaemonChild = null;
-        if (code !== 0 && code !== null) {
-          console.warn(`[Start] ingest-daemon exited (code=${code})`);
+        ingestDaemonChild.on('error', (e) => {
+          console.warn(`[Start] ingest-daemon failed to start: ${e.message} — WebRTC/AI capture unavailable`);
+          ingestDaemonChild = null;
+        });
+        ingestDaemonChild.on('exit', (code) => {
+          ingestDaemonChild = null;
+          if (code !== 0 && code !== null) {
+            console.warn(`[Start] ingest-daemon exited (code=${code})`);
+          }
+        });
+        console.log(`[Start] ingest-daemon starting on ${ingestAddr}`);
+
+        // Wait up to 15 s for ingest-daemon to bind its port before starting the
+        // Node.js server. Without this delay, pipelineManager.startCamera() calls
+        // addCameraStream() while the port is still unbound → ECONNREFUSED → WebRTC
+        // disabled for every camera.
+        const INGEST_READY_TIMEOUT_MS = 15_000;
+        const INGEST_POLL_MS          = 300;
+        const deadline = Date.now() + INGEST_READY_TIMEOUT_MS;
+        let ingestReady = false;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, INGEST_POLL_MS));
+          // Stop polling if the daemon already exited (spawn error)
+          if (!ingestDaemonChild) break;
+          const ready = await new Promise(resolve => {
+            const s = new net.Socket();
+            s.setTimeout(400);
+            s.on('connect', () => { s.destroy(); resolve(true); });
+            s.on('timeout', () => { s.destroy(); resolve(false); });
+            s.on('error',   () => resolve(false));
+            s.connect(ingestPort, '127.0.0.1');
+          });
+          if (ready) { ingestReady = true; break; }
         }
-      });
-    } catch (e) {
-      console.warn(`[Start] Could not start ingest-daemon: ${e.message}`);
+        if (ingestReady) {
+          console.log(`[Start] ingest-daemon ready on :${ingestPort}`);
+        } else {
+          console.warn(`[Start] ingest-daemon not ready after ${INGEST_READY_TIMEOUT_MS / 1000}s — starting server anyway`);
+        }
+      } catch (e) {
+        console.warn(`[Start] Could not start ingest-daemon: ${e.message}`);
+      }
     }
   }
 
@@ -211,4 +256,4 @@ function main() {
   process.on('SIGINT',  () => shutdown('SIGINT'));
 }
 
-main();
+main().catch(e => { console.error('[Start] fatal:', e.message); process.exit(1); });

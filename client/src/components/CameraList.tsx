@@ -133,6 +133,17 @@ export default function CameraList() {
   // Auto-switch to Found tab when first device arrives
   const [autoSwitched, setAutoSwitched] = useState(false);
 
+  // Auto-switch back to Added tab when a camera is added from Found tab
+  const prevCamerasLen = useRef(cameras.length);
+
+  // When a camera is added while on the Found tab, switch back to Added
+  useEffect(() => {
+    if (cameras.length > prevCamerasLen.current && tab === 'found') {
+      setTab('added');
+    }
+    prevCamerasLen.current = cameras.length;
+  }, [cameras.length, tab]);
+
   // Listen for server-pushed discovery events
   useEffect(() => {
     const handleResult = (data: { device: DiscoveredCamera }) => {

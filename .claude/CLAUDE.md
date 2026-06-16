@@ -64,7 +64,8 @@ loitering_tracking/
 │   │   ├── admin.js                # 관리자 라우터
 │   │   ├── auth.js                 # 인증 라우터
 │   │   ├── analysisApi.js          # AI 분석 API (analysis/combined 모드)
-│   │   └── analysisProxy.js        # 분석 API 프록시 (streaming 모드)
+│   │   ├── analysisProxy.js        # 분석 API 프록시 (streaming 모드)
+│   │   └── onvifApi.js             # ONVIF 이벤트 REST API (GET/DELETE /api/onvif-events)
 │   ├── socket/
 │   │   └── streamHandler.js        # Socket.IO 스트림 이벤트
 │   ├── middleware/
@@ -87,11 +88,14 @@ loitering_tracking/
 │   │   ├── AnalysisServerDashboard.tsx # analysis 모드 메인 대시보드
 │   │   ├── AnalysisLivePanel.tsx   # 실시간 감지 피드 오버레이 (analysis 모드)
 │   │   ├── AnalysisDetectionPanel.tsx  # 이벤트 히스토리 오버레이 (배회/화재/연기)
-│   │   └── AnalysisEventsTab.tsx   # Detections 탭 — 이벤트 히스토리 (analysis 모드)
+│   │   ├── AnalysisEventsTab.tsx   # Detections 탭 — 이벤트 히스토리 (analysis 모드)
+│   │   └── OnvifTimelineOverlay.tsx # ONVIF 이벤트 타임라인 오버레이 (줌/팬/상세/Raw XML)
 │   ├── stores/                     # Zustand 상태 스토어
 │   ├── hooks/                      # 커스텀 React 훅
 │   ├── i18n/                       # 다국어(ko/en) 리소스
-│   ├── pages/                      # 페이지 컴포넌트
+│   ├── pages/
+│   │   └── admin/
+│   │       └── AdminUsersPage.tsx  # Admin Dashboard (Users/ONVIF/Audit 섹션)
 │   └── types/                      # TypeScript 타입 정의
 ├── ingest-daemon/
 │   └── ingest_daemon.py            # Python PyAV 독립 캡처 데몬 (:7070)
@@ -195,6 +199,15 @@ loitering_tracking/
 | POST | `/api/faces/search` | 얼굴 검색 |
 | POST | `/api/streams/youtube` | YouTube 스트림 수집 |
 | GET | `/health` | 서버 상태 확인 |
+| GET | `/api/client-logs` | 브라우저 콘솔 로그 조회 (query: level, sessionId, from, to, limit) |
+| POST | `/api/client-logs` | 브라우저 콘솔 로그 수신 (HTTP 직접 전송 경로) |
+| DELETE | `/api/client-logs` | 콘솔 로그 전체 삭제 |
+| GET | `/api/client-logs/webrtc` | WebRTC PeerConnection 통계 조회 (query: cameraId, pcId, sessionId) |
+| DELETE | `/api/client-logs/webrtc` | WebRTC 통계 전체 삭제 |
+| GET | `/api/onvif-events` | ONVIF 이벤트 조회 (query: cameraId, type, severity, from, to, limit) |
+| DELETE | `/api/onvif-events` | ONVIF 이벤트 삭제 (query: cameraId — 생략 시 전체 삭제) |
+| GET | `/api/onvif-event-types` | ONVIF 이벤트 타입 레지스트리 전체 조회 (ever-seen topicTypes) |
+| DELETE | `/api/onvif-event-types` | ONVIF 이벤트 타입 레지스트리 초기화 (Admin 페이지용) |
 
 ---
 
@@ -211,6 +224,11 @@ loitering_tracking/
 | `clothing:reidentified` | Server → Client | 의상 Appearance Re-ID 크로스카메라 전환 감지 |
 | `camera:capabilities` | Server → Client | 카메라 WebRTC 지원 여부 오버라이드 (mediasoup 모드 전용) |
 | `subscribeCamera` | Client → Server | 카메라 스트림 구독 |
+| `appRtp` | Server → Client | RTSP Application RTP 패킷 (ONVIF 메타데이터 등) |
+| `client:log` | Client → Server | 브라우저 콘솔 로그 배치 (clientLogger 백채널) |
+| `client:webrtc-stats` | Client → Server | WebRTC PeerConnection getStats() 폴링 결과 |
+| `onvif:event` | Server → Client | ONVIF 상태 변화 이벤트 (DB 저장 후 브로드캐스트) |
+| `onvif:type-registered` | Server → Client | 신규 ONVIF topicType 최초 감지 시 브로드캐스트 (타입 레지스트리 실시간 동기화) |
 
 ---
 

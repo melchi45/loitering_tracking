@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback } from 'react';
 import { useSocket } from './useSocket';
 import { useWebRTCConfigStore } from '../stores/webrtcConfigStore';
 import { useDataChannelStore } from '../stores/dataChannelStore';
+import { registerPeerConnection } from '../clientLogger';
 
 // Kept for backwards compatibility with components that import this type
 export interface IceStats {
@@ -21,7 +22,6 @@ type WebRTCState = 'idle' | 'connecting' | 'connected' | 'failed';
 const MAX_AUTO_RETRIES   = 8;
 const AUTO_RETRY_DELAY   = 3_000;
 const CONNECT_TIMEOUT_MS = 30_000;
-const ICE_GATHER_TIMEOUT = 5_000;
 
 // ── Shared session registry ────────────────────────────────────────────────
 //
@@ -87,6 +87,23 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
     setRetryCount(0);
     setRetryNonce(n => n + 1);
   }, []);
+
+  // Subscribe to Socket.IO appRtp events for this camera independently of the
+  // WebRTC session lifecycle. This works in mediamtx mode (no DataChannel) and
+  // acts as a redundant delivery path in mediasoup mode.  The store deduplicates
+  // by seq, so double-counting is prevented when both DataChannel and Socket.IO
+  // deliver the same packet.
+  useEffect(() => {
+    if (!enabled || !cameraId || !socket) return;
+    const handleAppRtp = (data: {
+      cameraId: string; pt: number; timestamp: number; seq: number; payload: string;
+    }) => {
+      if (data.cameraId !== cameraId) return;
+      pushDCMessage({ cameraId, pt: data.pt, timestamp: data.timestamp, seq: data.seq, payload: data.payload });
+    };
+    socket.on('appRtp', handleAppRtp);
+    return () => { socket.off('appRtp', handleAppRtp); };
+  }, [cameraId, enabled, socket, pushDCMessage]);
 
   useEffect(() => {
     if (!enabled || !cameraId) return;
@@ -177,6 +194,7 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
 
     const pc = new RTCPeerConnection({ iceServers: getIceServers() });
     entry.pc = pc;
+    registerPeerConnection(pc, cameraId);
     pc.addTransceiver('video', { direction: 'recvonly' });
     pc.addTransceiver('audio', { direction: 'recvonly' });
 
@@ -195,10 +213,35 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
       };
     };
 
+    // Synthetic stream for engines that don't include a=msid in the SDP answer
+    // (mediasoup before the fix). Without a=msid, event.streams is [], so we
+    // collect each incoming track into a single MediaStream manually.
+    let _peerStream: MediaStream | null = null;
+
     pc.ontrack = (event) => {
+      // Diagnostic: log BEFORE early-return so we can see if ontrack fires even when
+      // the guard conditions block the rest of the handler.
+      console.log(
+        `[useWebRTC][${cameraId.slice(0,8)}] ontrack-raw: kind=${event.track.kind}` +
+        ` cancelled=${cancelled} hasRef=${!!videoRef.current} streams=${event.streams.length}`
+      );
       if (cancelled || !videoRef.current) return;
-      const stream = event.streams?.[0];
-      if (!stream) return;
+      console.log(
+        `[useWebRTC][${cameraId.slice(0,8)}] ontrack: kind=${event.track.kind}` +
+        ` streams=${event.streams.length} muted=${event.track.muted}`
+      );
+      // Monitor track mute/unmute to detect when RTP starts flowing.
+      const trackKind = event.track.kind;
+      event.track.onunmute = () =>
+        console.log(`[useWebRTC][${cameraId.slice(0,8)}] track-UNMUTED: kind=${trackKind}`);
+      event.track.onmute = () =>
+        console.log(`[useWebRTC][${cameraId.slice(0,8)}] track-MUTED: kind=${trackKind}`);
+      let stream = event.streams?.[0];
+      if (!stream) {
+        if (!_peerStream) _peerStream = new MediaStream();
+        _peerStream.addTrack(event.track);
+        stream = _peerStream;
+      }
       const ha = stream.getAudioTracks().length > 0;
 
       // Populate the shared entry and notify waiting consumers (Case B)
@@ -211,6 +254,10 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
       }
 
       videoRef.current.srcObject = stream;
+      console.log(
+        `[useWebRTC][${cameraId.slice(0,8)}] srcObject set` +
+        ` tracks=${stream.getTracks().map(t => t.kind + '/' + t.readyState).join(',')}`
+      );
       videoRef.current.play().catch(_ignoreAbort);
       if (!cancelled) setHasAudio(ha);
     };
@@ -220,39 +267,59 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
 
-        await new Promise<void>((resolve) => {
-          if (pc.iceGatheringState === 'complete') { resolve(); return; }
-          const fb = setTimeout(resolve, ICE_GATHER_TIMEOUT);
-          pc.onicegatheringstatechange = () => {
-            if (pc.iceGatheringState === 'complete') { clearTimeout(fb); resolve(); }
-          };
-        });
-
         if (cancelled) { pc.close(); return; }
 
-        const resp = await fetch(`/api/webrtc/whep/${cameraId}`, {
-          method:  'POST',
-          headers: { 'Content-Type': 'application/sdp' },
-          body:    pc.localDescription?.sdp ?? offer.sdp,
-        });
-
-        if (!resp.ok) {
-          const txt = await resp.text().catch(() => '');
-          throw new Error(`WHEP ${resp.status}: ${txt.slice(0, 120)}`);
-        }
-
-        const sdpAnswer = await resp.text();
-        if (cancelled) { pc.close(); return; }
-
-        await pc.setRemoteDescription({ type: 'answer', sdp: sdpAnswer });
-
+        // Register connection state handler BEFORE setRemoteDescription to avoid
+        // missing the 'connected' transition if ICE connects very fast (same LAN).
         pc.onconnectionstatechange = () => {
           if (cancelled) return;
           const cs = pc.connectionState;
           console.log(`[useWebRTC][${cameraId.slice(0,8)}] connection: ${cs}`);
           if (cs === 'connected') {
             clearTimeout(connectTimeoutId);
+            if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = undefined; }
             setState('connected');
+            // ── Post-connect diagnostics: log getStats() every 2s for 20s ────────
+            let statsTick = 0;
+            const statsTimer = setInterval(async () => {
+              if (cancelled || statsTick++ >= 10) { clearInterval(statsTimer); return; }
+              try {
+                const stats = await pc.getStats();
+                let vBytesRx = 0, vPktsRx = 0, vFrames = 0;
+                let cpBytesRx = 0, cpBytesTx = 0;
+                let localCand = '', remoteCand = '';
+                const candidatePairIds = new Set<string>();
+                stats.forEach(r => {
+                  if (r.type === 'inbound-rtp' && r.kind === 'video') {
+                    vBytesRx = r.bytesReceived ?? 0;
+                    vPktsRx  = r.packetsReceived ?? 0;
+                    vFrames  = r.framesDecoded ?? 0;
+                  }
+                  if (r.type === 'candidate-pair' && r.nominated) {
+                    cpBytesRx += r.bytesReceived ?? 0;
+                    cpBytesTx += r.bytesSent ?? 0;
+                    const lcId = r.localCandidateId ?? '';
+                    const rcId = r.remoteCandidateId ?? '';
+                    if (lcId) candidatePairIds.add('L:' + lcId);
+                    if (rcId) candidatePairIds.add('R:' + rcId);
+                    localCand  = lcId;
+                    remoteCand = rcId;
+                  }
+                  if (r.type === 'local-candidate' && candidatePairIds.has('L:' + r.id)) {
+                    localCand = `${r.candidateType}/${r.protocol}/${r.address}:${r.port}`;
+                  }
+                  if (r.type === 'remote-candidate' && candidatePairIds.has('R:' + r.id)) {
+                    remoteCand = `${r.candidateType}/${r.protocol}/${r.address}:${r.port}`;
+                  }
+                });
+                console.log(
+                  `[useWebRTC][${cameraId.slice(0,8)}] stats t+${statsTick*2}s:` +
+                  ` vBytesRx=${vBytesRx} vPkts=${vPktsRx} vFrames=${vFrames}` +
+                  ` cpRx=${cpBytesRx} cpTx=${cpBytesTx}` +
+                  ` local=${localCand} remote=${remoteCand}`
+                );
+              } catch (_) {}
+            }, 2000);
           } else if (cs === 'failed' || cs === 'closed') {
             setState('failed');
             if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
@@ -266,6 +333,43 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
             }, 5_000);
           }
         };
+
+        pc.oniceconnectionstatechange = () => {
+          if (!cancelled) console.log(`[useWebRTC][${cameraId.slice(0,8)}] ice: ${pc.iceConnectionState}`);
+        };
+
+        // Wait up to 2s for the browser to gather its LAN host candidate.
+        // We must include host candidates so mediasoup knows the browser's LAN IP.
+        // We filter OUT srflx/relay candidates whose public IPs (same NAT as the
+        // server's external IP) would cause NAT hairpin failures in mediasoup.
+        await new Promise<void>((resolve) => {
+          if (pc.iceGatheringState === 'complete') { resolve(); return; }
+          const fb = setTimeout(resolve, 2_000);
+          pc.onicegatheringstatechange = () => {
+            if (pc.iceGatheringState === 'complete') { clearTimeout(fb); resolve(); }
+          };
+        });
+
+        if (cancelled) { pc.close(); return; }
+
+        // Keep only typ=host candidates; strip srflx and relay to avoid NAT hairpin.
+        const hostOnlySdp = _filterHostCandidates(pc.localDescription?.sdp ?? offer.sdp ?? '');
+
+        const resp = await fetch(`/api/webrtc/whep/${cameraId}`, {
+          method:  'POST',
+          headers: { 'Content-Type': 'application/sdp' },
+          body:    hostOnlySdp,
+        });
+
+        if (!resp.ok) {
+          const txt = await resp.text().catch(() => '');
+          throw new Error(`WHEP ${resp.status}: ${txt.slice(0, 120)}`);
+        }
+
+        const sdpAnswer = await resp.text();
+        if (cancelled) { pc.close(); return; }
+
+        await pc.setRemoteDescription({ type: 'answer', sdp: sdpAnswer });
 
       } catch (err) {
         if (!cancelled) {
@@ -317,4 +421,29 @@ function _ignoreAbort(err: DOMException | Error) {
   if (name !== 'AbortError' && name !== 'NotAllowedError') {
     console.warn('[useWebRTC] play():', err.message ?? err);
   }
+}
+
+// Keep typ=host candidates (all) and typ=srflx candidates whose address is
+// in an RFC-1918 private range (i.e. from a local STUN server like coturn on
+// the same LAN). This gives mediasoup the browser's reachable LAN address
+// while excluding public srflx/relay candidates that cause NAT hairpin issues.
+function _filterHostCandidates(sdp: string): string {
+  return sdp
+    .split('\n')
+    .filter(line => {
+      if (!line.startsWith('a=candidate:')) return true;
+      if (line.includes(' typ host')) return true;
+      if (line.includes(' typ srflx')) {
+        // Only keep srflx if the mapped address is private (RFC 1918)
+        const m = line.match(/(\d+\.\d+\.\d+\.\d+)/);
+        if (m) {
+          const ip = m[1];
+          return ip.startsWith('10.') ||
+                 ip.startsWith('192.168.') ||
+                 /^172\.(1[6-9]|2\d|3[01])\./.test(ip);
+        }
+      }
+      return false;
+    })
+    .join('\n');
 }

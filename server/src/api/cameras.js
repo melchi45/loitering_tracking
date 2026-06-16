@@ -7,10 +7,9 @@ const SERVER_MODE      = process.env.SERVER_MODE      || 'combined';
 const CAPTURE_BACKEND  = (process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase();
 const WEBRTC_ENGINE    = (process.env.WEBRTC_ENGINE   || 'mediamtx').toLowerCase();
 
-// WebRTC is truly unavailable only when the ingest-daemon backend is paired with mediasoup
-// (no RTP source for mediasoup since ffmpeg was removed).  With mediamtx engine, MediaMTX
-// provides WebRTC WHEP directly, so the DB webrtcEnabled value must be respected.
-const FORCE_NO_WEBRTC  = CAPTURE_BACKEND === 'ingest-daemon' && WEBRTC_ENGINE === 'mediasoup';
+// ingest-daemon now supports RTP fan-out for mediasoup (mediasoupPort / mediasoupAudioPort).
+// WebRTC availability is determined by the pipeline, not forced off here.
+const FORCE_NO_WEBRTC  = false;
 
 function normalizeRtspUrl(rtspUrl) {
   if (typeof rtspUrl !== 'string' || !rtspUrl.trim()) {
@@ -66,8 +65,6 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
           bitrate,
           password:       undefined, // Never expose password in list
           pipelineStatus: pipelineStatus || null,
-          // mediasoup+ingest-daemon has no RTP source (ffmpeg removed) → force JPEG mode.
-          // mediamtx+ingest-daemon uses MediaMTX WHEP → respect DB webrtcEnabled value.
           ...(FORCE_NO_WEBRTC && { webrtcEnabled: false }),
         };
       });

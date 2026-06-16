@@ -80,19 +80,21 @@ try { execSync("pkill -f 'ingest_daemon.py' 2>/dev/null; true", { shell: true, s
 execSync('sleep 0.5', { shell: true, stdio: 'ignore' });
 
 // ── 새 daemon 시작 ────────────────────────────────────────────────────────────
-console.log('[ingest:restart] 새 daemon 시작 중…');
+// Daemon logs are written directly to a file so the restart script can exit
+// cleanly after camera registration without holding the event loop open.
+const DAEMON_LOG = process.env.INGEST_DAEMON_LOG || '/tmp/ingest-daemon.log';
+console.log(`[ingest:restart] 새 daemon 시작 중… (로그: ${DAEMON_LOG})`);
+const logFd = fs.openSync(DAEMON_LOG, 'a');
 const child = spawn(PYTHON_BIN, [DAEMON_PATH, '--addr', DAEMON_ADDR], {
-  stdio: ['ignore', 'pipe', 'pipe'],
+  stdio: ['ignore', logFd, logFd],
   detached: true,
 });
-
-child.stdout.on('data', (d) => process.stdout.write(`[Ingest] ${d}`));
-child.stderr.on('data', (d) => process.stderr.write(`[Ingest] ${d}`));
 child.on('error', (e) => { console.error(`[ingest:restart] 시작 실패: ${e.message}`); process.exit(1); });
 child.on('exit', (code) => {
   if (code != null && code !== 0) console.warn(`[ingest:restart] daemon exited (code=${code})`);
 });
 child.unref();  // 부모 프로세스 종료 후에도 daemon 유지
+fs.closeSync(logFd); // parent no longer needs the FD; daemon keeps it via inheritance
 
 // ── 기동 확인 ─────────────────────────────────────────────────────────────────
 async function waitForHealth(maxMs = 10_000, pollMs = 300) {
@@ -118,7 +120,54 @@ async function waitForHealth(maxMs = 10_000, pollMs = 300) {
 }
 
 // ── 카메라 재등록 ─────────────────────────────────────────────────────────────
+// mediasoup PlainTransport 포트는 DB에 없고 서버 메모리(_cameras 맵)에만 있으므로
+// 서버의 /api/internal/ingest/reregister 엔드포인트를 통해 재등록한다.
+// 서버가 응답하지 않으면 DB 직접 읽기 방식으로 폴백 (AI 프레임만, RTP 없음).
 async function reregisterCameras() {
+  const proto = (HTTPS_ENABLED ? https : http);
+  const sslCtx = HTTPS_ENABLED ? { rejectUnauthorized: false } : {};
+
+  // 1차: 서버 API를 통해 재등록 (mediasoup 포트 포함)
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const reregisterUrl = new URL(
+        `${SERVER_PROTO}://127.0.0.1:${SERVER_PORT}/api/internal/ingest/reregister`
+      );
+      const opts = {
+        hostname: reregisterUrl.hostname,
+        port:     reregisterUrl.port || SERVER_PORT,
+        path:     reregisterUrl.pathname,
+        method:   'POST',
+        headers:  { 'Content-Length': '0' },
+        ...sslCtx,
+      };
+      const req = proto.request(opts, (res) => {
+        let data = '';
+        res.on('data', (c) => { data += c; });
+        res.on('end', () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) resolve(JSON.parse(data));
+          else reject(new Error(`HTTP ${res.statusCode}: ${data}`));
+        });
+      });
+      req.on('error', reject);
+      req.setTimeout(5000, () => { req.destroy(); reject(new Error('timeout')); });
+      req.end();
+    });
+
+    const cams = result.cameras || {};
+    for (const [id, info] of Object.entries(cams)) {
+      if (info.ok) {
+        console.log(`[ingest:restart]   ✓ 재등록 (via server): ${id.slice(0, 8)}  vPort=${info.videoPort} aPort=${info.audioPort}`);
+      } else {
+        console.warn(`[ingest:restart]   ✗ 재등록 실패 ${id.slice(0, 8)}: ${info.error || `HTTP ${info.status}`}`);
+      }
+    }
+    return;
+  } catch (e) {
+    console.warn(`[ingest:restart] 서버 재등록 API 실패 (${e.message}) — DB 직접 읽기로 폴백`);
+  }
+
+  // 2차 폴백: DB 직접 읽기 (mediasoup 포트 없음 — AI 프레임만 등록)
   let cameras = [];
   try {
     const db = JSON.parse(fs.readFileSync(DB_PATH, 'utf8'));
@@ -127,8 +176,6 @@ async function reregisterCameras() {
     console.warn(`[ingest:restart] DB 읽기 실패 (${DB_PATH}): ${e.message}`);
     return;
   }
-
-  const sslCtx = HTTPS_ENABLED ? { rejectUnauthorized: false } : null;
 
   for (const cam of cameras) {
     if (!cam.id || !cam.rtspUrl) continue;
@@ -142,7 +189,6 @@ async function reregisterCameras() {
           hostname: u.hostname, port: u.port || 7070, path: u.pathname,
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-          ...(sslCtx || {}),
         };
         const req = http.request(opts, (res) => {
           let data = '';
@@ -157,7 +203,7 @@ async function reregisterCameras() {
         req.write(body);
         req.end();
       });
-      console.log(`[ingest:restart]   ✓ 등록: ${cam.id.slice(0, 8)} → ${cam.rtspUrl.slice(0, 50)}`);
+      console.log(`[ingest:restart]   ✓ 등록 (AI only, RTP 없음): ${cam.id.slice(0, 8)}`);
     } catch (e) {
       console.warn(`[ingest:restart]   ✗ 등록 실패 ${cam.id.slice(0, 8)}: ${e.message}`);
     }
@@ -175,5 +221,5 @@ async function reregisterCameras() {
 
   console.log('[ingest:restart] 카메라 재등록 중…');
   await reregisterCameras();
-  console.log('[ingest:restart] 완료. daemon 로그:');
+  console.log(`[ingest:restart] 완료. 로그 확인: tail -f ${DAEMON_LOG}`);
 })();

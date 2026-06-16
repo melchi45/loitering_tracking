@@ -186,6 +186,8 @@ mediasoup acts as a **Selective Forwarding Unit (SFU)**: the server receives RTP
 | FR-V-3 | The browser `<video>` element MUST replace the current `<img>` JPEG display. The video MUST render at the camera's native frame rate (up to 30 FPS). |
 | FR-V-4 | The AI inference pipeline (YOLOv8, ByteTrack) MUST continue to receive decoded frames. The `RtpIngestion` component MUST tee the H.264 bitstream: one path to mediasoup (forwarding) and one path to the existing FFmpeg JPEG decoder for inference. |
 | FR-V-5 | Keyframe (IDR) request (RTCP PLI/FIR) MUST be forwarded from mediasoup back to the camera via the RTSP/RTP path to recover from packet loss. |
+| FR-V-6 | The mediasoup Router MUST be configured with H.264 `preferredPayloadType: 109` (not 108). mediasoup v3.19+ pins the Consumer PT to the Router's `preferredPayloadType`; Edge browser assigns PT=109 to H264/42e01f/pm=1. Using PT=108 causes Edge to silently discard all received SRTP packets, yielding black video despite a fully established ICE/DTLS connection. Chrome tolerates PT=109 per RFC 8829 (JSEP). |
+| FR-V-7 | The mediasoup `WebRtcTransport` listenIps MUST be derived exclusively from `SERVER_IP` / `SERVER_PUBLIC_IP` env vars. `os.networkInterfaces()` MUST NOT be used for this purpose. Including all NIC IPs as ICE host candidates causes the browser to select the server's public IP as its local candidate, forming a loopback ICE path that routes SRTP back to the server instead of the browser. |
 
 ### 5.2 Audio Track (FR-A)
 
@@ -727,3 +729,4 @@ ss -ulnp | grep -E 'mediasoup|ffmpeg'
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for WebRTC Media Gateway |
+| 1.2 | 2026-06-16 | LTS Engineering Team | §5.1 FR-V-6/FR-V-7 추가 — mediasoup PT=109 H264 제약 및 ICE listenIps env-var 전용 요구사항 |

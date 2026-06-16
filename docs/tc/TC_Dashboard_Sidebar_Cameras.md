@@ -66,6 +66,7 @@
 | FR-UI-CAM-031 | TC-D-002 |
 | FR-UI-CAM-032 | TC-D-003 |
 | FR-UI-CAM-033 | TC-D-004 |
+| FR-UI-CAM-004 | TC-A-004 |
 | FR-UI-CAM-040 | TC-E-001 |
 | FR-UI-CAM-041 | TC-E-002 |
 | FR-UI-CAM-042 | TC-E-003 |
@@ -104,6 +105,14 @@
 - **Input:** `discovery:result` Socket.IO event received (first one)
 - **Expected:** Sidebar switches to Found sub-tab automatically
 - **Acceptance:** One-time auto-switch occurs; subsequent results don't re-switch
+
+### TC-A-004 — Auto-Switch Back to Added on Camera Registration
+- **SRS:** FR-UI-CAM-004
+- **Input:** Found sub-tab is active; user registers a camera (via "Add as camera" or Camera Add modal pre-filled from discovered device); `POST /api/cameras` succeeds; `cameras` array length increases by 1
+- **Expected:** Panel automatically switches to Added sub-tab
+- **Acceptance:** Added tab becomes active within one render cycle; newly registered camera is visible in the list; no manual tab click required
+- **Test script:** `test/api/sidebar_cameras.test.js` — TC-A-004 (Phase-3 UI/E2E; REST API layer skipped)
+- **Cross-ref:** Design_Dashboard_Sidebar_Cameras.md §9.4
 
 ---
 
@@ -283,3 +292,4 @@ Clean up: delete test cameras after Group B, C, F.
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for Dashboard Sidebar Cameras |
+| 1.1 | 2026-06-16 | LTS Engineering Team | TC-A-004 추가 — Found→Added 자동 전환 테스트 케이스; SRS Traceability FR-UI-CAM-004 → TC-A-004 추가 |

@@ -413,6 +413,8 @@ TURN_CREDENTIAL_2=test1234
 | TURN 인증 오류 | `TURN_USER` / `TURN_PASS` 사용 (구 키명) | `TURN_USERNAME` / `TURN_CREDENTIAL`로 교체 |
 | HTTP 서버 미기동 | `PORT` 사용 (구 키명) | `HTTP_PORT`로 교체 |
 | GStreamer 스트림 미동작 | `gst-launch-1.0` 미설치 | `apt install gstreamer1.0-tools gstreamer1.0-plugins-good` |
+| **mediasoup Edge 검은 화면** (`inbound-rtp` 없음) | Router `preferredPayloadType`이 Edge H264 PT(109)와 불일치 | `_boot()`에서 `preferredPayloadType: 109` 확인. 진단: `GET /api/client-logs/webrtc`에서 `candidate-pair.bytesReceived > 0`이지만 `inbound-rtp` 항목 없음. 참조: SRS FR-WRTC-070, TC-A-008, Design §4.6 |
+| **mediasoup 모든 브라우저 검은 화면** (ICE loopback) | `_getListenIps()`가 서버 공인 IP를 포함해 loopback ICE path 형성 | `SERVER_IP` / `SERVER_PUBLIC_IP` 환경변수를 LAN IP로 한정. 서버 시작 로그 `announcedIps=[...]` 확인. 참조: SRS FR-WRTC-071, TC-A-009, Design §4.7 |
 
 ### .env 빠른 검증 스크립트
 
@@ -464,6 +466,9 @@ yt-dlp -F https://youtube.com/watch?v=...
 | Design | [Design_RTSP_Capture_Backend](../../../docs/design/Design_RTSP_Capture_Backend.md) · [Design_FFmpeg_RTSP_Capture](../../../docs/design/Design_FFmpeg_RTSP_Capture.md) · [Design_WebRTC_Media_Gateway](../../../docs/design/Design_WebRTC_Media_Gateway.md) |
 | Design | [Design_Camera_Discovery](../../../docs/design/Design_Camera_Discovery.md) · [Design_YouTube_RTSP_Ingest](../../../docs/design/Design_YouTube_RTSP_Ingest.md) · [Design_STUN_TURN_ICE](../../../docs/design/Design_STUN_TURN_ICE.md) |
 | Design | [Design_Distributed_AI_Pipeline](../../../docs/design/Design_Distributed_AI_Pipeline.md) — 분산 파이프라인 아키텍처 설계 |
+| Design | [Design_WebRTC_Engine_Modes](../../../docs/design/Design_WebRTC_Engine_Modes.md) — mediamtx·mediasoup·werift 엔진 비교·전환 방법 |
+| Design | [Design_ONVIF_Metadata_Pipeline](../../../docs/design/Design_ONVIF_Metadata_Pipeline.md) — RTSP App RTP ONVIF 메타데이터 수집·라우팅 파이프라인 |
+| Design | [Design_DataChannel_CameraEvents](../../../docs/design/Design_DataChannel_CameraEvents.md) — WebRTC DataChannel Camera Events Tab UI |
 | TC | [TC_RTSP_Capture_Backend](../../../docs/tc/TC_RTSP_Capture_Backend.md) · [TC_FFmpeg_RTSP_Capture](../../../docs/tc/TC_FFmpeg_RTSP_Capture.md) · [TC_WebRTC_Media_Gateway](../../../docs/tc/TC_WebRTC_Media_Gateway.md) · [TC_STUN_TURN_ICE](../../../docs/tc/TC_STUN_TURN_ICE.md) |
 | TC | [TC_Distributed_AI_Pipeline](../../../docs/tc/TC_Distributed_AI_Pipeline.md) — SERVER_MODE별 기능 테스트 케이스 |
 | Ops | [RTSP_Capture_Backend_Setup](../../../docs/ops/RTSP_Capture_Backend_Setup.md) · [FFmpeg_Installation_Compatibility](../../../docs/ops/FFmpeg_Installation_Compatibility.md) |
@@ -478,6 +483,12 @@ yt-dlp -F https://youtube.com/watch?v=...
 | `socket/streamHandler.js` (camera:capabilities) | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/design/Design_Server_Architecture.md` |
 | `scripts/restartIngestDaemon.js` | `CLAUDE.md` 개발 명령어, `docs/ops/RTSP_Capture_Backend_Setup.md` |
 | `api/cameras.js` (FORCE_NO_WEBRTC) | `docs/design/Design_RTSP_WebRTC_Architecture.md` |
+| `server/.env*` (WEBRTC_ENGINE 변경) | `docs/design/Design_WebRTC_Engine_Modes.md` §8 |
+| `services/webrtc/mediasoupEngine.js` (DataChannel 변경) | `docs/design/Design_WebRTC_Engine_Modes.md` §4, `docs/design/Design_DataChannel_CameraEvents.md` |
+| `routes/internalApi.js` (apprtp 경로, ONVIF 저장) | `docs/design/Design_ONVIF_Metadata_Pipeline.md` §6, `docs/design/Design_ONVIF_Timeline.md` §3 |
+| `routes/onvifApi.js` (REST API) | `docs/design/Design_ONVIF_Timeline.md` §3.3, `CLAUDE.md` API 표 |
+| `db.js` (`onvif_events` 스키마) | `docs/design/Design_ONVIF_Timeline.md` §2.1 |
+| `ingest_daemon.py` (_app_rtp_* 변경) | `docs/design/Design_ONVIF_Metadata_Pipeline.md` §5 |
 | `rtspCapture.js` *(레거시)* | `docs/design/Design_FFmpeg_RTSP_Capture.md` (Deprecated) |
 | `gstreamerCapture.js` | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/ops/RTSP_Capture_Backend_Setup.md` |
 | `webrtcGateway.js`, `rtpIngestion.js` | `docs/design/Design_WebRTC_Media_Gateway.md` (Historical) |

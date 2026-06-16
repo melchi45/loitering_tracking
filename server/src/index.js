@@ -31,13 +31,15 @@ const settingsRouter         = require('./api/settings');
 const missingPersonsRouter   = require('./api/missingPersons');
 const youtubeStreamsRouter    = require('./api/youtubeStreams');
 const internalRouter         = require('./api/internal');
-const { router: ingestFrameRouter, setPipelineManager: setIngestPM, setSocketIO: setIngestIO } = require('./routes/internalApi');
+const { router: ingestFrameRouter, setPipelineManager: setIngestPM, setSocketIO: setIngestIO, setDb: setIngestDb } = require('./routes/internalApi');
+const { router: onvifEventsRouter, typesRouter: onvifTypesRouter, setDb: setOnvifDb } = require('./routes/onvifApi');
 const faceGalleryRouter      = require('./api/faceGallery');
 const { buildRouter: buildSnapshotsRouter } = require('./api/snapshots');
 const { buildRouter: buildSearchRouter }    = require('./api/search');
 const { buildRouter: buildStatsRouter }     = require('./api/stats');
-const authRouter     = require('./routes/auth');
-const adminRouter    = require('./routes/admin');
+const authRouter         = require('./routes/auth');
+const adminRouter        = require('./routes/admin');
+const buildClientLogsRouter = require('./routes/clientLogs');
 const { passport: configuredPassport, setup: setupPassport } = require('./config/passport');
 const YouTubeStreamService   = require('./services/youtubeStreamService');
 const registerStreamHandlers = require('./socket/streamHandler');
@@ -195,6 +197,9 @@ async function main() {
   app.use('/auth',  authRouter);
   app.use('/admin', adminRouter);
 
+  // ── Client log ingestion (all modes) ─────────────────────────────────────
+  app.use('/api/client-logs', buildClientLogsRouter(db));
+
   // ── REST API Routes ───────────────────────────────────────────────────────
   app.use('/api/cameras', camerasRouter(db, pipelineManager, youtubeSvc));
   app.use('/api/cameras/:cameraId/zones', zonesRouter(zoneManager));
@@ -212,7 +217,13 @@ async function main() {
   // Only used when CAPTURE_BACKEND=ingest-daemon (WEBRTC_ENGINE=mediasoup path).
   setIngestPM(pipelineManager);
   setIngestIO(io);
+  setIngestDb(db);
   app.use('/api/internal',        ingestFrameRouter);
+
+  // ONVIF events REST API (all server modes)
+  setOnvifDb(db);
+  app.use('/api/onvif-events', onvifEventsRouter);
+  app.use('/api/onvif-event-types', onvifTypesRouter);
 
   // Face gallery — getter always resolves to the live FaceService once models are loaded
   const getFaceService = () => pipelineManager._attrPipeline?._face ?? null;
@@ -462,21 +473,42 @@ async function main() {
     res.json({ ai: aiMap, status: statusMap });
   });
 
-  // Pipeline dev monitor — no auth, localhost-only (NODE_ENV=development)
+  // Pipeline dev monitor — no auth, localhost-only
   app.get('/api/webrtc/monitor', async (req, res) => {
     const ip = req.ip || req.connection?.remoteAddress || '';
     const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
     if (process.env.NODE_ENV !== 'development' && !isLocal) {
       return res.status(403).json({ error: 'monitor endpoint is dev-only' });
     }
-    const engineHealthy = await getWebRTCEngine().isHealthy().catch(() => false);
+    const engine = getWebRTCEngine();
+    const engineHealthy = await engine.isHealthy().catch(() => false);
+    const producerStats  = engine.getProducerStats ? await engine.getProducerStats().catch(() => ({})) : {};
     res.json({
-      serverMode:   SERVER_MODE,
-      webrtcEngine: WEBRTC_ENGINE,
-      timestamp:    Date.now(),
-      pipelines:    pipelineManager.getAllPipelineStatus(),
-      webrtc:       { engine: WEBRTC_ENGINE, ok: engineHealthy },
+      serverMode:    SERVER_MODE,
+      webrtcEngine:  WEBRTC_ENGINE,
+      timestamp:     Date.now(),
+      pipelines:     pipelineManager.getAllPipelineStatus(),
+      webrtc:        { engine: WEBRTC_ENGINE, ok: engineHealthy },
+      producerStats,
     });
+  });
+
+  // Ingest-daemon reregister — called by `npm run ingest:restart` after daemon restart.
+  // Re-POSTs all active cameras with their current PlainTransport ports so video+audio RTP resume.
+  app.post('/api/internal/ingest/reregister', async (req, res) => {
+    const ip = req.ip || req.connection?.remoteAddress || '';
+    const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+    if (!isLocal) return res.status(403).json({ error: 'localhost only' });
+    const engine = getWebRTCEngine();
+    if (!engine.reregisterAllWithIngest) {
+      return res.status(501).json({ error: 'not supported by current engine' });
+    }
+    try {
+      const results = await engine.reregisterAllWithIngest();
+      res.json({ ok: true, cameras: results });
+    } catch (e) {
+      res.status(500).json({ error: e.message });
+    }
   });
 
   // Health check

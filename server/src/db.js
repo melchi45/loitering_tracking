@@ -26,7 +26,7 @@ if (!fs.existsSync(STORAGE_PATH)) fs.mkdirSync(STORAGE_PATH, { recursive: true }
 const DB_PATH = path.join(STORAGE_PATH, 'lts.json');
 
 // ── In-memory store ──────────────────────────────────────────────────────────
-const ALL_TABLES = ['cameras', 'zones', 'events', 'alerts', 'faceGalleries', 'faceGalleryFaces', 'settings', 'detectionSnapshots', 'faceMatchHistory', 'missing_persons', 'missing_person_detections', 'analysisEvents'];
+const ALL_TABLES = ['cameras', 'zones', 'events', 'alerts', 'faceGalleries', 'faceGalleryFaces', 'settings', 'detectionSnapshots', 'faceMatchHistory', 'missing_persons', 'missing_person_detections', 'analysisEvents', 'client_logs', 'client_webrtc_stats', 'onvif_events', 'onvif_event_types'];
 
 let store = {};
 ALL_TABLES.forEach(t => { store[t] = []; });
@@ -77,6 +77,7 @@ function persistJson() {
 // already durably stored in MongoDB.
 const MONGO_ONLY_TABLES = new Set([
   'events', 'alerts', 'detectionSnapshots', 'faceMatchHistory', 'missing_person_detections',
+  'client_logs', 'client_webrtc_stats',
 ]);
 
 // Max rows kept in-memory per table. Oldest records are evicted when the cap is
@@ -88,6 +89,9 @@ const TABLE_ROW_CAPS = {
   detectionSnapshots:         2000,
   faceMatchHistory:           5000,
   missing_person_detections:  5000,
+  client_logs:               10000,
+  client_webrtc_stats:        5000,
+  onvif_events:              50000,
 };
 
 /** Synchronous atomic write: write to .tmp, then rename to final path. */

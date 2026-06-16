@@ -143,6 +143,12 @@ loitering_tracking/
 | PATCH | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 런타임 변경 |
 | GET | `/api/analysis/events` | 분석 이벤트 조회 (query: limit, type) |
 | DELETE | `/api/analysis/events` | 분석 이벤트 전체 삭제 |
+| GET | `/api/client-logs` | 브라우저 콘솔 로그 조회 |
+| DELETE | `/api/client-logs` | 콘솔 로그 전체 삭제 |
+| GET | `/api/client-logs/webrtc` | WebRTC PeerConnection 통계 조회 |
+| DELETE | `/api/client-logs/webrtc` | WebRTC 통계 전체 삭제 |
+| GET | `/api/onvif-events` | ONVIF 이벤트 조회 (query: cameraId, type, severity, from, to, limit) |
+| DELETE | `/api/onvif-events` | ONVIF 이벤트 삭제 (cameraId 생략 시 전체 삭제) |
 
 ---
 
@@ -156,6 +162,10 @@ loitering_tracking/
 | `camera:status` | Server → Client | 카메라 상태 변경 |
 | `camera:capabilities` | Server → Client | 카메라 WebRTC 지원 여부 오버라이드 (mediasoup 모드 전용) |
 | `camera:subscribe` | Client → Server | 카메라 룸 구독 |
+| `appRtp` | Server → Client | RTSP Application RTP 패킷 (ONVIF 메타데이터 등) |
+| `onvif:event` | Server → Client | ONVIF 상태 변화 이벤트 (onvif_events DB 저장 후 브로드캐스트) |
+| `client:log` | Client → Server | 브라우저 콘솔 로그 배치 |
+| `client:webrtc-stats` | Client → Server | WebRTC PeerConnection getStats() 결과 |
 
 ---
 
