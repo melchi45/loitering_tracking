@@ -891,12 +891,11 @@ class PipelineManager {
 
               const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
 
-              // Persist condition: loitering flag OR zone-based risk OR dwell >= 5s
+              // Persist condition: loitering flag OR zone-based risk OR dwell >= 1s
               const meetsRisk = meta.isLoitering || (meta.maxRiskScore ?? 0) >= 0.3;
-              const meetsDwell = dwellMs >= 5000; // 5-second minimum dwell (zone-less cameras)
+              const meetsDwell = dwellMs >= 1000; // 1-second minimum dwell
               if (!meetsRisk && !meetsDwell) continue;
-              this._db.insert('detectionTracks', {
-                id:          _uuid(),
+              const _completedFields = {
                 cameraId:    camera.id,
                 cameraName:  camera.name || camera.id,
                 objectId:    trackKey,
@@ -913,8 +912,14 @@ class PipelineManager {
                 zoneName:    meta.zoneName,
                 color:       meta.color,
                 cloth:       meta.cloth,
-                createdAt:   new Date().toISOString(),
-              });
+                inProgress:  false,
+              };
+              const _existing = this._db.findOne('detectionTracks', { objectId: trackKey, cameraId: camera.id });
+              if (_existing) {
+                this._db.update('detectionTracks', _existing.id, _completedFields);
+              } else {
+                this._db.insert('detectionTracks', { id: _uuid(), ..._completedFields, createdAt: new Date().toISOString() });
+              }
             }
             // Cap collection at 10,000 rows (oldest first)
             const allTracks = this._db.find('detectionTracks', {});
@@ -1068,6 +1073,46 @@ class PipelineManager {
         }
       }, 8_000);
     }
+
+    // Active track flush: upsert long-running tracks every 30s so they appear
+    // in the timeline even while the subject remains in frame continuously.
+    {
+      ctx._activeFlushTimer = setInterval(() => {
+        if (!ctx.running || ctx._trackMeta.size === 0) return;
+        const { v4: _fuuid } = require('uuid');
+        const nowMs = Date.now();
+        for (const [trackKey, meta] of ctx._trackMeta.entries()) {
+          const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
+          if (dwellMs < 5000) continue;           // only flush tracks active >= 5s
+          if (nowMs - meta.lastSeenAt > 15_000) continue; // stale — removal imminent
+          const fields = {
+            cameraId:    camera.id,
+            cameraName:  camera.name || camera.id,
+            objectId:    trackKey,
+            className:   meta.className,
+            firstSeenAt: new Date(meta.firstSeenAt).toISOString(),
+            lastSeenAt:  new Date(meta.lastSeenAt).toISOString(),
+            dwellTime:   dwellMs,
+            maxRiskScore: meta.maxRiskScore,
+            isLoitering: meta.isLoitering,
+            confidence:  meta.confidence,
+            faceId:      meta.faceId,
+            identity:    meta.identity,
+            zoneId:      meta.zoneId,
+            zoneName:    meta.zoneName,
+            color:       meta.color,
+            cloth:       meta.cloth,
+            inProgress:  true,
+          };
+          const _ex = this._db.findOne('detectionTracks', { objectId: trackKey, cameraId: camera.id });
+          if (_ex) {
+            this._db.update('detectionTracks', _ex.id, fields);
+          } else {
+            this._db.insert('detectionTracks', { id: _fuuid(), ...fields, createdAt: new Date().toISOString() });
+          }
+        }
+      }, 30_000);
+    }
   }
 
   /**
@@ -1084,6 +1129,10 @@ class PipelineManager {
     if (ctx.frameWatchdogTimer) {
       clearInterval(ctx.frameWatchdogTimer);
       ctx.frameWatchdogTimer = null;
+    }
+    if (ctx._activeFlushTimer) {
+      clearInterval(ctx._activeFlushTimer);
+      ctx._activeFlushTimer = null;
     }
     ctx.capture.stop();
     ctx.behavior.reset();

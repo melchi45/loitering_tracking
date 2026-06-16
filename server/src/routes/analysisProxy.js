@@ -116,6 +116,10 @@ router.get('/detection-tracks',  (req, res) => {
   const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
   proxyGet(`/api/analysis/detection-tracks${qs}`, req, res);
 });
+router.get('/detection-snapshots', (req, res) => {
+  const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
+  proxyGet(`/api/analysis/detection-snapshots${qs}`, req, res);
+});
 router.delete('/detection-tracks', (_req, res) => {
   proxyMethod('DELETE', '/api/analysis/detection-tracks', res);
 });

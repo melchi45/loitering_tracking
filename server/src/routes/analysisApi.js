@@ -1106,6 +1106,35 @@ router.delete('/detection-tracks', (req, res) => {
   }
 });
 
+// ── GET /api/analysis/detection-snapshots ─────────────────────────────────────
+// Returns saved crop images for a given objectId (detection track)
+// Query: objectId (required), cameraId, from (ISO), to (ISO), limit (default 20, max 100)
+router.get('/detection-snapshots', (req, res) => {
+  const db = req.app.get('db');
+  if (!db) return res.status(503).json({ error: 'DB not available' });
+
+  try {
+    const objectId     = req.query.objectId ? String(req.query.objectId) : null;
+    const cameraFilter = req.query.cameraId ? String(req.query.cameraId) : null;
+    const fromTs       = req.query.from     ? new Date(String(req.query.from)).getTime() : null;
+    const toTs         = req.query.to       ? new Date(String(req.query.to)).getTime()   : null;
+    const limit        = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '20'), 10) || 20));
+
+    if (!objectId) return res.status(400).json({ error: 'objectId required' });
+
+    let snaps = db.find('detectionSnapshots', { objectId });
+    if (cameraFilter) snaps = snaps.filter(s => s.cameraId === cameraFilter);
+    if (fromTs) snaps = snaps.filter(s => new Date(s.timestamp).getTime() >= fromTs);
+    if (toTs)   snaps = snaps.filter(s => new Date(s.timestamp).getTime() <= toTs);
+    snaps.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    snaps = snaps.slice(0, limit);
+
+    res.json({ snapshots: snaps, total: snaps.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GET /api/analysis/contexts ────────────────────────────────────────────────
 // Returns per-camera context summary (for debugging)
 router.get('/contexts', (_req, res) => {

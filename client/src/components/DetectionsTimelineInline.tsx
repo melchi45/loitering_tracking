@@ -45,6 +45,20 @@ interface DetectionTrack {
   zoneName?: string | null;
   color?: { upper: string; lower: string } | null;
   cloth?: { upper: string; lower: string; sleeve?: string } | null;
+  inProgress?: boolean;
+}
+
+interface DetectionSnapshot {
+  id: string;
+  cameraId: string;
+  objectId: string;
+  timestamp: string;
+  className: string;
+  cropData: string;
+  cropWidth: number;
+  cropHeight: number;
+  confidence: number;
+  isLoitering: boolean;
 }
 
 type RangeLabel = '1H' | '6H' | '1D' | '1W' | 'custom';
@@ -118,6 +132,8 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
   const [customStart,  setCustomStart]  = useState('');
   const [customEnd,    setCustomEnd]    = useState('');
   const [customApplied, setCustomApplied] = useState<{ from: string; to: string } | null>(null);
+  const [snapshots,    setSnapshots]    = useState<DetectionSnapshot[]>([]);
+  const [snapsLoading, setSnapsLoading] = useState(false);
 
   const containerRef  = useRef<HTMLDivElement>(null);
   const dragRef       = useRef<{ startX: number; startPan: number } | null>(null);
@@ -156,6 +172,22 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
       .catch(e => console.error('[DetectionsTimeline] fetch error:', e))
       .finally(() => setLoading(false));
   }, [fetchKey, range, customApplied, classFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch crop snapshots when a track is selected
+  useEffect(() => {
+    if (!selected) { setSnapshots([]); return; }
+    setSnapsLoading(true);
+    const params = new URLSearchParams({
+      objectId: selected.objectId,
+      cameraId: selected.cameraId,
+      limit: '20',
+    });
+    fetch(`/api/analysis/detection-snapshots?${params}`)
+      .then(r => r.json())
+      .then(d => setSnapshots(Array.isArray(d.snapshots) ? d.snapshots : []))
+      .catch(() => setSnapshots([]))
+      .finally(() => setSnapsLoading(false));
+  }, [selected]);
 
   // Viewport
   const viewSpan  = rangeMs / zoom;
@@ -350,8 +382,8 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
                         width:           `${barW * 100}%`,
                         top:             3,
                         height:          ROW_H - 6,
-                        backgroundColor: color + (isSel ? 'ff' : 'cc'),
-                        border:          isSel ? `2px solid #fff` : `1px solid ${color}`,
+                        backgroundColor: color + (isSel ? 'ff' : track.inProgress ? '88' : 'cc'),
+                        border:          isSel ? `2px solid #fff` : track.inProgress ? `1px dashed ${color}` : `1px solid ${color}`,
                         cursor:          'pointer',
                         zIndex:          isSel ? 10 : 1,
                       }}
@@ -407,8 +439,39 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
                       className="text-gray-500 hover:text-white flex-shrink-0 ml-1 text-[11px]">✕</button>
             </div>
 
+            {/* Crop image strip */}
+            <div className="flex-shrink-0 px-1 pt-1 pb-0.5 border-b border-gray-700/50 bg-gray-950/40">
+              {snapsLoading ? (
+                <div className="flex justify-center py-2"><Spinner /></div>
+              ) : snapshots.length > 0 ? (
+                <div className="grid grid-cols-2 gap-1">
+                  {snapshots.map(s => (
+                    <div key={s.id} className="relative overflow-hidden rounded border border-gray-700">
+                      <img src={s.cropData} alt={s.className}
+                           className="w-full object-cover"
+                           style={{ maxHeight: 76 }} />
+                      {s.isLoitering && (
+                        <span className="absolute top-0 right-0 bg-red-600 text-white text-[6px] px-0.5">⚠</span>
+                      )}
+                      <span className="absolute bottom-0 left-0 right-0 text-[6px] text-gray-300
+                                      bg-black/70 px-0.5 text-center leading-tight">
+                        {new Date(s.timestamp).toLocaleTimeString('en', { hour12: false })}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-[8px] text-gray-600 text-center py-1.5">No crop images saved</div>
+              )}
+            </div>
+
             {/* Detail rows */}
             <div className="flex-1 overflow-y-auto px-2 py-1 space-y-1">
+              {selected.inProgress && (
+                <div className="text-[8px] text-yellow-400 bg-yellow-900/30 rounded px-1 py-0.5 mb-1">
+                  ● In progress
+                </div>
+              )}
               <DR label="Track"    value={`#${String(selected.objectId).slice(-8)}`} mono />
               <DR label="First"    value={new Date(selected.firstSeenAt).toLocaleString()} />
               <DR label="Last"     value={new Date(selected.lastSeenAt).toLocaleString()} />
