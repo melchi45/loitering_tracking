@@ -9,9 +9,11 @@
  * analysis server.
  *
  * Supported:
- *   GET /api/analysis/metrics  → proxied to remote /api/analysis/metrics
- *   GET /api/analysis/health   → proxied to remote /api/analysis/health
- *   GET /api/analysis/contexts → proxied to remote /api/analysis/contexts
+ *   GET /api/analysis/metrics            → proxied to remote
+ *   GET /api/analysis/health             → proxied to remote
+ *   GET /api/analysis/contexts           → proxied to remote
+ *   GET /api/analysis/detection-tracks   → proxied; falls back to streaming server local DB
+ *   GET /api/analysis/detection-snapshots → proxied; falls back to streaming server local DB
  */
 
 const http    = require('http');
@@ -30,6 +32,66 @@ const httpsAgent = new https.Agent({
   keepAlive:          true,
   rejectUnauthorized: process.env.NODE_ENV === 'production',
 });
+
+// ── Local fallback helpers ────────────────────────────────────────────────────
+
+function _localDetectionTracks(req, res) {
+  const db = req.app.get('db');
+  if (!db) return res.status(503).json({ tracks: [], total: 0, source: 'local-streaming', error: 'DB unavailable' });
+  let tracks = db.find('detectionTracks', {});
+  const { cameraId, from, to, class: cls } = req.query;
+  const lim = Math.min(parseInt(req.query.limit, 10) || 200, 500);
+  if (cameraId) tracks = tracks.filter(t => t.cameraId === cameraId);
+  if (cls)      tracks = tracks.filter(t => t.className === cls);
+  if (from) { const f = new Date(from).getTime(); tracks = tracks.filter(t => new Date(t.lastSeenAt).getTime() >= f); }
+  if (to)   { const u = new Date(to).getTime();   tracks = tracks.filter(t => new Date(t.firstSeenAt).getTime() <= u); }
+  tracks = tracks.sort((a, b) => new Date(b.firstSeenAt).getTime() - new Date(a.firstSeenAt).getTime()).slice(0, lim);
+  res.json({ tracks, total: tracks.length, source: 'local-streaming' });
+}
+
+function _localDetectionSnapshots(req, res) {
+  const db = req.app.get('db');
+  if (!db) return res.status(503).json({ snapshots: [], total: 0, source: 'local-streaming', error: 'DB unavailable' });
+  const { objectId, cameraId } = req.query;
+  if (!objectId) return res.status(400).json({ error: 'objectId required' });
+  let snaps = db.find('detectionSnapshots', { objectId });
+  if (cameraId) snaps = snaps.filter(s => s.cameraId === cameraId);
+  const lim = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+  snaps = snaps.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime()).slice(0, lim);
+  res.json({ snapshots: snaps, total: snaps.length, source: 'local-streaming' });
+}
+
+function proxyGetWithFallback(targetPath, req, res, fallback) {
+  if (!ANALYSIS_URL) return fallback(req, res);
+  let base;
+  try { base = new URL(ANALYSIS_URL); } catch { return fallback(req, res); }
+  const isHttps = base.protocol === 'https:';
+  const mod     = isHttps ? https : http;
+  const opts    = {
+    hostname: base.hostname,
+    port:     base.port || (isHttps ? 443 : 80),
+    path:     targetPath,
+    method:   'GET',
+    timeout:  PROXY_TIMEOUT,
+    agent:    isHttps ? httpsAgent : httpAgent,
+  };
+  const proxyReq = mod.request(opts, (proxyRes) => {
+    let raw = '';
+    proxyRes.on('data', c => { raw += c; });
+    proxyRes.on('end', () => {
+      if (proxyRes.statusCode >= 500 && !res.headersSent) return fallback(req, res);
+      res.status(proxyRes.statusCode).set('Content-Type', 'application/json').send(raw);
+    });
+  });
+  proxyReq.on('timeout', () => {
+    proxyReq.destroy();
+    if (!res.headersSent) fallback(req, res);
+  });
+  proxyReq.on('error', () => {
+    if (!res.headersSent) fallback(req, res);
+  });
+  proxyReq.end();
+}
 
 function proxyGet(targetPath, req, res) {
   if (!ANALYSIS_URL) {
@@ -114,11 +176,11 @@ router.get('/events',            (req, res) => {
 });
 router.get('/detection-tracks',  (req, res) => {
   const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-  proxyGet(`/api/analysis/detection-tracks${qs}`, req, res);
+  proxyGetWithFallback(`/api/analysis/detection-tracks${qs}`, req, res, _localDetectionTracks);
 });
 router.get('/detection-snapshots', (req, res) => {
   const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-  proxyGet(`/api/analysis/detection-snapshots${qs}`, req, res);
+  proxyGetWithFallback(`/api/analysis/detection-snapshots${qs}`, req, res, _localDetectionSnapshots);
 });
 router.delete('/detection-tracks', (_req, res) => {
   proxyMethod('DELETE', '/api/analysis/detection-tracks', res);

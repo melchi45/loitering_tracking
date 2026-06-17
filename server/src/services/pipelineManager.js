@@ -1076,15 +1076,28 @@ class PipelineManager {
 
     // Active track flush: upsert long-running tracks every 30s so they appear
     // in the timeline even while the subject remains in frame continuously.
+    // In streaming mode, also finalizes stale tracks (those not seen for 15s+)
+    // since there is no popRemovedTracks() available (tracker runs on analysis server).
     {
       ctx._activeFlushTimer = setInterval(() => {
         if (!ctx.running || ctx._trackMeta.size === 0) return;
         const { v4: _fuuid } = require('uuid');
         const nowMs = Date.now();
+        const _staleToFinalize = [];
+
         for (const [trackKey, meta] of ctx._trackMeta.entries()) {
           const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
-          if (dwellMs < 5000) continue;           // only flush tracks active >= 5s
-          if (nowMs - meta.lastSeenAt > 15_000) continue; // stale — removal imminent
+          const isStale = nowMs - meta.lastSeenAt > 15_000;
+
+          if (isStale) {
+            if (SERVER_MODE === 'streaming') {
+              // Collect stale tracks for finalization below (inProgress: false)
+              _staleToFinalize.push([trackKey, meta]);
+            }
+            continue; // skip inProgress upsert for stale tracks
+          }
+
+          if (dwellMs < 5000) continue; // only flush tracks active >= 5s
           const fields = {
             cameraId:    camera.id,
             cameraName:  camera.name || camera.id,
@@ -1103,6 +1116,39 @@ class PipelineManager {
             color:       meta.color,
             cloth:       meta.cloth,
             inProgress:  true,
+          };
+          const _ex = this._db.findOne('detectionTracks', { objectId: trackKey, cameraId: camera.id });
+          if (_ex) {
+            this._db.update('detectionTracks', _ex.id, fields);
+          } else {
+            this._db.insert('detectionTracks', { id: _fuuid(), ...fields, createdAt: new Date().toISOString() });
+          }
+        }
+
+        // Streaming mode: finalize tracks not seen in 15s (replaces popRemovedTracks)
+        for (const [trackKey, meta] of _staleToFinalize) {
+          ctx._trackMeta.delete(trackKey);
+          const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
+          const meetsRisk = meta.isLoitering || (meta.maxRiskScore ?? 0) >= 0.3;
+          if (!meetsRisk && dwellMs < 1000) continue;
+          const fields = {
+            cameraId:    camera.id,
+            cameraName:  camera.name || camera.id,
+            objectId:    trackKey,
+            className:   meta.className,
+            firstSeenAt: new Date(meta.firstSeenAt).toISOString(),
+            lastSeenAt:  new Date(meta.lastSeenAt).toISOString(),
+            dwellTime:   dwellMs,
+            maxRiskScore: meta.maxRiskScore,
+            isLoitering: meta.isLoitering,
+            confidence:  meta.confidence,
+            faceId:      meta.faceId,
+            identity:    meta.identity,
+            zoneId:      meta.zoneId,
+            zoneName:    meta.zoneName,
+            color:       meta.color,
+            cloth:       meta.cloth,
+            inProgress:  false,
           };
           const _ex = this._db.findOne('detectionTracks', { objectId: trackKey, cameraId: camera.id });
           if (_ex) {
@@ -1600,6 +1646,48 @@ class PipelineManager {
       frameWidth:  remoteFrameWidth,
       frameHeight: remoteFrameHeight,
     });
+
+    // ── Track lifecycle accumulation for streaming mode (local shadow copy) ──
+    // In streaming mode ByteTracker runs on the analysis server; streaming server
+    // maintains its own _trackMeta to save a local copy of detectionTracks so
+    // the DetectionsTimeline works even when the analysis server restarts.
+    if (this._db) {
+      const _ctx = this._pipelines.get(_cameraId);
+      if (_ctx && _ctx._trackMeta) {
+        for (const obj of remoteTracked) {
+          if (obj.className === 'face' || obj.className === 'fire' || obj.className === 'smoke') continue;
+          const id = String(obj.objectId);
+          const existing = _ctx._trackMeta.get(id);
+          if (existing) {
+            existing.lastSeenAt = _ts;
+            if ((obj.riskScore ?? 0) > (existing.maxRiskScore ?? 0)) existing.maxRiskScore = obj.riskScore;
+            if (obj.isLoitering) existing.isLoitering = true;
+            existing.confidence = Math.max(existing.confidence, obj.confidence ?? 0);
+            if (obj.faceId)   existing.faceId   = obj.faceId;
+            if (obj.identity) existing.identity = obj.identity;
+            if (obj.color)    existing.color    = obj.color;
+            if (obj.cloth)    existing.cloth    = obj.cloth;
+            if (obj.zoneId)   existing.zoneId   = obj.zoneId;
+            if (obj.zoneName) existing.zoneName = obj.zoneName;
+          } else {
+            _ctx._trackMeta.set(id, {
+              firstSeenAt:  _ts,
+              lastSeenAt:   _ts,
+              className:    obj.className,
+              maxRiskScore: obj.riskScore   ?? 0,
+              isLoitering:  obj.isLoitering ?? false,
+              confidence:   obj.confidence  ?? 0,
+              faceId:       obj.faceId      ?? null,
+              identity:     obj.identity    ?? null,
+              zoneId:       obj.zoneId      ?? null,
+              zoneName:     obj.zoneName    ?? null,
+              color:        obj.color       ?? null,
+              cloth:        obj.cloth       ?? null,
+            });
+          }
+        }
+      }
+    }
 
     for (const b of (result.behaviors || [])) {
       if (b.isLoitering || b.type === 'loitering') {

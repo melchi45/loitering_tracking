@@ -709,3 +709,43 @@ DELETE /api/analysis/detection-tracks
 | `tracking.js` (`popRemovedTracks` 변경) | `Design_Fullscreen_Camera_View.md` §3.3 서버 구현 표 |
 | `pipelineManager.js` (저장 기준 변경) | `Design_Fullscreen_Camera_View.md` §3.3 저장 기준 설명 |
 | `analysisApi.js` (API 파라미터 변경) | `CLAUDE.md` API 표, `Design_Fullscreen_Camera_View.md` §3.3 |
+
+### 최근 변경 (2026-06-17) — 모드별 데이터 저장 및 fallback
+
+#### DetectionTrack inProgress 필드
+
+```typescript
+interface DetectionTrack {
+  id: string;
+  cameraId: string;
+  objectId: string;      // UUID (ByteTracker track.id)
+  className: string;
+  firstSeenAt: string;   // ISO8601
+  lastSeenAt: string;    // ISO8601
+  dwellTime: number;     // ms
+  maxRiskScore: number;
+  isLoitering: boolean;
+  inProgress?: boolean;  // true = 현재 프레임 내 (Gantt 대시 스타일)
+  // ... faceId, identity, zoneId, etc.
+}
+```
+
+`inProgress: true` 트랙은 Gantt 바에서 `opacity 0.88 + dashed border`로 구분 표시됩니다.
+
+#### 모드별 데이터 소스
+
+| SERVER_MODE | `/api/analysis/detection-tracks` | `/api/analysis/detection-snapshots` |
+|---|---|---|
+| `combined` | 로컬 DB | 로컬 DB |
+| `analysis` | 로컬 DB | 로컬 DB |
+| `streaming` | analysis 서버 proxy → **로컬 fallback** | analysis 서버 proxy → **로컬 fallback** |
+
+fallback 응답에는 `source: 'local-streaming'` 필드가 포함됩니다.
+
+#### Detections Timeline 데이터가 없을 때 체크리스트
+
+1. `storage/lts.json`에 `detectionTracks` 키가 있는가? (db.js `ALL_TABLES` 누락 → TypeError)
+2. 트랙 저장 조건 충족 여부: `isLoitering || riskScore >= 0.3 || dwellTime >= 1000ms`
+3. `streaming` 모드: analysis 서버에 새 코드가 배포되었는가? (`analysisApi.js` track saving)
+4. `streaming` 모드: analysis 서버 다운 시 로컬 fallback으로 자동 전환되는가?
+5. objectId가 `"undefined"` 문자열로 저장되지 않았는가? (raw Track은 `.id` 사용, `.objectId` 아님)

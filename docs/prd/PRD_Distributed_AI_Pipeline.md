@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-DAP-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Draft |
 | **Date** | 2026-06-08 |
 | **Related RFP** | [rfp/RFP_Distributed_AI_Pipeline.md](../rfp/RFP_Distributed_AI_Pipeline.md) |
@@ -236,6 +236,18 @@ So that 분석 서버의 성능 상태를 실시간으로 파악할 수 있다.
 - [ ] `ANALYSIS_MAX_CONCURRENT=2`로 설정 후 동시에 3개 이상의 요청 발생 시 초과 프레임이 드롭됨
 - [ ] `GET /api/analysis/health`의 `droppedFrames` 카운터가 증가함
 
+### AC-DAP-08: 감지 트랙 영구 저장 (DetectionsTimeline)
+- [ ] `combined`/`analysis` 모드에서 1초 이상 체류한 추적 객체가 종료 시 `detectionTracks` DB에 `inProgress: false`로 저장됨
+- [ ] `streaming` 모드에서 분석 서버 응답의 `tracked` 객체 정보를 스트리밍 서버 로컬 DB에 shadow copy로 저장됨
+- [ ] 스트리밍 서버에서 30초 간격 active flush로 현재 프레임 내 객체가 `inProgress: true`로 저장됨
+- [ ] 분석 서버 다운 시 15초 후 미갱신 트랙이 `inProgress: false`로 자동 종료됨
+- [ ] `/api/analysis/detection-tracks` 프록시 실패 시 스트리밍 서버 로컬 DB로 fallback 제공됨
+- [ ] 원본 해상도 JPEG 프레임에서 bbox 정보로 크롭한 스냅샷이 스트리밍 서버 `detectionSnapshots`에 저장됨
+
+### AC-DAP-09: 스냅샷 원본 크롭 (Streaming 모드)
+- [ ] streaming 모드에서 크롭 이미지는 분석 서버의 640px 재인코딩 프레임이 아닌 스트리밍 서버의 원본 해상도 JPEG에서 생성됨
+- [ ] bbox 좌표는 분석 서버에서 원본 프레임 해상도로 스케일백된 좌표를 사용함
+
 ### AC-DAP-06: per-camera 상태 유지
 - [ ] analysis 모드에서 동일 cameraId 연속 프레임에 대해 tracker objectId가 연속적으로 증가함
 - [ ] 5분 비활성 후 새 프레임 수신 시 새 컨텍스트가 생성됨 (tracker가 1번 ID부터 재시작)
@@ -256,6 +268,17 @@ So that 분석 서버의 성능 상태를 실시간으로 파악할 수 있다.
 | M5 | `server/.env.example` 환경변수 추가 | Config |
 | M6 | 테스트 케이스 작성 및 실행 (TC-DAP-001 ~ TC-DAP-008) | QA |
 | M7 | 운영 가이드 검토 및 Docker Compose 예시 업데이트 | DevOps |
+
+---
+
+---
+
+## Revision History
+
+| 버전 | 날짜 | 변경 내용 |
+|---|---|---|
+| 1.0 | 2026-06-08 | 초기 작성 |
+| 1.1 | 2026-06-17 | DetectionsTimeline 트랙 영구 저장 요구사항(AC-DAP-08~09), 스냅샷 원본 크롭 정책 추가 |
 
 ---
 

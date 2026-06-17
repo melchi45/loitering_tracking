@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-DAP-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-06-08 |
 | **Parent PRD** | [prd/PRD_Distributed_AI_Pipeline.md](../prd/PRD_Distributed_AI_Pipeline.md) |
@@ -159,6 +159,25 @@ AttributePipeline/Face/PAR/FireSmoke 모델 세션을 선로딩하지 않아야 
 
 HTTP 연결 오류(ECONNREFUSED, ECONNRESET, EHOSTUNREACH 등) 발생 시 해당 프레임을 조용히 폐기하고 오류를 카운터에 기록한다. 스트리밍 파이프라인을 중단하거나 카메라 상태를 오프라인으로 변경하지 않는다.
 
+### FR-DAP-014: Streaming 모드 감지 트랙 로컬 저장 (Shadow Copy)
+
+`streaming` 모드에서 `_processRemoteResult()` 처리 시, 분석 서버 응답의 `tracked` 배열에 포함된 각 객체 정보를 스트리밍 서버 로컬 `_trackMeta` Map에 upsert해야 한다.
+
+- `_trackMeta` 구조: `Map<String(objectId), { firstSeenAt, lastSeenAt, className, maxRiskScore, isLoitering, confidence, faceId, identity, zoneId, zoneName, color, cloth }>`
+- `face`, `fire`, `smoke` className은 `_trackMeta` 적재 대상에서 제외한다
+- 30초 간격 active flush: `lastSeenAt` 기준 15초 이내 객체는 `detectionTracks`에 `inProgress: true`로 upsert
+- 30초 flush 시 `lastSeenAt` 기준 15초 초과 객체는 `inProgress: false`로 finalize 후 `_trackMeta`에서 제거
+
+### FR-DAP-015: DetectionTracks 프록시 로컬 Fallback
+
+`streaming` 모드에서 `GET /api/analysis/detection-tracks`가 분석 서버 프록시 실패(연결 오류, 타임아웃, 5xx) 시 스트리밍 서버 로컬 `detectionTracks` DB를 조회하여 응답해야 한다. 응답에 `source: 'local-streaming'` 필드를 포함한다.
+
+`GET /api/analysis/detection-snapshots` 도 동일 fallback 정책을 적용한다.
+
+### FR-DAP-016: Streaming 모드 스냅샷 원본 크롭
+
+`streaming` 모드에서 스냅샷 크롭은 분석 서버가 아닌 스트리밍 서버에서 수행하며, 원본 카메라 해상도 JPEG 버퍼(`frame.buf`)를 사용해야 한다. bbox 좌표는 분석 서버가 반환한 `frameWidth/frameHeight` 기준의 원본 해상도 좌표다.
+
 ---
 
 ## 5. Functional Requirements — Analysis 서버 동작
@@ -222,9 +241,23 @@ HTTP 연결 오류(ECONNREFUSED, ECONNRESET, EHOSTUNREACH 등) 발생 시 해당
 3. `DetectionService.detect(jpegBuffer)` — YOLOv8 추론
 4. `analyticsConfig`에 따라 활성화된 서비스만 실행:
    - `ByteTracker.update(detections)` — 객체 추적
+   - `popRemovedTracks()` — 이탈 트랙 수집 (즉시, await 이전)
    - `BehaviorEngine.update(tracked, zones)` — 배회 점수 산출
    - `FireSmokeService.analyze(jpegBuffer)` (활성화된 경우)
 5. 결과 JSON 조합 후 응답
+6. `_trackMeta` 업데이트 + 이탈 트랙 `detectionTracks` DB 저장 (비동기)
+
+### FR-DAP-026: Analysis 서버 감지 트랙 저장
+
+`analysis` 모드 `POST /api/analysis/frame` 처리 중 다음 조건을 만족하는 트랙은 `detectionTracks` DB에 저장해야 한다:
+
+- 저장 조건: `isLoitering === true` OR `maxRiskScore >= 0.3` OR `dwellTime >= 1000ms`
+- 트랙 이탈 시(`popRemovedTracks()`): `inProgress: false`로 저장
+- 30초 active flush: 현재 프레임 내 객체(`lastSeenAt < 15s ago`): `inProgress: true`로 upsert
+
+저장 필드: `objectId, cameraId, cameraName, className, firstSeenAt, lastSeenAt, dwellTime, maxRiskScore, isLoitering, confidence, faceId, identity, zoneId, zoneName, color, cloth, inProgress`
+
+최대 보관: `detectionTracks` 컬렉션을 10,000건으로 제한하고 초과 시 가장 오래된 항목부터 삭제한다.
 
 ---
 
@@ -439,3 +472,12 @@ ANALYSIS_MAX_CONCURRENT=4
 | NFR-DAP-001 | TC-DAP-003 |
 | NFR-DAP-004 | TC-DAP-004 |
 | NFR-DAP-005 | TC-DAP-007 |
+
+---
+
+## Revision History
+
+| 버전 | 날짜 | 변경 내용 |
+|---|---|---|
+| 1.0 | 2026-06-08 | 초기 작성 |
+| 1.1 | 2026-06-17 | FR-DAP-014~016 (streaming 로컬 shadow copy·fallback·원본 크롭), FR-DAP-026 (analysis 트랙 저장) 추가 |

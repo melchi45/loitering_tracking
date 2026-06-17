@@ -516,3 +516,99 @@ PATCH /api/analysis/config/fire-smoke → body: { confThreshold?, nmsThreshold? 
 - NMS IoU Threshold 슬라이더: 0.10~0.90, step 0.05
 - 300ms debounce 후 자동 PATCH, "Reset Defaults" 버튼 제공
 - `accent-orange-500` 색상 테마 (화재/연기 강조)
+
+## 최근 운영 변경 (2026-06-17)
+
+### 11. DetectionTrack 생명주기 — 모드별 저장 전략
+
+**배경:** `DetectionsTimelineInline.tsx` 하단 패널에서 Gantt 타임라인이 표시되지 않는 문제. 분석 서버에서 트랙이 저장되지 않았고, streaming 모드에서는 로컬 트랙도 없었음.
+
+#### 11.1 모드별 저장 위치
+
+| 모드 | 트랙 메타데이터 | 스냅샷 크롭 | Timeline 데이터 소스 |
+|---|---|---|---|
+| `combined` | 로컬 `detectionTracks` | 로컬 `detectionSnapshots` | 로컬 DB 직접 조회 |
+| `analysis` | 분석 서버 `detectionTracks` | 분석 서버 `detectionSnapshots` | 로컬 DB 직접 조회 |
+| `streaming` | 분석 서버 (primary) + 스트리밍 서버 shadow | 스트리밍 서버 원본 크롭 | 분석 서버 proxy → 로컬 fallback |
+
+#### 11.2 db.js `ALL_TABLES` 필수 항목 (2026-06-17 기준)
+
+```javascript
+const ALL_TABLES = [
+  'cameras', 'zones', 'events', 'alerts',
+  'faceGalleries', 'faceGalleryFaces', 'settings',
+  'detectionSnapshots', 'faceMatchHistory',
+  'missing_persons', 'missing_person_detections',
+  'analysisEvents',
+  'detectionTracks',  // ← DetectionsTimeline Gantt 트랙
+];
+```
+
+**규칙:** 새 컬렉션은 반드시 `ALL_TABLES`에 먼저 추가. 누락 시 `db.find()` TypeError.
+
+#### 11.3 _trackMeta 구조 및 upsert 패턴
+
+```javascript
+// 모든 모드에서 ctx에 초기화
+ctx._trackMeta = new Map();
+// key = String(track.id) — UUID  ← rt.objectId 아님! (rt.id 사용)
+// value = { firstSeenAt, lastSeenAt, className, maxRiskScore, isLoitering,
+//           confidence, faceId, identity, zoneId, zoneName, color, cloth }
+
+// combined/analysis: popRemovedTracks() 직후 처리
+const removedBatch = tracker.popRemovedTracks(); // await 이전에 호출 필수!
+for (const rt of removedBatch) {
+  const trackKey = String(rt.id); // rt.objectId는 undefined!
+  const meta = ctx._trackMeta.get(trackKey);
+  if (!meta) continue;
+  ctx._trackMeta.delete(trackKey);
+  // dwellMs >= 1000 || isLoitering || riskScore >= 0.3 이면 저장
+}
+
+// streaming: _processRemoteResult()에서 remoteTracked 순회
+for (const obj of remoteTracked) {
+  const id = String(obj.objectId); // analysis 서버가 부여한 UUID
+  ctx._trackMeta.set(id, { ... });
+}
+```
+
+#### 11.4 Active Flush Timer (30s, 모든 모드)
+
+```javascript
+// 현재 프레임 내 객체 → inProgress: true upsert
+// streaming 모드에서 stale 트랙(15s 미갱신) → inProgress: false finalize + _trackMeta 제거
+const isStale = nowMs - meta.lastSeenAt > 15_000;
+if (isStale && SERVER_MODE === 'streaming') {
+  // finalize to detectionTracks(inProgress: false)
+  ctx._trackMeta.delete(trackKey);
+}
+```
+
+#### 11.5 Streaming 모드 스냅샷 원본 크롭
+
+```javascript
+// _processRemoteResult() 내 — 이미 구현된 코드
+const { data: cropBuf } = await snapshotSvc.cropJpeg(
+  _buf,             // 원본 카메라 JPEG (full resolution)
+  det.bbox,         // analysis 서버가 원본 해상도 좌표로 스케일백한 bbox
+  remoteFrameWidth, // analysis 서버가 반환한 원본 프레임 폭
+  remoteFrameHeight
+);
+// ✅ 640px YOLO 내부 해상도가 아닌 원본 해상도에서 크롭
+```
+
+#### 11.6 analysisProxy.js 로컬 Fallback
+
+```javascript
+// GET /api/analysis/detection-tracks
+// 1순위: analysis 서버 proxy
+// 2순위 (연결 오류/타임아웃/5xx): 스트리밍 서버 로컬 detectionTracks DB
+// 응답 필드: { tracks, total, source: 'local-streaming' }
+
+// GET /api/analysis/detection-snapshots 동일 fallback 적용
+```
+
+**코드 위치:**
+- `server/src/routes/analysisProxy.js` — `proxyGetWithFallback()`, `_localDetectionTracks()`, `_localDetectionSnapshots()`
+- `server/src/services/pipelineManager.js` — `_processRemoteResult()` 내 `_trackMeta` 업데이트, active flush timer stale 처리
+- `server/src/routes/analysisApi.js` — analysis 모드 트랙 저장 (`_trackMeta`, `popRemovedTracks()`, active flush)
