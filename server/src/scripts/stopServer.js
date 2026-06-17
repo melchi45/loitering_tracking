@@ -29,7 +29,7 @@ function getPidsOnWindows(ports) {
 
   // Prefer Get-NetTCPConnection, fallback to netstat parsing.
   try {
-    const cmd = `Get-NetTCPConnection -LocalPort ${ports.join(',')} -State Listen -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique`;
+    const cmd = `$ports = @(${ports.join(',')}); Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $ports -contains $_.LocalPort } | Select-Object -ExpandProperty OwningProcess -Unique`;
     const out = execSync(`powershell -NoProfile -Command "${cmd}"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     out.split(/\r?\n/).forEach((line) => {
       const n = parseInt(line.trim(), 10);
@@ -44,10 +44,15 @@ function getPidsOnWindows(ports) {
       const out = execSync('netstat -ano -p tcp', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
       const lines = out.split(/\r?\n/);
       for (const line of lines) {
-        const m = line.match(/^\s*TCP\s+[^\s]+:(\d+)\s+[^\s]+\s+LISTENING\s+(\d+)\s*$/i);
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 5) continue;
+        if (!/^TCP$/i.test(parts[0])) continue;
+
+        const local = parts[1];
+        const pid = parseInt(parts[parts.length - 1], 10);
+        const m = local.match(/:(\d+)$/);
         if (!m) continue;
         const port = parseInt(m[1], 10);
-        const pid = parseInt(m[2], 10);
         if (ports.includes(port) && Number.isFinite(pid)) pids.add(pid);
       }
     } catch {
@@ -103,14 +108,28 @@ function killPids(pids) {
   }
 }
 
-function isPortFree(port) {
+function isPortFreeOnHost(port, host) {
   const net = require('net');
   return new Promise((resolve) => {
     const server = net.createServer();
-    server.once('error', () => resolve(false));
+    server.once('error', (err) => {
+      // Some Linux hosts disable IPv6 entirely. Treat "address family not supported"
+      // as neutral so IPv4 availability can still decide port state.
+      if (err && (err.code === 'EAFNOSUPPORT' || err.code === 'EINVAL')) {
+        resolve(true);
+        return;
+      }
+      resolve(false);
+    });
     server.once('listening', () => { server.close(); resolve(true); });
-    server.listen(port, '127.0.0.1');
+    server.listen(port, host);
   });
+}
+
+async function isPortFree(port) {
+  const ipv4 = await isPortFreeOnHost(port, '127.0.0.1');
+  const ipv6 = await isPortFreeOnHost(port, '::');
+  return ipv4 && ipv6;
 }
 
 async function waitForPortsFree(ports, timeoutMs = 10000, pollMs = 200) {
