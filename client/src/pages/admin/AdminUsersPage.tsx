@@ -122,12 +122,25 @@ const NAV: { id: AdminSection; label: string; icon: string; desc: string }[] = [
 export default function AdminUsersPage() {
   const { accessToken, navigateTo } = useAuthStore();
   const [section, setSection] = useState<AdminSection>('users');
+  const [serverMode, setServerMode] = useState<string | null>(null);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') navigateTo('dashboard'); };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   }, [navigateTo]);
+
+  useEffect(() => {
+    fetch('/health')
+      .then(r => r.json())
+      .then((d: { serverMode?: string }) => { if (d.serverMode) setServerMode(d.serverMode.trim().toLowerCase()); })
+      .catch(() => {});
+  }, []);
+
+  const isStreaming = serverMode === 'streaming';
+
+  // Visible nav items: hide AI Models in streaming mode
+  const visibleNav = NAV.filter(item => !(item.id === 'ai-models' && isStreaming));
 
   async function apiFetch(path: string, opts: RequestInit = {}) {
     const res = await fetch(path, {
@@ -178,7 +191,7 @@ export default function AdminUsersPage() {
         {/* Sidebar */}
         <nav className="w-52 flex-shrink-0 bg-gray-900 border-r border-gray-800
                         flex flex-col py-4 gap-1 overflow-y-auto">
-          {NAV.map(item => (
+          {visibleNav.map(item => (
             <button
               key={item.id}
               onClick={() => setSection(item.id)}

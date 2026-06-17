@@ -29,7 +29,8 @@ Admin Dashboard provides four management sections accessible via left sidebar na
 | FR-AD-001 | The Admin Dashboard shall only be accessible when `auth.user.role === 'admin'`; non-admin users shall see `AccessDeniedPage`. |
 | FR-AD-002 | The admin entrypoint in `App.tsx` profile dropdown shall be labeled "Admin Dashboard". |
 | FR-AD-003 | Pressing `Escape` while the Admin Dashboard is open shall navigate back to the main dashboard. |
-| FR-AD-004 | The sidebar shall have four nav items: Users, AI Models, ONVIF, Audit Log. |
+| FR-AD-004 | The sidebar shall have four nav items: Users, AI Models, ONVIF, Audit Log. The AI Models item shall be hidden when `SERVER_MODE=streaming`. |
+| FR-AD-005 | On mount, `AdminUsersPage` shall fetch `GET /health` to determine `serverMode`. If `serverMode === 'streaming'`, the AI Models nav item shall not be rendered. |
 
 ## 4. Functional Requirements — AI Models Section
 
@@ -101,3 +102,4 @@ Admin Dashboard provides four management sections accessible via left sidebar na
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-17 | 초기 작성 — AI Models 섹션(FR-AD-010~035), Users/ONVIF/Audit 기능 요구사항 정의 |
+| 1.1 | 2026-06-17 | FR-AD-005 추가 — streaming 모드에서 AI Models 탭 숨김 (`GET /health` serverMode 판별) |
