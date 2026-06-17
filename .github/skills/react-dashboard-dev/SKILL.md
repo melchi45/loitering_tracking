@@ -152,8 +152,9 @@ npm run preview      # 빌드 결과 미리보기
 | `App.tsx` (auth/role 변경) | `docs/design/Design_User_Authentication.md`, `docs/design/Design_Dashboard_Analysis_Mode.md` |
 | **`pages/admin/AdminUsersPage.tsx`** (Admin Dashboard) | **`docs/design/Design_Admin_Dashboard.md`** — 섹션 추가/삭제·레이아웃·API 변경 시 |
 | `pages/admin/AdminUsersPage.tsx` (Users 섹션) | `docs/design/Design_Admin_Dashboard.md` §4.1 |
-| `pages/admin/AdminUsersPage.tsx` (ONVIF 섹션) | `docs/design/Design_Admin_Dashboard.md` §4.2 · `docs/design/Design_ONVIF_Timeline.md` §3.4 |
-| `pages/admin/AdminUsersPage.tsx` (Audit 섹션) | `docs/design/Design_Admin_Dashboard.md` §4.3 |
+| `pages/admin/AdminUsersPage.tsx` (AI Models 섹션) | `docs/design/Design_Admin_Dashboard.md` §4.2 · `docs/design/Design_AI_Model_Catalog.md` · `docs/srs/SRS_Admin_Dashboard.md` §4 |
+| `pages/admin/AdminUsersPage.tsx` (ONVIF 섹션) | `docs/design/Design_Admin_Dashboard.md` §4.4 · `docs/design/Design_ONVIF_Timeline.md` §3.4 |
+| `pages/admin/AdminUsersPage.tsx` (Audit 섹션) | `docs/design/Design_Admin_Dashboard.md` §4.5 |
 | 새 컴포넌트 추가 | PRD + SRS + Design + TC 문서 신규 작성 또는 관련 문서에 섹션 추가 |
 
 **공통 규칙**
@@ -165,9 +166,13 @@ npm run preview      # 빌드 결과 미리보기
 
 ## Admin Dashboard (`pages/admin/AdminUsersPage.tsx`)
 
-**설계 문서:** [Design_Admin_Dashboard.md](../../../docs/design/Design_Admin_Dashboard.md)
+**설계 문서:** [Design_Admin_Dashboard.md](../../../docs/design/Design_Admin_Dashboard.md)  
+**SRS:** [SRS_Admin_Dashboard.md](../../../docs/srs/SRS_Admin_Dashboard.md)  
+**TC:** [TC_Admin_Dashboard.md](../../../docs/tc/TC_Admin_Dashboard.md)
 
-`admin` 역할 전용 관리 화면. 단일 파일에 좌측 사이드바 + 3개 섹션을 포함합니다.
+`admin` 역할 전용 관리 화면. 단일 파일에 좌측 사이드바 + 4개 섹션을 포함합니다.
+
+진입점: App.tsx 프로필 드롭다운 → **"Admin Dashboard"** (admin 역할 전용)
 
 ### 레이아웃
 
@@ -176,6 +181,7 @@ npm run preview      # 빌드 결과 미리보기
 │ ← Admin Dashboard                                    [Admin]    │
 ├──────────────────┬──────────────────────────────────────────────┤
 │  👥 Users        │  섹션 콘텐츠 (scrollable)                    │
+│  🤖 AI Models    │                                              │
 │  📡 ONVIF        │                                              │
 │  📋 Audit Log    │                                              │
 └──────────────────┴──────────────────────────────────────────────┘
@@ -185,15 +191,35 @@ npm run preview      # 빌드 결과 미리보기
 ### 섹션 구조
 
 ```typescript
-type AdminSection = 'users' | 'onvif' | 'audit';
+type AdminSection = 'users' | 'ai-models' | 'onvif' | 'audit';
 // useState<AdminSection>('users') — 사이드바 탭 전환
 ```
 
 | 섹션 | 컴포넌트 | 주요 API |
 |------|---------|---------|
 | 👥 Users | `UsersSection` | GET/PATCH/DELETE `/admin/users` |
+| 🤖 AI Models | `AiModelsSection` | GET/POST `/api/analysis/models`, GET/PUT `/api/analytics/config`, GET `/api/capabilities` |
 | 📡 ONVIF | `OnvifSection` | GET/DELETE `/api/onvif-event-types` |
 | 📋 Audit Log | `AuditSection` | GET `/admin/audit?limit=200` |
+
+### AiModelsSection 구현 포인트
+
+**YOLO Detection Model 카탈로그:**
+- `GET /api/analysis/models` → `{ activeFile, catalog[] }` — 응답 키는 `catalog` (not `models`)
+- 각 항목: `exists`(다운로드 여부), `active`(활성 여부), `downloading`, `converting`, `downloadPercent`, `downloadError`
+- 시리즈 순서: YOLO12 → YOLO11 → YOLOv8 (15개 모델 총)
+- `POST /api/analysis/models/switch { modelId }` → 모델 전환
+- `POST /api/analysis/models/download { modelId }` → 다운로드 시작; YOLO12는 PT→ONNX 자동 변환
+- 폴링: `setInterval(fetchCatalog, 2000)` — 다운로드/변환 중인 모델이 있을 때만 활성
+
+**YOLO12 다운로드 버튼 레이블:** `↓ PT→ONNX` (서버가 자동 변환)
+
+**AI Analysis Modules (ADMIN_MODULE_GROUPS):**
+- Core: Human, Vehicle
+- AI Attributes: Face, Color, Cloth, Mask, Hat
+- Hazard: Fire, Smoke
+- `GET /api/analytics/config` + `GET /api/capabilities` → 활성화 상태 및 가용성 로드
+- `PUT /api/analytics/config { [id]: boolean }` → 토글
 
 ### 공유 서브컴포넌트 (동일 파일 내)
 
@@ -209,9 +235,10 @@ type AdminSection = 'users' | 'onvif' | 'audit';
 | 변경 내용 | 업데이트 필요 문서 |
 |----------|-----------------|
 | 사이드바 섹션 추가·삭제 | `Design_Admin_Dashboard.md` §3 NAV 표 |
-| Users 섹션 기능 변경 | `Design_Admin_Dashboard.md` §4.1 |
-| ONVIF 섹션 변경 | `Design_Admin_Dashboard.md` §4.2 · `Design_ONVIF_Timeline.md` §3.4 |
-| Audit 섹션 변경 | `Design_Admin_Dashboard.md` §4.3 |
+| Users 섹션 기능 변경 | `Design_Admin_Dashboard.md` §4.1 · `SRS_Admin_Dashboard.md` §5 |
+| AI Models 섹션 변경 | `Design_Admin_Dashboard.md` §4.2 · `Design_AI_Model_Catalog.md` · `SRS_Admin_Dashboard.md` §4 |
+| ONVIF 섹션 변경 | `Design_Admin_Dashboard.md` §4.4 · `Design_ONVIF_Timeline.md` §3.4 |
+| Audit 섹션 변경 | `Design_Admin_Dashboard.md` §4.5 |
 | 공유 컴포넌트 추가 | `Design_Admin_Dashboard.md` §5 |
 | API 엔드포인트 변경 | `Design_Admin_Dashboard.md` §6 · `CLAUDE.md` API 표 |
 

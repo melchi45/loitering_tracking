@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuthStore } from '../../stores/authStore';
 import { useOnvifEventStore, type OnvifEventType } from '../../stores/onvifEventStore';
 import { useSocket } from '../../hooks/useSocket';
@@ -32,7 +32,62 @@ interface AuditEntry {
 }
 
 type StatusFilter = 'all' | 'pending' | 'active' | 'rejected' | 'revoked';
-type AdminSection = 'users' | 'onvif' | 'audit';
+type AdminSection = 'users' | 'onvif' | 'audit' | 'ai-models';
+
+// ── AI Models types ───────────────────────────────────────────────────────────
+
+interface ModelCatalogEntry {
+  id:              string;
+  label:           string;
+  series:          string;
+  mAP:             number;
+  cpuMs:           number;
+  t4Ms:            number;
+  params:          string;
+  flops:           string;
+  file:            string;
+  exists:          boolean;
+  active:          boolean;
+  sizeBytes:       number | null;
+  downloading:     boolean;
+  converting:      boolean;
+  downloadPercent: number | null;
+  downloadError:   string | null;
+  requiresConversion?: boolean;
+}
+
+interface AdminModuleItem  { id: string; label: string; desc: string; model?: string; }
+interface AdminModuleGroup { groupKey: string; label: string; items: AdminModuleItem[]; }
+
+const ADMIN_MODULE_GROUPS: AdminModuleGroup[] = [
+  {
+    groupKey: 'core',
+    label: 'Core Detection',
+    items: [
+      { id: 'human',   label: 'Human Detection',   desc: 'Person (COCO yolov8n built-in)' },
+      { id: 'vehicle', label: 'Vehicle Detection',  desc: 'Car / truck / bus (COCO yolov8n)' },
+    ],
+  },
+  {
+    groupKey: 'attributes',
+    label: 'AI Attributes',
+    items: [
+      { id: 'face',  label: 'Face Recognition', desc: 'SCRFD + ArcFace Re-ID',  model: 'scrfd_2.5g.onnx + arcface_w600k_r50.onnx' },
+      { id: 'color', label: 'Color Analysis',   desc: 'Upper/lower body color — no model required' },
+      { id: 'cloth', label: 'Cloth Analysis',   desc: 'Clothing type (OpenPAR)', model: 'openpar.onnx' },
+      { id: 'mask',  label: 'Mask Detection',   desc: 'PPE mask compliance',    model: 'yolov8m_ppe.onnx' },
+      { id: 'hat',   label: 'Helmet Detection', desc: 'PPE safety helmet',      model: 'yolov8m_ppe.onnx' },
+    ],
+  },
+  {
+    groupKey: 'hazards',
+    label: 'Hazard Detection',
+    items: [
+      { id: 'fire',  label: 'Fire Detection',  desc: 'Real-time fire',  model: 'yolov8s_fire_smoke.onnx' },
+      { id: 'smoke', label: 'Smoke Detection', desc: 'Early smoke',     model: 'yolov8s_fire_smoke.onnx' },
+    ],
+  },
+];
 
 // ── Badges ───────────────────────────────────────────────────────────────────
 
@@ -56,9 +111,10 @@ const SEVERITY_BADGE: Record<string, string> = {
 // ── Nav items ─────────────────────────────────────────────────────────────────
 
 const NAV: { id: AdminSection; label: string; icon: string; desc: string }[] = [
-  { id: 'users', label: 'Users',      icon: '👥', desc: 'Manage user accounts & roles' },
-  { id: 'onvif', label: 'ONVIF',      icon: '📡', desc: 'Event type registry' },
-  { id: 'audit', label: 'Audit Log',  icon: '📋', desc: 'Activity history' },
+  { id: 'users',     label: 'Users',      icon: '👥', desc: 'Manage user accounts & roles' },
+  { id: 'ai-models', label: 'AI Models',  icon: '🤖', desc: 'YOLO model catalog & AI modules' },
+  { id: 'onvif',     label: 'ONVIF',      icon: '📡', desc: 'Event type registry' },
+  { id: 'audit',     label: 'Audit Log',  icon: '📋', desc: 'Activity history' },
 ];
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -144,9 +200,10 @@ export default function AdminUsersPage() {
 
         {/* Content */}
         <main className="flex-1 overflow-y-auto bg-gray-950">
-          {section === 'users' && <UsersSection apiFetch={apiFetch} />}
-          {section === 'onvif' && <OnvifSection apiFetch={apiFetch} />}
-          {section === 'audit' && <AuditSection apiFetch={apiFetch} />}
+          {section === 'users'     && <UsersSection apiFetch={apiFetch} />}
+          {section === 'ai-models' && <AiModelsSection />}
+          {section === 'onvif'     && <OnvifSection apiFetch={apiFetch} />}
+          {section === 'audit'     && <AuditSection apiFetch={apiFetch} />}
         </main>
       </div>
     </div>
@@ -570,5 +627,330 @@ function ErrorBar({ msg }: { msg: string }) {
 function EmptyState({ msg }: { msg: string }) {
   return (
     <div className="text-center py-16 text-gray-600 text-sm">{msg}</div>
+  );
+}
+
+// ── Section: AI Models ────────────────────────────────────────────────────────
+
+function AiModelsSection() {
+  const [catalog,    setCatalog]    = useState<ModelCatalogEntry[]>([]);
+  const [switching,  setSwitching]  = useState<string | null>(null);
+  const [dlLoading,  setDlLoading]  = useState<string | null>(null);
+  const [dlError,    setDlError]    = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const [enabled,    setEnabled]    = useState<Record<string, boolean>>({});
+  const [caps,       setCaps]       = useState<Record<string, boolean>>({});
+  const [capStatus,  setCapStatus]  = useState<Record<string, string>>({});
+  const [modSaving,  setModSaving]  = useState<string | null>(null);
+
+  const [loadError, setLoadError] = useState(false);
+
+  const fetchCatalog = useCallback(async () => {
+    try {
+      const r = await fetch('/api/analysis/models');
+      if (!r.ok) return;
+      const data = await r.json();
+      const list: ModelCatalogEntry[] = data.catalog ?? [];
+      setCatalog(list);
+      // stop polling once nothing is in-flight
+      const anyActive = list.some(m => m.downloading || m.converting);
+      if (!anyActive && pollRef.current) {
+        clearInterval(pollRef.current);
+        pollRef.current = null;
+      }
+    } catch { /* ignore */ }
+  }, []);
+
+  useEffect(() => {
+    fetchCatalog();
+    Promise.all([
+      fetch('/api/analytics/config').then(r => r.json()),
+      fetch('/api/capabilities').then(r => r.json()),
+    ])
+      .then(([cfg, cap]) => {
+        if (cfg.success) setEnabled(cfg.data);
+        if (cap.ai)      setCaps(cap.ai);
+        if (cap.status)  setCapStatus(cap.status);
+      })
+      .catch(() => setLoadError(true));
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+  }, [fetchCatalog]);
+
+  const startPolling = () => {
+    if (pollRef.current) return;
+    pollRef.current = setInterval(fetchCatalog, 2000);
+  };
+
+  const switchModel = async (id: string) => {
+    setSwitching(id);
+    try {
+      const r = await fetch('/api/analysis/models/switch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelId: id }),
+      });
+      if (r.ok) await fetchCatalog();
+      else {
+        const b = await r.json().catch(() => ({}));
+        setDlError(b.error ?? 'Switch failed');
+      }
+    } finally { setSwitching(null); }
+  };
+
+  const downloadModel = async (id: string) => {
+    setDlLoading(id); setDlError(null);
+    try {
+      const r = await fetch('/api/analysis/models/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelId: id }),
+      });
+      const b = await r.json().catch(() => ({}));
+      if (!r.ok) { setDlError(b.error ?? 'Download failed'); return; }
+      if (!b.already) startPolling();
+      await fetchCatalog();
+    } finally { setDlLoading(null); }
+  };
+
+  const toggleModule = async (id: string) => {
+    const next = !enabled[id];
+    setEnabled(prev => ({ ...prev, [id]: next }));
+    setModSaving(id);
+    try {
+      await fetch('/api/analytics/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ [id]: next }),
+      });
+    } catch {
+      setEnabled(prev => ({ ...prev, [id]: !next }));
+    } finally { setModSaving(null); }
+  };
+
+  const SERIES_ORDER = ['YOLO12', 'YOLO11', 'YOLOv8'];
+
+  return (
+    <div className="p-6 space-y-8">
+      <SectionHeader
+        title="AI Models"
+        subtitle="YOLO detection model catalog — download, activate, and configure AI analysis modules"
+      />
+
+      {loadError && <ErrorBar msg="Failed to load AI configuration. Is the analysis server running?" />}
+      {dlError   && <ErrorBar msg={dlError} />}
+
+      {/* ── YOLO Detection Model Catalog ── */}
+      <div>
+        <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+          <span className="text-indigo-400">◈</span>
+          YOLO Detection Model
+          {catalog.find(m => m.active) && (
+            <span className="text-[10px] bg-indigo-800/60 text-indigo-200 border border-indigo-600/40 rounded px-2 py-0.5">
+              Active: {catalog.find(m => m.active)!.label}
+            </span>
+          )}
+        </h3>
+
+        <div className="space-y-4">
+          {SERIES_ORDER.map(series => {
+            const entries = catalog.filter(m => m.series === series);
+            if (!entries.length) return null;
+            return (
+              <div key={series} className="border border-gray-800 rounded-lg overflow-hidden">
+                <div className="px-4 py-2 bg-gray-900 border-b border-gray-800 flex items-center gap-2">
+                  <span className="text-xs font-bold text-gray-300">{series}</span>
+                  {series === 'YOLO12' && (
+                    <span className="text-[9px] bg-amber-900/50 text-amber-300 border border-amber-700/40 rounded px-1.5 py-0.5">
+                      PT→ONNX auto-convert
+                    </span>
+                  )}
+                </div>
+
+                {/* Table header */}
+                <div className="grid grid-cols-[1fr_auto_auto_auto_auto_auto_auto] gap-x-4 px-4 py-1.5 bg-gray-900/60 border-b border-gray-800 text-[10px] text-gray-500 uppercase tracking-wide">
+                  <span>Model</span>
+                  <span className="text-right">mAP</span>
+                  <span className="text-right">CPU ms</span>
+                  <span className="text-right">T4 ms</span>
+                  <span className="text-right">Params</span>
+                  <span className="text-right">Size</span>
+                  <span className="text-right">Action</span>
+                </div>
+
+                {entries.map(m => {
+                  const isSwitching  = switching === m.id;
+                  const isDownloading = dlLoading === m.id || m.downloading;
+                  const pct = m.downloadPercent ?? 0;
+                  return (
+                    <div
+                      key={m.id}
+                      className={`grid grid-cols-[1fr_auto_auto_auto_auto_auto_auto] gap-x-4 items-center px-4 py-2.5 border-b border-gray-800/60 last:border-0 transition-colors ${
+                        m.active ? 'bg-indigo-950/30' : 'hover:bg-gray-900/40'
+                      }`}
+                    >
+                      {/* Model label + status */}
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className={`w-3 h-3 rounded-full border-2 flex-shrink-0 ${
+                          m.active ? 'border-indigo-400 bg-indigo-400' : 'border-gray-600'
+                        }`} />
+                        <span className={`text-sm font-mono font-semibold ${m.active ? 'text-indigo-300' : 'text-gray-200'}`}>
+                          {m.label}
+                        </span>
+                        {m.active && (
+                          <span className="text-[9px] text-indigo-400 font-medium">● active</span>
+                        )}
+                        {m.converting && (
+                          <span className="text-[9px] text-amber-400 animate-pulse">⟳ converting…</span>
+                        )}
+                        {m.downloading && !m.converting && (
+                          <span className="text-[9px] text-blue-400 animate-pulse">↓ {pct}%</span>
+                        )}
+                        {m.downloadError && (
+                          <span className="text-[9px] text-red-400" title={m.downloadError}>✗ error</span>
+                        )}
+                      </div>
+
+                      {/* mAP */}
+                      <span className={`text-xs font-mono text-right tabular-nums ${
+                        m.mAP >= 51 ? 'text-green-400' : m.mAP >= 44 ? 'text-yellow-400' : 'text-gray-400'
+                      }`}>{m.mAP}</span>
+
+                      {/* CPU ms */}
+                      <span className={`text-xs font-mono text-right tabular-nums ${
+                        m.cpuMs <= 90 ? 'text-green-400' : m.cpuMs <= 240 ? 'text-yellow-400' : 'text-red-400'
+                      }`}>{m.cpuMs}</span>
+
+                      {/* T4 ms */}
+                      <span className="text-xs font-mono text-right tabular-nums text-gray-500">{m.t4Ms}</span>
+
+                      {/* Params */}
+                      <span className="text-xs font-mono text-right text-gray-500">{m.params}</span>
+
+                      {/* File size */}
+                      <span className="text-xs font-mono text-right text-gray-600">
+                        {m.sizeBytes ? `${(m.sizeBytes / 1024 / 1024).toFixed(0)}MB` : '—'}
+                      </span>
+
+                      {/* Action */}
+                      <div className="flex justify-end">
+                        {!m.exists && !isDownloading && (
+                          <button
+                            onClick={() => downloadModel(m.id)}
+                            disabled={!!dlLoading}
+                            className="px-2.5 py-1 text-[10px] font-medium rounded bg-blue-700/70 text-blue-200 border border-blue-600/50 hover:bg-blue-700 disabled:opacity-40 transition-colors"
+                          >
+                            {series === 'YOLO12' ? '↓ PT→ONNX' : '↓ Download'}
+                          </button>
+                        )}
+                        {isDownloading && (
+                          <span className="text-[10px] text-blue-400 animate-pulse">
+                            {m.converting ? 'Converting…' : `${pct}%`}
+                          </span>
+                        )}
+                        {m.exists && !m.active && !isSwitching && (
+                          <button
+                            onClick={() => switchModel(m.id)}
+                            disabled={!!switching}
+                            className="px-2.5 py-1 text-[10px] font-medium rounded bg-indigo-700/70 text-indigo-200 border border-indigo-600/50 hover:bg-indigo-700 disabled:opacity-40 transition-colors"
+                          >
+                            Activate
+                          </button>
+                        )}
+                        {isSwitching && (
+                          <span className="text-[10px] text-yellow-400 animate-pulse">Switching…</span>
+                        )}
+                        {m.active && (
+                          <span className="text-[10px] text-indigo-400 font-medium">Active</span>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Legend */}
+        <div className="mt-2 flex flex-wrap gap-4 text-[10px] text-gray-600">
+          <span><span className="text-green-400">■</span> Fast / High accuracy</span>
+          <span><span className="text-yellow-400">■</span> Moderate</span>
+          <span><span className="text-red-400">■</span> Slow / Heavy</span>
+          <span className="ml-auto">mAP COCO val2017 50-95 · ONNX Runtime CPU ms</span>
+        </div>
+      </div>
+
+      {/* ── AI Module Enable / Disable ── */}
+      <div>
+        <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+          <span className="text-green-400">◈</span>
+          AI Analysis Modules
+        </h3>
+
+        <div className="space-y-4">
+          {ADMIN_MODULE_GROUPS.map(group => (
+            <div key={group.groupKey} className="border border-gray-800 rounded-lg overflow-hidden">
+              <div className="px-4 py-2 bg-gray-900 border-b border-gray-800">
+                <span className="text-xs font-bold text-gray-300">{group.label}</span>
+              </div>
+              <div className="divide-y divide-gray-800/60">
+                {group.items.map(item => {
+                  const available = caps[item.id] !== false;
+                  const st        = capStatus[item.id] ?? '';
+                  const isOn      = enabled[item.id] === true;
+                  const isSaving  = modSaving === item.id;
+                  const isFailed  = st === 'failed' || st === 'missing';
+
+                  return (
+                    <div key={item.id} className="flex items-center justify-between px-4 py-3">
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-sm font-medium ${available && !isFailed ? 'text-gray-200' : 'text-gray-500'}`}>
+                            {item.label}
+                          </span>
+                          {isFailed && (
+                            <span className="text-[9px] bg-red-900/40 text-red-400 border border-red-700/40 rounded px-1.5 py-0.5">
+                              {st === 'missing' ? 'Model Missing' : 'Load Failed'}
+                            </span>
+                          )}
+                          {st === 'pending' && (
+                            <span className="text-[9px] bg-gray-800 text-gray-500 border border-gray-700 rounded px-1.5 py-0.5">Phase-2</span>
+                          )}
+                        </div>
+                        <p className="text-[10px] text-gray-500 mt-0.5">{item.desc}</p>
+                        {item.model && (
+                          <p className="text-[10px] text-gray-600 mt-0.5 font-mono">
+                            requires: {item.model}
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => available && !isFailed && toggleModule(item.id)}
+                        disabled={!available || isFailed || isSaving || st === 'pending'}
+                        className={`flex-shrink-0 ml-4 w-11 h-6 rounded-full relative transition-colors disabled:opacity-30 ${
+                          isOn ? 'bg-green-600' : 'bg-gray-700'
+                        }`}
+                        title={isOn ? 'Enabled — click to disable' : 'Disabled — click to enable'}
+                      >
+                        <span className={`absolute top-1 w-4 h-4 rounded-full bg-white shadow transition-all ${isOn ? 'left-6' : 'left-1'}`} />
+                        {isSaving && (
+                          <span className="absolute inset-0 flex items-center justify-center text-[8px] text-white animate-pulse">…</span>
+                        )}
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <p className="mt-3 text-[10px] text-gray-600">
+          Full module list (COCO 80-class accessories, animals, indoor objects) is available in the
+          Analytics panel (left sidebar → 🤖 Analytics tab).
+        </p>
+      </div>
+    </div>
   );
 }

@@ -26,11 +26,12 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 
 | ID | Requirement |
 |---|---|
-| FR-MC-001 | `GET /api/analysis/models` shall return an array of all catalog entries, each containing: `id, label, series, size, mAP, cpuMs, t4Ms, params, flops, file, downloaded, active, downloading, converting`. |
-| FR-MC-002 | `downloaded` shall be `true` if and only if the ONNX file exists in `server/models/<file>`. |
+| FR-MC-001 | `GET /api/analysis/models` shall return `{ activeFile, catalog }` where `catalog` is an array of all catalog entries, each containing: `id, label, series, size, mAP, cpuMs, t4Ms, params, flops, file, exists, active, sizeBytes, downloading, converting, downloadPercent, downloadError`. |
+| FR-MC-002 | `exists` shall be `true` if and only if the ONNX file exists in `server/models/<file>`. |
 | FR-MC-003 | `active` shall be `true` for the model currently loaded in `_detector`. |
 | FR-MC-004 | `downloading` shall be `true` when `_downloadProgress.status` is `'downloading'` or `'converting'`. |
 | FR-MC-005 | `converting` shall be `true` when `_downloadProgress.status` is `'converting'` (YOLO12 PT→ONNX phase only). |
+| FR-MC-005b | `downloadPercent` shall be the integer 0–100 download progress, or `null` if no download is in progress. `downloadError` shall be the error message string when `status === 'error'`, otherwise `null`. |
 
 ### 3.2 Model Download — Direct ONNX (YOLOv8, YOLO11)
 
@@ -39,7 +40,7 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | FR-MC-006 | `POST /api/analysis/models/download` with body `{ modelId }` shall start an asynchronous download of the model's ONNX file from the URL defined in `MODEL_CATALOG`. |
 | FR-MC-007 | HTTP 301/302 redirects shall be followed automatically (GitHub releases redirect to CDN). |
 | FR-MC-008 | The file shall be written to a `.tmp` file first and renamed atomically on completion. |
-| FR-MC-009 | If the ONNX file already exists, the endpoint shall return HTTP 200 `{ already: true }` without re-downloading. |
+| FR-MC-009 | If the ONNX file already exists, the endpoint shall return HTTP 200 `{ already: true }` without re-downloading. The `url` field is excluded from the catalog response (never sent to client). |
 | FR-MC-010 | If a download is already in progress for the same `modelId`, the endpoint shall return HTTP 409. |
 
 ### 3.3 Model Download — PT→ONNX Conversion (YOLO12)
@@ -101,3 +102,4 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-17 | 초기 작성 — FR-MC-001~022, NFR-MC-001~004, YOLO12 PT→ONNX 파이프라인 요구사항 |
+| 1.1 | 2026-06-17 | FR-MC-001 응답 키 `downloaded` → `exists`/`catalog` 수정, downloadPercent/downloadError 필드 추가 (FR-MC-005b) |
