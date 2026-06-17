@@ -1369,7 +1369,7 @@ router.post('/models/download', express.json({ limit: '1kb' }), async (req, res)
     const tmpPath = destPath + '.tmp';
     const file = fs.createWriteStream(tmpPath);
 
-    const req2 = proto.get(url, (response) => {
+    const req2 = proto.get(url, { rejectUnauthorized: false }, (response) => {
       if (response.statusCode === 301 || response.statusCode === 302) {
         file.destroy();
         fs.unlink(tmpPath, () => {});
