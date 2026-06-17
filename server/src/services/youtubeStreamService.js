@@ -62,8 +62,14 @@ function findNodeBin() {
   }
   return null;  // fallback: rely on ~/.config/yt-dlp/config
 }
-const NODE_BIN_FOR_YTDLP = findNodeBin();
-console.log(`[YouTubeStream] Node bin for yt-dlp JS runtime: ${NODE_BIN_FOR_YTDLP || '(not found, using config file)'}`);
+// Skip expensive binary detection and startup logs in analysis-only mode —
+// this module is required by index.js unconditionally, but analysis mode never
+// spawns yt-dlp or FFmpeg.
+const _isAnalysis = process.env.SERVER_MODE === 'analysis';
+const NODE_BIN_FOR_YTDLP = _isAnalysis ? null : findNodeBin();
+if (!_isAnalysis) {
+  console.log(`[YouTubeStream] Node bin for yt-dlp JS runtime: ${NODE_BIN_FOR_YTDLP || '(not found, using config file)'}`);
+}
 
 function findYtDlp() {
   // 1. Explicit single-path override
@@ -83,9 +89,11 @@ function findYtDlp() {
   }
   return 'yt-dlp';  // fallback to PATH
 }
-const YTDLP_BIN = findYtDlp();
-console.log(`[YouTubeStream] yt-dlp binary: ${YTDLP_BIN}`);
-console.log(`[YouTubeStream] SSL check: ${YTDLP_NO_CHECK_CERT ? 'disabled (--no-check-certificate)' : 'enabled'}`);
+const YTDLP_BIN = _isAnalysis ? 'yt-dlp' : findYtDlp();
+if (!_isAnalysis) {
+  console.log(`[YouTubeStream] yt-dlp binary: ${YTDLP_BIN}`);
+  console.log(`[YouTubeStream] SSL check: ${YTDLP_NO_CHECK_CERT ? 'disabled (--no-check-certificate)' : 'enabled'}`);
+}
 
 // ── URL-expiry refresh: if FFmpeg stderr contains HTTP 403 re-resolve ─────────
 const HTTP_403_RE = /Server returned 4XX Client Error reply to.*403|403 Forbidden/i;

@@ -120,13 +120,16 @@ async function main() {
     });
   }
 
-  try { startMediaMTX(); } catch (_) {}
-
   // ── Ingest daemon (CAPTURE_BACKEND=ingest-daemon) ────────────────────────
   // Start before nodemon so it's ready when pipelineManager calls addCameraStream().
   // Skip if already running (avoids port conflict on server restart).
   const captureBackend = (childEnv.CAPTURE_BACKEND || '').toLowerCase();
   const serverMode     = (childEnv.SERVER_MODE || 'combined').toLowerCase();
+
+  // Analysis-only mode never serves WebRTC or captures RTSP — skip MediaMTX.
+  if (serverMode !== 'analysis') {
+    try { startMediaMTX(); } catch (_) {}
+  }
   let ingestDaemonChild = null;
 
   if (captureBackend === 'ingest-daemon' && serverMode !== 'analysis') {

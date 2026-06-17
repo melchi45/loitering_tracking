@@ -98,10 +98,10 @@ async function main() {
   const serverMode     = (childEnv.SERVER_MODE       || 'combined').toLowerCase();
 
   // MediaMTX: needed for mediamtx WebRTC WHEP engine, or when mediamtx is the capture backend.
-  // Independent of CAPTURE_BACKEND — ingest-daemon + mediamtx is a valid combination where
-  // MediaMTX handles WebRTC and the ingest-daemon connects to its loopback RTSP for AI.
-  const needsMediaMTX = (webrtcEngine === 'mediamtx' && serverMode !== 'analysis')
-                      || captureBackend === 'mediamtx';
+  // Analysis-only mode never serves WebRTC or captures RTSP, so skip MediaMTX entirely
+  // regardless of CAPTURE_BACKEND/WEBRTC_ENGINE settings in the env file.
+  const needsMediaMTX = serverMode !== 'analysis' &&
+                      (webrtcEngine === 'mediamtx' || captureBackend === 'mediamtx');
 
   // Ingest daemon: started whenever CAPTURE_BACKEND=ingest-daemon regardless of WebRTC engine.
   const needsIngestDaemon = captureBackend === 'ingest-daemon' && serverMode !== 'analysis';

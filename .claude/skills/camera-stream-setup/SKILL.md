@@ -132,6 +132,9 @@ ONVIF 자동 탐색 ──► discoveryService.js ──► RTSP 주소 → inge
 - `SERVER_MODE=combined`: 캡처 + 로컬 AI 추론 + 스트리밍
 - `SERVER_MODE=streaming`: 캡처 + 스트리밍만 수행, AI 추론은 `ANALYSIS_SERVER_URL` 원격 서버로 위임
 - `SERVER_MODE=analysis`: 캡처/Discovery 미실행, `/api/analysis/frame` 추론 전용
+  - MediaMTX 프로세스 시작 안 함 (`CAPTURE_BACKEND=mediamtx`/`WEBRTC_ENGINE=mediamtx` 설정 무관)
+  - YouTubeStreamService yt-dlp 바이너리 탐색 및 로그 억제
+  - UDPDiscovery 서브모듈 탐색 지연 (실제 스캔 요청 시까지)
 
 운영 주의:
 - `streaming` 모드에서는 로컬 PAR/ArcFace 모델 eager load가 발생하면 설정/코드 회귀입니다.

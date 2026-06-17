@@ -327,18 +327,22 @@ graph TB
 
 **활성화 서비스:**
 
-| 서비스 | 활성 여부 |
-|---|---|
-| RTSPCapture | ❌ |
-| PipelineManager | ✅ (AI 추론만) |
-| analysisApi 마운트 | ✅ (`/api/analysis/*`) |
-| analysisProxy 마운트 | ❌ |
-| analysisClient (원격 전송) | ❌ |
-| DiscoveryService (ONVIF) | ❌ |
-| YouTubeStreamService | ✅ (DB 접근용으로 초기화) |
-| WebRTC WHEP 프록시 | ✅ (엔드포인트 존재, 실 사용 없음) |
-| 카메라 자동 시작 | ❌ |
-| ONNX 모델 eager 로딩 | ✅ (3 s 지연) |
+| 서비스 | 활성 여부 | 비고 |
+|---|---|---|
+| RTSPCapture / ingest-daemon | ❌ | |
+| PipelineManager | ✅ | AI 추론만 |
+| analysisApi 마운트 | ✅ | `/api/analysis/*` |
+| analysisProxy 마운트 | ❌ | |
+| analysisClient (원격 전송) | ❌ | |
+| DiscoveryService (ONVIF) | ❌ | |
+| YouTubeStreamService | ❌ | 바이너리 탐색·로그 억제 |
+| MediaMTX 프로세스 | ❌ | `CAPTURE_BACKEND=mediamtx`여도 미시작 |
+| UDPDiscovery 서브모듈 탐색 | ❌ | `getUDPDiscovery()` 호출 시점까지 지연 |
+| WebRTC WHEP 프록시 | ❌ | |
+| 카메라 자동 시작 | ❌ | |
+| ONNX 모델 eager 로딩 | ✅ | 3 s 지연 |
+
+> **구현 참고:** `startServer.js`·`devServer.js`는 `SERVER_MODE=analysis`일 때 MediaMTX를 시작하지 않습니다 (`CAPTURE_BACKEND` 값 무관). `youtubeStreamService.js`와 `udpDiscovery.js`의 모듈 로드 시점 탐색 코드도 analysis 모드에서 억제됩니다.
 
 **시작 명령:**
 ```bash
@@ -879,3 +883,4 @@ if (subscribedRef.current.size > 0 && !subscribedRef.current.has(ev.cameraId)) r
 | 1.1 | 2026-06-10 | Section 8 추가: 실시간 감지 데이터 흐름(SERVER_MODE별), analysis 모드 Socket.IO 활성화, useAllDetections 전체 수신 메커니즘, snapshotSvc로 일반 person 크롭 지원 |
 | 1.2 | 2026-06-10 | streaming 모드 `GET /api/analysis/client-status` 엔드포인트 추가 — circuit-breaker 상태·통계 노출, DashboardDetectionPanel 분석 서버 연결 상태 배너 |
 | 1.3 | 2026-06-11 | CAPTURE_BACKEND 기본값 `ingest-daemon`으로 변경; RTSPCapture 표기를 CaptureBackend로 일반화 |
+| 1.4 | 2026-06-17 | analysis 모드 불필요 서비스 억제: MediaMTX(CAPTURE_BACKEND 무관), YouTubeStream 바이너리 탐색, UDPDiscovery 서브모듈 로그 모두 비활성화 |
