@@ -4,8 +4,8 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-STORAGE-001 |
-| **Version** | 1.3 |
-| **Status** | Active — amended 2026-05-27 |
+| **Version** | 1.4 |
+| **Status** | Active — amended 2026-06-17 |
 | **Date** | 2026-05-27 |
 | **Parent SRS** | srs/SRS_Storage_MongoDB.md |
 
@@ -112,7 +112,8 @@ server/
 // ── Constants ─────────────────────────────────────────────────────────────
 const ALL_TABLES = [
   'cameras', 'zones', 'events', 'alerts',
-  'faceGalleries', 'faceGalleryFaces', 'settings'
+  'faceGalleries', 'faceGalleryFaces', 'settings',
+  'users', 'refresh_tokens', 'audit_logs',
 ];
 
 // ── In-memory store ───────────────────────────────────────────────────────
@@ -803,6 +804,9 @@ const ALL_TABLES = [
   'detectionSnapshots',  // added in v1.0
   'faceMatchHistory',    // added in v1.1 (Face ID Live Match)
   'analysisEvents',      // added in v1.2 (Analysis Mode Event Persistence)
+  'users',               // added in v1.4 (Auth service unified storage)
+  'refresh_tokens',      // added in v1.4 (Auth service unified storage)
+  'audit_logs',          // added in v1.4 (Auth service unified storage) — MONGO_ONLY
 ];
 ```
 
@@ -832,6 +836,45 @@ Analysis 서버(`SERVER_MODE=analysis` / `combined`)가 감지한 화재·연기
 
 ---
 
+## 16. v1.4 Amendment — Auth Service Unified Storage
+
+### 16.1 New Tables
+
+The following three tables were added to `ALL_TABLES` in `db.js` as part of unifying the authentication service storage layer. Previously, `UserService.js`, `TokenService.js`, and `AuditService.js` each wrote directly to separate JSON files (`users.json`, `tokens.json`, `audit.json`). They now use `getDB().insert/update/delete/find/all()` exclusively.
+
+| Table | Purpose | MONGO_ONLY |
+|---|---|---|
+| `users` | User accounts — email, passwordHash, role, status, OAuth provider | No |
+| `refresh_tokens` | JWT refresh token hashes — tokenHash, userId, expiresAt, revoked | No |
+| `audit_logs` | Auth audit trail — event, userId, email, ip, ts | **Yes** |
+
+> `audit_logs` is in `MONGO_ONLY_TABLES`: when `DB_TYPE=json`, audit log entries are written to the in-memory store and flushed to `lts.json` but are **not** replicated to MongoDB in JSON mode. In MongoDB mode, all audit entries go to the `audit_logs` collection.
+
+### 16.2 Row Caps
+
+```js
+const ROW_CAPS = {
+  refresh_tokens: 10000,
+  audit_logs: 10000,
+};
+```
+
+When a table exceeds its cap, the oldest entries are evicted automatically to keep memory bounded.
+
+### 16.3 One-Time Legacy Migration
+
+On first startup after upgrading, `initDB()` checks whether the target table is empty. If so, it reads each legacy file and imports rows into `db.js`:
+
+| Legacy File | Target Table |
+|---|---|
+| `storage/users.json` | `users` |
+| `storage/tokens.json` | `refresh_tokens` |
+| `storage/audit.json` | `audit_logs` |
+
+The migration is **idempotent** — if the target table is already populated, it is skipped. After migration, the legacy files remain on disk but are no longer read or written by the application.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
@@ -839,3 +882,4 @@ Analysis 서버(`SERVER_MODE=analysis` / `combined`)가 감지한 화재·연기
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Storage MongoDB |
 | 1.2 | 2026-06-10 | LTS Engineering Team | Section 15.8 추가: analysisEvents 컬렉션 스키마 및 저장 정책, ALL_TABLES v1.2 업데이트 |
 | 1.3 | 2026-06-10 | LTS Engineering Team | analysisEvents 스키마에 `cropData` 필드 추가 (감지 영역 JPEG Base64) |
+| 1.4 | 2026-06-17 | LTS Engineering Team | users, refresh_tokens, audit_logs 테이블 추가 — 인증 서비스 저장소 통합 |

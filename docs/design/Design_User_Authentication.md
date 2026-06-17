@@ -5,7 +5,7 @@
 **Module:** User Authentication & Authorization  
 **SRS Reference:** SRS-LTS2026-AUTH-001  
 **Status:** Released  
-**Rev:** 1.1 — Implemented as local email/password auth (OAuth deferred)
+**Rev:** 1.2 — Implemented as local email/password auth (OAuth deferred); auth services migrated to db.js unified storage
 
 ---
 
@@ -45,9 +45,10 @@
 │                       optionalToken                               │
 │  middleware/role.js   requireRole(roles[])                       │
 │                                                                   │
-│  services/UserService.js  JSON-file CRUD  →  storage/users.json  │
-│  services/TokenService.js  JWT RS256 sign/verify/rotate          │
-│  services/AuditService.js  append-only log → storage/audit.json  │
+│  services/UserService.js  db.js CRUD  →  users table (lts.json / MongoDB)     │
+│  services/TokenService.js  JWT RS256 sign/verify/rotate                        │
+│                             → refresh_tokens table (lts.json / MongoDB)        │
+│  services/AuditService.js  append-only log → audit_logs table (lts.json / MongoDB) │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -55,12 +56,6 @@
 > Local email + bcrypt password auth is the implemented primary method.
 > OAuth can be layered on later by adding passport strategies without
 > changing the JWT / RBAC / audit infrastructure.
-
----
-              │  Google Identity Platform │
-              │  Microsoft Entra ID       │
-              └───────────────────────────┘
-```
 
 ---
 
@@ -76,9 +71,9 @@ server/
 │   │   ├── auth.js            ← verifyAccessToken + optionalToken (RS256 JWT)
 │   │   └── role.js            ← requireRole(...roles) RBAC guard
 │   └── services/
-│       ├── UserService.js     ← User CRUD (JSON storage), bcrypt password hashing
-│       ├── TokenService.js    ← JWT RS256 sign/verify, refresh token rotation
-│       └── AuditService.js    ← Append-only auth audit log (max 10 000 events)
+│       ├── UserService.js     ← User CRUD (db.js → lts.json / MongoDB), bcrypt password hashing
+│       ├── TokenService.js    ← JWT RS256 sign/verify, refresh token rotation (db.js → lts.json / MongoDB)
+│       └── AuditService.js    ← Append-only auth audit log (db.js → lts.json / MongoDB, max 10 000 events)
 ├── certs/
 │   ├── jwt.key                ← RS256 private key (generated, git-ignored)
 │   └── jwt.pub                ← RS256 public key
@@ -120,66 +115,56 @@ return <Dashboard />;
 
 ## 3. Data Models
 
-### 3.1 User Record (`storage/users.json`)
+> **Storage Note:** `users`, `refresh_tokens`, `audit_logs` are unified tables in `db.js`. When `DB_TYPE=mongodb`, data is persisted to MongoDB; when `DB_TYPE=json`, it is written to `storage/lts.json`. Legacy separate JSON files (`users.json`, `tokens.json`, `audit.json`) are automatically migrated into `lts.json` on first startup.
+
+### 3.1 User Record (`db.js` — `users` table)
 
 ```json
 {
-  "users": [
-    {
-      "id": "uuid-v4",
-      "email": "user@example.com",
-      "name": "Jane Doe",
-      "avatar": "https://lh3.googleusercontent.com/...",
-      "provider": "google",
-      "providerAccountId": "google-sub-claim",
-      "role": "viewer",
-      "status": "pending",
-      "createdAt": "2026-05-28T09:00:00Z",
-      "approvedAt": null,
-      "approvedBy": null,
-      "lastLoginAt": null,
-      "loginCount": 0
-    }
-  ]
+  "id": "uuid-v4",
+  "email": "user@example.com",
+  "name": "Jane Doe",
+  "avatar": "https://lh3.googleusercontent.com/...",
+  "provider": "google",
+  "providerAccountId": "google-sub-claim",
+  "role": "viewer",
+  "status": "pending",
+  "createdAt": "2026-05-28T09:00:00Z",
+  "approvedAt": null,
+  "approvedBy": null,
+  "lastLoginAt": null,
+  "loginCount": 0
 }
 ```
 
 Status values: `"pending"` → `"active"` | `"rejected"`
 
-### 3.2 Refresh Token Record (`storage/tokens.json`)
+### 3.2 Refresh Token Record (`db.js` — `refresh_tokens` table)
 
 ```json
 {
-  "refreshTokens": [
-    {
-      "tokenHash": "sha256-hex-of-refresh-token",
-      "userId": "uuid-v4",
-      "issuedAt": "2026-05-28T09:00:00Z",
-      "expiresAt": "2026-06-04T09:00:00Z",
-      "revoked": false
-    }
-  ]
+  "tokenHash": "sha256-hex-of-refresh-token",
+  "userId": "uuid-v4",
+  "issuedAt": "2026-05-28T09:00:00Z",
+  "expiresAt": "2026-06-04T09:00:00Z",
+  "revoked": false
 }
 ```
 
-### 3.3 Audit Log Entry (`storage/audit.json`)
+### 3.3 Audit Log Entry (`db.js` — `audit_logs` table)
 
 ```json
 {
-  "events": [
-    {
-      "id": "uuid-v4",
-      "ts": "2026-05-28T09:00:00Z",
-      "event": "signup",
-      "userId": "uuid-v4",
-      "email": "user@example.com",
-      "provider": "google",
-      "ip": "203.0.113.1",
-      "userAgent": "Mozilla/5.0 ...",
-      "actorId": null,
-      "detail": {}
-    }
-  ]
+  "id": "uuid-v4",
+  "ts": "2026-05-28T09:00:00Z",
+  "event": "signup",
+  "userId": "uuid-v4",
+  "email": "user@example.com",
+  "provider": "google",
+  "ip": "203.0.113.1",
+  "userAgent": "Mozilla/5.0 ...",
+  "actorId": null,
+  "detail": {}
 }
 ```
 
@@ -422,3 +407,4 @@ client/package.json:
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for User Authentication |
+| 1.2 | 2026-06-17 | LTS Engineering Team | 서비스 저장소 통합: users.json·tokens.json·audit.json → db.js 통합 (lts.json / MongoDB) |

@@ -209,11 +209,26 @@ npm run ingest:restart -- --dry-run  # 설정 확인만
 4. 반환된 카메라 목록에서 선택하여 등록
 
 ### YouTube 스트림 수집
-1. 대상 YouTube URL 준비 (라이브 또는 녹화)
+1. 대상 YouTube URL 준비 (라이브 또는 녹화, HLS 전용 스트림 포함)
 2. `server/src/services/youtubeStreamService.js`에서 yt-dlp 경로 확인
-3. API 호출: `POST /api/streams/youtube` `{ "url": "https://youtube.com/..." }`
+3. API 호출: `POST /api/youtube-streams` `{ "youtubeUrl": "https://youtube.com/...", "name": "...", "resolution": "720p" }`
 4. MediaMTX 내부 경로로 RTSP 변환 후 파이프라인 연결 확인
-5. 참고: [Design_LTS2026_YouTube_RTSP_Ingest.md](../../../docs/design/Design_LTS2026_YouTube_RTSP_Ingest.md)
+5. 참고: [Design_YouTube_RTSP_Ingest.md](../../../docs/design/Design_YouTube_RTSP_Ingest.md)
+
+**FFmpeg 파이프라인 (youtubeStreamService.js `_buildFFmpegArgsPipe`):**
+- `-c:v copy`: H.264 소스 복사 (libx264 재인코딩 제거 → CPU 대폭 절감)
+- `-c:a aac -b:a 128k`: AAC 재인코딩 (HLS ADTS → MPEG-4 global header 변환 필수)
+- `-re` 플래그 제거: yt-dlp가 출력 속도를 제어, pipe 병목 방지
+- `--merge-output-format mkv`: DASH 스트림 병합 시 mkv 사용 (mp4는 pipe 스트리밍 불가)
+
+**yt-dlp 포맷 셀렉터 우선순위:**
+1. DASH (별도 video+audio): `bestvideo[ext=mp4][vcodec^=avc]+bestaudio[ext=m4a]` 등
+2. HLS 통합 스트림: `best[vcodec^=avc][height<=HEIGHT]` — 라이브 스트림·일부 VOD 전용
+
+**`STREAM_FAILED` 원인 진단:**
+- DASH 포맷이 없는 HLS 전용 스트림 → 현재 구현은 자동 폴백 지원
+- HLS AAC `AAC with no global headers` 오류 → `-c:a aac`로 자동 변환
+- `STREAM_TIMEOUT` → yt-dlp 또는 MediaMTX 문제, 로그 확인: `grep YouTubeStream /tmp/lts-server-dev.log`
 
 ### WebRTC 연결 문제 해결
 1. `server/src/services/webrtcGateway.js` ICE candidate 로그 확인

@@ -35,6 +35,7 @@ import os
 import ssl
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import urlparse
 from urllib.request import urlopen, Request
@@ -62,7 +63,8 @@ IDR_WAIT_TIMEOUT  = float(os.environ.get("IDR_WAIT_TIMEOUT", "10"))
 _RTSP_OPTIONS = {
     "rtsp_transport": "tcp",
     "stimeout":       "5000000",
-    "max_delay":      "500000",
+    "max_delay":      "100000",   # 500ms → 100ms: reduces initial buffering lag
+    "flags":          "low_delay",
 }
 
 # Must match VIDEO_SSRC / AUDIO_SSRC / AUDIO_PT in server/src/services/webrtc/mediasoupEngine.js.
@@ -107,6 +109,11 @@ class CameraSession:
 
         self._stop = threading.Event()
 
+        # Async HTTP push: bounded thread pool + semaphore prevent queue overflow
+        # when the AI server is slower than the capture rate.
+        self._push_executor  = ThreadPoolExecutor(max_workers=2, thread_name_prefix=f"push-{self.id[:8]}")
+        self._push_semaphore = threading.Semaphore(4)  # max 4 in-flight POST requests
+
         self._threads: list[threading.Thread] = []
 
         self._start_thread("ai",   self._ai_loop)
@@ -127,6 +134,7 @@ class CameraSession:
 
     def stop(self):
         self._stop.set()
+        self._push_executor.shutdown(wait=False)
         for t in self._threads:
             t.join(timeout=5)
         log.info("[%s] Stopped", self.id[:8])
@@ -193,32 +201,51 @@ class CameraSession:
             container.close()
 
     def _push_jpeg(self, frame: "av.VideoFrame"):
+        """
+        Encode the frame to JPEG (synchronous — fast, <5 ms) then submit the
+        HTTP POST to the AI server asynchronously so the decode loop is never
+        blocked waiting for a server response.  A semaphore caps in-flight
+        requests; excess frames are dropped with a debug log instead of queuing
+        unboundedly and consuming memory.
+        """
         try:
             img = frame.to_image()
             img = _resize_frame(img, AI_MAX_WIDTH)
             buf = io.BytesIO()
             img.save(buf, format="JPEG", quality=JPEG_QUALITY)
             jpeg_bytes = buf.getvalue()
-
-            req = Request(
-                self.callback_url,
-                data=jpeg_bytes,
-                headers={"Content-Type": "image/jpeg"},
-                method="POST",
-            )
-            ctx = _SSL_CTX_NOVERIFY if self.callback_url.startswith("https://") else None
-            with urlopen(req, timeout=3, context=ctx) as resp:
-                code = resp.getcode()
+            w, h = img.width, img.height
 
             if not hasattr(self, "_push_count"):
                 self._push_count = 0
             self._push_count += 1
-            if self._push_count == 1 or self._push_count % 100 == 0:
-                log.info("[%s] AI frame #%d: %dx%d → %dB → HTTP %d",
-                         self.id[:8], self._push_count,
-                         img.width, img.height, len(jpeg_bytes), code)
+            count = self._push_count
+
+            if not self._push_semaphore.acquire(blocking=False):
+                log.debug("[%s] AI busy — dropping frame #%d", self.id[:8], count)
+                return
+
+            url      = self.callback_url
+            is_https = url.startswith("https://")
+
+            def _post():
+                try:
+                    req = Request(url, data=jpeg_bytes,
+                                  headers={"Content-Type": "image/jpeg"}, method="POST")
+                    ctx = _SSL_CTX_NOVERIFY if is_https else None
+                    with urlopen(req, timeout=3, context=ctx) as resp:
+                        code = resp.getcode()
+                    if count == 1 or count % 100 == 0:
+                        log.info("[%s] AI frame #%d: %dx%d → %dB → HTTP %d",
+                                 self.id[:8], count, w, h, len(jpeg_bytes), code)
+                except Exception as e:
+                    log.warning("[%s] push_jpeg failed: %s", self.id[:8], e)
+                finally:
+                    self._push_semaphore.release()
+
+            self._push_executor.submit(_post)
         except Exception as e:
-            log.warning("[%s] push_jpeg failed: %s", self.id[:8], e)
+            log.warning("[%s] push_jpeg prep failed: %s", self.id[:8], e)
 
     # ── Video RTP path (H.264 → mediasoup PlainTransport) ─────────────────────
 
@@ -358,11 +385,28 @@ class CameraSession:
                     out.close()
             else:
                 out_as     = out.add_stream("libopus", rate=48000)
-                out_as.layout = "stereo"
-                resampler  = av.AudioResampler(format="fltp", layout="stereo", rate=48000)
+                out_as.codec_context.channels = 2
+                out_as.codec_context.layout   = "stereo"
+                # libopus on this system requires s16 (signed 16-bit integer), not fltp.
+                resampler  = av.AudioResampler(format="s16", layout="stereo", rate=48000)
                 log.info("[%s] Audio RTP transcode %s → opus → rtp://127.0.0.1:%d",
                          self.id[:8], as_.codec_context.name, self.mediasoup_audio_port)
                 try:
+                    last_out_dts = None
+
+                    def _mux_enc(pkt):
+                        nonlocal last_out_dts
+                        if pkt.dts is not None:
+                            if last_out_dts is not None and pkt.dts <= last_out_dts:
+                                pkt.dts = last_out_dts + 1
+                                if pkt.pts is not None and pkt.pts < pkt.dts:
+                                    pkt.pts = pkt.dts
+                            last_out_dts = pkt.dts
+                        try:
+                            out.mux(pkt)
+                        except av.AVError:
+                            pass
+
                     for pkt in inp.demux(as_):
                         if self._stop.is_set():
                             break
@@ -371,13 +415,13 @@ class CameraSession:
                         for frame in pkt.decode():
                             for resampled in resampler.resample(frame):
                                 for out_pkt in out_as.encode(resampled):
-                                    out.mux(out_pkt)
+                                    _mux_enc(out_pkt)
                     # Flush encoder
                     for frame in resampler.resample(None):
                         for out_pkt in out_as.encode(frame):
-                            out.mux(out_pkt)
+                            _mux_enc(out_pkt)
                     for out_pkt in out_as.encode(None):
-                        out.mux(out_pkt)
+                        _mux_enc(out_pkt)
                 finally:
                     out.close()
         finally:

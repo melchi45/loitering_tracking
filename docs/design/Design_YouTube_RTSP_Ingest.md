@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-YT-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-05-27 |
 | **Parent SRS** | srs/SRS_YouTube_RTSP_Ingest.md |
@@ -153,7 +153,7 @@ async _startStream(entry) {
   const ytdlp = spawn(YTDLP_BIN, [
     '--no-playlist',
     '--format', FORMAT_STRING,          // H.264 priority chain
-    '--merge-output-format', 'mp4',
+    '--merge-output-format', 'mkv',     // mkv is natively streamable; mp4 needs seeking
     '-o', '-',
     '--no-progress', '--newline',
     ...(YTDLP_NO_CHECK_CERT ? ['--no-check-certificate'] : []),
@@ -161,14 +161,9 @@ async _startStream(entry) {
   ], { stdio: ['ignore', 'pipe', 'pipe'] })
 
   const ffmpeg = spawn(FFMPEG_BIN, [
-    '-re', '-i', 'pipe:0',
-    '-c:v', 'libx264', '-profile:v', 'main', '-level', '4.1',
-    '-preset', 'ultrafast', '-tune', 'zerolatency',
-    '-b:v', `${entry.bitrate}k`, '-maxrate', `${entry.bitrate}k`,
-    '-bufsize', `${entry.bitrate * 2}k`,
-    '-vf', `scale=-2:${HEIGHT_MAP[entry.resolution]}`,
-    '-g', '60', '-keyint_min', '30', '-sc_threshold', '0',
-    '-c:a', 'aac', '-b:a', '128k', '-ar', '44100',
+    '-i', 'pipe:0',                 // No -re: rate controlled by yt-dlp
+    '-c:v', 'copy',                 // Copy H.264 — no re-encoding (CPU savings)
+    '-c:a', 'aac', '-b:a', '128k', // Re-encode AAC: converts ADTS→MPEG-4 headers
     '-f', 'rtsp', '-rtsp_transport', 'tcp',
     entry.rtspUrl,
   ], { stdio: [ytdlp.stdout, 'pipe', 'pipe'] })
@@ -248,10 +243,8 @@ yt-dlp (pipe mode)
                                                   ▼
                                              FFmpeg
                                                ├─ stdin = yt-dlp.stdout
-                                               ├─ decode: H.264/VP9/AV1
-                                               ├─ encode: libx264 main@4.1
-                                               ├─ audio: AAC 128k 44100Hz
-                                               ├─ scale: -2:<height>
+                                               ├─ copy: H.264 (no re-encode)
+                                               ├─ audio: AAC 128k (ADTS→MPEG-4)
                                                └─ output: rtsp://127.0.0.1:8554/yt/<id>
                                                           (RTSP over TCP)
                                                                │
@@ -269,10 +262,15 @@ yt-dlp (pipe mode)
 ### yt-dlp Format String
 
 ```
-bestvideo[vcodec^=avc1]+bestaudio[acodec^=mp4a]/
-bestvideo[vcodec^=avc1]+bestaudio/
-bestvideo+bestaudio/
-best[vcodec^=avc1]/
+// DASH (separate video+audio) — highest quality, most VODs
+bestvideo[ext=mp4][vcodec^=avc][height<=HEIGHT]+bestaudio[ext=m4a]/
+bestvideo[vcodec^=avc][height<=HEIGHT]+bestaudio[ext=m4a]/
+bestvideo[vcodec^=avc][height<=HEIGHT]+bestaudio/
+bestvideo[vcodec^=avc]+bestaudio/
+// HLS combined — live streams, age-restricted videos, some VODs
+best[vcodec^=avc][height<=HEIGHT]/
+best[vcodec^=avc]/
+best[height<=HEIGHT]/
 best
 ```
 
@@ -315,19 +313,22 @@ interface StreamEntry {
   "resolution": "720p",
   "bitrate": 1500000,
   "repeatPlayback": false,
+  "webrtcEnabled": true,
   "status": "offline"
 }
 ```
 
-> **Note:** `bitrate` stored as bps in DB; API and in-memory use kbps.
+> **Note:** `bitrate` stored as bps in DB; API and in-memory use kbps. `webrtcEnabled` defaults to `true` for newly created YouTube cameras.
 
-### 6.3 Resolution / Bitrate / Scale Map
+### 6.3 Resolution / Bitrate Map
 
-| Resolution | `-vf scale` | Default Bitrate | kbps Range |
+| Resolution | yt-dlp height filter | Default Bitrate | kbps Range |
 |---|---|---|---|
-| `1080p` | `scale=-2:1080` | 2500 kbps | 2000–4000 |
-| `720p` | `scale=-2:720` | 1500 kbps | 1000–2000 |
-| `480p` | `scale=-2:480` | 750 kbps | 500–1000 |
+| `1080p` | `height<=1080` | 2500 kbps | 2000–4000 |
+| `720p` | `height<=720` | 1500 kbps | 1000–2000 |
+| `480p` | `height<=480` | 750 kbps | 500–1000 |
+
+> **Note:** With `-c:v copy`, FFmpeg no longer applies a `-vf scale` filter. Resolution is enforced by the yt-dlp format selector (`height<=HEIGHT`). The `bitrate` field is retained for backward compatibility but does not control FFmpeg encoding when copying.
 
 ---
 
@@ -561,3 +562,4 @@ ffmpeg.on('close', (code, signal) => {
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for YouTube RTSP Ingest |
+| 1.1 | 2026-06-17 | LTS Engineering Team | FFmpeg 파이프라인 최적화: libx264 → -c:v copy, HLS 폴백 포맷 셀렉터 추가, webrtcEnabled 기본값 추가 |

@@ -26,7 +26,7 @@ if (!fs.existsSync(STORAGE_PATH)) fs.mkdirSync(STORAGE_PATH, { recursive: true }
 const DB_PATH = path.join(STORAGE_PATH, 'lts.json');
 
 // ── In-memory store ──────────────────────────────────────────────────────────
-const ALL_TABLES = ['cameras', 'zones', 'events', 'alerts', 'faceGalleries', 'faceGalleryFaces', 'settings', 'detectionSnapshots', 'faceMatchHistory', 'missing_persons', 'missing_person_detections', 'analysisEvents', 'client_logs', 'client_webrtc_stats', 'onvif_events', 'onvif_event_types', 'detectionTracks'];
+const ALL_TABLES = ['cameras', 'zones', 'events', 'alerts', 'faceGalleries', 'faceGalleryFaces', 'settings', 'detectionSnapshots', 'faceMatchHistory', 'missing_persons', 'missing_person_detections', 'analysisEvents', 'client_logs', 'client_webrtc_stats', 'onvif_events', 'onvif_event_types', 'detectionTracks', 'users', 'refresh_tokens', 'audit_logs'];
 
 let store = {};
 ALL_TABLES.forEach(t => { store[t] = []; });
@@ -77,7 +77,7 @@ function persistJson() {
 // already durably stored in MongoDB.
 const MONGO_ONLY_TABLES = new Set([
   'events', 'alerts', 'detectionSnapshots', 'faceMatchHistory', 'missing_person_detections',
-  'client_logs', 'client_webrtc_stats',
+  'client_logs', 'client_webrtc_stats', 'audit_logs',
 ]);
 
 // Max rows kept in-memory per table. Oldest records are evicted when the cap is
@@ -93,6 +93,8 @@ const TABLE_ROW_CAPS = {
   client_webrtc_stats:        5000,
   onvif_events:              50000,
   detectionTracks:           10000,
+  refresh_tokens:            10000,
+  audit_logs:                10000,
 };
 
 /** Synchronous atomic write: write to .tmp, then rename to final path. */
@@ -278,8 +280,35 @@ const db = {
  *
  * @returns {Promise<typeof db>}
  */
+// Legacy separate JSON files used before db.js unified them.
+// Migrated on first startup when the table is empty in lts.json.
+const LEGACY_MIGRATIONS = [
+  { table: 'users',          file: 'users.json',  key: 'users' },
+  { table: 'refresh_tokens', file: 'tokens.json', key: 'refreshTokens' },
+  { table: 'audit_logs',     file: 'audit.json',  key: 'events' },
+];
+
 async function initDB() {
   loadFromJson(); // always: warm start from JSON
+
+  // One-time migration: load from legacy separate JSON files if tables are empty
+  for (const { table, file, key } of LEGACY_MIGRATIONS) {
+    if (store[table].length === 0) {
+      const legacyPath = path.join(STORAGE_PATH, file);
+      if (fs.existsSync(legacyPath)) {
+        try {
+          const raw  = JSON.parse(fs.readFileSync(legacyPath, 'utf8'));
+          const rows = raw[key];
+          if (Array.isArray(rows) && rows.length > 0) {
+            store[table] = rows;
+            console.log(`[DB] Migrated ${rows.length} rows: ${file} → ${table} (original file kept)`);
+          }
+        } catch (e) {
+          console.warn(`[DB] Migration from ${file} failed:`, e.message);
+        }
+      }
+    }
+  }
 
   if (process.env.DB_TYPE === 'mongodb') {
     const uri    = process.env.MONGODB_URI;

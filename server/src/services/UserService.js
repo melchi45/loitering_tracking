@@ -1,32 +1,15 @@
 'use strict';
 
-const fs   = require('fs');
-const path = require('path');
 const { v4: uuidv4 } = require('uuid');
+const { getDB } = require('../db');
 
-const STORAGE_PATH = process.env.STORAGE_PATH
-  ? path.resolve(process.cwd(), process.env.STORAGE_PATH)
-  : path.resolve(__dirname, '../../storage');
+// ── internal helpers ─────────────────────────────────────────────────────────
 
-const USERS_FILE = path.join(STORAGE_PATH, 'users.json');
-
-// ── helpers ──────────────────────────────────────────────────────────────────
-
-function _load() {
-  try {
-    if (fs.existsSync(USERS_FILE)) {
-      const raw = JSON.parse(fs.readFileSync(USERS_FILE, 'utf8'));
-      return Array.isArray(raw.users) ? raw.users : [];
-    }
-  } catch {}
-  return [];
-}
-
-function _save(users) {
-  if (!fs.existsSync(STORAGE_PATH)) fs.mkdirSync(STORAGE_PATH, { recursive: true });
-  const tmp = USERS_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify({ users }, null, 2));
-  fs.renameSync(tmp, USERS_FILE);
+/** Strip passwordHash before returning a user to callers. */
+function _safe(user) {
+  if (!user) return null;
+  const { passwordHash: _, ...safe } = user;
+  return safe;
 }
 
 // ── public API ───────────────────────────────────────────────────────────────
@@ -36,7 +19,7 @@ function _save(users) {
  * @returns {object|null}
  */
 function findById(id) {
-  return _load().find(u => u.id === id) ?? null;
+  return _safe(getDB().findOne('users', { id }));
 }
 
 /**
@@ -45,7 +28,7 @@ function findById(id) {
  */
 function findByEmail(email) {
   const lc = email.toLowerCase();
-  return _load().find(u => u.email.toLowerCase() === lc) ?? null;
+  return _safe(getDB().all('users').find(u => u.email === lc) ?? null);
 }
 
 /**
@@ -53,7 +36,7 @@ function findByEmail(email) {
  * @param {{ status?: string, search?: string }} opts
  */
 function list({ status, search } = {}) {
-  let users = _load();
+  let users = getDB().all('users');
   if (status) users = users.filter(u => u.status === status);
   if (search) {
     const q = search.toLowerCase();
@@ -65,8 +48,7 @@ function list({ status, search } = {}) {
       (u.bio          || '').toLowerCase().includes(q)
     );
   }
-  // Never return password hash to callers
-  return users.map(({ passwordHash: _, ...rest }) => rest);
+  return users.map(_safe);
 }
 
 /**
@@ -74,31 +56,28 @@ function list({ status, search } = {}) {
  * Returns the created user (without passwordHash).
  */
 function create({ email, name, passwordHash, role = 'viewer' }) {
-  const users = _load();
-  // Determine status: first user ever → auto-approved admin
-  const isFirst     = users.length === 0;
-  const seedEmail   = (process.env.ADMIN_SEED_EMAIL || '').toLowerCase();
+  const db      = getDB();
+  const users   = db.all('users');
+  const isFirst = users.length === 0;
+  const seedEmail  = (process.env.ADMIN_SEED_EMAIL || '').toLowerCase();
   const isAdminSeed = seedEmail && email.toLowerCase() === seedEmail;
 
   const user = {
-    id:             uuidv4(),
-    email:          email.toLowerCase(),
-    name:           name || email.split('@')[0],
+    id:          uuidv4(),
+    email:       email.toLowerCase(),
+    name:        name || email.split('@')[0],
     passwordHash,
-    role:           (isFirst || isAdminSeed) ? 'admin' : role,
-    status:         (isFirst || isAdminSeed) ? 'active' : 'pending',
-    createdAt:      new Date().toISOString(),
-    approvedAt:     (isFirst || isAdminSeed) ? new Date().toISOString() : null,
-    approvedBy:     (isFirst || isAdminSeed) ? 'system' : null,
-    lastLoginAt:    null,
-    loginCount:     0,
+    role:        (isFirst || isAdminSeed) ? 'admin'  : role,
+    status:      (isFirst || isAdminSeed) ? 'active' : 'pending',
+    createdAt:   new Date().toISOString(),
+    approvedAt:  (isFirst || isAdminSeed) ? new Date().toISOString() : null,
+    approvedBy:  (isFirst || isAdminSeed) ? 'system' : null,
+    lastLoginAt: null,
+    loginCount:  0,
   };
 
-  users.push(user);
-  _save(users);
-
-  const { passwordHash: _, ...safe } = user;
-  return safe;
+  db.insert('users', user);
+  return _safe(user);
 }
 
 /**
@@ -106,43 +85,40 @@ function create({ email, name, passwordHash, role = 'viewer' }) {
  * action: 'approve' | 'reject' | 'revoke' | 'reactivate'
  */
 function updateStatus(id, { action, role } = {}) {
-  const users = _load();
-  const idx   = users.findIndex(u => u.id === id);
-  if (idx === -1) return null;
+  const db   = getDB();
+  const user = db.findOne('users', { id });
+  if (!user) return null;
 
-  const user = users[idx];
+  const updates = {};
   switch (action) {
     case 'approve':
-      user.status     = 'active';
-      user.approvedAt = new Date().toISOString();
+      updates.status     = 'active';
+      updates.approvedAt = new Date().toISOString();
       break;
     case 'reject':
-      user.status = 'rejected';
+      updates.status = 'rejected';
       break;
     case 'revoke':
-      user.status = 'revoked';
+      updates.status = 'revoked';
       break;
     case 'reactivate':
-      user.status = 'active';
+      updates.status = 'active';
       break;
   }
-  if (role && ['admin', 'operator', 'viewer'].includes(role)) {
-    user.role = role;
-  }
+  if (role && ['admin', 'operator', 'viewer'].includes(role)) updates.role = role;
 
-  _save(users);
-  const { passwordHash: _, ...safe } = user;
-  return safe;
+  db.update('users', id, updates);
+  return _safe(db.findOne('users', { id }));
 }
 
 /** Record a successful login. */
 function recordLogin(id) {
-  const users = _load();
-  const user  = users.find(u => u.id === id);
+  const user = getDB().findOne('users', { id });
   if (user) {
-    user.lastLoginAt = new Date().toISOString();
-    user.loginCount  = (user.loginCount || 0) + 1;
-    _save(users);
+    getDB().update('users', id, {
+      lastLoginAt: new Date().toISOString(),
+      loginCount:  (user.loginCount || 0) + 1,
+    });
   }
 }
 
@@ -153,38 +129,39 @@ function recordLogin(id) {
  * @returns {object|null} safe user record (no passwordHash)
  */
 function updateProfile(id, { name, organization, phone, bio, avatarDataUrl } = {}) {
-  const users = _load();
-  const idx   = users.findIndex(u => u.id === id);
-  if (idx === -1) return null;
-  const user = users[idx];
-  if (name          !== undefined) user.name          = name;
-  if (organization  !== undefined) user.organization  = organization;
-  if (phone         !== undefined) user.phone         = phone;
-  if (bio           !== undefined) user.bio           = bio;
-  if (avatarDataUrl !== undefined) user.avatarDataUrl = avatarDataUrl;
-  _save(users);
-  const { passwordHash: _, ...safe } = user;
-  return safe;
+  const db   = getDB();
+  const user = db.findOne('users', { id });
+  if (!user) return null;
+
+  const updates = {};
+  if (name          !== undefined) updates.name          = name;
+  if (organization  !== undefined) updates.organization  = organization;
+  if (phone         !== undefined) updates.phone         = phone;
+  if (bio           !== undefined) updates.bio           = bio;
+  if (avatarDataUrl !== undefined) updates.avatarDataUrl = avatarDataUrl;
+
+  db.update('users', id, updates);
+  return _safe(db.findOne('users', { id }));
 }
 
 /** Delete a user by id. Returns true if found and deleted. */
 function remove(id) {
-  const users   = _load();
-  const updated = users.filter(u => u.id !== id);
-  if (updated.length === users.length) return false;
-  _save(updated);
+  const db   = getDB();
+  const user = db.findOne('users', { id });
+  if (!user) return false;
+  db.delete('users', id);
   return true;
 }
 
 /** Return the raw user record including passwordHash (for auth verification). */
 function findByIdWithHash(id) {
-  return _load().find(u => u.id === id) ?? null;
+  return getDB().findOne('users', { id }) ?? null;
 }
 
 /** Return the raw user record including passwordHash (for auth verification). */
 function findByEmailWithHash(email) {
   const lc = email.toLowerCase();
-  return _load().find(u => u.email.toLowerCase() === lc) ?? null;
+  return getDB().all('users').find(u => u.email === lc) ?? null;
 }
 
 /**
@@ -192,62 +169,54 @@ function findByEmailWithHash(email) {
  * @returns {object|null}
  */
 function findByProvider(provider, providerId) {
-  return _load().find(u => u.provider === provider && u.providerId === providerId) ?? null;
+  return getDB().all('users').find(u => u.provider === provider && u.providerId === providerId) ?? null;
 }
 
 /**
  * Create or update a user from an OAuth provider callback.
- * - Matches first by (provider, providerId), then falls back to email.
- * - New users get status='pending' (or 'active' if first / ADMIN_SEED_EMAIL).
  * Returns the safe user record (no passwordHash).
  */
 function upsertOAuthUser({ provider, providerId, email, name }) {
-  const users   = _load();
+  const db      = getDB();
   const emailLc = email.toLowerCase();
+  const users   = db.all('users');
 
-  // 1. Find existing user by provider + providerId
-  let idx = users.findIndex(u => u.provider === provider && u.providerId === providerId);
+  // 1. Find by provider + providerId
+  let existing = users.find(u => u.provider === provider && u.providerId === providerId);
 
-  // 2. Fall back: find by email (link OAuth to existing account)
-  if (idx === -1) idx = users.findIndex(u => u.email === emailLc);
+  // 2. Fallback: find by email (link OAuth to existing account)
+  if (!existing) existing = users.find(u => u.email === emailLc);
 
-  if (idx !== -1) {
-    const u = users[idx];
-    // Link OAuth provider if account was previously local-only
-    if (!u.provider || u.provider === 'local') {
-      u.provider   = provider;
-      u.providerId = providerId;
-      _save(users);
+  if (existing) {
+    if (!existing.provider || existing.provider === 'local') {
+      db.update('users', existing.id, { provider, providerId });
     }
-    const { passwordHash: _, ...safe } = u;
-    return safe;
+    return _safe(db.findOne('users', { id: existing.id }));
   }
 
   // 3. New user
-  const isFirst    = users.length === 0;
-  const seedEmail  = (process.env.ADMIN_SEED_EMAIL || '').toLowerCase();
+  const isFirst     = users.length === 0;
+  const seedEmail   = (process.env.ADMIN_SEED_EMAIL || '').toLowerCase();
   const isAdminSeed = seedEmail && emailLc === seedEmail;
 
   const user = {
-    id:          uuidv4(),
-    email:       emailLc,
-    name:        name || email.split('@')[0],
+    id:           uuidv4(),
+    email:        emailLc,
+    name:         name || email.split('@')[0],
     passwordHash: null,
     provider,
     providerId,
-    role:        (isFirst || isAdminSeed) ? 'admin'  : 'viewer',
-    status:      (isFirst || isAdminSeed) ? 'active' : 'pending',
-    createdAt:   new Date().toISOString(),
-    approvedAt:  (isFirst || isAdminSeed) ? new Date().toISOString() : null,
-    approvedBy:  (isFirst || isAdminSeed) ? 'system' : null,
-    lastLoginAt: null,
-    loginCount:  0,
+    role:         (isFirst || isAdminSeed) ? 'admin'  : 'viewer',
+    status:       (isFirst || isAdminSeed) ? 'active' : 'pending',
+    createdAt:    new Date().toISOString(),
+    approvedAt:   (isFirst || isAdminSeed) ? new Date().toISOString() : null,
+    approvedBy:   (isFirst || isAdminSeed) ? 'system' : null,
+    lastLoginAt:  null,
+    loginCount:   0,
   };
 
-  users.push(user);
-  _save(users);
-  const { passwordHash: _, ...safe } = user;
-  return safe;
+  db.insert('users', user);
+  return _safe(user);
 }
 
 module.exports = {
@@ -264,4 +233,3 @@ module.exports = {
   recordLogin,
   remove,
 };
-

@@ -129,6 +129,7 @@ class YouTubeStreamService {
         // DB stores bps; in-memory entry uses kbps (same as createStream)
         bitrate:        cam.bitrate ? Math.round(cam.bitrate / 1000) : 2000,
         maxHeight:      RESOLUTION_MAP[cam.resolution] || 1080,
+        webrtcEnabled:  cam.webrtcEnabled !== false, // default true for restored streams
         status:         'offline',
         restartCount:   0,
         repeatPlayback: !!cam.repeatPlayback,
@@ -171,7 +172,7 @@ class YouTubeStreamService {
    * @param {{ youtubeUrl: string, name: string, resolution?: string, bitrate?: number }} opts
    * @returns {Promise<object>} camera record
    */
-  async createStream({ youtubeUrl, name, resolution = '1080p', bitrate = 2000, repeatPlayback = false }) {
+  async createStream({ youtubeUrl, name, resolution = '1080p', bitrate = 2000, repeatPlayback = false, webrtcEnabled = true }) {
     // Validate URL
     if (!YOUTUBE_URL_REGEX.test(youtubeUrl)) {
       const err = new Error('INVALID_YOUTUBE_URL');
@@ -201,6 +202,7 @@ class YouTubeStreamService {
       resolution,
       bitrate,
       maxHeight,
+      webrtcEnabled:  !!webrtcEnabled,
       status:         'starting',
       restartCount:   0,
       repeatPlayback: !!repeatPlayback,
@@ -219,12 +221,13 @@ class YouTubeStreamService {
       id,
       name,
       rtspUrl,
-      type:          'youtube',
+      type:           'youtube',
       youtubeUrl,
       resolution,
-      bitrate:       bitrate * 1000, // store as bps
+      bitrate:        bitrate * 1000, // store as bps
       repeatPlayback: !!repeatPlayback,
-      status:        'offline',
+      webrtcEnabled:  !!webrtcEnabled,
+      status:         'offline',
     });
 
     console.log(`[YouTubeStream] Creating stream ${id}: ${youtubeUrl}`);
@@ -340,6 +343,12 @@ class YouTubeStreamService {
       this.db.update('cameras', id, { repeatPlayback: !!updates.repeatPlayback });
     }
 
+    if (updates.webrtcEnabled !== undefined) {
+      entry.webrtcEnabled = !!updates.webrtcEnabled;
+      this.db.update('cameras', id, { webrtcEnabled: !!updates.webrtcEnabled });
+      needRestart = true;
+    }
+
     if (needRestart) {
       // Restart asynchronously so the API response returns immediately
       this._stopEntry(entry, false).then(async () => {
@@ -431,30 +440,19 @@ class YouTubeStreamService {
    * @returns {string[]}
    */
   _buildFFmpegArgsPipe(entry) {
-    const bitrateK = entry.bitrate;
-    const bufsizeK = bitrateK * 2;
-    const scale    = `scale=-2:${entry.maxHeight}`;
-
     return [
-      '-re',
-      '-i', 'pipe:0',   // read from yt-dlp stdout pipe
-      // Video
-      '-c:v',          'libx264',
-      '-profile:v',    'main',
-      '-level',        '4.1',
-      '-preset',       'ultrafast',
-      '-tune',         'zerolatency',
-      '-b:v',          `${bitrateK}k`,
-      '-maxrate',      `${bitrateK}k`,
-      '-bufsize',      `${bufsizeK}k`,
-      '-vf',           scale,
-      '-g',            '60',
-      '-keyint_min',   '30',
-      '-sc_threshold', '0',
-      // Audio
-      '-c:a', 'aac',
-      '-b:a', '128k',
-      '-ar',  '44100',
+      // No -re: pipe rate is controlled by yt-dlp; -re causes buffering/garbling
+      '-i', 'pipe:0',
+      // Copy H.264 video as-is — no libx264 re-encoding (eliminates >90% CPU usage).
+      // yt-dlp format selector already enforces vcodec^=avc so the source is H.264.
+      '-c:v', 'copy',
+      // Re-encode audio to AAC.
+      // HLS (m3u8) combined streams deliver AAC in ADTS format (no global headers).
+      // The RTSP muxer rejects ADTS at av_write_header() time — before any BSF runs.
+      // Re-encoding produces MPEG-4 AAC with proper AudioSpecificConfig headers,
+      // which RTSP requires. For DASH streams (already MPEG-4 AAC), re-encoding is
+      // harmless extra CPU but ensures compatibility for all input types.
+      '-c:a', 'aac', '-b:a', '128k',
       // Output
       '-f',              'rtsp',
       '-rtsp_transport', 'tcp',
@@ -478,19 +476,29 @@ class YouTubeStreamService {
       entry.liveReject  = reject;
 
       // ── Spawn yt-dlp in pipe mode ─────────────────────────────────────────
-      // Format priority: prefer H.264 (avc) to avoid AV1/VP9 which FFmpeg 3.x cannot decode.
-      // Fallback chain ensures we always get a playable stream.
+      // Strict H.264 (avc) only — we use -c:v copy so source MUST be H.264.
+      // VP9/AV1 would be copied as-is and MediaMTX/mediasoup would reject them.
+      //
+      // Fallback order:
+      //   1. DASH (separate video+audio) — highest quality, most VOD videos
+      //   2. HLS combined (m3u8)         — live streams, age-restricted, some VODs
+      //   3. Any H.264 combined          — last resort
       const fmtH264 = [
+        // DASH: separate video+audio streams
         `bestvideo[ext=mp4][vcodec^=avc][height<=${entry.maxHeight}]+bestaudio[ext=m4a]`,
+        `bestvideo[vcodec^=avc][height<=${entry.maxHeight}]+bestaudio[ext=m4a]`,
         `bestvideo[vcodec^=avc][height<=${entry.maxHeight}]+bestaudio`,
-        `best[ext=mp4][vcodec^=avc][height<=${entry.maxHeight}]`,
-        `best[ext=mp4][height<=${entry.maxHeight}]`,
+        `bestvideo[vcodec^=avc]+bestaudio`,
+        // HLS: combined video+audio (live streams only have these)
+        `best[vcodec^=avc][height<=${entry.maxHeight}]`,
+        `best[vcodec^=avc]`,
         `best[height<=${entry.maxHeight}]`,
+        `best`,
       ].join('/');
       const ytArgs = [
         '--no-playlist',
         '--format', fmtH264,
-        '--merge-output-format', 'mp4',
+        '--merge-output-format', 'mkv',  // mkv is naturally streamable; mp4 needs seeking
         '-o', '-',           // output binary stream to stdout
         '--no-progress',     // suppress progress bars (keep errors/warnings visible)
         '--newline',         // one status line per update (easier parsing)
@@ -769,6 +777,7 @@ class YouTubeStreamService {
       resolution:     entry.resolution,
       bitrate:        entry.bitrate,
       repeatPlayback: entry.repeatPlayback || false,
+      webrtcEnabled:  entry.webrtcEnabled !== false,
       status:         entry.status,
       restartCount:   entry.restartCount,
       uptimeSeconds:  uptime,
