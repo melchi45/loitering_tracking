@@ -1416,9 +1416,9 @@ router.post('/models/download', express.json({ limit: '1kb' }), async (req, res)
       await new Promise((resolve, reject) => doDownload(entry.url, ptPath, (err) => err ? reject(err) : resolve()));
       _downloadProgress.set(modelId, { status: 'converting', percent: 95, error: null });
 
-      // Resolve Python with ultralytics — try candidates in priority order.
-      // PYTHON_EXEC_LINUX may point to a Python build without _lzma; fall back to
-      // /usr/bin/python3 which typically has a complete standard library.
+      // Resolve Python with ultralytics that supports YOLO12 (cfg/models/12 directory).
+      // ultralytics < 8.3.x uses 'v12' or missing dir and cannot export YOLO12 weights.
+      // Check must verify YOLO12 support explicitly, not just 'import ultralytics'.
       const { execFileSync } = require('child_process');
       const pyCandidates = [
         process.env.PYTHON_EXEC,
@@ -1427,11 +1427,16 @@ router.post('/models/download', express.json({ limit: '1kb' }), async (req, res)
         'python3',
         'python',
       ].filter(Boolean);
+      const pyCheckScript = [
+        'import ultralytics, os',
+        'cfg12 = os.path.join(os.path.dirname(ultralytics.__file__), "cfg", "models", "12")',
+        'assert os.path.exists(cfg12), "YOLO12 not supported (ultralytics " + ultralytics.__version__ + ")"',
+      ].join('; ');
       let pyExec = null;
       for (const cand of pyCandidates) {
-        try { execFileSync(cand, ['-c', 'import ultralytics'], { timeout: 5000 }); pyExec = cand; break; } catch {}
+        try { execFileSync(cand, ['-c', pyCheckScript], { timeout: 8000 }); pyExec = cand; break; } catch {}
       }
-      if (!pyExec) throw new Error('Python with ultralytics not found. Run: pip install ultralytics');
+      if (!pyExec) throw new Error('Python with ultralytics >=8.3 (YOLO12 support) not found. Run: pip install -U ultralytics');
 
       const script = [
         'from ultralytics import YOLO',

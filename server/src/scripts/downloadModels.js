@@ -52,7 +52,8 @@ const YOLO12_MODELS = [
   { id: 'yolo12x', ptFile: 'yolo12x.pt', onnxFile: 'yolo12x.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12x.pt', size: '~118 MB PT' },
 ];
 
-// Find Python that has ultralytics — PYTHON_EXEC_LINUX may lack _lzma so try /usr/bin/python3 as fallback.
+// Find Python with ultralytics that supports YOLO12 (cfg/models/12 directory).
+// ultralytics < 8.3.x has no YOLO12 support; check explicitly.
 const { execFileSync } = require('child_process');
 const _pyCandidates = [
   process.env.PYTHON_EXEC,
@@ -61,12 +62,17 @@ const _pyCandidates = [
   'python3',
   'python',
 ].filter(Boolean);
+const _pyCheckScript = [
+  'import ultralytics, os',
+  'cfg12 = os.path.join(os.path.dirname(ultralytics.__file__), "cfg", "models", "12")',
+  'assert os.path.exists(cfg12), "YOLO12 not supported (ultralytics " + ultralytics.__version__ + ")"',
+].join('; ');
 let PYTHON_EXEC = null;
 for (const cand of _pyCandidates) {
-  try { execFileSync(cand, ['-c', 'import ultralytics'], { timeout: 5000, stdio: 'pipe' }); PYTHON_EXEC = cand; break; } catch {}
+  try { execFileSync(cand, ['-c', _pyCheckScript], { timeout: 8000, stdio: 'pipe' }); PYTHON_EXEC = cand; break; } catch {}
 }
 if (!PYTHON_EXEC) {
-  console.warn('Warning: Python with ultralytics not found — YOLO12 export will fail. Run: pip install ultralytics');
+  console.warn('Warning: Python with ultralytics >=8.3 (YOLO12 support) not found — YOLO12 export will fail. Run: pip install -U ultralytics');
   PYTHON_EXEC = 'python3';
 }
 

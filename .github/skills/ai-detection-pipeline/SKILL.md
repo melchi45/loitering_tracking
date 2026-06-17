@@ -70,7 +70,32 @@ Python 인터프리터 자동 탐지 순서:
 ```
 PYTHON_EXEC → PYTHON_EXEC_LINUX → /usr/bin/python3 → python3 → python
 ```
-> `PYTHON_EXEC_LINUX`(`~/.local/bin/python3`)가 `_lzma` 미설치 시 `import ultralytics` 실패 → `/usr/bin/python3` 폴백 사용.
+> 단순 `import ultralytics`가 아닌 **YOLO12 지원 여부**(cfg/models/12 디렉토리 존재)를 검사.
+> ultralytics < 8.3.x는 YOLO12 아키텍처 미지원 → 해당 인터프리터 건너뜀.
+> 이 서버에서 `/usr/bin/python3` (Python 3.7.5, ultralytics 8.0.145)는 건너뛰고,
+> `python3` → `~/.local/bin/python3` (Python 3.11.9, ultralytics 8.4.63)이 선택됨.
+
+**`_lzma` 컴파일 (시스템 의존성 설정):**
+`~/.local/opt/python3.11`은 `_lzma` 없이 빌드됨 → torchvision import 시 오류.
+아래 과정으로 수동 컴파일하여 해결:
+```bash
+# 1. liblzma-dev 헤더 확보 (sudo 없이)
+apt-get download liblzma-dev && dpkg -x liblzma-dev_*.deb /tmp/lzma-dev
+
+# 2. CPython 3.11.9 _lzma C 소스 다운로드
+curl -sL https://raw.githubusercontent.com/python/cpython/v3.11.9/Modules/_lzmamodule.c -o /tmp/_lzmamodule.c
+curl -sL https://raw.githubusercontent.com/python/cpython/v3.11.9/Modules/clinic/_lzmamodule.c.h -o /tmp/clinic/_lzmamodule.c.h
+
+# 3. 컴파일 (system liblzma.so.5 rpath 포함)
+PY311_INC=~/.local/opt/python3.11/include/python3.11
+gcc -O2 -fPIC -shared \
+  -I$PY311_INC -I$PY311_INC/internal \
+  -I/tmp/lzma-dev/usr/include -I/tmp \
+  /tmp/_lzmamodule.c \
+  -L/tmp/lzma-dev/usr/lib/x86_64-linux-gnu \
+  -Wl,-rpath,/lib/x86_64-linux-gnu -llzma \
+  -o ~/.local/opt/python3.11/lib/python3.11/lib-dynload/_lzma.cpython-311-x86_64-linux-gnu.so
+```
 
 #### YOLO12 지원 모델 (mAP COCO val2017 50-95)
 

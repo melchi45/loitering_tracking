@@ -48,8 +48,8 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | ID | Requirement |
 |---|---|
 | FR-MC-011 | For entries with `requiresConversion: true`, the download handler shall: (1) download the `.pt` file, (2) set status `'converting'`, (3) run `ultralytics export` via Python subprocess, (4) rename the exported ONNX to `server/models/<file>`, (5) delete the `.pt` file. |
-| FR-MC-012 | The Python interpreter shall be auto-detected by attempting `import ultralytics` on each candidate in order: `process.env.PYTHON_EXEC`, `process.env.PYTHON_EXEC_LINUX` (Linux) / `process.env.PYTHON_EXEC_WINDOWS` (Windows), `/usr/bin/python3`, `python3`, `python`. |
-| FR-MC-013 | If no candidate passes the `import ultralytics` check, the download shall fail with a descriptive error message. |
+| FR-MC-012 | For YOLO12 export, the Python interpreter shall be auto-detected by verifying YOLO12 support (`cfg/models/12` directory exists inside the ultralytics package) on each candidate in order: `process.env.PYTHON_EXEC`, `process.env.PYTHON_EXEC_LINUX` (Linux) / `process.env.PYTHON_EXEC_WINDOWS` (Windows), `/usr/bin/python3`, `python3`, `python`. A plain `import ultralytics` check is insufficient because ultralytics < 8.3 lacks YOLO12 architecture support. |
+| FR-MC-013 | If no candidate passes the YOLO12 support check, the download shall fail with a descriptive error message including the detected ultralytics version. |
 | FR-MC-014 | The ultralytics export subprocess shall have a 5-minute timeout (`300_000 ms`). |
 | FR-MC-015 | The `.pt` file shall be deleted after successful ONNX export, even if the ONNX was exported to a path different from `server/models/<file>` (ultralytics may write next to the `.pt`). |
 
@@ -103,3 +103,4 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 |---|---|---|
 | 1.0 | 2026-06-17 | 초기 작성 — FR-MC-001~022, NFR-MC-001~004, YOLO12 PT→ONNX 파이프라인 요구사항 |
 | 1.1 | 2026-06-17 | FR-MC-001 응답 키 `downloaded` → `exists`/`catalog` 수정, downloadPercent/downloadError 필드 추가 (FR-MC-005b) |
+| 1.2 | 2026-06-17 | FR-MC-012 강화 — `import ultralytics` → `cfg/models/12` 디렉토리 존재 확인으로 변경 (ultralytics < 8.3.x YOLO12 지원 불가 대응) |
