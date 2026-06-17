@@ -111,7 +111,9 @@ class CameraSession:
 
         # Async HTTP push: bounded thread pool + semaphore prevent queue overflow
         # when the AI server is slower than the capture rate.
-        self._push_executor  = ThreadPoolExecutor(max_workers=2, thread_name_prefix=f"push-{self.id[:8]}")
+        # max_workers=4: each camera may have ≥1 encode+POST in-flight; 4 workers
+        # allows 4 concurrent encodes across all cameras without blocking each other.
+        self._push_executor  = ThreadPoolExecutor(max_workers=4, thread_name_prefix=f"push-{self.id[:8]}")
         self._push_semaphore = threading.Semaphore(4)  # max 4 in-flight POST requests
 
         self._threads: list[threading.Thread] = []
@@ -202,50 +204,59 @@ class CameraSession:
 
     def _push_jpeg(self, frame: "av.VideoFrame"):
         """
-        Encode the frame to JPEG (synchronous — fast, <5 ms) then submit the
-        HTTP POST to the AI server asynchronously so the decode loop is never
-        blocked waiting for a server response.  A semaphore caps in-flight
-        requests; excess frames are dropped with a debug log instead of queuing
-        unboundedly and consuming memory.
+        Capture raw pixel data from the decoded frame (cheap memcopy), then
+        submit JPEG encoding + HTTP POST entirely to the thread pool so the
+        decode loop is never blocked by slow encoding or network latency.
+
+        Flow: decode thread captures ndarray → semaphore check → thread pool
+              (encode JPEG → POST /api/internal/frame → release semaphore).
         """
+        if not hasattr(self, "_push_count"):
+            self._push_count = 0
+        self._push_count += 1
+        count = self._push_count
+
+        # Semaphore check happens in the decode thread — fast, no I/O.
+        if not self._push_semaphore.acquire(blocking=False):
+            log.debug("[%s] AI busy — dropping frame #%d", self.id[:8], count)
+            return
+
+        # Capture raw pixels now (frame object may be recycled after this call
+        # returns).  to_ndarray() is a fast C-level memcopy, not an encode.
         try:
-            img = frame.to_image()
-            img = _resize_frame(img, AI_MAX_WIDTH)
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=JPEG_QUALITY)
-            jpeg_bytes = buf.getvalue()
-            w, h = img.width, img.height
-
-            if not hasattr(self, "_push_count"):
-                self._push_count = 0
-            self._push_count += 1
-            count = self._push_count
-
-            if not self._push_semaphore.acquire(blocking=False):
-                log.debug("[%s] AI busy — dropping frame #%d", self.id[:8], count)
-                return
-
-            url      = self.callback_url
-            is_https = url.startswith("https://")
-
-            def _post():
-                try:
-                    req = Request(url, data=jpeg_bytes,
-                                  headers={"Content-Type": "image/jpeg"}, method="POST")
-                    ctx = _SSL_CTX_NOVERIFY if is_https else None
-                    with urlopen(req, timeout=3, context=ctx) as resp:
-                        code = resp.getcode()
-                    if count == 1 or count % 100 == 0:
-                        log.info("[%s] AI frame #%d: %dx%d → %dB → HTTP %d",
-                                 self.id[:8], count, w, h, len(jpeg_bytes), code)
-                except Exception as e:
-                    log.warning("[%s] push_jpeg failed: %s", self.id[:8], e)
-                finally:
-                    self._push_semaphore.release()
-
-            self._push_executor.submit(_post)
+            raw = frame.to_ndarray(format="rgb24")
+            orig_w, orig_h = frame.width, frame.height
         except Exception as e:
-            log.warning("[%s] push_jpeg prep failed: %s", self.id[:8], e)
+            self._push_semaphore.release()
+            log.warning("[%s] frame capture failed: %s", self.id[:8], e)
+            return
+
+        url      = self.callback_url
+        is_https = url.startswith("https://")
+
+        def _encode_and_post():
+            try:
+                img = Image.fromarray(raw)
+                img = _resize_frame(img, AI_MAX_WIDTH)
+                buf = io.BytesIO()
+                img.save(buf, format="JPEG", quality=JPEG_QUALITY)
+                jpeg_bytes = buf.getvalue()
+                w, h = img.width, img.height
+
+                req = Request(url, data=jpeg_bytes,
+                              headers={"Content-Type": "image/jpeg"}, method="POST")
+                ctx = _SSL_CTX_NOVERIFY if is_https else None
+                with urlopen(req, timeout=3, context=ctx) as resp:
+                    code = resp.getcode()
+                if count == 1 or count % 100 == 0:
+                    log.info("[%s] AI frame #%d: %dx%d → %dB → HTTP %d",
+                             self.id[:8], count, w, h, len(jpeg_bytes), code)
+            except Exception as e:
+                log.warning("[%s] push_jpeg failed: %s", self.id[:8], e)
+            finally:
+                self._push_semaphore.release()
+
+        self._push_executor.submit(_encode_and_post)
 
     # ── Video RTP path (H.264 → mediasoup PlainTransport) ─────────────────────
 

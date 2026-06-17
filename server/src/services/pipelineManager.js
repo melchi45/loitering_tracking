@@ -509,9 +509,14 @@ class PipelineManager {
       // Skip if every analytics module is disabled on this server.
       if (!analyticsConfig.anyModuleEnabled()) return;
 
-      // Skip if previous frame is still being processed — CPU-bound ONNX
-      // inference must be serialized per camera.
-      if (ctx._inferring) return;
+      // Latest-frame-wins: when inference is already running for this camera,
+      // store the newest frame so it is processed immediately after the current
+      // inference completes.  This eliminates the idle gap between inference end
+      // and the next frame arriving from ingest-daemon, smoothing GPU utilisation.
+      if (ctx._inferring) {
+        ctx._pendingFrame = { buf: jpegBuffer, fw: frameWidth, fh: frameHeight, ts: timestamp };
+        return;
+      }
       ctx._inferring = true;
       const _inferStart = Date.now();
 
@@ -992,6 +997,14 @@ class PipelineManager {
         }
       } finally {
         ctx._inferring = false;
+        // If a newer frame arrived while we were inferring, process it immediately
+        // rather than waiting for the next frame from ingest-daemon.
+        if (ctx._pendingFrame && ctx.running) {
+          const pending = ctx._pendingFrame;
+          ctx._pendingFrame = null;
+          // Re-inject via the same capture event so all listeners run
+          capture.emit('frame', pending.buf);
+        }
       }
     });
 
