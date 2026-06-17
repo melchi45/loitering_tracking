@@ -155,6 +155,54 @@ function _getLocalTracks(query, db) {
   return tracks.sort((a, b) => new Date(b.firstSeenAt).getTime() - new Date(a.firstSeenAt).getTime()).slice(0, lim);
 }
 
+// Merged: analysis server snapshots + local streaming DB snapshots (dedup by id)
+function proxyGetMergedSnapshots(targetPath, req, res, localFn) {
+  if (!ANALYSIS_URL) return localFn(req, res);
+  let base;
+  try { base = new URL(ANALYSIS_URL); } catch { return localFn(req, res); }
+  const isHttps = base.protocol === 'https:';
+  const mod     = isHttps ? https : http;
+  const opts    = {
+    hostname: base.hostname,
+    port:     base.port || (isHttps ? 443 : 80),
+    path:     targetPath,
+    method:   'GET',
+    timeout:  PROXY_TIMEOUT,
+    agent:    isHttps ? httpsAgent : httpAgent,
+  };
+  const proxyReq = mod.request(opts, (proxyRes) => {
+    let raw = '';
+    proxyRes.on('data', c => { raw += c; });
+    proxyRes.on('end', () => {
+      if (proxyRes.statusCode >= 500 && !res.headersSent) return localFn(req, res);
+      let remoteData = { snapshots: [], total: 0 };
+      try { remoteData = JSON.parse(raw); } catch (_) { return localFn(req, res); }
+      if (res.headersSent) return;
+
+      const db = req.app.get('db');
+      const { objectId, cameraId } = req.query;
+      const lim = Math.min(parseInt(req.query.limit, 10) || 20, 100);
+
+      let localSnaps = [];
+      if (db && objectId) {
+        localSnaps = db.find('detectionSnapshots', { objectId });
+        if (cameraId) localSnaps = localSnaps.filter(s => s.cameraId === cameraId);
+      }
+
+      const remoteSnaps = Array.isArray(remoteData.snapshots) ? remoteData.snapshots : [];
+      const seenIds = new Set(remoteSnaps.map(s => s.id));
+      const onlyLocal = localSnaps.filter(s => !seenIds.has(s.id));
+      const merged = [...remoteSnaps, ...onlyLocal];
+      merged.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+      const result = merged.slice(0, lim);
+      res.json({ snapshots: result, total: result.length, source: 'merged' });
+    });
+  });
+  proxyReq.on('timeout', () => { proxyReq.destroy(); if (!res.headersSent) localFn(req, res); });
+  proxyReq.on('error', () => { if (!res.headersSent) localFn(req, res); });
+  proxyReq.end();
+}
+
 function proxyGet(targetPath, req, res) {
   if (!ANALYSIS_URL) {
     return res.status(503).json({ error: 'ANALYSIS_SERVER_URL not configured' });
@@ -242,7 +290,7 @@ router.get('/detection-tracks',  (req, res) => {
 });
 router.get('/detection-snapshots', (req, res) => {
   const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-  proxyGetWithFallback(`/api/analysis/detection-snapshots${qs}`, req, res, _localDetectionSnapshots);
+  proxyGetMergedSnapshots(`/api/analysis/detection-snapshots${qs}`, req, res, _localDetectionSnapshots);
 });
 router.delete('/detection-tracks', (_req, res) => {
   proxyMethod('DELETE', '/api/analysis/detection-tracks', res);

@@ -1,23 +1,18 @@
 /**
- * DetectionsTimelineInline — Gantt-style detection track timeline.
+ * DetectionsTimelineInline — Gantt-style detection track timeline with inline crop filmstrip.
  *
- * Shows persisted track lifecycles (objectId, start→end, className, riskScore)
- * stored by pipelineManager when a ByteTracker track ends with riskScore >= 0.3
- * or isLoitering=true.
+ * Layout per track row (ROW_H = 56px):
+ *   ┌────────────────────────────────────────────────────────────┐
+ *   │  [████████ person #a3f2  2m30s  85% ████████]  ← Gantt bar (top 18px)
+ *   │       [img1]     [img2]              [img3]     ← crops at timestamps (bottom 34px)
+ *   └────────────────────────────────────────────────────────────┘
  *
- * Layout:
- *   ┌──────────────────────────────────────────────────────────────────────┐
- *   │ [1H][6H][1D][1W][Custom]  [Class ▾]  🖼  ↺   5/12                  │ ← controls
- *   ├──────────────────────────────────────────────────────────────────────┤
- *   │ [thumb] │ Gantt rows (scrollable)             │ Detail panel (192px)│
- *   │  [img]  │  person#a3f2 [████████] L 85%      │ (open on bar click) │
- *   │  [img]  │  car#7d91     [████]                │                     │
- *   ├─────────┴──────────────────────────────────────┴─────────────────────┤
- *   │ tick labels                                                          │
- *   └──────────────────────────────────────────────────────────────────────┘
+ * Each crop thumbnail is positioned at its exact capture timestamp within the bar's span.
+ * Clicking a thumbnail or bar selects the track → right detail panel with all snapshots.
  *
- * Data source: GET /api/analysis/detection-tracks?cameraId=&from=&to=&class=&limit=
- * Thumbnails:  GET /api/analysis/detection-snapshots?objectId=&cameraId=&limit=1
+ * Data sources:
+ *   GET /api/analysis/detection-tracks?cameraId=&from=&to=&class=&limit=
+ *   GET /api/analysis/detection-snapshots?objectId=&cameraId=&limit=8  (per track)
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -30,9 +25,9 @@ interface DetectionTrack {
   cameraName: string;
   objectId: string;
   className: string;
-  firstSeenAt: string;   // ISO
-  lastSeenAt: string;    // ISO
-  dwellTime: number;     // ms
+  firstSeenAt: string;
+  lastSeenAt: string;
+  dwellTime: number;
   maxRiskScore: number;
   isLoitering: boolean;
   confidence: number;
@@ -87,23 +82,28 @@ function formatTick(ts: number, spanMs: number): string {
 }
 
 const DRAG_THRESHOLD_PX = 4;
-const DETAIL_W   = 192;
-const ROW_H      = 28; // px per track row (increased from 22 to fit thumbnail)
-const THUMB_W    = 30; // px — thumbnail column width
+const DETAIL_W  = 200;
+const ROW_H     = 56;   // bar (18px) + filmstrip (34px) + border (2px) + padding (2px)
+const BAR_H     = 16;   // height of the Gantt bar portion
+const BAR_TOP   = 4;    // top offset of bar within row
+const SNAP_H    = 34;   // filmstrip height
+const SNAP_TOP  = BAR_TOP + BAR_H + 2; // where filmstrip starts
+const SNAP_W    = 28;   // thumbnail width
+const TICK_H    = 20;   // tick label row height at bottom
 
 function classColor(track: DetectionTrack): string {
-  if (track.isLoitering) return '#ef4444'; // red-500
+  if (track.isLoitering) return '#ef4444';
   const cls = track.className;
-  if (cls === 'person')     return '#22c55e'; // green-500
-  if (cls === 'face')       return '#93c5fd'; // blue-300
-  if (cls === 'car')        return '#3b82f6'; // blue-500
-  if (cls === 'truck')      return '#14b8a6'; // teal-500
-  if (cls === 'bus')        return '#a855f7'; // purple-500
-  if (cls === 'motorcycle') return '#f97316'; // orange-500
-  if (cls === 'bicycle')    return '#eab308'; // yellow-500
-  if (cls === 'fire')       return '#f97316'; // orange-500
-  if (cls === 'smoke')      return '#94a3b8'; // slate-400
-  return '#6b7280'; // gray-500
+  if (cls === 'person')     return '#22c55e';
+  if (cls === 'face')       return '#93c5fd';
+  if (cls === 'car')        return '#3b82f6';
+  if (cls === 'truck')      return '#14b8a6';
+  if (cls === 'bus')        return '#a855f7';
+  if (cls === 'motorcycle') return '#f97316';
+  if (cls === 'bicycle')    return '#eab308';
+  if (cls === 'fire')       return '#f97316';
+  if (cls === 'smoke')      return '#94a3b8';
+  return '#6b7280';
 }
 
 function Spinner() {
@@ -130,19 +130,19 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
   const [customStart,   setCustomStart]   = useState('');
   const [customEnd,     setCustomEnd]     = useState('');
   const [customApplied, setCustomApplied] = useState<{ from: string; to: string } | null>(null);
-  const [snapshots,     setSnapshots]     = useState<DetectionSnapshot[]>([]);
-  const [snapsLoading,  setSnapsLoading]  = useState(false);
-  // Thumbnails
-  const [showThumbs,   setShowThumbs]    = useState(true);
-  const [thumbCache,   setThumbCache]    = useState<Map<string, string | null>>(new Map());
+  // Per-track snapshot cache: objectId → snapshot array (sorted by timestamp asc)
+  const [snapCache, setSnapCache] = useState<Map<string, DetectionSnapshot[]>>(new Map());
+  // All snapshots for selected track (full detail panel)
+  const [detailSnaps,    setDetailSnaps]    = useState<DetectionSnapshot[]>([]);
+  const [detailLoading,  setDetailLoading]  = useState(false);
+  // Selected snapshot for zoomed view
+  const [zoomedSnap, setZoomedSnap] = useState<DetectionSnapshot | null>(null);
 
-  const containerRef   = useRef<HTMLDivElement>(null);
-  const innerScrollRef = useRef<HTMLDivElement>(null);
-  const thumbScrollRef = useRef<HTMLDivElement>(null);
-  const dragRef        = useRef<{ startX: number; startPan: number } | null>(null);
-  const hasDraggedRef  = useRef(false);
+  const containerRef  = useRef<HTMLDivElement>(null);
+  const dragRef       = useRef<{ startX: number; startPan: number } | null>(null);
+  const hasDraggedRef = useRef(false);
 
-  // Compute fetch range
+  // Compute time range
   const rangeMs = range === 'custom' && customApplied
     ? Math.max(1, new Date(customApplied.to).getTime() - new Date(customApplied.from).getTime())
     : (RANGE_MS[range] ?? RANGE_MS['1H']);
@@ -151,7 +151,8 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
     ? new Date(customApplied.to).getTime()
     : Date.now();
 
-  // Fetch tracks
+  // ── Fetch tracks ──────────────────────────────────────────────────────────
+
   useEffect(() => {
     if (range === 'custom' && !customApplied) return;
     setLoading(true);
@@ -176,23 +177,40 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
       .finally(() => setLoading(false));
   }, [fetchKey, range, customApplied, classFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch thumbnails for all loaded tracks (batched, 10 at a time)
+  // ── Batch-fetch snapshots for visible tracks (up to 8 per track, 10 concurrent) ──
+
+  const visibleTracks = useMemo(() => {
+    const viewSpan  = rangeMs / zoom;
+    const viewEnd   = viewRangeEnd - pan * rangeMs;
+    const viewStart = viewEnd - viewSpan;
+    return tracks.filter(t => {
+      const fs = new Date(t.firstSeenAt).getTime();
+      const ls = new Date(t.lastSeenAt).getTime();
+      return ls >= viewStart && fs <= viewEnd;
+    });
+  }, [tracks, rangeMs, zoom, pan, viewRangeEnd]);
+
   useEffect(() => {
-    if (!showThumbs || tracks.length === 0) return;
-    const toFetch = tracks.filter(t => !thumbCache.has(t.objectId));
+    const toFetch = visibleTracks.filter(t => !snapCache.has(t.objectId));
     if (toFetch.length === 0) return;
 
-    const results = new Map<string, string | null>();
+    const results = new Map<string, DetectionSnapshot[]>();
+
     const fetchOne = async (track: DetectionTrack) => {
       try {
-        const r = await fetch(
-          `/api/analysis/detection-snapshots?objectId=${encodeURIComponent(track.objectId)}&cameraId=${encodeURIComponent(track.cameraId)}&limit=1`
-        );
+        const params = new URLSearchParams({
+          objectId: track.objectId,
+          cameraId: track.cameraId,
+          limit: '8',
+        });
+        const r = await fetch(`/api/analysis/detection-snapshots?${params}`);
         const d = await r.json();
-        const first = (Array.isArray(d.snapshots) ? d.snapshots : [])[0];
-        results.set(track.objectId, first?.cropData ?? null);
+        const snaps: DetectionSnapshot[] = Array.isArray(d.snapshots) ? d.snapshots : [];
+        // Sort ascending by timestamp for left-to-right filmstrip
+        snaps.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        results.set(track.objectId, snaps);
       } catch {
-        results.set(track.objectId, null);
+        results.set(track.objectId, []);
       }
     };
 
@@ -201,37 +219,42 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
       for (let i = 0; i < toFetch.length; i += BATCH) {
         await Promise.all(toFetch.slice(i, i + BATCH).map(fetchOne));
       }
-      setThumbCache(prev => {
+      setSnapCache(prev => {
         const next = new Map(prev);
         results.forEach((v, k) => next.set(k, v));
         return next;
       });
     };
     run();
-  }, [tracks, showThumbs]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [visibleTracks]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Fetch crop snapshots when a track is selected
+  // ── Fetch ALL snapshots for selected track (detail panel) ──────────────────
+
   useEffect(() => {
-    if (!selected) { setSnapshots([]); return; }
-    setSnapsLoading(true);
+    if (!selected) { setDetailSnaps([]); setZoomedSnap(null); return; }
+    setDetailLoading(true);
     const params = new URLSearchParams({
       objectId: selected.objectId,
       cameraId: selected.cameraId,
-      limit: '20',
+      limit: '50',
     });
     fetch(`/api/analysis/detection-snapshots?${params}`)
       .then(r => r.json())
-      .then(d => setSnapshots(Array.isArray(d.snapshots) ? d.snapshots : []))
-      .catch(() => setSnapshots([]))
-      .finally(() => setSnapsLoading(false));
+      .then(d => {
+        const snaps: DetectionSnapshot[] = Array.isArray(d.snapshots) ? d.snapshots : [];
+        snaps.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+        setDetailSnaps(snaps);
+      })
+      .catch(() => setDetailSnaps([]))
+      .finally(() => setDetailLoading(false));
   }, [selected]);
 
-  // Viewport
+  // ── Viewport ────────────────────────────────────────────────────────────────
+
   const viewSpan  = rangeMs / zoom;
   const viewEnd   = viewRangeEnd - pan * rangeMs;
   const viewStart = viewEnd - viewSpan;
 
-  // Zoom
   const applyZoom = useCallback((factor: number) => {
     setZoom(z => Math.max(1, Math.min(z * factor, 500)));
   }, []);
@@ -248,7 +271,6 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
     if (e.deltaY < 0) applyZoom(1.4); else applyZoom(1 / 1.4);
   };
 
-  // Drag-to-pan
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
     dragRef.current = { startX: e.clientX, startPan: pan };
@@ -264,23 +286,6 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
     setPan(clampPan(dragRef.current.startPan - dx / width / zoom, zoom));
   };
   const stopDrag = () => { dragRef.current = null; setIsDragging(false); };
-
-  // Scroll sync between thumbnail strip and Gantt rows
-  const syncFromInner = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    if (thumbScrollRef.current) thumbScrollRef.current.scrollTop = e.currentTarget.scrollTop;
-  }, []);
-  const syncFromThumb = useCallback((e: React.UIEvent<HTMLDivElement>) => {
-    if (innerScrollRef.current) innerScrollRef.current.scrollTop = e.currentTarget.scrollTop;
-  }, []);
-
-  // Visible tracks (within viewport)
-  const visibleTracks = useMemo(() => {
-    return tracks.filter(t => {
-      const fs = new Date(t.firstSeenAt).getTime();
-      const ls = new Date(t.lastSeenAt).getTime();
-      return ls >= viewStart && fs <= viewEnd;
-    });
-  }, [tracks, viewStart, viewEnd]);
 
   const ticks = useMemo(() =>
     [0, 0.25, 0.5, 0.75, 1].map(f => ({
@@ -303,7 +308,6 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
       <div className="flex items-center gap-1 px-2 py-1 border-b border-gray-700/60
                       flex-shrink-0 bg-gray-900/60 flex-wrap">
 
-        {/* Range buttons */}
         <div className="flex items-center gap-0.5">
           {(['1H','6H','1D','1W','custom'] as RangeLabel[]).map(r => (
             <button key={r}
@@ -319,7 +323,6 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
           ))}
         </div>
 
-        {/* Class filter */}
         <select
           value={classFilter}
           onChange={e => { setClassFilter(e.target.value); setFetchKey(k => k + 1); }}
@@ -341,20 +344,6 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
             ×{zoom.toFixed(1)}
           </span>
         )}
-
-        {/* Thumbnail toggle */}
-        <button
-          onClick={() => setShowThumbs(v => !v)}
-          title={showThumbs ? 'Hide thumbnails' : 'Show thumbnails'}
-          className={`px-1.5 py-0.5 rounded text-[9px] transition-colors ${
-            showThumbs
-              ? 'bg-blue-700/60 text-blue-200'
-              : 'text-gray-500 hover:text-gray-300 hover:bg-gray-700'
-          }`}
-        >
-          {showThumbs ? '▣' : '▢'}
-        </button>
-
         {loading ? <Spinner /> : (
           <button onClick={() => setFetchKey(k => k + 1)}
                   className="text-gray-500 hover:text-gray-300 transition-colors" title="Refresh">↺</button>
@@ -362,7 +351,7 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
         <span className="text-gray-600">{visibleTracks.length}/{tracks.length}</span>
       </div>
 
-      {/* ── Custom date row ─────────────────────────────────────────────────── */}
+      {/* ── Custom date row ──────────────────────────────────────────────────── */}
       {range === 'custom' && (
         <div className="flex items-center gap-1 px-2 py-1 border-b border-gray-700/40
                         flex-shrink-0 bg-gray-900/40 flex-wrap">
@@ -384,71 +373,10 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
         </div>
       )}
 
-      {/* ── Main area: thumbnail strip + Gantt canvas + detail panel ─────────── */}
+      {/* ── Main area ────────────────────────────────────────────────────────── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
-        {/* Thumbnail column (synced scroll with Gantt rows) */}
-        {showThumbs && (
-          <div
-            ref={thumbScrollRef}
-            onScroll={syncFromThumb}
-            className="flex-shrink-0 overflow-y-auto overflow-x-hidden border-r border-gray-700/40 bg-gray-900/50"
-            style={{ width: THUMB_W }}
-          >
-            {visibleTracks.length === 0 ? (
-              /* placeholder to keep column visible */
-              <div style={{ height: '100%' }} />
-            ) : (
-              <>
-                {visibleTracks.map(track => {
-                  const thumb = thumbCache.get(track.objectId);
-                  const isSel = selected?.id === track.id;
-                  return (
-                    <div
-                      key={track.id}
-                      style={{ height: ROW_H, borderBottom: '1px solid rgba(55,65,81,0.3)' }}
-                      className={`relative flex items-center justify-center overflow-hidden cursor-pointer
-                                  transition-opacity ${isSel ? 'ring-1 ring-inset ring-white/50' : ''}`}
-                      onClick={() => setSelected(prev => prev?.id === track.id ? null : track)}
-                      title={`${track.className} — ${fmtDur(track.dwellTime)}`}
-                    >
-                      {thumb ? (
-                        <img
-                          src={thumb}
-                          alt={track.className}
-                          className="w-full h-full object-cover"
-                          style={{ opacity: isSel ? 1 : 0.85 }}
-                        />
-                      ) : (
-                        /* Letter avatar while loading or when no snapshot exists */
-                        <div
-                          className="w-full h-full flex items-center justify-center text-[8px] font-bold"
-                          style={{
-                            backgroundColor: classColor(track) + '22',
-                            color: classColor(track),
-                          }}
-                        >
-                          {thumb === null
-                            ? track.className[0].toUpperCase()
-                            : <span className="opacity-30">·</span>
-                          }
-                        </div>
-                      )}
-                      {track.isLoitering && (
-                        <span className="absolute top-0 right-0 text-[6px] leading-none
-                                         bg-red-600/90 text-white px-px">⚠</span>
-                      )}
-                    </div>
-                  );
-                })}
-                {/* Bottom spacer matching tick label row height */}
-                <div style={{ height: 20, borderTop: '1px solid rgba(55,65,81,0.2)' }} />
-              </>
-            )}
-          </div>
-        )}
-
-        {/* Gantt canvas */}
+        {/* ── Gantt canvas ────────────────────────────────────────────────── */}
         <div
           ref={containerRef}
           className={`flex-1 relative overflow-hidden ${cursorClass}`}
@@ -458,8 +386,9 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
           onMouseUp={stopDrag}
           onMouseLeave={stopDrag}
         >
-          {/* Tick labels row at bottom */}
-          <div className="absolute bottom-0 left-0 right-0 h-5 border-t border-gray-700/40 pointer-events-none bg-gray-900/60">
+          {/* Tick labels */}
+          <div className="absolute bottom-0 left-0 right-0 pointer-events-none bg-gray-900/60"
+               style={{ height: TICK_H, borderTop: '1px solid rgba(55,65,81,0.4)' }}>
             {ticks.map(({ x, label }) => (
               <div key={x} className="absolute flex flex-col items-center"
                    style={{ left: `${x * 100}%`, transform: 'translateX(-50%)', bottom: 2 }}>
@@ -470,12 +399,8 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
           </div>
 
           {/* Track rows */}
-          <div
-            ref={innerScrollRef}
-            onScroll={syncFromInner}
-            className="absolute top-0 left-0 right-0 overflow-y-auto"
-            style={{ bottom: 20 }}
-          >
+          <div className="absolute top-0 left-0 right-0 overflow-y-auto"
+               style={{ bottom: TICK_H }}>
             {loading && visibleTracks.length === 0 ? (
               <div className="flex items-center justify-center h-full text-gray-600 gap-2">
                 <Spinner /> <span className="text-xs">Loading tracks…</span>
@@ -486,39 +411,46 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
               </div>
             ) : (
               visibleTracks.map((track, idx) => {
-                const fs = new Date(track.firstSeenAt).getTime();
-                const ls = new Date(track.lastSeenAt).getTime();
+                const fs    = new Date(track.firstSeenAt).getTime();
+                const ls    = new Date(track.lastSeenAt).getTime();
                 const xLeft  = Math.max(0, (fs - viewStart) / viewSpan);
                 const xRight = Math.min(1, (ls - viewStart) / viewSpan);
-                const barW   = Math.max(0.002, xRight - xLeft); // min 0.2% visible
+                const barW   = Math.max(0.003, xRight - xLeft);
                 const isSel  = selected?.id === track.id;
                 const color  = classColor(track);
+                const snaps  = snapCache.get(track.objectId) ?? null; // null=not fetched, []=no snaps
 
                 return (
                   <div key={track.id}
-                       className="relative flex items-center"
-                       style={{ height: ROW_H, borderBottom: '1px solid rgba(55,65,81,0.4)' }}>
-                    {/* Bar */}
+                       className="relative overflow-hidden"
+                       style={{
+                         height: ROW_H,
+                         borderBottom: '1px solid rgba(55,65,81,0.4)',
+                         backgroundColor: isSel ? 'rgba(255,255,255,0.03)' : undefined,
+                       }}>
+
+                    {/* ── Gantt bar ── */}
                     <div
-                      className="absolute flex items-center overflow-hidden rounded-sm transition-transform"
+                      className="absolute flex items-center overflow-hidden rounded-sm"
                       style={{
                         left:            `${xLeft * 100}%`,
                         width:           `${barW * 100}%`,
-                        top:             3,
-                        height:          ROW_H - 6,
+                        top:             BAR_TOP,
+                        height:          BAR_H,
                         backgroundColor: color + (isSel ? 'ff' : track.inProgress ? '88' : 'cc'),
-                        border:          isSel ? `2px solid #fff` : track.inProgress ? `1px dashed ${color}` : `1px solid ${color}`,
+                        border:          isSel ? `1px solid #fff` : track.inProgress ? `1px dashed ${color}` : `1px solid ${color}`,
                         cursor:          'pointer',
-                        zIndex:          isSel ? 10 : 1,
+                        zIndex:          2,
                       }}
                       onMouseDown={e => e.stopPropagation()}
                       onClick={() => {
                         if (hasDraggedRef.current) return;
                         setSelected(prev => prev?.id === track.id ? null : track);
+                        setZoomedSnap(null);
                       }}
                       title={`${track.className} — ${fmtDur(track.dwellTime)} — risk ${(track.maxRiskScore * 100).toFixed(0)}%`}
                     >
-                      <span className="px-1 text-[8px] font-bold text-white whitespace-nowrap overflow-hidden">
+                      <span className="px-1 text-[7px] font-bold text-white whitespace-nowrap overflow-hidden">
                         {track.isLoitering ? '⚠ ' : ''}
                         {track.className}
                         {' '}
@@ -529,11 +461,59 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
                       </span>
                     </div>
 
-                    {/* Row index label (far left) */}
-                    <span className="absolute left-0 text-[7px] text-gray-700 pl-0.5 pointer-events-none"
-                          style={{ zIndex: 0 }}>
+                    {/* ── Row index ── */}
+                    <span className="absolute left-0.5 text-[7px] text-gray-700 pointer-events-none"
+                          style={{ top: BAR_TOP + 2, zIndex: 1 }}>
                       {idx + 1}
                     </span>
+
+                    {/* ── Crop filmstrip — each snapshot at its timestamp position ── */}
+                    {snaps && snaps.length > 0 && snaps.map((snap, si) => {
+                      const snapTs = new Date(snap.timestamp).getTime();
+                      const xSnap = (snapTs - viewStart) / viewSpan; // 0..1 position
+                      if (xSnap < 0 || xSnap > 1) return null; // outside view
+
+                      // Center the thumbnail on xSnap, but clamp so it doesn't bleed outside row
+                      const pct = Math.max(0, Math.min(100 - (SNAP_W / (containerRef.current?.getBoundingClientRect().width ?? 800)) * 100, xSnap * 100));
+
+                      return (
+                        <div
+                          key={snap.id}
+                          className="absolute overflow-hidden rounded border border-gray-600/80 cursor-pointer
+                                     hover:border-white/60 hover:z-20 transition-all"
+                          style={{
+                            left:    `${pct}%`,
+                            top:     SNAP_TOP,
+                            width:   SNAP_W,
+                            height:  SNAP_H,
+                            zIndex:  si + 3,
+                            outline: snap.isLoitering ? '1px solid #ef4444' : undefined,
+                          }}
+                          onMouseDown={e => e.stopPropagation()}
+                          onClick={e => {
+                            e.stopPropagation();
+                            if (hasDraggedRef.current) return;
+                            setSelected(prev => prev?.id === track.id ? track : track);
+                            setZoomedSnap(prev => prev?.id === snap.id ? null : snap);
+                          }}
+                          title={new Date(snap.timestamp).toLocaleTimeString('en', { hour12: false })}
+                        >
+                          <img src={snap.cropData} alt={snap.className}
+                               className="w-full h-full object-cover" />
+                          {snap.isLoitering && (
+                            <span className="absolute top-0 right-0 bg-red-600/90 text-white text-[5px] px-px leading-tight">⚠</span>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    {/* Loading indicator for this track's snaps */}
+                    {snaps === null && (
+                      <div className="absolute flex items-center justify-center"
+                           style={{ left: `${xLeft * 100}%`, top: SNAP_TOP + 6, height: 20, width: 20 }}>
+                        <span className="text-[8px] text-gray-700 animate-pulse">·</span>
+                      </div>
+                    )}
                   </div>
                 );
               })
@@ -542,13 +522,14 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
 
           {/* Background click = deselect */}
           <div className="absolute inset-0 -z-10"
-               onClick={() => { if (!hasDraggedRef.current) setSelected(null); }} />
+               onClick={() => { if (!hasDraggedRef.current) { setSelected(null); setZoomedSnap(null); } }} />
         </div>
 
-        {/* ── Detail panel (right, 192px, only when track selected) ──────────── */}
+        {/* ── Detail panel ─────────────────────────────────────────────────── */}
         {selected && (
           <div className="flex flex-col flex-shrink-0 border-l border-gray-700 bg-gray-900/90 overflow-hidden"
                style={{ width: DETAIL_W }}>
+
             {/* Header */}
             <div className="flex items-center justify-between px-2 py-1.5 border-b border-gray-700/60
                             bg-gray-800/80 flex-shrink-0">
@@ -558,38 +539,63 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
                 <span className="font-bold text-white text-[10px] uppercase truncate">
                   {selected.isLoitering ? '⚠ ' : ''}{selected.className}
                 </span>
+                {detailSnaps.length > 0 && (
+                  <span className="text-[8px] text-gray-400 ml-1">({detailSnaps.length} crops)</span>
+                )}
               </div>
-              <button onClick={() => setSelected(null)}
+              <button onClick={() => { setSelected(null); setZoomedSnap(null); }}
                       className="text-gray-500 hover:text-white flex-shrink-0 ml-1 text-[11px]">✕</button>
             </div>
 
-            {/* Crop image strip — all snapshots for this track */}
-            <div className="flex-shrink-0 px-1 pt-1 pb-0.5 border-b border-gray-700/50 bg-gray-950/40">
-              {snapsLoading ? (
-                <div className="flex justify-center py-2"><Spinner /></div>
-              ) : snapshots.length > 0 ? (
-                <div className="grid grid-cols-2 gap-1">
-                  {snapshots.map(s => (
-                    <div key={s.id} className="relative overflow-hidden rounded border border-gray-700">
+            {/* Zoomed snapshot view */}
+            {zoomedSnap && (
+              <div className="flex-shrink-0 px-1 pt-1 pb-0.5 border-b border-gray-700/50 bg-black/40">
+                <div className="relative overflow-hidden rounded border border-white/20">
+                  <img src={zoomedSnap.cropData} alt={zoomedSnap.className}
+                       className="w-full object-cover" style={{ maxHeight: 120 }} />
+                  {zoomedSnap.isLoitering && (
+                    <span className="absolute top-1 right-1 bg-red-600 text-white text-[7px] px-1 rounded">⚠ loitering</span>
+                  )}
+                  <span className="absolute bottom-0 left-0 right-0 text-[7px] text-gray-200
+                                   bg-black/70 px-1 py-0.5 text-center">
+                    {new Date(zoomedSnap.timestamp).toLocaleTimeString('en', { hour12: false })}
+                  </span>
+                  <button onClick={() => setZoomedSnap(null)}
+                          className="absolute top-1 left-1 text-gray-400 hover:text-white bg-black/50 rounded px-1 text-[8px]">✕</button>
+                </div>
+              </div>
+            )}
+
+            {/* All crop thumbnails (scrollable grid) */}
+            <div className="flex-shrink-0 border-b border-gray-700/50 overflow-y-auto"
+                 style={{ maxHeight: 180 }}>
+              {detailLoading ? (
+                <div className="flex justify-center py-3"><Spinner /></div>
+              ) : detailSnaps.length > 0 ? (
+                <div className="grid gap-1 p-1" style={{ gridTemplateColumns: `repeat(3, 1fr)` }}>
+                  {detailSnaps.map(s => (
+                    <div key={s.id}
+                         className={`relative overflow-hidden rounded border cursor-pointer transition-all
+                                     ${zoomedSnap?.id === s.id ? 'border-white/80 ring-1 ring-white/30' : 'border-gray-700 hover:border-gray-500'}`}
+                         onClick={() => setZoomedSnap(prev => prev?.id === s.id ? null : s)}>
                       <img src={s.cropData} alt={s.className}
-                           className="w-full object-cover"
-                           style={{ maxHeight: 76 }} />
+                           className="w-full object-cover" style={{ height: 52 }} />
                       {s.isLoitering && (
-                        <span className="absolute top-0 right-0 bg-red-600 text-white text-[6px] px-0.5">⚠</span>
+                        <span className="absolute top-0 right-0 bg-red-600 text-white text-[5px] px-0.5">⚠</span>
                       )}
-                      <span className="absolute bottom-0 left-0 right-0 text-[6px] text-gray-300
-                                      bg-black/70 px-0.5 text-center leading-tight">
+                      <span className="absolute bottom-0 left-0 right-0 text-[5px] text-gray-300
+                                       bg-black/70 px-0.5 text-center leading-tight truncate">
                         {new Date(s.timestamp).toLocaleTimeString('en', { hour12: false })}
                       </span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <div className="text-[8px] text-gray-600 text-center py-1.5">No crop images saved</div>
+                <div className="text-[8px] text-gray-600 text-center py-2">No crop images saved</div>
               )}
             </div>
 
-            {/* Detail rows */}
+            {/* Track metadata */}
             <div className="flex-1 overflow-y-auto px-2 py-1 space-y-1">
               {selected.inProgress && (
                 <div className="text-[8px] text-yellow-400 bg-yellow-900/30 rounded px-1 py-0.5 mb-1">
@@ -625,7 +631,7 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
         )}
       </div>
 
-      {/* ── Pan bar (zoom > 1) ────────────────────────────────────────────────── */}
+      {/* ── Pan bar (zoom > 1) ────────────────────────────────────────────── */}
       {zoom > 1 && (
         <div className="flex items-center gap-1 px-2 py-0.5 border-t border-gray-700/40
                         bg-gray-900/40 flex-shrink-0">
