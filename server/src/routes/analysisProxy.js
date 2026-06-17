@@ -80,7 +80,7 @@ function proxyGetWithFallback(targetPath, req, res, fallback) {
     proxyRes.on('data', c => { raw += c; });
     proxyRes.on('end', () => {
       if (proxyRes.statusCode >= 500 && !res.headersSent) return fallback(req, res);
-      res.status(proxyRes.statusCode).set('Content-Type', 'application/json').send(raw);
+      if (!res.headersSent) res.status(proxyRes.statusCode).set('Content-Type', 'application/json').send(raw);
     });
   });
   proxyReq.on('timeout', () => {
@@ -91,6 +91,68 @@ function proxyGetWithFallback(targetPath, req, res, fallback) {
     if (!res.headersSent) fallback(req, res);
   });
   proxyReq.end();
+}
+
+// Merged: analysis server result + local streaming DB result (by objectId dedup)
+function proxyGetMerged(targetPath, req, res, localFn) {
+  if (!ANALYSIS_URL) return localFn(req, res);
+  let base;
+  try { base = new URL(ANALYSIS_URL); } catch { return localFn(req, res); }
+  const isHttps = base.protocol === 'https:';
+  const mod     = isHttps ? https : http;
+  const opts    = {
+    hostname: base.hostname,
+    port:     base.port || (isHttps ? 443 : 80),
+    path:     targetPath,
+    method:   'GET',
+    timeout:  PROXY_TIMEOUT,
+    agent:    isHttps ? httpsAgent : httpAgent,
+  };
+  const proxyReq = mod.request(opts, (proxyRes) => {
+    let raw = '';
+    proxyRes.on('data', c => { raw += c; });
+    proxyRes.on('end', () => {
+      if (proxyRes.statusCode >= 500 && !res.headersSent) return localFn(req, res);
+      let remoteData = { tracks: [], total: 0 };
+      try { remoteData = JSON.parse(raw); } catch (_) { return localFn(req, res); }
+      if (res.headersSent) return;
+
+      // Merge local streaming tracks with remote analysis tracks
+      const db = req.app.get('db');
+      const localTracks = db ? _getLocalTracks(req.query, db) : [];
+
+      // Deduplicate by objectId: remote takes precedence (more up-to-date)
+      const remoteTracks = Array.isArray(remoteData.tracks) ? remoteData.tracks : [];
+      const seenObjectIds = new Set(remoteTracks.map(t => t.objectId));
+      const onlyLocal = localTracks.filter(t => !seenObjectIds.has(t.objectId));
+      const merged = [...remoteTracks, ...onlyLocal];
+
+      // Re-sort by firstSeenAt descending and enforce limit
+      const lim = Math.min(parseInt(req.query.limit, 10) || 200, 1000);
+      merged.sort((a, b) => new Date(b.firstSeenAt).getTime() - new Date(a.firstSeenAt).getTime());
+      const result = merged.slice(0, lim);
+      res.json({ tracks: result, total: result.length, source: 'merged' });
+    });
+  });
+  proxyReq.on('timeout', () => {
+    proxyReq.destroy();
+    if (!res.headersSent) localFn(req, res);
+  });
+  proxyReq.on('error', () => {
+    if (!res.headersSent) localFn(req, res);
+  });
+  proxyReq.end();
+}
+
+function _getLocalTracks(query, db) {
+  let tracks = db.find('detectionTracks', {});
+  const { cameraId, from, to, class: cls } = query;
+  const lim = Math.min(parseInt(query.limit, 10) || 200, 1000);
+  if (cameraId) tracks = tracks.filter(t => t.cameraId === cameraId);
+  if (cls)      tracks = tracks.filter(t => t.className === cls);
+  if (from) { const f = new Date(from).getTime(); tracks = tracks.filter(t => new Date(t.lastSeenAt).getTime() >= f); }
+  if (to)   { const u = new Date(to).getTime();   tracks = tracks.filter(t => new Date(t.firstSeenAt).getTime() <= u); }
+  return tracks.sort((a, b) => new Date(b.firstSeenAt).getTime() - new Date(a.firstSeenAt).getTime()).slice(0, lim);
 }
 
 function proxyGet(targetPath, req, res) {
@@ -176,7 +238,7 @@ router.get('/events',            (req, res) => {
 });
 router.get('/detection-tracks',  (req, res) => {
   const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-  proxyGetWithFallback(`/api/analysis/detection-tracks${qs}`, req, res, _localDetectionTracks);
+  proxyGetMerged(`/api/analysis/detection-tracks${qs}`, req, res, _localDetectionTracks);
 });
 router.get('/detection-snapshots', (req, res) => {
   const qs = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';

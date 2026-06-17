@@ -27,11 +27,12 @@ try {
 }
 
 // ── Config (read once on module load) ────────────────────────────────────────
-const ENABLED       = process.env.SNAPSHOT_ENABLED !== 'false';
-const INTERVAL_SEC  = parseInt(process.env.SNAPSHOT_INTERVAL_SEC    || '30',  10);
-const MAX_DIM       = parseInt(process.env.SNAPSHOT_MAX_DIMENSION   || '320', 10);
-const JPEG_QUALITY  = parseInt(process.env.SNAPSHOT_JPEG_QUALITY    || '70',  10);
-const MAX_PER_CAM_DAY = parseInt(process.env.SNAPSHOT_MAX_PER_CAMERA_DAY || '500', 10);
+const ENABLED          = process.env.SNAPSHOT_ENABLED !== 'false';
+const INTERVAL_SEC     = parseInt(process.env.SNAPSHOT_INTERVAL_SEC          || '30', 10);
+const LOITER_INTERVAL  = parseInt(process.env.SNAPSHOT_LOITERING_INTERVAL_SEC || '10', 10);
+const MAX_DIM          = parseInt(process.env.SNAPSHOT_MAX_DIMENSION         || '320', 10);
+const JPEG_QUALITY     = parseInt(process.env.SNAPSHOT_JPEG_QUALITY          || '70',  10);
+const MAX_PER_CAM_DAY  = parseInt(process.env.SNAPSHOT_MAX_PER_CAMERA_DAY   || '500', 10);
 
 // ── In-session state (reset on process restart) ───────────────────────────────
 /** Map<'cameraId:objectId', lastSaveTimestampMs> */
@@ -65,10 +66,12 @@ function shouldSave(cameraId, objectId, { isLoitering, hasFaceMatch, isFireSmoke
   const isFirstSeen = !_seen.has(key);
   _seen.add(key);
 
-  if (isLoitering || isFirstSeen || hasFaceMatch || isFireSmoke) return true;
+  if (isFirstSeen || hasFaceMatch || isFireSmoke) return true;
 
-  const last = _lastSave.get(key) || 0;
-  return (timestamp - last) / 1000 >= INTERVAL_SEC;
+  const last    = _lastSave.get(key) || 0;
+  const elapsed = (timestamp - last) / 1000;
+  // Loitering: save at shorter interval; normal: full interval
+  return elapsed >= (isLoitering ? LOITER_INTERVAL : INTERVAL_SEC);
 }
 
 /**

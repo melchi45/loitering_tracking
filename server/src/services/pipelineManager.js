@@ -891,9 +891,9 @@ class PipelineManager {
 
               const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
 
-              // Persist condition: loitering flag OR zone-based risk OR dwell >= 1s
+              // Persist condition: loitering flag OR zone-based risk OR dwell >= 0.5s
               const meetsRisk = meta.isLoitering || (meta.maxRiskScore ?? 0) >= 0.3;
-              const meetsDwell = dwellMs >= 1000; // 1-second minimum dwell
+              const meetsDwell = dwellMs >= 500; // 0.5-second minimum dwell
               if (!meetsRisk && !meetsDwell) continue;
               const _completedFields = {
                 cameraId:    camera.id,
@@ -1097,7 +1097,7 @@ class PipelineManager {
             continue; // skip inProgress upsert for stale tracks
           }
 
-          if (dwellMs < 5000) continue; // only flush tracks active >= 5s
+          if (dwellMs < 1000) continue; // only flush tracks active >= 1s
           const fields = {
             cameraId:    camera.id,
             cameraName:  camera.name || camera.id,
@@ -1130,7 +1130,7 @@ class PipelineManager {
           ctx._trackMeta.delete(trackKey);
           const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
           const meetsRisk = meta.isLoitering || (meta.maxRiskScore ?? 0) >= 0.3;
-          if (!meetsRisk && dwellMs < 1000) continue;
+          if (!meetsRisk && dwellMs < 500) continue;
           const fields = {
             cameraId:    camera.id,
             cameraName:  camera.name || camera.id,
