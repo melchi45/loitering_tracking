@@ -32,6 +32,15 @@ const snapshotSvc      = require('../services/snapshotService');
 // ── YOLO Model catalog ────────────────────────────────────────────────────────
 // Each entry = one downloadable ONNX model.  file is relative to server/models/.
 const MODEL_CATALOG = [
+  // YOLOv12 series (Ultralytics 2025 — attention-based architecture)
+  // Ultralytics releases only .pt for YOLO12; ONNX is produced by `ultralytics export`.
+  // requiresConversion: true → download handler fetches .pt then runs Python export.
+  // Output format identical to YOLO11/v8: [1, 84, 8400] — no parser changes needed.
+  { id: 'yolo12n', label: 'YOLO12n', series: 'YOLO12', size: 640, mAP: 40.6, cpuMs: 58.0,  t4Ms: 1.6,  params: '2.6M',  flops: '6.5B',   file: 'yolo12n.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12n.pt', requiresConversion: true },
+  { id: 'yolo12s', label: 'YOLO12s', series: 'YOLO12', size: 640, mAP: 48.0, cpuMs: 95.0,  t4Ms: 2.7,  params: '9.3M',  flops: '21.5B',  file: 'yolo12s.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12s.pt', requiresConversion: true },
+  { id: 'yolo12m', label: 'YOLO12m', series: 'YOLO12', size: 640, mAP: 52.5, cpuMs: 192.0, t4Ms: 5.0,  params: '20.2M', flops: '68.0B',  file: 'yolo12m.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12m.pt', requiresConversion: true },
+  { id: 'yolo12l', label: 'YOLO12l', series: 'YOLO12', size: 640, mAP: 53.7, cpuMs: 250.0, t4Ms: 6.5,  params: '26.4M', flops: '88.9B',  file: 'yolo12l.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12l.pt', requiresConversion: true },
+  { id: 'yolo12x', label: 'YOLO12x', series: 'YOLO12', size: 640, mAP: 55.2, cpuMs: 490.0, t4Ms: 12.0, params: '59.1M', flops: '199.0B', file: 'yolo12x.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12x.pt', requiresConversion: true },
   // YOLO11 series (Ultralytics 2024)
   { id: 'yolo11n', label: 'YOLO11n', series: 'YOLO11', size: 640, mAP: 39.5, cpuMs: 56.1,  t4Ms: 1.5,  params: '2.6M',  flops: '6.5B',   file: 'yolo11n.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.onnx' },
   { id: 'yolo11s', label: 'YOLO11s', series: 'YOLO11', size: 640, mAP: 47.0, cpuMs: 90.0,  t4Ms: 2.5,  params: '9.4M',  flops: '21.5B',  file: 'yolo11s.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s.onnx' },
@@ -1291,7 +1300,8 @@ router.get('/models', (req, res) => {
       exists,
       active:   activeFile === m.file,
       sizeBytes: stat ? stat.size : null,
-      downloading: progress?.status === 'downloading',
+      converting: progress?.status === 'converting',
+      downloading: progress?.status === 'downloading' || progress?.status === 'converting',
       downloadPercent: progress?.percent ?? null,
       downloadError:   progress?.status === 'error' ? progress.error : null,
     };
@@ -1395,9 +1405,59 @@ router.post('/models/download', express.json({ limit: '1kb' }), async (req, res)
 
   try {
     if (!fs.existsSync(modelsDir)) fs.mkdirSync(modelsDir, { recursive: true });
-    await new Promise((resolve, reject) => doDownload(entry.url, filePath, (err) => err ? reject(err) : resolve()));
+
+    if (entry.requiresConversion) {
+      // PT → ONNX via ultralytics export
+      const { execFile } = require('child_process');
+      const ptFile = entry.file.replace('.onnx', '.pt');
+      const ptPath = path.join(modelsDir, ptFile);
+
+      _downloadProgress.set(modelId, { status: 'downloading', percent: 0, error: null });
+      await new Promise((resolve, reject) => doDownload(entry.url, ptPath, (err) => err ? reject(err) : resolve()));
+      _downloadProgress.set(modelId, { status: 'converting', percent: 95, error: null });
+
+      // Resolve Python with ultralytics — try candidates in priority order.
+      // PYTHON_EXEC_LINUX may point to a Python build without _lzma; fall back to
+      // /usr/bin/python3 which typically has a complete standard library.
+      const { execFileSync } = require('child_process');
+      const pyCandidates = [
+        process.env.PYTHON_EXEC,
+        process.platform === 'win32' ? process.env.PYTHON_EXEC_WINDOWS : process.env.PYTHON_EXEC_LINUX,
+        '/usr/bin/python3',
+        'python3',
+        'python',
+      ].filter(Boolean);
+      let pyExec = null;
+      for (const cand of pyCandidates) {
+        try { execFileSync(cand, ['-c', 'import ultralytics'], { timeout: 5000 }); pyExec = cand; break; } catch {}
+      }
+      if (!pyExec) throw new Error('Python with ultralytics not found. Run: pip install ultralytics');
+
+      const script = [
+        'from ultralytics import YOLO',
+        `m = YOLO(${JSON.stringify(ptPath)})`,
+        `m.export(format="onnx", imgsz=${entry.size}, dynamic=False)`,
+      ].join('; ');
+
+      await new Promise((resolve, reject) => {
+        execFile(pyExec, ['-c', script], { timeout: 300_000 }, (err, stdout, stderr) => {
+          if (err) { console.error('[AnalysisAPI] ONNX export stderr:', stderr); return reject(err); }
+          resolve();
+        });
+      });
+
+      // ultralytics writes <stem>.onnx next to the .pt file
+      const exportedOnnx = ptPath.replace(/\.pt$/, '.onnx');
+      if (exportedOnnx !== filePath && fs.existsSync(exportedOnnx)) {
+        fs.renameSync(exportedOnnx, filePath);
+      }
+      fs.unlink(ptPath, () => {});
+    } else {
+      await new Promise((resolve, reject) => doDownload(entry.url, filePath, (err) => err ? reject(err) : resolve()));
+    }
+
     _downloadProgress.set(modelId, { status: 'done', percent: 100, error: null });
-    console.log(`[AnalysisAPI] Downloaded ${entry.label} → ${entry.file}`);
+    console.log(`[AnalysisAPI] Ready ${entry.label} → ${entry.file}`);
   } catch (err) {
     _downloadProgress.set(modelId, { status: 'error', percent: 0, error: err.message });
     console.error(`[AnalysisAPI] Download failed for ${entry.label}:`, err.message);
