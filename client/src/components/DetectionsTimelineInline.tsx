@@ -6,21 +6,18 @@
  * or isLoitering=true.
  *
  * Layout:
- *   ┌──────────────────────────────────────────────────────────────┐
- *   │ [1H][6H][1D][1W][Custom]  [Class ▾]   ↺   ⟳    5/12        │ ← controls
- *   ├──────────────────────────────────────────────────────────────┤
- *   │ (Custom: From [────] To [────] [Apply] [✕])                  │ ← custom row
- *   ├─────────────────────────────────┬────────────────────────────┤
- *   │ Gantt rows (scrollable)         │ Detail panel (192px)       │
- *   │  person#a3f2 [████████] L 85%  │ (open on bar click)        │
- *   │  car#7d91     [████]            │                            │
- *   ├─────────────────────────────────┴────────────────────────────┤
- *   │ tick labels                                                  │
- *   ├──────────────────────────────────────────────────────────────┤
- *   │ ◀ ━━━━━━━━━━ ▶  ✕    (zoom > 1)                             │
- *   └──────────────────────────────────────────────────────────────┘
+ *   ┌──────────────────────────────────────────────────────────────────────┐
+ *   │ [1H][6H][1D][1W][Custom]  [Class ▾]  🖼  ↺   5/12                  │ ← controls
+ *   ├──────────────────────────────────────────────────────────────────────┤
+ *   │ [thumb] │ Gantt rows (scrollable)             │ Detail panel (192px)│
+ *   │  [img]  │  person#a3f2 [████████] L 85%      │ (open on bar click) │
+ *   │  [img]  │  car#7d91     [████]                │                     │
+ *   ├─────────┴──────────────────────────────────────┴─────────────────────┤
+ *   │ tick labels                                                          │
+ *   └──────────────────────────────────────────────────────────────────────┘
  *
  * Data source: GET /api/analysis/detection-tracks?cameraId=&from=&to=&class=&limit=
+ * Thumbnails:  GET /api/analysis/detection-snapshots?objectId=&cameraId=&limit=1
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -90,8 +87,9 @@ function formatTick(ts: number, spanMs: number): string {
 }
 
 const DRAG_THRESHOLD_PX = 4;
-const DETAIL_W = 192;
-const ROW_H = 22; // px per track row
+const DETAIL_W   = 192;
+const ROW_H      = 28; // px per track row (increased from 22 to fit thumbnail)
+const THUMB_W    = 30; // px — thumbnail column width
 
 function classColor(track: DetectionTrack): string {
   if (track.isLoitering) return '#ef4444'; // red-500
@@ -120,24 +118,29 @@ function Spinner() {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function DetectionsTimelineInline({ cameraId }: { cameraId: string }) {
-  const [tracks,       setTracks]       = useState<DetectionTrack[]>([]);
-  const [loading,      setLoading]      = useState(false);
-  const [range,        setRange]        = useState<RangeLabel>('1H');
-  const [classFilter,  setClassFilter]  = useState('');
-  const [selected,     setSelected]     = useState<DetectionTrack | null>(null);
-  const [zoom,         setZoom]         = useState(1);
-  const [pan,          setPan]          = useState(0);
-  const [isDragging,   setIsDragging]   = useState(false);
-  const [fetchKey,     setFetchKey]     = useState(0);
-  const [customStart,  setCustomStart]  = useState('');
-  const [customEnd,    setCustomEnd]    = useState('');
+  const [tracks,        setTracks]        = useState<DetectionTrack[]>([]);
+  const [loading,       setLoading]       = useState(false);
+  const [range,         setRange]         = useState<RangeLabel>('1H');
+  const [classFilter,   setClassFilter]   = useState('');
+  const [selected,      setSelected]      = useState<DetectionTrack | null>(null);
+  const [zoom,          setZoom]          = useState(1);
+  const [pan,           setPan]           = useState(0);
+  const [isDragging,    setIsDragging]    = useState(false);
+  const [fetchKey,      setFetchKey]      = useState(0);
+  const [customStart,   setCustomStart]   = useState('');
+  const [customEnd,     setCustomEnd]     = useState('');
   const [customApplied, setCustomApplied] = useState<{ from: string; to: string } | null>(null);
-  const [snapshots,    setSnapshots]    = useState<DetectionSnapshot[]>([]);
-  const [snapsLoading, setSnapsLoading] = useState(false);
+  const [snapshots,     setSnapshots]     = useState<DetectionSnapshot[]>([]);
+  const [snapsLoading,  setSnapsLoading]  = useState(false);
+  // Thumbnails
+  const [showThumbs,   setShowThumbs]    = useState(true);
+  const [thumbCache,   setThumbCache]    = useState<Map<string, string | null>>(new Map());
 
-  const containerRef  = useRef<HTMLDivElement>(null);
-  const dragRef       = useRef<{ startX: number; startPan: number } | null>(null);
-  const hasDraggedRef = useRef(false);
+  const containerRef   = useRef<HTMLDivElement>(null);
+  const innerScrollRef = useRef<HTMLDivElement>(null);
+  const thumbScrollRef = useRef<HTMLDivElement>(null);
+  const dragRef        = useRef<{ startX: number; startPan: number } | null>(null);
+  const hasDraggedRef  = useRef(false);
 
   // Compute fetch range
   const rangeMs = range === 'custom' && customApplied
@@ -172,6 +175,40 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
       .catch(e => console.error('[DetectionsTimeline] fetch error:', e))
       .finally(() => setLoading(false));
   }, [fetchKey, range, customApplied, classFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Fetch thumbnails for all loaded tracks (batched, 10 at a time)
+  useEffect(() => {
+    if (!showThumbs || tracks.length === 0) return;
+    const toFetch = tracks.filter(t => !thumbCache.has(t.objectId));
+    if (toFetch.length === 0) return;
+
+    const results = new Map<string, string | null>();
+    const fetchOne = async (track: DetectionTrack) => {
+      try {
+        const r = await fetch(
+          `/api/analysis/detection-snapshots?objectId=${encodeURIComponent(track.objectId)}&cameraId=${encodeURIComponent(track.cameraId)}&limit=1`
+        );
+        const d = await r.json();
+        const first = (Array.isArray(d.snapshots) ? d.snapshots : [])[0];
+        results.set(track.objectId, first?.cropData ?? null);
+      } catch {
+        results.set(track.objectId, null);
+      }
+    };
+
+    const BATCH = 10;
+    const run = async () => {
+      for (let i = 0; i < toFetch.length; i += BATCH) {
+        await Promise.all(toFetch.slice(i, i + BATCH).map(fetchOne));
+      }
+      setThumbCache(prev => {
+        const next = new Map(prev);
+        results.forEach((v, k) => next.set(k, v));
+        return next;
+      });
+    };
+    run();
+  }, [tracks, showThumbs]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Fetch crop snapshots when a track is selected
   useEffect(() => {
@@ -227,6 +264,14 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
     setPan(clampPan(dragRef.current.startPan - dx / width / zoom, zoom));
   };
   const stopDrag = () => { dragRef.current = null; setIsDragging(false); };
+
+  // Scroll sync between thumbnail strip and Gantt rows
+  const syncFromInner = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    if (thumbScrollRef.current) thumbScrollRef.current.scrollTop = e.currentTarget.scrollTop;
+  }, []);
+  const syncFromThumb = useCallback((e: React.UIEvent<HTMLDivElement>) => {
+    if (innerScrollRef.current) innerScrollRef.current.scrollTop = e.currentTarget.scrollTop;
+  }, []);
 
   // Visible tracks (within viewport)
   const visibleTracks = useMemo(() => {
@@ -296,6 +341,20 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
             ×{zoom.toFixed(1)}
           </span>
         )}
+
+        {/* Thumbnail toggle */}
+        <button
+          onClick={() => setShowThumbs(v => !v)}
+          title={showThumbs ? 'Hide thumbnails' : 'Show thumbnails'}
+          className={`px-1.5 py-0.5 rounded text-[9px] transition-colors ${
+            showThumbs
+              ? 'bg-blue-700/60 text-blue-200'
+              : 'text-gray-500 hover:text-gray-300 hover:bg-gray-700'
+          }`}
+        >
+          {showThumbs ? '▣' : '▢'}
+        </button>
+
         {loading ? <Spinner /> : (
           <button onClick={() => setFetchKey(k => k + 1)}
                   className="text-gray-500 hover:text-gray-300 transition-colors" title="Refresh">↺</button>
@@ -325,8 +384,69 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
         </div>
       )}
 
-      {/* ── Main area: Gantt canvas + detail panel ───────────────────────────── */}
+      {/* ── Main area: thumbnail strip + Gantt canvas + detail panel ─────────── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
+
+        {/* Thumbnail column (synced scroll with Gantt rows) */}
+        {showThumbs && (
+          <div
+            ref={thumbScrollRef}
+            onScroll={syncFromThumb}
+            className="flex-shrink-0 overflow-y-auto overflow-x-hidden border-r border-gray-700/40 bg-gray-900/50"
+            style={{ width: THUMB_W }}
+          >
+            {visibleTracks.length === 0 ? (
+              /* placeholder to keep column visible */
+              <div style={{ height: '100%' }} />
+            ) : (
+              <>
+                {visibleTracks.map(track => {
+                  const thumb = thumbCache.get(track.objectId);
+                  const isSel = selected?.id === track.id;
+                  return (
+                    <div
+                      key={track.id}
+                      style={{ height: ROW_H, borderBottom: '1px solid rgba(55,65,81,0.3)' }}
+                      className={`relative flex items-center justify-center overflow-hidden cursor-pointer
+                                  transition-opacity ${isSel ? 'ring-1 ring-inset ring-white/50' : ''}`}
+                      onClick={() => setSelected(prev => prev?.id === track.id ? null : track)}
+                      title={`${track.className} — ${fmtDur(track.dwellTime)}`}
+                    >
+                      {thumb ? (
+                        <img
+                          src={thumb}
+                          alt={track.className}
+                          className="w-full h-full object-cover"
+                          style={{ opacity: isSel ? 1 : 0.85 }}
+                        />
+                      ) : (
+                        /* Letter avatar while loading or when no snapshot exists */
+                        <div
+                          className="w-full h-full flex items-center justify-center text-[8px] font-bold"
+                          style={{
+                            backgroundColor: classColor(track) + '22',
+                            color: classColor(track),
+                          }}
+                        >
+                          {thumb === null
+                            ? track.className[0].toUpperCase()
+                            : <span className="opacity-30">·</span>
+                          }
+                        </div>
+                      )}
+                      {track.isLoitering && (
+                        <span className="absolute top-0 right-0 text-[6px] leading-none
+                                         bg-red-600/90 text-white px-px">⚠</span>
+                      )}
+                    </div>
+                  );
+                })}
+                {/* Bottom spacer matching tick label row height */}
+                <div style={{ height: 20, borderTop: '1px solid rgba(55,65,81,0.2)' }} />
+              </>
+            )}
+          </div>
+        )}
 
         {/* Gantt canvas */}
         <div
@@ -350,8 +470,12 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
           </div>
 
           {/* Track rows */}
-          <div className="absolute top-0 left-0 right-0 overflow-y-auto"
-               style={{ bottom: 20 }}>
+          <div
+            ref={innerScrollRef}
+            onScroll={syncFromInner}
+            className="absolute top-0 left-0 right-0 overflow-y-auto"
+            style={{ bottom: 20 }}
+          >
             {loading && visibleTracks.length === 0 ? (
               <div className="flex items-center justify-center h-full text-gray-600 gap-2">
                 <Spinner /> <span className="text-xs">Loading tracks…</span>
@@ -439,7 +563,7 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
                       className="text-gray-500 hover:text-white flex-shrink-0 ml-1 text-[11px]">✕</button>
             </div>
 
-            {/* Crop image strip */}
+            {/* Crop image strip — all snapshots for this track */}
             <div className="flex-shrink-0 px-1 pt-1 pb-0.5 border-b border-gray-700/50 bg-gray-950/40">
               {snapsLoading ? (
                 <div className="flex justify-center py-2"><Spinner /></div>
