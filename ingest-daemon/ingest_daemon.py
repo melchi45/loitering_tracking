@@ -62,7 +62,7 @@ IDR_WAIT_TIMEOUT  = float(os.environ.get("IDR_WAIT_TIMEOUT", "10"))
 
 _RTSP_OPTIONS = {
     "rtsp_transport": "tcp",
-    "stimeout":       "5000000",
+    "stimeout":       "2000000",  # 5s → 2s: detect silent streams faster so reconnect starts sooner
     "max_delay":      "100000",   # 500ms → 100ms: reduces initial buffering lag
     "flags":          "low_delay",
 }
@@ -145,7 +145,7 @@ class CameraSession:
 
     def _ai_loop(self):
         log.info("[%s] AI loop starting → %s", self.id[:8], self.rtsp_url[:50])
-        retry_delay = 2.0
+        retry_delay = 0.5
         while not self._stop.is_set():
             try:
                 self._ai_ingest_once()
@@ -263,7 +263,7 @@ class CameraSession:
     def _video_rtp_loop(self):
         log.info("[%s] Video RTP loop starting → UDP:%d",
                  self.id[:8], self.mediasoup_video_port)
-        retry_delay = 2.0
+        retry_delay = 0.5
         while not self._stop.is_set():
             try:
                 self._video_rtp_ingest_once()
@@ -334,7 +334,7 @@ class CameraSession:
     def _audio_rtp_loop(self):
         log.info("[%s] Audio RTP loop starting → UDP:%d",
                  self.id[:8], self.mediasoup_audio_port)
-        retry_delay = 2.0
+        retry_delay = 0.5
         while not self._stop.is_set():
             try:
                 self._audio_rtp_ingest_once()
@@ -443,7 +443,7 @@ class CameraSession:
     def _app_rtp_loop(self):
         log.info("[%s] App RTP loop starting → %s",
                  self.id[:8], self.app_rtp_callback_url[:60])
-        retry_delay = 2.0
+        retry_delay = 0.5
         while not self._stop.is_set():
             try:
                 self._app_rtp_ingest_once()

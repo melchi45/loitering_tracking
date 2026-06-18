@@ -449,7 +449,12 @@ class YouTubeStreamService {
    */
   _buildFFmpegArgsPipe(entry) {
     return [
-      // No -re: pipe rate is controlled by yt-dlp; -re causes buffering/garbling
+      // -re: read input at native playback rate, creating backpressure on the pipe.
+      // Without this, FFmpeg drains the pipe at 43x speed (HLS segments burst in);
+      // yt-dlp interprets an empty pipe as "download complete" and exits after ~7s,
+      // causing a restart gap where the stream freezes until yt-dlp relaunches.
+      // With -re the pipe fills up, yt-dlp's writes block, keeping both processes alive.
+      '-re',
       '-i', 'pipe:0',
       // Copy H.264 video as-is — no libx264 re-encoding (eliminates >90% CPU usage).
       // yt-dlp format selector already enforces vcodec^=avc so the source is H.264.
