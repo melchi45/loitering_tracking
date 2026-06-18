@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-YT-01 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Active |
-| **Date** | 2026-05-27 |
+| **Date** | 2026-06-18 |
 | **Parent SRS** | srs/SRS_YouTube_RTSP_Ingest.md |
 
 ---
@@ -288,6 +288,7 @@ interface StreamEntry {
   rtspUrl: string        // "rtsp://<MEDIAMTX_HOST>:8554/yt/<id>"
   resolution: '1080p' | '720p' | '480p'
   bitrate: number        // kbps (in-memory)
+  webrtcEnabled: boolean // true → WebRTC(WHEP), false → JPEG/Socket.IO
   status: StreamStatus
   restartCount: number
   repeatPlayback: boolean
@@ -354,9 +355,12 @@ interface StreamEntry {
   "youtubeUrl": "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
   "resolution": "720p",
   "bitrate": 1500,
-  "repeatPlayback": false
+  "repeatPlayback": false,
+  "webrtcEnabled": false
 }
 ```
+
+> `webrtcEnabled` — 선택 필드. `true`이면 브라우저가 WebRTC(WHEP)로 영상을 수신, `false`이면 JPEG/Socket.IO. 기본값: `false`.
 
 **Response (201):**
 ```json
@@ -377,7 +381,7 @@ interface StreamEntry {
 
 ### 7.3 PATCH /api/youtube-streams/:id
 
-- Changes to `youtubeUrl`, `resolution`, or `bitrate` → restart stream
+- Changes to `youtubeUrl`, `resolution`, `bitrate`, or `webrtcEnabled` → restart stream
 - Changes to `name` or `repeatPlayback` only → no restart
 
 ---
@@ -431,6 +435,9 @@ app.post('/internal/mediamtx', (req, res) => {
 │  Resolution:   [720p  ▼]        │
 │  Bitrate(kbps):[1500       ]    │
 │  Repeat Playback: [ ]           │
+│  ─────────────────────────      │
+│  WebRTC Streaming       [ ●]    │
+│  Video via WebRTC (H.264+Audio) │
 │                                 │
 │  [Cancel]          [Add Stream] │
 │    ← Loading spinner (30s) →    │
@@ -441,6 +448,30 @@ app.post('/internal/mediamtx', (req, res) => {
 - While loading: spinner + "Starting YouTube stream…" message.
 - On success: modal closes, camera appears in grid.
 - On error: error code mapped to user-friendly message.
+- **WebRTC toggle**: `webrtcEnabled` 필드를 POST body에 포함. `true`이면 `SERVER_IP` 환경변수 필요.
+
+### 9.1-B Edit Camera Modal — YouTube 설정 편집
+
+```
+┌─────────────────────────────────┐
+│  Edit Camera       [YT]  [×]    │
+│  ─────────────────────────      │
+│  Name: [____________________]   │
+│  YouTube URL: [______________]  │
+│  Resolution: [720p ▼]  Bitrate  │
+│  Repeat Playback: [ ]           │
+│  ─────────────────────────      │
+│  WebRTC Streaming       [●  ]   │
+│  Video via JPEG / Socket.IO     │
+│  ─────────────────────────      │
+│  Internal RTSP URL (read-only)  │
+│                                 │
+│  [Cancel]               [Save]  │
+└─────────────────────────────────┘
+```
+
+- `PATCH /api/youtube-streams/:id` body에 `webrtcEnabled` 포함.
+- `webrtcEnabled` 변경 시 스트림 자동 재시작.
 
 ### 9.2 YouTube Error Code UI Messages
 
@@ -563,3 +594,4 @@ ffmpeg.on('close', (code, signal) => {
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for YouTube RTSP Ingest |
 | 1.1 | 2026-06-17 | LTS Engineering Team | FFmpeg 파이프라인 최적화: libx264 → -c:v copy, HLS 폴백 포맷 셀렉터 추가, webrtcEnabled 기본값 추가 |
+| 1.2 | 2026-06-18 | LTS Engineering Team | YouTube 채널 UI에 WebRTC 토글 추가: Add/Edit 폼 모두 webrtcEnabled 필드 지원, API 명세 업데이트 |

@@ -214,9 +214,15 @@ npm run ingest:restart -- --dry-run  # 설정 확인만
 ### YouTube 스트림 수집
 1. 대상 YouTube URL 준비 (라이브 또는 녹화, HLS 전용 스트림 포함)
 2. `server/src/services/youtubeStreamService.js`에서 yt-dlp 경로 확인
-3. API 호출: `POST /api/youtube-streams` `{ "youtubeUrl": "https://youtube.com/...", "name": "...", "resolution": "720p" }`
+3. API 호출: `POST /api/youtube-streams` `{ "youtubeUrl": "https://youtube.com/...", "name": "...", "resolution": "720p", "webrtcEnabled": false }`
 4. MediaMTX 내부 경로로 RTSP 변환 후 파이프라인 연결 확인
 5. 참고: [Design_YouTube_RTSP_Ingest.md](../../../docs/design/Design_YouTube_RTSP_Ingest.md)
+
+**YouTube WebRTC 토글 (`webrtcEnabled`):**
+- Add Camera 모달(YouTube 탭)과 Edit Camera 모달 모두 WebRTC 토글 제공 (RTSP 채널과 동일한 UI)
+- `true` → WebRTC(WHEP) 수신, `false` → JPEG/Socket.IO (기본값: `false`)
+- `webrtcEnabled` 변경 시 스트림 자동 재시작
+- 관련 파일: `client/src/components/CameraList.tsx`, `client/src/components/CameraEditModal.tsx`, `server/src/api/youtubeStreams.js`
 
 **FFmpeg 파이프라인 (youtubeStreamService.js `_buildFFmpegArgsPipe`):**
 - `-c:v copy`: H.264 소스 복사 (libx264 재인코딩 제거 → CPU 대폭 절감)

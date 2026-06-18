@@ -27,6 +27,7 @@ export default function CameraEditModal({ camera, onClose }: Props) {
     resolution:     (camera.resolution as '1080p' | '720p' | '480p') || '1080p',
     bitrate:        camera.bitrate || 2000,
     repeatPlayback: camera.repeatPlayback || false,
+    webrtcEnabled:  !!(camera.webrtcEnabled),
   });
 
   const [saving,  setSaving]  = useState(false);
@@ -94,6 +95,7 @@ export default function CameraEditModal({ camera, onClose }: Props) {
           resolution:     ytForm.resolution,
           bitrate:        ytForm.bitrate,
           repeatPlayback: ytForm.repeatPlayback,
+          webrtcEnabled:  ytForm.webrtcEnabled,
         }),
       });
       if (!res.ok) {
@@ -112,6 +114,7 @@ export default function CameraEditModal({ camera, onClose }: Props) {
           resolution:     result.camera.resolution,
           bitrate:        result.camera.bitrate,
           repeatPlayback: result.camera.repeatPlayback,
+          webrtcEnabled:  result.camera.webrtcEnabled,
         });
       }
       setSuccess('Saved. The stream will restart if URL or resolution is changed.');
@@ -215,6 +218,29 @@ export default function CameraEditModal({ camera, onClose }: Props) {
                 />
                 <span>Repeat Playback — auto-restart when video ends</span>
               </label>
+
+              {/* WebRTC toggle */}
+              <div className="flex items-center justify-between py-2 border-t border-gray-700 mt-1">
+                <div>
+                  <p className="text-xs text-gray-200 font-medium">WebRTC Streaming</p>
+                  <p className="text-[10px] text-gray-500 mt-0.5">
+                    {ytForm.webrtcEnabled
+                      ? 'Video via WebRTC (H.264 + Audio) — requires SERVER_IP in .env'
+                      : 'Video via JPEG / Socket.IO (default)'}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setYtForm((p) => ({ ...p, webrtcEnabled: !p.webrtcEnabled }))}
+                  className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors duration-200 ${
+                    ytForm.webrtcEnabled ? 'bg-blue-600' : 'bg-gray-600'
+                  }`}
+                >
+                  <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform duration-200 ${
+                    ytForm.webrtcEnabled ? 'translate-x-4' : 'translate-x-0.5'
+                  }`} />
+                </button>
+              </div>
 
               {/* Internal RTSP URL (read-only) */}
               <div>
