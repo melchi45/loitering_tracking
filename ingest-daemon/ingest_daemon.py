@@ -55,17 +55,26 @@ logging.basicConfig(
 log = logging.getLogger("ingest")
 
 # ── Configuration ─────────────────────────────────────────────────────────────
-AI_FRAME_INTERVAL = int(os.environ.get("AI_FRAME_INTERVAL", "3"))
-JPEG_QUALITY      = int(os.environ.get("JPEG_QUALITY", "85"))
-AI_MAX_WIDTH      = int(os.environ.get("AI_MAX_WIDTH", "640"))
-IDR_WAIT_TIMEOUT  = float(os.environ.get("IDR_WAIT_TIMEOUT", "10"))
+AI_FRAME_INTERVAL  = int(os.environ.get("AI_FRAME_INTERVAL", "3"))
+JPEG_QUALITY       = int(os.environ.get("JPEG_QUALITY", "85"))
+AI_MAX_WIDTH       = int(os.environ.get("AI_MAX_WIDTH", "640"))
+IDR_WAIT_TIMEOUT   = float(os.environ.get("IDR_WAIT_TIMEOUT", "10"))
+# Per-packet read timeout (seconds).  If av.demux() blocks longer than this
+# (e.g. MediaMTX stops forwarding while reconnecting to the camera), PyAV's
+# interrupt_callback fires → AVError → _*_loop retries after retry_delay.
+# Independent of stimeout (socket-level).  Default 5s keeps freeze gap short.
+RTSP_READ_TIMEOUT  = float(os.environ.get("RTSP_READ_TIMEOUT", "5"))
 
 _RTSP_OPTIONS = {
     "rtsp_transport": "tcp",
-    "stimeout":       "30000000", # socket I/O timeout 30s — matches typical RTSP session timeout/2
+    "stimeout":       "30000000", # socket I/O timeout 30s (fallback; keep-alive fires at ~30s)
     "max_delay":      "100000",   # 500ms → 100ms: reduces initial buffering lag
     "flags":          "low_delay",
 }
+
+# PyAV open() timeout tuple: (connection_open_sec, per_packet_read_sec).
+# The read part uses PyAV's interrupt_callback — fires independently of stimeout.
+_RTSP_OPEN_TIMEOUT = (10, RTSP_READ_TIMEOUT)
 
 # Must match VIDEO_SSRC / AUDIO_SSRC / AUDIO_PT in server/src/services/webrtc/mediasoupEngine.js.
 # mediasoup PlainTransport (comedia=true) matches incoming RTP by both SSRC and payload type;
@@ -159,7 +168,7 @@ class CameraSession:
                 retry_delay = min(retry_delay * 1.5, 30.0)
 
     def _ai_ingest_once(self):
-        container = av.open(self.rtsp_url, options=_RTSP_OPTIONS, timeout=10)
+        container = av.open(self.rtsp_url, options=_RTSP_OPTIONS, timeout=_RTSP_OPEN_TIMEOUT)
         try:
             vs = next((s for s in container.streams if s.type == "video"), None)
             if vs is None:
@@ -277,7 +286,7 @@ class CameraSession:
                 retry_delay = min(retry_delay * 1.5, 30.0)
 
     def _video_rtp_ingest_once(self):
-        inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS, timeout=10)
+        inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS, timeout=_RTSP_OPEN_TIMEOUT)
         try:
             vs = next((s for s in inp.streams if s.type == "video"), None)
             if vs is None:
@@ -354,7 +363,7 @@ class CameraSession:
                 retry_delay = min(retry_delay * 1.5, 30.0)
 
     def _audio_rtp_ingest_once(self):
-        inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS, timeout=10)
+        inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS, timeout=_RTSP_OPEN_TIMEOUT)
         try:
             as_ = next((s for s in inp.streams if s.type == "audio"), None)
             if as_ is None:
@@ -462,7 +471,7 @@ class CameraSession:
                 retry_delay = min(retry_delay * 1.5, 30.0)
 
     def _app_rtp_ingest_once(self):
-        inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS, timeout=10)
+        inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS, timeout=_RTSP_OPEN_TIMEOUT)
         try:
             # Find non-video, non-audio streams (data, subtitle, application tracks).
             # Samsung / ONVIF metadata is typically exposed as a "data" or "subtitle"
