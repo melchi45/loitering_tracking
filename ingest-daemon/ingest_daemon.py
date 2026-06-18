@@ -62,7 +62,7 @@ IDR_WAIT_TIMEOUT  = float(os.environ.get("IDR_WAIT_TIMEOUT", "10"))
 
 _RTSP_OPTIONS = {
     "rtsp_transport": "tcp",
-    "stimeout":       "2000000",  # 5s → 2s: detect silent streams faster so reconnect starts sooner
+    "stimeout":       "30000000", # socket I/O timeout 30s — matches typical RTSP session timeout/2
     "max_delay":      "100000",   # 500ms → 100ms: reduces initial buffering lag
     "flags":          "low_delay",
 }
