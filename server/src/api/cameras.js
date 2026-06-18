@@ -52,8 +52,11 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
    */
   router.get('/', (req, res) => {
     try {
-      const cameras = db.all('cameras').sort((a, b) =>
-        (b.createdAt || '').localeCompare(a.createdAt || ''));
+      const cameras = db.all('cameras').sort((a, b) => {
+        const ta = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        const tb = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        return tb - ta;
+      });
       const result = cameras.map((cam) => {
         const pipelineStatus = pipelineManager.getCameraStatus(cam.id);
         // YouTube cameras store bitrate in DB as bps; normalize to kbps for API consumers

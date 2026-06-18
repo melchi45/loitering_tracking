@@ -4,9 +4,11 @@
  * db.js — In-memory JSON store with optional MongoDB write-through.
  *
  * Storage modes (controlled by DB_TYPE in .env):
- *   DB_TYPE=json     (default) — read/write storage/lts.json synchronously.
- *   DB_TYPE=mongodb  — on startup load from MongoDB; writes go to MongoDB
- *                      (async, fire-and-forget) AND to JSON as hot-standby.
+ *   DB_TYPE=json     (default) — read/write storage/lts.json (async, debounced).
+ *   DB_TYPE=mongodb  — on startup load from MongoDB; ALL writes go to MongoDB only.
+ *                      lts.json is loaded on startup as warm-start fallback but
+ *                      never written during normal operation.
+ *                      If MongoDB disconnects, writes fall back to JSON automatically.
  *
  * The in-memory store is always the source of truth for synchronous reads,
  * keeping the existing synchronous API unchanged for all route handlers.
@@ -39,7 +41,7 @@ function _isMongo() {
   return process.env.DB_TYPE === 'mongodb' && mongoSvc !== null && mongoSvc.isConnected();
 }
 
-// ── JSON persistence ─────────────────────────────────────────────────────────
+// ── JSON persistence (DB_TYPE=json only) ─────────────────────────────────────
 function loadFromJson() {
   if (fs.existsSync(DB_PATH)) {
     try { store = JSON.parse(fs.readFileSync(DB_PATH, 'utf8')); } catch (_) {}
@@ -51,38 +53,25 @@ function loadFromJson() {
 
 const TEMP_DB_PATH = DB_PATH + '.tmp';
 
-/**
- * Write full store to lts.json using an atomic temp-file-then-rename pattern.
- * This prevents a partially-written (corrupt) file if the process is killed
- * mid-write.  Debounced to at most once every PERSIST_DEBOUNCE_MS to avoid
- * blocking the event loop when many rows are inserted in rapid succession
- * (e.g., detectionSnapshots during live streaming).
- */
-const PERSIST_DEBOUNCE_MS = 2000; // write at most once per 2 s
-let   _persistTimer = null;
+// Debounce: write at most once per 2 s to avoid event-loop pressure during
+// rapid inserts (e.g. detectionSnapshots during live streaming).
+const PERSIST_DEBOUNCE_MS = 2000;
+let   _persistTimer   = null;
 let   _persistPending = false;
+let   _writingJson    = false; // one async write at a time
 
 function persistJson() {
   _persistPending = true;
-  if (_persistTimer) return;            // already scheduled — just flag & exit
+  if (_persistTimer) return;
   _persistTimer = setTimeout(() => {
-    _persistTimer  = null;
+    _persistTimer   = null;
     _persistPending = false;
-    _flushJson();
+    _flushJson().catch(err => console.error('[DB] persist error:', err.message));
   }, PERSIST_DEBOUNCE_MS);
 }
 
-// Tables safe to omit from the JSON backup when MongoDB holds them — these are
-// high-volume write streams that can exceed V8's JSON string limit and are
-// already durably stored in MongoDB.
-const MONGO_ONLY_TABLES = new Set([
-  'events', 'alerts', 'detectionSnapshots', 'faceMatchHistory', 'missing_person_detections',
-  'client_logs', 'client_webrtc_stats', 'audit_logs',
-]);
-
 // Max rows kept in-memory per table. Oldest records are evicted when the cap is
-// exceeded. Prevents unbounded memory growth when MongoDB is unavailable (DB_TYPE=json
-// fallback) and the process runs for an extended period.
+// exceeded. Prevents unbounded memory growth during extended JSON-mode operation.
 const TABLE_ROW_CAPS = {
   events:                    20000,
   alerts:                    10000,
@@ -97,24 +86,52 @@ const TABLE_ROW_CAPS = {
   audit_logs:                10000,
 };
 
-/** Synchronous atomic write: write to .tmp, then rename to final path. */
-function _flushJson() {
+// Tables excluded from the JSON fallback write when MongoDB is (or was) the primary store.
+// These are high-volume transactional tables whose base64/binary payloads can reach
+// 20–100 MB when serialized — skipping them avoids event-loop stalls during fallback
+// writes and keeps lts.json small. Config and identity tables (cameras, zones, users…)
+// are always included so the server can restart cleanly without MongoDB.
+const JSON_FALLBACK_SKIP = new Set([
+  'detectionSnapshots',
+  'client_logs',
+  'client_webrtc_stats',
+  'onvif_events',
+  'detectionTracks',
+  'analysisEvents',
+  'faceMatchHistory',
+  'missing_person_detections',
+  'events',
+  'audit_logs',
+]);
+
+/**
+ * Async atomic write: serialize store → .tmp, then rename to final path.
+ * Only called when DB_TYPE=json (or MongoDB has disconnected as fallback).
+ * Non-blocking: uses fs.promises so the event loop is never stalled.
+ */
+async function _flushJson() {
+  if (_writingJson) return; // concurrent write already in progress
+  _writingJson = true;
   try {
-    // When MongoDB is active, skip large transactional tables to stay under V8's
-    // ~512 MB JSON string limit. Config tables (cameras, zones, …) are always included.
-    const payload = _isMongo()
-      ? Object.fromEntries(Object.entries(store).filter(([t]) => !MONGO_ONLY_TABLES.has(t)))
+    // Skip high-volume tables in fallback mode to avoid event-loop stalls.
+    const payload = process.env.DB_TYPE === 'mongodb'
+      ? Object.fromEntries(Object.entries(store).filter(([t]) => !JSON_FALLBACK_SKIP.has(t)))
       : store;
-    fs.writeFileSync(TEMP_DB_PATH, JSON.stringify(payload, null, 2));
-    fs.renameSync(TEMP_DB_PATH, DB_PATH);
+    const json = JSON.stringify(payload, null, 2);
+    await fs.promises.writeFile(TEMP_DB_PATH, json);
+    await fs.promises.rename(TEMP_DB_PATH, DB_PATH);
   } catch (err) {
     console.error('[DB] JSON persist error:', err.message);
-    // Clean up temp file if it was created
-    try { if (fs.existsSync(TEMP_DB_PATH)) fs.unlinkSync(TEMP_DB_PATH); } catch (_) {}
+    try { await fs.promises.unlink(TEMP_DB_PATH); } catch (_) {}
+  } finally {
+    _writingJson = false;
   }
 }
 
-/** Flush any pending write immediately (call on graceful shutdown). */
+/**
+ * Flush any pending write immediately (graceful shutdown — sync is acceptable here).
+ * Skips if an async _flushJson() is already mid-flight to avoid .tmp file collision.
+ */
 function flushNow() {
   if (_persistTimer) {
     clearTimeout(_persistTimer);
@@ -122,36 +139,90 @@ function flushNow() {
   }
   if (_persistPending) {
     _persistPending = false;
-    _flushJson();
+    if (_writingJson) return; // async write in progress — it will complete on its own
+    try {
+      const payload = process.env.DB_TYPE === 'mongodb'
+        ? Object.fromEntries(Object.entries(store).filter(([t]) => !JSON_FALLBACK_SKIP.has(t)))
+        : store;
+      fs.writeFileSync(TEMP_DB_PATH, JSON.stringify(payload, null, 2));
+      fs.renameSync(TEMP_DB_PATH, DB_PATH);
+    } catch (err) {
+      console.error('[DB] flushNow persist error:', err.message);
+      try { if (fs.existsSync(TEMP_DB_PATH)) fs.unlinkSync(TEMP_DB_PATH); } catch (_) {}
+    }
   }
 }
+
+// ── DB query statistics ───────────────────────────────────────────────────────
+const _dbCounts = { inserts: 0, updates: 0, deletes: 0, finds: 0 };
+let   _dbRates  = { insertsPerSec: 0, updatesPerSec: 0, deletesPerSec: 0, findsPerSec: 0, totalPerSec: 0 };
+let   _dbLastSample   = { inserts: 0, updates: 0, deletes: 0, finds: 0 };
+let   _dbLastSampleAt = Date.now();
+
+const _dbRateTimer = setInterval(() => {
+  const now = Date.now();
+  const dt  = (now - _dbLastSampleAt) / 1000;
+  if (dt > 0) {
+    const d = (k) => Math.max(0, Math.round((_dbCounts[k] - _dbLastSample[k]) / dt));
+    _dbRates = {
+      insertsPerSec: d('inserts'),
+      updatesPerSec: d('updates'),
+      deletesPerSec: d('deletes'),
+      findsPerSec:   d('finds'),
+      totalPerSec:   d('inserts') + d('updates') + d('deletes') + d('finds'),
+    };
+    _dbLastSample   = { ..._dbCounts };
+    _dbLastSampleAt = now;
+  }
+}, 2000);
+_dbRateTimer.unref();
 
 // ── Row-level persistence dispatcher ─────────────────────────────────────────
 /**
  * Called after every in-memory mutation.
- * Writes to MongoDB (async) when connected; always writes JSON backup.
+ * - MongoDB mode: write to MongoDB only (no JSON backup).
+ * - JSON mode: schedule debounced JSON write.
+ * If MongoDB disconnects mid-session, _isMongo() returns false and writes
+ * automatically fall back to JSON until the connection is restored.
  */
+let _jsonFallbackLogged = false;
+
 function afterWrite(table, id, row, op) {
+  if (op === 'delete') {
+    _dbCounts.deletes++;
+  } else if (op === 'insert') {
+    _dbCounts.inserts++;
+  } else {
+    _dbCounts.updates++;
+  }
+
   if (_isMongo()) {
+    _jsonFallbackLogged = false;
     if (op === 'delete') {
       mongoSvc.remove(table, id).catch(e => console.error('[DB] mongo remove:', e.message));
     } else {
       mongoSvc.upsert(table, id, row).catch(e => console.error('[DB] mongo upsert:', e.message));
     }
+    return; // MongoDB is the sole persistent store — skip JSON
   }
-  // JSON is always written (serves as warm standby / offline fallback)
+  if (process.env.DB_TYPE === 'mongodb' && !_jsonFallbackLogged) {
+    console.warn('[DB] MongoDB not connected — falling back to lts.json until reconnect');
+    _jsonFallbackLogged = true;
+  }
   persistJson();
 }
 
 /**
  * Called when a WHERE-based delete removes multiple rows.
- * Re-syncs the whole table in MongoDB.
  */
 function afterDeleteWhere(table, removedIds) {
+  _dbCounts.deletes += removedIds.length;
+
   if (_isMongo()) {
     removedIds.forEach(id =>
       mongoSvc.remove(table, id).catch(e => console.error('[DB] mongo removeWhere:', e.message))
     );
+    return; // MongoDB is the sole persistent store — skip JSON
   }
   persistJson();
 }
@@ -241,7 +312,6 @@ const db = {
     const inserted = { createdAt: now, updatedAt: now, ...row };
     store[table].push(inserted);
     // Prevent unbounded in-memory growth for high-volume transactional tables.
-    // Oldest records are dropped first; MongoDB / snapshotService handle durable retention.
     const cap = TABLE_ROW_CAPS[table];
     if (cap && store[table].length > cap) store[table] = store[table].slice(-cap);
     afterWrite(table, inserted.id, inserted, 'insert');
@@ -259,12 +329,15 @@ const db = {
     afterWrite(table, id, null, 'delete');
   },
   find(table, where = {}) {
+    _dbCounts.finds++;
     return store[table].filter(r => matchRow(r, where));
   },
   findOne(table, where = {}) {
+    _dbCounts.finds++;
     return store[table].find(r => matchRow(r, where)) || null;
   },
   all(table) {
+    _dbCounts.finds++;
     return [...store[table]];
   },
 };
@@ -273,7 +346,7 @@ const db = {
 /**
  * Initialise the database.
  *
- * - Always loads lts.json first (warm start / fallback).
+ * - Always loads lts.json first as warm-start fallback.
  * - If DB_TYPE=mongodb and MONGODB_URI is set, connects to MongoDB and
  *   replaces in-memory data with the MongoDB snapshot.
  *   Falls back silently to JSON-only if MongoDB is unreachable.
@@ -289,7 +362,7 @@ const LEGACY_MIGRATIONS = [
 ];
 
 async function initDB() {
-  loadFromJson(); // always: warm start from JSON
+  loadFromJson(); // always: warm start from JSON (fallback snapshot)
 
   // One-time migration: load from legacy separate JSON files if tables are empty
   for (const { table, file, key } of LEGACY_MIGRATIONS) {
@@ -327,8 +400,7 @@ async function initDB() {
           if (Array.isArray(snapshot[table]) && snapshot[table].length > 0) {
             store[table] = snapshot[table];
           }
-          // If MongoDB collection is empty and JSON has data, keep JSON data
-          // and schedule a one-time sync to MongoDB
+          // If MongoDB collection is empty and JSON has data, seed MongoDB from JSON
           else if (store[table].length > 0) {
             console.log(`[DB] MongoDB ${table} empty — seeding from JSON (${store[table].length} rows)`);
             const rows = [...store[table]];
@@ -339,10 +411,8 @@ async function initDB() {
             );
           }
         }
-        console.log('[DB] Storage mode: MongoDB (JSON as hot-standby backup)');
-        // Sync JSON with the MongoDB snapshot so the hot-standby is up-to-date
-        // even if the server crashed before the last debounced write completed.
-        _flushJson();
+        console.log('[DB] Storage mode: MongoDB (all writes go to MongoDB only)');
+        // lts.json is no longer written during normal operation in MongoDB mode.
       } catch (err) {
         console.warn('[DB] MongoDB connection failed — falling back to JSON:', err.message);
         mongoSvc = null;
@@ -364,5 +434,14 @@ function getStorageMode() {
   return _isMongo() ? 'mongodb' : 'json';
 }
 
-module.exports = { initDB, getDB, getStorageMode, flushNow };
+/** Returns DB query statistics (rates/sec and cumulative counts). */
+function getDbStats() {
+  return {
+    mode:      _isMongo() ? 'mongodb' : 'json',
+    connected: _isMongo(),
+    rates:     { ..._dbRates },
+    cumulative: { ..._dbCounts },
+  };
+}
 
+module.exports = { initDB, getDB, getStorageMode, getDbStats, flushNow };

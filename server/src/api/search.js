@@ -170,7 +170,7 @@ function buildRouter(db) {
           (f.notes   || '').toLowerCase().includes(ql)
         );
 
-        faces.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+        faces.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 
         // Get gallery info for type label
         const galleries = db.all('faceGalleries');
@@ -242,7 +242,7 @@ function buildRouter(db) {
           (r.cameraId    || '').toLowerCase().includes(ql)
         );
 
-        history.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+        history.sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 
         for (const r of history.slice(0, lim)) {
           results.push({

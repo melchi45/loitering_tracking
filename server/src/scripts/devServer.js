@@ -9,6 +9,8 @@ try {
   // Continue with process env when dotenv is unavailable.
 }
 
+const { ensureMongoDB } = require('./ensureMongodb');
+
 function resolveRuntimeOs() {
   const override = (process.env.SERVER_RUNTIME_OS || 'auto').trim().toLowerCase();
   if (override === 'windows' || override === 'win') return 'windows';
@@ -65,6 +67,8 @@ function resolveByRuntime(runtimeOs, baseKey) {
 }
 
 async function main() {
+  await ensureMongoDB();
+
   const runtimeOs = resolveRuntimeOs();
   const nodeExec = resolveNodeExec(runtimeOs);
   const pythonExec = resolvePythonExec(runtimeOs);

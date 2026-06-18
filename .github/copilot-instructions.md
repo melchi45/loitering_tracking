@@ -46,6 +46,10 @@ loitering_tracking/
 │   ├── routes/            # 인증/관리자/분석 라우터
 │   │   ├── analysisApi.js      # AI 분석 API (analysis/combined 모드)
 │   │   └── analysisProxy.js    # 분석 프록시 (streaming 모드)
+│   ├── scripts/           # 시작·마이그레이션·설치 스크립트
+│   │   ├── ensureMongodb.js    # DB_TYPE=mongodb 시작 시 MongoDB 실행 확인·재시작·설치 가이드
+│   │   ├── migrateToMongo.js   # 일회성 JSON → MongoDB 마이그레이션
+│   │   └── installDb.js        # MongoDB 컬렉션·인덱스·사용자 생성
 │   ├── socket/            # Socket.IO 이벤트 핸들러
 │   └── middleware/        # 인증, 에러 핸들링
 ├── client/src/            # React 프론트엔드

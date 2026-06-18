@@ -13,7 +13,7 @@
 ---
 
 By default the server persists all data to `server/storage/lts.json` (`DB_TYPE=json`).  
-This guide describes how to switch to **MongoDB 5.0** as the primary database, with `lts.json` kept as a hot-standby backup.
+This guide describes how to switch to **MongoDB 5.0** as the primary database. When `DB_TYPE=mongodb`, all writes go to MongoDB exclusively; `lts.json` is written only if MongoDB disconnects (and only for non-high-volume tables).
 
 > **Tested on:** Ubuntu 18.04 LTS (Bionic) · MongoDB 5.0.33 · AVX-capable CPU required
 
@@ -75,7 +75,7 @@ cd server && npm run dev
 로그에서 확인:
 ```
 [MongoDB] connected → mongodb://ltsuser:****@192.168.1.100:27017/lts
-[DB] Storage mode: MongoDB (JSON as hot-standby backup)
+[DB] Storage mode: MongoDB (writes MongoDB-only; JSON written only on disconnect)
 ```
 
 ---
@@ -174,17 +174,19 @@ npm start
 Confirm in logs (`/tmp/lts.log`):
 ```
 [MongoDB] connected → mongodb://localhost:27017/lts
-[DB] Storage mode: MongoDB (JSON as hot-standby backup)
+[DB] Storage mode: MongoDB (writes MongoDB-only; JSON written only on disconnect)
 [Server] Starting 9 registered camera pipeline(s)
-[Server] Loitering Tracking System backend listening on port 3443
+[Server] Loitering Tracking System backend listening on port 3080
 ```
+
+> **Auto-start check**: When `DB_TYPE=mongodb` is set, the server runs `ensureMongodb.js` on startup. It TCP-probes the configured host/port. If MongoDB is down, it attempts `sudo systemctl restart mongod` and waits up to 20 s. If MongoDB is not installed, it prints a platform-specific installation guide. See `server/src/scripts/ensureMongodb.js`.
 
 ## Storage Mode Comparison
 
 | Mode | `DB_TYPE` | Persistence | Best For |
 |---|:---:|---|---|
-| JSON (default) | `json` | `server/storage/lts.json` | Dev / single-node |
-| MongoDB | `mongodb` | MongoDB collections + JSON hot-standby | Production / multi-node |
+| JSON (default) | `json` | `server/storage/lts.json` (always written) | Dev / single-node |
+| MongoDB | `mongodb` | MongoDB collections (primary); `lts.json` written only if MongoDB disconnects | Production / multi-node |
 
 ## Troubleshooting
 
@@ -200,19 +202,21 @@ Confirm in logs (`/tmp/lts.log`):
 
 ---
 
-## db.js 메모리 제한 (TABLE_ROW_CAPS)
+## db.js 메모리 제한 (TABLE_ROW_CAPS) 및 JSON 폴백 제외 테이블
 
 고용량 트랜잭션 테이블은 `server/src/db.js`의 `TABLE_ROW_CAPS`로 인-메모리 행 수를 제한합니다.
-MongoDB 연결 시 해당 테이블은 JSON 백업에서 제외됩니다(`MONGO_ONLY_TABLES`).
+MongoDB 모드에서 MongoDB 연결이 끊긴 경우 `JSON_FALLBACK_SKIP` 집합에 해당하는 테이블은 `lts.json` 쓰기에서 제외되어 이벤트루프 블로킹을 방지합니다.
 
-| 테이블 | 최대 행 수 (JSON 모드) | MongoDB 저장 여부 |
-|---|:---:|:---:|
-| `events` | 20,000 | ✅ |
-| `alerts` | 10,000 | ✅ |
-| `detectionSnapshots` | 2,000 | ✅ |
-| `faceMatchHistory` | 5,000 | ✅ |
-| `missing_person_detections` | 5,000 | ✅ |
-| `cameras`, `zones`, `settings` 등 | 제한 없음 | ✅ |
+| 테이블 | 최대 행 수 | MongoDB 저장 | JSON 폴백 포함 |
+|---|:---:|:---:|:---:|
+| `events` | 20,000 | ✅ | ❌ (JSON_FALLBACK_SKIP) |
+| `alerts` | 10,000 | ✅ | ✅ |
+| `detectionSnapshots` | 2,000 | ✅ | ❌ (JSON_FALLBACK_SKIP) |
+| `faceMatchHistory` | 5,000 | ✅ | ❌ (JSON_FALLBACK_SKIP) |
+| `missing_person_detections` | 5,000 | ✅ | ❌ (JSON_FALLBACK_SKIP) |
+| `client_logs` | 10,000 | ✅ | ❌ (JSON_FALLBACK_SKIP) |
+| `audit_logs` | 10,000 | ✅ | ❌ (JSON_FALLBACK_SKIP) |
+| `cameras`, `zones`, `settings` 등 | 제한 없음 | ✅ | ✅ |
 
 ---
 
@@ -222,3 +226,4 @@ MongoDB 연결 시 해당 테이블은 JSON 백업에서 제외됩니다(`MONGO_
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — MongoDB 5.0 installation and migration guide for Ubuntu 18.04 |
 | 1.1 | 2026-06-09 | LTS Engineering Team | Add `npm run install_db` script documentation, TABLE_ROW_CAPS reference, extended troubleshooting |
+| 1.2 | 2026-06-18 | LTS Engineering Team | MongoDB-only 쓰기 모드 반영 (JSON은 disconnect 시만 쓰기), MONGO_ONLY_TABLES → JSON_FALLBACK_SKIP, ensureMongodb.js 자동 시작 설명 추가 |

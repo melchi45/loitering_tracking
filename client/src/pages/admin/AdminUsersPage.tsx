@@ -32,7 +32,7 @@ interface AuditEntry {
 }
 
 type StatusFilter = 'all' | 'pending' | 'active' | 'rejected' | 'revoked';
-type AdminSection = 'users' | 'onvif' | 'audit' | 'ai-models';
+type AdminSection = 'users' | 'onvif' | 'audit' | 'ai-models' | 'system';
 
 // ── AI Models types ───────────────────────────────────────────────────────────
 
@@ -115,6 +115,7 @@ const NAV: { id: AdminSection; label: string; icon: string; desc: string }[] = [
   { id: 'ai-models', label: 'AI Models',  icon: '🤖', desc: 'YOLO model catalog & AI modules' },
   { id: 'onvif',     label: 'ONVIF',      icon: '📡', desc: 'Event type registry' },
   { id: 'audit',     label: 'Audit Log',  icon: '📋', desc: 'Activity history' },
+  { id: 'system',    label: 'System',     icon: '📊', desc: 'CPU · Memory · Disk · DB metrics' },
 ];
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -217,6 +218,7 @@ export default function AdminUsersPage() {
           {section === 'ai-models' && <AiModelsSection />}
           {section === 'onvif'     && <OnvifSection apiFetch={apiFetch} />}
           {section === 'audit'     && <AuditSection apiFetch={apiFetch} />}
+          {section === 'system'    && <SystemSection apiFetch={apiFetch} />}
         </main>
       </div>
     </div>
@@ -963,6 +965,269 @@ function AiModelsSection() {
           Full module list (COCO 80-class accessories, animals, indoor objects) is available in the
           Analytics panel (left sidebar → 🤖 Analytics tab).
         </p>
+      </div>
+    </div>
+  );
+}
+
+// ── Section: System Health ────────────────────────────────────────────────────
+
+interface SystemInfo {
+  cpu:     { usagePct: number | null; cores: number; model: string | null };
+  memory:  { totalBytes: number; freeBytes: number; usedPct: number; processRss: number; processHeap: number };
+  gpu:     Array<{ index: number; utilization: number; memUsed: number; memTotal: number }> | null;
+  diskIo:  { readBps: number; writeBps: number } | null;
+  storage: { totalBytes: number; usedBytes: number; freeBytes: number; usedPct: number | null; path: string } | null;
+}
+
+interface DbInfo {
+  mode:      'mongodb' | 'json';
+  connected: boolean;
+  rates:     { insertsPerSec: number; updatesPerSec: number; deletesPerSec: number; findsPerSec: number; totalPerSec: number };
+  cumulative:{ inserts: number; updates: number; deletes: number; finds: number };
+}
+
+function fmtBytes(b: number): string {
+  if (b >= 1e12) return (b / 1e12).toFixed(1) + ' TB';
+  if (b >= 1e9)  return (b / 1e9).toFixed(1)  + ' GB';
+  if (b >= 1e6)  return (b / 1e6).toFixed(1)  + ' MB';
+  if (b >= 1e3)  return (b / 1e3).toFixed(0)  + ' KB';
+  return b + ' B';
+}
+
+function fmtBps(bps: number): string {
+  if (bps >= 1e9) return (bps / 1e9).toFixed(1) + ' GB/s';
+  if (bps >= 1e6) return (bps / 1e6).toFixed(1) + ' MB/s';
+  if (bps >= 1e3) return (bps / 1e3).toFixed(0) + ' KB/s';
+  return bps + ' B/s';
+}
+
+function fmtNum(n: number): string {
+  return n.toLocaleString();
+}
+
+function GaugeBar({ pct, color = 'blue' }: { pct: number | null; color?: string }) {
+  const colorMap: Record<string, string> = {
+    blue:   'bg-blue-500',
+    green:  'bg-green-500',
+    yellow: 'bg-yellow-500',
+    red:    'bg-red-500',
+    purple: 'bg-purple-500',
+  };
+  const barColor = pct !== null && pct > 85 ? 'bg-red-500'
+                 : pct !== null && pct > 65 ? 'bg-yellow-500'
+                 : (colorMap[color] ?? 'bg-blue-500');
+  return (
+    <div className="h-1.5 rounded-full bg-gray-700 overflow-hidden mt-1.5">
+      <div
+        className={`h-full rounded-full transition-all duration-700 ${barColor}`}
+        style={{ width: pct !== null ? `${Math.min(100, pct)}%` : '0%' }}
+      />
+    </div>
+  );
+}
+
+function MetricCard({ title, value, sub, pct, color = 'blue', children }: {
+  title: string; value: string; sub?: string; pct?: number | null; color?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 flex flex-col gap-1">
+      <div className="text-[10px] text-gray-500 uppercase tracking-wider">{title}</div>
+      <div className="text-xl font-bold text-white">{value}</div>
+      {sub  && <div className="text-xs text-gray-400">{sub}</div>}
+      {pct !== undefined && <GaugeBar pct={pct ?? null} color={color} />}
+      {children}
+    </div>
+  );
+}
+
+function SystemSection({ apiFetch }: { apiFetch: (path: string, opts?: RequestInit) => Promise<unknown> }) {
+  const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
+  const [dbInfo,     setDbInfo]     = useState<DbInfo | null>(null);
+  const [error,      setError]      = useState<string | null>(null);
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await apiFetch('/admin/system') as { system: SystemInfo; db: DbInfo };
+      setSystemInfo(data.system);
+      setDbInfo(data.db);
+      setError(null);
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }, [apiFetch]);
+
+  useEffect(() => {
+    load();
+    timerRef.current = setInterval(load, 3000);
+    return () => { if (timerRef.current) clearInterval(timerRef.current); };
+  }, [load]);
+
+  const sys = systemInfo;
+  const db  = dbInfo;
+
+  return (
+    <div className="p-6">
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h2 className="text-lg font-semibold text-white">System Health</h2>
+          <p className="text-sm text-gray-500 mt-0.5">CPU · Memory · Disk I/O · DB — auto-refreshes every 3s</p>
+        </div>
+        {sys && (
+          <span className="text-[10px] text-gray-500 font-mono">
+            uptime {Math.floor(performance.now() / 1000)}s (client)
+          </span>
+        )}
+      </div>
+
+      {error && <ErrorBar msg={error} />}
+
+      {/* ── Resource gauges ──────────────────────────────────────────────────── */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-4">
+
+        {/* CPU */}
+        <MetricCard
+          title="CPU"
+          value={sys ? (sys.cpu.usagePct !== null ? `${sys.cpu.usagePct}%` : '—') : '…'}
+          sub={sys ? `${sys.cpu.cores} cores` + (sys.cpu.model ? ` · ${sys.cpu.model.slice(0, 28)}` : '') : undefined}
+          pct={sys?.cpu.usagePct}
+          color="blue"
+        />
+
+        {/* Memory */}
+        <MetricCard
+          title="Memory"
+          value={sys ? `${sys.memory.usedPct}%` : '…'}
+          sub={sys ? `${fmtBytes(sys.memory.totalBytes - sys.memory.freeBytes)} / ${fmtBytes(sys.memory.totalBytes)}` : undefined}
+          pct={sys?.memory.usedPct}
+          color="purple"
+        >
+          {sys && (
+            <div className="text-[10px] text-gray-500 mt-1">
+              Process RSS {fmtBytes(sys.memory.processRss)} · Heap {fmtBytes(sys.memory.processHeap)}
+            </div>
+          )}
+        </MetricCard>
+
+        {/* GPU */}
+        {sys?.gpu && sys.gpu.length > 0 ? (
+          <MetricCard
+            title={`GPU × ${sys.gpu.length}`}
+            value={`${sys.gpu[0].utilization}%`}
+            sub={`${fmtBytes(sys.gpu[0].memUsed * 1024 * 1024)} / ${fmtBytes(sys.gpu[0].memTotal * 1024 * 1024)}`}
+            pct={sys.gpu[0].utilization}
+            color="green"
+          >
+            {sys.gpu.length > 1 && (
+              <div className="text-[10px] text-gray-500 mt-1">
+                {sys.gpu.slice(1).map(g => `GPU${g.index}: ${g.utilization}%`).join(' · ')}
+              </div>
+            )}
+          </MetricCard>
+        ) : (
+          <MetricCard title="GPU" value="—" sub="No NVIDIA GPU detected" />
+        )}
+
+        {/* Storage capacity */}
+        <MetricCard
+          title="Storage"
+          value={sys?.storage ? `${sys.storage.usedPct ?? '?'}%` : '—'}
+          sub={sys?.storage
+            ? `${fmtBytes(sys.storage.usedBytes)} / ${fmtBytes(sys.storage.totalBytes)}`
+            : undefined}
+          pct={sys?.storage?.usedPct ?? null}
+          color="yellow"
+        >
+          {sys?.storage && (
+            <div className="text-[10px] text-gray-500 mt-1 truncate" title={sys.storage.path}>
+              {sys.storage.path}
+            </div>
+          )}
+        </MetricCard>
+      </div>
+
+      {/* ── Disk I/O ─────────────────────────────────────────────────────────── */}
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-4">
+        <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-3">Disk I/O</div>
+        {sys?.diskIo ? (
+          <div className="grid grid-cols-2 gap-4">
+            {([['Read', sys.diskIo.readBps, 'blue'], ['Write', sys.diskIo.writeBps, 'yellow']] as const).map(([label, bps, color]) => {
+              const MAX_BPS = 500 * 1024 * 1024; // 500 MB/s scale
+              const pct = Math.min(100, Math.round((bps / MAX_BPS) * 100));
+              return (
+                <div key={label}>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-gray-400">{label}</span>
+                    <span className="font-mono text-white">{fmtBps(bps)}</span>
+                  </div>
+                  <GaugeBar pct={pct} color={color} />
+                </div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="text-xs text-gray-600">Disk I/O data unavailable (Linux /proc/diskstats only)</div>
+        )}
+      </div>
+
+      {/* ── Database ─────────────────────────────────────────────────────────── */}
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-4">
+        <div className="text-[10px] text-gray-500 uppercase tracking-wider mb-3">Database</div>
+        {db ? (
+          <div className="space-y-3">
+            {/* Mode + connection */}
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-medium text-white capitalize">{db.mode}</span>
+              <span className={`flex items-center gap-1.5 text-xs font-medium ${db.connected ? 'text-green-400' : 'text-red-400'}`}>
+                <span className={`w-2 h-2 rounded-full ${db.connected ? 'bg-green-400' : 'bg-red-400'}`} />
+                {db.connected ? 'Connected' : 'Disconnected'}
+              </span>
+              {!db.connected && db.mode === 'mongodb' && (
+                <span className="text-[10px] text-yellow-500">⚠ Falling back to lts.json</span>
+              )}
+            </div>
+
+            {/* Rates */}
+            <div>
+              <div className="flex items-baseline gap-2 mb-1">
+                <span className="text-2xl font-bold text-white">{db.rates.totalPerSec}</span>
+                <span className="text-xs text-gray-400">queries/sec</span>
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                {([
+                  ['Insert', db.rates.insertsPerSec, 'text-blue-400'],
+                  ['Update', db.rates.updatesPerSec, 'text-yellow-400'],
+                  ['Delete', db.rates.deletesPerSec, 'text-red-400'],
+                  ['Find',   db.rates.findsPerSec,   'text-green-400'],
+                ] as const).map(([label, val, cls]) => (
+                  <div key={label} className="bg-gray-800 rounded-lg p-2 text-center">
+                    <div className={`text-base font-bold ${cls}`}>{val}</div>
+                    <div className="text-[10px] text-gray-500">{label}/s</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Cumulative */}
+            <div className="border-t border-gray-800 pt-2 grid grid-cols-4 gap-2 text-[11px]">
+              {([
+                ['Total inserts', db.cumulative.inserts],
+                ['Total updates', db.cumulative.updates],
+                ['Total deletes', db.cumulative.deletes],
+                ['Total finds',   db.cumulative.finds],
+              ] as const).map(([label, val]) => (
+                <div key={label}>
+                  <div className="text-gray-300 font-mono">{fmtNum(val)}</div>
+                  <div className="text-gray-600">{label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="text-xs text-gray-600">Loading…</div>
+        )}
       </div>
     </div>
   );

@@ -71,6 +71,10 @@ loitering_tracking/
 │   ├── middleware/
 │   │   ├── auth.js                 # JWT 인증 미들웨어
 │   │   └── role.js                 # 역할 기반 접근 제어
+│   ├── scripts/
+│   │   ├── ensureMongodb.js        # DB_TYPE=mongodb 시작 시 MongoDB 실행 확인·재시작·설치 가이드
+│   │   ├── migrateToMongo.js       # 일회성 JSON → MongoDB 마이그레이션
+│   │   └── installDb.js            # MongoDB 컬렉션·인덱스·사용자 생성 스크립트
 │   ├── config/                     # 환경별 설정
 │   └── utils/                      # 공통 유틸리티
 ├── client/src/
@@ -213,6 +217,7 @@ loitering_tracking/
 | DELETE | `/api/onvif-events` | ONVIF 이벤트 삭제 (query: cameraId — 생략 시 전체 삭제) |
 | GET | `/api/onvif-event-types` | ONVIF 이벤트 타입 레지스트리 전체 조회 (ever-seen topicTypes) |
 | DELETE | `/api/onvif-event-types` | ONVIF 이벤트 타입 레지스트리 초기화 (Admin 페이지용) |
+| GET | `/admin/system` | CPU·메모리·GPU·디스크 I/O·스토리지·DB 쿼리 통계 (admin 전용) |
 
 ---
 

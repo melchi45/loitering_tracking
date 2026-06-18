@@ -40,7 +40,7 @@ function faceGalleryRouter(db, pipelineManager, getFaceService) {
   router.get('/', (_req, res) => {
     try {
       const galleries = db.all('faceGalleries').sort(
-        (a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''),
+        (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime(),
       );
       const withCount = galleries.map((g) => ({
         ...g,
@@ -90,7 +90,7 @@ function faceGalleryRouter(db, pipelineManager, getFaceService) {
       if (!g) return res.status(404).json({ success: false, error: 'Gallery not found' });
       const faces = db.find('faceGalleryFaces', { galleryId: req.params.id })
         .map((f) => ({ ...f, embedding: undefined })) // never expose raw embedding
-        .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+        .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
       res.json({ success: true, data: faces });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
