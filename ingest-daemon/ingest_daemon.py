@@ -59,22 +59,53 @@ AI_FRAME_INTERVAL  = int(os.environ.get("AI_FRAME_INTERVAL", "3"))
 JPEG_QUALITY       = int(os.environ.get("JPEG_QUALITY", "85"))
 AI_MAX_WIDTH       = int(os.environ.get("AI_MAX_WIDTH", "640"))
 IDR_WAIT_TIMEOUT   = float(os.environ.get("IDR_WAIT_TIMEOUT", "10"))
-# Per-packet read timeout (seconds).  If av.demux() blocks longer than this
-# (e.g. MediaMTX stops forwarding while reconnecting to the camera), PyAV's
-# interrupt_callback fires → AVError → _*_loop retries after retry_delay.
-# Independent of stimeout (socket-level).  Default 5s keeps freeze gap short.
+# Frame/packet watchdog timeout (seconds).
+# If no RTP packet is demuxed within this window the interrupt_callback fires,
+# raising AVError so _*_loop reconnects after retry_delay.
+# Uses PyAV's interrupt_callback mechanism (checked per av_read_frame() call)
+# rather than the per-I/O-op stimeout, so RTSP keepalive responses
+# (OPTIONS / GET_PARAMETER) do NOT reset this timer — only actual RTP data does.
 RTSP_READ_TIMEOUT  = float(os.environ.get("RTSP_READ_TIMEOUT", "5"))
 
 _RTSP_OPTIONS = {
     "rtsp_transport": "tcp",
-    "stimeout":       "30000000", # socket I/O timeout 30s (fallback; keep-alive fires at ~30s)
+    "stimeout":       "30000000", # socket I/O timeout 30s (fallback for hard network hang)
     "max_delay":      "100000",   # 500ms → 100ms: reduces initial buffering lag
     "flags":          "low_delay",
 }
 
-# PyAV open() timeout tuple: (connection_open_sec, per_packet_read_sec).
-# The read part uses PyAV's interrupt_callback — fires independently of stimeout.
-_RTSP_OPEN_TIMEOUT = (10, RTSP_READ_TIMEOUT)
+
+def _make_watchdog_cb(stop_event: threading.Event, timeout_sec: float, label: str):
+    """
+    Returns (interrupt_cb, reset_fn).
+
+    interrupt_cb — pass to av.open(interrupt_callback=...).
+        Returns True (abort current I/O) if:
+          • stop_event is set, OR
+          • no reset_fn() call has occurred for timeout_sec seconds.
+        The callback is invoked by libavformat between every socket-level read,
+        making it immune to RTSP keepalive traffic keeping the socket "live"
+        while no actual video packets are being forwarded.
+
+    reset_fn — call after each successfully demuxed RTP packet to prevent the
+        watchdog from firing during normal operation (IDR wait, slow cameras, etc).
+    """
+    _last = [time.monotonic()]
+
+    def interrupt_cb():
+        if stop_event.is_set():
+            return True
+        elapsed = time.monotonic() - _last[0]
+        if elapsed > timeout_sec:
+            log.warning("%s watchdog: no RTP packet for %.1fs — interrupting RTSP",
+                        label, elapsed)
+            return True
+        return False
+
+    def reset():
+        _last[0] = time.monotonic()
+
+    return interrupt_cb, reset
 
 # Must match VIDEO_SSRC / AUDIO_SSRC / AUDIO_PT in server/src/services/webrtc/mediasoupEngine.js.
 # mediasoup PlainTransport (comedia=true) matches incoming RTP by both SSRC and payload type;
@@ -168,7 +199,8 @@ class CameraSession:
                 retry_delay = min(retry_delay * 1.5, 30.0)
 
     def _ai_ingest_once(self):
-        container = av.open(self.rtsp_url, options=_RTSP_OPTIONS, timeout=_RTSP_OPEN_TIMEOUT)
+        cb, reset_wd = _make_watchdog_cb(self._stop, RTSP_READ_TIMEOUT, f"[{self.id[:8]}] ai")
+        container = av.open(self.rtsp_url, options=_RTSP_OPTIONS, interrupt_callback=cb)
         try:
             vs = next((s for s in container.streams if s.type == "video"), None)
             if vs is None:
@@ -191,6 +223,8 @@ class CameraSession:
                     break
                 if packet.size == 0:
                     continue
+
+                reset_wd()  # RTP packet arrived → reset frame watchdog
 
                 if not idr_seen:
                     if packet.is_keyframe:
@@ -286,7 +320,8 @@ class CameraSession:
                 retry_delay = min(retry_delay * 1.5, 30.0)
 
     def _video_rtp_ingest_once(self):
-        inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS, timeout=_RTSP_OPEN_TIMEOUT)
+        cb, reset_wd = _make_watchdog_cb(self._stop, RTSP_READ_TIMEOUT, f"[{self.id[:8]}] vrtp")
+        inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS, interrupt_callback=cb)
         try:
             vs = next((s for s in inp.streams if s.type == "video"), None)
             if vs is None:
@@ -311,6 +346,8 @@ class CameraSession:
                         break
                     if pkt.size == 0:
                         continue
+
+                    reset_wd()  # RTP packet arrived → reset watchdog
 
                     if not idr_seen:
                         if pkt.is_keyframe:
@@ -363,7 +400,8 @@ class CameraSession:
                 retry_delay = min(retry_delay * 1.5, 30.0)
 
     def _audio_rtp_ingest_once(self):
-        inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS, timeout=_RTSP_OPEN_TIMEOUT)
+        cb, reset_wd = _make_watchdog_cb(self._stop, RTSP_READ_TIMEOUT, f"[{self.id[:8]}] artp")
+        inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS, interrupt_callback=cb)
         try:
             as_ = next((s for s in inp.streams if s.type == "audio"), None)
             if as_ is None:
@@ -390,6 +428,7 @@ class CameraSession:
                             break
                         if pkt.size == 0:
                             continue
+                        reset_wd()  # RTP packet arrived → reset watchdog
                         if pkt.dts is not None:
                             if last_dts is not None and pkt.dts <= last_dts:
                                 pkt.dts = last_dts + 1
@@ -432,6 +471,7 @@ class CameraSession:
                             break
                         if pkt.size == 0:
                             continue
+                        reset_wd()  # RTP packet arrived → reset watchdog
                         for frame in pkt.decode():
                             for resampled in resampler.resample(frame):
                                 for out_pkt in out_as.encode(resampled):
@@ -471,7 +511,8 @@ class CameraSession:
                 retry_delay = min(retry_delay * 1.5, 30.0)
 
     def _app_rtp_ingest_once(self):
-        inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS, timeout=_RTSP_OPEN_TIMEOUT)
+        cb, reset_wd = _make_watchdog_cb(self._stop, RTSP_READ_TIMEOUT, f"[{self.id[:8]}] apprtp")
+        inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS, interrupt_callback=cb)
         try:
             # Find non-video, non-audio streams (data, subtitle, application tracks).
             # Samsung / ONVIF metadata is typically exposed as a "data" or "subtitle"
@@ -497,6 +538,7 @@ class CameraSession:
                     break
                 if pkt.size == 0:
                     continue
+                reset_wd()  # RTP packet arrived → reset watchdog
 
                 payload_b64 = base64.b64encode(bytes(pkt)).decode("ascii")
                 body = json.dumps({
