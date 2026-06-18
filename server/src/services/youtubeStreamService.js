@@ -351,14 +351,20 @@ class YouTubeStreamService {
       this.db.update('cameras', id, { repeatPlayback: !!updates.repeatPlayback });
     }
 
+    // webrtcEnabled change only needs a pipeline restart (no YouTube source restart).
+    // Separating this avoids the 30-60s yt-dlp/FFmpeg respawn when just toggling WebRTC.
+    let needPipelineOnly = false;
     if (updates.webrtcEnabled !== undefined) {
       entry.webrtcEnabled = !!updates.webrtcEnabled;
       this.db.update('cameras', id, { webrtcEnabled: !!updates.webrtcEnabled });
-      needRestart = true;
+      if (!needRestart) {
+        needPipelineOnly = true;
+      }
     }
 
     if (needRestart) {
-      // Restart asynchronously so the API response returns immediately
+      // Full restart: source URL / resolution / bitrate changed.
+      // Restart asynchronously so the API response returns immediately.
       this._stopEntry(entry, false).then(async () => {
         entry.restartCount = 0;
         entry.status       = 'starting';
@@ -372,6 +378,18 @@ class YouTubeStreamService {
       }).catch((err) => {
         console.error(`[YouTubeStream] Stop failed during update for ${id}:`, err.message);
       });
+    } else if (needPipelineOnly && entry.status === 'live') {
+      // webrtcEnabled changed while stream is live — restart pipeline only.
+      // The YouTube source (yt-dlp + FFmpeg) keeps running; only the ingest-daemon
+      // registration and mediasoup transports are rebuilt with the new setting.
+      const camRecord = this.db.findOne('cameras', { id });
+      if (camRecord && this.pipelineManager) {
+        this.pipelineManager.stopCamera(id)
+          .then(() => this.pipelineManager.startCamera(camRecord))
+          .catch((err) => {
+            console.error(`[YouTubeStream] Pipeline restart error for ${id}:`, err.message);
+          });
+      }
     }
 
     return this._toPublic(entry);

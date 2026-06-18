@@ -255,6 +255,7 @@ export default function CameraList() {
             youtubeUrl: data.youtubeUrl,
             resolution: data.resolution,
             bitrate: data.bitrate,
+            webrtcEnabled: data.webrtcEnabled,
           });
           closeAddModal();
           setTab('added');
