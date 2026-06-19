@@ -133,6 +133,10 @@ class _Watchdog:
     def _run(self) -> None:
         while not self._disarmed.wait(timeout=0.25):
             if self._stop_ev.is_set():
+                try:
+                    self._container.close()
+                except Exception:
+                    pass
                 return
             elapsed = time.monotonic() - self._last
             if elapsed > self._timeout:
@@ -272,7 +276,9 @@ class CameraSession:
                     if packet.is_keyframe:
                         idr_seen = True
                     elif time.monotonic() > idr_deadline:
-                        idr_seen = True
+                        raise RuntimeError(
+                            f"No IDR within {IDR_WAIT_TIMEOUT}s — reconnecting"
+                        )
                     else:
                         continue
 
@@ -403,7 +409,9 @@ class CameraSession:
                         if pkt.is_keyframe:
                             idr_seen = True
                         elif time.monotonic() > idr_deadline:
-                            idr_seen = True
+                            raise RuntimeError(
+                                f"No IDR within {IDR_WAIT_TIMEOUT}s — reconnecting"
+                            )
                         else:
                             continue
 
