@@ -59,7 +59,14 @@ docker compose logs -f mediamtx --tail 100
 ```
 
 #### 프로덕션 로그 파일 (`npm run start` 계열)
-`startServer.js`가 모든 출력(서버·MediaMTX·Ingest)에 `[YY-MM-DD HH:mm:ss.sss]` 타임스탬프를 붙여 일별 파일로 저장합니다.
+`startServer.js`가 모든 출력(서버·MediaMTX·Ingest)에 `[YY-MM-DD HH:mm:ss.sss] [LEVEL]` 접두어를 붙여 일별 파일로 저장합니다.
+
+**출력 형식**
+```
+[26-06-19 13:45:30.012] [INFO]    [DB] MongoDB connected
+[26-06-19 13:45:30.234] [WARNING] [MediaMTX] Port 8554 already in use
+[26-06-19 13:45:30.456] [DEBUG]   [YouTubeStream] yt-dlp: [hls @ 0x...] Skip(...)
+```
 
 **초기 설정 (1회, root 필요)**
 ```bash
@@ -71,8 +78,9 @@ sudo mkdir -p /var/log/lts && sudo chown $USER:$USER /var/log/lts
 # 실시간 확인
 tail -f /var/log/lts/lts-$(date +%Y-%m-%d).log
 
-# 에러만 필터
-grep -E "ERROR|WARN" /var/log/lts/lts-$(date +%Y-%m-%d).log
+# 레벨별 필터
+grep '\[ERROR\]'   /var/log/lts/lts-$(date +%Y-%m-%d).log
+grep '\[WARNING\]' /var/log/lts/lts-$(date +%Y-%m-%d).log
 ```
 
 **환경변수 (`server/.env`)**
@@ -81,6 +89,11 @@ grep -E "ERROR|WARN" /var/log/lts/lts-$(date +%Y-%m-%d).log
 |---|---|---|
 | `LOG_TO_FILE` | `true` | `false`로 설정 시 파일 저장 비활성화 |
 | `LOG_DIR` | `/var/log/lts` | 로그 디렉토리. 권한 없을 시 `server/logs/`로 자동 폴백 |
+| `LOG_LEVEL` | `INFO` | 최소 레벨: `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`/`NONE` |
+| `LOG_FILTER_PATTERNS` | `` | 쉼표 구분 정규식 — 매칭 줄 강제 억제 |
+
+> `LOG_LEVEL=INFO`(기본) 설정 시 ffmpeg `[hls @ 0x...] Skip` 노이즈가 자동 필터링됩니다.
+> `LOG_LEVEL=DEBUG`로 변경하면 yt-dlp/ffmpeg 전체 verbose 출력을 볼 수 있습니다.
 
 상세 내용 → `docs/ops/Logging_Guide.md`
 
