@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAPTURE-002 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Active |
 | **Date** | 2026-06-11 |
 | **Ops Guide** | [RTSP_Capture_Backend_Setup.md](../ops/RTSP_Capture_Backend_Setup.md) |
@@ -381,6 +381,137 @@ npm run ingest:restart -- --dry-run  # 설정 출력만
 
 ---
 
+### 6.7 Watchdog 및 자동 복구 (Auto-Recovery)
+
+ingest-daemon은 두 계층의 Watchdog으로 RTSP 스트림 고착 및 프로세스 충돌을 자동 복구합니다.
+
+#### 계층 1 — PyAV 내부 Watchdog (`ingest_daemon.py`)
+
+각 RTSP 세션(`ai` / `vrtp` / `artp` / `apprtp`)에 독립적인 `_Watchdog` 스레드가 붙습니다.
+
+```python
+RTSP_READ_TIMEOUT = float(os.environ.get("RTSP_READ_TIMEOUT", "5"))  # 기본 5초
+
+class _Watchdog:
+    def _run(self):
+        while not self._disarmed.wait(timeout=0.25):
+            if elapsed > self._timeout:
+                log.warning("%s watchdog: no RTP for %.1fs — closing container", ...)
+                self._container.close()   # demux() → av.AVError → 루프 종료
+                return
+```
+
+- RTP 패킷이 `RTSP_READ_TIMEOUT`(기본 5 s) 동안 도착하지 않으면 PyAV 컨테이너를 닫습니다.
+- `demux()` 루프가 `av.AVError` / `OSError`를 발생시키고 `_*_loop()` 함수가 재연결을 스케줄합니다.
+- RTSP keepalive(OPTIONS/GET_PARAMETER)는 `wd.reset()`을 호출하지 않으므로 "keepalive는 살아있지만 영상이 없는" 고착 상태를 정확히 감지합니다.
+- 환경변수 `RTSP_READ_TIMEOUT`(초)으로 민감도를 조정할 수 있습니다.
+
+#### 계층 2 — Node.js 프레임 Watchdog (`pipelineManager.js`)
+
+`pipelineManager.js`는 카메라별로 `setInterval`(8 s 주기)을 유지하며,
+마지막 JPEG 수신 이후 `FRAME_STALL_MS`(기본 20 s)가 지나면 복구를 시도합니다.
+
+```javascript
+// server/src/services/pipelineManager.js
+const FRAME_STALL_MS = 20_000;
+
+ctx.frameWatchdogTimer = setInterval(async () => {
+  if (!ctx.running || !ctx.lastFrameAt) return;
+  const stalledMs = Date.now() - ctx.lastFrameAt;
+  if (stalledMs > FRAME_STALL_MS) {
+    ctx.lastFrameAt = Date.now();             // 다음 인터벌까지 재발동 방지
+    ctx.capture.stop();
+
+    if (CAPTURE_BACKEND === 'ingest-daemon' && ctx._ingestRtspUrl) {
+      // mediamtx/직접 경로: ingest-daemon HTTP API로 재등록
+      await _ingestRemoveCamera(camera.id);
+      await _ingestRegisterCamera(camera.id, ctx._ingestRtspUrl, ctx._ingestCallbackUrl);
+    } else if (CAPTURE_BACKEND === 'ingest-daemon') {
+      // mediasoup 경로: 엔진이 PlainTransport 재생성 + daemon에 POST
+      await getWebRTCEngine().addCameraStream(camera.id, ctx._captureUrl);
+    }
+    ctx.capture.start();
+  }
+}, 8_000);
+```
+
+| 필드 | 값 | 설명 |
+|---|---|---|
+| `FRAME_STALL_MS` | 20,000 ms | 마지막 JPEG 이후 이 시간 경과 시 복구 시작 |
+| 폴링 주기 | 8,000 ms | setInterval 주기 |
+| `ctx._ingestRtspUrl` | MediaMTX loopback URL | 설정 시 직접 HTTP 재등록 |
+| `ctx._captureUrl` | 원본 RTSP / MediaMTX URL | mediasoup 재등록 시 사용 |
+
+#### 계층 3 — 프로세스 자동 재시작 (`startServer.js`)
+
+`startServer.js`는 ingest-daemon 프로세스의 `exit` 이벤트를 감지하여 지수 백오프로 재시작합니다.
+
+```
+ingest-daemon 프로세스 종료
+    │
+    ▼  _attachIngestHandlers(proc).on('exit')
+    │  _shuttingDown? → return (정상 종료 중이면 무시)
+    │
+    ▼  _respawnIngest() — 지수 백오프 대기 (1s → 1.5s → 2.25s → ... → 최대 30s)
+    │
+    ▼  spawn(ingestExec, ingestArgs) + _attachIngestHandlers(proc)
+    │
+    ▼  /health 폴링 (최대 15 s)
+    │
+    ▼  ready → _ingestRestartAttempts = 0
+           POST http://127.0.0.1:{PORT}/api/internal/ingest/reregister
+               → pipelineManager.reregisterAllWithIngestDaemon()
+                   ├── mediamtx 경로: _ingestRemoveCamera + _ingestRegisterCamera (직접)
+                   └── mediasoup 경로: engine.addCameraStream (PlainTransport 재생성)
+```
+
+**복구 소요 시간 (일반적):**
+
+| 경로 | 총 복구 시간 |
+|---|---|
+| mediasoup 카메라 | ~2–5 s (daemon 재시작 + reregister 호출) |
+| mediamtx 카메라 | ~2–5 s (daemon 재시작 + reregister 호출) |
+| daemon 반복 재시작 실패 | 최대 30 s 대기 후 재시도 |
+
+**백오프 공식:**
+
+```
+대기 시간 = min(1000 × 1.5^attempt, 30000) ms
+attempt:  0 → 1.0 s
+          1 → 1.5 s
+          2 → 2.25 s
+          ...
+          9 → 29.5 s (이후 30 s 고정)
+```
+
+성공 시 `_ingestRestartAttempts`를 0으로 리셋합니다.
+
+#### `reregisterAllWithIngestDaemon()` — 통합 재등록 메서드
+
+`pipelineManager.reregisterAllWithIngestDaemon()`은 모든 활성 파이프라인을
+WEBRTC_ENGINE 종류에 무관하게 단일 API로 재등록합니다.
+
+```javascript
+// server/src/services/pipelineManager.js
+async reregisterAllWithIngestDaemon() {
+  for (const [cameraId, ctx] of this._pipelines) {
+    if (!ctx.running) continue;
+    if (ctx._ingestRtspUrl) {
+      // mediamtx/직접 경로
+      await _ingestRemoveCamera(cameraId);
+      await _ingestRegisterCamera(cameraId, ctx._ingestRtspUrl, ctx._ingestCallbackUrl);
+    } else if (CAPTURE_BACKEND === 'ingest-daemon') {
+      // mediasoup 경로: engine이 PlainTransport 포트 포함 재등록
+      await getWebRTCEngine().addCameraStream(cameraId, ctx._captureUrl);
+    }
+  }
+}
+```
+
+HTTP API: `POST /api/internal/ingest/reregister` (localhost 전용, 인증 없음)
+
+---
+
 ## 7. 백엔드 선택 기준 비교
 
 | 항목 | Ingest-Daemon | FFmpeg *(레거시)* | GStreamer | PyAV (인라인) |
@@ -541,3 +672,4 @@ if (!PYAV_AVAILABLE) {
 |---|---|---|
 | 1.0 | 2026-06-04 | 초기 작성 (ffmpeg / gstreamer / pyav 3가지 백엔드) |
 | 1.1 | 2026-06-11 | ingest-daemon 백엔드 추가 (현재 기본값); ffmpeg 레거시 분류; WEBRTC_ENGINE 환경변수 추가; captureFactory.js 코드 스니펫 업데이트 |
+| 1.2 | 2026-06-19 | §6.7 Watchdog 및 자동 복구 추가 — PyAV 내부 watchdog, Node.js 프레임 watchdog, startServer.js 자동 재시작, reregisterAllWithIngestDaemon() |

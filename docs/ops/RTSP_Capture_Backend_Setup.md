@@ -506,6 +506,98 @@ cd server && npm run ingest:restart  # server/ 경로
 
 ---
 
+## Ingest-Daemon Watchdog 및 자동 복구
+
+### 복구 계층 구조
+
+LTS-2026은 세 계층의 Watchdog이 중첩되어 스트림 고착 및 프로세스 충돌을 자동 복구합니다.
+
+```
+계층 1  ingest_daemon.py / _Watchdog (Python)
+        └── RTSP 세션별: RTP 패킷이 RTSP_READ_TIMEOUT(기본 5s) 동안 없으면
+            PyAV 컨테이너 강제 종료 → _*_loop()가 자동 재연결
+
+계층 2  pipelineManager.js / frameWatchdogTimer (Node.js)
+        └── 카메라별: 마지막 JPEG 수신 후 20s 경과 시
+            ingest-daemon에 DELETE + POST 재등록 (mediamtx/mediasoup 모두 처리)
+
+계층 3  startServer.js / _respawnIngest (Node.js)
+        └── ingest-daemon 프로세스 자체가 종료되면
+            지수 백오프 후 자동 재시작 →
+            /api/internal/ingest/reregister 호출로 모든 카메라 즉시 재등록
+```
+
+### 계층 1 — PyAV 내부 Watchdog
+
+`RTSP_READ_TIMEOUT` 환경변수로 민감도를 조정할 수 있습니다:
+
+```env
+# server/.env
+RTSP_READ_TIMEOUT=5   # 기본값 (초). 불안정한 네트워크에서는 10–15로 늘림
+```
+
+RTSP keepalive(OPTIONS/GET_PARAMETER)는 카운터를 초기화하지 않으므로
+"keepalive는 살아있지만 영상이 없는" 고착 상태도 감지됩니다.
+
+### 계층 2 — Node.js 프레임 Watchdog
+
+로그에서 이 동작을 확인할 수 있습니다:
+
+```
+[INFO]  [PipelineManager][cam-id] Frame watchdog: no frame for 24s — restarting capture
+[INFO]  [PipelineManager][cam-id] Capture started (ingest-daemon): ...
+```
+
+`ECONNREFUSED 127.0.0.1:7070` 에러가 함께 보이면 ingest-daemon 자체가 죽은 것입니다 —
+계층 3 자동 재시작이 이어서 처리합니다.
+
+### 계층 3 — 프로세스 자동 재시작
+
+서버 로그에서 이 동작을 확인할 수 있습니다:
+
+```
+[WARNING] [Start] ingest-daemon exited (code=1)
+[WARNING] [Start] ingest-daemon crashed — restarting in 1.0s (attempt #1)
+[INFO]    [Start] ingest-daemon restarting on :7070
+[INFO]    [Start] ingest-daemon restarted on :7070 — re-registering cameras
+[INFO]    [Start] ingest reregister: HTTP 200
+```
+
+재시작 백오프: `1s → 1.5s → 2.25s → ... → 최대 30s (성공 시 0으로 리셋)`
+
+### 수동 개입이 필요한 경우
+
+자동 복구가 실패할 때(데몬이 반복 충돌하는 경우):
+
+```bash
+# 1. 로그에서 Python traceback 확인
+grep -A5 "ingest-daemon crashed" /var/log/lts/lts-$(date +%Y-%m-%d).log
+
+# 2. 데몬 단독 재시작 (서버 재시작 불필요)
+cd server && npm run ingest:restart
+
+# 3. PyAV 환경 확인
+python3 -c "import av, PIL; print(av.__version__)"
+
+# 4. RTSP 소스 직접 확인
+python3 -c "
+import av
+c = av.open('rtsp://127.0.0.1:8554/<cameraId>', options={'rtsp_transport':'tcp'})
+print([s.type for s in c.streams])
+c.close()
+"
+```
+
+### 환경변수 (Watchdog 관련)
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `RTSP_READ_TIMEOUT` | `5` | PyAV 내부 watchdog 타임아웃(초). 불안정 네트워크에서 증가 |
+
+설계 상세 → [Design_RTSP_Capture_Backend.md §6.7](../design/Design_RTSP_Capture_Backend.md)
+
+---
+
 ## 환경변수 (관련 `.env` 항목)
 
 | 변수 | 기본값 | 설명 |
@@ -526,8 +618,18 @@ cd server && npm run ingest:restart  # server/ 경로
 
 ## 관련 문서
 
-- [Design_RTSP_Capture_Backend.md](../design/Design_RTSP_Capture_Backend.md) — 4-backend 추상화 설계 (ingest-daemon §6)
+- [Design_RTSP_Capture_Backend.md](../design/Design_RTSP_Capture_Backend.md) — 4-backend 추상화 설계 (ingest-daemon §6, §6.7 Watchdog)
 - [Design_RTSP_WebRTC_Architecture.md](../design/Design_RTSP_WebRTC_Architecture.md) — WebRTC 아키텍처 (MediaMTX WHEP)
 - [Design_FFmpeg_RTSP_Capture.md](../design/Design_FFmpeg_RTSP_Capture.md) — FFmpeg 설계 (Deprecated)
 - [FFmpeg_Installation_Compatibility.md](../ops/FFmpeg_Installation_Compatibility.md) — FFmpeg 호환성 (레거시)
 - [Design_LTS2026_YouTube_RTSP_Ingest.md](../design/Design_LTS2026_YouTube_RTSP_Ingest.md) — YouTube 스트림 설계
+- [Process_Management.md](../ops/Process_Management.md) — 프로세스 종료·재시작·수동 정리
+
+---
+
+## Revision History
+
+| 버전 | 날짜 | 변경 내용 |
+|---|---|---|
+| 1.0 | 2026-06-04 | 초기 작성 |
+| 1.1 | 2026-06-19 | Ingest-Daemon Watchdog 및 자동 복구 섹션 추가 (RTSP_READ_TIMEOUT, 계층 3 프로세스 재시작, 수동 진단 절차)

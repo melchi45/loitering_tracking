@@ -192,6 +192,86 @@ npm run ingest:restart -- --dry-run  # 설정 확인만
 3. `/health` 폴링으로 기동 확인 (최대 10초)
 4. DB에서 카메라 목록 읽어 daemon에 재등록
 
+---
+
+## Ingest Daemon Watchdog 및 자동 복구
+
+LTS-2026은 세 계층의 Watchdog으로 스트림 고착·프로세스 충돌을 자동 복구합니다.
+
+### 계층 구조
+
+```
+계층 1  ingest_daemon.py / _Watchdog (Python)
+        RTSP_READ_TIMEOUT(기본 5s) 동안 RTP 없으면 PyAV 컨테이너 강제 종료 → 자동 재연결
+
+계층 2  pipelineManager.js / frameWatchdogTimer (Node.js)
+        마지막 JPEG 수신 후 20s 경과 시 ingest-daemon에 DELETE+POST 재등록
+        (mediamtx·mediasoup 두 경로 모두 처리)
+
+계층 3  startServer.js / _respawnIngest (Node.js)
+        ingest-daemon 프로세스 종료 감지 → 지수 백오프 재시작 →
+        POST /api/internal/ingest/reregister → pipelineManager.reregisterAllWithIngestDaemon()
+```
+
+### 복구 흐름 (계층 3)
+
+```
+ingest-daemon crash
+  → exit 이벤트 (startServer.js)
+  → _shuttingDown? return (정상 종료 시 무시)
+  → _respawnIngest(): 1s 대기 후 재시작
+  → /health 폴링 성공
+  → POST /api/internal/ingest/reregister
+      → pipelineManager.reregisterAllWithIngestDaemon()
+          ├── ctx._ingestRtspUrl 있음 → _ingestRegisterCamera() 직접 호출 (mediamtx)
+          └── 없음 + CAPTURE_BACKEND=ingest-daemon → engine.addCameraStream() (mediasoup)
+  → 전체 카메라 재등록 완료 (~2-5s)
+```
+
+재시작 백오프: `1s → 1.5s → 2.25s → ... → 최대 30s` (성공 시 0 리셋)
+
+### 로그 패턴
+
+```
+# 계층 2 — 프레임 watchdog 발동
+[INFO] [PipelineManager][cam-id] Frame watchdog: no frame for 24s — restarting capture
+# ingest-daemon 죽은 경우 (계층 3이 이어받음)
+[ERROR] [PipelineManager][cam-id] ingest-daemon register failed: fetch failed
+
+# 계층 3 — 프로세스 자동 재시작
+[WARNING] [Start] ingest-daemon exited (code=1)
+[WARNING] [Start] ingest-daemon crashed — restarting in 1.0s (attempt #1)
+[INFO]    [Start] ingest-daemon restarted on :7070 — re-registering cameras
+[INFO]    [Start] ingest reregister: HTTP 200
+```
+
+### 환경변수
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `RTSP_READ_TIMEOUT` | `5` | PyAV 내부 watchdog 타임아웃(초). 불안정 네트워크에서는 10–15로 증가 |
+
+### 수동 진단
+
+```bash
+# 1. 로그 확인
+grep "watchdog\|crashed\|reregister" /var/log/lts/lts-$(date +%Y-%m-%d).log
+
+# 2. 데몬 상태 확인
+curl http://127.0.0.1:7070/health
+
+# 3. 수동 재시작 (서버 재시작 없이)
+cd server && npm run ingest:restart
+
+# 4. PyAV 환경 확인
+python3 -c "import av, PIL; print(av.__version__)"
+```
+
+설계 상세 → [Design_RTSP_Capture_Backend.md §6.7](../../../docs/design/Design_RTSP_Capture_Backend.md)  
+운영 가이드 → [RTSP_Capture_Backend_Setup.md](../../../docs/ops/RTSP_Capture_Backend_Setup.md)
+
+---
+
 ### RTSP 카메라 추가
 1. 카메라의 RTSP URL 확인 (예: `rtsp://admin:pass@192.168.1.100:554/stream1`)
 2. `mediamtx.yml`의 `paths` 섹션에 새 경로 추가:
@@ -503,6 +583,9 @@ yt-dlp -F https://youtube.com/watch?v=...
 | 변경 파일 | 업데이트 필요 문서 |
 |-----------|------------------|
 | `ingestDaemonCapture.js`, `ingest_daemon.py` | `docs/design/Design_RTSP_Capture_Backend.md` §6, `docs/ops/RTSP_Capture_Backend_Setup.md` |
+| `ingest_daemon.py` (_Watchdog, RTSP_READ_TIMEOUT) | `docs/design/Design_RTSP_Capture_Backend.md` §6.7, `docs/ops/RTSP_Capture_Backend_Setup.md` Watchdog 섹션 |
+| `pipelineManager.js` (frameWatchdogTimer, reregisterAllWithIngestDaemon) | `docs/design/Design_RTSP_Capture_Backend.md` §6.7 |
+| `scripts/startServer.js` (_respawnIngest, _attachIngestHandlers) | `docs/design/Design_RTSP_Capture_Backend.md` §6.7, `docs/ops/Process_Management.md` |
 | `captureFactory.js` | `docs/design/Design_RTSP_Capture_Backend.md` §2 코드스니펫 |
 | `socket/streamHandler.js` (camera:capabilities) | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/design/Design_Server_Architecture.md` |
 | `scripts/restartIngestDaemon.js` | `CLAUDE.md` 개발 명령어, `docs/ops/RTSP_Capture_Backend_Setup.md` |
