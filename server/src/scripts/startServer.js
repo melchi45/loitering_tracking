@@ -242,28 +242,51 @@ async function main() {
 
   child.on('error', (err) => {
     console.error(`[Start] Failed to launch server with "${nodeExec}": ${err.message}`);
-    if (mediamtxChild) try { mediamtxChild.kill(); } catch (_) {}
+    if (mediamtxChild) try { mediamtxChild.kill('SIGTERM'); } catch (_) {}
     process.exit(1);
   });
 
+  // ── Graceful shutdown helpers ───────────────────────────────────────────
+  // killChildren: terminate managed child processes (mediamtx, ingest-daemon).
+  // Idempotent — safe to call multiple times.
+  const killChildren = (sig = 'SIGTERM') => {
+    if (mediamtxChild)     { try { mediamtxChild.kill(sig);     } catch (_) {} mediamtxChild     = null; }
+    if (ingestDaemonChild) { try { ingestDaemonChild.kill(sig); } catch (_) {} ingestDaemonChild = null; }
+  };
+
+  let _shuttingDown = false;
+  const shutdown = (sig) => {
+    if (_shuttingDown) return;
+    _shuttingDown = true;
+    killChildren(sig);
+    try { child.kill(sig); } catch (_) {}
+    // Force-exit after 12 s if graceful shutdown stalls
+    setTimeout(() => {
+      console.warn('[Start] Forced exit after 12s shutdown timeout');
+      killChildren('SIGKILL');
+      process.exit(1);
+    }, 12_000).unref();
+  };
+
   child.on('exit', (code, signal) => {
-    if (mediamtxChild)     try { mediamtxChild.kill();     } catch (_) {}
-    if (ingestDaemonChild) try { ingestDaemonChild.kill(); } catch (_) {}
+    killChildren('SIGTERM');
+    // Remove signal handlers before re-raising so the OS default (exit) fires.
+    // Without this, process.kill(pid, signal) would re-invoke our handler and
+    // never reach the default exit behaviour, leaving startServer.js alive forever.
+    process.removeAllListeners('SIGTERM');
+    process.removeAllListeners('SIGINT');
+    process.removeAllListeners('SIGHUP');
     if (signal) {
       process.kill(process.pid, signal);
       return;
     }
-    process.exit(code || 0);
+    process.exit(code ?? 0);
   });
 
-  // Forward SIGTERM/SIGINT to all child processes
-  const shutdown = (sig) => {
-    if (mediamtxChild)     try { mediamtxChild.kill(sig);     } catch (_) {}
-    if (ingestDaemonChild) try { ingestDaemonChild.kill(sig); } catch (_) {}
-    try { child.kill(sig); } catch (_) {}
-  };
+  // Forward SIGTERM / SIGINT / SIGHUP to all child processes.
   process.on('SIGTERM', () => shutdown('SIGTERM'));
   process.on('SIGINT',  () => shutdown('SIGINT'));
+  process.on('SIGHUP',  () => shutdown('SIGTERM'));
 }
 
 main().catch(e => { console.error('[Start] fatal:', e.message); process.exit(1); });

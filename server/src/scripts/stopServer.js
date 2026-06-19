@@ -142,29 +142,77 @@ async function waitForPortsFree(ports, timeoutMs = 10000, pollMs = 200) {
   return false;
 }
 
+// ── Kill processes by cmdline pattern (Linux/macOS only) ─────────────────────
+// Uses pgrep -f to find processes matching the pattern string and sends SIGTERM.
+// Returns the list of PIDs that were signalled.
+function killByPattern(pattern) {
+  if (process.platform === 'win32') return [];
+  const pids = [];
+  try {
+    const out = execSync(`pgrep -f "${pattern}"`, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+    out.trim().split(/\r?\n/).forEach((line) => {
+      const pid = parseInt(line.trim(), 10);
+      if (!Number.isFinite(pid) || pid === process.pid) return;
+      pids.push(pid);
+      try { process.kill(pid, 'SIGTERM'); } catch { /* already dead */ }
+    });
+  } catch { /* pgrep exits non-zero when no match — ignore */ }
+  return pids;
+}
+
+// LTS-managed child process patterns (Linux/macOS).
+// These are killed after the main Node.js server exits so that mediamtx,
+// ingest-daemon, and yt-dlp/ffmpeg do not linger as orphan processes.
+const LTS_CHILD_PATTERNS = [
+  'mediamtx',          // MediaMTX media proxy
+  'ingest_daemon.py',  // PyAV ingest daemon
+];
+
 async function main() {
   const ports = getTargetPorts();
   const pids = process.platform === 'win32' ? getPidsOnWindows(ports) : getPidsOnUnix(ports);
 
   if (pids.length === 0) {
     console.log(`[Stop] No listening process found on ports: ${ports.join(', ')}`);
-    return;
-  }
-
-  console.log(`[Stop] Stopping PIDs on ports ${ports.join(', ')}: ${pids.join(', ')}`);
-  killPids(pids);
-
-  const freed = await waitForPortsFree(ports);
-  if (freed) {
-    console.log('[Stop] Done — ports released');
   } else {
-    console.warn('[Stop] Timeout waiting for ports to be released — forcing SIGKILL');
-    for (const pid of pids) {
-      try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+    console.log(`[Stop] Stopping PIDs on ports ${ports.join(', ')}: ${pids.join(', ')}`);
+    killPids(pids);
+
+    const freed = await waitForPortsFree(ports);
+    if (freed) {
+      console.log('[Stop] Server stopped — ports released');
+    } else {
+      console.warn('[Stop] Timeout waiting for ports to be released — forcing SIGKILL');
+      for (const pid of pids) {
+        try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+      }
+      await waitForPortsFree(ports, 3000);
     }
-    await waitForPortsFree(ports, 3000);
-    console.log('[Stop] Done');
   }
+
+  // Kill LTS child processes that may outlive the Node.js server.
+  // These are spawned by startServer.js and should have exited with it, but
+  // if the server was SIGKILL'd they become orphans.
+  if (process.platform !== 'win32') {
+    const extra = [];
+    for (const pattern of LTS_CHILD_PATTERNS) {
+      const killed = killByPattern(pattern);
+      extra.push(...killed);
+    }
+    if (extra.length > 0) {
+      console.log(`[Stop] Killed orphan LTS processes (PIDs: ${extra.join(', ')})`);
+      // Give them 3 s to exit cleanly, then SIGKILL any survivors.
+      await new Promise(r => setTimeout(r, 3000));
+      for (const pid of extra) {
+        try { process.kill(pid, 'SIGKILL'); } catch { /* already dead */ }
+      }
+    }
+  }
+
+  console.log('[Stop] Done');
 }
 
 main().catch((err) => { console.error('[Stop] Error:', err.message); process.exit(1); });
