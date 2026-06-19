@@ -76,7 +76,8 @@ loitering_tracking/
 │   │   ├── migrateToMongo.js       # 일회성 JSON → MongoDB 마이그레이션
 │   │   └── installDb.js            # MongoDB 컬렉션·인덱스·사용자 생성 스크립트
 │   ├── config/                     # 환경별 설정
-│   └── utils/                      # 공통 유틸리티
+│   └── utils/
+│       └── logger.js               # 프로덕션 로거 — [YY-MM-DD HH:mm:ss.sss] 타임스탬프, /var/log/lts 파일 저장, makeLineRelay
 ├── client/src/
 │   ├── App.tsx
 │   ├── components/
@@ -284,6 +285,17 @@ node src/scripts/installDb.js --host HOST --port 27017 \
 # ── Ingest Daemon (CAPTURE_BACKEND=ingest-daemon) ──────────────────────────
 cd server
 npm run ingest:restart   # ingest-daemon만 핫 재시작 (전체 서버 재시작 불필요)
+
+# ── 로그 설정 (프로덕션, npm run start 계열) ─────────────────────────────────
+# 1회성: /var/log/lts 디렉토리 권한 설정 (root 필요)
+sudo mkdir -p /var/log/lts && sudo chown $USER:$USER /var/log/lts
+
+# 로그 실시간 확인
+tail -f /var/log/lts/lts-$(date +%Y-%m-%d).log
+
+# 로그 비활성화: server/.env 에서 LOG_TO_FILE=false 설정
+# 로그 경로 변경: server/.env 에서 LOG_DIR=/path/to/dir 설정
+# 폴백 경로 (권한 없을 시 자동): server/logs/lts-YYYY-MM-DD.log
 
 # ── MCP 서버 ─────────────────────────────────────────────────────────────────
 cd mcp-server && npm start           # stdio 모드 (Claude Code 연동)

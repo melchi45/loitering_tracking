@@ -47,6 +47,8 @@ docker compose build && docker compose up -d
 ```
 
 ### 로그 확인
+
+#### Docker 컨테이너 로그
 ```bash
 # 전체 서비스 실시간 로그
 docker compose logs -f
@@ -55,6 +57,32 @@ docker compose logs -f
 docker compose logs -f server
 docker compose logs -f mediamtx --tail 100
 ```
+
+#### 프로덕션 로그 파일 (`npm run start` 계열)
+`startServer.js`가 모든 출력(서버·MediaMTX·Ingest)에 `[YY-MM-DD HH:mm:ss.sss]` 타임스탬프를 붙여 일별 파일로 저장합니다.
+
+**초기 설정 (1회, root 필요)**
+```bash
+sudo mkdir -p /var/log/lts && sudo chown $USER:$USER /var/log/lts
+```
+
+**로그 조회**
+```bash
+# 실시간 확인
+tail -f /var/log/lts/lts-$(date +%Y-%m-%d).log
+
+# 에러만 필터
+grep -E "ERROR|WARN" /var/log/lts/lts-$(date +%Y-%m-%d).log
+```
+
+**환경변수 (`server/.env`)**
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `LOG_TO_FILE` | `true` | `false`로 설정 시 파일 저장 비활성화 |
+| `LOG_DIR` | `/var/log/lts` | 로그 디렉토리. 권한 없을 시 `server/logs/`로 자동 폴백 |
+
+상세 내용 → [`docs/ops/Logging_Guide.md`](../../../docs/ops/Logging_Guide.md)
 
 ## 환경변수 설정 (`server/.env`)
 

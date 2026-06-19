@@ -9,6 +9,10 @@ try {
   // Continue with process env when dotenv is unavailable.
 }
 
+const { openLogFile, patchConsole, makeLineRelay } = require('../utils/logger');
+openLogFile();
+patchConsole();
+
 const { ensureMongoDB } = require('./ensureMongodb');
 
 function resolveRuntimeOs() {
@@ -123,8 +127,8 @@ async function main() {
         env: childEnv,
       });
 
-      mediamtxChild.stdout.on('data', (d) => process.stdout.write(`[MediaMTX] ${d}`));
-      mediamtxChild.stderr.on('data', (d) => process.stderr.write(`[MediaMTX] ${d}`));
+      mediamtxChild.stdout.on('data', makeLineRelay('[MediaMTX]', process.stdout));
+      mediamtxChild.stderr.on('data', makeLineRelay('[MediaMTX]', process.stderr));
 
       mediamtxChild.on('error', (e) => {
         console.warn(`[Start] MediaMTX failed to start: ${e.message} — WebRTC delivery will be unavailable`);
@@ -181,8 +185,8 @@ async function main() {
           env: childEnv,
         });
 
-        ingestDaemonChild.stdout.on('data', (d) => process.stdout.write(`[Ingest] ${d}`));
-        ingestDaemonChild.stderr.on('data', (d) => process.stderr.write(`[Ingest] ${d}`));
+        ingestDaemonChild.stdout.on('data', makeLineRelay('[Ingest]', process.stdout));
+        ingestDaemonChild.stderr.on('data', makeLineRelay('[Ingest]', process.stderr));
 
         ingestDaemonChild.on('error', (e) => {
           console.warn(`[Start] ingest-daemon failed to start: ${e.message} — WebRTC/AI capture unavailable`);
@@ -230,9 +234,11 @@ async function main() {
   }
 
   const child = spawn(nodeExec, [serverEntry], {
-    stdio: 'inherit',
+    stdio: ['inherit', 'pipe', 'pipe'],
     env: childEnv,
   });
+  child.stdout.on('data', makeLineRelay('', process.stdout));
+  child.stderr.on('data', makeLineRelay('', process.stderr));
 
   child.on('error', (err) => {
     console.error(`[Start] Failed to launch server with "${nodeExec}": ${err.message}`);
