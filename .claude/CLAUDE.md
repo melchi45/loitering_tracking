@@ -162,7 +162,8 @@ loitering_tracking/
 - **CommonJS 전용** — `require()` / `module.exports` 사용, `import`/`export` 금지
 - 비동기는 `async/await` 사용, Promise 체인(`.then()`) 지양
 - `server/src/db.js`를 통해서만 `storage/lts.json` 접근 (직접 파일 I/O 금지)
-- 환경변수는 `server/.env`에서 `dotenv`로 로드
+- 환경변수는 **`server/.env` 단일 파일**에서 `dotenv`로 로드 — 모든 서버 모드(combined/streaming/analysis)가 동일 파일 사용
+- `server/.env.example`, `server/.env.streaming.example`, `server/.env.analysis.example`은 **참조용 문서**이며 서버가 절대 로드하지 않음
 - HTTP 포트 기본값 `3080`; HTTPS 포트 기본값 `3443`
 - `SERVER_MODE` = `combined`(기본) | `streaming` | `analysis` — 역할 분리
 - `DB_TYPE` = `json`(기본) | `mongodb` — 스토리지 백엔드 선택
@@ -247,11 +248,13 @@ loitering_tracking/
 
 ```bash
 # ── 서버 모드별 개발 명령어 ─────────────────────────────────────────────────
+# 모든 서버 모드는 server/.env 파일 하나만 참조합니다.
+# .env.example / .env.streaming.example / .env.analysis.example 은 참조용 문서이며 서버가 로드하지 않습니다.
 cd server
 
-npm run dev              # combined 모드 (캡처+AI+WebRTC, .env)
-npm run dev:streaming    # streaming 모드 (캡처 전용, .env_streaming)
-npm run dev:analysis     # analysis 모드  (AI 전용,   .env_analysis)
+npm run dev              # combined 모드 (캡처+AI+WebRTC)
+npm run dev:streaming    # streaming 모드 (캡처 전용)
+npm run dev:analysis     # analysis 모드  (AI 전용)
 
 # 프로덕션 시작/중지
 npm run start            # combined

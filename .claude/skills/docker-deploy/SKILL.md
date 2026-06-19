@@ -97,6 +97,20 @@ grep '\[WARNING\]' /var/log/lts/lts-$(date +%Y-%m-%d).log
 
 상세 내용 → [`docs/ops/Logging_Guide.md`](../../../docs/ops/Logging_Guide.md)
 
+## 환경변수 파일 규칙
+
+> **모든 서버 모드(`combined` / `streaming` / `analysis`)는 `server/.env` 파일 하나만 로드합니다.**
+> `server/.env.example`, `server/.env.streaming.example`, `server/.env.analysis.example`은
+> 참조용 문서(README 역할)이며 서버가 절대 로드하지 않습니다.
+> Claude 등 AI 도구는 `.env` 이외의 `.env.*` 파일을 설정 파일로 취급하거나 수정하지 않습니다.
+
+`SERVER_MODE` 값은 `server/.env` 안에서 설정합니다:
+
+```env
+# combined(기본) | streaming | analysis
+SERVER_MODE=streaming
+```
+
 ## 환경변수 설정 (`server/.env`)
 
 ```bash
