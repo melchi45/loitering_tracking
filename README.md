@@ -397,59 +397,408 @@ Connection failed / Video frozen
 
 ## 2. System Architecture
 
-```
-[WiseNet IP Cameras]
-        │  UDP Broadcast Discovery (port 7701/7711)
-        │  RTSP Stream (rtsp://<ip>:<port>/...)
-        ▼
-┌─────────────────────────────────────────┐
-│         Node.js Backend Server          │
-│                                         │
-│  ┌──────────────┐  ┌─────────────────┐  │
-│  │ UDP Discovery│  │  RTSP Capture   │  │
-│  │  (dgram)     │  │ (FFmpeg 10 FPS) │  │
-│  └──────────────┘  └────────┬────────┘  │
-│                             │ raw frame  │
-│                    ┌────────▼────────┐  │
-│                    │  AI Inference   │  │
-│                    │  YOLOv8n ONNX   │  │
-│                    │  + ByteTrack    │  │
-│                    └────────┬────────┘  │
-│                             │ detections │
-│                    ┌────────▼────────┐  │
-│                    │ Behavior Engine │  │
-│                    │ (Loitering Logic│  │
-│                    │  Zone Manager)  │  │
-│                    └────────┬────────┘  │
-│            ┌────────────────┼────────┐  │
-│            ▼                ▼        ▼  │
-│      [Alert Svc]     [REST API]  [WS]  │
-│      [Storage]       [Express]  [IO]   │
-└─────────────────────────────────────────┘
-                             │ Socket.IO
-                             │ (annotated JPEG + detections JSON)
-                    ┌────────▼────────┐
-                    │  React Web UI   │
-                    │  Live Grid View │
-                    │  BBox Overlay   │
-                    │  Alert Panel    │
-                    └─────────────────┘
+> 아래 다이어그램은 `server/src/`, `client/src/` 코드와 `docs/design/` 문서를 기반으로 작성되었습니다.
+
+### 2.1 전체 시스템 아키텍처
+
+```mermaid
+graph TB
+    subgraph SRC["비디오 소스"]
+        IPCAM["IP 카메라\nRTSP / ONVIF"]
+        YTLIVE["YouTube Live\nyt-dlp"]
+    end
+
+    subgraph SS["스트리밍 서버  SERVER_MODE=streaming | combined"]
+        MTX["MediaMTX\n:8554 RTSP  :8889 WHEP\n:8189 ICE UDP  :9997 API"]
+        INGEST["ingest-daemon\nPython PyAV  :7070"]
+        NODESTR["Node.js  :3443 HTTPS / :3080 HTTP\nExpress · Socket.IO · REST API · WHEP Proxy"]
+    end
+
+    subgraph AS["AI 분석 서버  SERVER_MODE=analysis | combined"]
+        AIPIPE["AI Pipeline\nYOLOv8 / YOLO11 / YOLO12  ONNX\n→ ByteTrack + KalmanFilter\n→ BehaviorEngine · AttributePipeline · FireSmokeService"]
+    end
+
+    subgraph DBLAYER["데이터베이스"]
+        JSONF[("lts.json\nJSON File DB")]
+        MONGOSRV[("MongoDB\nAtlas / Standalone")]
+    end
+
+    subgraph AUTHLAYER["인증 / 권한"]
+        JWTR["JWT RS256  TokenService\nRBAC  admin · operator · viewer\nAuditService"]
+    end
+
+    subgraph MCPB["MCP 서버  선택"]
+        MCPS["mcp-server  :3100\nstdio | HTTP+SSE\n10 MCP Tools  Claude / LLM 연동"]
+    end
+
+    subgraph UI["Web UI  React 18 + TypeScript + Tailwind + Zustand"]
+        AUTHUI["Sign-in / Register\nPending Approval"]
+        STREAMD["Streaming Dashboard\nCameraGrid · 실시간 WebRTC 영상"]
+        ANALYSD["Analysis Dashboard\n메트릭 · 감지 이벤트"]
+        ADMND["Admin Dashboard\nUsers · AI Models · ONVIF · Audit"]
+        STATS["Statistics\n분석 통계 · 타임라인"]
+    end
+
+    IPCAM -- "RTSP/ONVIF" --> MTX
+    YTLIVE -- "yt-dlp → FFmpeg\nRTSP re-publish" --> MTX
+    MTX -- "RTSP loopback :8554" --> INGEST
+    INGEST -- "JPEG 10FPS\nPOST /api/internal/frame" --> NODESTR
+    INGEST -- "H.264 / Opus RTP\nmediasoup 모드" --> NODESTR
+    NODESTR -- "POST JPEG + metadata\nstreaming 모드 한정" --> AIPIPE
+    AIPIPE -- "JSON results\ndetections · tracks · alerts" --> NODESTR
+    NODESTR <--> AUTHLAYER
+    NODESTR -- "read / write" --> JSONF
+    JSONF -. "write-through\nDB_TYPE=mongodb" .-> MONGOSRV
+    NODESTR -- "HTTPS REST · Socket.IO" --> UI
+    MTX -- "ICE UDP :8189\nWebRTC 미디어" --> STREAMD
+    MCPS -- "HTTP REST" --> NODESTR
 ```
 
-### 2.1 Core Components
+---
 
-| # | Component | Technology | Role |
+### 2.2 비디오 수집 파이프라인
+
+`ingest-daemon`(Python PyAV)은 RTSP 수집의 **유일한** 공급자로 단일 RTSP 세션에서 최대 4개 경로로 데이터를 공급합니다.
+
+```mermaid
+graph TB
+    subgraph SRC2["비디오 소스"]
+        CAM2["IP 카메라  RTSP / ONVIF"]
+        YT2["YouTube Live"]
+    end
+
+    subgraph MTX2["MediaMTX  :8554 RTSP Loopback"]
+        PATH_CAM["카메라 경로\nrtsp://127.0.0.1:8554/{cameraId}"]
+        PATH_YT["YouTube 경로\nrtsp://127.0.0.1:8554/yt/{id}"]
+    end
+
+    subgraph DAEMON2["ingest-daemon  Python PyAV  :7070"]
+        PYAV["PyAV RTSP 디코더\n재연결 지수 백오프  최대 5s"]
+    end
+
+    subgraph FANOUT["4-way 팬아웃  단일 RTSP 세션"]
+        OUT1["① JPEG 10FPS\nAI 추론용"]
+        OUT2["② H.264 RTP\nWebRTC 비디오"]
+        OUT3["③ Opus RTP\nWebRTC 오디오"]
+        OUT4["④ App RTP\nONVIF 메타데이터"]
+    end
+
+    subgraph DEST2["Node.js 수신처"]
+        FRAPI["POST /api/internal/frame/:id\n→ PipelineManager  AI 추론"]
+        VDRTP["UDP mediasoupVideoPort\n→ mediasoup PlainTransport  비디오 Producer"]
+        ADRTP["UDP mediasoupAudioPort\n→ mediasoup PlainTransport  오디오 Producer"]
+        ARAPI["POST /api/internal/apprtp/:id\n→ Socket.IO appRtp 이벤트"]
+    end
+
+    CAM2 -- "RTSP" --> PATH_CAM
+    YT2 -- "yt-dlp → FFmpeg\nRTSP re-publish" --> PATH_YT
+    PATH_CAM -- "RTSP loopback" --> PYAV
+    PATH_YT -- "RTSP loopback" --> PYAV
+    PYAV --> OUT1
+    PYAV --> OUT2
+    PYAV --> OUT3
+    PYAV --> OUT4
+    OUT1 --> FRAPI
+    OUT2 --> VDRTP
+    OUT3 --> ADRTP
+    OUT4 --> ARAPI
+```
+
+---
+
+### 2.3 AI 비디오 분석 파이프라인
+
+```mermaid
+graph LR
+    JPEGI["JPEG 프레임\n10 FPS"]
+
+    subgraph DETLAYER["감지 레이어"]
+        YOLOCAT["YOLO 모델 카탈로그  런타임 전환\nYOLOv8  n/s/m/l/x\nYOLO11  n/s/m/l/x\nYOLO12  n/s/m/l/x\nONNX Runtime  선택적 CUDA 가속"]
+    end
+
+    subgraph TRKLAYER["추적 레이어"]
+        BYTETEK["ByteTrack\n칼만 필터\n다중 객체 ID 유지"]
+    end
+
+    subgraph BEHAVLAYER["행동 분석 레이어"]
+        ZONEMGR["ZoneManager\n다각형 구역\n진입/이탈 감지"]
+        BHENG["BehaviorEngine\n체류 시간 · 이동 패턴\n배회 위험 점수 0~100"]
+        ALRTSVC["AlertService\n임계값 초과 → 알림 발생\n에스컬레이션 · 웹훅"]
+    end
+
+    subgraph ATTRLAYER["속성 분석 레이어  퍼채널 선택 활성화"]
+        FACESVC["얼굴 인식\nSCRFD-2.5G + ArcFace ResNet50\n512-dim 임베딩  크로스 카메라 Re-ID"]
+        CLOTHSVC["의상 분석\nOpenPAR\n색상 · 유형 분류"]
+        PPESVC["PPE 감지\nYOLOv8m PPE\n안전모 · 마스크 감지"]
+        FIRESVC["화재 · 연기 감지\nYOLOv8s FireSmoke\n30초 쿨다운"]
+    end
+
+    subgraph OUTLAYER["출력"]
+        SOCKOUT["Socket.IO 이벤트\nframeData · objectTracked\nnewAlert · face:reidentified\nonvif:event"]
+        SNAPOUT["스냅샷 저장\nbbox 크롭 이미지\nBase64 JPEG"]
+        DBOUT["DB 저장\nalerts · analysisEvents\ndetectionTracks · faceGalleries"]
+    end
+
+    JPEGI --> YOLOCAT --> BYTETEK
+    BYTETEK --> ZONEMGR --> BHENG --> ALRTSVC
+    BYTETEK --> FACESVC
+    BYTETEK --> CLOTHSVC
+    BYTETEK --> PPESVC
+    BYTETEK --> FIRESVC
+    ALRTSVC --> SOCKOUT
+    ALRTSVC --> DBOUT
+    FACESVC --> SOCKOUT
+    CLOTHSVC --> SOCKOUT
+    YOLOCAT --> SNAPOUT
+```
+
+---
+
+### 2.4 WebRTC 영상 전달 모드
+
+`WEBRTC_ENGINE` 환경변수로 WebRTC 전달 백엔드를 선택합니다. 세 경로는 동시에 공존할 수 있습니다.
+
+```mermaid
+graph TB
+    CAM4["IP 카메라  RTSP"]
+    MTX4["MediaMTX\n:8554 RTSP  :8889 WHEP  :8189 ICE UDP"]
+    INGEST4["ingest-daemon  PyAV"]
+
+    CAM4 --> MTX4
+    MTX4 -- "RTSP loopback :8554" --> INGEST4
+
+    subgraph MODEMTX["WEBRTC_ENGINE=mediamtx  기본값  외부 MediaMTX WHEP"]
+        WHEPPRXY["Node.js WHEP 프록시\nPOST /api/webrtc/whep/:id\n→ MediaMTX :8889"]
+        BRMTX["Browser  video\nH.264 + Opus  SRTP\nICE UDP :8189 직접 연결"]
+    end
+
+    subgraph MODEMS["WEBRTC_ENGINE=mediasoup  Node.js 내장 SFU  DataChannel 지원"]
+        MSROUTER["mediasoup Router\nPlainTransport  H.264 RTP → videoProducer\nPlainTransport  Opus RTP → audioProducer\nWebRtcTransport → videoConsumer + audioConsumer"]
+        DATACHAN["DataConsumer\nSCTP DataChannel\nONVIF 메타데이터 실시간"]
+        BRMS["Browser  video + audio\nH.264 + Opus  SRTP\n+ DataChannel"]
+    end
+
+    subgraph MODEJPEG["JPEG 폴백  항상 사용 가능  WEBRTC_ENGINE 무관"]
+        AIANN["AI 어노테이션\nbbox 오버레이 렌더링"]
+        BRJPEG["Browser  img\nJPEG 10FPS\nSocket.IO frameData 이벤트"]
+    end
+
+    MTX4 -- "WHEP SDP 협상" --> WHEPPRXY
+    WHEPPRXY --> BRMTX
+    INGEST4 -- "H.264 RTP\nOpus RTP" --> MSROUTER
+    MSROUTER --> DATACHAN --> BRMS
+    INGEST4 -- "JPEG 10FPS" --> AIANN
+    AIANN -- "Socket.IO frameData" --> BRJPEG
+```
+
+---
+
+### 2.5 사용자 인증 및 권한 흐름
+
+```mermaid
+flowchart TD
+    REG["회원가입\nPOST /auth/register\nbcrypt 해싱 저장"]
+    PEND["대기 상태  pending\nPendingPage 표시"]
+    APPDEC{"관리자 승인 / 거절\nPATCH /admin/users/:id"}
+    ACTIVE["활성 계정  active"]
+    REJECTED["거절됨  rejected"]
+    LOGIN["로그인\nPOST /auth/login\nbcrypt 검증"]
+    TOKEN["JWT 발급\naccess token 15분\nrefresh token cookie 7일  HttpOnly"]
+    ROLECHECK{"역할  role 확인"}
+    ADMINDOOR["admin 역할\nStreaming Dashboard\nAdmin Dashboard\nAnalysis Dashboard"]
+    OPVIEWDOOR["operator / viewer\nAccessDeniedPage"]
+    REFRESH["POST /auth/refresh\n토큰 로테이션\nrefresh_tokens 테이블 검증"]
+    OAUTH["[예정] Google OAuth 2.0\nMicrosoft Entra ID  MSAL\npassport 전략 추가 계획"]
+
+    REG --> PEND
+    PEND --> APPDEC
+    APPDEC -- "approve" --> ACTIVE
+    APPDEC -- "reject" --> REJECTED
+    ACTIVE --> LOGIN
+    LOGIN --> TOKEN
+    TOKEN --> ROLECHECK
+    ROLECHECK -- "admin" --> ADMINDOOR
+    ROLECHECK -- "operator / viewer" --> OPVIEWDOOR
+    TOKEN -. "15분 후 만료" .-> REFRESH
+    REFRESH --> TOKEN
+    OAUTH -.-> LOGIN
+```
+
+---
+
+### 2.6 데이터베이스 이중화
+
+`DB_TYPE` 환경변수로 스토리지 백엔드를 선택합니다. `db.js` 추상화 레이어가 애플리케이션을 스토리지 구현으로부터 격리합니다.
+
+```mermaid
+graph TB
+    APP2["애플리케이션 레이어\n라우트 핸들러 · 서비스 · PipelineManager"]
+
+    subgraph DBJS["db.js  in-memory 추상화"]
+        MEMSTORE["인메모리 스토어  20 테이블\ncameras · zones · alerts · events\nusers · refresh_tokens · audit_logs\ndetectionSnapshots · analysisEvents\ndetectionTracks · onvif_events\nfaceGalleries · settings · ..."]
+        DISPATCH2["afterWrite()\nDB_TYPE에 따라 경로 분기"]
+    end
+
+    subgraph JSONPATH["DB_TYPE=json  기본값"]
+        DEBOUNCE["persistJson()\n디바운스 500ms  비동기"]
+        JSONFILE[("storage/lts.json\nface_tracking.json\nanalytics.json")]
+    end
+
+    subgraph MONGOPATH["DB_TYPE=mongodb"]
+        MONGUPSERT["mongoSvc.upsert / remove\nfire-and-forget 비동기"]
+        MONGOCOL[("MongoDB  Atlas / Standalone\n:27017\n20 컬렉션")]
+        JFALLBACK["JSON 폴백\nMongoDB 연결 장애 시만 기록\nhigh-volume 테이블 제외"]
+    end
+
+    subgraph STARTUP["시작 시 로딩"]
+        ENSUREMON["ensureMongodb.js\nTCP probe → 자동 재시작 → 설치 안내"]
+        MIGRATE["migrateToMongo.js\n일회성 JSON → MongoDB 마이그레이션"]
+    end
+
+    APP2 --> MEMSTORE
+    MEMSTORE --> DISPATCH2
+    DISPATCH2 -- "DB_TYPE=json" --> DEBOUNCE --> JSONFILE
+    DISPATCH2 -- "DB_TYPE=mongodb" --> MONGUPSERT --> MONGOCOL
+    MONGUPSERT -. "disconnect fallback" .-> JFALLBACK
+    ENSUREMON --> MONGOCOL
+    MIGRATE --> MONGOCOL
+```
+
+---
+
+### 2.7 Dashboard 구성
+
+```mermaid
+graph TB
+    subgraph AUTHPAGES["인증 / 접근 제어"]
+        SIGNINPG["SignInPage\nlogin + register 탭"]
+        PENDPG["PendingPage\n관리자 승인 대기"]
+        DENIEDPG["AccessDeniedPage\noperator / viewer 역할"]
+    end
+
+    subgraph ADMINDASH2["Admin Dashboard  admin 전용"]
+        USERSEC["Users 섹션\n계정 승인·거절·역할 변경·삭제\nPATCH /admin/users/:id"]
+        AISEC["AI Models 섹션\nYOLO 모델 카탈로그 15종\n다운로드 진행률 · 런타임 전환\nAI 모듈 퍼채널 활성화"]
+        ONVIFSEC["ONVIF 섹션\n이벤트 타입 레지스트리\n타임라인 오버레이  줌 · 팬 · Raw XML"]
+        AUDITSEC["Audit Log 섹션\n인증 이력 조회\nsignup · signin · approve · reject · ..."]
+    end
+
+    subgraph STREAMDASH2["Streaming Dashboard  combined | streaming 모드"]
+        CAMGRID["CameraGrid\n멀티 카메라 그리드  1×1 ~ 4×4\n채널 페이징  레이아웃 전환"]
+        subgraph SIDEBAR2["사이드바  리사이즈 가능"]
+            TCAM["Cameras 탭\n추가 · 편집 · RTSP / YouTube / ONVIF"]
+            TALERT["Alerts 탭\n실시간 알림 목록  확인 처리"]
+            TZONE["Zones 탭\n다각형 구역 관리"]
+            TDET["Detections 탭\n실시간 감지 객체  크롭 이미지"]
+            TFACE["Face Gallery 탭\n얼굴 등록 · Re-ID 크로스 카메라"]
+        end
+        FULLSCR2["FullscreenCameraView\nDetections Gantt 타임라인\nONVIF 이벤트 타임라인\nFace Gallery  Appearance Re-ID"]
+    end
+
+    subgraph ANALYSDASH2["Analysis Dashboard  analysis 모드"]
+        ANALIVE["AnalysisLivePanel\n실시간 감지 피드\nbbox 오버레이"]
+        ANAEVT["AnalysisEventsTab\n이벤트 이력\n배회 · 화재 · 연기"]
+        ANAMTX["서버 메트릭\n처리 FPS · 큐 깊이\n카메라별 입력 상태 · 연결 수"]
+    end
+
+    subgraph STATSPANEL["Statistics"]
+        STATSSTR["StatsPanelModal\ncombined | streaming 모드\n카메라별 통계"]
+        STATSANA["AnalysisStatsModal\nanalysis 모드\n/api/analysis/metrics 기반"]
+    end
+
+    SIGNINPG -- "대기 상태" --> PENDPG
+    SIGNINPG -- "admin 로그인" --> ADMINDASH2
+    SIGNINPG -- "admin 로그인" --> STREAMDASH2
+    SIGNINPG -- "admin 로그인" --> ANALYSDASH2
+    SIGNINPG -- "operator/viewer" --> DENIEDPG
+    STREAMDASH2 --> STATSPANEL
+    ANALYSDASH2 --> STATSPANEL
+```
+
+---
+
+### 2.8 멀티 서버 분산 / 이중화
+
+`SERVER_MODE` 조합과 공유 MongoDB로 현장 서버 다중화와 GPU 서버 분리를 지원합니다.
+
+```mermaid
+graph TB
+    subgraph INTERNET2["외부 접근"]
+        BROWSERS["Browser / 모바일"]
+        LLMCLI["Claude / LLM\nMCP Client"]
+    end
+
+    subgraph DMZ["리버스 프록시  DMZ"]
+        NGINX2["Nginx / HAProxy\n:443 HTTPS  SSL Termination\n스트리밍 서버 라우팅"]
+    end
+
+    subgraph SITEA["현장 A  streaming mode"]
+        MTXA["MediaMTX\n:8189 ICE UDP"]
+        STRA["Node.js  :3443\nstreaming mode\nCircuit Breaker\n자동 재연결 15s"]
+        CAMA["IP Cameras 1~N"]
+        CAMA --> MTXA --> STRA
+    end
+
+    subgraph SITEB["현장 B  streaming mode"]
+        MTXB["MediaMTX\n:8189 ICE UDP"]
+        STRB["Node.js  :3443\nstreaming mode\nCircuit Breaker"]
+        CAMB["IP Cameras N+1~M"]
+        CAMB --> MTXB --> STRB
+    end
+
+    subgraph GPUSRV["GPU 서버  analysis mode"]
+        ANASRV["Node.js  :3443\nanalysis mode\nONNX_CUDA=1\nmax 100 concurrent req\nPer-Camera Context Map"]
+    end
+
+    subgraph DBSRV["DB 서버"]
+        SHAREDMG[("MongoDB  :27017\n공유 DB\ncameras · zones · alerts · users · ...")]
+    end
+
+    subgraph MCPSRV2["MCP 서버  선택"]
+        MCPSVC["mcp-server  :3100\n10 MCP Tools"]
+    end
+
+    BROWSERS --> NGINX2
+    NGINX2 --> STRA
+    NGINX2 --> STRB
+    BROWSERS -- "ICE UDP :8189" --> MTXA
+    BROWSERS -- "ICE UDP :8189" --> MTXB
+    LLMCLI --> MCPSVC
+
+    STRA -- "POST /api/analysis/frame\nJPEG + metadata  LAN" --> ANASRV
+    STRB -- "POST /api/analysis/frame\nJPEG + metadata  LAN" --> ANASRV
+    ANASRV -- "JSON results" --> STRA
+    ANASRV -- "JSON results" --> STRB
+
+    STRA -- "DB_TYPE=mongodb\nwrite-through" --> SHAREDMG
+    STRB -- "DB_TYPE=mongodb\nwrite-through" --> SHAREDMG
+    ANASRV -- "DB_TYPE=mongodb\nwrite-through" --> SHAREDMG
+
+    MCPSVC -- "HTTP REST" --> STRA
+```
+
+---
+
+### 2.9 핵심 컴포넌트
+
+| # | 컴포넌트 | 기술 | 역할 |
 |---|---|---|---|
-| 1 | UDP Discovery Service | Node.js `dgram` | Discover WiseNet cameras on LAN |
-| 2 | RTSP Capture Service | FFmpeg + fluent-ffmpeg | Decode RTSP stream, extract 10 FPS |
-| 3 | Detection Engine | ONNX Runtime + YOLOv8n | Person bounding box inference |
-| 4 | Tracking Engine | ByteTrack (JS/Python bridge) | Persistent object ID across frames |
-| 5 | Behavior Analysis Engine | Custom JS | Loitering dwell-time logic |
-| 6 | Zone Manager | GeoJSON polygons | Per-camera zone configuration |
-| 7 | WebSocket Server | Socket.IO | Push annotated frames to React |
-| 8 | REST API | Express.js | Camera/zone/alert management |
-| 9 | React Dashboard | React 18 + TypeScript | Live video + bounding box UI |
-| 10 | Alert Service | EventEmitter + webhook | Loitering event notifications |
+| 1 | UDP Discovery | Node.js `dgram` + ONVIF WS-Discovery | LAN 상 IP 카메라 자동 탐색 |
+| 2 | ingest-daemon | Python PyAV (RTSP 수집 유일 공급자) | RTSP → JPEG · H.264 · Opus · App RTP 4-way 팬아웃 |
+| 3 | MediaMTX | MediaMTX 미디어 서버 | RTSP loopback · WHEP 시그널링 · ICE UDP 릴레이 |
+| 4 | PipelineManager | Node.js (서비스 오케스트레이션) | AI 서비스 생명주기 · 프레임 라우팅 · Watchdog |
+| 5 | DetectionService | ONNX Runtime + YOLOv8/11/12 (15종) | 다중 객체 감지 · 런타임 모델 전환 · GPU 가속 |
+| 6 | ByteTrack | JS ByteTrack + KalmanFilter | 프레임 간 객체 ID 유지 · 다중 객체 추적 |
+| 7 | BehaviorEngine | Custom JS | 배회 위험 점수 0~100 · 구역 체류 시간 분석 |
+| 8 | AttributePipeline | SCRFD + ArcFace + OpenPAR + YOLOv8m | 얼굴 Re-ID · 의상 분류 · PPE 감지 |
+| 9 | FireSmokeService | YOLOv8s FireSmoke ONNX | 화재 · 연기 실시간 감지 |
+| 10 | AlertService | Node.js EventEmitter | 알림 생성 · 에스컬레이션 · 웹훅 |
+| 11 | Socket.IO Server | Socket.IO 4.x | 실시간 프레임 · 알림 · 감지 결과 스트리밍 |
+| 12 | REST API | Express.js | 카메라 · 구역 · 알림 · 분석 CRUD |
+| 13 | Auth (JWT + RBAC) | JWT RS256 + bcrypt | 사용자 인증 · 역할 기반 접근 제어 · 감사 로그 |
+| 14 | DB Layer (db.js) | JSON file / MongoDB (전환 가능) | 이중화 스토리지 · in-memory 캐시 |
+| 15 | React Dashboard | React 18 + TypeScript + Zustand + Tailwind | Streaming · Analysis · Admin 다중 대시보드 |
+| 16 | mcp-server | Node.js ESM + MCP SDK | Claude / LLM 연동 10종 MCP 도구 |
 
 ---
 
