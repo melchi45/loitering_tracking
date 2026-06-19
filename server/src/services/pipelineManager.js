@@ -453,6 +453,7 @@ class PipelineManager {
       // ingest-daemon re-registration params (used by frame watchdog on stall)
       _ingestRtspUrl,
       _ingestCallbackUrl,
+      _captureUrl: captureUrl,   // URL ingest-daemon reads from (for mediasoup watchdog re-reg)
     };
 
     // ── Listen for loitering events ──────────────────────────────────────
@@ -1106,11 +1107,18 @@ class PipelineManager {
           ctx.capture.stop();
 
           if (CAPTURE_BACKEND === 'ingest-daemon' && ctx._ingestRtspUrl) {
-            // Force the daemon to close its RTSP connection and re-open it.
+            // AI-only or mediamtx-engine path: re-register directly with ingest-daemon.
             await _ingestRemoveCamera(camera.id);
             const ok = await _ingestRegisterCamera(camera.id, ctx._ingestRtspUrl, ctx._ingestCallbackUrl);
             if (!ok) {
               console.error(`[PipelineManager][${camera.id}] Frame watchdog: ingest-daemon re-registration failed`);
+            }
+          } else if (CAPTURE_BACKEND === 'ingest-daemon' && WEBRTC_ENGINE !== 'mediamtx') {
+            // mediasoup path: _ingestRtspUrl is null because mediasoupEngine.addCameraStream()
+            // handled registration. Re-register via the engine (recreates PlainTransports + re-POST to daemon).
+            const ok = await getWebRTCEngine().addCameraStream(camera.id, ctx._captureUrl).catch(() => false);
+            if (!ok) {
+              console.error(`[PipelineManager][${camera.id}] Frame watchdog: mediasoup re-registration failed`);
             }
           }
 
