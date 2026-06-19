@@ -1286,6 +1286,35 @@ class PipelineManager {
     }
   }
 
+  /**
+   * Re-register all active cameras with ingest-daemon after an unexpected daemon restart.
+   * Handles both paths:
+   *  - mediamtx/direct: ctx._ingestRtspUrl is set → POST directly to ingest-daemon HTTP API
+   *  - mediasoup:       ctx._ingestRtspUrl is null → re-register via engine.addCameraStream
+   * Called by startServer.js auto-restart logic via POST /api/internal/ingest/reregister.
+   */
+  async reregisterAllWithIngestDaemon() {
+    const results = {};
+    for (const [cameraId, ctx] of this._pipelines) {
+      if (!ctx.running) continue;
+      try {
+        if (ctx._ingestRtspUrl) {
+          // mediamtx engine or direct AI-only path: re-register directly
+          await _ingestRemoveCamera(cameraId);
+          const ok = await _ingestRegisterCamera(cameraId, ctx._ingestRtspUrl, ctx._ingestCallbackUrl);
+          results[cameraId] = { ok };
+        } else if (CAPTURE_BACKEND === 'ingest-daemon') {
+          // mediasoup path: engine re-creates PlainTransports and re-POSTs to daemon
+          const ok = await getWebRTCEngine().addCameraStream(cameraId, ctx._captureUrl).catch(() => false);
+          results[cameraId] = { ok };
+        }
+      } catch (e) {
+        results[cameraId] = { ok: false, error: e.message };
+      }
+    }
+    return results;
+  }
+
   /** Returns status snapshot of all active pipelines for the dev monitor. */
   getAllPipelineStatus() {
     const result = [];

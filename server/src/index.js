@@ -493,18 +493,15 @@ async function main() {
     });
   });
 
-  // Ingest-daemon reregister — called by `npm run ingest:restart` after daemon restart.
-  // Re-POSTs all active cameras with their current PlainTransport ports so video+audio RTP resume.
+  // Ingest-daemon reregister — called by startServer.js auto-restart and `npm run ingest:restart`.
+  // Re-registers all active cameras with ingest-daemon: mediamtx cameras via direct HTTP POST,
+  // mediasoup cameras via engine.addCameraStream (which re-creates PlainTransports + RTP).
   app.post('/api/internal/ingest/reregister', async (req, res) => {
     const ip = req.ip || req.connection?.remoteAddress || '';
     const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
     if (!isLocal) return res.status(403).json({ error: 'localhost only' });
-    const engine = getWebRTCEngine();
-    if (!engine.reregisterAllWithIngest) {
-      return res.status(501).json({ error: 'not supported by current engine' });
-    }
     try {
-      const results = await engine.reregisterAllWithIngest();
+      const results = await pipelineManager.reregisterAllWithIngestDaemon();
       res.json({ ok: true, cameras: results });
     } catch (e) {
       res.status(500).json({ error: e.message });

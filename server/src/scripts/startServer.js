@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('path');
+const http = require('http');
 const { spawn } = require('child_process');
 
 try {
@@ -167,8 +168,8 @@ async function main() {
     if (alreadyRunning) {
       console.log(`[Start] ingest-daemon already running on :${ingestPort} — skipping start`);
     } else {
-      let ingestArgs;
       let ingestExec;
+      let ingestArgs;
       if (ingestBinRaw.endsWith('.py')) {
         // Prefer PYAV_PYTHON_BIN (points to the Python that has PyAV installed)
         // over the generic PYTHON_EXEC which may be a system Python without PyAV.
@@ -180,25 +181,92 @@ async function main() {
         ingestArgs = ['--addr', ingestAddr];
       }
 
+      let _ingestRestartAttempts = 0;
+
+      // Attach stdout/stderr relay and exit-based auto-restart to a spawned ingest-daemon process.
+      // On unexpected exit (!_shuttingDown), waits with exponential backoff and re-spawns.
+      // After successful restart, triggers camera re-registration via server internal API.
+      function _attachIngestHandlers(proc) {
+        proc.stdout.on('data', makeLineRelay('[Ingest]', process.stdout));
+        proc.stderr.on('data', makeLineRelay('[Ingest]', process.stderr));
+
+        proc.on('error', (e) => {
+          console.warn(`[Start] ingest-daemon failed to start: ${e.message} — WebRTC/AI capture unavailable`);
+          ingestDaemonChild = null;
+          if (!_shuttingDown) _respawnIngest();
+        });
+
+        proc.on('exit', (code) => {
+          ingestDaemonChild = null;
+          if (_shuttingDown) return;
+          if (code !== 0 && code !== null) {
+            console.warn(`[Start] ingest-daemon exited (code=${code})`);
+          }
+          _respawnIngest();
+        });
+      }
+
+      async function _respawnIngest() {
+        if (_shuttingDown) return;
+        const delay = Math.min(1_000 * Math.pow(1.5, _ingestRestartAttempts), 30_000);
+        _ingestRestartAttempts++;
+        console.warn(`[Start] ingest-daemon crashed — restarting in ${(delay / 1000).toFixed(1)}s (attempt #${_ingestRestartAttempts})`);
+        await new Promise(r => setTimeout(r, delay));
+        if (_shuttingDown) return;
+
+        try {
+          const proc = spawn(ingestExec, ingestArgs, {
+            stdio: ['ignore', 'pipe', 'pipe'],
+            env: childEnv,
+          });
+          ingestDaemonChild = proc;
+          _attachIngestHandlers(proc);
+          console.log(`[Start] ingest-daemon restarting on ${ingestAddr}`);
+
+          // Wait for the daemon to bind its port (up to 15 s).
+          const deadline = Date.now() + 15_000;
+          let ready = false;
+          while (Date.now() < deadline) {
+            await new Promise(r => setTimeout(r, 300));
+            if (_shuttingDown || !ingestDaemonChild) break;
+            const up = await new Promise(resolve => {
+              const s = new net.Socket();
+              s.setTimeout(400);
+              s.on('connect', () => { s.destroy(); resolve(true); });
+              s.on('timeout', () => { s.destroy(); resolve(false); });
+              s.on('error', () => resolve(false));
+              s.connect(ingestPort, '127.0.0.1');
+            });
+            if (up) { ready = true; break; }
+          }
+
+          if (ready) {
+            _ingestRestartAttempts = 0;
+            console.log(`[Start] ingest-daemon restarted on :${ingestPort} — re-registering cameras`);
+            const serverPort = parseInt(childEnv.PORT || childEnv.HTTP_PORT || '3080', 10);
+            http.request(
+              {
+                hostname: '127.0.0.1', port: serverPort,
+                path: '/api/internal/ingest/reregister',
+                method: 'POST', headers: { 'Content-Length': '0' },
+              },
+              (res) => { console.log(`[Start] ingest reregister: HTTP ${res.statusCode}`); res.resume(); }
+            ).on('error', (e) => { console.warn(`[Start] ingest reregister failed: ${e.message}`); }).end();
+          } else {
+            console.warn(`[Start] ingest-daemon not ready after restart — will retry on next crash`);
+          }
+        } catch (e) {
+          console.warn(`[Start] Could not restart ingest-daemon: ${e.message}`);
+          _respawnIngest();
+        }
+      }
+
       try {
         ingestDaemonChild = spawn(ingestExec, ingestArgs, {
           stdio: ['ignore', 'pipe', 'pipe'],
           env: childEnv,
         });
-
-        ingestDaemonChild.stdout.on('data', makeLineRelay('[Ingest]', process.stdout));
-        ingestDaemonChild.stderr.on('data', makeLineRelay('[Ingest]', process.stderr));
-
-        ingestDaemonChild.on('error', (e) => {
-          console.warn(`[Start] ingest-daemon failed to start: ${e.message} — WebRTC/AI capture unavailable`);
-          ingestDaemonChild = null;
-        });
-        ingestDaemonChild.on('exit', (code) => {
-          ingestDaemonChild = null;
-          if (code !== 0 && code !== null) {
-            console.warn(`[Start] ingest-daemon exited (code=${code})`);
-          }
-        });
+        _attachIngestHandlers(ingestDaemonChild);
         console.log(`[Start] ingest-daemon starting on ${ingestAddr}`);
 
         // Wait up to 15 s for ingest-daemon to bind its port before starting the
