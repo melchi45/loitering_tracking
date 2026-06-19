@@ -9,6 +9,9 @@
 | **Date** | 2026-05-26 |
 | **Parent PRD** | prd/PRD_WebRTC_Media_Gateway.md |
 | **Parent RFP** | rfp/RFP_WebRTC_Media_Gateway.md |
+| **Child Design** | design/Design_WebRTC_Engine_Modes.md |
+| **Child TC** | tc/TC_WebRTC_Media_Gateway.md |
+| **Test Script** | test/api/webrtc.test.js · test/api/webrtc_ice.test.js |
 
 ---
 
@@ -164,6 +167,21 @@ Server start
   - Output 1: RTP to mediasoup PlainTransport (video + audio)
   - Output 2: JPEG pipe to `RTSPCapture`-compatible AI inference path at 10 FPS
 - The AI inference path must remain unchanged regardless of WebRTC state.
+
+### FR-WRTC-070 — mediasoup Router H.264 Payload Type = 109
+
+- The mediasoup Router must be created with `preferredPayloadType: 109` for the H.264 media codec (not 108).
+- Rationale: mediasoup v3.19+ hard-pins each Consumer's RTP payload type to the Router's `preferredPayloadType`. Edge browser assigns PT=109 to H264/CBP (profile-level-id=42e01f, packetization-mode=1). If the Router uses PT=108, the server SDP answer carries `a=rtpmap:108 H264/90000`; Edge's SRTP receiver rejects all packets at the codec-binding layer (candidate-pair bytes received > 0 but inbound-rtp absent), producing black video with no ICE/DTLS error.
+- Chrome offers PT=108 in its SDP offer but accepts `a=rtpmap:109 H264/90000` in the server answer per RFC 8829 §5.3.1 (JSEP dynamic payload type reuse).
+- Opus must use `preferredPayloadType: 111` (both Edge and Chrome assign PT=111 to Opus).
+- Verification: `GET /api/client-logs/webrtc` — `inbound-rtp` entries with `framesDecoded > 0` must be present for all subscribed cameras in both Edge and Chrome.
+
+### FR-WRTC-071 — mediasoup ICE Listen IP Restricted to Env Vars
+
+- The `WebRtcTransport` `listenIps` array must be built exclusively from the `SERVER_IP` and `SERVER_PUBLIC_IP` environment variables.
+- `os.networkInterfaces()` must not be used to populate `listenIps`.
+- Rationale: Advertising all NIC addresses as ICE host candidates causes the browser's ICE agent to form a loopback ICE path when the browser machine shares the server's public IP as a local candidate. This routes SRTP from the browser back to the server process itself rather than to the browser's media receiver, resulting in all cameras showing black video.
+- Fallback: If neither env var is set, a single `{ ip: '0.0.0.0', announcedIp: MEDIASOUP_ANNOUNCED_IP }` entry is acceptable (server must be accessed on LAN only in this configuration).
 
 ---
 
@@ -441,3 +459,4 @@ Server start
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for WebRTC Media Gateway |
 | 1.1 | 2026-05-29 | LTS Engineering Team | Added post-patch stability requirements (duplicate guard, timestamp stability, frozen-stream recovery) |
+| 1.2 | 2026-06-16 | LTS Engineering Team | FR-WRTC-070/071 추가 — mediasoup Router H.264 PT=109 강제 및 ICE listenIps env-var 전용 제약 (Edge 검은 화면 및 ICE loopback 근본 원인 문서화) |

@@ -5,12 +5,7 @@ const crypto = require('crypto');
 const fs     = require('fs');
 const path   = require('path');
 const { v4: uuidv4 } = require('uuid');
-
-const STORAGE_PATH = process.env.STORAGE_PATH
-  ? path.resolve(process.cwd(), process.env.STORAGE_PATH)
-  : path.resolve(__dirname, '../../storage');
-
-const TOKENS_FILE = path.join(STORAGE_PATH, 'tokens.json');
+const { getDB } = require('../db');
 
 // ── Key loading ──────────────────────────────────────────────────────────────
 
@@ -33,25 +28,6 @@ function getPubKey() {
     );
   }
   return _pubKey;
-}
-
-// ── Token file helpers ───────────────────────────────────────────────────────
-
-function _load() {
-  try {
-    if (fs.existsSync(TOKENS_FILE)) {
-      const raw = JSON.parse(fs.readFileSync(TOKENS_FILE, 'utf8'));
-      return Array.isArray(raw.refreshTokens) ? raw.refreshTokens : [];
-    }
-  } catch {}
-  return [];
-}
-
-function _save(tokens) {
-  if (!fs.existsSync(STORAGE_PATH)) fs.mkdirSync(STORAGE_PATH, { recursive: true });
-  const tmp = TOKENS_FILE + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify({ refreshTokens: tokens }, null, 2));
-  fs.renameSync(tmp, TOKENS_FILE);
 }
 
 // ── JWT helpers ──────────────────────────────────────────────────────────────
@@ -81,8 +57,7 @@ function issueRefreshToken(user) {
     ? new Date(Date.now() + parseInt(match[1]) * (msMap[match[2]] || 864e5)).toISOString()
     : new Date(Date.now() + 7 * 864e5).toISOString();
 
-  const tokens = _load();
-  tokens.push({
+  getDB().insert('refresh_tokens', {
     id:        uuidv4(),
     tokenHash,
     userId:    user.id,
@@ -90,7 +65,6 @@ function issueRefreshToken(user) {
     expiresAt,
     revoked:   false,
   });
-  _save(tokens);
   return token;
 }
 
@@ -98,12 +72,11 @@ function issueRefreshToken(user) {
  * Validate a refresh token. Returns the stored record if valid, null otherwise.
  */
 function validateRefreshToken(rawToken) {
-  const hash    = hashToken(rawToken);
-  const tokens  = _load();
-  const record  = tokens.find(t => t.tokenHash === hash);
-  if (!record)               return null;
-  if (record.revoked)        return null;
-  if (new Date(record.expiresAt) < new Date()) return null;
+  const hash   = hashToken(rawToken);
+  const record = getDB().all('refresh_tokens').find(t => t.tokenHash === hash);
+  if (!record)                                   return null;
+  if (record.revoked)                            return null;
+  if (new Date(record.expiresAt) < new Date())   return null;
   return record;
 }
 
@@ -112,24 +85,18 @@ function validateRefreshToken(rawToken) {
  */
 function revokeRefreshToken(rawToken) {
   const hash   = hashToken(rawToken);
-  const tokens = _load();
-  const record = tokens.find(t => t.tokenHash === hash);
-  if (record) {
-    record.revoked = true;
-    _save(tokens);
-  }
+  const record = getDB().all('refresh_tokens').find(t => t.tokenHash === hash);
+  if (record) getDB().update('refresh_tokens', record.id, { revoked: true });
 }
 
 /**
  * Revoke all refresh tokens belonging to a user (e.g. on password change).
  */
 function revokeAllForUser(userId) {
-  const tokens  = _load();
-  let changed   = false;
-  for (const t of tokens) {
-    if (t.userId === userId && !t.revoked) { t.revoked = true; changed = true; }
-  }
-  if (changed) _save(tokens);
+  const db = getDB();
+  db.find('refresh_tokens', { userId })
+    .filter(t => !t.revoked)
+    .forEach(t => db.update('refresh_tokens', t.id, { revoked: true }));
 }
 
 /** SHA-256 hex of a token string. */
@@ -140,10 +107,10 @@ function hashToken(token) {
 /** Prune expired / revoked tokens older than 30 days (maintenance). */
 function pruneExpired() {
   const cutoff = new Date(Date.now() - 30 * 864e5);
-  const tokens = _load().filter(t =>
-    !(t.revoked && new Date(t.expiresAt) < cutoff)
-  );
-  _save(tokens);
+  const db     = getDB();
+  db.all('refresh_tokens')
+    .filter(t => t.revoked && new Date(t.expiresAt) < cutoff)
+    .forEach(t => db.delete('refresh_tokens', t.id));
 }
 
 module.exports = {

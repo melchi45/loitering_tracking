@@ -33,7 +33,12 @@ loitering_tracking/
 │   │   ├── pipelineManager.js  # AI 파이프라인 오케스트레이션
 │   │   ├── attributePipeline.js # 얼굴/PPE/색상/의류 분석
 │   │   ├── faceService.js      # 얼굴 인식 및 Re-ID
-│   │   ├── rtspCapture.js      # RTSP 스트림 캡처 (10 FPS)
+│   │   ├── captureFactory.js   # CAPTURE_BACKEND별 캡처 인스턴스 팩토리
+│   │   ├── ingestDaemonCapture.js # ingest-daemon 수신 EventEmitter (권장)
+│   │   ├── rtspCapture.js      # ffmpeg RTSP 캡처 (레거시)
+│   │   ├── gstreamerCapture.js # GStreamer 캡처 (GPU 가속)
+│   │   ├── pyavCapture.js      # Python PyAV 직접 캡처
+│   │   ├── mediamtxSnapshotCapture.js # MediaMTX JPEG 스냅샷 캡처
 │   │   ├── mediamtxManager.js  # MediaMTX 경로 등록/해제 (WebRTC WHEP)
 │   │   ├── analysisClient.js   # streaming→analysis HTTP 클라이언트
 │   │   └── fireSmokeService.js # 화재/연기 감지
@@ -41,6 +46,10 @@ loitering_tracking/
 │   ├── routes/            # 인증/관리자/분석 라우터
 │   │   ├── analysisApi.js      # AI 분석 API (analysis/combined 모드)
 │   │   └── analysisProxy.js    # 분석 프록시 (streaming 모드)
+│   ├── scripts/           # 시작·마이그레이션·설치 스크립트
+│   │   ├── ensureMongodb.js    # DB_TYPE=mongodb 시작 시 MongoDB 실행 확인·재시작·설치 가이드
+│   │   ├── migrateToMongo.js   # 일회성 JSON → MongoDB 마이그레이션
+│   │   └── installDb.js        # MongoDB 컬렉션·인덱스·사용자 생성
 │   ├── socket/            # Socket.IO 이벤트 핸들러
 │   └── middleware/        # 인증, 에러 핸들링
 ├── client/src/            # React 프론트엔드
@@ -55,16 +64,39 @@ loitering_tracking/
 │   │   ├── AnalysisServerDashboard.tsx # analysis 모드 메인 대시보드
 │   │   ├── AnalysisLivePanel.tsx   # 실시간 감지 피드 오버레이 (analysis 모드)
 │   │   ├── AnalysisDetectionPanel.tsx  # 이벤트 히스토리 오버레이 (배회/화재/연기)
-│   │   └── AnalysisEventsTab.tsx   # Detections 탭 — 이벤트 히스토리 (analysis 모드)
+│   │   ├── AnalysisEventsTab.tsx   # Detections 탭 — 이벤트 히스토리 (analysis 모드)
+│   │   ├── DetectionsTimelineInline.tsx # 감지 트랙 Gantt 타임라인 (FullscreenCameraView Detections 탭)
+│   │   └── AnalysisHistoryTab.tsx  # 분석 이벤트 이력 탭 (저장된 fire/smoke/loitering)
 │   ├── stores/            # Zustand 상태 관리
 │   ├── hooks/             # 커스텀 React 훅
 │   ├── i18n/              # 다국어(ko/en) 리소스
 │   └── types/             # TypeScript 타입 정의
+├── ingest-daemon/
+│   └── ingest_daemon.py   # Python PyAV 독립 캡처 데몬 (:7070)
 ├── mcp-server/            # LLM MCP 통합 서버
 ├── test/                  # Jest 테스트 (api/ integration/ e2e/)
 ├── docs/                  # 설계 문서 (design/ srs/ prd/ rfp/)
 └── storage/               # JSON 파일 DB
 ```
+
+---
+
+## 수집 레이어 아키텍처 원칙 (Architecture Invariants)
+
+> **이 원칙은 모든 코드·문서 작업 시 최우선으로 준수해야 합니다.**
+
+### ingest-daemon 우선 원칙
+
+| 상황 | 수집 방식 | 비고 |
+|---|---|---|
+| RTSP/ONVIF IP 카메라 | **ingest-daemon 전용** | FFmpeg subprocess 금지 |
+| WEBRTC_ENGINE=mediamtx | ingest-daemon → JPEG → AI | RTP 경로 미사용 |
+| WEBRTC_ENGINE=mediasoup | ingest-daemon → JPEG(AI) + H.264 RTP(비디오) + Opus RTP(오디오) | 단일 RTSP 세션 3-way 팬아웃 |
+| YouTube / RTMP / HLS | yt-dlp → ffmpeg → MediaMTX | FFmpeg 허용되는 유일한 구간 |
+
+- `ingest_daemon.py`(Python PyAV)는 RTSP 수집의 유일한 공급자입니다.
+- `rtspCapture.js`, `gstreamerCapture.js`, `pyavCapture.js`는 **레거시**입니다 — 신규 카메라에 사용 금지.
+- `mediasoupEngine.js`가 WebRTC 비디오·오디오 RTP를 필요로 할 때도 ingest-daemon API(`POST /cameras { mediasoupPort, mediasoupAudioPort }`)를 통해 요청합니다. FFmpeg subprocess를 직접 띄우지 않습니다.
 
 ---
 
@@ -115,8 +147,16 @@ loitering_tracking/
 | GET | `/api/analysis/metrics` | 분석 서버 대시보드용 트래픽/모듈/결과 메트릭 조회 |
 | GET | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 조회 |
 | PATCH | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 런타임 변경 |
-| GET | `/api/analysis/events` | 분석 이벤트 조회 (query: limit, type) |
+| GET | `/api/analysis/events` | 분석 이벤트 조회 (query: limit, type, cameraId, from, to — max 500) |
 | DELETE | `/api/analysis/events` | 분석 이벤트 전체 삭제 |
+| GET | `/api/analysis/detection-tracks` | 감지 트랙 이력 조회 (query: cameraId, from, to, class, limit — 배회위험 객체만) |
+| DELETE | `/api/analysis/detection-tracks` | 감지 트랙 이력 전체 삭제 |
+| GET | `/api/client-logs` | 브라우저 콘솔 로그 조회 |
+| DELETE | `/api/client-logs` | 콘솔 로그 전체 삭제 |
+| GET | `/api/client-logs/webrtc` | WebRTC PeerConnection 통계 조회 |
+| DELETE | `/api/client-logs/webrtc` | WebRTC 통계 전체 삭제 |
+| GET | `/api/onvif-events` | ONVIF 이벤트 조회 (query: cameraId, type, severity, from, to, limit) |
+| DELETE | `/api/onvif-events` | ONVIF 이벤트 삭제 (cameraId 생략 시 전체 삭제) |
 
 ---
 
@@ -128,7 +168,12 @@ loitering_tracking/
 | `alert:new` | Server → Client | 신규 경보 발생 |
 | `person:trajectory-update` | Server → Client | 인물 궤적 업데이트 |
 | `camera:status` | Server → Client | 카메라 상태 변경 |
+| `camera:capabilities` | Server → Client | 카메라 WebRTC 지원 여부 오버라이드 (mediasoup 모드 전용) |
 | `camera:subscribe` | Client → Server | 카메라 룸 구독 |
+| `appRtp` | Server → Client | RTSP Application RTP 패킷 (ONVIF 메타데이터 등) |
+| `onvif:event` | Server → Client | ONVIF 상태 변화 이벤트 (onvif_events DB 저장 후 브로드캐스트) |
+| `client:log` | Client → Server | 브라우저 콘솔 로그 배치 |
+| `client:webrtc-stats` | Client → Server | WebRTC PeerConnection getStats() 결과 |
 
 ---
 
@@ -162,6 +207,10 @@ cd server && npm run install_db
 node src/scripts/installDb.js --host HOST --port 27017 \
   --admin-user admin --admin-pwd secret \
   --db lts --db-user ltsuser --db-pwd ltspwd
+
+# ── Ingest Daemon (CAPTURE_BACKEND=ingest-daemon) ──────────────────────────
+cd server
+npm run ingest:restart   # ingest-daemon만 핫 재시작 (전체 서버 재시작 불필요)
 
 # ── MCP 서버 ─────────────────────────────────────────────────────────────────
 cd mcp-server && npm start           # stdio 모드 (Claude Code)

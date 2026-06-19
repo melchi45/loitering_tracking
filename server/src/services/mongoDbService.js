@@ -18,6 +18,8 @@
 const mongoose = require('mongoose');
 
 // ── Table names ──────────────────────────────────────────────────────────────
+// Must match ALL_TABLES in db.js — every table written to MongoDB must also be
+// loaded on startup, otherwise in-memory store is empty for that table after restart.
 const TABLES = [
   'cameras',
   'zones',
@@ -25,18 +27,48 @@ const TABLES = [
   'alerts',
   'faceGalleries',
   'faceGalleryFaces',
-  'settings',                    // single-document settings (face tracking state etc.)
-  'missing_persons',             // registered missing persons with face embeddings
-  'missing_person_detections',   // detection events matched against missing persons
+  'settings',
+  'detectionSnapshots',
+  'faceMatchHistory',
+  'missing_persons',
+  'missing_person_detections',
+  'analysisEvents',
+  'client_logs',
+  'client_webrtc_stats',
+  'onvif_events',
+  'onvif_event_types',
+  'detectionTracks',
+  'users',
+  'refresh_tokens',
+  'audit_logs',
 ];
+
+// Row limits applied when loading high-volume tables from MongoDB on startup.
+// Mirrors TABLE_ROW_CAPS in db.js — load only the most recent N rows to keep
+// startup fast and avoid exceeding in-memory caps.
+const LOAD_LIMITS = {
+  events:                    20000,
+  alerts:                    10000,
+  detectionSnapshots:         2000,
+  faceMatchHistory:           5000,
+  missing_person_detections:  5000,
+  client_logs:               10000,
+  client_webrtc_stats:        5000,
+  onvif_events:              50000,
+  detectionTracks:           10000,
+  refresh_tokens:            10000,
+  audit_logs:                10000,
+  analysisEvents:            10000,
+};
 
 // ── Schema: flexible, identity keyed by `id` ────────────────────────────────
 // strict:false lets us store any shape of document without pre-declaring every field.
+// timestamps is disabled — db.js manages createdAt/updatedAt as ISO strings.
 const flexSchema = new mongoose.Schema(
   { id: { type: String, required: true } },
   {
     strict: false,
-    timestamps: { createdAt: 'createdAt', updatedAt: 'updatedAt' },
+    timestamps: false,
     minimize: false,
   },
 );
@@ -66,7 +98,9 @@ let _connected = false;
 async function connect(uri, dbName) {
   const opts = {
     serverSelectionTimeoutMS: 5000,
-    socketTimeoutMS: 30000,
+    socketTimeoutMS: 45000,
+    heartbeatFrequencyMS: 10000,
+    maxIdleTimeMS: 60000,
   };
   if (dbName) opts.dbName = dbName;
 
@@ -102,12 +136,27 @@ async function disconnect() {
  * Load all table data from MongoDB into plain JS arrays.
  * @returns {Promise<Record<string, Array>>}  Object keyed by table name.
  */
+/** Convert any Date objects in a plain document to ISO strings. */
+function normalizeDates(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    out[k] = v instanceof Date ? v.toISOString() : v;
+  }
+  return out;
+}
+
 async function loadAll() {
   const result = {};
   for (const table of TABLES) {
-    const docs = await model(table).find({}).lean();
-    // Strip internal Mongoose fields before handing to the application layer
-    result[table] = docs.map(({ _id, __v, ...rest }) => rest);
+    const limit = LOAD_LIMITS[table];
+    // For high-volume tables load only the most recent N rows (sorted by createdAt desc)
+    // to bound startup time and stay within in-memory row caps.
+    const query = model(table).find({}).lean();
+    if (limit) query.sort({ createdAt: -1 }).limit(limit);
+    const docs = await query;
+    // Strip internal Mongoose fields; normalize any legacy Date objects to ISO strings.
+    result[table] = docs.map(({ _id, __v, ...rest }) => normalizeDates(rest));
   }
   return result;
 }

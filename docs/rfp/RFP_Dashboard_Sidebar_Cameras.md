@@ -117,9 +117,16 @@ Absolute position within tab: left-2 top-1/2 -translate-y-1/2
 CSS: w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping
 ```
 
-### 4.3 Auto Tab Switch
+### 4.3 Auto Tab Switch on Discovery
 
 When the first discovered device (`discovery:result` event) is received from the server, **automatically switches to the Found tab** (limited to once via `autoSwitched` flag).
+
+### 4.4 Auto Tab Switch Back to Added on Camera Registration
+
+When a camera is registered from the Found tab (via "Add as Camera" or Camera Add modal pre-filled from a discovered device), the panel shall **automatically switch back to the Added tab** so the operator can immediately see the newly registered camera in context.
+
+- Mechanism: React `useEffect` watches `cameras.length`; when the count increases while the Found sub-tab is active, it switches to the Added sub-tab.
+- This one-shot behavior applies only when the user is currently on the Found tab; no switch occurs if the user is already on the Added tab.
 
 ---
 
@@ -576,6 +583,7 @@ Displayed as an overlay above the Camera Grid when a device from the Found tab i
 | Found tab search bar (string + category) | ✅ Done |
 | SUNAPI/ONVIF badge | ✅ Done |
 | Auto tab switch (on first device found) | ✅ Done |
+| Auto tab switch back to Added after camera registration | ✅ Done |
 | Discovered Camera Panel overlay | ✅ Done |
 | WebRTC Enabled toggle (per camera) | ✅ Done |
 
@@ -603,3 +611,4 @@ Displayed as an overlay above the Camera Grid when a device from the Found tab i
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for Dashboard Sidebar Cameras |
+| 1.1 | 2026-06-16 | LTS Engineering Team | §4.4 추가 — Found 탭에서 카메라 등록 시 Added 탭 자동 전환 요구사항; §12.1 구현 완료 항목 추가 |

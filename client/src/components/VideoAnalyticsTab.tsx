@@ -1,19 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from 'react'; // eslint-disable-line
+import { useEffect, useRef, useState } from 'react'; // eslint-disable-line
 import { useI18n } from '../i18n';
-
-// ── YOLO Model catalog types ───────────────────────────────────────────────────
-interface ModelEntry {
-  id:        string;
-  label:     string;
-  series:    string;
-  mAP:       number;
-  cpuMs:     number;
-  params:    string;
-  file:      string;
-  exists:    boolean;
-  active:    boolean;
-  sizeBytes: number | null;
-}
 
 interface AttrItem  { id: string; label: string; labelKo: string; model?: string; pending?: boolean; installHint?: string; }
 interface AttrGroup { groupKey: string; items: AttrItem[]; }
@@ -236,35 +222,6 @@ export default function VideoAnalyticsTab() {
   const [saving, setSaving]     = useState<string | null>(null);
   const [loadError, setLoadError] = useState(false);
 
-  // YOLO model selector
-  const [models, setModels]             = useState<ModelEntry[]>([]);
-  const [modelOpen, setModelOpen]       = useState(true);
-  const [modelSwitching, setModelSwitching] = useState<string | null>(null);
-  const modelPollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const fetchModels = useCallback(async () => {
-    try {
-      const r = await fetch('/api/analysis/models');
-      if (!r.ok) return;
-      const data = await r.json();
-      setModels(data.catalog ?? []);
-    } catch { /* ignore */ }
-  }, []);
-
-  const switchModel = async (id: string) => {
-    setModelSwitching(id);
-    try {
-      const r = await fetch('/api/analysis/models/switch', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ modelId: id }),
-      });
-      if (r.ok) await fetchModels();
-    } finally {
-      setModelSwitching(null);
-    }
-  };
-
   // Kalman / Tracker settings
   const [kalman, setKalman]             = useState<KalmanConfig>({ ...KALMAN_DEFAULTS });
   const [kalmanOpen, setKalmanOpen]     = useState(false);
@@ -300,12 +257,7 @@ export default function VideoAnalyticsTab() {
         }
       })
       .catch(() => setLoadError(true));
-
-    fetchModels();
-    return () => {
-      if (modelPollRef.current) clearInterval(modelPollRef.current);
-    };
-  }, [fetchModels]);
+  }, []);
 
   const toggle = async (id: string) => {
     const next = !enabled[id];
@@ -476,107 +428,6 @@ export default function VideoAnalyticsTab() {
       </div>
 
       <div className="flex-1 overflow-y-auto p-3 space-y-4">
-
-        {/* ── YOLO Model Selector ── */}
-        {models.length > 0 && (
-          <div className="border border-gray-700 rounded-lg overflow-hidden">
-            {/* section header */}
-            <button
-              onClick={() => setModelOpen(v => !v)}
-              className="w-full flex items-center justify-between px-3 py-2 bg-gray-800/80 hover:bg-gray-700/60 transition-colors"
-            >
-              <div className="flex items-center gap-2">
-                <span className="text-[9px] text-indigo-400 font-bold uppercase tracking-wide">YOLO Detection Model</span>
-                {models.find(m => m.active) && (
-                  <span className="text-[9px] bg-indigo-700/60 text-indigo-200 rounded px-1.5 py-0.5">
-                    {models.find(m => m.active)!.label}
-                  </span>
-                )}
-              </div>
-              <span className="text-[8px] text-gray-500">{modelOpen ? '▲' : '▼'}</span>
-            </button>
-
-            {modelOpen && (
-              <div className="bg-gray-900/60">
-                {/* Column headers */}
-                <div className="grid grid-cols-[auto_1fr_auto_auto_auto_auto] gap-x-2 px-3 py-1 border-b border-gray-700/60 text-[8px] text-gray-500 uppercase tracking-wide">
-                  <span />
-                  <span>모델</span>
-                  <span className="text-right">mAP</span>
-                  <span className="text-right">CPU ms</span>
-                  <span className="text-right">Params</span>
-                  <span className="text-right">Size</span>
-                </div>
-
-                {/* Group by series */}
-                {['YOLO11', 'YOLOv8'].map(series => (
-                  <div key={series}>
-                    <div className="px-3 pt-1.5 pb-0.5">
-                      <span className="text-[8px] text-gray-600 uppercase tracking-wide font-bold">{series}</span>
-                    </div>
-                    {models.filter(m => m.series === series).map(m => {
-                      const isSwitching = modelSwitching === m.id;
-                      return (
-                        <div
-                          key={m.id}
-                          onClick={() => m.exists && !isSwitching && !modelSwitching && switchModel(m.id)}
-                          className={`grid grid-cols-[auto_1fr_auto_auto_auto_auto] gap-x-2 items-center px-3 py-1.5 border-b border-gray-800/60 last:border-0 transition-colors ${
-                            m.active
-                              ? 'bg-indigo-900/20'
-                              : m.exists
-                                ? 'hover:bg-gray-800/40 cursor-pointer'
-                                : 'opacity-40 cursor-not-allowed'
-                          }`}
-                          title={m.exists ? (m.active ? '현재 활성 모델' : '클릭하여 이 모델로 전환') : '파일 없음'}
-                        >
-                          {/* Radio indicator */}
-                          <div className={`w-3 h-3 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${
-                            m.active ? 'border-indigo-400 bg-indigo-400' : 'border-gray-500'
-                          }`}>
-                            {isSwitching && <span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" />}
-                          </div>
-
-                          {/* Label */}
-                          <span className={`text-[10px] font-mono font-bold ${m.active ? 'text-indigo-300' : 'text-gray-200'}`}>
-                            {m.label}
-                            {m.active && <span className="ml-1 text-[8px] text-indigo-500 font-normal">● 활성</span>}
-                            {isSwitching && <span className="ml-1 text-[8px] text-yellow-400 font-normal">전환 중...</span>}
-                          </span>
-
-                          {/* mAP */}
-                          <span className={`text-[9px] font-mono text-right ${m.mAP >= 51 ? 'text-green-400' : m.mAP >= 44 ? 'text-yellow-400' : 'text-gray-400'}`}>
-                            {m.mAP}
-                          </span>
-
-                          {/* CPU ms */}
-                          <span className={`text-[9px] font-mono text-right ${m.cpuMs <= 90 ? 'text-green-400' : m.cpuMs <= 240 ? 'text-yellow-400' : 'text-red-400'}`}>
-                            {m.cpuMs}
-                          </span>
-
-                          {/* Params */}
-                          <span className="text-[9px] font-mono text-right text-gray-500">{m.params}</span>
-
-                          {/* File size */}
-                          <span className="text-[8px] font-mono text-right text-gray-600">
-                            {m.sizeBytes ? `${(m.sizeBytes / 1024 / 1024).toFixed(0)}MB` : '—'}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                ))}
-
-                {/* legend */}
-                <div className="px-3 py-1.5 bg-gray-900/40 text-[8px] text-gray-600 flex gap-3 flex-wrap">
-                  <span><span className="text-green-400">■</span> 빠름</span>
-                  <span><span className="text-yellow-400">■</span> 보통</span>
-                  <span><span className="text-red-400">■</span> 느림/무거움</span>
-                  <span className="ml-auto">mAP val 50-95 · COCO · CPU ONNX ms</span>
-                </div>
-              </div>
-            )}
-          </div>
-        )}
 
         {GROUPS.map((group) => {
           const groupAvailableIds = _availableIdsForGroup(group);

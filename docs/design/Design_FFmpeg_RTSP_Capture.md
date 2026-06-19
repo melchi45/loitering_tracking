@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-FFMPEG-001 |
-| **Version** | 1.0 |
-| **Status** | Active |
-| **Date** | 2026-06-04 |
+| **Version** | 1.1 |
+| **Status** | **Deprecated** — `CAPTURE_BACKEND=ingest-daemon`으로 대체됨 |
+| **Date** | 2026-06-11 |
 | **Ops Guide** | [FFmpeg_Installation_Compatibility.md](../ops/FFmpeg_Installation_Compatibility.md) |
 | **Test Cases** | [TC_FFmpeg_RTSP_Capture.md](../tc/TC_FFmpeg_RTSP_Capture.md) |
 
@@ -25,9 +25,16 @@
 
 ---
 
+> ⚠️ **이 문서는 Deprecated 상태입니다.**  
+> v1.1(2026-06-11)부터 `CAPTURE_BACKEND=ingest-daemon` (Python PyAV 독립 데몬)이 기본값이며, ffmpeg 캡처 서브프로세스는 레거시로 분류됩니다.  
+> 신규 배포에는 [Design_RTSP_Capture_Backend.md](./Design_RTSP_Capture_Backend.md) §6 (Ingest-Daemon 백엔드)를 참조하세요.  
+> 이 문서는 레거시 호환성 및 참조 목적으로 보존됩니다.
+
+---
+
 ## 1. 목적 및 범위
 
-이 문서는 LTS-2026이 RTSP 카메라 스트림 수집에 ffmpeg를 사용하는 방식과,  
+이 문서는 LTS-2026이 RTSP 카메라 스트림 수집에 ffmpeg를 사용했던 방식과,  
 Ubuntu 버전에 따른 ffmpeg 버전 차이로 인한 호환성 문제의 해결 설계를 기술합니다.
 
 **범위:**

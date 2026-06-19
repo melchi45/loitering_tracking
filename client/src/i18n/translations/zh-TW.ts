@@ -151,7 +151,19 @@ export const zhTW: Translations = {
   zoneVertexDeleteMin: 'Minimum 3 vertices required.',
   zoneEnterName: 'Enter zone name.',
 
-  cameraName: '攝影機名稱',
+  // Camera Events Tab (DataChannel — RTSP application RTP metadata stream)
+  cameraEventsTab:    'Camera Events',
+  cameraEventsNoData: 'No events — waiting for RTSP metadata stream…',
+
+  // ONVIF Timeline
+  onvifTimelineOpen:  'ONVIF Timeline',
+  onvifTimelineTitle: 'ONVIF Event Timeline',
+  onvifTimelineEmpty: 'No ONVIF events in this range',
+  onvifTimelineHint:  '↑↓ Zoom  ←→ Pan',
+  onvifTimelineCount: (shown: number, total: number) =>
+    `${shown} event${shown !== 1 ? 's' : ''} visible  /  ${total} total`,
+
+    cameraName: '攝影機名稱',
   cameraRtspUrl: 'RTSP 位址',
   cameraSave: '儲存',
   cameraCancel: '取消',

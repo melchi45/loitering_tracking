@@ -1,5 +1,6 @@
 'use strict';
 
+const { v4: uuidv4 }         = require('uuid');
 const { getUDPDiscovery }    = require('../utils/udpDiscovery');
 const { getDiscoveryService } = require('../services/discoveryService');
 
@@ -29,6 +30,8 @@ function registerStreamHandlers(io, socket, db, options = {}) {
     socket.join(cameraId);
     console.log(`[Socket.IO] ${socket.id.slice(0,8)} subscribed to camera ${cameraId.slice(0,8)}`);
     socket.emit('camera:subscribed', { cameraId });
+
+    // ingest-daemon now supports RTP fan-out for mediasoup — do not force WebRTC off.
   });
 
   /**
@@ -168,6 +171,48 @@ function registerStreamHandlers(io, socket, db, options = {}) {
       _discoveryInstance = null;
     }
     socket.emit('discovery:stopped');
+  });
+
+  // ─── Client console log ingestion ─────────────────────────────────────
+  // payload: { entries: LogEntry[], sessionId, userAgent, pageUrl }
+  socket.on('client:log', ({ entries, sessionId, userAgent, pageUrl } = {}) => {
+    if (!Array.isArray(entries) || entries.length === 0) return;
+    const clientIp = socket.handshake.headers['x-forwarded-for']?.split(',')[0]?.trim()
+                  || socket.handshake.address
+                  || 'unknown';
+    const now = new Date().toISOString();
+    for (const entry of entries) {
+      if (!entry || typeof entry !== 'object') continue;
+      db.insert('client_logs', {
+        id:        uuidv4(),
+        sessionId: sessionId || null,
+        clientIp,
+        userAgent: userAgent || null,
+        pageUrl:   pageUrl   || null,
+        level:     (entry.level || 'log').toLowerCase(),
+        message:   String(entry.message ?? '').slice(0, 2000),
+        args:      entry.args  ?? null,
+        stack:     entry.stack ?? null,
+        clientTs:  entry.timestamp ?? null,
+        serverTs:  now,
+      });
+    }
+  });
+
+  // ─── WebRTC stats ingestion (equivalent to webrtc-internals) ─────────
+  // payload: { sessionId, pcId, label, cameraId?, timestamp, stats: {...} }
+  socket.on('client:webrtc-stats', ({ sessionId, pcId, label, cameraId, timestamp, stats } = {}) => {
+    if (!stats || typeof stats !== 'object') return;
+    db.insert('client_webrtc_stats', {
+      id:        uuidv4(),
+      sessionId: sessionId || null,
+      pcId:      pcId      || null,
+      label:     label     || null,
+      cameraId:  cameraId  || null,
+      clientTs:  timestamp || null,
+      serverTs:  new Date().toISOString(),
+      stats,
+    });
   });
 
   // ─── Disconnect cleanup ────────────────────────────────────────────────

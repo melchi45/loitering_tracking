@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-DAP-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-06-08 |
 | **Parent SRS** | [srs/SRS_Distributed_AI_Pipeline.md](../srs/SRS_Distributed_AI_Pipeline.md) |
@@ -843,3 +843,87 @@ server/src/
 | ONNX 추론 오류 (analysis 서버) | `500 Internal Server Error`, `console.error` | 해당 요청만 실패 |
 | `ANALYSIS_SERVER_URL` 미설정 (streaming 시작) | 경고 로그 출력 후 원격 분석 비활성 | 영상 스트리밍 유지, AI 결과 미수신 |
 | 잘못된 `SERVER_MODE` 값 | `process.exit(1)`, 에러 메시지 출력 | 서버 시작 실패 |
+
+---
+
+## 11. Detection Track Lifecycle (v1.1)
+
+### 11.1 모드별 트랙 저장 위치
+
+| 모드 | 트랙 메타데이터 저장 | 스냅샷 크롭 저장 | Timeline 데이터 소스 |
+|---|---|---|---|
+| `combined` | 로컬 `detectionTracks` | 로컬 `detectionSnapshots` | 로컬 DB 직접 조회 |
+| `analysis` | 분석 서버 `detectionTracks` | 분석 서버 `detectionSnapshots` | 로컬 DB 직접 조회 |
+| `streaming` | 분석 서버 (primary) + 스트리밍 서버 (shadow) | **스트리밍 서버** (원본 프레임 크롭) | 분석 서버 proxy → 로컬 fallback |
+
+### 11.2 _trackMeta 구조 (모든 모드)
+
+```javascript
+// pipelineManager.js ctx 및 analysisApi.js ctx 공통
+ctx._trackMeta = new Map();
+// Key: String(objectId) — UUID 문자열
+// Value:
+{
+  firstSeenAt:  <ms timestamp>,
+  lastSeenAt:   <ms timestamp>,
+  className:    "person" | "vehicle" | ...,
+  maxRiskScore: <0.0–1.0>,
+  isLoitering:  <boolean>,
+  confidence:   <0.0–1.0>,
+  faceId:       <string|null>,
+  identity:     <string|null>,
+  zoneId:       <string|null>,
+  zoneName:     <string|null>,
+  color:        <string|null>,
+  cloth:        <string|null>,
+}
+```
+
+### 11.3 Streaming 모드 트랙 생명주기 시퀀스
+
+```
+Streaming Server                                Analysis Server
+      │                                                │
+      │─── POST /api/analysis/frame (JPEG) ──────────►│
+      │                                                │ ByteTracker.update()
+      │                                                │ popRemovedTracks()  ← 이탈 트랙 수집
+      │                                                │ _trackMeta 업데이트
+      │                                                │ [이탈 트랙 → detectionTracks 저장]
+      │◄── { tracked, behaviors, fireSmoke, ... } ────│
+      │                                                │
+      │ _processRemoteResult():                        │
+      │   for obj in tracked:                          │
+      │     _ctx._trackMeta.set(obj.objectId, ...)    │
+      │   cropJpeg(frame.buf, bbox, fw, fh)           │  ← 원본 해상도 크롭
+      │   snapshotSvc.saveSnapshot() → detectionSnapshots
+      │                                                │
+      │ [30s flush timer]:                             │
+      │   for [key, meta] in _trackMeta:              │
+      │     if lastSeenAt < 15s ago → finalize        │
+      │       → detectionTracks(inProgress=false)     │
+      │     elif dwell >= 5s → upsert                 │
+      │       → detectionTracks(inProgress=true)      │
+```
+
+### 11.4 DetectionsTimeline 데이터 조회 흐름
+
+```
+Browser
+  │── GET /api/analysis/detection-tracks ──►│ Streaming/Analysis Server
+                                             │
+  streaming 모드:                            │
+     ├─ proxyGetWithFallback()              │
+     │    └─ 1순위: 분석 서버 proxy         │
+     │    └─ 2순위 (실패 시): 로컬 DB       │
+  analysis/combined 모드:                   │
+     └─ 로컬 DB 직접 조회                  │
+```
+
+---
+
+## Revision History
+
+| 버전 | 날짜 | 변경 내용 |
+|---|---|---|
+| 1.0 | 2026-06-08 | 초기 작성 |
+| 1.1 | 2026-06-17 | 섹션 11 추가: DetectionTrack 생명주기, _trackMeta 구조, streaming 모드 시퀀스, fallback 흐름 |

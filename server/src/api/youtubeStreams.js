@@ -22,7 +22,7 @@ function youtubeStreamsRouter(youtubeStreamService) {
   // ── POST /api/youtube-streams ─────────────────────────────────────────────
   // Create a new virtual camera from a YouTube URL.
   router.post('/', async (req, res) => {
-    const { youtubeUrl, name, resolution, bitrate, repeatPlayback } = req.body;
+    const { youtubeUrl, name, resolution, bitrate, repeatPlayback, webrtcEnabled } = req.body;
 
     if (!youtubeUrl || typeof youtubeUrl !== 'string') {
       return res.status(422).json({ success: false, code: 'INVALID_YOUTUBE_URL', error: 'youtubeUrl is required' });
@@ -49,6 +49,7 @@ function youtubeStreamsRouter(youtubeStreamService) {
         resolution:     resolution || '1080p',
         bitrate:        parsedBitrate || 2000,
         repeatPlayback: !!repeatPlayback,
+        webrtcEnabled:  webrtcEnabled !== undefined ? !!webrtcEnabled : false,
       });
       return res.status(201).json({ success: true, camera });
     } catch (err) {
@@ -88,7 +89,7 @@ function youtubeStreamsRouter(youtubeStreamService) {
   // ── PATCH /api/youtube-streams/:id ───────────────────────────────────────
   // Update stream name, YouTube URL, resolution, or bitrate (triggers restart).
   router.patch('/:id', async (req, res) => {
-    const { youtubeUrl, name, resolution, bitrate, repeatPlayback } = req.body;
+    const { youtubeUrl, name, resolution, bitrate, repeatPlayback, webrtcEnabled } = req.body;
 
     if (youtubeUrl !== undefined && typeof youtubeUrl !== 'string') {
       return res.status(422).json({ success: false, code: 'INVALID_YOUTUBE_URL', error: 'youtubeUrl must be a string' });
@@ -111,6 +112,7 @@ function youtubeStreamsRouter(youtubeStreamService) {
         resolution,
         bitrate:        parsedBitrate,
         repeatPlayback: repeatPlayback !== undefined ? !!repeatPlayback : undefined,
+        webrtcEnabled:  webrtcEnabled !== undefined ? !!webrtcEnabled : undefined,
       });
       res.json({ success: true, camera: updated });
     } catch (err) {

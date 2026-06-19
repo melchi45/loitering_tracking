@@ -194,6 +194,7 @@ class Track {
     this.bbox = { ...detection.bbox };
     this.confidence = detection.confidence;
     this.className = detection.className || 'person';
+    this.firstSeenAt = Date.now();
     this.kf = new KalmanFilter();
     this.kf.init(detection.bbox);
 
@@ -283,11 +284,12 @@ class Track {
 
   toResult() {
     return {
-      objectId:   this.id,
-      bbox:       { ...this.bbox },
-      confidence: this.confidence,
-      state:      this.state,
-      className:  this.className,
+      objectId:    this.id,
+      bbox:        { ...this.bbox },
+      confidence:  this.confidence,
+      state:       this.state,
+      className:   this.className,
+      firstSeenAt: this.firstSeenAt,
     };
   }
 }
@@ -319,7 +321,19 @@ class ByteTracker {
     // options overrides are kept for test compatibility.
     this._maxAgeOverride      = options.maxAge      ?? null;
     this._iouThreshOverride   = options.iouThreshold ?? null;
-    this._tracks = [];  // Array of Track
+    this._tracks = [];        // Array of Track
+    this._removedTracks = []; // Tracks removed in the last update() call
+  }
+
+  /**
+   * Returns tracks removed in the most recent update() call, then clears the buffer.
+   * Caller (pipelineManager) uses this to persist track lifecycle to DB.
+   * @returns {{ id: string, className: string, firstSeenAt: number, confidence: number }[]}
+   */
+  popRemovedTracks() {
+    const removed = this._removedTracks;
+    this._removedTracks = [];
+    return removed;
   }
 
   /**
@@ -368,6 +382,9 @@ class ByteTracker {
         track.state = TrackState.Removed;
       }
     }
+
+    // Capture tracks about to be removed so callers can persist lifecycle data
+    this._removedTracks = this._tracks.filter(t => t.state === TrackState.Removed);
 
     // Remove dead tracks
     this._tracks = this._tracks.filter(t => t.state !== TrackState.Removed);

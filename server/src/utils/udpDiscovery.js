@@ -5,6 +5,8 @@ const { EventEmitter } = require('events');
 const path   = require('path');
 
 let _SubmoduleDiscovery = null;
+let _submoduleDetected  = false;
+
 function _isDiscoveryCtor(v) {
   return typeof v === 'function' && typeof v.prototype?.start === 'function';
 }
@@ -14,22 +16,28 @@ const SUBMODULE_CANDIDATES = [
   path.resolve(__dirname, '..', '..', '..', 'submodules', 'WiseNetChromeIPInstaller', 'udpDiscovery.js'),
 ];
 
-for (const candidate of SUBMODULE_CANDIDATES) {
-  try {
-    const mod = require(candidate);
-    const Ctor = mod.UDPDiscovery || mod.default || mod;
-    if (_isDiscoveryCtor(Ctor)) {
-      _SubmoduleDiscovery = Ctor;
-      console.log(`[UDPDiscovery] Using submodule implementation: ${candidate}`);
-      break;
+// Submodule detection is deferred to first getUDPDiscovery() call so that
+// requiring this module (which happens unconditionally in index.js) doesn't
+// print discovery logs in SERVER_MODE=analysis where discovery is disabled.
+function _detectSubmodule() {
+  if (_submoduleDetected) return;
+  _submoduleDetected = true;
+  for (const candidate of SUBMODULE_CANDIDATES) {
+    try {
+      const mod = require(candidate);
+      const Ctor = mod.UDPDiscovery || mod.default || mod;
+      if (_isDiscoveryCtor(Ctor)) {
+        _SubmoduleDiscovery = Ctor;
+        console.log(`[UDPDiscovery] Using submodule implementation: ${candidate}`);
+        break;
+      }
+    } catch (_) {
+      // try next candidate
     }
-  } catch (_) {
-    // try next candidate
   }
-}
-
-if (!_SubmoduleDiscovery) {
-  console.warn('[UDPDiscovery] Submodule implementation not found. Using inline fallback.');
+  if (!_SubmoduleDiscovery) {
+    console.warn('[UDPDiscovery] Submodule implementation not found. Using inline fallback.');
+  }
 }
 
 // ─── Inline Fallback Implementation ─────────────────────────────────────────
@@ -147,6 +155,7 @@ class UDPDiscoveryFallback extends EventEmitter {
  * @returns {typeof UDPDiscoveryFallback}
  */
 function getUDPDiscovery() {
+  _detectSubmodule();
   return _SubmoduleDiscovery || UDPDiscoveryFallback;
 }
 

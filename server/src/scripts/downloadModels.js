@@ -43,6 +43,79 @@ const DIRECT_MODELS = [
   },
 ];
 
+// ─── YOLO12 models (PT download → ultralytics ONNX export, automated) ────────
+const YOLO12_MODELS = [
+  { id: 'yolo12n', ptFile: 'yolo12n.pt', onnxFile: 'yolo12n.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12n.pt', size: '~5 MB PT' },
+  { id: 'yolo12s', ptFile: 'yolo12s.pt', onnxFile: 'yolo12s.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12s.pt', size: '~18 MB PT' },
+  { id: 'yolo12m', ptFile: 'yolo12m.pt', onnxFile: 'yolo12m.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12m.pt', size: '~40 MB PT' },
+  { id: 'yolo12l', ptFile: 'yolo12l.pt', onnxFile: 'yolo12l.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12l.pt', size: '~53 MB PT' },
+  { id: 'yolo12x', ptFile: 'yolo12x.pt', onnxFile: 'yolo12x.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12x.pt', size: '~118 MB PT' },
+];
+
+// Find Python with ultralytics that supports YOLO12 (cfg/models/12 directory).
+// ultralytics < 8.3.x has no YOLO12 support; check explicitly.
+const { execFileSync } = require('child_process');
+const _pyCandidates = [
+  process.env.PYTHON_EXEC,
+  process.platform === 'win32' ? process.env.PYTHON_EXEC_WINDOWS : process.env.PYTHON_EXEC_LINUX,
+  '/usr/bin/python3',
+  'python3',
+  'python',
+].filter(Boolean);
+const _pyCheckScript = [
+  'import ultralytics, os',
+  'cfg12 = os.path.join(os.path.dirname(ultralytics.__file__), "cfg", "models", "12")',
+  'assert os.path.exists(cfg12), "YOLO12 not supported (ultralytics " + ultralytics.__version__ + ")"',
+].join('; ');
+let PYTHON_EXEC = null;
+for (const cand of _pyCandidates) {
+  try { execFileSync(cand, ['-c', _pyCheckScript], { timeout: 8000, stdio: 'pipe' }); PYTHON_EXEC = cand; break; } catch {}
+}
+if (!PYTHON_EXEC) {
+  console.warn('Warning: Python with ultralytics >=8.3 (YOLO12 support) not found — YOLO12 export will fail. Run: pip install -U ultralytics');
+  PYTHON_EXEC = 'python3';
+}
+
+async function exportYolo12ToOnnx(m) {
+  const { execFile } = require('child_process');
+  const ptPath   = path.join(MODELS_DIR, m.ptFile);
+  const onnxPath = path.join(MODELS_DIR, m.onnxFile);
+
+  if (fs.existsSync(onnxPath)) {
+    console.log(`  [SKIP] ${m.onnxFile} (already exists)`);
+    return 'skipped';
+  }
+
+  if (!fs.existsSync(ptPath)) {
+    console.log(`  Downloading PT ${m.id} — ${m.size}`);
+    await download(m.url, ptPath);
+  } else {
+    console.log(`  [SKIP] PT ${m.ptFile} already cached`);
+  }
+
+  console.log(`  Converting ${m.ptFile} → ${m.onnxFile} ...`);
+  const script = [
+    'from ultralytics import YOLO',
+    `m = YOLO(${JSON.stringify(ptPath)})`,
+    'm.export(format="onnx", imgsz=640, dynamic=False)',
+  ].join('; ');
+
+  await new Promise((resolve, reject) => {
+    execFile(PYTHON_EXEC, ['-c', script], { timeout: 300_000 }, (err, _out, stderr) => {
+      if (err) { console.error('  export stderr:', stderr); return reject(err); }
+      resolve();
+    });
+  });
+
+  const exportedOnnx = ptPath.replace(/\.pt$/, '.onnx');
+  if (exportedOnnx !== onnxPath && fs.existsSync(exportedOnnx)) {
+    fs.renameSync(exportedOnnx, onnxPath);
+  }
+  fs.unlink(ptPath, () => {});
+  console.log(`  [OK] ${m.onnxFile}`);
+  return 'converted';
+}
+
 // ─── Models requiring Python / ultralytics export ────────────────────────────
 const PYTHON_EXPORT_INSTRUCTIONS = `
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -169,6 +242,7 @@ function printStatus() {
     { file: 'yolov8m_ppe.onnx',        module: 'AI-04 Mask + AI-07 Helmet' },
     { file: 'openpar.onnx',            module: 'AI-05 Color + AI-06 Cloth' },
     { file: 'yolov8s_fire_smoke.onnx', module: 'AI-09 Fire & Smoke Detection' },
+    ...YOLO12_MODELS.map(m => ({ file: m.onnxFile, module: `YOLO12 Detection (${m.id})` })),
   ];
   console.log('\n=== Model Status ===');
   for (const m of ALL) {
@@ -197,10 +271,22 @@ async function main() {
     }
   }
 
+  // YOLO12: automated PT download + ONNX export
+  console.log('\n=== YOLO12 Models (PT → ONNX auto-export) ===\n');
+  for (const m of YOLO12_MODELS) {
+    try {
+      const result = await exportYolo12ToOnnx(m);
+      if (result === 'skipped') skipped++; else downloaded++;
+    } catch (e) {
+      console.error(`  [FAIL] ${m.id}: ${e.message}`);
+      failed++;
+    }
+  }
+
   console.log(PYTHON_EXPORT_INSTRUCTIONS);
   printStatus();
 
-  console.log(`\nDone: ${downloaded} downloaded, ${skipped} skipped, ${failed} failed`);
+  console.log(`\nDone: ${downloaded} downloaded/converted, ${skipped} skipped, ${failed} failed`);
 }
 
 main().catch(console.error);

@@ -38,7 +38,12 @@ loitering_tracking/
 │   │   ├── pipelineManager.js      # AI 서비스 생명주기 오케스트레이션
 │   │   ├── attributePipeline.js    # 의상·색상·PPE 속성 분석
 │   │   ├── faceService.js          # 얼굴 인식·임베딩·Re-ID
-│   │   ├── rtspCapture.js          # RTSP 스트림 캡처 (10 FPS)
+│   │   ├── captureFactory.js       # CAPTURE_BACKEND별 캡처 인스턴스 팩토리
+│   │   ├── ingestDaemonCapture.js  # ingest-daemon 수신 EventEmitter (권장)
+│   │   ├── rtspCapture.js          # ffmpeg RTSP 캡처 (레거시)
+│   │   ├── gstreamerCapture.js     # GStreamer 캡처 (GPU 하드웨어 가속)
+│   │   ├── pyavCapture.js          # Python PyAV 직접 캡처
+│   │   ├── mediamtxSnapshotCapture.js # MediaMTX JPEG 스냅샷 캡처
 │   │   ├── mediamtxManager.js      # MediaMTX 경로 등록/해제 (WebRTC WHEP)
 │   │   ├── analysisClient.js       # streaming→analysis HTTP 클라이언트 (회로차단기)
 │   │   ├── fireSmokeService.js     # 화재·연기 감지
@@ -59,14 +64,20 @@ loitering_tracking/
 │   │   ├── admin.js                # 관리자 라우터
 │   │   ├── auth.js                 # 인증 라우터
 │   │   ├── analysisApi.js          # AI 분석 API (analysis/combined 모드)
-│   │   └── analysisProxy.js        # 분석 API 프록시 (streaming 모드)
+│   │   ├── analysisProxy.js        # 분석 API 프록시 (streaming 모드)
+│   │   └── onvifApi.js             # ONVIF 이벤트 REST API (GET/DELETE /api/onvif-events)
 │   ├── socket/
 │   │   └── streamHandler.js        # Socket.IO 스트림 이벤트
 │   ├── middleware/
 │   │   ├── auth.js                 # JWT 인증 미들웨어
 │   │   └── role.js                 # 역할 기반 접근 제어
+│   ├── scripts/
+│   │   ├── ensureMongodb.js        # DB_TYPE=mongodb 시작 시 MongoDB 실행 확인·재시작·설치 가이드
+│   │   ├── migrateToMongo.js       # 일회성 JSON → MongoDB 마이그레이션
+│   │   └── installDb.js            # MongoDB 컬렉션·인덱스·사용자 생성 스크립트
 │   ├── config/                     # 환경별 설정
-│   └── utils/                      # 공통 유틸리티
+│   └── utils/
+│       └── logger.js               # 프로덕션 로거 — [YY-MM-DD HH:mm:ss.sss] 타임스탬프, /var/log/lts 파일 저장, makeLineRelay
 ├── client/src/
 │   ├── App.tsx
 │   ├── components/
@@ -82,12 +93,19 @@ loitering_tracking/
 │   │   ├── AnalysisServerDashboard.tsx # analysis 모드 메인 대시보드
 │   │   ├── AnalysisLivePanel.tsx   # 실시간 감지 피드 오버레이 (analysis 모드)
 │   │   ├── AnalysisDetectionPanel.tsx  # 이벤트 히스토리 오버레이 (배회/화재/연기)
-│   │   └── AnalysisEventsTab.tsx   # Detections 탭 — 이벤트 히스토리 (analysis 모드)
+│   │   ├── AnalysisEventsTab.tsx   # Detections 탭 — 이벤트 히스토리 (analysis 모드)
+│   │   ├── OnvifTimelineOverlay.tsx # ONVIF 이벤트 타임라인 오버레이 (줌/팬/상세/Raw XML)
+│   │   ├── DetectionsTimelineInline.tsx # 감지 트랙 Gantt 타임라인 (FullscreenCameraView Detections 탭)
+│   │   └── AnalysisHistoryTab.tsx  # 분석 이벤트 이력 탭 (저장된 fire/smoke/loitering)
 │   ├── stores/                     # Zustand 상태 스토어
 │   ├── hooks/                      # 커스텀 React 훅
 │   ├── i18n/                       # 다국어(ko/en) 리소스
-│   ├── pages/                      # 페이지 컴포넌트
+│   ├── pages/
+│   │   └── admin/
+│   │       └── AdminUsersPage.tsx  # Admin Dashboard (Users/ONVIF/Audit 섹션)
 │   └── types/                      # TypeScript 타입 정의
+├── ingest-daemon/
+│   └── ingest_daemon.py            # Python PyAV 독립 캡처 데몬 (:7070)
 ├── mcp-server/                     # MCP LLM 통합 서버
 ├── test/                           # Jest 테스트
 │   ├── api/                        # API 단위 테스트
@@ -118,6 +136,25 @@ loitering_tracking/
 
 ---
 
+## 수집 레이어 아키텍처 원칙 (Architecture Invariants)
+
+> **이 원칙은 모든 코드·문서 작업 시 최우선으로 준수해야 합니다.**
+
+### ingest-daemon 우선 원칙
+
+| 상황 | 수집 방식 | 비고 |
+|---|---|---|
+| RTSP/ONVIF IP 카메라 | **ingest-daemon 전용** | FFmpeg subprocess 금지 |
+| WEBRTC_ENGINE=mediamtx | ingest-daemon → JPEG → AI | RTP 경로 미사용 |
+| WEBRTC_ENGINE=mediasoup | ingest-daemon → JPEG(AI) + H.264 RTP(비디오) + Opus RTP(오디오) | 단일 RTSP 세션 3-way 팬아웃 |
+| YouTube / RTMP / HLS | yt-dlp → ffmpeg → MediaMTX | FFmpeg 허용되는 유일한 구간 |
+
+- `ingest_daemon.py`(Python PyAV)는 RTSP 수집의 유일한 공급자입니다.
+- `rtspCapture.js`, `gstreamerCapture.js`, `pyavCapture.js`는 **레거시**입니다 — 신규 카메라에 사용 금지.
+- `mediasoupEngine.js`가 WebRTC 비디오·오디오 RTP를 필요로 할 때도 ingest-daemon API(`POST /cameras { mediasoupPort, mediasoupAudioPort }`)를 통해 요청합니다. FFmpeg subprocess를 직접 띄우지 않습니다.
+
+---
+
 ## 기술 스택 및 코딩 규칙
 
 ### 서버 (Node.js)
@@ -125,7 +162,8 @@ loitering_tracking/
 - **CommonJS 전용** — `require()` / `module.exports` 사용, `import`/`export` 금지
 - 비동기는 `async/await` 사용, Promise 체인(`.then()`) 지양
 - `server/src/db.js`를 통해서만 `storage/lts.json` 접근 (직접 파일 I/O 금지)
-- 환경변수는 `server/.env`에서 `dotenv`로 로드
+- 환경변수는 **`server/.env` 단일 파일**에서 `dotenv`로 로드 — 모든 서버 모드(combined/streaming/analysis)가 동일 파일 사용
+- `server/.env.example`, `server/.env.streaming.example`, `server/.env.analysis.example`은 **참조용 문서**이며 서버가 절대 로드하지 않음
 - HTTP 포트 기본값 `3080`; HTTPS 포트 기본값 `3443`
 - `SERVER_MODE` = `combined`(기본) | `streaming` | `analysis` — 역할 분리
 - `DB_TYPE` = `json`(기본) | `mongodb` — 스토리지 백엔드 선택
@@ -160,8 +198,11 @@ loitering_tracking/
 | GET | `/api/analysis/client-status` | 분석 클라이언트 상태 (streaming 모드 전용 — 회로차단기 상태·통계) |
 | GET | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 조회 |
 | PATCH | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 런타임 변경 |
-| GET | `/api/analysis/events` | 분석 이벤트 조회 (query: limit, type) |
+| GET | `/api/analysis/events` | 분석 이벤트 조회 (query: limit, type, cameraId, from, to — max 500) |
 | DELETE | `/api/analysis/events` | 분석 이벤트 전체 삭제 |
+| GET | `/api/analysis/detection-tracks` | 감지 트랙 이력 조회 (query: cameraId, from, to, class, limit — dwell≥1s 저장, inProgress 플래그) |
+| DELETE | `/api/analysis/detection-tracks` | 감지 트랙 이력 전체 삭제 |
+| GET | `/api/analysis/detection-snapshots` | bbox crop 이미지 조회 (query: objectId(필수), cameraId, from, to, limit — cropData base64 JPEG) |
 | GET | `/api/analysis/models` | YOLO 모델 카탈로그 조회 (다운로드 상태·활성 모델 포함) |
 | POST | `/api/analysis/models/switch` | 활성 YOLO 탐지 모델 런타임 전환 (body: modelId) |
 | POST | `/api/analysis/models/download` | YOLO 모델 다운로드 시작 (body: modelId) |
@@ -169,6 +210,16 @@ loitering_tracking/
 | POST | `/api/faces/search` | 얼굴 검색 |
 | POST | `/api/streams/youtube` | YouTube 스트림 수집 |
 | GET | `/health` | 서버 상태 확인 |
+| GET | `/api/client-logs` | 브라우저 콘솔 로그 조회 (query: level, sessionId, from, to, limit) |
+| POST | `/api/client-logs` | 브라우저 콘솔 로그 수신 (HTTP 직접 전송 경로) |
+| DELETE | `/api/client-logs` | 콘솔 로그 전체 삭제 |
+| GET | `/api/client-logs/webrtc` | WebRTC PeerConnection 통계 조회 (query: cameraId, pcId, sessionId) |
+| DELETE | `/api/client-logs/webrtc` | WebRTC 통계 전체 삭제 |
+| GET | `/api/onvif-events` | ONVIF 이벤트 조회 (query: cameraId, type, severity, from, to, limit) |
+| DELETE | `/api/onvif-events` | ONVIF 이벤트 삭제 (query: cameraId — 생략 시 전체 삭제) |
+| GET | `/api/onvif-event-types` | ONVIF 이벤트 타입 레지스트리 전체 조회 (ever-seen topicTypes) |
+| DELETE | `/api/onvif-event-types` | ONVIF 이벤트 타입 레지스트리 초기화 (Admin 페이지용) |
+| GET | `/admin/system` | CPU·메모리·GPU·디스크 I/O·스토리지·DB 쿼리 통계 (admin 전용) |
 
 ---
 
@@ -183,7 +234,13 @@ loitering_tracking/
 | `cameraStatus` | Server → Client | 카메라 연결 상태 변경 |
 | `face:reidentified` | Server → Client | 얼굴 Re-ID 크로스카메라 전환 감지 |
 | `clothing:reidentified` | Server → Client | 의상 Appearance Re-ID 크로스카메라 전환 감지 |
+| `camera:capabilities` | Server → Client | 카메라 WebRTC 지원 여부 오버라이드 (mediasoup 모드 전용) |
 | `subscribeCamera` | Client → Server | 카메라 스트림 구독 |
+| `appRtp` | Server → Client | RTSP Application RTP 패킷 (ONVIF 메타데이터 등) |
+| `client:log` | Client → Server | 브라우저 콘솔 로그 배치 (clientLogger 백채널) |
+| `client:webrtc-stats` | Client → Server | WebRTC PeerConnection getStats() 폴링 결과 |
+| `onvif:event` | Server → Client | ONVIF 상태 변화 이벤트 (DB 저장 후 브로드캐스트) |
+| `onvif:type-registered` | Server → Client | 신규 ONVIF topicType 최초 감지 시 브로드캐스트 (타입 레지스트리 실시간 동기화) |
 
 ---
 
@@ -191,11 +248,13 @@ loitering_tracking/
 
 ```bash
 # ── 서버 모드별 개발 명령어 ─────────────────────────────────────────────────
+# 모든 서버 모드는 server/.env 파일 하나만 참조합니다.
+# .env.example / .env.streaming.example / .env.analysis.example 은 참조용 문서이며 서버가 로드하지 않습니다.
 cd server
 
-npm run dev              # combined 모드 (캡처+AI+WebRTC, .env)
-npm run dev:streaming    # streaming 모드 (캡처 전용, .env_streaming)
-npm run dev:analysis     # analysis 모드  (AI 전용,   .env_analysis)
+npm run dev              # combined 모드 (캡처+AI+WebRTC)
+npm run dev:streaming    # streaming 모드 (캡처 전용)
+npm run dev:analysis     # analysis 모드  (AI 전용)
 
 # 프로덕션 시작/중지
 npm run start            # combined
@@ -225,6 +284,24 @@ cd server && npm run install_db
 node src/scripts/installDb.js --host HOST --port 27017 \
   --admin-user admin --admin-pwd secret \
   --db lts --db-user ltsuser --db-pwd ltspwd
+
+# ── Ingest Daemon (CAPTURE_BACKEND=ingest-daemon) ──────────────────────────
+cd server
+npm run ingest:restart   # ingest-daemon만 핫 재시작 (전체 서버 재시작 불필요)
+
+# ── 로그 설정 (프로덕션, npm run start 계열) ─────────────────────────────────
+# 1회성: /var/log/lts 디렉토리 권한 설정 (root 필요)
+sudo mkdir -p /var/log/lts && sudo chown $USER:$USER /var/log/lts
+
+# 로그 실시간 확인 / 레벨별 필터
+tail -f /var/log/lts/lts-$(date +%Y-%m-%d).log
+grep '\[ERROR\]' /var/log/lts/lts-$(date +%Y-%m-%d).log
+
+# server/.env 로그 설정 키 (docs/ops/Logging_Guide.md 참조)
+#   LOG_TO_FILE=true            파일 저장 활성화 (기본 true)
+#   LOG_DIR=/var/log/lts        저장 경로 (권한 없을 시 server/logs/ 자동 폴백)
+#   LOG_LEVEL=INFO              최소 레벨: DEBUG|INFO|WARNING|ERROR|CRITICAL|NONE
+#   LOG_FILTER_PATTERNS=<csv>   추가 억제 정규식 (쉼표 구분)
 
 # ── MCP 서버 ─────────────────────────────────────────────────────────────────
 cd mcp-server && npm start           # stdio 모드 (Claude Code 연동)

@@ -4,8 +4,8 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-003 |
-| **Version** | 1.0 |
-| **Status** | Draft |
+| **Version** | 1.1 |
+| **Status** | Active |
 | **Date** | 2026-05-21 |
 | **Related RFP** | RFP_WebRTC_Media_Gateway.md (LTS-2026-003 v1.1) |
 
@@ -25,7 +25,13 @@
 
 ## 1. Product Vision
 
-The WebRTC Media Gateway replaces the FFmpeg → JPEG → Socket.IO streaming path with a mediasoup SFU that forwards H.264 video and transcoded Opus audio to browsers over DTLS-SRTP, while delivering AI inference results (detections, loitering events, alerts) via a WebRTC DataChannel, achieving sub-300ms glass-to-glass latency with hardware-accelerated browser decoding and encrypted media transport.
+The WebRTC Media Gateway replaces the FFmpeg → JPEG → Socket.IO streaming path with a low-latency WebRTC delivery path. The system has evolved through two major implementations:
+
+**현재 구현 (기본값 — `WEBRTC_ENGINE=mediamtx`)**: MediaMTX가 RTSP → WebRTC(WHEP) 변환을 직접 처리하며, 브라우저는 `http://<host>:8889/<cameraId>/whep`에서 H.264를 DTLS-SRTP로 직접 수신한다. mediasoup 의존성을 제거하여 ICE 연결 문제를 해소. AI 추론 결과(검출·배회·경보)는 현재 Socket.IO(`frameData`, `newAlert`)로 전달.
+
+**레거시 경로 (`WEBRTC_ENGINE=mediasoup`)**: mediasoup SFU가 카메라 RTP를 PlainTransport로 수신 후 WebRtcTransport를 통해 브라우저에 전달. Audio/Application RTP 및 DataChannel 경로는 이 모드에서 정의됨.
+
+**장기 목표**: Application RTP → WebRTC DataChannel 브리지로 AI 추론 결과를 Socket.IO 없이 브라우저에 전달 (→ M4 DataChannel, `Design_RTSP_WebRTC_Architecture.md §3.7` 참조).
 
 ---
 
@@ -63,6 +69,10 @@ The WebRTC Media Gateway replaces the FFmpeg → JPEG → Socket.IO streaming pa
 ### 4.1 Video Track
 
 The gateway must forward the H.264 video RTP track from each camera to every subscribed browser session without re-encoding. Cameras that stream H.265 (HEVC) must be transcoded to H.264 via FFmpeg before mediasoup injection. The browser `<video>` element replaces the current `<img>` JPEG display and must render at the camera's native frame rate (up to 30 FPS). The AI inference pipeline (YOLOv8, ByteTrack) must continue to receive decoded frames; the `RtpIngestion` component tees the H.264 bitstream — one path to mediasoup, one path to the existing JPEG decoder for inference. RTCP PLI / FIR keyframe requests from mediasoup must be forwarded back to the camera via the RTSP/RTP path.
+
+**RTP Payload Type Constraint (mediasoup mode)**: The mediasoup Router must be created with `preferredPayloadType: 109` for H.264 (not 108). mediasoup v3.19+ hard-pins the Consumer PT to the Router's `preferredPayloadType`. Edge browser assigns PT=109 to H264/CBP/pm=1; if the server answer carries PT=108, Edge discards all SRTP packets at the media layer, resulting in black video despite a successfully connected ICE/DTLS session. Chrome offers PT=108 but accepts PT=109 in the answer per RFC 8829 (JSEP).
+
+**ICE Listen IP Constraint (mediasoup mode)**: The `WebRtcTransport` listenIps list must be built exclusively from `SERVER_IP` / `SERVER_PUBLIC_IP` environment variables — never from `os.networkInterfaces()`. Advertising all NIC IPs as ICE host candidates causes the browser's ICE agent to select the server's own public IP as a shared local candidate, routing SRTP in a loopback path back to the server process instead of delivering it to the browser.
 
 ### 4.2 Audio Track
 
@@ -322,8 +332,9 @@ All DataChannel messages are UTF-8 JSON with a `type` discriminator field.
 |---|---|---|---|---|
 | M1 | Server-side WebRTC infrastructure: mediasoup Worker/Router, RtpIngestion, webrtcSignaling | Week 1–2 | 2026-05-22 | ✅ Done |
 | M2 | Client-side WebRTC integration: useWebRTC hook, CameraView `<video>`, DataChannel dispatch | Week 3 | 2026-05-22 | ✅ Done |
-| M3 | Audio & Application RTP: codec detection, audio UI, app-rtp hook | Week 4 | - | ⏳ Pending |
-| M4 | Hardening & observability: reconnection, RTCP PLI relay, port cleanup, load test, fallback flag | Week 5 | - | ⏳ Pending |
+| M5 | **MediaMTX WHEP 기본 경로**: ingest-daemon + `mediamtxManager.js` + WHEP 클라이언트; ICE 안정화 완료 | — | 2026-06-11 | ✅ Done |
+| M3 | Audio & Application RTP DataChannel: codec detection, audio UI, app-rtp hook, DataChannel 브리지 (§3.7 참조) | TBD | - | ⏳ Pending |
+| M4 | Hardening & observability: reconnection, RTCP PLI relay, port cleanup, load test, fallback flag | TBD | - | ⏳ Pending |
 
 ### 8.2 TODO
 
@@ -348,3 +359,5 @@ All DataChannel messages are UTF-8 JSON with a `type` discriminator field.
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for WebRTC Media Gateway |
+| 1.1 | 2026-06-11 | LTS Engineering Team | §1 현재 구현(MediaMTX WHEP) 반영; §8 M5 추가(WHEP 완료), M3/M4 DataChannel 참조 추가; Status → Active |
+| 1.2 | 2026-06-16 | LTS Engineering Team | §4.1 RTP PT=109 제약 및 ICE listenIps env-var 전용 제약 추가 (mediasoup 모드 Edge 검은 화면 + ICE loopback 근본 원인 명시) |

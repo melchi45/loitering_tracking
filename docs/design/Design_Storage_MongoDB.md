@@ -4,8 +4,8 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-STORAGE-001 |
-| **Version** | 1.3 |
-| **Status** | Active — amended 2026-05-27 |
+| **Version** | 1.5 |
+| **Status** | Active — amended 2026-06-18 |
 | **Date** | 2026-05-27 |
 | **Parent SRS** | srs/SRS_Storage_MongoDB.md |
 
@@ -38,31 +38,35 @@
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        APPLICATION LAYER                                     │
 │  Route Handlers · Services · BehaviorEngine · AlertService                  │
-│  (All call db.prepare(sql).run/get/all — synchronous, no storage awareness) │
+│  (All call db.insert/update/delete/find/all — synchronous, no storage       │
+│   awareness)                                                                 │
 └─────────────────────────────┬───────────────────────────────────────────────┘
-                              │ synchronous SQL-like API
+                              │ synchronous in-memory API
 ┌─────────────────────────────▼───────────────────────────────────────────────┐
 │                           db.js                                              │
 │                                                                              │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                    in-memory store                                   │    │
-│  │  { cameras:[], zones:[], events:[], alerts:[],                      │    │
-│  │    faceGalleries:[], faceGalleryFaces:[], settings:[] }             │    │
+│  │                    in-memory store (ALL_TABLES — 20 tables)          │    │
+│  │  cameras, zones, events, alerts, faceGalleries, faceGalleryFaces,   │    │
+│  │  settings, detectionSnapshots, analysisEvents, detectionTracks,     │    │
+│  │  users, refresh_tokens, audit_logs, onvif_events, ...               │    │
 │  └──────────────────────────┬──────────────────────────────────────────┘    │
-│                             │ afterWrite() / afterDeleteWhere()              │
+│                             │ afterWrite() — DB_TYPE determines path        │
 │  ┌──────────────────────────▼──────────────────────────────────────────┐    │
-│  │               persistJson()  [always, sync]                          │    │
-│  │               mongoSvc.upsert/remove  [if MongoDB, async]            │    │
+│  │  DB_TYPE=json:    persistJson() [debounced, async → lts.json]        │    │
+│  │  DB_TYPE=mongodb: mongoSvc.upsert/remove [async, fire-and-forget]   │    │
+│  │                   ↳ JSON only written if MongoDB disconnects          │    │
+│  │                     (JSON_FALLBACK_SKIP excludes high-volume tables)  │    │
 │  └──────────────────────────────────────────────────────────────────────┘    │
 └──────────────┬──────────────────────────────────┬──────────────────────────┘
-               │                                  │
+               │  disconnect fallback only         │  primary in MongoDB mode
                ▼                                  ▼
          lts.json                         MongoDB (mongoose)
-    (storage/lts.json)                  collections: cameras,
-    warm-standby backup                 zones, events, alerts,
-    always written                      faceGalleries,
-                                        faceGalleryFaces,
-                                        settings
+    (storage/lts.json)                  20 collections matching
+    written ONLY when                   ALL_TABLES in db.js
+    MongoDB disconnects                 (cameras, zones, events,
+    (excludes high-volume               alerts, users, audit_logs, ...)
+     tables via JSON_FALLBACK_SKIP)
 ```
 
 ### 1.2 Dual-Mode Switch
@@ -70,13 +74,15 @@
 ```
 DB_TYPE=json  (default)               DB_TYPE=mongodb
 ┌─────────────────────┐               ┌─────────────────────────────────────┐
-│  loadFromJson()      │               │  loadFromJson() → loadAll() (mongo) │
-│  reads lts.json      │               │  overwrite in-memory from MongoDB   │
-│  into in-memory store│               │                                     │
-│                      │               │  afterWrite:                        │
-│  afterWrite:         │               │    persistJson() + mongo upsert     │
-│    persistJson() only│               │    (fire-and-forget)                │
-└─────────────────────┘               └─────────────────────────────────────┘
+│  loadFromJson()      │               │  ensureMongoDB() — TCP probe,       │
+│  reads lts.json      │               │    auto-restart or install guide    │
+│  into in-memory store│               │  loadFromJson() → loadAll() (mongo) │
+│                      │               │  overwrite in-memory from MongoDB   │
+│  afterWrite:         │               │                                     │
+│    persistJson() only│               │  afterWrite:                        │
+│    (debounced, async)│               │    mongoSvc.upsert/remove ONLY      │
+└─────────────────────┘               │    persistJson() only if disconnected│
+                                      └─────────────────────────────────────┘
 ```
 
 ---
@@ -90,9 +96,10 @@ server/
 │   ├── services/
 │   │   └── mongoDbService.js         ← Mongoose-based MongoDB adapter
 │   └── scripts/
-│       └── migrateToMongo.js         ← One-time JSON → MongoDB migration
+│       ├── migrateToMongo.js         ← One-time JSON → MongoDB migration
+│       └── ensureMongodb.js          ← Startup health check: TCP probe → auto-restart → install guide
 ├── storage/
-│   ├── lts.json                      ← JSON warm-standby (cameras/zones/events/alerts/...)
+│   ├── lts.json                      ← JSON fallback (written only when MongoDB disconnects)
 │   ├── analytics.json                ← Analytics config (separate file, not db.js)
 │   ├── tracker.json                  ← Tracker config (separate file, not db.js)
 │   └── face_tracking.json            ← Face trajectory state (separate file, not db.js)
@@ -112,7 +119,8 @@ server/
 // ── Constants ─────────────────────────────────────────────────────────────
 const ALL_TABLES = [
   'cameras', 'zones', 'events', 'alerts',
-  'faceGalleries', 'faceGalleryFaces', 'settings'
+  'faceGalleries', 'faceGalleryFaces', 'settings',
+  'users', 'refresh_tokens', 'audit_logs',
 ];
 
 // ── In-memory store ───────────────────────────────────────────────────────
@@ -206,10 +214,28 @@ async function initDb() {
 let _connected = false;
 const _models = {};
 
+// ── Table list: must match ALL_TABLES in db.js (all 20 tables) ───────────
+const TABLES = [
+  'cameras', 'zones', 'events', 'alerts', 'faceGalleries', 'faceGalleryFaces',
+  'settings', 'detectionSnapshots', 'faceMatchHistory', 'missing_persons',
+  'missing_person_detections', 'analysisEvents', 'client_logs', 'client_webrtc_stats',
+  'onvif_events', 'onvif_event_types', 'detectionTracks', 'users', 'refresh_tokens', 'audit_logs',
+];
+
+// ── Row limits applied on startup to bound memory / startup time ──────────
+const LOAD_LIMITS = {
+  events: 20000, alerts: 10000, detectionSnapshots: 2000,
+  faceMatchHistory: 5000, missing_person_detections: 5000,
+  client_logs: 10000, client_webrtc_stats: 5000, onvif_events: 50000,
+  detectionTracks: 10000, refresh_tokens: 10000, audit_logs: 10000, analysisEvents: 10000,
+};
+
 // ── Schema ───────────────────────────────────────────────────────────────
+// timestamps:false — db.js manages createdAt/updatedAt as ISO strings.
+// Mongoose timestamps would store Date objects which break string comparators.
 const flexSchema = new mongoose.Schema(
   { id: { type: String, required: true } },
-  { strict: false, timestamps: true, minimize: false }
+  { strict: false, timestamps: false, minimize: false }
 );
 flexSchema.index({ id: 1 }, { unique: true });
 
@@ -222,7 +248,7 @@ function model(table) {
 }
 
 // ── Public API ────────────────────────────────────────────────────────────
-module.exports = { connect, disconnect, isConnected, loadAll, upsert, remove };
+module.exports = { TABLES, connect, disconnect, isConnected, loadAll, upsert, remove, removeWhere };
 ```
 
 ### 4.2 `connect()` Implementation
@@ -231,7 +257,9 @@ module.exports = { connect, disconnect, isConnected, loadAll, upsert, remove };
 async function connect(uri, dbName) {
   const opts = {
     serverSelectionTimeoutMS: 5000,
-    socketTimeoutMS: 30000,
+    socketTimeoutMS: 45000,         // raised from 30000 — avoids false disconnects on slow queries
+    heartbeatFrequencyMS: 10000,    // monitor server health every 10 s
+    maxIdleTimeMS: 60000,           // close idle connections after 60 s
     ...(dbName ? { dbName } : {}),
   };
   await mongoose.connect(uri, opts);
@@ -242,10 +270,6 @@ async function connect(uri, dbName) {
   mongoose.connection.on('reconnected',  () => { _connected = true;  console.log(...);  });
   mongoose.connection.on('error', err   => { console.error('[MongoDB] error:', err.message); });
 
-  // Ensure indexes exist for all collections
-  for (const table of TABLES) {
-    await model(table).createIndexes();
-  }
   console.log('[MongoDB] connected →', uri);
 }
 ```
@@ -253,12 +277,26 @@ async function connect(uri, dbName) {
 ### 4.3 `loadAll()` Implementation
 
 ```js
+/** Convert any Date objects in a plain document to ISO strings. */
+function normalizeDates(obj) {
+  if (!obj || typeof obj !== 'object') return obj;
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) {
+    out[k] = v instanceof Date ? v.toISOString() : v;
+  }
+  return out;
+}
+
 async function loadAll() {
   const result = {};
   for (const table of TABLES) {
-    const docs = await model(table).find({}).lean();
-    // Strip internal Mongoose fields before returning
-    result[table] = docs.map(({ _id, __v, ...rest }) => rest);
+    const limit = LOAD_LIMITS[table];
+    // High-volume tables: load only the most recent N rows to bound startup time.
+    const query = model(table).find({}).lean();
+    if (limit) query.sort({ createdAt: -1 }).limit(limit);
+    const docs = await query;
+    // Strip internal Mongoose fields; normalize any legacy Date objects to ISO strings.
+    result[table] = docs.map(({ _id, __v, ...rest }) => normalizeDates(rest));
   }
   return result;
 }
@@ -268,12 +306,17 @@ async function loadAll() {
 
 ```js
 async function upsert(table, id, row) {
-  // Use $set to overwrite only provided fields; upsert creates if absent
-  await model(table).updateOne(
-    { id },
-    { $set: row },
-    { upsert: true }
-  );
+  if (!_connected) return;
+  const { _id, __v, ...clean } = row;
+  try {
+    await model(table).findOneAndUpdate(
+      { id },
+      { $set: clean },
+      { upsert: true, returnDocument: 'before' },
+    );
+  } catch (err) {
+    console.error(`[MongoDB] upsert ${table}/${id} failed:`, err.message);
+  }
 }
 ```
 
@@ -294,7 +337,7 @@ async function remove(table, id) {
 | Option | Value | Rationale |
 |---|---|---|
 | `strict` | `false` | Allow any field shape; accommodates schema evolution without migration scripts |
-| `timestamps` | `{ createdAt: 'createdAt', updatedAt: 'updatedAt' }` | Auto-manages timestamps with LTS-2026 field naming |
+| `timestamps` | `false` | Disabled — db.js manages `createdAt`/`updatedAt` as ISO strings. Mongoose `timestamps:true` stores BSON Date objects which break ISO-string comparators and caused cameras to disappear on refresh |
 | `minimize` | `false` | Preserve empty objects (e.g., `aiTargets: {}`) |
 | `id` field | `String, required` | UUID v4 string; never ObjectId |
 
@@ -393,55 +436,84 @@ Server Process Start
       │  await db.initDb()
       ▼
   loadFromJson()
-      │  reads lts.json → store
+      │  reads lts.json → store (warm-start baseline)
       │
       ├─── DB_TYPE !== 'mongodb' ──────────────────────────────────────────►
-      │                                                            server.listen(3001)
+      │                                                            server.listen(3080)
       │
       └─── DB_TYPE === 'mongodb'
               │
               ▼
+          ensureMongoDB()  ← NEW (ensureMongodb.js)
+              │  TCP probe → if down: systemctl restart → wait 20 s
+              │  if not installed: print platform-specific install guide
+              │
+              ▼
           mongoSvc.connect(MONGODB_URI, MONGODB_DB)
               │
-              ├── timeout (5 s) ──► log WARN → fall back to JSON ──► server.listen(3001)
+              ├── timeout (5 s) ──► log WARN → fall back to JSON ──► server.listen(3080)
               │
               └── success
                       │
                       ▼
                   mongoSvc.loadAll()
+                      │  sorted by createdAt desc, capped per LOAD_LIMITS
+                      │  normalizeDates() converts Date → ISO string
                       │  overwrites store with MongoDB data
                       ▼
                   log '[DB] In-memory store hydrated from MongoDB'
                       │
                       ▼
-                  server.listen(3001)
+                  server.listen(3080)
 ```
 
 ---
 
 ## 8. Write Dispatch Sequence Diagram
 
+### 8.1 JSON Mode (`DB_TYPE=json`)
+
+```
+Route Handler                 db.js                    lts.json
+     │                          │                          │
+     │  db.insert/update(...)   │                          │
+     │─────────────────────────►│                          │
+     │                          │  mutate in-memory store  │
+     │                          │  persistJson()           │
+     │                          │  [debounced 2 s, async]  │
+     │◄─ return row ────────────│                          │
+     │                          │  [2 s debounce fires]    │
+     │                          │  _flushJson() async ────►│
+     │                          │  fs.promises.writeFile   │  (atomic rename via .tmp)
+```
+
+### 8.2 MongoDB Mode (`DB_TYPE=mongodb`)
+
 ```
 Route Handler                 db.js                  mongoDbService.js      MongoDB
      │                          │                           │                  │
-     │  db.prepare(sql).run(p)  │                           │                  │
+     │  db.insert/update(...)   │                           │                  │
      │─────────────────────────►│                           │                  │
      │                          │  mutate in-memory store   │                  │
-     │                          │  (push / map / filter)    │                  │
      │                          │                           │                  │
-     │                          │  persistJson() [sync]     │                  │
-     │                          │  ──► lts.json written     │                  │
+     │                          │  _isMongo() === true      │                  │
+     │                          │  ──► skip persistJson()   │                  │
+     │◄─ return row ────────────│                           │                  │
      │                          │                           │                  │
-     │◄─ return { changes } ────│                           │                  │
-     │                          │                           │                  │
-     │    (caller continues)    │  _isMongo() === true?     │                  │
-     │                          │───────────────────────────►                  │
-     │                          │  mongoSvc.upsert(...)     │                  │
+     │    (caller continues)    │  mongoSvc.upsert(...)     │                  │
      │                          │  [async, fire-and-forget] │                  │
-     │                          │                           │  updateOne()     │
+     │                          │───────────────────────────►                  │
+     │                          │                           │  findOneAndUpdate│
      │                          │                           │─────────────────►│
      │                          │                           │◄── acknowledge ──│
      │                          │  (error → log only)       │                  │
+     │                          │                           │                  │
+     │  [on MongoDB disconnect]  │                           │                  │
+     │                          │  _isMongo() === false     │                  │
+     │                          │  ──► persistJson() ──────────────────────────► lts.json
+     │                          │  (JSON_FALLBACK_SKIP      │                  │
+     │                          │   excludes high-volume    │                  │
+     │                          │   tables from fallback)   │                  │
 ```
 
 ---
@@ -581,17 +653,21 @@ POST /api/cameras  →  camerasRouter.js
 POST /api/cameras  →  camerasRouter.js
         │
         ▼
-  db.prepare('INSERT INTO cameras ...').run({
-    id: uuid(), name, rtspUrl, ...
-  })
+  db.insert('cameras', { id: uuid(), name, rtspUrl, ... })
         │
-        ├── store.cameras.push(row)          [sync]
-        ├── persistJson()                    [sync]  → storage/lts.json
-        └── mongoSvc.upsert('cameras', id, row)  [async, Promise]
+        ├── store.cameras.push(row)                  [sync]
+        │   (no persistJson() — MongoDB is primary)
+        └── mongoSvc.upsert('cameras', id, row)      [async, fire-and-forget]
                 │
                 ▼
            MongoDB cameras collection
-           { id, name, rtspUrl, ..., _id (hidden) }
+           { id, name, rtspUrl, ..., _id (hidden by lean()) }
+
+  [on MongoDB disconnect]
+        └── persistJson() with JSON_FALLBACK_SKIP    [async, debounced]
+                │
+                ▼
+           storage/lts.json  (excludes detectionSnapshots, client_logs, etc.)
 ```
 
 ### 11.3 Startup Hydration Flow (MongoDB Mode)
@@ -640,7 +716,7 @@ This is tracked as a security enhancement (NFR-STORAGE-007 compliance).
 | `lts.json` parse error | `loadFromJson()` | Catch, log, reset `store` to empty | Server starts; data lost from corrupted file |
 | `lts.json` write error | `persistJson()` | Catch, log ERROR | Data not persisted; in-memory still correct |
 | MongoDB connection timeout | `mongoDbService.connect()` | Throw to `initDb()`; caught → JSON mode | Server starts in JSON mode |
-| MongoDB upsert error | `mongoDbService.upsert()` | Propagates to `afterWrite()`; logged | Write lost in MongoDB; JSON backup still written |
+| MongoDB upsert error | `mongoDbService.upsert()` | Caught inside upsert; logged | Write lost in MongoDB; no JSON fallback in MongoDB mode (fallback only on disconnect) |
 | MongoDB remove error | `mongoDbService.remove()` | Same as upsert | |
 | MongoDB disconnection | `mongoose.connection.disconnected` | `_connected = false`; logged | Subsequent writes go to JSON only until reconnect |
 | `MONGODB_URI` absent | `initDb()` | Log WARN; stay in JSON mode | No MongoDB writes |
@@ -727,14 +803,24 @@ In v1.0, `persistJson()` was called synchronously on every `db.insert()` / `db.u
 | `TEMP_DB_PATH` | `DB_PATH + '.tmp'` | Temp file path for atomic rename |
 | `_persistTimer` | `null \| NodeJS.Timeout` | Active debounce timer handle |
 | `_persistPending` | `boolean` | Set true on any mutation, cleared before `_flushJson()` |
+| `_writingJson` | `boolean` | Set true while async `_flushJson()` is in progress; prevents `flushNow()` from starting a concurrent sync write to the same `.tmp` file |
 
 ### 15.4 Implementation Detail (`db.js`)
 
 ```js
 const PERSIST_DEBOUNCE_MS = 2000;
 const TEMP_DB_PATH = DB_PATH + '.tmp';
-let _persistTimer  = null;
+let _persistTimer   = null;
 let _persistPending = false;
+let _writingJson    = false;  // true while async _flushJson() is running
+
+// Tables excluded from JSON fallback writes (base64 blobs / high-volume).
+// Prevents 20-100 MB serialization stall when MongoDB disconnects.
+const JSON_FALLBACK_SKIP = new Set([
+  'detectionSnapshots', 'client_logs', 'client_webrtc_stats', 'onvif_events',
+  'detectionTracks', 'analysisEvents', 'faceMatchHistory', 'missing_person_detections',
+  'events', 'audit_logs',
+]);
 
 function persistJson() {
   _persistPending = true;
@@ -746,24 +832,38 @@ function persistJson() {
   }, PERSIST_DEBOUNCE_MS);
 }
 
-function _flushJson() {
+async function _flushJson() {
+  _writingJson = true;
   try {
-    fs.writeFileSync(TEMP_DB_PATH, JSON.stringify(store, null, 2));
-    fs.renameSync(TEMP_DB_PATH, DB_PATH);  // atomic on POSIX
+    const payload = process.env.DB_TYPE === 'mongodb'
+      ? Object.fromEntries(Object.entries(store).filter(([t]) => !JSON_FALLBACK_SKIP.has(t)))
+      : store;
+    await fs.promises.writeFile(TEMP_DB_PATH, JSON.stringify(payload, null, 2));
+    await fs.promises.rename(TEMP_DB_PATH, DB_PATH);
   } catch (err) {
     console.error('[DB] JSON persist error:', err.message);
-    try {
-      if (fs.existsSync(TEMP_DB_PATH)) fs.unlinkSync(TEMP_DB_PATH);
-    } catch (_) {}
+    try { await fs.promises.unlink(TEMP_DB_PATH); } catch (_) {}
+  } finally {
+    _writingJson = false;
   }
 }
 
 function flushNow() {
   if (_persistTimer) { clearTimeout(_persistTimer); _persistTimer = null; }
-  if (_persistPending) { _persistPending = false; _flushJson(); }
+  if (_persistPending) {
+    _persistPending = false;
+    if (_writingJson) return;  // async write already in progress — let it finish
+    try {
+      const payload = process.env.DB_TYPE === 'mongodb'
+        ? Object.fromEntries(Object.entries(store).filter(([t]) => !JSON_FALLBACK_SKIP.has(t)))
+        : store;
+      fs.writeFileSync(TEMP_DB_PATH, JSON.stringify(payload, null, 2));
+      fs.renameSync(TEMP_DB_PATH, DB_PATH);
+    } catch (err) { console.error('[DB] flushNow error:', err.message); }
+  }
 }
 
-module.exports = { initDB, getDB, getStorageMode, flushNow };
+module.exports = { initDB, getDB, getStorageMode, flushNow, getDbStats };
 ```
 
 ### 15.5 Graceful Shutdown Integration (`index.js`)
@@ -800,10 +900,23 @@ process.on('SIGINT',  () => gracefulShutdown('SIGINT'));
 const ALL_TABLES = [
   'cameras', 'zones', 'events', 'alerts',
   'faceGalleries', 'faceGalleryFaces', 'settings',
-  'detectionSnapshots',  // added in v1.0
-  'faceMatchHistory',    // added in v1.1 (Face ID Live Match)
-  'analysisEvents',      // added in v1.2 (Analysis Mode Event Persistence)
+  'detectionSnapshots',           // added in v1.0
+  'faceMatchHistory',             // added in v1.1 (Face ID Live Match)
+  'analysisEvents',               // added in v1.2 (Analysis Mode Event Persistence)
+  'client_logs',                  // added in v1.3 (client log ingestion)
+  'client_webrtc_stats',          // added in v1.3 (WebRTC PeerConnection stats)
+  'onvif_events',                 // added in v1.3 (ONVIF event storage)
+  'onvif_event_types',            // added in v1.3 (ONVIF type registry)
+  'detectionTracks',              // added in v1.3 (detection track history)
+  'missing_persons',              // added in v1.3 (missing person registry)
+  'missing_person_detections',    // added in v1.3 (missing person detection matches)
+  'users',                        // added in v1.4 (Auth service unified storage)
+  'refresh_tokens',               // added in v1.4 (Auth service unified storage)
+  'audit_logs',                   // added in v1.4 (Auth service unified storage)
 ];
+// Note: MONGO_ONLY_TABLES was removed in v1.5.
+// High-volume tables that should not appear in JSON fallback writes are
+// listed in JSON_FALLBACK_SKIP instead (see Section 15.4).
 ```
 
 ### 15.8 `analysisEvents` 컬렉션 (v1.2)
@@ -832,6 +945,87 @@ Analysis 서버(`SERVER_MODE=analysis` / `combined`)가 감지한 화재·연기
 
 ---
 
+## 16. v1.4 Amendment — Auth Service Unified Storage
+
+### 16.1 New Tables
+
+The following three tables were added to `ALL_TABLES` in `db.js` as part of unifying the authentication service storage layer. Previously, `UserService.js`, `TokenService.js`, and `AuditService.js` each wrote directly to separate JSON files (`users.json`, `tokens.json`, `audit.json`). They now use `getDB().insert/update/delete/find/all()` exclusively.
+
+| Table | Purpose | JSON Fallback |
+|---|---|---|
+| `users` | User accounts — email, passwordHash, role, status, OAuth provider | Yes (included in fallback) |
+| `refresh_tokens` | JWT refresh token hashes — tokenHash, userId, expiresAt, revoked | No (in `JSON_FALLBACK_SKIP`) |
+| `audit_logs` | Auth audit trail — event, userId, email, ip, ts | No (in `JSON_FALLBACK_SKIP`) |
+
+> `MONGO_ONLY_TABLES` was removed in v1.5. High-volume / sensitive tables that must not appear in JSON fallback writes are now listed in `JSON_FALLBACK_SKIP` inside `db.js`. The `audit_logs` table is excluded from JSON fallback to prevent unbounded growth of `lts.json`.
+
+### 16.2 Row Caps
+
+```js
+const ROW_CAPS = {
+  refresh_tokens: 10000,
+  audit_logs: 10000,
+};
+```
+
+When a table exceeds its cap, the oldest entries are evicted automatically to keep memory bounded.
+
+### 16.3 One-Time Legacy Migration
+
+On first startup after upgrading, `initDB()` checks whether the target table is empty. If so, it reads each legacy file and imports rows into `db.js`:
+
+| Legacy File | Target Table |
+|---|---|
+| `storage/users.json` | `users` |
+| `storage/tokens.json` | `refresh_tokens` |
+| `storage/audit.json` | `audit_logs` |
+
+The migration is **idempotent** — if the target table is already populated, it is skipped. After migration, the legacy files remain on disk but are no longer read or written by the application.
+
+---
+
+## 17. v1.5 Amendment — MongoDB-Only Writes, ensureMongodb.js, Bug Fixes
+
+### 17.1 Changes
+
+| # | Change | Detail |
+|---|---|---|
+| 1 | **MongoDB-only writes** | `afterWrite()` skips `persistJson()` when `_isMongo()` is true. JSON written only on disconnect. |
+| 2 | **`JSON_FALLBACK_SKIP`** | Set of 10 high-volume tables excluded from JSON fallback writes to prevent 20-100 MB event-loop stalls |
+| 3 | **`timestamps: false`** | Mongoose timestamps disabled; `db.js` manages `createdAt`/`updatedAt` as ISO strings. Fixes cameras disappearing after refresh (BSON Date → `localeCompare` TypeError) |
+| 4 | **`normalizeDates()`** | Applied in `loadAll()` to convert any legacy BSON Date objects to ISO strings |
+| 5 | **`LOAD_LIMITS`** | Row caps applied per high-volume table when loading from MongoDB on startup |
+| 6 | **`TABLES` expanded** | `mongoDbService.TABLES` now covers all 20 `ALL_TABLES` — previously missing 11 tables caused 401 errors on restart |
+| 7 | **Async `_flushJson()`** | Changed from `writeFileSync` to `fs.promises.writeFile`; `_writingJson` flag prevents concurrent writes |
+| 8 | **`ensureMongodb.js`** | New startup utility: TCP probe → systemctl restart → 20 s wait → install guide for platform |
+| 9 | **`connect()` options** | `socketTimeoutMS` raised to 45000; added `heartbeatFrequencyMS: 10000`, `maxIdleTimeMS: 60000` |
+| 10 | **`MONGO_ONLY_TABLES` removed** | Replaced by `JSON_FALLBACK_SKIP` which is applied in both `_flushJson()` and `flushNow()` |
+
+### 17.2 `ensureMongodb.js` Design
+
+```
+ensureMongoDB()  (runs once at server startup when DB_TYPE=mongodb)
+      │
+      ├── Atlas SRV URI detected → skip (remote; no local control)
+      │
+      ├── tcpConnect(host, port, 3000ms) → success → return (MongoDB already up)
+      │
+      └── TCP connect failed
+              │
+              ├── mongodInstalledPath() found
+              │       │
+              │       ├── trySystemctlStart() → wait 20 s → probe again
+              │       │       → success → return
+              │       │       → still failing → log WARN (server continues in JSON mode)
+              │
+              └── mongod not installed
+                      → printInstallGuide(platform)
+                        (Ubuntu: shows correct apt repo URL via lsb_release -cs)
+                      → log WARN (server continues in JSON mode)
+```
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
@@ -839,3 +1033,5 @@ Analysis 서버(`SERVER_MODE=analysis` / `combined`)가 감지한 화재·연기
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Storage MongoDB |
 | 1.2 | 2026-06-10 | LTS Engineering Team | Section 15.8 추가: analysisEvents 컬렉션 스키마 및 저장 정책, ALL_TABLES v1.2 업데이트 |
 | 1.3 | 2026-06-10 | LTS Engineering Team | analysisEvents 스키마에 `cropData` 필드 추가 (감지 영역 JPEG Base64) |
+| 1.4 | 2026-06-17 | LTS Engineering Team | users, refresh_tokens, audit_logs 테이블 추가 — 인증 서비스 저장소 통합 |
+| 1.5 | 2026-06-18 | LTS Engineering Team | MongoDB-only 쓰기, timestamps:false, normalizeDates, LOAD_LIMITS, JSON_FALLBACK_SKIP, ensureMongodb.js, async _flushJson, 연결 옵션 업데이트 |

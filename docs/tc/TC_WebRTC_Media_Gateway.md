@@ -80,6 +80,8 @@
 | FR-WRTC-067 | TC-H-002 |
 | FR-WRTC-068 | TC-H-003 |
 | FR-WRTC-069 | TC-H-004 |
+| FR-WRTC-070 | TC-A-008 |
+| FR-WRTC-071 | TC-A-009 |
 
 ---
 
@@ -129,6 +131,23 @@
 - **Input:** Camera pipeline active with WebRTC enabled
 - **Expected:** Single FFmpeg process outputs to both (1) RTMP/RTSP path and (2) mediasoup RTP port
 - **Acceptance:** Both outputs active simultaneously; no process duplication
+
+### TC-A-008 — mediasoup Router H.264 Payload Type = 109
+- **SRS:** FR-WRTC-070
+- **Input:** `GET /api/capabilities` with `WEBRTC_ENGINE=mediasoup`; then open WebRTC stream in Edge and Chrome
+- **Expected (API):** Router codec list in capabilities response uses `preferredPayloadType: 109` for H.264, `111` for Opus
+- **Expected (browser):** `GET /api/client-logs/webrtc` returns `inbound-rtp` entries with `framesDecoded > 0` for all active cameras in both Edge and Chrome
+- **Acceptance:** No camera shows `inboundRtp` array empty while `candidate-pair.bytesReceived > 0`; black video scenario not reproduced
+- **Test script:** `test/api/webrtc.test.js` — TC-A-008
+- **Cross-ref:** Design_WebRTC_Engine_Modes.md §4.6
+
+### TC-A-009 — mediasoup WebRtcTransport ICE Listen IPs from Env Vars Only
+- **SRS:** FR-WRTC-071
+- **Input:** Server started with `SERVER_IP=<LAN_IP>` set; inspect server startup log; check ICE candidates in SDP answer
+- **Expected:** Server log contains only the single LAN IP in `announcedIps`; SDP answer contains exactly one `a=candidate` host line matching `SERVER_IP`; no additional NIC IPs advertised
+- **Acceptance:** `announcedIps` list length = 1 (or equal to number of distinct env vars set); no loopback or unintended NIC IPs present
+- **Test script:** `test/api/webrtc.test.js` — TC-A-009
+- **Cross-ref:** Design_WebRTC_Engine_Modes.md §4.7
 
 ---
 
@@ -338,3 +357,4 @@ Group F (REST API) → Group A (codec config) → Group C (router lifecycle) →
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for WebRTC Media Gateway |
 | 1.1 | 2026-05-29 | LTS Engineering Team | Added post-patch stability verification (TC-H-001 ~ TC-H-004) |
+| 1.2 | 2026-06-16 | LTS Engineering Team | TC-A-008/TC-A-009 추가 — mediasoup PT=109 H264 검증, ICE listenIps env-var 전용 검증; SRS Traceability FR-WRTC-070/071 → TC-A-008/009 추가 |

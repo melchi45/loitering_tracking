@@ -4,41 +4,47 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAPTURE-002 |
-| **Version** | 1.0 |
+| **Version** | 1.2 |
 | **Status** | Active |
-| **Date** | 2026-06-04 |
+| **Date** | 2026-06-11 |
 | **Ops Guide** | [RTSP_Capture_Backend_Setup.md](../ops/RTSP_Capture_Backend_Setup.md) |
-| **Related Design** | [Design_FFmpeg_RTSP_Capture.md](../design/Design_FFmpeg_RTSP_Capture.md) |
+| **Related Design** | [Design_FFmpeg_RTSP_Capture.md](../design/Design_FFmpeg_RTSP_Capture.md) · [Design_RTSP_WebRTC_Architecture.md](../design/Design_RTSP_WebRTC_Architecture.md) |
 
 ---
 
 ## Table of Contents
 1. [목적 및 범위](#1-목적-및-범위)
 2. [아키텍처 개요](#2-아키텍처-개요)
-3. [FFmpeg 백엔드](#3-ffmpeg-백엔드)
+3. [FFmpeg 백엔드](#3-ffmpeg-백엔드) *(레거시)*
 4. [GStreamer 백엔드](#4-gstreamer-백엔드)
 5. [PyAV 백엔드](#5-pyav-백엔드)
-6. [백엔드 선택 기준 비교](#6-백엔드-선택-기준-비교)
-7. [이벤트 인터페이스 규격](#7-이벤트-인터페이스-규격)
-8. [환경변수 참조](#8-환경변수-참조)
-9. [오류 처리 및 재연결](#9-오류-처리-및-재연결)
-10. [향후 고려사항](#10-향후-고려사항)
+6. [Ingest-Daemon 백엔드](#6-ingest-daemon-백엔드) *(현재 기본값)*
+7. [백엔드 선택 기준 비교](#7-백엔드-선택-기준-비교)
+8. [이벤트 인터페이스 규격](#8-이벤트-인터페이스-규격)
+9. [환경변수 참조](#9-환경변수-참조)
+10. [오류 처리 및 재연결](#10-오류-처리-및-재연결)
+11. [향후 고려사항](#11-향후-고려사항)
 
 ---
 
 ## 1. 목적 및 범위
 
 이 문서는 LTS-2026의 RTSP 카메라 스트림 수집 계층을 단일 FFmpeg 의존에서
-**3가지 백엔드(ffmpeg / gstreamer / pyav)를 런타임에 선택 가능한 추상화 구조**로 확장한 설계를 기술합니다.
+**4가지 백엔드(ingest-daemon / ffmpeg / gstreamer / pyav)를 런타임에 선택 가능한 추상화 구조**로 확장한 설계를 기술합니다.
+
+> **현재 기본 백엔드:** `CAPTURE_BACKEND=ingest-daemon` (Python PyAV 독립 데몬)  
+> **ffmpeg 캡처 서브프로세스**: v1.1(2026-06-11)부터 레거시로 분류됩니다. `captureFactory.js`에서 여전히 선택 가능하지만, 신규 배포에는 `ingest-daemon` 사용을 권장합니다.
 
 각 백엔드는 동일한 `EventEmitter` 인터페이스를 구현하므로, 상위 서비스(`pipelineManager.js`)는
 어떤 백엔드가 선택되었는지 알 필요 없이 `frame` 이벤트만 수신합니다.
 
 **범위:**
 - `server/src/services/captureFactory.js` — 백엔드 선택 팩토리
-- `server/src/services/rtspCapture.js` — FFmpeg 백엔드
+- `server/src/services/ingestDaemonCapture.js` — Ingest-Daemon 백엔드 (Node.js 수신 래퍼, **현재 기본**)
+- `ingest-daemon/ingest_daemon.py` — Python PyAV 독립 데몬 프로세스
+- `server/src/services/rtspCapture.js` — FFmpeg 백엔드 *(레거시)*
 - `server/src/services/gstreamerCapture.js` — GStreamer 백엔드
-- `server/src/services/pyavCapture.js` — PyAV 백엔드 (Node.js 래퍼)
+- `server/src/services/pyavCapture.js` — PyAV 백엔드 (Node.js 래퍼, 인라인 사이드카)
 - `server/src/python/pyav_capture.py` — PyAV Python 사이드카 프로세스
 
 **범위 외:**
@@ -80,22 +86,27 @@ const CAPTURE_BACKEND = (process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase();
 
 function createCapture(cameraId, rtspUrl, opts = {}) {
   switch (CAPTURE_BACKEND) {
-    case 'gstreamer': return new (require('./gstreamerCapture'))(cameraId, rtspUrl, opts);
-    case 'pyav':      return new (require('./pyavCapture'))(cameraId, rtspUrl, opts);
+    case 'ingest-daemon': return new (require('./ingestDaemonCapture'))(cameraId, rtspUrl, opts);
+    case 'gstreamer':     return new (require('./gstreamerCapture'))(cameraId, rtspUrl, opts);
+    case 'pyav':          return new (require('./pyavCapture'))(cameraId, rtspUrl, opts);
     case 'ffmpeg':
-    default:          return new (require('./rtspCapture'))(cameraId, rtspUrl, opts);
+    default:              return new (require('./rtspCapture'))(cameraId, rtspUrl, opts);
   }
 }
 
 module.exports = { createCapture, CAPTURE_BACKEND };
 ```
 
+> **Note:** `ingest-daemon` 백엔드는 `IngestDaemonCapture`(패시브 EventEmitter)를 반환합니다. 외부 Python 데몬이 JPEG 프레임을 HTTP POST로 Node.js에 전달하며, Node.js는 이를 `injectFrame()` → `emit('frame', jpegBuffer)` 경로로 내부에 주입합니다. 다른 백엔드처럼 `start()` 메서드가 서브프로세스를 직접 스폰하지 않습니다.
+
 `pipelineManager.js`는 직접 `RTSPCapture`를 `require`하는 대신 `createCapture()`를 호출합니다.
 백엔드 변경은 `.env`의 `CAPTURE_BACKEND` 값만 바꾸면 서버 재시작 후 즉시 적용됩니다.
 
 ---
 
-## 3. FFmpeg 백엔드
+## 3. FFmpeg 백엔드 *(레거시)*
+
+> ⚠️ **v1.1(2026-06-11) 이후 레거시로 분류됩니다.** `CAPTURE_BACKEND=ingest-daemon`이 기본값이며, 신규 배포에는 ingest-daemon을 사용하세요. ffmpeg 캡처 서브프로세스는 여전히 동작하나, 단일 RTSP 연결 원칙(Design_RTSP_WebRTC_Architecture.md §2.1)을 위반하므로 권장하지 않습니다.
 
 ### 3.1 개요
 
@@ -289,32 +300,243 @@ spawnSync(PYAV_PYTHON_BIN, ['-c', 'import av, PIL; print("ok")'])
 
 ---
 
-## 6. 백엔드 선택 기준 비교
+## 6. Ingest-Daemon 백엔드 *(현재 기본값)*
 
-| 항목 | FFmpeg | GStreamer | PyAV |
-|---|---|---|---|
-| **CPU 효율** | 보통 | 우수 (낮은 레이턴시) | 보통 |
-| **GPU 하드웨어 가속** | `-hwaccel cuda` (별도 빌드 필요) | nvdec / VA-API 자동 감지 | CUDA (Python 생태계 활용) |
-| **의존성** | `ffmpeg` 바이너리 1개 | GStreamer + 다수 플러그인 | Python 3 + av + Pillow |
-| **코덱 호환성** | 최고 (H.264/H.265/MJPEG 등) | 우수 (플러그인 의존) | 우수 (libav 기반) |
-| **자동 재연결** | 1초 고정 간격, 무제한 | 1초 고정 간격, 무제한 | 1초 고정 간격, 무제한 |
-| **Ubuntu 18.04 지원** | 지원 (ffmpeg 3.4 자동 감지) | 지원 (1.14.x) | 지원 (pip 설치) |
-| **설치 복잡도** | 낮음 | 중간 | 낮음 (pip) |
-| **추천 환경** | 범용, 기본값 | 저레이턴시 / NVIDIA GPU | Python ML 통합, CUDA 인퍼런스 |
+### 6.1 개요
+
+- **Node.js 래퍼**: `server/src/services/ingestDaemonCapture.js` — 패시브 EventEmitter (프레임 주입 전용)
+- **Python 데몬**: `ingest-daemon/ingest_daemon.py` — 독립 HTTP 서버 + PyAV RTSP 캡처
+- **통신 방식**: 외부 데몬 → HTTP POST `{callbackUrl}/api/internal/frame/{cameraId}` → Node.js
+- **의존성**: Python 3.x + `av` (PyAV) + `Pillow`
+
+이 백엔드는 기존 서브프로세스 모델(ffmpeg/gstreamer)과 달리, Node.js가 프레임을 직접 캡처하지 않습니다.
+별도 Python 데몬이 RTSP 연결을 관리하고 JPEG 프레임을 Node.js에 HTTP POST로 전달합니다.
+
+### 6.2 아키텍처 다이어그램
+
+```
+IP 카메라 (RTSP)
+    │
+    ▼ TCP 연결 (단일 연결 원칙)
+MediaMTX (mediamtx.yml, :8554 RTSP 로컬 재퍼블리시)
+    │                          │
+    ▼ RTSP loopback            ▼ WebRTC WHEP (:8889)
+ingest_daemon.py              브라우저
+    │  PyAV decode
+    │  JPEG 인코딩 (10 FPS)
+    │  HTTP POST callbackUrl
+    ▼
+Node.js /api/internal/frame/:id
+    │  onIngestFrame(cameraId, jpegBuffer)
+    ▼
+IngestDaemonCapture.injectFrame()
+    │  emit('frame', jpegBuffer)
+    ▼
+PipelineManager — AI 분석 / Socket.IO 전송
+```
+
+### 6.3 Python 데몬 HTTP API
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| `GET` | `/health` | 데몬 상태 확인 (`{"status":"ok","cameras":N}`) |
+| `POST` | `/cameras` | 카메라 등록 `{"id","rtspUrl","callbackUrl"}` |
+| `DELETE` | `/cameras/:id` | 카메라 등록 해제 |
+
+### 6.4 B-프레임 처리
+
+H.264 B-프레임 카메라(대부분의 IP 카메라)는 모든 패킷을 디코더에 공급해야 합니다. 이전 서브프로세스 백엔드에서는 패킷 스킵 시 빈 프레임이 발생했습니다. ingest-daemon은 다음 방식으로 해결합니다:
+
+```python
+# 모든 패킷 디코딩 → 출력 프레임에서만 레이트 제한
+for packet in container.demux(video_stream):
+    for frame in packet.decode():      # 항상 디코딩
+        frame_counter += 1
+        if frame_counter % AI_FRAME_INTERVAL == 0:
+            self._push_jpeg(frame)     # N번째 프레임만 전송
+```
+
+### 6.5 MediaMTX 연동
+
+`WEBRTC_ENGINE=mediamtx` 환경에서:
+- `pipelineManager.js`가 MediaMTX REST API로 카메라 경로를 등록
+- 데몬은 MediaMTX loopback RTSP(`rtsp://127.0.0.1:8554/{cameraId}`)에 연결
+- 브라우저는 MediaMTX WHEP(`https://SERVER_IP:8889/{cameraId}/whep`)로 직접 WebRTC 수신
+
+### 6.6 `npm run ingest:restart`
+
+서버 전체 재시작 없이 ingest 데몬만 재시작합니다:
+
+```bash
+# workspace 루트에서
+npm run ingest:restart
+
+# server/ 에서
+npm run ingest:restart -- --dry-run  # 설정 출력만
+```
+
+- 기존 daemon 프로세스 종료(포트 7070 kill)
+- 새 데몬 시작 → `/health` 기동 확인(최대 10초)
+- DB에서 카메라 목록 읽어 재등록 (`callbackUrl` 포함)
+
+---
+
+### 6.7 Watchdog 및 자동 복구 (Auto-Recovery)
+
+ingest-daemon은 두 계층의 Watchdog으로 RTSP 스트림 고착 및 프로세스 충돌을 자동 복구합니다.
+
+#### 계층 1 — PyAV 내부 Watchdog (`ingest_daemon.py`)
+
+각 RTSP 세션(`ai` / `vrtp` / `artp` / `apprtp`)에 독립적인 `_Watchdog` 스레드가 붙습니다.
+
+```python
+RTSP_READ_TIMEOUT = float(os.environ.get("RTSP_READ_TIMEOUT", "5"))  # 기본 5초
+
+class _Watchdog:
+    def _run(self):
+        while not self._disarmed.wait(timeout=0.25):
+            if elapsed > self._timeout:
+                log.warning("%s watchdog: no RTP for %.1fs — closing container", ...)
+                self._container.close()   # demux() → av.AVError → 루프 종료
+                return
+```
+
+- RTP 패킷이 `RTSP_READ_TIMEOUT`(기본 5 s) 동안 도착하지 않으면 PyAV 컨테이너를 닫습니다.
+- `demux()` 루프가 `av.AVError` / `OSError`를 발생시키고 `_*_loop()` 함수가 재연결을 스케줄합니다.
+- RTSP keepalive(OPTIONS/GET_PARAMETER)는 `wd.reset()`을 호출하지 않으므로 "keepalive는 살아있지만 영상이 없는" 고착 상태를 정확히 감지합니다.
+- 환경변수 `RTSP_READ_TIMEOUT`(초)으로 민감도를 조정할 수 있습니다.
+
+#### 계층 2 — Node.js 프레임 Watchdog (`pipelineManager.js`)
+
+`pipelineManager.js`는 카메라별로 `setInterval`(8 s 주기)을 유지하며,
+마지막 JPEG 수신 이후 `FRAME_STALL_MS`(기본 20 s)가 지나면 복구를 시도합니다.
+
+```javascript
+// server/src/services/pipelineManager.js
+const FRAME_STALL_MS = 20_000;
+
+ctx.frameWatchdogTimer = setInterval(async () => {
+  if (!ctx.running || !ctx.lastFrameAt) return;
+  const stalledMs = Date.now() - ctx.lastFrameAt;
+  if (stalledMs > FRAME_STALL_MS) {
+    ctx.lastFrameAt = Date.now();             // 다음 인터벌까지 재발동 방지
+    ctx.capture.stop();
+
+    if (CAPTURE_BACKEND === 'ingest-daemon' && ctx._ingestRtspUrl) {
+      // mediamtx/직접 경로: ingest-daemon HTTP API로 재등록
+      await _ingestRemoveCamera(camera.id);
+      await _ingestRegisterCamera(camera.id, ctx._ingestRtspUrl, ctx._ingestCallbackUrl);
+    } else if (CAPTURE_BACKEND === 'ingest-daemon') {
+      // mediasoup 경로: 엔진이 PlainTransport 재생성 + daemon에 POST
+      await getWebRTCEngine().addCameraStream(camera.id, ctx._captureUrl);
+    }
+    ctx.capture.start();
+  }
+}, 8_000);
+```
+
+| 필드 | 값 | 설명 |
+|---|---|---|
+| `FRAME_STALL_MS` | 20,000 ms | 마지막 JPEG 이후 이 시간 경과 시 복구 시작 |
+| 폴링 주기 | 8,000 ms | setInterval 주기 |
+| `ctx._ingestRtspUrl` | MediaMTX loopback URL | 설정 시 직접 HTTP 재등록 |
+| `ctx._captureUrl` | 원본 RTSP / MediaMTX URL | mediasoup 재등록 시 사용 |
+
+#### 계층 3 — 프로세스 자동 재시작 (`startServer.js`)
+
+`startServer.js`는 ingest-daemon 프로세스의 `exit` 이벤트를 감지하여 지수 백오프로 재시작합니다.
+
+```
+ingest-daemon 프로세스 종료
+    │
+    ▼  _attachIngestHandlers(proc).on('exit')
+    │  _shuttingDown? → return (정상 종료 중이면 무시)
+    │
+    ▼  _respawnIngest() — 지수 백오프 대기 (1s → 1.5s → 2.25s → ... → 최대 30s)
+    │
+    ▼  spawn(ingestExec, ingestArgs) + _attachIngestHandlers(proc)
+    │
+    ▼  /health 폴링 (최대 15 s)
+    │
+    ▼  ready → _ingestRestartAttempts = 0
+           POST http://127.0.0.1:{PORT}/api/internal/ingest/reregister
+               → pipelineManager.reregisterAllWithIngestDaemon()
+                   ├── mediamtx 경로: _ingestRemoveCamera + _ingestRegisterCamera (직접)
+                   └── mediasoup 경로: engine.addCameraStream (PlainTransport 재생성)
+```
+
+**복구 소요 시간 (일반적):**
+
+| 경로 | 총 복구 시간 |
+|---|---|
+| mediasoup 카메라 | ~2–5 s (daemon 재시작 + reregister 호출) |
+| mediamtx 카메라 | ~2–5 s (daemon 재시작 + reregister 호출) |
+| daemon 반복 재시작 실패 | 최대 30 s 대기 후 재시도 |
+
+**백오프 공식:**
+
+```
+대기 시간 = min(1000 × 1.5^attempt, 30000) ms
+attempt:  0 → 1.0 s
+          1 → 1.5 s
+          2 → 2.25 s
+          ...
+          9 → 29.5 s (이후 30 s 고정)
+```
+
+성공 시 `_ingestRestartAttempts`를 0으로 리셋합니다.
+
+#### `reregisterAllWithIngestDaemon()` — 통합 재등록 메서드
+
+`pipelineManager.reregisterAllWithIngestDaemon()`은 모든 활성 파이프라인을
+WEBRTC_ENGINE 종류에 무관하게 단일 API로 재등록합니다.
+
+```javascript
+// server/src/services/pipelineManager.js
+async reregisterAllWithIngestDaemon() {
+  for (const [cameraId, ctx] of this._pipelines) {
+    if (!ctx.running) continue;
+    if (ctx._ingestRtspUrl) {
+      // mediamtx/직접 경로
+      await _ingestRemoveCamera(cameraId);
+      await _ingestRegisterCamera(cameraId, ctx._ingestRtspUrl, ctx._ingestCallbackUrl);
+    } else if (CAPTURE_BACKEND === 'ingest-daemon') {
+      // mediasoup 경로: engine이 PlainTransport 포트 포함 재등록
+      await getWebRTCEngine().addCameraStream(cameraId, ctx._captureUrl);
+    }
+  }
+}
+```
+
+HTTP API: `POST /api/internal/ingest/reregister` (localhost 전용, 인증 없음)
+
+---
+
+## 7. 백엔드 선택 기준 비교
+
+| 항목 | Ingest-Daemon | FFmpeg *(레거시)* | GStreamer | PyAV (인라인) |
+|---|---|---|---|---|
+| **CPU 효율** | 우수 (IDR 대기, 최적 스킵) | 보통 | 우수 (낮은 레이턴시) | 보통 |
+| **GPU 하드웨어 가속** | CUDA (Python PyAV) | `-hwaccel cuda` (별도 빌드) | nvdec / VA-API 자동 감지 | CUDA (Python 생태계) |
+| **의존성** | Python 3 + av + Pillow | `ffmpeg` 바이너리 | GStreamer + 다수 플러그인 | Python 3 + av + Pillow |
+| **단일 RTSP 연결** | ✅ (MediaMTX loopback) | ❌ (직접 연결) | ❌ (직접 연결) | ❌ (직접 연결) |
+| **WebRTC 통합** | ✅ (MediaMTX WHEP) | ❌ | ❌ | ❌ |
+| **B-프레임 처리** | ✅ (모든 패킷 디코딩) | ✅ | ✅ | ✅ |
+| **자동 재연결** | ✅ (IDR 키프레임 대기) | ✅ 1초 간격 | ✅ 1초 간격 | ✅ 1초 간격 |
+| **설치 복잡도** | 낮음 (pip) | 낮음 | 중간 | 낮음 (pip) |
+| **추천 환경** | **모든 환경 (기본값)** | 레거시 호환 | 저레이턴시 GPU | 레거시 Python 통합 |
 
 ### 운영 환경별 추천 백엔드
 
 | 환경 | 추천 백엔드 | 이유 |
 |---|---|---|
-| 범용 서버 (Ubuntu 18~26, CPU 전용) | `ffmpeg` | 가장 넓은 호환성, 단일 바이너리 의존 |
-| NVIDIA GPU 서버 | `gstreamer` (nvdec) | 하드웨어 디코딩으로 CPU 부하 최소화 |
-| Intel/AMD 내장 GPU 서버 | `gstreamer` (vaapi) | VA-API 하드웨어 가속 |
-| CUDA 기반 ML 서버 | `pyav` | Python GPU 인퍼런스 파이프라인 통합 |
-| Docker 컨테이너 (의존성 최소화) | `ffmpeg` | 이미지 크기 최소, 단순 설치 |
+| **모든 신규 배포** | `ingest-daemon` | 단일 RTSP 연결, WebRTC 통합, B-프레임 처리 |
+| NVIDIA GPU 서버 (레거시) | `gstreamer` (nvdec) | 하드웨어 디코딩 (ingest-daemon 전환 권장) |
+| Docker 컨테이너 (레거시) | `ffmpeg` | 단순 의존성 (ingest-daemon 전환 권장) |
 
 ---
 
-## 7. 이벤트 인터페이스 규격
+## 8. 이벤트 인터페이스 규격
 
 모든 백엔드 클래스는 `EventEmitter`를 상속하며 동일한 이벤트/메서드 규격을 구현합니다.
 
@@ -329,14 +551,15 @@ spawnSync(PYAV_PYTHON_BIN, ['-c', 'import av, PIL; print("ok")'])
 | `warn` | `{ cameraId: string, message: string }` | stderr 경고 라인 수신 시 |
 | `error` | `Error` | 복구 불가 오류 (바이너리 미설치 등) |
 
-### 7.2 메서드
+### 8.2 메서드
 
 | 메서드 | 설명 |
 |---|---|
 | `start()` | 캡처 시작. 이미 실행 중이면 무시 (idempotent) |
-| `stop()` | 캡처 중지, 자식 프로세스 SIGKILL |
+| `stop()` | 캡처 중지, 자식 프로세스 SIGKILL (ingest-daemon 백엔드는 데몬을 종료하지 않음) |
+| `injectFrame(jpegBuffer)` | **(ingest-daemon 전용)** 외부 데몬에서 프레임 주입 → `frame` 이벤트 발생 |
 
-### 7.3 생성자 공통 인수
+### 8.3 생성자 공통 인수
 
 ```javascript
 new BackendCapture(cameraId, rtspUrl, opts)
@@ -344,7 +567,7 @@ new BackendCapture(cameraId, rtspUrl, opts)
 // opts.width (number, 기본 640) — 출력 영상 너비 (픽셀)
 ```
 
-### 7.4 JPEG 프레임 파싱 (공통 로직)
+### 8.4 JPEG 프레임 파싱 (공통 로직)
 
 모든 백엔드는 동일한 SOI/EOI 마커 기반 파싱 로직을 사용합니다.
 
@@ -355,39 +578,47 @@ stdout: [FF D8 FF ... FF D9][FF D8 FF ... FF D9][FF D8 FF ... (불완전)]
 
 ---
 
-## 8. 환경변수 참조
+## 9. 환경변수 참조
 
 | 변수 | 기본값 | 관련 백엔드 | 설명 |
 |---|---|---|---|
-| `CAPTURE_BACKEND` | `ffmpeg` | 전체 | 사용할 캡처 백엔드 선택: `ffmpeg` / `gstreamer` / `pyav` |
+| `CAPTURE_BACKEND` | `ingest-daemon` | 전체 | 캡처 백엔드: `ingest-daemon` / `ffmpeg` / `gstreamer` / `pyav` |
+| `WEBRTC_ENGINE` | `mediamtx` | 전체 | WebRTC 엔진: `mediamtx` (기본·권장) / `mediasoup` |
+| `INGEST_DAEMON_BIN` | `../ingest-daemon/ingest_daemon.py` | ingest-daemon | Python 데몬 스크립트 경로 (server/ 기준 상대경로) |
+| `INGEST_DAEMON_ADDR` | `:7070` | ingest-daemon | 데몬 HTTP 서버 bind 주소 |
+| `INGEST_DAEMON_URL` | `http://127.0.0.1:7070` | ingest-daemon | Node.js → 데몬 요청 URL |
+| `PYAV_PYTHON_BIN` | `python3` | ingest-daemon, pyav | Python 바이너리 절대경로 (예: `/home/user/.local/bin/python3`) |
 | `GSTREAMER_HW_ACCEL` | `auto` | gstreamer | GStreamer 하드웨어 가속 모드: `auto` / `nvdec` / `vaapi` / `software` |
-| `PYAV_PYTHON_BIN` | `python3` | pyav | Python 바이너리 절대경로 (예: `/usr/bin/python3.11`) |
-| `PYAV_HW_ACCEL` | `none` | pyav | PyAV 하드웨어 가속: `none` / `cuda` / `videotoolbox` |
-| `MAX_PIPELINES` | `0` | 전체 | 동시 캡처 프로세스 최대 수 (0=무제한) |
+| `PYAV_HW_ACCEL` | `none` | pyav | PyAV 하드웨어 가속 (인라인 사이드카): `none` / `cuda` / `videotoolbox` |
+| `MAX_PIPELINES` | `0` | 전체 | 동시 캡처 파이프라인 최대 수 (0=무제한) |
 
 `.env` 설정 예시:
 
 ```bash
-# FFmpeg (기본)
-CAPTURE_BACKEND=ffmpeg
+# Ingest-Daemon + MediaMTX WebRTC (기본 · 권장)
+CAPTURE_BACKEND=ingest-daemon
+WEBRTC_ENGINE=mediamtx
+PYAV_PYTHON_BIN=/home/user/.local/bin/python3
+INGEST_DAEMON_BIN=../ingest-daemon/ingest_daemon.py
+INGEST_DAEMON_ADDR=:7070
 
-# GStreamer (NVIDIA GPU)
+# GStreamer (NVIDIA GPU, 레거시)
 CAPTURE_BACKEND=gstreamer
+WEBRTC_ENGINE=mediamtx
 GSTREAMER_HW_ACCEL=nvdec
 
-# PyAV (CUDA ML 서버)
-CAPTURE_BACKEND=pyav
-PYAV_PYTHON_BIN=/usr/bin/python3
-PYAV_HW_ACCEL=cuda
+# FFmpeg (레거시 호환)
+CAPTURE_BACKEND=ffmpeg
+WEBRTC_ENGINE=mediamtx
 ```
 
 ---
 
-## 9. 오류 처리 및 재연결
+## 10. 오류 처리 및 재연결
 
 모든 백엔드는 동일한 재연결 정책을 따릅니다.
 
-### 9.1 재연결 정책
+### 10.1 재연결 정책
 
 | 상황 | 동작 |
 |---|---|
@@ -397,12 +628,12 @@ PYAV_HW_ACCEL=cuda
 | `ENOENT` (바이너리 미설치) | 즉시 중단, `error` 이벤트 발생 |
 | PyAV 패키지 미설치 | `start()` 호출 즉시 `error` 이벤트 발생 |
 
-### 9.2 연결 성공 판단 기준
+### 10.2 연결 성공 판단 기준
 
 첫 번째 stdout 데이터(`_onData()`) 수신 시 `_connected = true`로 전환하고 재시도 카운터를 초기화합니다.
 단순 프로세스 기동이 아니라 **실제 프레임 수신**으로 연결 성공을 판단합니다.
 
-### 9.3 백엔드별 미설치 탐지
+### 10.3 백엔드별 미설치 탐지
 
 ```javascript
 // FFmpeg
@@ -423,13 +654,22 @@ if (!PYAV_AVAILABLE) {
 
 ---
 
-## 10. 향후 고려사항
+## 11. 향후 고려사항
 
 | 항목 | 설명 | 우선순위 |
 |---|---|---|
-| H.265/HEVC 지원 | GStreamer `nvh265dec` / FFmpeg `-vcodec hevc` 추가 | Medium |
+| H.265/HEVC 지원 | ingest-daemon PyAV: `av.open` H.265 자동 디코딩 (libav 기반이므로 추가 작업 최소) | Medium |
+| 인트 데몬 CUDA 가속 | `ingest_daemon.py`에 `PYAV_HW_ACCEL=cuda` 옵션 추가 | Medium |
+| 백엔드 헬스 지표 | `/api/cameras/:id/capture-stats` 엔드포인트로 프레임률·지연 노출 | Low |
+| Docker 이미지 최적화 | Python + PyAV만 포함하는 슬림 이미지 (`lts-ingest-daemon`) | Low |
 | 동적 백엔드 전환 | 실행 중 카메라별 백엔드를 API로 전환 (현재는 서버 재시작 필요) | Low |
-| PyAV GPU 인퍼런스 통합 | pyav_capture.py에서 YOLO 추론까지 처리하여 프레임 복사 최소화 | Medium |
-| GStreamer appsink | `fdsink` 대신 `appsink`를 Node.js N-API로 직접 수신하여 파이프 오버헤드 제거 | Low |
-| 백엔드 헬스 지표 | `/api/cameras/:id/capture-stats` 엔드포인트로 백엔드별 프레임률·지연 노출 | Low |
-| Docker 멀티스테이지 이미지 | 백엔드별 전용 Docker 이미지 (`lts-ffmpeg`, `lts-gstreamer`, `lts-pyav`) | Medium |
+
+---
+
+## Revision History
+
+| 버전 | 날짜 | 변경 내용 |
+|---|---|---|
+| 1.0 | 2026-06-04 | 초기 작성 (ffmpeg / gstreamer / pyav 3가지 백엔드) |
+| 1.1 | 2026-06-11 | ingest-daemon 백엔드 추가 (현재 기본값); ffmpeg 레거시 분류; WEBRTC_ENGINE 환경변수 추가; captureFactory.js 코드 스니펫 업데이트 |
+| 1.2 | 2026-06-19 | §6.7 Watchdog 및 자동 복구 추가 — PyAV 내부 watchdog, Node.js 프레임 watchdog, startServer.js 자동 재시작, reregisterAllWithIngestDaemon() |

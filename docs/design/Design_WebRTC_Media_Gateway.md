@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-WRTC-01 |
-| **Version** | 1.0 |
-| **Status** | Active |
-| **Date** | 2026-05-26 |
+| **Version** | 1.1 |
+| **Status** | **Historical** — mediasoup+FFmpeg RTP 경로는 `WEBRTC_ENGINE=mediamtx`로 대체됨 |
+| **Date** | 2026-06-11 |
 | **Parent SRS** | srs/SRS_WebRTC_Media_Gateway.md |
 
 ---
@@ -21,6 +21,14 @@
 7. [Sequence Diagrams](#7-sequence-diagrams)
 8. [Configuration & Environment](#8-configuration--environment)
 9. [Error Handling](#9-error-handling)
+
+---
+
+> ⚠️ **이 문서는 Historical 상태입니다.**  
+> 현재 기본 WebRTC 엔진은 `WEBRTC_ENGINE=mediamtx` (MediaMTX WHEP)입니다.  
+> MediaMTX 기반 WebRTC 아키텍처는 [Design_RTSP_WebRTC_Architecture.md](./Design_RTSP_WebRTC_Architecture.md) 및 [Design_RTSP_Capture_Backend.md §6](./Design_RTSP_Capture_Backend.md)을 참조하세요.  
+> mediasoup + FFmpeg RTP 경로 (`WEBRTC_ENGINE=mediasoup`)는 현재 비활성 상태이며, `CAPTURE_BACKEND=ingest-daemon`과 조합 시 RTP 소스가 없어 동작하지 않습니다.  
+> 이 문서는 mediasoup 구현 이력 및 레거시 참조 목적으로 보존됩니다.
 
 ---
 

@@ -30,6 +30,7 @@ const PORT            = HTTPS_ENABLED
   ? parseInt(process.env.HTTPS_PORT || '3443', 10)
   : parseInt(process.env.HTTP_PORT  || '3080', 10);
 const MEDIAMTX_API    = process.env.MEDIAMTX_API_URL || 'http://127.0.0.1:9997';
+const WEBRTC_ENGINE   = (process.env.WEBRTC_ENGINE || 'mediamtx').toLowerCase();
 const POLL_INTERVAL_MS   = 5_000;
 const STALL_THRESHOLD_MS = 10_000;
 const CONNECT_RETRY_MS   = 2_000;
@@ -185,8 +186,11 @@ async function poll() {
           ? warn(`frozen frames=${pipe.frameCount}`)
           : ok(`live frames=${pipe.frameCount} lag=${(staleMs / 1000).toFixed(1)}s`);
 
+    const engineLabel = WEBRTC_ENGINE === 'mediasoup' ? 'mediasoup'
+                      : WEBRTC_ENGINE === 'werift'    ? 'werift'
+                      : 'MediaMTX';
     const webrtcLabel = pipe.useWebRTC
-      ? `webrtc=${ok('MediaMTX')}`
+      ? `webrtc=${ok(engineLabel)}`
       : `webrtc=${dim('NO')}`;
 
     console.log(

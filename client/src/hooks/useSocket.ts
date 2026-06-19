@@ -21,6 +21,8 @@ function getSocket(): Socket {
   return socketInstance;
 }
 
+export { getSocket };
+
 export function useSocket() {
   const [connected, setConnected] = useState(false);
   const socketRef = useRef<Socket>(getSocket());

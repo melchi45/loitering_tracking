@@ -49,7 +49,78 @@ RTSP/WebRTC 스트림
 4. `client/src/types/` 에 TypeScript 타입 추가
 5. 대시보드 컴포넌트에서 새 속성 표시
 
-### YOLOv8 모델 교체
+### YOLO 모델 카탈로그 — 런타임 전환 (YOLOv8 / YOLO11 / YOLO12)
+
+`analysisApi.js`는 15개 모델 카탈로그를 유지합니다. 서버 재시작 없이 모델 다운로드·전환이 가능합니다.
+
+| API | 설명 |
+|---|---|
+| `GET /api/analysis/models` | 카탈로그 조회 (downloaded/active/downloading/converting 상태 포함) |
+| `POST /api/analysis/models/switch { modelId }` | 활성 모델 핫 스왑 |
+| `POST /api/analysis/models/download { modelId }` | 모델 다운로드 (YOLOv8/YOLO11: 직접 ONNX, YOLO12: PT→ONNX 변환) |
+
+#### YOLO12 다운로드 특이사항
+
+Ultralytics는 YOLO12에 대해 `.pt`(PyTorch)만 공식 배포하며 ONNX 미제공. 서버가 자동으로:
+1. `.pt` 다운로드 (Ultralytics v8.4.0 릴리스)
+2. Python `ultralytics export` 실행 → ONNX 변환 (최대 5분)
+3. `.pt` 삭제
+
+Python 인터프리터 자동 탐지 순서:
+```
+PYTHON_EXEC → PYTHON_EXEC_LINUX → /usr/bin/python3 → python3 → python
+```
+> 단순 `import ultralytics`가 아닌 **YOLO12 지원 여부**(cfg/models/12 디렉토리 존재)를 검사.
+> ultralytics < 8.3.x는 YOLO12 아키텍처 미지원 → 해당 인터프리터 건너뜀.
+> 이 서버에서 `/usr/bin/python3` (Python 3.7.5, ultralytics 8.0.145)는 건너뛰고,
+> `python3` → `~/.local/bin/python3` (Python 3.11.9, ultralytics 8.4.63)이 선택됨.
+
+**`_lzma` 컴파일 (시스템 의존성 설정):**
+`~/.local/opt/python3.11`은 `_lzma` 없이 빌드됨 → torchvision import 시 오류.
+아래 과정으로 수동 컴파일하여 해결:
+```bash
+# 1. liblzma-dev 헤더 확보 (sudo 없이)
+apt-get download liblzma-dev && dpkg -x liblzma-dev_*.deb /tmp/lzma-dev
+
+# 2. CPython 3.11.9 _lzma C 소스 다운로드
+curl -sL https://raw.githubusercontent.com/python/cpython/v3.11.9/Modules/_lzmamodule.c -o /tmp/_lzmamodule.c
+curl -sL https://raw.githubusercontent.com/python/cpython/v3.11.9/Modules/clinic/_lzmamodule.c.h -o /tmp/clinic/_lzmamodule.c.h
+
+# 3. 컴파일 (system liblzma.so.5 rpath 포함)
+PY311_INC=~/.local/opt/python3.11/include/python3.11
+gcc -O2 -fPIC -shared \
+  -I$PY311_INC -I$PY311_INC/internal \
+  -I/tmp/lzma-dev/usr/include -I/tmp \
+  /tmp/_lzmamodule.c \
+  -L/tmp/lzma-dev/usr/lib/x86_64-linux-gnu \
+  -Wl,-rpath,/lib/x86_64-linux-gnu -llzma \
+  -o ~/.local/opt/python3.11/lib/python3.11/lib-dynload/_lzma.cpython-311-x86_64-linux-gnu.so
+```
+
+#### YOLO12 지원 모델 (mAP COCO val2017 50-95)
+
+| ID | mAP | CPU (ms) | T4 (ms) | Params |
+|---|---|---|---|---|
+| yolo12n | 40.6 | 58 | 1.6 | 2.6M |
+| yolo12s | 48.0 | 95 | 2.7 | 9.3M |
+| yolo12m | 52.5 | 192 | 5.0 | 20.2M |
+| yolo12l | 53.7 | 250 | 6.5 | 26.4M |
+| yolo12x | 55.2 | 490 | 12.0 | 59.1M |
+
+모든 시리즈(v8/11/12) 출력 shape `[1, 84, 8400]` — `DetectionService._postprocess()` 변경 없이 호환.
+
+#### 배치 다운로드 스크립트
+
+```bash
+cd server && node src/scripts/downloadModels.js
+```
+
+- YOLO12 5개 모델 자동 다운로드 + ONNX 변환
+- 이미 존재하는 파일은 건너뜀
+
+**SDLC 참조:** [SRS_AI_Model_Catalog](../../../docs/srs/SRS_AI_Model_Catalog.md) · [Design_AI_Model_Catalog](../../../docs/design/Design_AI_Model_Catalog.md) · [TC_AI_Model_Catalog](../../../docs/tc/TC_AI_Model_Catalog.md) · `test/api/model_catalog.test.js`
+
+### YOLOv8 모델 교체 (레거시)
 1. 루트의 `yolov8s.pt`를 새 모델로 교체 (또는 경로 설정 변경)
 2. `server/src/services/detection.js`에서 모델 로드 경로 수정
 3. 클래스 레이블 매핑 업데이트
@@ -120,18 +191,23 @@ RTSP/WebRTC 스트림
 | RFP | [RFP_LTS2026_Loitering_Tracking_System](../../../docs/rfp/RFP_LTS2026_Loitering_Tracking_System.md) · [RFP_AI_Human_Detection](../../../docs/rfp/RFP_AI_Human_Detection.md) · [RFP_AI_Vehicle_Detection](../../../docs/rfp/RFP_AI_Vehicle_Detection.md) · [RFP_Object_Tracking](../../../docs/rfp/RFP_Object_Tracking.md) |
 | RFP | [RFP_AI_Fire_Smoke_Detection](../../../docs/rfp/RFP_AI_Fire_Smoke_Detection.md) · [RFP_AI_Cloth_Analysis](../../../docs/rfp/RFP_AI_Cloth_Analysis.md) · [RFP_AI_Color_Analysis](../../../docs/rfp/RFP_AI_Color_Analysis.md) · [RFP_AI_Mask_Detection](../../../docs/rfp/RFP_AI_Mask_Detection.md) · [RFP_AI_Hat_Detection](../../../docs/rfp/RFP_AI_Hat_Detection.md) · [RFP_AI_CUDA_Acceleration](../../../docs/rfp/RFP_AI_CUDA_Acceleration.md) |
 | RFP | [RFP_Distributed_AI_Pipeline](../../../docs/rfp/RFP_Distributed_AI_Pipeline.md) — 스트리밍/분석 서버 분리 요구사항 |
+| RFP | [RFP_AI_Model_Catalog](../../../docs/rfp/RFP_AI_Model_Catalog.md) — YOLOv8/YOLO11/YOLO12 모델 카탈로그·런타임 전환 |
 | PRD | [PRD_LTS2026_Loitering_Tracking_System](../../../docs/prd/PRD_LTS2026_Loitering_Tracking_System.md) · [PRD_Object_Tracking](../../../docs/prd/PRD_Object_Tracking.md) · [PRD_AI_Human_Detection](../../../docs/prd/PRD_AI_Human_Detection.md) · [PRD_AI_Vehicle_Detection](../../../docs/prd/PRD_AI_Vehicle_Detection.md) |
 | PRD | [PRD_AI_Fire_Smoke_Detection](../../../docs/prd/PRD_AI_Fire_Smoke_Detection.md) · [PRD_AI_Cloth_Analysis](../../../docs/prd/PRD_AI_Cloth_Analysis.md) · [PRD_AI_Color_Analysis](../../../docs/prd/PRD_AI_Color_Analysis.md) · [PRD_AI_Mask_Detection](../../../docs/prd/PRD_AI_Mask_Detection.md) · [PRD_AI_Hat_Detection](../../../docs/prd/PRD_AI_Hat_Detection.md) |
 | PRD | [PRD_Distributed_AI_Pipeline](../../../docs/prd/PRD_Distributed_AI_Pipeline.md) — SERVER_MODE 제품 요구사항 |
+| PRD | [PRD_AI_Model_Catalog](../../../docs/prd/PRD_AI_Model_Catalog.md) — 15종 YOLO 모델 카탈로그 제품 요구사항 |
 | SRS | [SRS_LTS2026_Loitering_Tracking_System](../../../docs/srs/SRS_LTS2026_Loitering_Tracking_System.md) · [SRS_Object_Tracking](../../../docs/srs/SRS_Object_Tracking.md) · [SRS_AI_Human_Detection](../../../docs/srs/SRS_AI_Human_Detection.md) |
 | SRS | [SRS_AI_Fire_Smoke_Detection](../../../docs/srs/SRS_AI_Fire_Smoke_Detection.md) · [SRS_AI_Cloth_Analysis](../../../docs/srs/SRS_AI_Cloth_Analysis.md) · [SRS_AI_Color_Analysis](../../../docs/srs/SRS_AI_Color_Analysis.md) · [SRS_AI_Mask_Detection](../../../docs/srs/SRS_AI_Mask_Detection.md) · [SRS_AI_Hat_Detection](../../../docs/srs/SRS_AI_Hat_Detection.md) |
 | SRS | [SRS_Distributed_AI_Pipeline](../../../docs/srs/SRS_Distributed_AI_Pipeline.md) — 분산 파이프라인 소프트웨어 요구사항 |
+| SRS | [SRS_AI_Model_Catalog](../../../docs/srs/SRS_AI_Model_Catalog.md) — FR-MC-001~022, YOLO12 PT→ONNX 파이프라인 |
 | Design | [Design_LTS2026_Loitering_Tracking_System](../../../docs/design/Design_LTS2026_Loitering_Tracking_System.md) · [Design_Object_Tracking](../../../docs/design/Design_Object_Tracking.md) · [Design_AI_Human_Detection](../../../docs/design/Design_AI_Human_Detection.md) |
 | Design | [Design_AI_Fire_Smoke_Detection](../../../docs/design/Design_AI_Fire_Smoke_Detection.md) · [Design_AI_Cloth_Analysis](../../../docs/design/Design_AI_Cloth_Analysis.md) · [Design_AI_Color_Analysis](../../../docs/design/Design_AI_Color_Analysis.md) · [Design_AI_Mask_Detection](../../../docs/design/Design_AI_Mask_Detection.md) · [Design_AI_Hat_Detection](../../../docs/design/Design_AI_Hat_Detection.md) |
 | Design | [Design_Distributed_AI_Pipeline](../../../docs/design/Design_Distributed_AI_Pipeline.md) — AnalysisClient·AnalysisAPI·SERVER_MODE 설계 |
+| Design | [Design_AI_Model_Catalog](../../../docs/design/Design_AI_Model_Catalog.md) — MODEL_CATALOG 구조, 다운로드 파이프라인, 런타임 전환 |
 | TC | [TC_AI_Human_Detection](../../../docs/tc/TC_AI_Human_Detection.md) · [TC_Object_Tracking](../../../docs/tc/TC_Object_Tracking.md) · [TC_AI_Fire_Smoke_Detection](../../../docs/tc/TC_AI_Fire_Smoke_Detection.md) |
 | TC | [TC_AI_Cloth_Analysis](../../../docs/tc/TC_AI_Cloth_Analysis.md) · [TC_AI_Color_Analysis](../../../docs/tc/TC_AI_Color_Analysis.md) · [TC_AI_Mask_Detection](../../../docs/tc/TC_AI_Mask_Detection.md) · [TC_AI_Hat_Detection](../../../docs/tc/TC_AI_Hat_Detection.md) |
 | TC | [TC_Distributed_AI_Pipeline](../../../docs/tc/TC_Distributed_AI_Pipeline.md) — 분산 파이프라인 기능별 테스트 케이스 |
+| TC | [TC_AI_Model_Catalog](../../../docs/tc/TC_AI_Model_Catalog.md) — TC-MC-001~011, 모델 카탈로그·전환·YOLO12 변환 |
 | Ops | [ONNX_Runtime_Provider_Diagnostics](../../../docs/ops/ONNX_Runtime_Provider_Diagnostics.md) · [ONNX_Runtime_Source_Build_CUDA13](../../../docs/ops/ONNX_Runtime_Source_Build_CUDA13.md) |
 | Ops | [Distributed_AI_Pipeline_Setup](../../../docs/ops/Distributed_AI_Pipeline_Setup.md) — 분산 배포 운영 가이드 |
 
@@ -150,6 +226,8 @@ RTSP/WebRTC 스트림
 | `pipelineManager.js` (SERVER_MODE 분기 변경) | `docs/design/Design_Distributed_AI_Pipeline.md`, `docs/tc/TC_Distributed_AI_Pipeline.md` |
 | `services/analysisClient.js` | `docs/design/Design_Distributed_AI_Pipeline.md`, `docs/srs/SRS_Distributed_AI_Pipeline.md` |
 | `routes/analysisApi.js` | `docs/design/Design_Distributed_AI_Pipeline.md`, `docs/srs/SRS_Distributed_AI_Pipeline.md`, `docs/tc/TC_Distributed_AI_Pipeline.md` |
+| `routes/analysisApi.js` (MODEL_CATALOG 변경) | `docs/design/Design_AI_Model_Catalog.md`, `docs/srs/SRS_AI_Model_Catalog.md`, `docs/tc/TC_AI_Model_Catalog.md` |
+| `scripts/downloadModels.js` (YOLO12 추가) | `docs/design/Design_AI_Model_Catalog.md`, `docs/tc/TC_AI_Model_Catalog.md` |
 
 **공통 규칙**
 - **새 기능 추가** → PRD + SRS + Design + TC 문서 모두 신규 작성 또는 기존 문서에 항목 추가
@@ -516,3 +594,99 @@ PATCH /api/analysis/config/fire-smoke → body: { confThreshold?, nmsThreshold? 
 - NMS IoU Threshold 슬라이더: 0.10~0.90, step 0.05
 - 300ms debounce 후 자동 PATCH, "Reset Defaults" 버튼 제공
 - `accent-orange-500` 색상 테마 (화재/연기 강조)
+
+## 최근 운영 변경 (2026-06-17)
+
+### 11. DetectionTrack 생명주기 — 모드별 저장 전략
+
+**배경:** `DetectionsTimelineInline.tsx` 하단 패널에서 Gantt 타임라인이 표시되지 않는 문제. 분석 서버에서 트랙이 저장되지 않았고, streaming 모드에서는 로컬 트랙도 없었음.
+
+#### 11.1 모드별 저장 위치
+
+| 모드 | 트랙 메타데이터 | 스냅샷 크롭 | Timeline 데이터 소스 |
+|---|---|---|---|
+| `combined` | 로컬 `detectionTracks` | 로컬 `detectionSnapshots` | 로컬 DB 직접 조회 |
+| `analysis` | 분석 서버 `detectionTracks` | 분석 서버 `detectionSnapshots` | 로컬 DB 직접 조회 |
+| `streaming` | 분석 서버 (primary) + 스트리밍 서버 shadow | 스트리밍 서버 원본 크롭 | 분석 서버 proxy → 로컬 fallback |
+
+#### 11.2 db.js `ALL_TABLES` 필수 항목 (2026-06-17 기준)
+
+```javascript
+const ALL_TABLES = [
+  'cameras', 'zones', 'events', 'alerts',
+  'faceGalleries', 'faceGalleryFaces', 'settings',
+  'detectionSnapshots', 'faceMatchHistory',
+  'missing_persons', 'missing_person_detections',
+  'analysisEvents',
+  'detectionTracks',  // ← DetectionsTimeline Gantt 트랙
+];
+```
+
+**규칙:** 새 컬렉션은 반드시 `ALL_TABLES`에 먼저 추가. 누락 시 `db.find()` TypeError.
+
+#### 11.3 _trackMeta 구조 및 upsert 패턴
+
+```javascript
+// 모든 모드에서 ctx에 초기화
+ctx._trackMeta = new Map();
+// key = String(track.id) — UUID  ← rt.objectId 아님! (rt.id 사용)
+// value = { firstSeenAt, lastSeenAt, className, maxRiskScore, isLoitering,
+//           confidence, faceId, identity, zoneId, zoneName, color, cloth }
+
+// combined/analysis: popRemovedTracks() 직후 처리
+const removedBatch = tracker.popRemovedTracks(); // await 이전에 호출 필수!
+for (const rt of removedBatch) {
+  const trackKey = String(rt.id); // rt.objectId는 undefined!
+  const meta = ctx._trackMeta.get(trackKey);
+  if (!meta) continue;
+  ctx._trackMeta.delete(trackKey);
+  // dwellMs >= 1000 || isLoitering || riskScore >= 0.3 이면 저장
+}
+
+// streaming: _processRemoteResult()에서 remoteTracked 순회
+for (const obj of remoteTracked) {
+  const id = String(obj.objectId); // analysis 서버가 부여한 UUID
+  ctx._trackMeta.set(id, { ... });
+}
+```
+
+#### 11.4 Active Flush Timer (30s, 모든 모드)
+
+```javascript
+// 현재 프레임 내 객체 → inProgress: true upsert
+// streaming 모드에서 stale 트랙(15s 미갱신) → inProgress: false finalize + _trackMeta 제거
+const isStale = nowMs - meta.lastSeenAt > 15_000;
+if (isStale && SERVER_MODE === 'streaming') {
+  // finalize to detectionTracks(inProgress: false)
+  ctx._trackMeta.delete(trackKey);
+}
+```
+
+#### 11.5 Streaming 모드 스냅샷 원본 크롭
+
+```javascript
+// _processRemoteResult() 내 — 이미 구현된 코드
+const { data: cropBuf } = await snapshotSvc.cropJpeg(
+  _buf,             // 원본 카메라 JPEG (full resolution)
+  det.bbox,         // analysis 서버가 원본 해상도 좌표로 스케일백한 bbox
+  remoteFrameWidth, // analysis 서버가 반환한 원본 프레임 폭
+  remoteFrameHeight
+);
+// ✅ 640px YOLO 내부 해상도가 아닌 원본 해상도에서 크롭
+```
+
+#### 11.6 analysisProxy.js 로컬 Fallback
+
+```javascript
+// GET /api/analysis/detection-tracks
+// 1순위: analysis 서버 proxy
+// 2순위 (연결 오류/타임아웃/5xx): 스트리밍 서버 로컬 detectionTracks DB
+// 응답 필드: { tracks, total, source: 'local-streaming' }
+
+// GET /api/analysis/detection-snapshots 동일 fallback 적용
+```
+
+**코드 위치:**
+- `server/src/routes/analysisProxy.js` — `proxyGetWithFallback()`, `_localDetectionTracks()`, `_localDetectionSnapshots()`
+- `server/src/services/pipelineManager.js` — `_processRemoteResult()` 내 `_trackMeta` 업데이트, active flush timer stale 처리
+- `server/src/routes/analysisApi.js` — analysis 모드 트랙 저장 (`_trackMeta`, `popRemovedTracks()`, active flush)

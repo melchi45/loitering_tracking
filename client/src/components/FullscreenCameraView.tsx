@@ -4,8 +4,12 @@ import { useCrossCameraStore } from '../stores/crossCameraStore';
 import { useClothingReIdStore } from '../stores/clothingReIdStore';
 import { useCameraStore } from '../stores/cameraStore';
 import { usePersonTrajectoryStore } from '../stores/personTrajectoryStore';
+import { useDataChannelStore } from '../stores/dataChannelStore';
+import type { AppRtpMessage } from '../stores/dataChannelStore';
 import { useI18n } from '../i18n';
 import CameraView from './CameraView';
+import OnvifTimelineInline from './OnvifTimelineInline';
+import DetectionsTimelineInline from './DetectionsTimelineInline';
 import type { Detection, ClothingFeature } from '../types';
 
 interface Props {
@@ -750,8 +754,93 @@ export function DetectionPanel({ cameraId }: { cameraId: string }) {
   );
 }
 
+// ── Payload decoder ───────────────────────────────────────────────────────────
+// App RTP payload is base64-encoded raw bytes from the RTSP data/subtitle track
+// (typically ONVIF XML metadata). Try to render as UTF-8 text; fall back to
+// binary size indicator so the row is never blank.
+function decodePayload(b64: string): string {
+  try {
+    const bin  = atob(b64);
+    const bytes = Uint8Array.from(bin, c => c.charCodeAt(0));
+    const text  = new TextDecoder('utf-8', { fatal: false }).decode(bytes);
+    // Strip non-printable control chars (keep tab/LF/CR for XML readability)
+    const clean = text.replace(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g, '').trim();
+    if (clean.length > 0) return clean.slice(0, 200);
+    return `[binary ${bytes.length}B]`;
+  } catch {
+    return '[decode error]';
+  }
+}
+
+// ── Camera Events Tab ─────────────────────────────────────────────────────────
+export function CameraEventsTab({ cameraId }: { cameraId: string }) {
+  const history    = useDataChannelStore(s => s.history[cameraId]  ?? []);
+  const totalCount = useDataChannelStore(s => s.counts[cameraId]   ?? 0);
+  const listRef    = useRef<HTMLDivElement>(null);
+  const { t }      = useI18n();
+
+  // Auto-scroll to bottom when new history items arrive
+  useEffect(() => {
+    const el = listRef.current;
+    if (!el) return;
+    el.scrollTop = el.scrollHeight;
+  }, [history.length]);
+
+  const fmtTime = (ts: number) =>
+    new Date(ts).toLocaleTimeString('en', {
+      hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit',
+    });
+
+  return (
+    <div className="flex flex-col h-full">
+      {/* Tab header */}
+      <div className="flex items-center gap-2 px-3 py-1.5 border-b border-gray-700/60 flex-shrink-0 bg-gray-900/60">
+        <span className="text-[10px] font-bold uppercase tracking-wide text-gray-300">
+          {t.cameraEventsTab}
+        </span>
+        {totalCount > 0 && (
+          <span className="text-[9px] bg-blue-700/50 text-blue-200 rounded-full px-1.5 py-0.5 tabular-nums">
+            {totalCount >= 1000 ? `${Math.floor(totalCount / 1000)}k+` : totalCount}
+          </span>
+        )}
+        {history.length === 0 && (
+          <span className="text-[9px] text-gray-600 ml-auto">{t.cameraEventsNoData}</span>
+        )}
+      </div>
+
+      {/* Message list — scrollable */}
+      <div
+        ref={listRef}
+        className="flex-1 overflow-y-auto min-h-0 divide-y divide-gray-800/50"
+      >
+        {history.map((msg: AppRtpMessage) => (
+          <div
+            key={`${msg.seq}-${msg.receivedAt}`}
+            className="flex items-start gap-2 px-3 py-0.5 hover:bg-gray-800/40 transition-colors"
+          >
+            <span className="text-[8px] text-gray-500 whitespace-nowrap font-mono flex-shrink-0 pt-px">
+              {fmtTime(msg.receivedAt)}
+            </span>
+            <span className="text-[8px] text-gray-600 flex-shrink-0 pt-px tabular-nums">
+              #{msg.seq}
+            </span>
+            <span className="text-[8px] text-cyan-700 flex-shrink-0 pt-px">
+              pt{msg.pt}
+            </span>
+            <span className="text-[8px] text-gray-400 break-all leading-3 pt-px">
+              {decodePayload(msg.payload)}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 export default function FullscreenCameraView({ cameraId, cameraName, onClose }: Props) {
-  const [isMobile, setIsMobile] = useState(() => window.innerWidth < 768);
+  const [videoTab, setVideoTab] = useState<'events' | 'onvif' | 'detections'>('onvif');
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
+  const { t } = useI18n();
 
   // Close on Escape key
   useEffect(() => {
@@ -760,11 +849,14 @@ export default function FullscreenCameraView({ cameraId, cameraName, onClose }: 
     return () => window.removeEventListener('keydown', handler);
   }, [onClose]);
 
+  // Responsive breakpoint
   useEffect(() => {
-    const handler = () => setIsMobile(window.innerWidth < 768);
-    window.addEventListener('resize', handler);
-    return () => window.removeEventListener('resize', handler);
+    const onResize = () => setIsMobile(window.innerWidth < 768);
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
   }, []);
+
+  const tabHeight = videoTab === 'detections' ? 300 : videoTab === 'onvif' ? 200 : 160;
 
   return (
     <div
@@ -772,10 +864,10 @@ export default function FullscreenCameraView({ cameraId, cameraName, onClose }: 
       style={{ display: 'flex', flexDirection: isMobile ? 'column' : 'row' }}
       onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     >
-      {/* Video area — full width on mobile (60%), left panel on desktop */}
+      {/* ── Video column (left on desktop, top on mobile) ─────────────── */}
       <div
-        className="flex flex-col overflow-hidden"
-        style={isMobile ? { flex: '0 0 60%' } : { flex: 1 }}
+        className="flex flex-col overflow-hidden min-h-0"
+        style={isMobile ? { flex: '0 0 60%' } : { flex: 1, minWidth: 0 }}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-2 bg-gray-900/80 flex-shrink-0">
@@ -792,14 +884,64 @@ export default function FullscreenCameraView({ cameraId, cameraName, onClose }: 
         </div>
 
         {/* Video */}
-        <div className="flex-1 overflow-hidden p-2">
+        <div className="flex-1 min-h-0 overflow-hidden p-2">
           <CameraView cameraId={cameraId} cameraName={cameraName} />
+        </div>
+
+        {/* ── Bottom tab bar + content ───────────────────────────────── */}
+        <div
+          className="flex-shrink-0 flex flex-col border-t border-gray-700 bg-gray-900"
+          style={{ height: tabHeight }}
+        >
+          {/* Tab bar */}
+          <div className="flex items-center border-b border-gray-700/60 flex-shrink-0 bg-gray-900/80">
+            <button
+              onClick={() => setVideoTab('events')}
+              className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide transition-colors border-b-2 ${
+                videoTab === 'events'
+                  ? 'border-blue-500 text-blue-300'
+                  : 'border-transparent text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              {t.cameraEventsTab}
+            </button>
+            <button
+              onClick={() => setVideoTab('onvif')}
+              className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide transition-colors border-b-2 ${
+                videoTab === 'onvif'
+                  ? 'border-indigo-500 text-indigo-300'
+                  : 'border-transparent text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              {t.onvifTimelineOpen}
+            </button>
+            <button
+              onClick={() => setVideoTab('detections')}
+              className={`px-3 py-1.5 text-[10px] font-bold uppercase tracking-wide transition-colors border-b-2 ${
+                videoTab === 'detections'
+                  ? 'border-emerald-500 text-emerald-300'
+                  : 'border-transparent text-gray-500 hover:text-gray-300'
+              }`}
+            >
+              Detections
+            </button>
+          </div>
+
+          {/* Tab content:
+              events     → Camera Events (DataChannel RTP messages)
+              onvif      → ONVIF Timeline (DB-persisted events)
+              detections → Analysis Events history (fire/smoke/loitering stored in DB) */}
+          <div className="flex-1 min-h-0 overflow-hidden">
+            {videoTab === 'events' && <CameraEventsTab cameraId={cameraId} />}
+            {videoTab === 'onvif'  && <OnvifTimelineInline cameraId={cameraId} />}
+            {videoTab === 'detections' && <DetectionsTimelineInline cameraId={cameraId} />}
+          </div>
         </div>
       </div>
 
-      {/* Detection panel — bottom on mobile (40%), right panel on desktop */}
+      {/* ── Right panel — real-time AI detections (always visible) ───── */}
       <div
-        className="bg-gray-800 flex flex-col overflow-hidden"
+        className="flex flex-col overflow-hidden border-gray-700"
         style={isMobile
           ? { flex: '0 0 40%', borderTop: '1px solid rgb(55 65 81)' }
           : { width: 288, flexShrink: 0, borderLeft: '1px solid rgb(55 65 81)' }

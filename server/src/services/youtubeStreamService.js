@@ -62,8 +62,14 @@ function findNodeBin() {
   }
   return null;  // fallback: rely on ~/.config/yt-dlp/config
 }
-const NODE_BIN_FOR_YTDLP = findNodeBin();
-console.log(`[YouTubeStream] Node bin for yt-dlp JS runtime: ${NODE_BIN_FOR_YTDLP || '(not found, using config file)'}`);
+// Skip expensive binary detection and startup logs in analysis-only mode —
+// this module is required by index.js unconditionally, but analysis mode never
+// spawns yt-dlp or FFmpeg.
+const _isAnalysis = process.env.SERVER_MODE === 'analysis';
+const NODE_BIN_FOR_YTDLP = _isAnalysis ? null : findNodeBin();
+if (!_isAnalysis) {
+  console.log(`[YouTubeStream] Node bin for yt-dlp JS runtime: ${NODE_BIN_FOR_YTDLP || '(not found, using config file)'}`);
+}
 
 function findYtDlp() {
   // 1. Explicit single-path override
@@ -83,9 +89,11 @@ function findYtDlp() {
   }
   return 'yt-dlp';  // fallback to PATH
 }
-const YTDLP_BIN = findYtDlp();
-console.log(`[YouTubeStream] yt-dlp binary: ${YTDLP_BIN}`);
-console.log(`[YouTubeStream] SSL check: ${YTDLP_NO_CHECK_CERT ? 'disabled (--no-check-certificate)' : 'enabled'}`);
+const YTDLP_BIN = _isAnalysis ? 'yt-dlp' : findYtDlp();
+if (!_isAnalysis) {
+  console.log(`[YouTubeStream] yt-dlp binary: ${YTDLP_BIN}`);
+  console.log(`[YouTubeStream] SSL check: ${YTDLP_NO_CHECK_CERT ? 'disabled (--no-check-certificate)' : 'enabled'}`);
+}
 
 // ── URL-expiry refresh: if FFmpeg stderr contains HTTP 403 re-resolve ─────────
 const HTTP_403_RE = /Server returned 4XX Client Error reply to.*403|403 Forbidden/i;
@@ -129,6 +137,7 @@ class YouTubeStreamService {
         // DB stores bps; in-memory entry uses kbps (same as createStream)
         bitrate:        cam.bitrate ? Math.round(cam.bitrate / 1000) : 2000,
         maxHeight:      RESOLUTION_MAP[cam.resolution] || 1080,
+        webrtcEnabled:  cam.webrtcEnabled !== false, // default true for restored streams
         status:         'offline',
         restartCount:   0,
         repeatPlayback: !!cam.repeatPlayback,
@@ -171,7 +180,7 @@ class YouTubeStreamService {
    * @param {{ youtubeUrl: string, name: string, resolution?: string, bitrate?: number }} opts
    * @returns {Promise<object>} camera record
    */
-  async createStream({ youtubeUrl, name, resolution = '1080p', bitrate = 2000, repeatPlayback = false }) {
+  async createStream({ youtubeUrl, name, resolution = '1080p', bitrate = 2000, repeatPlayback = false, webrtcEnabled = true }) {
     // Validate URL
     if (!YOUTUBE_URL_REGEX.test(youtubeUrl)) {
       const err = new Error('INVALID_YOUTUBE_URL');
@@ -201,6 +210,7 @@ class YouTubeStreamService {
       resolution,
       bitrate,
       maxHeight,
+      webrtcEnabled:  !!webrtcEnabled,
       status:         'starting',
       restartCount:   0,
       repeatPlayback: !!repeatPlayback,
@@ -219,12 +229,13 @@ class YouTubeStreamService {
       id,
       name,
       rtspUrl,
-      type:          'youtube',
+      type:           'youtube',
       youtubeUrl,
       resolution,
-      bitrate:       bitrate * 1000, // store as bps
+      bitrate:        bitrate * 1000, // store as bps
       repeatPlayback: !!repeatPlayback,
-      status:        'offline',
+      webrtcEnabled:  !!webrtcEnabled,
+      status:         'offline',
     });
 
     console.log(`[YouTubeStream] Creating stream ${id}: ${youtubeUrl}`);
@@ -340,8 +351,20 @@ class YouTubeStreamService {
       this.db.update('cameras', id, { repeatPlayback: !!updates.repeatPlayback });
     }
 
+    // webrtcEnabled change only needs a pipeline restart (no YouTube source restart).
+    // Separating this avoids the 30-60s yt-dlp/FFmpeg respawn when just toggling WebRTC.
+    let needPipelineOnly = false;
+    if (updates.webrtcEnabled !== undefined) {
+      entry.webrtcEnabled = !!updates.webrtcEnabled;
+      this.db.update('cameras', id, { webrtcEnabled: !!updates.webrtcEnabled });
+      if (!needRestart) {
+        needPipelineOnly = true;
+      }
+    }
+
     if (needRestart) {
-      // Restart asynchronously so the API response returns immediately
+      // Full restart: source URL / resolution / bitrate changed.
+      // Restart asynchronously so the API response returns immediately.
       this._stopEntry(entry, false).then(async () => {
         entry.restartCount = 0;
         entry.status       = 'starting';
@@ -355,6 +378,18 @@ class YouTubeStreamService {
       }).catch((err) => {
         console.error(`[YouTubeStream] Stop failed during update for ${id}:`, err.message);
       });
+    } else if (needPipelineOnly && entry.status === 'live') {
+      // webrtcEnabled changed while stream is live — restart pipeline only.
+      // The YouTube source (yt-dlp + FFmpeg) keeps running; only the ingest-daemon
+      // registration and mediasoup transports are rebuilt with the new setting.
+      const camRecord = this.db.findOne('cameras', { id });
+      if (camRecord && this.pipelineManager) {
+        this.pipelineManager.stopCamera(id)
+          .then(() => this.pipelineManager.startCamera(camRecord))
+          .catch((err) => {
+            console.error(`[YouTubeStream] Pipeline restart error for ${id}:`, err.message);
+          });
+      }
     }
 
     return this._toPublic(entry);
@@ -431,30 +466,24 @@ class YouTubeStreamService {
    * @returns {string[]}
    */
   _buildFFmpegArgsPipe(entry) {
-    const bitrateK = entry.bitrate;
-    const bufsizeK = bitrateK * 2;
-    const scale    = `scale=-2:${entry.maxHeight}`;
-
     return [
+      // -re: read input at native playback rate, creating backpressure on the pipe.
+      // Without this, FFmpeg drains the pipe at 43x speed (HLS segments burst in);
+      // yt-dlp interprets an empty pipe as "download complete" and exits after ~7s,
+      // causing a restart gap where the stream freezes until yt-dlp relaunches.
+      // With -re the pipe fills up, yt-dlp's writes block, keeping both processes alive.
       '-re',
-      '-i', 'pipe:0',   // read from yt-dlp stdout pipe
-      // Video
-      '-c:v',          'libx264',
-      '-profile:v',    'main',
-      '-level',        '4.1',
-      '-preset',       'ultrafast',
-      '-tune',         'zerolatency',
-      '-b:v',          `${bitrateK}k`,
-      '-maxrate',      `${bitrateK}k`,
-      '-bufsize',      `${bufsizeK}k`,
-      '-vf',           scale,
-      '-g',            '60',
-      '-keyint_min',   '30',
-      '-sc_threshold', '0',
-      // Audio
-      '-c:a', 'aac',
-      '-b:a', '128k',
-      '-ar',  '44100',
+      '-i', 'pipe:0',
+      // Copy H.264 video as-is — no libx264 re-encoding (eliminates >90% CPU usage).
+      // yt-dlp format selector already enforces vcodec^=avc so the source is H.264.
+      '-c:v', 'copy',
+      // Re-encode audio to AAC.
+      // HLS (m3u8) combined streams deliver AAC in ADTS format (no global headers).
+      // The RTSP muxer rejects ADTS at av_write_header() time — before any BSF runs.
+      // Re-encoding produces MPEG-4 AAC with proper AudioSpecificConfig headers,
+      // which RTSP requires. For DASH streams (already MPEG-4 AAC), re-encoding is
+      // harmless extra CPU but ensures compatibility for all input types.
+      '-c:a', 'aac', '-b:a', '128k',
       // Output
       '-f',              'rtsp',
       '-rtsp_transport', 'tcp',
@@ -478,19 +507,29 @@ class YouTubeStreamService {
       entry.liveReject  = reject;
 
       // ── Spawn yt-dlp in pipe mode ─────────────────────────────────────────
-      // Format priority: prefer H.264 (avc) to avoid AV1/VP9 which FFmpeg 3.x cannot decode.
-      // Fallback chain ensures we always get a playable stream.
+      // Strict H.264 (avc) only — we use -c:v copy so source MUST be H.264.
+      // VP9/AV1 would be copied as-is and MediaMTX/mediasoup would reject them.
+      //
+      // Fallback order:
+      //   1. DASH (separate video+audio) — highest quality, most VOD videos
+      //   2. HLS combined (m3u8)         — live streams, age-restricted, some VODs
+      //   3. Any H.264 combined          — last resort
       const fmtH264 = [
+        // DASH: separate video+audio streams
         `bestvideo[ext=mp4][vcodec^=avc][height<=${entry.maxHeight}]+bestaudio[ext=m4a]`,
+        `bestvideo[vcodec^=avc][height<=${entry.maxHeight}]+bestaudio[ext=m4a]`,
         `bestvideo[vcodec^=avc][height<=${entry.maxHeight}]+bestaudio`,
-        `best[ext=mp4][vcodec^=avc][height<=${entry.maxHeight}]`,
-        `best[ext=mp4][height<=${entry.maxHeight}]`,
+        `bestvideo[vcodec^=avc]+bestaudio`,
+        // HLS: combined video+audio (live streams only have these)
+        `best[vcodec^=avc][height<=${entry.maxHeight}]`,
+        `best[vcodec^=avc]`,
         `best[height<=${entry.maxHeight}]`,
+        `best`,
       ].join('/');
       const ytArgs = [
         '--no-playlist',
         '--format', fmtH264,
-        '--merge-output-format', 'mp4',
+        '--merge-output-format', 'mkv',  // mkv is naturally streamable; mp4 needs seeking
         '-o', '-',           // output binary stream to stdout
         '--no-progress',     // suppress progress bars (keep errors/warnings visible)
         '--newline',         // one status line per update (easier parsing)
@@ -519,20 +558,26 @@ class YouTubeStreamService {
       let started = false;
 
       // ── Buffer FFmpeg stderr line-by-line to avoid chunk-boundary mismatches ──
+      // Split on \r\n, \r (ffmpeg progress), or \n to handle all line endings.
       let ffStderrBuf = '';
       const onFfStderr = (data) => {
         ffStderrBuf += data.toString();
-        const lines = ffStderrBuf.split('\n');
+        const lines = ffStderrBuf.split(/\r\n|\r|\n/);
         ffStderrBuf = lines.pop();  // hold last (possibly incomplete) line
         for (const line of lines) {
           const trimmed = line.trim();
-          if (trimmed) console.log(`[YouTubeStream] ffmpeg[${entry.id}]: ${trimmed.slice(0, 300)}`);
-          if (!started && RTSP_LIVE_RE.test(line)) {
+          if (!trimmed) continue;
+          // Check live status before filtering (RTSP_LIVE_RE includes frame=1 pattern)
+          if (!started && RTSP_LIVE_RE.test(trimmed)) {
             started = true;
             clearTimeout(entry.startTimer);
             entry.startTimer = null;
             this._setLive(entry);
           }
+          // Suppress ffmpeg encoding progress noise (frame= fps= size= time= bitrate=)
+          // These use \r to overwrite the terminal line and are not actionable log events.
+          if (/^frame=\s*\d/.test(trimmed)) continue;
+          console.log(`[YouTubeStream] ffmpeg[${entry.id}]: ${trimmed.slice(0, 300)}`);
         }
       };
       ffProc.stdout.on('data', onFfStderr);
@@ -769,6 +814,7 @@ class YouTubeStreamService {
       resolution:     entry.resolution,
       bitrate:        entry.bitrate,
       repeatPlayback: entry.repeatPlayback || false,
+      webrtcEnabled:  entry.webrtcEnabled !== false,
       status:         entry.status,
       restartCount:   entry.restartCount,
       uptimeSeconds:  uptime,

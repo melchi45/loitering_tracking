@@ -32,6 +32,15 @@ const snapshotSvc      = require('../services/snapshotService');
 // ── YOLO Model catalog ────────────────────────────────────────────────────────
 // Each entry = one downloadable ONNX model.  file is relative to server/models/.
 const MODEL_CATALOG = [
+  // YOLOv12 series (Ultralytics 2025 — attention-based architecture)
+  // Ultralytics releases only .pt for YOLO12; ONNX is produced by `ultralytics export`.
+  // requiresConversion: true → download handler fetches .pt then runs Python export.
+  // Output format identical to YOLO11/v8: [1, 84, 8400] — no parser changes needed.
+  { id: 'yolo12n', label: 'YOLO12n', series: 'YOLO12', size: 640, mAP: 40.6, cpuMs: 58.0,  t4Ms: 1.6,  params: '2.6M',  flops: '6.5B',   file: 'yolo12n.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12n.pt', requiresConversion: true },
+  { id: 'yolo12s', label: 'YOLO12s', series: 'YOLO12', size: 640, mAP: 48.0, cpuMs: 95.0,  t4Ms: 2.7,  params: '9.3M',  flops: '21.5B',  file: 'yolo12s.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12s.pt', requiresConversion: true },
+  { id: 'yolo12m', label: 'YOLO12m', series: 'YOLO12', size: 640, mAP: 52.5, cpuMs: 192.0, t4Ms: 5.0,  params: '20.2M', flops: '68.0B',  file: 'yolo12m.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12m.pt', requiresConversion: true },
+  { id: 'yolo12l', label: 'YOLO12l', series: 'YOLO12', size: 640, mAP: 53.7, cpuMs: 250.0, t4Ms: 6.5,  params: '26.4M', flops: '88.9B',  file: 'yolo12l.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12l.pt', requiresConversion: true },
+  { id: 'yolo12x', label: 'YOLO12x', series: 'YOLO12', size: 640, mAP: 55.2, cpuMs: 490.0, t4Ms: 12.0, params: '59.1M', flops: '199.0B', file: 'yolo12x.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12x.pt', requiresConversion: true },
   // YOLO11 series (Ultralytics 2024)
   { id: 'yolo11n', label: 'YOLO11n', series: 'YOLO11', size: 640, mAP: 39.5, cpuMs: 56.1,  t4Ms: 1.5,  params: '2.6M',  flops: '6.5B',   file: 'yolo11n.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11n.onnx' },
   { id: 'yolo11s', label: 'YOLO11s', series: 'YOLO11', size: 640, mAP: 47.0, cpuMs: 90.0,  t4Ms: 2.5,  params: '9.4M',  flops: '21.5B',  file: 'yolo11s.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.3.0/yolo11s.onnx' },
@@ -518,6 +527,7 @@ function _getOrCreateContext(cameraId, zonesArray, cameraName) {
     cameraName: cameraName || cameraId,
     _zones:     zonesArray || [],
     lastSeenAt: Date.now(),
+    _trackMeta: new Map(), // trackId → { firstSeenAt, lastSeenAt, className, maxRiskScore, isLoitering, ... }
   };
   _cameraContexts.set(cameraId, ctx);
   return ctx;
@@ -533,6 +543,50 @@ setInterval(() => {
     }
   }
 }, 60_000).unref();
+
+// Lazily cached db reference (set on first frame processed)
+let _db = null;
+
+// Active track flush: upsert long-running in-frame tracks every 30s
+// so they appear in the Timeline even when the subject never leaves the camera view.
+const { v4: _trackUuid } = require('uuid');
+setInterval(() => {
+  if (!_db) return;
+  const nowMs = Date.now();
+  for (const [camId, ctx] of _cameraContexts) {
+    if (!ctx._trackMeta || ctx._trackMeta.size === 0) continue;
+    for (const [trackKey, meta] of ctx._trackMeta.entries()) {
+      const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
+      if (dwellMs < 5000) continue;
+      if (nowMs - meta.lastSeenAt > 15_000) continue; // stale — removal imminent
+      const fields = {
+        cameraId:    camId,
+        cameraName:  ctx.cameraName || camId,
+        objectId:    trackKey,
+        className:   meta.className,
+        firstSeenAt: new Date(meta.firstSeenAt).toISOString(),
+        lastSeenAt:  new Date(meta.lastSeenAt).toISOString(),
+        dwellTime:   dwellMs,
+        maxRiskScore: meta.maxRiskScore,
+        isLoitering: meta.isLoitering,
+        confidence:  meta.confidence,
+        faceId:      meta.faceId,
+        identity:    meta.identity,
+        zoneId:      meta.zoneId,
+        zoneName:    meta.zoneName,
+        color:       meta.color,
+        cloth:       meta.cloth,
+        inProgress:  true,
+      };
+      const _ex = _db.findOne('detectionTracks', { objectId: trackKey, cameraId: camId });
+      if (_ex) {
+        _db.update('detectionTracks', _ex.id, fields);
+      } else {
+        _db.insert('detectionTracks', { id: _trackUuid(), ...fields, createdAt: new Date().toISOString() });
+      }
+    }
+  }
+}, 30_000).unref();
 
 // ── POST /api/analysis/frame ──────────────────────────────────────────────────
 // Accepts two content-types:
@@ -649,6 +703,8 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
 
     // 3. Tracking
     const trackedObjects = ctx.tracker.update(detections);
+    // Capture removed tracks immediately (before any concurrent update can overwrite _removedTracks)
+    const _removedBatch = ctx.tracker.popRemovedTracks();
 
     // 4. Attribute enrichment (face / PPE / color)
     let enrichedObjects = trackedObjects;
@@ -846,6 +902,80 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
 
     // ── Persist fire/smoke and loitering events (after response — non-blocking) ─
     if (db) {
+      if (!_db) _db = db; // cache for active-flush interval
+
+      // ── Track lifecycle: update _trackMeta + flush removed tracks to DB ──────
+      if (!ctx._trackMeta) ctx._trackMeta = new Map();
+      const _nowMs = typeof timestamp === 'number' ? timestamp : Date.now();
+
+      for (const obj of enrichedObjects) {
+        const id = String(obj.objectId);
+        const existing = ctx._trackMeta.get(id);
+        if (existing) {
+          existing.lastSeenAt = _nowMs;
+          if ((obj.riskScore ?? 0) > (existing.maxRiskScore ?? 0)) existing.maxRiskScore = obj.riskScore;
+          if (obj.isLoitering) existing.isLoitering = true;
+          if (obj.faceId)      existing.faceId      = obj.faceId;
+          if (obj.identity)    existing.identity    = obj.identity;
+          if (obj.zoneId)      existing.zoneId      = obj.zoneId;
+          if (obj.zoneName)    existing.zoneName    = obj.zoneName;
+          if (obj.color)       existing.color       = obj.color;
+          if (obj.cloth)       existing.cloth       = obj.cloth;
+          existing.confidence = Math.max(existing.confidence, obj.confidence ?? 0);
+        } else {
+          ctx._trackMeta.set(id, {
+            firstSeenAt:  obj.firstSeenAt ?? _nowMs,
+            lastSeenAt:   _nowMs,
+            className:    obj.className,
+            maxRiskScore: obj.riskScore   ?? 0,
+            isLoitering:  obj.isLoitering ?? false,
+            confidence:   obj.confidence  ?? 0,
+            faceId:       obj.faceId      ?? null,
+            identity:     obj.identity    ?? null,
+            zoneId:       obj.zoneId      ?? null,
+            zoneName:     obj.zoneName    ?? null,
+            color:        obj.color       ?? null,
+            cloth:        obj.cloth       ?? null,
+          });
+        }
+      }
+
+      for (const rt of _removedBatch) {
+        const trackKey = String(rt.id);
+        const meta = ctx._trackMeta.get(trackKey);
+        if (!meta) continue;
+        ctx._trackMeta.delete(trackKey);
+        const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
+        const meetsRisk = meta.isLoitering || (meta.maxRiskScore ?? 0) >= 0.3;
+        const meetsDwell = dwellMs >= 1000;
+        if (!meetsRisk && !meetsDwell) continue;
+        const _completedFields = {
+          cameraId:    cameraId,
+          cameraName:  cameraName || cameraId,
+          objectId:    trackKey,
+          className:   meta.className,
+          firstSeenAt: new Date(meta.firstSeenAt).toISOString(),
+          lastSeenAt:  new Date(meta.lastSeenAt).toISOString(),
+          dwellTime:   dwellMs,
+          maxRiskScore: meta.maxRiskScore,
+          isLoitering: meta.isLoitering,
+          confidence:  meta.confidence,
+          faceId:      meta.faceId,
+          identity:    meta.identity,
+          zoneId:      meta.zoneId,
+          zoneName:    meta.zoneName,
+          color:       meta.color,
+          cloth:       meta.cloth,
+          inProgress:  false,
+        };
+        const _ex = db.findOne('detectionTracks', { objectId: trackKey, cameraId });
+        if (_ex) {
+          db.update('detectionTracks', _ex.id, _completedFields);
+        } else {
+          db.insert('detectionTracks', { id: _trackUuid(), ..._completedFields, createdAt: new Date().toISOString() });
+        }
+      }
+
       if (fireSmoke.length > 0) _persistFireSmoke(db, io, cameraId, cameraName, ts, fireSmoke, jpegBuffer, frameWidth, frameHeight).catch(() => {});
       if (behaviors.length > 0) _persistLoitering(db, io, cameraId, cameraName, ts, behaviors, jpegBuffer, frameWidth, frameHeight).catch(() => {});
 
@@ -1015,18 +1145,28 @@ router.patch('/config/fire-smoke', express.json({ limit: '10kb' }), (req, res) =
 
 // ── GET /api/analysis/events ──────────────────────────────────────────────────
 // Returns recent persisted analysis events (fire/smoke/loitering).
-// Query params: limit (default 100, max 200), type (comma-separated, e.g. fire,smoke,loitering)
+// Query params:
+//   limit    (default 100, max 500)
+//   type     comma-separated: fire,smoke,loitering
+//   cameraId single camera filter
+//   from     ISO timestamp — include events at or after this time
+//   to       ISO timestamp — include events at or before this time
 router.get('/events', (req, res) => {
   const db = req.app.get('db');
   if (!db) return res.status(503).json({ error: 'DB not available' });
 
-  const limit      = Math.min(200, Math.max(1, parseInt(String(req.query.limit || '100'), 10) || 100));
-  const typeFilter = req.query.type ? String(req.query.type).split(',').map(t => t.trim()).filter(Boolean) : null;
+  const limit        = Math.min(500, Math.max(1, parseInt(String(req.query.limit || '100'), 10) || 100));
+  const typeFilter   = req.query.type     ? String(req.query.type).split(',').map(t => t.trim()).filter(Boolean) : null;
+  const cameraFilter = req.query.cameraId ? String(req.query.cameraId) : null;
+  const fromTs       = req.query.from     ? new Date(String(req.query.from)).getTime() : null;
+  const toTs         = req.query.to       ? new Date(String(req.query.to)).getTime()   : null;
 
   let events = db.find('analysisEvents', {});
-  if (typeFilter && typeFilter.length > 0) {
-    events = events.filter(e => typeFilter.includes(e.type));
-  }
+  if (typeFilter   && typeFilter.length > 0) events = events.filter(e => typeFilter.includes(e.type));
+  if (cameraFilter) events = events.filter(e => e.cameraId === cameraFilter);
+  if (fromTs)       events = events.filter(e => new Date(e.timestamp).getTime() >= fromTs);
+  if (toTs)         events = events.filter(e => new Date(e.timestamp).getTime() <= toTs);
+
   events.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
   events = events.slice(0, limit);
 
@@ -1045,6 +1185,81 @@ router.delete('/events', (req, res) => {
       if (event.id) db.delete('analysisEvents', event.id);
     }
     res.json({ deleted: all.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/detection-tracks ────────────────────────────────────────────────
+// Returns persisted detection track lifecycles (배회 위험 기준 저장됨)
+// Query: cameraId, from (ISO), to (ISO), class, limit (default 500, max 1000)
+router.get('/detection-tracks', (req, res) => {
+  const db = req.app.get('db');
+  if (!db) return res.status(503).json({ error: 'DB not available' });
+
+  try {
+    const limit        = Math.min(1000, Math.max(1, parseInt(String(req.query.limit || '500'), 10) || 500));
+    const cameraFilter = req.query.cameraId ? String(req.query.cameraId) : null;
+    const classFilter  = req.query.class    ? String(req.query.class)    : null;
+    const fromTs       = req.query.from     ? new Date(String(req.query.from)).getTime() : null;
+    const toTs         = req.query.to       ? new Date(String(req.query.to)).getTime()   : null;
+
+    let tracks = db.find('detectionTracks', {});
+    if (cameraFilter) tracks = tracks.filter(t => t.cameraId === cameraFilter);
+    if (classFilter)  tracks = tracks.filter(t => t.className === classFilter);
+    // Overlap filter: include tracks whose interval [firstSeenAt, lastSeenAt] overlaps [fromTs, toTs]
+    if (fromTs) tracks = tracks.filter(t => new Date(t.lastSeenAt).getTime()  >= fromTs);
+    if (toTs)   tracks = tracks.filter(t => new Date(t.firstSeenAt).getTime() <= toTs);
+
+    tracks.sort((a, b) => new Date(b.firstSeenAt).getTime() - new Date(a.firstSeenAt).getTime());
+    tracks = tracks.slice(0, limit);
+
+    res.json({ tracks, total: tracks.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── DELETE /api/detection-tracks ─────────────────────────────────────────────
+router.delete('/detection-tracks', (req, res) => {
+  const db = req.app.get('db');
+  if (!db) return res.status(503).json({ error: 'DB not available' });
+
+  try {
+    const all = db.find('detectionTracks', {});
+    for (const t of all) {
+      if (t.id) db.delete('detectionTracks', t.id);
+    }
+    res.json({ deleted: all.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── GET /api/analysis/detection-snapshots ─────────────────────────────────────
+// Returns saved crop images for a given objectId (detection track)
+// Query: objectId (required), cameraId, from (ISO), to (ISO), limit (default 20, max 100)
+router.get('/detection-snapshots', (req, res) => {
+  const db = req.app.get('db');
+  if (!db) return res.status(503).json({ error: 'DB not available' });
+
+  try {
+    const objectId     = req.query.objectId ? String(req.query.objectId) : null;
+    const cameraFilter = req.query.cameraId ? String(req.query.cameraId) : null;
+    const fromTs       = req.query.from     ? new Date(String(req.query.from)).getTime() : null;
+    const toTs         = req.query.to       ? new Date(String(req.query.to)).getTime()   : null;
+    const limit        = Math.min(100, Math.max(1, parseInt(String(req.query.limit || '20'), 10) || 20));
+
+    if (!objectId) return res.status(400).json({ error: 'objectId required' });
+
+    let snaps = db.find('detectionSnapshots', { objectId });
+    if (cameraFilter) snaps = snaps.filter(s => s.cameraId === cameraFilter);
+    if (fromTs) snaps = snaps.filter(s => new Date(s.timestamp).getTime() >= fromTs);
+    if (toTs)   snaps = snaps.filter(s => new Date(s.timestamp).getTime() <= toTs);
+    snaps.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+    snaps = snaps.slice(0, limit);
+
+    res.json({ snapshots: snaps, total: snaps.length });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1085,7 +1300,8 @@ router.get('/models', (req, res) => {
       exists,
       active:   activeFile === m.file,
       sizeBytes: stat ? stat.size : null,
-      downloading: progress?.status === 'downloading',
+      converting: progress?.status === 'converting',
+      downloading: progress?.status === 'downloading' || progress?.status === 'converting',
       downloadPercent: progress?.percent ?? null,
       downloadError:   progress?.status === 'error' ? progress.error : null,
     };
@@ -1153,7 +1369,7 @@ router.post('/models/download', express.json({ limit: '1kb' }), async (req, res)
     const tmpPath = destPath + '.tmp';
     const file = fs.createWriteStream(tmpPath);
 
-    const req2 = proto.get(url, (response) => {
+    const req2 = proto.get(url, { rejectUnauthorized: false }, (response) => {
       if (response.statusCode === 301 || response.statusCode === 302) {
         file.destroy();
         fs.unlink(tmpPath, () => {});
@@ -1189,9 +1405,64 @@ router.post('/models/download', express.json({ limit: '1kb' }), async (req, res)
 
   try {
     if (!fs.existsSync(modelsDir)) fs.mkdirSync(modelsDir, { recursive: true });
-    await new Promise((resolve, reject) => doDownload(entry.url, filePath, (err) => err ? reject(err) : resolve()));
+
+    if (entry.requiresConversion) {
+      // PT → ONNX via ultralytics export
+      const { execFile } = require('child_process');
+      const ptFile = entry.file.replace('.onnx', '.pt');
+      const ptPath = path.join(modelsDir, ptFile);
+
+      _downloadProgress.set(modelId, { status: 'downloading', percent: 0, error: null });
+      await new Promise((resolve, reject) => doDownload(entry.url, ptPath, (err) => err ? reject(err) : resolve()));
+      _downloadProgress.set(modelId, { status: 'converting', percent: 95, error: null });
+
+      // Resolve Python with ultralytics that supports YOLO12 (cfg/models/12 directory).
+      // ultralytics < 8.3.x uses 'v12' or missing dir and cannot export YOLO12 weights.
+      // Check must verify YOLO12 support explicitly, not just 'import ultralytics'.
+      const { execFileSync } = require('child_process');
+      const pyCandidates = [
+        process.env.PYTHON_EXEC,
+        process.platform === 'win32' ? process.env.PYTHON_EXEC_WINDOWS : process.env.PYTHON_EXEC_LINUX,
+        '/usr/bin/python3',
+        'python3',
+        'python',
+      ].filter(Boolean);
+      const pyCheckScript = [
+        'import ultralytics, os',
+        'cfg12 = os.path.join(os.path.dirname(ultralytics.__file__), "cfg", "models", "12")',
+        'assert os.path.exists(cfg12), "YOLO12 not supported (ultralytics " + ultralytics.__version__ + ")"',
+      ].join('; ');
+      let pyExec = null;
+      for (const cand of pyCandidates) {
+        try { execFileSync(cand, ['-c', pyCheckScript], { timeout: 8000 }); pyExec = cand; break; } catch {}
+      }
+      if (!pyExec) throw new Error('Python with ultralytics >=8.3 (YOLO12 support) not found. Run: pip install -U ultralytics');
+
+      const script = [
+        'from ultralytics import YOLO',
+        `m = YOLO(${JSON.stringify(ptPath)})`,
+        `m.export(format="onnx", imgsz=${entry.size}, dynamic=False)`,
+      ].join('; ');
+
+      await new Promise((resolve, reject) => {
+        execFile(pyExec, ['-c', script], { timeout: 300_000 }, (err, stdout, stderr) => {
+          if (err) { console.error('[AnalysisAPI] ONNX export stderr:', stderr); return reject(err); }
+          resolve();
+        });
+      });
+
+      // ultralytics writes <stem>.onnx next to the .pt file
+      const exportedOnnx = ptPath.replace(/\.pt$/, '.onnx');
+      if (exportedOnnx !== filePath && fs.existsSync(exportedOnnx)) {
+        fs.renameSync(exportedOnnx, filePath);
+      }
+      fs.unlink(ptPath, () => {});
+    } else {
+      await new Promise((resolve, reject) => doDownload(entry.url, filePath, (err) => err ? reject(err) : resolve()));
+    }
+
     _downloadProgress.set(modelId, { status: 'done', percent: 100, error: null });
-    console.log(`[AnalysisAPI] Downloaded ${entry.label} → ${entry.file}`);
+    console.log(`[AnalysisAPI] Ready ${entry.label} → ${entry.file}`);
   } catch (err) {
     _downloadProgress.set(modelId, { status: 'error', percent: 0, error: err.message });
     console.error(`[AnalysisAPI] Download failed for ${entry.label}:`, err.message);

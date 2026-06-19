@@ -126,6 +126,10 @@ class DetectionService {
     this._session     = null;
     this._loading     = null;
     this._numClasses  = null; // inferred from first inference output dims
+    // Pre-allocated input tensor buffer — reused across frames (safe because
+    // pipelineManager serialises inference with _inferring; the previous run's
+    // session.run() has already resolved before the next _preprocess() call).
+    this._float32Buf  = new Float32Array(3 * INPUT_SIZE * INPUT_SIZE);
   }
 
   /**
@@ -190,20 +194,30 @@ class DetectionService {
 
   /**
    * Decode JPEG, letterbox-resize to 640×640, build CHW Float32Array tensor.
+   *
+   * Single JPEG decode: the first sharp call decodes once to raw pixels and
+   * returns original dimensions; the second call operates on the already-decoded
+   * raw buffer (no second JPEG decode) to resize and letterbox.
    */
   async _preprocess(jpegBuffer) {
-    const meta = await sharp(jpegBuffer).metadata();
-    const srcW = meta.width  || INPUT_SIZE;
-    const srcH = meta.height || INPUT_SIZE;
+    // Decode JPEG once → raw RGB pixels + source dimensions
+    const { data: srcRaw, info: srcInfo } = await sharp(jpegBuffer)
+      .removeAlpha()   // normalise to 3-channel RGB regardless of source format
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+
+    const srcW = srcInfo.width;
+    const srcH = srcInfo.height;
 
     // Compute letterbox scale
-    const scale = Math.min(INPUT_SIZE / srcW, INPUT_SIZE / srcH);
+    const scale   = Math.min(INPUT_SIZE / srcW, INPUT_SIZE / srcH);
     const scaledW = Math.round(srcW * scale);
     const scaledH = Math.round(srcH * scale);
     const padLeft = Math.floor((INPUT_SIZE - scaledW) / 2);
     const padTop  = Math.floor((INPUT_SIZE - scaledH) / 2);
 
-    const rgbData = await sharp(jpegBuffer)
+    // Resize + pad from already-decoded raw pixels — no second JPEG decode
+    const rgbData = await sharp(srcRaw, { raw: { width: srcW, height: srcH, channels: 3 } })
       .resize(scaledW, scaledH)
       .extend({
         top:    padTop,
@@ -212,17 +226,18 @@ class DetectionService {
         right:  INPUT_SIZE - scaledW - padLeft,
         background: { r: 114, g: 114, b: 114 },
       })
-      .removeAlpha()
       .raw()
       .toBuffer();
 
+    // HWC uint8 → CHW float32 using pre-allocated buffer (avoids per-frame GC)
     const numPixels = INPUT_SIZE * INPUT_SIZE;
-    const float32 = new Float32Array(3 * numPixels);
-
+    const float32   = this._float32Buf;
+    const inv255    = 1 / 255;
     for (let i = 0; i < numPixels; i++) {
-      float32[i]                = rgbData[i * 3]     / 255.0; // R
-      float32[i + numPixels]    = rgbData[i * 3 + 1] / 255.0; // G
-      float32[i + 2 * numPixels]= rgbData[i * 3 + 2] / 255.0; // B
+      const j = i * 3;
+      float32[i]                = rgbData[j]     * inv255;
+      float32[i + numPixels]    = rgbData[j + 1] * inv255;
+      float32[i + 2 * numPixels]= rgbData[j + 2] * inv255;
     }
 
     const tensor = new ort.Tensor('float32', float32, [1, 3, INPUT_SIZE, INPUT_SIZE]);

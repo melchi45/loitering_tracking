@@ -607,6 +607,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
 
   const { socket, connected } = useSocket();
   const updateCameraStatus = useCameraStore((s) => s.updateCameraStatus);
+  const updateCamera = useCameraStore((s) => s.updateCamera);
   const setCameras = useCameraStore((s) => s.setCameras);
   const cameras = useCameraStore((s) => s.cameras);
   const addAlert = useAlertStore((s) => s.addAlert);
@@ -737,6 +738,14 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
       updateCameraStatus(event.cameraId, event.status);
     };
 
+    // Server signals that this camera has no WebRTC path (e.g. ingest-daemon mode).
+    // Update the in-memory store so CameraView switches to JPEG/Socket.IO mode.
+    const handleCameraCapabilities = (event: { cameraId: string; webrtcEnabled?: boolean }) => {
+      if (event.webrtcEnabled === false) {
+        updateCamera(event.cameraId, { webrtcEnabled: false });
+      }
+    };
+
     const handleAlert = (event: {
       id?: string;
       cameraId: string;
@@ -779,6 +788,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
     };
 
     socket.on('camera:status',            handleCameraStatus);
+    socket.on('camera:capabilities',      handleCameraCapabilities);
     socket.on('alert:new',                handleAlert);
     socket.on('face:reidentified',        handleFaceReidentified);
     socket.on('clothing:reidentified',    handleClothingReidentified);
@@ -789,12 +799,13 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
 
     return () => {
       socket.off('camera:status',            handleCameraStatus);
+      socket.off('camera:capabilities',      handleCameraCapabilities);
       socket.off('alert:new',                handleAlert);
       socket.off('face:reidentified',        handleFaceReidentified);
       socket.off('clothing:reidentified',    handleClothingReidentified);
       socket.off('person:trajectory-update', handlePersonTrajectory);
     };
-  }, [socket, updateCameraStatus, addAlert, addCrossCameraEvent, addClothingReIdEvent, updatePerson]);
+  }, [socket, updateCameraStatus, updateCamera, addAlert, addCrossCameraEvent, addClothingReIdEvent, updatePerson]);
 
   // ── Dashboard routing ────────────────────────────────────────────────────────
   // combined + /analysis  →  show analysis dashboard
@@ -925,7 +936,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
             <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" />
             </svg>
-            User Management
+            Admin Dashboard
           </button>
         )}
         {isCombined && (

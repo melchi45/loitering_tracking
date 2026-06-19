@@ -54,6 +54,39 @@ const { getSystemMetrics } = require('./systemMetrics');
 
 const SERVER_MODE = process.env.SERVER_MODE || 'combined';
 
+// ─── Ingest daemon helpers ────────────────────────────────────────────────────
+// Used when CAPTURE_BACKEND=ingest-daemon to register/remove cameras directly
+// with the AI-only Python daemon (no ffmpeg, no WebRTC RTP path).
+
+const _INGEST_DAEMON_URL = (process.env.INGEST_DAEMON_URL || 'http://127.0.0.1:7070').replace(/\/$/, '');
+
+async function _ingestRegisterCamera(cameraId, rtspUrl, callbackUrl) {
+  try {
+    const resp = await fetch(`${_INGEST_DAEMON_URL}/cameras`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id: cameraId, rtspUrl, callbackUrl }),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (!resp.ok) throw new Error(`ingest-daemon responded ${resp.status}`);
+    return true;
+  } catch (err) {
+    console.warn(`[PipelineManager][${cameraId.slice(0, 8)}] ingest-daemon register failed: ${err.message}`);
+    return false;
+  }
+}
+
+async function _ingestRemoveCamera(cameraId) {
+  try {
+    await fetch(`${_INGEST_DAEMON_URL}/cameras/${encodeURIComponent(cameraId)}`, {
+      method: 'DELETE',
+      signal: AbortSignal.timeout(5000),
+    });
+  } catch {
+    // ignore cleanup errors
+  }
+}
+
 // Forwarding rate cap for streaming→analysis (frames per second per camera).
 // 0 = unlimited (latest-frame-wins naturally throttles to analysis server speed).
 // Set ANALYSIS_FPS in .env_streaming to explicitly cap forwarding, reducing
@@ -275,14 +308,24 @@ class PipelineManager {
     const requestedWebRTC = !!camera.webrtcEnabled;
     const captureFps = parseInt(process.env.CAPTURE_FPS, 10) || 10;
 
+    // YouTube cameras publish their stream via FFmpeg → MediaMTX at /yt/<id>.
+    // They do NOT need a second MediaMTX path registration (which would create a
+    // MediaMTX→MediaMTX loopback) and do NOT use mediasoup RTP fan-out — the
+    // ingest-daemon reads directly from the existing /yt/<id> RTSP path for AI JPEG only.
+    const isYouTube = camera.type === 'youtube';
+
     // Register with MediaMTX when:
     //   (a) WEBRTC_ENGINE=mediamtx and browser WebRTC delivery is requested, OR
-    //   (b) WEBRTC_ENGINE=mediasoup (MediaMTX acts as single-connection relay so
-    //       both the AI capture and mediasoup's ffmpeg share one upstream), OR
+    //   (b) WEBRTC_ENGINE=mediasoup and not analysis mode — MediaMTX holds the single
+    //       upstream RTSP connection; ingest-daemon reads from MediaMTX loopback to
+    //       feed both AI JPEG and RTP paths without a second camera connection, OR
     //   (c) the mediamtx capture backend is active.
-    const needsMediaMTX = (requestedWebRTC && WEBRTC_ENGINE === 'mediamtx')
-                       || (WEBRTC_ENGINE === 'mediasoup' && SERVER_MODE !== 'analysis')
-                       || CAPTURE_BACKEND === 'mediamtx';
+    // YouTube cameras are excluded: their RTSP URL IS already a MediaMTX path.
+    const needsMediaMTX = !isYouTube && (
+      (requestedWebRTC && WEBRTC_ENGINE === 'mediamtx')
+      || (WEBRTC_ENGINE === 'mediasoup' && SERVER_MODE !== 'analysis')
+      || CAPTURE_BACKEND === 'mediamtx'
+    );
     let mediamtxReady = false;
     if (needsMediaMTX) {
       mediamtxReady = await mediamtxManager.addCameraPath(camera.id, rtspUrl).catch(() => false);
@@ -311,16 +354,55 @@ class PipelineManager {
       ? `rtsp://127.0.0.1:${mediamtxRtspPort}/${camera.id}`
       : rtspUrl;
 
-    // For non-mediamtx WebRTC engines, register the stream with the selected engine.
-    // Pass captureUrl (MediaMTX re-publish when available) so mediasoup's ffmpeg
-    // shares the same upstream as the AI capture backend — one camera connection only.
-    // Also register when mediamtxReady even if webrtcEnabled=false, so WHEP is
-    // available for all cameras (matches the previous mediamtx engine behaviour).
+    // For non-mediamtx WebRTC engines (mediasoup), register the stream with the engine.
+    // mediasoupEngine.addCameraStream() internally calls ingest-daemon with both the
+    // AI callbackUrl AND the mediasoup RTP ports, so we skip the separate ingest-daemon
+    // registration below when WEBRTC_ENGINE=mediasoup.
+    // YouTube cameras are excluded: they use AI-only ingest-daemon registration (below)
+    // since their stream is already managed by FFmpeg→MediaMTX; starting mediasoup RTP
+    // fan-out threads against a MediaMTX RTSP URL causes connection-refused retry loops.
     let altWebRTCReady = false;
-    const registerAltEngine = WEBRTC_ENGINE !== 'mediamtx' &&
-      (requestedWebRTC || (WEBRTC_ENGINE === 'mediasoup' && mediamtxReady));
+    const registerAltEngine = !isYouTube && WEBRTC_ENGINE !== 'mediamtx' &&
+      (requestedWebRTC || WEBRTC_ENGINE === 'mediasoup');
     if (registerAltEngine) {
-      altWebRTCReady = await getWebRTCEngine().addCameraStream(camera.id, captureUrl).catch(() => false);
+      // Retry up to 3 times with a 2-second delay — ingest-daemon may still be
+      // binding its port when the first addCameraStream call arrives on startup.
+      for (let attempt = 0; attempt < 3; attempt++) {
+        altWebRTCReady = await getWebRTCEngine().addCameraStream(camera.id, captureUrl).catch(() => false);
+        if (altWebRTCReady) break;
+        if (attempt < 2) {
+          console.warn(`[PipelineManager][${camera.id.slice(0,8)}] addCameraStream attempt ${attempt + 1} failed — retrying in 2s`);
+          await new Promise(r => setTimeout(r, 2000));
+        }
+      }
+    }
+
+    // When using ingest-daemon with mediamtx engine: register for AI JPEG only.
+    // When using mediasoup engine: mediasoupEngine.addCameraStream() already registered
+    // ingest-daemon (AI + RTP). Fall back to AI-only registration if mediasoup failed.
+    // These are declared here (outer scope) so ctx can capture them in its literal below.
+    let _ingestRtspUrl     = null;
+    let _ingestCallbackUrl = null;
+    if (CAPTURE_BACKEND === 'ingest-daemon') {
+      const isHttps     = (process.env.HTTPS_ENABLED || '').toLowerCase() === 'true';
+      const serverProto = isHttps ? 'https' : 'http';
+      const serverPort  = isHttps
+        ? parseInt(process.env.HTTPS_PORT || '3443', 10)
+        : parseInt(process.env.HTTP_PORT || process.env.PORT || '3080', 10);
+      const callbackUrl   = `${serverProto}://127.0.0.1:${serverPort}/api/internal/frame/${camera.id}`;
+      const daemonRtspUrl = mediamtxReady ? captureUrl : rtspUrl;
+
+      const needsDirectIngestReg = WEBRTC_ENGINE !== 'mediasoup' || !altWebRTCReady;
+      if (needsDirectIngestReg) {
+        const daemonReady = await _ingestRegisterCamera(camera.id, daemonRtspUrl, callbackUrl);
+        if (!daemonReady) {
+          console.error(`[PipelineManager][${camera.id}] Ingest daemon registration failed — no AI frames for this camera`);
+        } else {
+          console.log(`[PipelineManager][${camera.id}] Ingest daemon registered (AI-only) → ${daemonRtspUrl}`);
+        }
+        _ingestRtspUrl     = daemonRtspUrl;
+        _ingestCallbackUrl = callbackUrl;
+      }
     }
 
     const useWebRTC = requestedWebRTC && (WEBRTC_ENGINE === 'mediamtx' ? mediamtxReady : altWebRTCReady);
@@ -365,6 +447,13 @@ class PipelineManager {
       loiteringTotal:     0,
       totalProcessingMs:  0,
       recentSamples:      [], // { at, bytes, detections, trackedObjects, faces, fireSmoke, loitering, processingMs }
+      // Track lifecycle meta — keyed by objectId, used to persist ended tracks to DB
+      // Only objects with riskScore >= 0.3 or isLoitering are saved (배회 위험 기준)
+      _trackMeta:         new Map(), // objectId → { firstSeenAt, lastSeenAt, className, maxRiskScore, isLoitering, confidence, faceId, identity, zoneId, zoneName, color, cloth }
+      // ingest-daemon re-registration params (used by frame watchdog on stall)
+      _ingestRtspUrl,
+      _ingestCallbackUrl,
+      _captureUrl: captureUrl,   // URL ingest-daemon reads from (for mediasoup watchdog re-reg)
     };
 
     // ── Listen for loitering events ──────────────────────────────────────
@@ -441,9 +530,14 @@ class PipelineManager {
       // Skip if every analytics module is disabled on this server.
       if (!analyticsConfig.anyModuleEnabled()) return;
 
-      // Skip if previous frame is still being processed — CPU-bound ONNX
-      // inference must be serialized per camera.
-      if (ctx._inferring) return;
+      // Latest-frame-wins: when inference is already running for this camera,
+      // store the newest frame so it is processed immediately after the current
+      // inference completes.  This eliminates the idle gap between inference end
+      // and the next frame arriving from ingest-daemon, smoothing GPU utilisation.
+      if (ctx._inferring) {
+        ctx._pendingFrame = { buf: jpegBuffer, fw: frameWidth, fh: frameHeight, ts: timestamp };
+        return;
+      }
       ctx._inferring = true;
       const _inferStart = Date.now();
 
@@ -772,6 +866,98 @@ class PipelineManager {
           frameHeight,
         });
 
+        // 7b. Update track lifecycle meta + persist ended tracks to DB
+        {
+          const _nowMs = timestamp;
+
+          // Update meta for all currently enriched (active) objects
+          // enrichedObjects use objectId (= track.id UUID from toResult())
+          for (const obj of enrichedObjects) {
+            const id = String(obj.objectId);
+            const existing = ctx._trackMeta.get(id);
+            if (existing) {
+              existing.lastSeenAt = _nowMs;
+              if ((obj.riskScore ?? 0) > (existing.maxRiskScore ?? 0)) existing.maxRiskScore = obj.riskScore;
+              if (obj.isLoitering) existing.isLoitering = true;
+              if (obj.faceId)      existing.faceId      = obj.faceId;
+              if (obj.identity)    existing.identity    = obj.identity;
+              if (obj.zoneId)      existing.zoneId      = obj.zoneId;
+              if (obj.zoneName)    existing.zoneName    = obj.zoneName;
+              if (obj.color)       existing.color       = obj.color;
+              if (obj.cloth)       existing.cloth       = obj.cloth;
+              existing.confidence = Math.max(existing.confidence, obj.confidence ?? 0);
+            } else {
+              ctx._trackMeta.set(id, {
+                firstSeenAt:  obj.firstSeenAt ?? _nowMs,
+                lastSeenAt:   _nowMs,
+                className:    obj.className,
+                maxRiskScore: obj.riskScore ?? 0,
+                isLoitering:  obj.isLoitering ?? false,
+                confidence:   obj.confidence ?? 0,
+                faceId:       obj.faceId      ?? null,
+                identity:     obj.identity    ?? null,
+                zoneId:       obj.zoneId      ?? null,
+                zoneName:     obj.zoneName    ?? null,
+                color:        obj.color       ?? null,
+                cloth:        obj.cloth       ?? null,
+              });
+            }
+          }
+
+          // Flush removed tracks → save to DB if they meet the risk threshold
+          const removedTracks = ctx.tracker.popRemovedTracks();
+          if (removedTracks.length > 0) {
+            const { v4: _uuid } = require('uuid');
+            for (const rt of removedTracks) {
+              // Track objects use rt.id (UUID); enrichedObjects expose it as objectId
+              const trackKey = String(rt.id);
+              const meta = ctx._trackMeta.get(trackKey);
+              if (!meta) continue;
+              ctx._trackMeta.delete(trackKey);
+
+              const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
+
+              // Persist condition: loitering flag OR zone-based risk OR dwell >= 0.5s
+              const meetsRisk = meta.isLoitering || (meta.maxRiskScore ?? 0) >= 0.3;
+              const meetsDwell = dwellMs >= 500; // 0.5-second minimum dwell
+              if (!meetsRisk && !meetsDwell) continue;
+              const _completedFields = {
+                cameraId:    camera.id,
+                cameraName:  camera.name || camera.id,
+                objectId:    trackKey,
+                className:   meta.className,
+                firstSeenAt: new Date(meta.firstSeenAt).toISOString(),
+                lastSeenAt:  new Date(meta.lastSeenAt).toISOString(),
+                dwellTime:   dwellMs,
+                maxRiskScore: meta.maxRiskScore,
+                isLoitering: meta.isLoitering,
+                confidence:  meta.confidence,
+                faceId:      meta.faceId,
+                identity:    meta.identity,
+                zoneId:      meta.zoneId,
+                zoneName:    meta.zoneName,
+                color:       meta.color,
+                cloth:       meta.cloth,
+                inProgress:  false,
+              };
+              const _existing = this._db.findOne('detectionTracks', { objectId: trackKey, cameraId: camera.id });
+              if (_existing) {
+                this._db.update('detectionTracks', _existing.id, _completedFields);
+              } else {
+                this._db.insert('detectionTracks', { id: _uuid(), ..._completedFields, createdAt: new Date().toISOString() });
+              }
+            }
+            // Cap collection at 10,000 rows (oldest first)
+            const allTracks = this._db.find('detectionTracks', {});
+            if (allTracks.length > 10000) {
+              const toRemove = allTracks
+                .sort((a, b) => new Date(a.firstSeenAt).getTime() - new Date(b.firstSeenAt).getTime())
+                .slice(0, allTracks.length - 10000);
+              for (const t of toRemove) this._db.delete('detectionTracks', t.id);
+            }
+          }
+        }
+
         // 8. Accumulate per-camera analytics stats
         {
           const _now    = Date.now();
@@ -832,6 +1018,14 @@ class PipelineManager {
         }
       } finally {
         ctx._inferring = false;
+        // If a newer frame arrived while we were inferring, process it immediately
+        // rather than waiting for the next frame from ingest-daemon.
+        if (ctx._pendingFrame && ctx.running) {
+          const pending = ctx._pendingFrame;
+          ctx._pendingFrame = null;
+          // Re-inject via the same capture event so all listeners run
+          capture.emit('frame', pending.buf);
+        }
       }
     });
 
@@ -899,19 +1093,124 @@ class PipelineManager {
     this._updateCameraStatus(camera.id, 'connecting');
     capture.start();
 
-    // Frame watchdog: restart RTSPCapture if no JPEG arrives for 20 s.
+    // Frame watchdog: restart capture if no JPEG arrives for 20 s.
+    // For IngestDaemonCapture, capture.stop()/start() only toggles an in-process flag.
+    // The actual reconnect requires re-registering the camera with the daemon via HTTP.
     {
       const FRAME_STALL_MS = 20_000;
-      ctx.frameWatchdogTimer = setInterval(() => {
+      ctx.frameWatchdogTimer = setInterval(async () => {
         if (!ctx.running || !ctx.lastFrameAt) return;
         const stalledMs = Date.now() - ctx.lastFrameAt;
         if (stalledMs > FRAME_STALL_MS) {
           console.warn(`[PipelineManager][${camera.id}] Frame watchdog: no frame for ${Math.round(stalledMs / 1000)}s — restarting capture`);
           ctx.lastFrameAt = Date.now();
           ctx.capture.stop();
+
+          if (CAPTURE_BACKEND === 'ingest-daemon' && ctx._ingestRtspUrl) {
+            // AI-only or mediamtx-engine path: re-register directly with ingest-daemon.
+            await _ingestRemoveCamera(camera.id);
+            const ok = await _ingestRegisterCamera(camera.id, ctx._ingestRtspUrl, ctx._ingestCallbackUrl);
+            if (!ok) {
+              console.error(`[PipelineManager][${camera.id}] Frame watchdog: ingest-daemon re-registration failed`);
+            }
+          } else if (CAPTURE_BACKEND === 'ingest-daemon' && WEBRTC_ENGINE !== 'mediamtx') {
+            // mediasoup path: _ingestRtspUrl is null because mediasoupEngine.addCameraStream()
+            // handled registration. Re-register via the engine (recreates PlainTransports + re-POST to daemon).
+            const ok = await getWebRTCEngine().addCameraStream(camera.id, ctx._captureUrl).catch(() => false);
+            if (!ok) {
+              console.error(`[PipelineManager][${camera.id}] Frame watchdog: mediasoup re-registration failed`);
+            }
+          }
+
           ctx.capture.start();
         }
       }, 8_000);
+    }
+
+    // Active track flush: upsert long-running tracks every 30s so they appear
+    // in the timeline even while the subject remains in frame continuously.
+    // In streaming mode, also finalizes stale tracks (those not seen for 15s+)
+    // since there is no popRemovedTracks() available (tracker runs on analysis server).
+    {
+      ctx._activeFlushTimer = setInterval(() => {
+        if (!ctx.running || ctx._trackMeta.size === 0) return;
+        const { v4: _fuuid } = require('uuid');
+        const nowMs = Date.now();
+        const _staleToFinalize = [];
+
+        for (const [trackKey, meta] of ctx._trackMeta.entries()) {
+          const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
+          const isStale = nowMs - meta.lastSeenAt > 15_000;
+
+          if (isStale) {
+            if (SERVER_MODE === 'streaming') {
+              // Collect stale tracks for finalization below (inProgress: false)
+              _staleToFinalize.push([trackKey, meta]);
+            }
+            continue; // skip inProgress upsert for stale tracks
+          }
+
+          if (dwellMs < 1000) continue; // only flush tracks active >= 1s
+          const fields = {
+            cameraId:    camera.id,
+            cameraName:  camera.name || camera.id,
+            objectId:    trackKey,
+            className:   meta.className,
+            firstSeenAt: new Date(meta.firstSeenAt).toISOString(),
+            lastSeenAt:  new Date(meta.lastSeenAt).toISOString(),
+            dwellTime:   dwellMs,
+            maxRiskScore: meta.maxRiskScore,
+            isLoitering: meta.isLoitering,
+            confidence:  meta.confidence,
+            faceId:      meta.faceId,
+            identity:    meta.identity,
+            zoneId:      meta.zoneId,
+            zoneName:    meta.zoneName,
+            color:       meta.color,
+            cloth:       meta.cloth,
+            inProgress:  true,
+          };
+          const _ex = this._db.findOne('detectionTracks', { objectId: trackKey, cameraId: camera.id });
+          if (_ex) {
+            this._db.update('detectionTracks', _ex.id, fields);
+          } else {
+            this._db.insert('detectionTracks', { id: _fuuid(), ...fields, createdAt: new Date().toISOString() });
+          }
+        }
+
+        // Streaming mode: finalize tracks not seen in 15s (replaces popRemovedTracks)
+        for (const [trackKey, meta] of _staleToFinalize) {
+          ctx._trackMeta.delete(trackKey);
+          const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
+          const meetsRisk = meta.isLoitering || (meta.maxRiskScore ?? 0) >= 0.3;
+          if (!meetsRisk && dwellMs < 500) continue;
+          const fields = {
+            cameraId:    camera.id,
+            cameraName:  camera.name || camera.id,
+            objectId:    trackKey,
+            className:   meta.className,
+            firstSeenAt: new Date(meta.firstSeenAt).toISOString(),
+            lastSeenAt:  new Date(meta.lastSeenAt).toISOString(),
+            dwellTime:   dwellMs,
+            maxRiskScore: meta.maxRiskScore,
+            isLoitering: meta.isLoitering,
+            confidence:  meta.confidence,
+            faceId:      meta.faceId,
+            identity:    meta.identity,
+            zoneId:      meta.zoneId,
+            zoneName:    meta.zoneName,
+            color:       meta.color,
+            cloth:       meta.cloth,
+            inProgress:  false,
+          };
+          const _ex = this._db.findOne('detectionTracks', { objectId: trackKey, cameraId: camera.id });
+          if (_ex) {
+            this._db.update('detectionTracks', _ex.id, fields);
+          } else {
+            this._db.insert('detectionTracks', { id: _fuuid(), ...fields, createdAt: new Date().toISOString() });
+          }
+        }
+      }, 30_000);
     }
   }
 
@@ -930,12 +1229,19 @@ class PipelineManager {
       clearInterval(ctx.frameWatchdogTimer);
       ctx.frameWatchdogTimer = null;
     }
+    if (ctx._activeFlushTimer) {
+      clearInterval(ctx._activeFlushTimer);
+      ctx._activeFlushTimer = null;
+    }
     ctx.capture.stop();
     ctx.behavior.reset();
     ctx.behavior.removeAllListeners();
-    const needsMediaMTXCleanup = (ctx.useWebRTC && WEBRTC_ENGINE === 'mediamtx') || CAPTURE_BACKEND === 'mediamtx';
+    const needsMediaMTXCleanup = (ctx.useWebRTC && WEBRTC_ENGINE === 'mediamtx')
+      || CAPTURE_BACKEND === 'mediamtx'
+      || (WEBRTC_ENGINE === 'mediasoup' && SERVER_MODE !== 'analysis');
     if (needsMediaMTXCleanup) mediamtxManager.removeCameraPath(cameraId).catch(() => {});
-    if (ctx.useWebRTC && WEBRTC_ENGINE !== 'mediamtx') getWebRTCEngine().removeCameraStream(cameraId).catch(() => {});
+    if (WEBRTC_ENGINE !== 'mediamtx') getWebRTCEngine().removeCameraStream(cameraId).catch(() => {});
+    if (CAPTURE_BACKEND === 'ingest-daemon') _ingestRemoveCamera(cameraId).catch(() => {});
     this._pipelines.delete(cameraId);
     this._updateCameraStatus(cameraId, 'offline');
   }
@@ -964,6 +1270,49 @@ class PipelineManager {
   setAiEnabled(cameraId, enabled) {
     const ctx = this._pipelines.get(cameraId);
     if (ctx) ctx.aiEnabled = enabled;
+  }
+
+  /**
+   * Inject a JPEG frame from the external ingest daemon into the pipeline.
+   * Called by POST /api/internal/frame/:cameraId when CAPTURE_BACKEND=ingest-daemon.
+   * @param {string} cameraId
+   * @param {Buffer} jpegBuffer
+   */
+  onIngestFrame(cameraId, jpegBuffer) {
+    const ctx = this._pipelines.get(cameraId);
+    if (!ctx || !ctx.running) return;
+    if (typeof ctx.capture.injectFrame === 'function') {
+      ctx.capture.injectFrame(jpegBuffer);
+    }
+  }
+
+  /**
+   * Re-register all active cameras with ingest-daemon after an unexpected daemon restart.
+   * Handles both paths:
+   *  - mediamtx/direct: ctx._ingestRtspUrl is set → POST directly to ingest-daemon HTTP API
+   *  - mediasoup:       ctx._ingestRtspUrl is null → re-register via engine.addCameraStream
+   * Called by startServer.js auto-restart logic via POST /api/internal/ingest/reregister.
+   */
+  async reregisterAllWithIngestDaemon() {
+    const results = {};
+    for (const [cameraId, ctx] of this._pipelines) {
+      if (!ctx.running) continue;
+      try {
+        if (ctx._ingestRtspUrl) {
+          // mediamtx engine or direct AI-only path: re-register directly
+          await _ingestRemoveCamera(cameraId);
+          const ok = await _ingestRegisterCamera(cameraId, ctx._ingestRtspUrl, ctx._ingestCallbackUrl);
+          results[cameraId] = { ok };
+        } else if (CAPTURE_BACKEND === 'ingest-daemon') {
+          // mediasoup path: engine re-creates PlainTransports and re-POSTs to daemon
+          const ok = await getWebRTCEngine().addCameraStream(cameraId, ctx._captureUrl).catch(() => false);
+          results[cameraId] = { ok };
+        }
+      } catch (e) {
+        results[cameraId] = { ok: false, error: e.message };
+      }
+    }
+    return results;
   }
 
   /** Returns status snapshot of all active pipelines for the dev monitor. */
@@ -1379,6 +1728,48 @@ class PipelineManager {
       frameWidth:  remoteFrameWidth,
       frameHeight: remoteFrameHeight,
     });
+
+    // ── Track lifecycle accumulation for streaming mode (local shadow copy) ──
+    // In streaming mode ByteTracker runs on the analysis server; streaming server
+    // maintains its own _trackMeta to save a local copy of detectionTracks so
+    // the DetectionsTimeline works even when the analysis server restarts.
+    if (this._db) {
+      const _ctx = this._pipelines.get(_cameraId);
+      if (_ctx && _ctx._trackMeta) {
+        for (const obj of remoteTracked) {
+          if (obj.className === 'face' || obj.className === 'fire' || obj.className === 'smoke') continue;
+          const id = String(obj.objectId);
+          const existing = _ctx._trackMeta.get(id);
+          if (existing) {
+            existing.lastSeenAt = _ts;
+            if ((obj.riskScore ?? 0) > (existing.maxRiskScore ?? 0)) existing.maxRiskScore = obj.riskScore;
+            if (obj.isLoitering) existing.isLoitering = true;
+            existing.confidence = Math.max(existing.confidence, obj.confidence ?? 0);
+            if (obj.faceId)   existing.faceId   = obj.faceId;
+            if (obj.identity) existing.identity = obj.identity;
+            if (obj.color)    existing.color    = obj.color;
+            if (obj.cloth)    existing.cloth    = obj.cloth;
+            if (obj.zoneId)   existing.zoneId   = obj.zoneId;
+            if (obj.zoneName) existing.zoneName = obj.zoneName;
+          } else {
+            _ctx._trackMeta.set(id, {
+              firstSeenAt:  _ts,
+              lastSeenAt:   _ts,
+              className:    obj.className,
+              maxRiskScore: obj.riskScore   ?? 0,
+              isLoitering:  obj.isLoitering ?? false,
+              confidence:   obj.confidence  ?? 0,
+              faceId:       obj.faceId      ?? null,
+              identity:     obj.identity    ?? null,
+              zoneId:       obj.zoneId      ?? null,
+              zoneName:     obj.zoneName    ?? null,
+              color:        obj.color       ?? null,
+              cloth:        obj.cloth       ?? null,
+            });
+          }
+        }
+      }
+    }
 
     for (const b of (result.behaviors || [])) {
       if (b.isLoitering || b.type === 'loitering') {

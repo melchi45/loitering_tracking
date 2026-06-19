@@ -72,7 +72,9 @@ Two sub-tabs: **Added (N)** and **Found (N)**, where N is the respective count. 
 
 A blue animated ping dot (`w-1.5 h-1.5 bg-blue-400 animate-ping`) appears inside the Found tab label while scanning.
 
-**Auto tab switch**: When the first `discovery:result` Socket.IO event is received, the panel automatically switches to the Found tab (one-time, controlled by `autoSwitched` flag).
+**Auto tab switch on discovery**: When the first `discovery:result` Socket.IO event is received, the panel automatically switches to the Found tab (one-time, controlled by `autoSwitched` flag).
+
+**Auto tab switch back to Added on registration**: When a camera is registered (cameras count increases) while the Found tab is active, the panel automatically switches back to the Added tab so the operator can immediately see the newly added camera. Implemented via `useRef`/`useEffect` watching `cameras.length` in `CameraList.tsx`.
 
 ### 4.3 Added Tab — Registered Camera List
 
@@ -273,6 +275,7 @@ bg-gray-800 border-gray-700 hover:bg-gray-700 hover:border-gray-600
 5. The AI toggle button immediately reflects the new state (`text-green-400` when on, `text-gray-600` when off) after `POST /api/cameras/{id}/ai/toggle` responds successfully.
 6. The reconnect button shows a 2-second "Reconnecting…" pulsing indicator after click.
 7. The Found tab auto-switches when the first `discovery:result` event is received, and does not auto-switch again for subsequent events.
+7a. When a camera is registered while on the Found tab, the panel automatically switches back to the Added tab.
 8. The search bar in the Found tab correctly filters devices by text fields (Model, IP, MAC, etc.) and by virtual category keywords (`onvif`, `sunapi`, `hanwha`); matched field names appear as yellow badges.
 9. Clicking a discovered device shows the `DiscoveredCameraPanel` overlay with its details and "Add as camera" pre-fills the Camera Add Modal.
 10. The Camera Edit Modal pre-populates all fields with current values; "Save & Reconnect" calls both `PUT /api/cameras/{id}` and `POST /api/cameras/{id}/stream/reconnect` sequentially.
@@ -311,3 +314,4 @@ bg-gray-800 border-gray-700 hover:bg-gray-700 hover:border-gray-600
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for Dashboard Sidebar Cameras |
+| 1.1 | 2026-06-16 | LTS Engineering Team | §4.2 Sub-Tab 섹션에 Found→Added 자동 전환 요구사항 추가; §5 검증 항목 7a 추가 |

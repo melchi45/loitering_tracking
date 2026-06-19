@@ -47,6 +47,8 @@ docker compose build && docker compose up -d
 ```
 
 ### 로그 확인
+
+#### Docker 컨테이너 로그
 ```bash
 # 전체 서비스 실시간 로그
 docker compose logs -f
@@ -54,6 +56,59 @@ docker compose logs -f
 # 특정 서비스 로그
 docker compose logs -f server
 docker compose logs -f mediamtx --tail 100
+```
+
+#### 프로덕션 로그 파일 (`npm run start` 계열)
+`startServer.js`가 모든 출력(서버·MediaMTX·Ingest)에 `[YY-MM-DD HH:mm:ss.sss] [LEVEL]` 접두어를 붙여 일별 파일로 저장합니다.
+
+**출력 형식**
+```
+[26-06-19 13:45:30.012] [INFO]    [DB] MongoDB connected
+[26-06-19 13:45:30.234] [WARNING] [MediaMTX] Port 8554 already in use
+[26-06-19 13:45:30.456] [DEBUG]   [YouTubeStream] yt-dlp: [hls @ 0x...] Skip(...)
+```
+
+**초기 설정 (1회, root 필요)**
+```bash
+sudo mkdir -p /var/log/lts && sudo chown $USER:$USER /var/log/lts
+```
+
+**로그 조회**
+```bash
+# 실시간 확인
+tail -f /var/log/lts/lts-$(date +%Y-%m-%d).log
+
+# 레벨별 필터
+grep '\[ERROR\]'   /var/log/lts/lts-$(date +%Y-%m-%d).log
+grep '\[WARNING\]' /var/log/lts/lts-$(date +%Y-%m-%d).log
+```
+
+**환경변수 (`server/.env`)**
+
+| 변수 | 기본값 | 설명 |
+|---|---|---|
+| `LOG_TO_FILE` | `true` | `false`로 설정 시 파일 저장 비활성화 |
+| `LOG_DIR` | `/var/log/lts` | 로그 디렉토리. 권한 없을 시 `server/logs/`로 자동 폴백 |
+| `LOG_LEVEL` | `INFO` | 최소 레벨: `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`/`NONE` |
+| `LOG_FILTER_PATTERNS` | `` | 쉼표 구분 정규식 — 매칭 줄 강제 억제 |
+
+> `LOG_LEVEL=INFO`(기본) 설정 시 ffmpeg `[hls @ 0x...] Skip` 노이즈가 자동 필터링됩니다.
+> `LOG_LEVEL=DEBUG`로 변경하면 yt-dlp/ffmpeg 전체 verbose 출력을 볼 수 있습니다.
+
+상세 내용 → [`docs/ops/Logging_Guide.md`](../../../docs/ops/Logging_Guide.md)
+
+## 환경변수 파일 규칙
+
+> **모든 서버 모드(`combined` / `streaming` / `analysis`)는 `server/.env` 파일 하나만 로드합니다.**
+> `server/.env.example`, `server/.env.streaming.example`, `server/.env.analysis.example`은
+> 참조용 문서(README 역할)이며 서버가 절대 로드하지 않습니다.
+> Claude 등 AI 도구는 `.env` 이외의 `.env.*` 파일을 설정 파일로 취급하거나 수정하지 않습니다.
+
+`SERVER_MODE` 값은 `server/.env` 안에서 설정합니다:
+
+```env
+# combined(기본) | streaming | analysis
+SERVER_MODE=streaming
 ```
 
 ## 환경변수 설정 (`server/.env`)
@@ -75,6 +130,12 @@ JWT_EXPIRY=24h
 # MSAL (Microsoft 인증, 선택사항)
 MSAL_CLIENT_ID=
 MSAL_TENANT_ID=
+
+# 캡처 백엔드 (권장: ingest-daemon)
+CAPTURE_BACKEND=ingest-daemon
+WEBRTC_ENGINE=mediamtx
+INGEST_DAEMON_BIN=../ingest-daemon/ingest_daemon.py
+INGEST_DAEMON_ADDR=:7070
 
 # TURN 서버 (WebRTC NAT 통과)
 TURN_URL=turn:your-turn-server.com:3478
@@ -161,6 +222,47 @@ curl -I http://localhost:3000
 | mediamtx WebRTC | 8889 | WebRTC 시그널링 |
 | mediamtx API | 9997 | MediaMTX 관리 API |
 | MongoDB | 27017 | 데이터베이스 |
+
+## 프로세스 관리 및 종료
+
+### 정상 종료 방법
+
+```bash
+# 대화형 터미널 (Ctrl+C)
+# → startServer.js가 mediamtx·ingest-daemon·index.js에 신호 전달 → 자동 종료
+
+# 백그라운드 실행 중 (npm run stop)
+cd server
+npm run stop           # combined 서버 종료 + mediamtx/ingest-daemon 잔여 프로세스 정리
+npm run stop:streaming
+npm run stop:analysis
+```
+
+`npm run stop`은 두 단계로 종료합니다:
+1. 포트(3080/3443) 기반으로 Node.js 서버 SIGTERM → 10초 후 미반납 시 SIGKILL
+2. `mediamtx`, `ingest_daemon.py` 프로세스를 이름으로 찾아 SIGTERM → 3초 후 SIGKILL
+
+### 잔여 프로세스 수동 정리
+
+```bash
+# LTS 관련 모든 프로세스 확인
+ps -ef | grep -E "mediamtx|ingest_daemon|index.js|ffmpeg" | grep -v grep
+
+# 개별 강제 종료
+pkill -f mediamtx
+pkill -f ingest_daemon.py
+```
+
+### mcp-server 별도 관리
+
+mcp-server는 startServer.js와 독립 프로세스입니다 — `npm run stop`으로 종료되지 않습니다.
+
+```bash
+# mcp-server 수동 종료
+pkill -f "loitering_tracking/mcp-server"
+```
+
+상세 내용 → [`docs/ops/Process_Management.md`](../../../docs/ops/Process_Management.md)
 
 ## 문제 해결
 

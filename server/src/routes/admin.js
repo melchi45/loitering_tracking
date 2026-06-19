@@ -8,6 +8,8 @@ const TokenService  = require('../services/TokenService');
 const AuditService  = require('../services/AuditService');
 const { verifyAccessToken } = require('../middleware/auth');
 const { requireRole }       = require('../middleware/role');
+const { getSystemMetrics }  = require('../services/systemMetrics');
+const { getDbStats }        = require('../db');
 
 // All admin routes require authentication + admin role
 router.use(verifyAccessToken);
@@ -83,6 +85,15 @@ router.delete('/users/:id', (req, res) => {
   });
 
   res.json({ ok: true });
+});
+
+// ── GET /admin/system ─────────────────────────────────────────────────────────
+// Returns: CPU, memory, GPU, disk I/O, storage, DB query stats
+router.get('/system', (_req, res) => {
+  res.json({
+    system: getSystemMetrics(),
+    db:     getDbStats(),
+  });
 });
 
 // ── GET /admin/audit ──────────────────────────────────────────────────────────

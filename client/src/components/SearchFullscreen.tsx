@@ -6,6 +6,7 @@ import { usePersonTrajectoryStore } from '../stores/personTrajectoryStore';
 import { useCrossCameraStore } from '../stores/crossCameraStore';
 import { useI18n } from '../i18n';
 import type { Translations } from '../i18n/translations/en';
+import OnvifTimelineOverlay from './OnvifTimelineOverlay';
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
@@ -858,6 +859,7 @@ interface SearchFullscreenProps {
 
 export function SearchFullscreen({ initialQuery = '', onClose }: SearchFullscreenProps) {
   const { t } = useI18n();
+  const [showOnvifTimeline, setShowOnvifTimeline] = useState(false);
   const [query,    setQuery]   = useState(initialQuery);
   const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [from,     setFrom]    = useState('');
@@ -1137,8 +1139,30 @@ export function SearchFullscreen({ initialQuery = '', onClose }: SearchFullscree
               >Clear</button>
             )}
           </div>
+
+          <div className="h-4 w-px bg-gray-600 flex-shrink-0" />
+
+          {/* ONVIF Timeline */}
+          <button
+            onClick={() => setShowOnvifTimeline(true)}
+            className="flex items-center gap-1.5 px-2.5 py-1 text-[10px] font-semibold
+                       bg-indigo-900/40 text-indigo-300 border border-indigo-700/40
+                       hover:bg-indigo-800/60 hover:text-indigo-100 rounded-full transition-colors"
+            title={t.onvifTimelineOpen}
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                    d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+            </svg>
+            {t.onvifTimelineOpen}
+          </button>
         </div>
       </header>
+
+      {/* ONVIF Timeline overlay */}
+      {showOnvifTimeline && (
+        <OnvifTimelineOverlay onClose={() => setShowOnvifTimeline(false)} />
+      )}
 
       {/* ── Body ───────────────────────────────────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden">

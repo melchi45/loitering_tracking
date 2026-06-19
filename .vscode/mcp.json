@@ -57,7 +57,7 @@
     },
     "caveman-mode": {
       "type": "sse",
-      "url": "http://55.101.57.105:3100/sse?mode=lite"
+      "url": "http://55.101.57.105:3100/sse?mode=ultra"
     }    
   },
   "skills": [

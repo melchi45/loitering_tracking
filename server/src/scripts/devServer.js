@@ -9,6 +9,8 @@ try {
   // Continue with process env when dotenv is unavailable.
 }
 
+const { ensureMongoDB } = require('./ensureMongodb');
+
 function resolveRuntimeOs() {
   const override = (process.env.SERVER_RUNTIME_OS || 'auto').trim().toLowerCase();
   if (override === 'windows' || override === 'win') return 'windows';
@@ -64,7 +66,9 @@ function resolveByRuntime(runtimeOs, baseKey) {
   return osVal && String(osVal).trim() ? String(osVal).trim() : '';
 }
 
-function main() {
+async function main() {
+  await ensureMongoDB();
+
   const runtimeOs = resolveRuntimeOs();
   const nodeExec = resolveNodeExec(runtimeOs);
   const pythonExec = resolvePythonExec(runtimeOs);
@@ -120,7 +124,68 @@ function main() {
     });
   }
 
-  try { startMediaMTX(); } catch (_) {}
+  // ── Ingest daemon (CAPTURE_BACKEND=ingest-daemon) ────────────────────────
+  // Start before nodemon so it's ready when pipelineManager calls addCameraStream().
+  // Skip if already running (avoids port conflict on server restart).
+  const captureBackend = (childEnv.CAPTURE_BACKEND || '').toLowerCase();
+  const serverMode     = (childEnv.SERVER_MODE || 'combined').toLowerCase();
+
+  // Analysis-only mode never serves WebRTC or captures RTSP — skip MediaMTX.
+  if (serverMode !== 'analysis') {
+    try { startMediaMTX(); } catch (_) {}
+  }
+  let ingestDaemonChild = null;
+
+  if (captureBackend === 'ingest-daemon' && serverMode !== 'analysis') {
+    const ingestBinRaw = resolveByRuntime(runtimeOs, 'INGEST_DAEMON_BIN') || '';
+    const ingestAddr   = childEnv.INGEST_DAEMON_ADDR || ':7070';
+    const ingestUrl    = (childEnv.INGEST_DAEMON_URL || 'http://127.0.0.1:7070').replace(/\/$/, '');
+    const ingestPort   = parseInt(ingestAddr.replace(':', '') || '7070', 10);
+
+    // Check if ingest-daemon is already listening on its port.
+    const net = require('net');
+    const alreadyRunning = await new Promise(resolve => {
+      const sock = new net.Socket();
+      sock.setTimeout(500);
+      sock.on('connect', () => { sock.destroy(); resolve(true); });
+      sock.on('timeout', () => { sock.destroy(); resolve(false); });
+      sock.on('error',   () => resolve(false));
+      sock.connect(ingestPort, '127.0.0.1');
+    });
+
+    if (alreadyRunning) {
+      console.log(`[Dev] ingest-daemon already running on :${ingestPort} — skipping start`);
+    } else {
+      let ingestExec, ingestArgs;
+      if (ingestBinRaw.endsWith('.py')) {
+        ingestExec = (childEnv.PYAV_PYTHON_BIN || '').trim() || pythonExec;
+        ingestArgs = [path.resolve(__dirname, '..', '..', ingestBinRaw), '--addr', ingestAddr];
+      } else {
+        ingestExec = ingestBinRaw || 'ingest-daemon';
+        ingestArgs = ['--addr', ingestAddr];
+      }
+
+      try {
+        ingestDaemonChild = spawn(ingestExec, ingestArgs, {
+          stdio: ['ignore', 'pipe', 'pipe'],
+          env: childEnv,
+        });
+        ingestDaemonChild.stdout.on('data', (d) => process.stdout.write(`[Ingest] ${d}`));
+        ingestDaemonChild.stderr.on('data', (d) => process.stderr.write(`[Ingest] ${d}`));
+        ingestDaemonChild.on('error', (e) => {
+          console.warn(`[Dev] ingest-daemon failed to start: ${e.message}`);
+          ingestDaemonChild = null;
+        });
+        ingestDaemonChild.on('exit', (code) => {
+          ingestDaemonChild = null;
+          if (code !== 0 && code !== null) console.warn(`[Dev] ingest-daemon exited (code=${code})`);
+        });
+        console.log(`[Dev] ingest-daemon starting on ${ingestAddr}`);
+      } catch (e) {
+        console.warn(`[Dev] Could not start ingest-daemon: ${e.message}`);
+      }
+    }
+  }
 
   // ── nodemon (main server process) ────────────────────────────────────────
   const child = spawn(nodeExec, [nodemonBin, '--config', nodemonConfig, '--exec', nodeExec, serverEntry], {
@@ -134,8 +199,9 @@ function main() {
   });
 
   child.on('exit', (code, signal) => {
-    if (monitorChild) try { monitorChild.kill(); } catch (_) {}
-    if (mediamtxChild) try { mediamtxChild.kill(); } catch (_) {}
+    if (monitorChild)      try { monitorChild.kill();      } catch (_) {}
+    if (mediamtxChild)     try { mediamtxChild.kill();     } catch (_) {}
+    if (ingestDaemonChild) try { ingestDaemonChild.kill(); } catch (_) {}
     if (signal) {
       process.kill(process.pid, signal);
       return;
@@ -164,11 +230,12 @@ function main() {
   // Forward SIGINT/SIGTERM so all children are cleaned up on Ctrl+C
   for (const sig of ['SIGINT', 'SIGTERM']) {
     process.on(sig, () => {
-      if (monitorChild)  try { monitorChild.kill(sig);  } catch (_) {}
-      if (mediamtxChild) try { mediamtxChild.kill(sig); } catch (_) {}
+      if (monitorChild)      try { monitorChild.kill(sig);      } catch (_) {}
+      if (mediamtxChild)     try { mediamtxChild.kill(sig);     } catch (_) {}
+      if (ingestDaemonChild) try { ingestDaemonChild.kill(sig); } catch (_) {}
       try { child.kill(sig); } catch (_) {}
     });
   }
 }
 
-main();
+main().catch(err => { console.error('[Dev] Fatal:', err.message); process.exit(1); });  

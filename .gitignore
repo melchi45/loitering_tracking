@@ -17,3 +17,11 @@ auto.key
 
 # Backup files
 *.bak
+
+# Runtime log files (production log output — written to /var/log/lts or server/logs/)
+server/logs/
+
+# Python bytecode cache
+ingest-daemon/__pycache__/
+**/__pycache__/
+*.pyc
