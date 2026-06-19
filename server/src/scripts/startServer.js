@@ -105,11 +105,12 @@ async function main() {
   const captureBackend = (childEnv.CAPTURE_BACKEND  || 'ffmpeg').toLowerCase();
   const serverMode     = (childEnv.SERVER_MODE       || 'combined').toLowerCase();
 
-  // MediaMTX: needed for mediamtx WebRTC WHEP engine, or when mediamtx is the capture backend.
-  // Analysis-only mode never serves WebRTC or captures RTSP, so skip MediaMTX entirely
-  // regardless of CAPTURE_BACKEND/WEBRTC_ENGINE settings in the env file.
-  const needsMediaMTX = serverMode !== 'analysis' &&
-                      (webrtcEngine === 'mediamtx' || captureBackend === 'mediamtx');
+  // MediaMTX is required in any non-analysis mode because:
+  //   - mediamtx engine: RTSP pull + WebRTC WHEP delivery
+  //   - mediasoup engine: pipelineManager registers camera paths for ingest-daemon loopback
+  //   - YouTube streams: FFmpeg always publishes to MediaMTX RTSP regardless of WEBRTC_ENGINE
+  // Analysis-only mode never captures RTSP or serves WebRTC — skip MediaMTX entirely.
+  const needsMediaMTX = serverMode !== 'analysis';
 
   // Ingest daemon: started whenever CAPTURE_BACKEND=ingest-daemon regardless of WebRTC engine.
   const needsIngestDaemon = captureBackend === 'ingest-daemon' && serverMode !== 'analysis';

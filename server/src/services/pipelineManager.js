@@ -308,15 +308,24 @@ class PipelineManager {
     const requestedWebRTC = !!camera.webrtcEnabled;
     const captureFps = parseInt(process.env.CAPTURE_FPS, 10) || 10;
 
+    // YouTube cameras publish their stream via FFmpeg → MediaMTX at /yt/<id>.
+    // They do NOT need a second MediaMTX path registration (which would create a
+    // MediaMTX→MediaMTX loopback) and do NOT use mediasoup RTP fan-out — the
+    // ingest-daemon reads directly from the existing /yt/<id> RTSP path for AI JPEG only.
+    const isYouTube = camera.type === 'youtube';
+
     // Register with MediaMTX when:
     //   (a) WEBRTC_ENGINE=mediamtx and browser WebRTC delivery is requested, OR
     //   (b) WEBRTC_ENGINE=mediasoup and not analysis mode — MediaMTX holds the single
     //       upstream RTSP connection; ingest-daemon reads from MediaMTX loopback to
     //       feed both AI JPEG and RTP paths without a second camera connection, OR
     //   (c) the mediamtx capture backend is active.
-    const needsMediaMTX = (requestedWebRTC && WEBRTC_ENGINE === 'mediamtx')
-                       || (WEBRTC_ENGINE === 'mediasoup' && SERVER_MODE !== 'analysis')
-                       || CAPTURE_BACKEND === 'mediamtx';
+    // YouTube cameras are excluded: their RTSP URL IS already a MediaMTX path.
+    const needsMediaMTX = !isYouTube && (
+      (requestedWebRTC && WEBRTC_ENGINE === 'mediamtx')
+      || (WEBRTC_ENGINE === 'mediasoup' && SERVER_MODE !== 'analysis')
+      || CAPTURE_BACKEND === 'mediamtx'
+    );
     let mediamtxReady = false;
     if (needsMediaMTX) {
       mediamtxReady = await mediamtxManager.addCameraPath(camera.id, rtspUrl).catch(() => false);
@@ -349,8 +358,11 @@ class PipelineManager {
     // mediasoupEngine.addCameraStream() internally calls ingest-daemon with both the
     // AI callbackUrl AND the mediasoup RTP ports, so we skip the separate ingest-daemon
     // registration below when WEBRTC_ENGINE=mediasoup.
+    // YouTube cameras are excluded: they use AI-only ingest-daemon registration (below)
+    // since their stream is already managed by FFmpeg→MediaMTX; starting mediasoup RTP
+    // fan-out threads against a MediaMTX RTSP URL causes connection-refused retry loops.
     let altWebRTCReady = false;
-    const registerAltEngine = WEBRTC_ENGINE !== 'mediamtx' &&
+    const registerAltEngine = !isYouTube && WEBRTC_ENGINE !== 'mediamtx' &&
       (requestedWebRTC || WEBRTC_ENGINE === 'mediasoup');
     if (registerAltEngine) {
       // Retry up to 3 times with a 2-second delay — ingest-daemon may still be
@@ -368,6 +380,9 @@ class PipelineManager {
     // When using ingest-daemon with mediamtx engine: register for AI JPEG only.
     // When using mediasoup engine: mediasoupEngine.addCameraStream() already registered
     // ingest-daemon (AI + RTP). Fall back to AI-only registration if mediasoup failed.
+    // These are declared here (outer scope) so ctx can capture them in its literal below.
+    let _ingestRtspUrl     = null;
+    let _ingestCallbackUrl = null;
     if (CAPTURE_BACKEND === 'ingest-daemon') {
       const isHttps     = (process.env.HTTPS_ENABLED || '').toLowerCase() === 'true';
       const serverProto = isHttps ? 'https' : 'http';
@@ -385,13 +400,9 @@ class PipelineManager {
         } else {
           console.log(`[PipelineManager][${camera.id}] Ingest daemon registered (AI-only) → ${daemonRtspUrl}`);
         }
+        _ingestRtspUrl     = daemonRtspUrl;
+        _ingestCallbackUrl = callbackUrl;
       }
-
-      // Store registration params so the frame watchdog can re-register on stall.
-      // IngestDaemonCapture.stop()/start() only toggles an in-process flag; the
-      // actual RTSP pull in the daemon must be restarted via its HTTP API.
-      ctx._ingestRtspUrl     = needsDirectIngestReg ? daemonRtspUrl : null;
-      ctx._ingestCallbackUrl = needsDirectIngestReg ? callbackUrl   : null;
     }
 
     const useWebRTC = requestedWebRTC && (WEBRTC_ENGINE === 'mediamtx' ? mediamtxReady : altWebRTCReady);
@@ -439,6 +450,9 @@ class PipelineManager {
       // Track lifecycle meta — keyed by objectId, used to persist ended tracks to DB
       // Only objects with riskScore >= 0.3 or isLoitering are saved (배회 위험 기준)
       _trackMeta:         new Map(), // objectId → { firstSeenAt, lastSeenAt, className, maxRiskScore, isLoitering, confidence, faceId, identity, zoneId, zoneName, color, cloth }
+      // ingest-daemon re-registration params (used by frame watchdog on stall)
+      _ingestRtspUrl,
+      _ingestCallbackUrl,
     };
 
     // ── Listen for loitering events ──────────────────────────────────────
