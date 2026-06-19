@@ -1720,29 +1720,32 @@ The `nodejs-udp-discovery` branch adds:
 
 ## 14. Project Milestones & Deliverables
 
-| Phase | Milestone | Deliverables | Status | Date |
-|:---:|---|---|:---:|:---:|
-| 1 | Project Setup | Repo structure, submodule (WiseNetChromeIPInstaller), Docker Compose skeleton, CI | ✅ Done | Mar 31, 2026 |
-| 2 | UDP Discovery | Node.js UDP/ONVIF discovery, WS-Discovery, camera list UI | ✅ Done | Apr 7, 2026 |
-| 3 | RTSP Capture | FFmpeg RTSP ingestion, 10 FPS frame pipeline, JPEG buffer | ✅ Done | Apr 14, 2026 |
-| 4 | AI Detection | YOLOv8n ONNX, letterbox pre-process, NMS, COCO 80-class support | ✅ Done | Apr 28, 2026 |
-| 5 | MOT Tracking | ByteTracker (8-dim KF, adaptive Q, NaN guard, maxAge=90, ArcFace EMA) | ✅ Done | May 5, 2026 |
-| 6 | React UI | Live video + bbox overlay, fullscreen view, zone editor, detection panel | ✅ Done | May 12, 2026 |
-| 7 | Loitering Logic | Sliding-window displacement, pacing score, 5-factor risk score, cross-ID transfer | ✅ Done | May 19, 2026 |
-| 8 | Attribute Pipeline | SCRFD face, ArcFace Re-ID, PPE (mask/hat), HSV colour, fire/smoke | ✅ Done | May 19, 2026 |
-| 9 | Integration | Full E2E pipeline, ONVIF discovery, runtime tracker config API, perf tuning | ✅ Done | May 28, 2026 |
-| 10 | UAT & QA | HOTA/MOTA benchmarks, regression tests (KF/IoU/NaN), security audit | ✅ Done | May 28, 2026 |
-| 11 | User Auth | JWT-based login/logout, RBAC (admin/operator/viewer), session management, password hashing (bcrypt), refresh token rotation; Google + Microsoft OAuth 2.0; admin approval workflow; audit log | ✅ Done | May 28, 2026 |
-| 12 | Video Recording | DVR/NVR recording scheduler, pre/post-event clip storage, video playback UI, retention policy | 🔲 Planned | Jul 28, 2026 |
-| 13 | PTZ Control | ONVIF PTZ API (pan/tilt/zoom), remote control UI overlay, preset position management | 🔲 Planned | Aug 11, 2026 |
-| 14 | Notification Hub | Email/SMS/Slack/Teams/webhook alert routing, loitering event push, configurable throttle rules | 🔲 Planned | Aug 25, 2026 |
-| 15 | Heatmap & Path | Crowd density heatmap (time-series), cross-camera movement path visualisation on floor plan | 🔲 Planned | Sep 8, 2026 |
-| 16 | Advanced AI | Fall detection, fight/aggression detection, running/counter-flow detection (pose/action models) | 🔲 Planned | Sep 22, 2026 |
-| 17 | Auto Reports | Daily/weekly/monthly PDF security report generation, scheduled email delivery, export to Excel | 🔲 Planned | Oct 6, 2026 |
-| 18 | Map Layout | Floor-plan / satellite-map camera placement, click-to-view camera overlay, site management | 🔲 Planned | Oct 20, 2026 |
-| 19 | Privacy & Audit | Face blurring / anonymisation mode, GDPR data-retention controls, immutable audit log, RBAC access trail | 🔲 Planned | Nov 3, 2026 |
-| 20 | AI Model Mgmt | Model upload/versioning UI, per-channel model assignment, confidence threshold live-tuning, A/B testing | 🔲 Planned | Nov 17, 2026 |
-| 21 | Deployment | Docker Compose image, OpenAPI docs, Prometheus metrics, production SLA | 🔲 Planned | Dec 1, 2026 |
+> **범례**: ✅ Done — 완전 구현 · ⚠️ Partial — 핵심 기능 구현, 일부 미완 · 🔲 Planned — 미착수
+
+| Phase | Milestone | 구현 내역 | 미구현 / 잔여 | Status | Date |
+|:---:|---|---|---|:---:|:---:|
+| 1 | Project Setup | Repo 구조 · Docker Compose · 서브모듈(WiseNetChromeIPInstaller) · CI | — | ✅ Done | Mar 31, 2026 |
+| 2 | UDP Discovery | Node.js UDP/ONVIF WS-Discovery(`discoveryService.js`, `onvifDiscovery.js`) · 카메라 목록 UI | — | ✅ Done | Apr 7, 2026 |
+| 3 | RTSP Capture | `ingest_daemon.py`(PyAV) + `ingestDaemonCapture.js` · 10FPS JPEG 파이프라인 · GStreamer/ffmpeg 폴백 | — | ✅ Done | Apr 14, 2026 |
+| 4 | AI Detection | `detection.js` YOLOv8/11/12 ONNX(15종) · letterbox/NMS · COCO 80-class · CUDA 가속 · 런타임 모델 전환 | — | ✅ Done | Apr 28, 2026 |
+| 5 | MOT Tracking | `tracking.js` ByteTrack · 8-dim KalmanFilter · NaN guard · maxAge=90 · ArcFace EMA | — | ✅ Done | May 5, 2026 |
+| 6 | React UI | CameraGrid · bbox 오버레이 · 전체화면 뷰 · 구역 편집기 · 감지 패널 · 다국어(15개) · 모바일 레이아웃 | — | ✅ Done | May 12, 2026 |
+| 7 | Loitering Logic | `behaviorEngine.js` 슬라이딩 윈도우 변위 · pacing score · 5-factor 위험 점수 · 크로스 ID 전이 · 구역 트리거 | — | ✅ Done | May 19, 2026 |
+| 8 | Attribute Pipeline | SCRFD 얼굴 감지 · ArcFace Re-ID · PPE(안전모/마스크) · 색상/의상 분석(OpenPAR) · 화재/연기(YOLOv8s) | — | ✅ Done | May 19, 2026 |
+| 9 | Integration | E2E 파이프라인 · combined/streaming/analysis 모드 · WebRTC(mediamtx/mediasoup) · YouTube 수집 · MCP 서버 | — | ✅ Done | May 28, 2026 |
+| 10 | UAT & QA | HOTA/MOTA 벤치마크 · 회귀 테스트(KF/IoU/NaN) · 보안 감사 · `test/` Jest 스위트 | — | ✅ Done | May 28, 2026 |
+| 11 | User Auth | JWT RS256 · bcrypt · RBAC(admin/operator/viewer) · refresh token 로테이션 · admin 승인 · AuditService · **Google OAuth 2.0**(passport-google-oauth20) · **Microsoft OAuth**(MSAL, @azure/msal-node) | 이메일 인증 · 2FA(TOTP) | ✅ Done | May 28, 2026 |
+| 11-B | Missing Person | `missingPersonService.js` · ArcFace 임베딩 비교 · 실종자 등록/탐지/통계 · MCP 도구 5종 | UI 뷰 보강 | ✅ Done | Jun 2026 |
+| 12 | Video Recording | DVR/NVR 녹화 스케줄러 · 이전/이후 이벤트 클립 · 영상 재생 UI · 보존 정책 | 전체 미착수 | 🔲 Planned | Jul 28, 2026 |
+| 13 | PTZ Control | ONVIF PTZ API(pan/tilt/zoom) · 원격 제어 UI 오버레이 · 프리셋 위치 관리 | 전체 미착수 | 🔲 Planned | Aug 11, 2026 |
+| 14 | Notification Hub | **Webhook** `ALERT_WEBHOOK_URL` HTTP POST · **Email** nodemailer(`SMTP_HOST/USER/PASS`) · loitering 알림 발송 | SMS · Slack · Teams 미착수 · 스로틀 규칙 UI 없음 | ⚠️ Partial | Aug 25, 2026 |
+| 15 | Heatmap & Path | — | 전체 미착수 | 🔲 Planned | Sep 8, 2026 |
+| 16 | Advanced AI | — | 낙상 · 싸움 · 역주행 감지 전체 미착수 | 🔲 Planned | Sep 22, 2026 |
+| 17 | Auto Reports | — | PDF · Excel · 이메일 예약 발송 전체 미착수 | 🔲 Planned | Oct 6, 2026 |
+| 18 | Map Layout | — | 도면/위성맵 카메라 배치 전체 미착수 | 🔲 Planned | Oct 20, 2026 |
+| 19 | Privacy & Audit | **AuditService.js** 불변 감사 로그(최대 10,000건) · RBAC 접근 이력 · `/admin/audit` UI | 얼굴 블러/익명화 미착수 · GDPR 삭제 API 미착수 | ⚠️ Partial | Nov 3, 2026 |
+| 20 | AI Model Mgmt | **YOLO 모델 카탈로그 15종**(YOLOv8/11/12 n/s/m/l/x) · 다운로드 API + SSE 진행률 · **런타임 모델 전환**(hot-swap) · **Admin UI** AiModelsSection · 퍼채널 AI 모듈 활성화 | 커스텀 모델 업로드 미착수 · 카메라별 모델 배정 UI 미착수 · A/B 테스트 미착수 | ⚠️ Partial | Nov 17, 2026 |
+| 21 | Deployment | **Docker Compose** 단일 명령 배포 · **프로덕션 로그**(레벨 필터 · `/var/log/lts`) · `npm run start/stop` 프로세스 관리 · `/admin/system` CPU/메모리/GPU/디스크 메트릭 | Prometheus `/metrics` 미착수 · OpenAPI 문서 미착수 · K8s/Helm 미착수(→ ES-8) | ⚠️ Partial | Dec 1, 2026 |
 
 ### 14.2 Enterprise Scale 마일스톤 — 대규모 분산 / 이중화 (TODO)
 
