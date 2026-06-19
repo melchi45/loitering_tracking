@@ -802,6 +802,147 @@ graph TB
 
 ---
 
+### 2.10 대규모 분산 / 이중화 목표 아키텍처 (Enterprise Scale)
+
+수백 대의 카메라와 YouTube 스트림, 다중 스트리밍 서버, 다중 AI 분석 서버, MongoDB Replica Set, N명의 사용자 및 중앙화된 관리자 대시보드를 포함한 엔터프라이즈 수준 분산 구성입니다.
+
+> **⚠️ 범례**: `✅ 현재 지원` · `⚠️ 부분 지원` · `🔲 미구현 (TODO Milestone 참조)`
+
+```mermaid
+graph TB
+    subgraph SRCS["비디오 소스 Pool  수백 개"]
+        CAMPOL["IP 카메라 100+ 대\nRTSP / ONVIF\nWiseNet · Hanwha · Hikvision"]
+        YTPOL["YouTube 스트림 N개\nyt-dlp → FFmpeg → MediaMTX"]
+    end
+
+    subgraph CLIENTS["클라이언트 영역  N명 사용자"]
+        USERBR["일반 사용자 브라우저\nStreaming Dashboard\nAnalysis Dashboard\nStatistics"]
+        ADMINBR["관리자 브라우저\nAdmin Dashboard\n사용자 승인 · AI 모델 관리\n전체 서버 통합 모니터링"]
+        LLMCLI["Claude / LLM\nMCP Client"]
+    end
+
+    subgraph LB["로드 밸런서  DMZ  ✅ 현재 지원"]
+        NGINX["Nginx / HAProxy  :443\nHTTPS Termination\nSticky Session  IP Hash\nWebSocket Upgrade\nHealth Check Probe"]
+    end
+
+    subgraph SSC["스트리밍 서버 클러스터  K대  ✅ 다중 배포 가능"]
+        SS1["Streaming Server 1\nSERVER_MODE=streaming\nMediaMTX + ingest-daemon\n카메라 1~M  수동 배정"]
+        SS2["Streaming Server 2\nSERVER_MODE=streaming\nMediaMTX + ingest-daemon\n카메라 M+1~2M"]
+        SSK["Streaming Server K\nSERVER_MODE=streaming\nMediaMTX + ingest-daemon\n카메라 ... ~MAX"]
+    end
+
+    subgraph SHAREDST["공유 상태 레이어  🔲 ES-2  ES-3 미구현"]
+        REDIS_S["Redis Cluster\n@socket.io/redis-adapter\nPub/Sub 크로스 노드 이벤트\ncamera:frameData · newAlert · cameraStatus"]
+        REDIS_SE["Redis Session Store\nconnect-redis\nOAuth CSRF 상태 공유\nSSO 세션 노드 간 공유"]
+    end
+
+    subgraph AIPOOL["AI 분석 서버 풀  L대  ⚠️ 현재 단일 URL만 지원  🔲 ES-1"]
+        AILB["AI 로드 밸런서  🔲 미구현\n라운드 로빈  최소 연결\n퍼서버 Circuit Breaker\n자동 페일오버"]
+        GPU1["Analysis Server 1\nSERVER_MODE=analysis\nONNX_CUDA=1\nGPU A100 / RTX 4090"]
+        GPU2["Analysis Server 2\nSERVER_MODE=analysis\nONNX_CUDA=1"]
+        GPUL["Analysis Server L\nSERVER_MODE=analysis\nONNX_CUDA=1"]
+    end
+
+    subgraph DBHA["데이터베이스 고가용성  ⚠️ Replica Set URI 지원  🔲 ES-4 튜닝"]
+        MGPRI["MongoDB Primary  :27017\n쓰기 마스터\nWrite Concern majority"]
+        MGSEC1["MongoDB Secondary 1\n읽기 복제본\nreadPreference: secondaryPreferred"]
+        MGSEC2["MongoDB Secondary 2\n읽기 복제본 또는 Arbiter"]
+    end
+
+    subgraph CENTRAL["중앙 관리 레이어  🔲 ES-5 미구현"]
+        ADMINSVC["Central Admin Service\n다중 스트리밍 서버 통합 뷰\n전체 카메라 목록  실시간 상태\n서버별 부하 모니터링\n통합 감사 로그 집계"]
+        MCPSVC["mcp-server  :3100\nClaude  LLM 연동\n10 MCP Tools"]
+    end
+
+    CAMPOL -- "카메라 배정\n수동 설정  🔲 ES-6 자동 배정" --> SS1
+    CAMPOL --> SS2
+    CAMPOL --> SSK
+    YTPOL --> SS1
+    YTPOL --> SSK
+
+    USERBR --> NGINX
+    ADMINBR --> NGINX
+    NGINX --> SS1
+    NGINX --> SS2
+    NGINX --> SSK
+
+    SS1 <-. "🔲 ES-2 미구현" .-> REDIS_S
+    SS2 <-. "🔲 ES-2 미구현" .-> REDIS_S
+    SSK <-. "🔲 ES-2 미구현" .-> REDIS_S
+    SS1 -. "🔲 ES-3 미구현" .-> REDIS_SE
+    SS2 -. "🔲 ES-3 미구현" .-> REDIS_SE
+
+    SS1 -- "POST /api/analysis/frame\n현재: 단일 URL" --> AILB
+    SS2 -- "POST /api/analysis/frame" --> AILB
+    SSK -- "POST /api/analysis/frame" --> AILB
+    AILB -. "🔲 ES-1 미구현" .-> GPU1
+    AILB -. "🔲 ES-1 미구현" .-> GPU2
+    AILB -. "🔲 ES-1 미구현" .-> GPUL
+
+    SS1 -- "DB_TYPE=mongodb\nwrite-through" --> MGPRI
+    SS2 -- "write-through" --> MGPRI
+    SSK -- "write-through" --> MGPRI
+    GPU1 -- "write-through" --> MGPRI
+    GPU2 -- "write-through" --> MGPRI
+    GPUL -- "write-through" --> MGPRI
+    MGPRI -. "Replication" .-> MGSEC1
+    MGPRI -. "Replication" .-> MGSEC2
+
+    LLMCLI --> MCPSVC
+    MCPSVC --> NGINX
+    ADMINBR --> ADMINSVC
+    ADMINSVC -. "🔲 ES-5 미구현" .-> SS1
+    ADMINSVC -. "🔲 ES-5 미구현" .-> SS2
+    ADMINSVC -. "🔲 ES-5 미구현" .-> SSK
+```
+
+#### 세션 관리 흐름  현재 vs 목표
+
+```mermaid
+graph LR
+    subgraph CURRENT["현재 구현  단일 노드 전제"]
+        BR_NOW["Browser\nN명 사용자"]
+        ONE_SS["Streaming Server 1대\nexpress-session\nMemoryStore 인 프로세스\nSocket.IO In-Memory Adapter"]
+        ONE_DB["lts.json / MongoDB\nrefresh_tokens 테이블\nJWT RS256 검증"]
+        BR_NOW -- "HTTPS + JWT" --> ONE_SS
+        ONE_SS --> ONE_DB
+    end
+
+    subgraph TARGET["목표  멀티 노드  ES-2  ES-3"]
+        BR_TGT["Browser N명"]
+        LB_TGT["Nginx\nSticky Session"]
+        SS_A["Streaming Server A"]
+        SS_B["Streaming Server B"]
+        REDIS_TGT["Redis Cluster\nSocket.IO Adapter\n세션 공유 Store"]
+        DB_TGT["MongoDB Replica Set\nJWT RS256 공유 키\nrefresh_tokens 공유"]
+
+        BR_TGT --> LB_TGT
+        LB_TGT --> SS_A
+        LB_TGT --> SS_B
+        SS_A <--> REDIS_TGT
+        SS_B <--> REDIS_TGT
+        SS_A --> DB_TGT
+        SS_B --> DB_TGT
+    end
+```
+
+#### 현재 구현 상태 vs 대규모 요구사항
+
+| 요구사항 | 현재 구현 상태 | 한계점 | 해결 Milestone |
+|---|:---:|---|:---:|
+| 다중 스트리밍 서버 (K대) | ✅ 지원 | 각 서버 독립 배포, 공유 MongoDB 필요 | — |
+| 다중 AI 분석 서버 (L대) | ❌ 단일 URL | `ANALYSIS_SERVER_URL` 하나만 지원, 라운드 로빈 없음 | **ES-1** |
+| Socket.IO 크로스 노드 이벤트 | ❌ in-memory | 멀티 노드 배포 시 브라우저가 다른 서버 이벤트 수신 불가 | **ES-2** |
+| 세션 공유 (OAuth / CSRF) | ❌ MemoryStore | 노드 재시작 / 다중 노드 시 세션 소멸 | **ES-3** |
+| MongoDB Replica Set | ⚠️ URI 지원 | Replica Set URI 가능하나 readPreference 미설정 | **ES-4** |
+| JWT 다중 노드 인증 | ✅ 지원 | RS256 공개키 기반 stateless, 노드 간 공유 가능 | — |
+| 중앙 Admin Dashboard | ❌ 미구현 | 서버별 독립 Admin, 전체 통합 뷰 없음 | **ES-5** |
+| 카메라 자동 배정 / 이전 | ❌ 수동 설정 | 카메라 → 스트리밍 서버 매핑 `.env` 수동 | **ES-6** |
+| 프로덕션 가시성 (메트릭) | ⚠️ 기본 로그 | `/admin/system` CPU/메모리 제공, Prometheus 없음 | **ES-7** |
+| K8s / 컨테이너 오케스트레이션 | ⚠️ Docker Compose | 단일 호스트 Compose, K8s HPA 미지원 | **ES-8** |
+
+---
+
 ## 3. Technology Stack
 
 ### 3.1 Backend (Node.js)
@@ -1602,6 +1743,22 @@ The `nodejs-udp-discovery` branch adds:
 | 19 | Privacy & Audit | Face blurring / anonymisation mode, GDPR data-retention controls, immutable audit log, RBAC access trail | 🔲 Planned | Nov 3, 2026 |
 | 20 | AI Model Mgmt | Model upload/versioning UI, per-channel model assignment, confidence threshold live-tuning, A/B testing | 🔲 Planned | Nov 17, 2026 |
 | 21 | Deployment | Docker Compose image, OpenAPI docs, Prometheus metrics, production SLA | 🔲 Planned | Dec 1, 2026 |
+
+### 14.2 Enterprise Scale 마일스톤 — 대규모 분산 / 이중화 (TODO)
+
+> 섹션 2.10 현재 구현 상태 분석을 기반으로 도출한 엔터프라이즈 수준 확장 과제입니다.  
+> 우선순위는 좌측 순서(ES-1 → ES-8)이며, ES-1~ES-3 은 다중 노드 배포의 **필수 전제 조건**입니다.
+
+| ID | Milestone | 상세 내용 | 현재 한계 | 상태 | 목표 |
+|:---:|---|---|---|:---:|:---:|
+| **ES-1** | **AI 분석 서버 풀** | `ANALYSIS_SERVER_URLS` 다중 URL 환경변수 추가; 라운드 로빈 / 최소 연결(Least Connections) 라우터; 서버별 독립 Circuit Breaker; 자동 페일오버(서버 제거 → 복구 시 재투입); 가중치 기반 라우팅(GPU 성능 차이 반영) | `ANALYSIS_SERVER_URL` 단일 URL, `AnalysisClient` 인스턴스 1개 | 🔲 Planned | Q1 2027 |
+| **ES-2** | **Socket.IO 멀티 노드 어댑터** | `@socket.io/redis-adapter` 도입; Redis Cluster Pub/Sub 기반 크로스 노드 이벤트 브로드캐스트; `frameData`, `newAlert`, `cameraStatus`, `onvif:event` 이벤트 전파; 어댑터 연결 실패 시 in-memory fallback | Socket.IO in-memory 어댑터 — 다른 노드 구독 브라우저 이벤트 수신 불가 | 🔲 Planned | Q1 2027 |
+| **ES-3** | **분산 세션 스토어** | `connect-redis` 도입, `express-session` 스토어 교체; OAuth CSRF state 노드 간 공유; Passport serialize/deserialize 공유; Redis 연결 실패 시 MemoryStore fallback; TTL = 10분 (기존 OAuth 세션 동일) | `express-session` MemoryStore — 다중 노드 시 세션 소멸, 재인증 필요 | 🔲 Planned | Q1 2027 |
+| **ES-4** | **MongoDB 고가용성 튜닝** | 3-node Replica Set 운영 가이드; `readPreference: secondaryPreferred` 읽기 부하 분산; `writeConcern: majority` 데이터 안전성; 접속 풀 크기 최적화(`MONGODB_POOL_SIZE`); Replica Set URI 예제 및 자동 페일오버 검증; 선택적: MongoDB Atlas 자동 샤딩 | Replica Set URI 지원되나 `readPreference` 미설정, 풀 크기 기본값 | ⚠️ Partial | Q1 2027 |
+| **ES-5** | **중앙 Admin Dashboard** | 다중 스트리밍 서버 통합 관리 UI; 서버별 연결 상태 · 카메라 수 · 처리 FPS 실시간 모니터링; 전체 카메라 목록 및 서버 간 이동; 통합 사용자 관리(단일 MongoDB 전제); 통합 감사 로그 집계 뷰; 서버 추가/제거 UI | Admin Dashboard가 각 스트리밍 서버 단위, 전체 통합 뷰 없음 | 🔲 Planned | Q2 2027 |
+| **ES-6** | **카메라 자동 배정 / 이전** | 스트리밍 서버 부하 기반 카메라 자동 배정 알고리즘; 카메라 무중단 이전(drain → 재등록); 서버 과부하 시 자동 재분배; 카메라 발견(ONVIF) 시 최소 부하 서버 자동 선택; 배정 상태 중앙 DB 관리 | 카메라 → 서버 매핑 `.env` 수동 설정, 서버 간 이전 불가 | 🔲 Planned | Q2 2027 |
+| **ES-7** | **프로덕션 가시성 (Observability)** | `/metrics` Prometheus 엔드포인트; 카메라별 처리 FPS · 큐 깊이 · 지연시간 메트릭; OpenTelemetry 분산 추적(Jaeger / Zipkin); ELK / Loki 중앙 로그 집계; Grafana 대시보드(카메라/서버/AI 메트릭); SLA 알림(분석 서버 응답 지연 > 2s) | `/admin/system` CPU/메모리 제공, Prometheus / 분산 추적 없음 | 🔲 Planned | Q2 2027 |
+| **ES-8** | **Kubernetes / Helm 배포** | Helm Chart(streaming / analysis / mcp-server 분리); HPA(Horizontal Pod Autoscaler — 카메라 수 기반 스케일); GPU NodeSelector(`ONNX_CUDA=1` analysis pod); PersistentVolume(모델 파일 공유); K8s ConfigMap / Secret(.env 대체); mediamtx StatefulSet(ICE UDP NodePort); Readiness / Liveness probe 연동 | Docker Compose 단일 호스트, K8s 미지원 | 🔲 Planned | Q3 2027 |
 
 ---
 
