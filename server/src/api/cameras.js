@@ -263,7 +263,18 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
 
       // Stop the YouTube stream service first (kills yt-dlp + ffmpeg, removes from memory)
       if (camera.type === 'youtube' && youtubeSvc) {
-        try { await youtubeSvc.stopStream(camera.id); } catch { /* already removed */ }
+        try {
+          await youtubeSvc.stopStream(camera.id);
+        } catch (stopErr) {
+          // Entry not in memory map (never started, or already removed).
+          // Still guarantee pipeline and DB are cleaned up so the camera doesn't
+          // resurface on the next server restart via restoreFromDB().
+          if (stopErr.code !== 'NOT_FOUND') {
+            console.warn(`[cameras] DELETE ${camera.id}: stopStream error — ${stopErr.message}`);
+          }
+          try { await pipelineManager.stopCamera(camera.id); } catch {}
+          try { db.delete('cameras', camera.id); } catch {}
+        }
       } else {
         await pipelineManager.stopCamera(camera.id);
         db.delete('cameras', camera.id);

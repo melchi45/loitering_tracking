@@ -561,12 +561,14 @@ class YouTubeStreamService {
       // Split on \r\n, \r (ffmpeg progress), or \n to handle all line endings.
       let ffStderrBuf = '';
       const onFfStderr = (data) => {
+        if (entry.status === 'stopping' || entry.status === 'removed') return;
         ffStderrBuf += data.toString();
         const lines = ffStderrBuf.split(/\r\n|\r|\n/);
         ffStderrBuf = lines.pop();  // hold last (possibly incomplete) line
         for (const line of lines) {
           const trimmed = line.trim();
           if (!trimmed) continue;
+          if (entry.status === 'stopping' || entry.status === 'removed') break;
           // Check live status before filtering (RTSP_LIVE_RE includes frame=1 pattern)
           if (!started && RTSP_LIVE_RE.test(trimmed)) {
             started = true;
@@ -577,7 +579,11 @@ class YouTubeStreamService {
           // Suppress ffmpeg encoding progress noise (frame= fps= size= time= bitrate=)
           // These use \r to overwrite the terminal line and are not actionable log events.
           if (/^frame=\s*\d/.test(trimmed)) continue;
-          console.log(`[YouTubeStream] ffmpeg[${entry.id}]: ${trimmed.slice(0, 300)}`);
+          if (/\b(error|failed|failure)\b/i.test(trimmed)) {
+            console.error(`[YouTubeStream] ffmpeg[${entry.id}]: ${trimmed.slice(0, 300)}`);
+          } else {
+            console.log(`[YouTubeStream] ffmpeg[${entry.id}]: ${trimmed.slice(0, 300)}`);
+          }
         }
       };
       ffProc.stdout.on('data', onFfStderr);
@@ -586,12 +592,19 @@ class YouTubeStreamService {
       // Log yt-dlp stderr (errors / warnings — --no-progress keeps these visible)
       let ytStderrBuf = '';
       ytProc.stderr.on('data', (d) => {
+        if (entry.status === 'stopping' || entry.status === 'removed') return;
         ytStderrBuf += d.toString();
         const lines = ytStderrBuf.split('\n');
         ytStderrBuf = lines.pop();
         for (const line of lines) {
           const msg = line.trim();
-          if (msg) console.log(`[YouTubeStream] yt-dlp[${entry.id}]: ${msg.slice(0, 300)}`);
+          if (!msg) continue;
+          if (entry.status === 'stopping' || entry.status === 'removed') break;
+          if (/^ERROR:/i.test(msg) || /\b(error|failed|failure)\b/i.test(msg)) {
+            console.error(`[YouTubeStream] yt-dlp[${entry.id}]: ${msg.slice(0, 300)}`);
+          } else {
+            console.log(`[YouTubeStream] yt-dlp[${entry.id}]: ${msg.slice(0, 300)}`);
+          }
         }
       });
 
@@ -707,6 +720,15 @@ class YouTubeStreamService {
   _scheduleRestart(entry, isNaturalEnd = false) {
     if (entry.status === 'stopping' || entry.status === 'removed') return;
 
+    // Guard: if the camera no longer exists in DB (e.g., deleted while running),
+    // clean up and stop retrying rather than becoming a zombie stream.
+    if (!this.db.findOne('cameras', { id: entry.id })) {
+      console.warn(`[YouTubeStream] Camera ${entry.id} no longer in DB — stopping restart loop`);
+      entry.status = 'removed';
+      this.streams.delete(entry.id);
+      return;
+    }
+
     // Repeat playback: reset restart counter when video ends naturally
     if (entry.repeatPlayback && isNaturalEnd) {
       entry.restartCount = 0;
@@ -727,6 +749,13 @@ class YouTubeStreamService {
     entry.restartTimer = setTimeout(async () => {
       entry.restartTimer = null;
       if (entry.status !== 'restarting') return;
+      // Double-check DB existence before actually restarting
+      if (!this.db.findOne('cameras', { id: entry.id })) {
+        console.warn(`[YouTubeStream] Camera ${entry.id} deleted during restart delay — aborting`);
+        entry.status = 'removed';
+        this.streams.delete(entry.id);
+        return;
+      }
       entry.status = 'starting';
 
       try {
