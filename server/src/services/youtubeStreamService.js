@@ -558,20 +558,26 @@ class YouTubeStreamService {
       let started = false;
 
       // ── Buffer FFmpeg stderr line-by-line to avoid chunk-boundary mismatches ──
+      // Split on \r\n, \r (ffmpeg progress), or \n to handle all line endings.
       let ffStderrBuf = '';
       const onFfStderr = (data) => {
         ffStderrBuf += data.toString();
-        const lines = ffStderrBuf.split('\n');
+        const lines = ffStderrBuf.split(/\r\n|\r|\n/);
         ffStderrBuf = lines.pop();  // hold last (possibly incomplete) line
         for (const line of lines) {
           const trimmed = line.trim();
-          if (trimmed) console.log(`[YouTubeStream] ffmpeg[${entry.id}]: ${trimmed.slice(0, 300)}`);
-          if (!started && RTSP_LIVE_RE.test(line)) {
+          if (!trimmed) continue;
+          // Check live status before filtering (RTSP_LIVE_RE includes frame=1 pattern)
+          if (!started && RTSP_LIVE_RE.test(trimmed)) {
             started = true;
             clearTimeout(entry.startTimer);
             entry.startTimer = null;
             this._setLive(entry);
           }
+          // Suppress ffmpeg encoding progress noise (frame= fps= size= time= bitrate=)
+          // These use \r to overwrite the terminal line and are not actionable log events.
+          if (/^frame=\s*\d/.test(trimmed)) continue;
+          console.log(`[YouTubeStream] ffmpeg[${entry.id}]: ${trimmed.slice(0, 300)}`);
         }
       };
       ffProc.stdout.on('data', onFfStderr);

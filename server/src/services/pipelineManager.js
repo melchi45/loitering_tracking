@@ -386,6 +386,12 @@ class PipelineManager {
           console.log(`[PipelineManager][${camera.id}] Ingest daemon registered (AI-only) → ${daemonRtspUrl}`);
         }
       }
+
+      // Store registration params so the frame watchdog can re-register on stall.
+      // IngestDaemonCapture.stop()/start() only toggles an in-process flag; the
+      // actual RTSP pull in the daemon must be restarted via its HTTP API.
+      ctx._ingestRtspUrl     = needsDirectIngestReg ? daemonRtspUrl : null;
+      ctx._ingestCallbackUrl = needsDirectIngestReg ? callbackUrl   : null;
     }
 
     const useWebRTC = requestedWebRTC && (WEBRTC_ENGINE === 'mediamtx' ? mediamtxReady : altWebRTCReady);
@@ -1072,16 +1078,28 @@ class PipelineManager {
     this._updateCameraStatus(camera.id, 'connecting');
     capture.start();
 
-    // Frame watchdog: restart RTSPCapture if no JPEG arrives for 20 s.
+    // Frame watchdog: restart capture if no JPEG arrives for 20 s.
+    // For IngestDaemonCapture, capture.stop()/start() only toggles an in-process flag.
+    // The actual reconnect requires re-registering the camera with the daemon via HTTP.
     {
       const FRAME_STALL_MS = 20_000;
-      ctx.frameWatchdogTimer = setInterval(() => {
+      ctx.frameWatchdogTimer = setInterval(async () => {
         if (!ctx.running || !ctx.lastFrameAt) return;
         const stalledMs = Date.now() - ctx.lastFrameAt;
         if (stalledMs > FRAME_STALL_MS) {
           console.warn(`[PipelineManager][${camera.id}] Frame watchdog: no frame for ${Math.round(stalledMs / 1000)}s — restarting capture`);
           ctx.lastFrameAt = Date.now();
           ctx.capture.stop();
+
+          if (CAPTURE_BACKEND === 'ingest-daemon' && ctx._ingestRtspUrl) {
+            // Force the daemon to close its RTSP connection and re-open it.
+            await _ingestRemoveCamera(camera.id);
+            const ok = await _ingestRegisterCamera(camera.id, ctx._ingestRtspUrl, ctx._ingestCallbackUrl);
+            if (!ok) {
+              console.error(`[PipelineManager][${camera.id}] Frame watchdog: ingest-daemon re-registration failed`);
+            }
+          }
+
           ctx.capture.start();
         }
       }, 8_000);
