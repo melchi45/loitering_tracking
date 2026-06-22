@@ -588,13 +588,19 @@ newPan = startPan + (currentX − startX) / containerWidth / zoom
 - 이벤트 아이콘 `onClick`: `hasDraggedRef.current` 가 true이면 선택 무시
 - 이벤트 아이콘 `onMouseDown`: `stopPropagation()` — 컨테이너 드래그 시작 차단
 
-### Event Type 필터 (OnvifTimelineInline)
+### Event Type 필터
 
-컨트롤 행의 `[Event Type ▾]` 드롭다운으로 타임라인 이벤트를 특정 타입으로 필터링합니다.
+두 컴포넌트 모두 `[Event Type ▾]`(또는 `<select>`) 드롭다운으로 타임라인 이벤트를 특정 타입으로 필터링합니다.
 
 - **옵션 목록**: `onvifEventStore.types` (전역 레지스트리) — 현재 범위에 없는 타입도 표시
 - **기본값**: `All Types` (빈 문자열 — 필터 없음)
-- 타입 변경 시 선택된 이벤트 자동 초기화 (`setSelected(null)`)
+
+| 항목 | OnvifTimelineInline | OnvifTimelineOverlay |
+|------|--------------------|--------------------|
+| UI 위치 | 상단 컨트롤 행 `[Event Type ▾]` | 헤더 Range selector 우측 `<select>` |
+| 타입 변경 시 | `selected` 이벤트 초기화 | 자동 필터링만 |
+
+설계 상세: [Design_ONVIF_Timeline.md §5.5 / §5.8](../../../docs/design/Design_ONVIF_Timeline.md)
 
 ### ONVIF 이벤트 타입 전역 레지스트리
 
@@ -609,11 +615,13 @@ newPan = startPan + (currentX − startX) / containerWidth / zoom
 | 범위 | 전역 (카메라 종속 없음 — 카메라 삭제 후에도 유지) |
 | 관리 | Admin 페이지 → "ONVIF Event Type Registry" 섹션에서 조회·초기화 |
 
-클라이언트 로드 순서:
+클라이언트 로드 순서 (두 컴포넌트 공통):
 ```
-OnvifTimelineInline mount
-  → GET /api/onvif-event-types → setTypes(...)
-  → socket.on('onvif:type-registered', addType)
+OnvifTimelineInline mount (또는 OnvifTimelineOverlay mount)
+  → GET /api/onvif-event-types → setTypes(...)   [전역 타입 레지스트리]
+  → socket.on('onvif:type-registered', addType)  [실시간 신규 타입 수신]
+  → GET /api/onvif-events?from=…               → setEvents(...)
+  → socket.on('onvif:event', pushEvent)
 ```
 
 ### 상태 변화 저장 로직 (서버)
@@ -648,16 +656,17 @@ DELETE /api/onvif-events?cameraId=   (생략 시 전체 삭제)
 
 ### Socket.IO 이벤트
 
-| 이벤트 | 방향 | 설명 |
-|--------|------|------|
-| `onvif:event` | Server → Client | 상태 변화 ONVIF 이벤트 (OnvifEvent 객체) |
+| 이벤트 | 방향 | 구독 컴포넌트 | 설명 |
+|--------|------|------------|------|
+| `onvif:event` | Server → Client | Inline + Overlay | 상태 변화 ONVIF 이벤트 (OnvifEvent 객체) → `pushEvent()` |
+| `onvif:type-registered` | Server → Client | Inline + Overlay | 신규 topicType 최초 감지 시 브로드캐스트 → `addType()` (드롭다운 자동 추가) |
 
 ### 코드 수정 시 문서 동기화
 
 | 변경 파일 | 업데이트 필요 문서 |
 |-----------|------------------|
-| `OnvifTimelineOverlay.tsx` (전체화면 UI) | `Design_ONVIF_Timeline.md` §5 |
-| `OnvifTimelineInline.tsx` (인라인 UI, 드래그 패닝, 타입 필터) | `Design_ONVIF_Timeline.md` §5.3·5.5 |
+| `OnvifTimelineOverlay.tsx` (전체화면 UI + Type 필터) | `Design_ONVIF_Timeline.md` §5·§5.8 |
+| `OnvifTimelineInline.tsx` (인라인 UI, 드래그 패닝, 타입 필터) | `Design_ONVIF_Timeline.md` §5.3·§5.5 |
 | `AdminUsersPage.tsx` (Admin Dashboard 전체) | `Design_ONVIF_Timeline.md` §3.4 |
 | `onvifEventStore.ts` (스토어 필드) | `Design_ONVIF_Timeline.md` §4.3 |
 | `onvifApi.js` (API 파라미터) | `Design_ONVIF_Timeline.md` §3.3, `CLAUDE.md` API 표 |

@@ -1,6 +1,6 @@
 # Design: ONVIF Event Timeline
 
-**Version:** 1.4
+**Version:** 1.5
 **Status:** Implemented
 **Related:** [Design_ONVIF_Metadata_Pipeline.md](Design_ONVIF_Metadata_Pipeline.md) · [Design_DataChannel_CameraEvents.md](Design_DataChannel_CameraEvents.md)
 
@@ -366,6 +366,40 @@ const typeOptions = useMemo(() => {
 | `warning`| Yellow | 🚶 motionAlarm, 🚧 lineCrossed, ⬛ fieldEntered |
 | `critical`| Red  | 🔥 fire, 💨 smoke |
 
+### 5.8 Event Type Filter (OnvifTimelineOverlay)
+
+헤더 Range selector 옆의 `<select>` 드롭다운 — `OnvifTimelineInline`과 동일한 필터 UX를 전체화면 오버레이에 제공합니다.
+
+- **기본값**: `All Types` (빈 문자열 — 필터 없음)
+- **옵션 목록**: `onvifEventStore.types` (전역 레지스트리) — 현재 범위에 없는 타입도 표시
+- **로드 방식**: 마운트 시 `GET /api/onvif-event-types` fetch → `setTypes()`; `onvif:type-registered` 소켓 구독 → `addType()`
+- **필터링 범위**: `items` useMemo 내 `topicType` 비교 — viewport 내 이벤트에만 적용
+
+```typescript
+// useOnvifEvents hook (OnvifTimelineOverlay)
+useEffect(() => {  // mount-once: 전역 타입 레지스트리 로드
+  fetch('/api/onvif-event-types')
+    .then(r => r.json())
+    .then(data => { if (Array.isArray(data.types)) setTypes(data.types); });
+}, [setTypes]);
+
+useEffect(() => {  // 실시간: 신규 타입 감지 시 자동 추가
+  socket.on('onvif:type-registered', addType);
+  return () => socket.off('onvif:type-registered', addType);
+}, [socket, addType]);
+```
+
+**OnvifTimelineInline과의 차이점:**
+
+| 항목 | OnvifTimelineInline | OnvifTimelineOverlay |
+|------|--------------------|--------------------|
+| 타입 옵션 소스 | `onvifEventStore.types` (전역 레지스트리) | `onvifEventStore.types` (전역 레지스트리) |
+| 소켓 구독 | `onvif:type-registered` → `addType` | `onvif:type-registered` → `addType` |
+| 타입 변경 시 | `selected` 이벤트 초기화 | 자동 필터링만 (상세 팝업 위치 유지) |
+| UI 위치 | 상단 컨트롤 행 | 헤더 Range selector 우측 |
+
+---
+
 ### 5.7 Range Selector
 
 `[1D][1W][1M][1Y]` 버튼이 표시되는 위치:
@@ -402,13 +436,13 @@ ingest-daemon
             ├─ [NEW] if first time topicType:
             │    db.insert('onvif_event_types', ...)
             │    io.emit('onvif:type-registered', typeEntry)
-            │         └─ OnvifTimelineInline: addType()
+            │         └─ OnvifTimelineInline / OnvifTimelineOverlay: addType()
             └─ io.emit('onvif:event', evt)
                  └─ OnvifTimelineInline / OnvifTimelineOverlay: pushEvent()
 
-Client on mount (OnvifTimelineInline):
+Client on mount (OnvifTimelineInline 또는 OnvifTimelineOverlay):
   GET /api/onvif-event-types                → onvifEventStore.setTypes()  [type filter combobox]
-  GET /api/onvif-events?from=…&limit=1000  → onvifEventStore.setEvents() [timeline canvas]
+  GET /api/onvif-events?from=…&limit=2000  → onvifEventStore.setEvents() [timeline canvas]
 
 Admin: DELETE /api/onvif-event-types → registry cleared; types re-registered as events arrive
 
@@ -430,3 +464,4 @@ User action:
 | 1.2 | 2026-06-16 | OnvifTimelineInline 우측 분할 상세 패널 추가 (이벤트 선택 시에만 표시, 192px), Event Type 필터 콤보박스, 기본 탭 ONVIF Timeline 으로 변경 |
 | 1.3 | 2026-06-16 | ONVIF 이벤트 타입 전역 레지스트리 추가 (`onvif_event_types` DB 테이블, GET/DELETE /api/onvif-event-types, `onvif:type-registered` 소켓 이벤트, Admin Dashboard ONVIF 섹션) |
 | 1.4 | 2026-06-16 | OnvifTimelineInline Custom 날짜 범위 기능 추가 (Custom 버튼, datetime-local 입력, Apply, viewRangeEnd), SVG 로딩 스피너 교체 |
+| 1.5 | 2026-06-22 | OnvifTimelineOverlay Type 필터 추가 (§5.8) — 마운트 시 `/api/onvif-event-types` fetch + `onvif:type-registered` 소켓 구독 → `onvifEventStore.types` 기반 드롭다운 |

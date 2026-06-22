@@ -11,7 +11,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState, WheelEvent } from 'react';
 import { useI18n } from '../i18n';
-import { useOnvifEventStore, type OnvifEvent, type OnvifSeverity } from '../stores/onvifEventStore';
+import { useOnvifEventStore, type OnvifEvent, type OnvifEventType, type OnvifSeverity } from '../stores/onvifEventStore';
 import { parseOnvifXml } from '../utils/onvifParser';
 import { useSocket } from '../hooks/useSocket';
 
@@ -58,10 +58,11 @@ interface TimelineItem {
 // ── Hook: fetch + live ─────────────────────────────────────────────────────────
 
 function useOnvifEvents(cameraId: string | undefined, rangeMs: number) {
-  const { pushEvent, setEvents, events } = useOnvifEventStore();
+  const { pushEvent, setEvents, events, setTypes, addType, types } = useOnvifEventStore();
   const { socket } = useSocket();
   const [loading, setLoading] = useState(false);
 
+  // Fetch event history
   useEffect(() => {
     setLoading(true);
     const now   = Date.now();
@@ -80,17 +81,35 @@ function useOnvifEvents(cameraId: string | undefined, rangeMs: number) {
       .finally(() => setLoading(false));
   }, [cameraId, rangeMs, setEvents]);
 
+  // Fetch global type registry once on mount
+  useEffect(() => {
+    fetch('/api/onvif-event-types')
+      .then((r) => r.json())
+      .then((data) => {
+        if (Array.isArray(data.types)) setTypes(data.types as OnvifEventType[]);
+      })
+      .catch(() => {});
+  }, [setTypes]);
+
+  // Live event + new type registration via Socket.IO
   useEffect(() => {
     if (!socket) return;
-    const handler = (evt: OnvifEvent) => {
+    const onEvent = (evt: OnvifEvent) => {
       if (cameraId && evt.cameraId !== cameraId) return;
       pushEvent(evt);
     };
-    socket.on('onvif:event', handler);
-    return () => { socket.off('onvif:event', handler); };
-  }, [socket, cameraId, pushEvent]);
+    const onTypeRegistered = (type: OnvifEventType) => {
+      addType(type);
+    };
+    socket.on('onvif:event', onEvent);
+    socket.on('onvif:type-registered', onTypeRegistered);
+    return () => {
+      socket.off('onvif:event', onEvent);
+      socket.off('onvif:type-registered', onTypeRegistered);
+    };
+  }, [socket, cameraId, pushEvent, addType]);
 
-  return { events, loading };
+  return { events, types, loading };
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
@@ -157,14 +176,15 @@ function Row({ label, value }: { label: string; value: string }) {
 
 export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
   const { t } = useI18n();
-  const [range, setRange]         = useState<RangeLabel>('1D');
-  const [zoomLevel, setZoomLevel] = useState(1);       // 1 = full range, >1 = zoomed in
-  const [panFraction, setPan]     = useState(0);        // 0..1 offset from end (0 = latest)
-  const [selected, setSelected]   = useState<OnvifEvent | null>(null);
-  const containerRef              = useRef<HTMLDivElement>(null);
+  const [range, setRange]           = useState<RangeLabel>('1D');
+  const [zoomLevel, setZoomLevel]   = useState(1);       // 1 = full range, >1 = zoomed in
+  const [panFraction, setPan]       = useState(0);        // 0..1 offset from end (0 = latest)
+  const [selected, setSelected]     = useState<OnvifEvent | null>(null);
+  const [selectedType, setSelectedType] = useState<string>('');  // '' = All Types
+  const containerRef                = useRef<HTMLDivElement>(null);
 
   const rangeMs = RANGE_OPTIONS.find((r) => r.label === range)!.ms;
-  const { events, loading } = useOnvifEvents(cameraId, rangeMs);
+  const { events, types, loading } = useOnvifEvents(cameraId, rangeMs);
 
   // Close on Escape
   useEffect(() => {
@@ -201,18 +221,20 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
   const viewEnd  = rangeEnd - panFraction * rangeMs;
   const viewStart = viewEnd - viewSpan;
 
-  // Map events to x positions [0..1] within current viewport
+  // Map events to x positions [0..1] within current viewport (with optional type filter)
   const items = useMemo<TimelineItem[]>(() => {
     return events
       .filter((e) => {
         const ts = new Date(e.serverTs).getTime();
-        return ts >= viewStart && ts <= viewEnd;
+        if (ts < viewStart || ts > viewEnd) return false;
+        if (selectedType && e.topicType !== selectedType) return false;
+        return true;
       })
       .map((e) => ({
         evt: e,
         x: (new Date(e.serverTs).getTime() - viewStart) / viewSpan,
       }));
-  }, [events, viewStart, viewEnd, viewSpan]);
+  }, [events, viewStart, viewEnd, viewSpan, selectedType]);
 
   // Timeline tick labels
   const ticks = useMemo(() => {
@@ -247,21 +269,39 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
           )}
         </div>
 
-        {/* Range selector */}
-        <div className="flex items-center gap-1">
-          {RANGE_OPTIONS.map(({ label }) => (
-            <button
-              key={label}
-              onClick={() => { setRange(label as RangeLabel); setZoomLevel(1); setPan(0); }}
-              className={`px-3 py-1 text-[11px] font-bold rounded transition-colors ${
-                range === label
-                  ? 'bg-blue-600 text-white'
-                  : 'text-gray-400 hover:text-white hover:bg-gray-700'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
+        {/* Range selector + Type filter */}
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-1">
+            {RANGE_OPTIONS.map(({ label }) => (
+              <button
+                key={label}
+                onClick={() => { setRange(label as RangeLabel); setZoomLevel(1); setPan(0); }}
+                className={`px-3 py-1 text-[11px] font-bold rounded transition-colors ${
+                  range === label
+                    ? 'bg-blue-600 text-white'
+                    : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {/* Type filter — grows dynamically as new ONVIF types are detected */}
+          <select
+            value={selectedType}
+            onChange={(e) => setSelectedType(e.target.value)}
+            className="text-[11px] bg-gray-800 text-gray-300 border border-gray-600
+                       rounded px-2 py-1 hover:border-gray-400 focus:outline-none
+                       focus:border-blue-500 transition-colors"
+          >
+            <option value="">All Types</option>
+            {types.map((t) => (
+              <option key={t.topicType} value={t.topicType}>
+                {t.topicLabel || t.topicType}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="flex items-center gap-4">
