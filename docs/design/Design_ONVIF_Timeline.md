@@ -1,6 +1,6 @@
 # Design: ONVIF Event Timeline
 
-**Version:** 1.5
+**Version:** 1.6
 **Status:** Implemented
 **Related:** [Design_ONVIF_Metadata_Pipeline.md](Design_ONVIF_Metadata_Pipeline.md) · [Design_DataChannel_CameraEvents.md](Design_DataChannel_CameraEvents.md)
 
@@ -73,9 +73,10 @@ Only transitions (`lastState !== parsed.state`) result in a `db.insert()` call.
 
 | File | Change |
 |------|--------|
-| `server/src/routes/internalApi.js` | Added ONVIF parse + state-dedup + `db.insert` + `onvif:event` emit |
-| `server/src/db.js`                 | Added `onvif_events` to `ALL_TABLES`, `TABLE_ROW_CAPS` |
-| `server/src/index.js`              | Mounted `onvifEventsRouter`; called `setIngestDb(db)` and `setOnvifDb(db)` |
+| `server/src/routes/internalApi.js` | Added ONVIF parse + state-dedup + `db.insert` + `onvif:event` emit; on `state=true` saves frame to `onvif_snapshots` via `pipelineManager.getLatestFrame()` |
+| `server/src/db.js`                 | Added `onvif_events`, `onvif_snapshots` to `ALL_TABLES`, `TABLE_ROW_CAPS`, `JSON_FALLBACK_SKIP` |
+| `server/src/index.js`              | Mounted `onvifEventsRouter`, `onvifTypesRouter`, `onvifSnapshotsRouter`; called `setOnvifDb(db)` |
+| `server/src/services/pipelineManager.js` | Added `ctx._latestJpeg` (frame buffer updated on every frame); added `getLatestFrame(cameraId)` method |
 
 ### 3.3 REST Endpoints
 
@@ -85,6 +86,7 @@ Only transitions (`lastState !== parsed.state`) result in a `db.insert()` call.
 | `DELETE` | `/api/onvif-events`        | Delete all events. Optional `cameraId` query param to scope deletion |
 | `GET`    | `/api/onvif-event-types`   | Returns all ever-seen ONVIF event types (global registry). Response: `{ total, types[] }` |
 | `DELETE` | `/api/onvif-event-types`   | Clears event type registry. Admin use only (available from Admin page). Response: `{ deleted }` |
+| `GET`    | `/api/onvif-snapshots`     | Query frame snapshots captured at event start. Params: `eventId`, `cameraId`, `topicType`, `from`, `to`, `limit` (max 200). Response: `{ total, snapshots[] }`. `frameData` is `data:image/jpeg;base64,...` |
 
 ### 3.4 Event Type Registry (`onvif_event_types` table)
 
@@ -222,7 +224,8 @@ interface ParsedOnvifData {
 | `range`   | `'1D'…'1Y'`      | 선택된 범위 프리셋 |
 | `zoom`    | number           | 1 = 전체 범위; >1 = 확대 (max 500×) |
 | `pan`     | number           | 0..1 오프셋 (0=현재, 1=rangeMs 이전) |
-| `selected`| `OnvifEvent \| null` | 상세 패널에 표시 중인 이벤트 |
+| `selected`| `OnvifInterval \| null` | 상세 패널에 표시 중인 인터벌 |
+| `nowMs`   | number           | 5초마다 갱신 — in-progress 인터벌 duration 실시간 표시용 |
 
 ### 5.2 Viewport Computation
 
@@ -409,6 +412,67 @@ useEffect(() => {  // 실시간: 신규 타입 감지 시 자동 추가
 
 ---
 
+### 5.9 Gantt 인터벌 렌더링
+
+#### OnvifInterval 타입
+
+```typescript
+interface OnvifInterval {
+  id: string;            // = startEvt.id
+  cameraId: string;
+  topicType: string;
+  topicLabel: string;
+  severity: OnvifSeverity;
+  sourceToken: string | null;
+  startTs: number;       // ms
+  endTs: number;         // ms (= nowMs if inProgress)
+  isPoint: boolean;      // true = no-state event → diamond marker
+  inProgress: boolean;   // true = state=true without matching false
+  durationMs: number;
+  startEvt: OnvifEvent;
+  endEvt: OnvifEvent | null;
+}
+```
+
+#### buildIntervals() 알고리즘
+
+```
+sorted events (by serverTs ASC)
+for each event:
+  key = cameraId:topicType:sourceToken
+  state='true'  → open Map[key] = new interval (inProgress=true, endTs=nowMs)
+  state='false' → close Map[key] → set endTs, push to result
+  no state      → push point marker
+flush Map → remaining open intervals (inProgress=true)
+```
+
+#### 행(Row) 구조
+
+- 각 `topicType:sourceToken` 조합 → 별도 행
+- 행 레이블 = `topicLabel (sourceToken)` (없으면 `topicLabel`만)
+- Inline: ROW_H=28px, BAR_H=16px
+- Overlay: ROW_H=44px, BAR_H=24px
+
+#### 바 렌더링
+
+```
+barLeft  = max(0, (startTs − viewStart) / viewSpan)   // [0, 1]
+barRight = min(1, (endTs − viewStart) / viewSpan)      // [0, 1]
+barWidth = max(0.003, barRight − barLeft)               // min 0.3% (visibility)
+```
+
+- **완료 인터벌**: 단색 바 (`SEV_BAR[severity]`)
+- **진행 중 인터벌** (`inProgress=true`): `borderRight: 3px dashed` 로 개방 표시; 라벨에 `↦` 프리픽스
+- **포인트 이벤트** (`isPoint=true`): 45° 회전한 다이아몬드(◇)
+
+#### 스냅샷 연동
+
+- `state=true` 이벤트 저장 시 `pipelineManager.getLatestFrame(cameraId)` → `onvif_snapshots` 테이블에 JPEG 저장
+- 인터벌 선택 시 클라이언트가 `GET /api/onvif-snapshots?eventId=<id>&limit=1` 요청
+- 상세 패널 하단에 인라인 이미지 표시
+
+---
+
 ## 6. i18n Keys
 
 | Key | en | ko |
@@ -465,3 +529,4 @@ User action:
 | 1.3 | 2026-06-16 | ONVIF 이벤트 타입 전역 레지스트리 추가 (`onvif_event_types` DB 테이블, GET/DELETE /api/onvif-event-types, `onvif:type-registered` 소켓 이벤트, Admin Dashboard ONVIF 섹션) |
 | 1.4 | 2026-06-16 | OnvifTimelineInline Custom 날짜 범위 기능 추가 (Custom 버튼, datetime-local 입력, Apply, viewRangeEnd), SVG 로딩 스피너 교체 |
 | 1.5 | 2026-06-22 | OnvifTimelineOverlay Type 필터 추가 (§5.8) — 마운트 시 `/api/onvif-event-types` fetch + `onvif:type-registered` 소켓 구독 → `onvifEventStore.types` 기반 드롭다운 |
+| 1.6 | 2026-06-22 | Gantt 인터벌 바 렌더링 추가 (§5.9) — state=true/false 쌍으로 수평 막대, 진행 중 대시 바, 포인트 이벤트 다이아몬드; ONVIF 스냅샷 저장 (`onvif_snapshots` DB + `/api/onvif-snapshots`); `pipelineManager.getLatestFrame()` 추가 |

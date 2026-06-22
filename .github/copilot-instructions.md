@@ -157,6 +157,9 @@ loitering_tracking/
 | DELETE | `/api/client-logs/webrtc` | WebRTC 통계 전체 삭제 |
 | GET | `/api/onvif-events` | ONVIF 이벤트 조회 (query: cameraId, type, severity, from, to, limit) |
 | DELETE | `/api/onvif-events` | ONVIF 이벤트 삭제 (cameraId 생략 시 전체 삭제) |
+| GET | `/api/onvif-event-types` | ONVIF 이벤트 타입 레지스트리 전체 조회 (ever-seen topicTypes) |
+| DELETE | `/api/onvif-event-types` | ONVIF 이벤트 타입 레지스트리 초기화 |
+| GET | `/api/onvif-snapshots` | ONVIF 이벤트 시작 시점 프레임 조회 (query: eventId, cameraId, topicType, from, to, limit) |
 
 ---
 

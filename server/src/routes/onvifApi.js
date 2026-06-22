@@ -85,4 +85,36 @@ typesRouter.delete('/', (req, res) => {
   res.json({ deleted: all.length });
 });
 
-module.exports = { router, typesRouter, setDb };
+// ── GET /api/onvif-snapshots ──────────────────────────────────────────────────
+// Query: eventId (required or optional), cameraId, topicType, from, to, limit
+const snapshotsRouter = express.Router();
+
+snapshotsRouter.get('/', (req, res) => {
+  if (!_db) return res.status(503).json({ error: 'DB not ready' });
+
+  const { eventId, cameraId, topicType, from, to, limit } = req.query;
+  const maxRows = Math.min(parseInt(limit, 10) || 50, 200);
+
+  let rows = _db.all('onvif_snapshots');
+  rows.sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1)); // newest first
+
+  if (eventId)   rows = rows.filter(r => r.eventId === eventId);
+  if (cameraId)  rows = rows.filter(r => r.cameraId === cameraId);
+  if (topicType) rows = rows.filter(r => r.topicType === topicType);
+  if (from)      rows = rows.filter(r => r.timestamp >= from);
+  if (to)        rows = rows.filter(r => r.timestamp <= to);
+
+  rows = rows.slice(0, maxRows);
+
+  // Return frameData as data URL for direct use in <img>
+  const result = rows.map(r => ({
+    ...r,
+    frameData: r.frameData
+      ? `data:image/jpeg;base64,${r.frameData}`
+      : null,
+  }));
+
+  res.json({ total: result.length, snapshots: result });
+});
+
+module.exports = { router, typesRouter, snapshotsRouter, setDb };

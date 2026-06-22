@@ -65,7 +65,7 @@ loitering_tracking/
 │   │   ├── auth.js                 # 인증 라우터
 │   │   ├── analysisApi.js          # AI 분석 API (analysis/combined 모드)
 │   │   ├── analysisProxy.js        # 분석 API 프록시 (streaming 모드)
-│   │   └── onvifApi.js             # ONVIF 이벤트 REST API (GET/DELETE /api/onvif-events)
+│   │   └── onvifApi.js             # ONVIF 이벤트 REST API (GET/DELETE /api/onvif-events, GET /api/onvif-snapshots)
 │   ├── socket/
 │   │   └── streamHandler.js        # Socket.IO 스트림 이벤트
 │   ├── middleware/
@@ -219,6 +219,7 @@ loitering_tracking/
 | DELETE | `/api/onvif-events` | ONVIF 이벤트 삭제 (query: cameraId — 생략 시 전체 삭제) |
 | GET | `/api/onvif-event-types` | ONVIF 이벤트 타입 레지스트리 전체 조회 (ever-seen topicTypes) |
 | DELETE | `/api/onvif-event-types` | ONVIF 이벤트 타입 레지스트리 초기화 (Admin 페이지용) |
+| GET | `/api/onvif-snapshots` | ONVIF 이벤트 시작 시점 프레임 조회 (query: eventId, cameraId, topicType, from, to, limit — frameData=base64 JPEG) |
 | GET | `/admin/system` | CPU·메모리·GPU·디스크 I/O·스토리지·DB 쿼리 통계 (admin 전용) |
 
 ---

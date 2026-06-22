@@ -549,28 +549,28 @@ ONVIF 메타데이터 이벤트를 DB에 저장(`onvif_events` 테이블)하고,
 1. **FullscreenCameraView.tsx** — 하단 패널 "ONVIF Timeline" **탭** (`videoTab='onvif'`) → `OnvifTimelineInline` 렌더
 2. **SearchFullscreen.tsx** — 필터 행 "ONVIF Timeline" 버튼 → `OnvifTimelineOverlay` 전체화면 오버레이
 
-### OnvifTimelineInline 레이아웃 (분할 패널)
+### OnvifTimelineInline 레이아웃 (Gantt 행 분할 패널)
 
-이벤트 미선택 시 타임라인이 전체 너비를 사용합니다. 이벤트 아이콘 클릭 시에만 우측 상세 패널이 마운트됩니다.
+`state=true/false` 쌍 이벤트는 수평 Gantt 바, 상태 없는 이벤트는 다이아몬드 포인트 마커로 렌더링합니다.
+각 `topicType:sourceToken` 조합이 별도의 행(row)으로 표시됩니다.
 
 ```
-[미선택 — 전체 너비]
-┌──────────────────────────────────────────────────────────────┐
-│ [1D][1W][1M][1Y]  [Event Type ▾]         ×2.0   5/12        │
-├──────────────────────────────────────────────────────────────┤
-│  timeline canvas (full width)                                │
-└──────────────────────────────────────────────────────────────┘
-
-[선택 시 — 우측 패널 출현]
-┌──────────────────────────────────────────────────────────────┐
-│ [1D][1W][1M][1Y]  [Event Type ▾]         ×2.0   5/12        │
-├───────────────────────────────────┬──────────────────────────┤
-│  timeline canvas (flex-1)         │  detail (192px)          │
-│                                   │  Parsed / Raw XML  ✕    │
-└───────────────────────────────────┴──────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│ [1D][1W][1M][1Y][Custom]  [Event Type ▾]   ×2.0   5/12          │ ← control
+├──────────────────────────────────────────────────────────────────┤
+│ callRequest (Tok1) │ ████░░ 3s ████                 │ detail     │
+│ motionAlarm        │ ████████████████ 15s            │ 200px      │
+│ lineCrossed (L1)   │ ████ 1s                        │            │
+├────────────────────┼────────────────────────────────┤            │
+│    <tick labels>   │                                │            │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-구현: `{selected && <div style={{ width: DETAIL_PANEL_W }}>…</div>}` — `selected` null 시 DOM에서 완전히 제거되어 타임라인이 전체 너비를 사용합니다.
+- **완료 인터벌**: 단색 바 (severity 색상)
+- **진행 중** (`inProgress=true`): `borderRight: dashed` 로 개방 표시; 라벨에 `↦` 프리픽스
+- **포인트 이벤트** (state 없음): 45° 다이아몬드 마커
+
+구현: `{selected && <div style={{ width: 200 }}>…</div>}` — `selected` null 시 DOM에서 완전히 제거됩니다.
 
 ### 드래그 패닝 (OnvifTimelineInline)
 
@@ -647,11 +647,33 @@ viewStart = viewEnd − viewSpan
 itemX     = (eventTs − viewStart) / viewSpan   // [0..1]
 ```
 
+### Gantt 인터벌 로직
+
+```typescript
+// buildIntervals(events, nowMs) — state=true/false 쌍으로 인터벌 구성
+// key = cameraId:topicType:sourceToken
+// state='true'  → open Map[key] (inProgress=true, endTs=nowMs)
+// state='false' → close Map[key], set endTs
+// no state      → point marker (isPoint=true)
+// flush         → remaining open = inProgress
+```
+
+### ONVIF 스냅샷
+
+| 항목 | 내용 |
+|------|------|
+| 저장 시점 | ONVIF `state=true` 이벤트 수신 즉시 (`setImmediate`) |
+| 데이터 소스 | `pipelineManager.getLatestFrame(cameraId)` → `ctx._latestJpeg` |
+| DB 테이블 | `onvif_snapshots` (row cap 2,000) |
+| REST | `GET /api/onvif-snapshots?eventId=&cameraId=&topicType=&from=&to=&limit=` |
+| 클라이언트 | 인터벌 선택 시 자동 fetch → 상세 패널 하단 인라인 `<img>` |
+
 ### REST API
 
 ```
 GET  /api/onvif-events?cameraId=&type=&severity=&from=&to=&limit=500
 DELETE /api/onvif-events?cameraId=   (생략 시 전체 삭제)
+GET  /api/onvif-snapshots?eventId=&cameraId=&topicType=&from=&to=&limit=50
 ```
 
 ### Socket.IO 이벤트
@@ -665,13 +687,15 @@ DELETE /api/onvif-events?cameraId=   (생략 시 전체 삭제)
 
 | 변경 파일 | 업데이트 필요 문서 |
 |-----------|------------------|
-| `OnvifTimelineOverlay.tsx` (전체화면 UI + Type 필터) | `Design_ONVIF_Timeline.md` §5·§5.8 |
-| `OnvifTimelineInline.tsx` (인라인 UI, 드래그 패닝, 타입 필터) | `Design_ONVIF_Timeline.md` §5.3·§5.5 |
+| `OnvifTimelineOverlay.tsx` (전체화면 UI + Gantt + Type 필터) | `Design_ONVIF_Timeline.md` §5·§5.9 |
+| `OnvifTimelineInline.tsx` (인라인 UI + Gantt, 드래그 패닝, 타입 필터) | `Design_ONVIF_Timeline.md` §5.3·§5.9 |
 | `AdminUsersPage.tsx` (Admin Dashboard 전체) | `Design_ONVIF_Timeline.md` §3.4 |
 | `onvifEventStore.ts` (스토어 필드) | `Design_ONVIF_Timeline.md` §4.3 |
 | `onvifApi.js` (API 파라미터) | `Design_ONVIF_Timeline.md` §3.3, `CLAUDE.md` API 표 |
 | `onvifParser.js` (TOPIC_MAP) | `Design_ONVIF_Metadata_Pipeline.md` §2 |
-| `db.js` (`onvif_events` 스키마) | `Design_ONVIF_Timeline.md` §2.1 |
+| `db.js` (`onvif_events`, `onvif_snapshots` 스키마) | `Design_ONVIF_Timeline.md` §2.1 |
+| `pipelineManager.js` (`_latestJpeg`, `getLatestFrame`) | `Design_ONVIF_Timeline.md` §5.9 |
+| `internalApi.js` (스냅샷 저장 로직) | `Design_ONVIF_Timeline.md` §5.9 |
 
 ---
 

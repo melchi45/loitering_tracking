@@ -108,6 +108,28 @@ router.post(
             };
             _db.insert('onvif_events', event);
 
+            // On state=true (event START), capture the latest camera frame as a snapshot
+            if (parsed.state === 'true' && _pipelineManager) {
+              setImmediate(() => {
+                try {
+                  const frame = _pipelineManager.getLatestFrame(cameraId);
+                  if (frame && frame.buf) {
+                    _db.insert('onvif_snapshots', {
+                      id:          uuidv4(),
+                      eventId:     event.id,
+                      cameraId,
+                      topicType:   parsed.topicType,
+                      timestamp:   now,
+                      frameData:   frame.buf.toString('base64'),
+                      frameWidth:  frame.fw,
+                      frameHeight: frame.fh,
+                      createdAt:   now,
+                    });
+                  }
+                } catch (_e) { /* never block ONVIF path */ }
+              });
+            }
+
             // Register topicType globally if first time seen
             const knownTypes = _db.all('onvif_event_types');
             if (!knownTypes.some(r => r.topicType === parsed.topicType)) {

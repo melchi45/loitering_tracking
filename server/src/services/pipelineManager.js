@@ -435,6 +435,8 @@ class PipelineManager {
       _pendingFrame:        null,
       _analyzing:           false,
       _lastAnalysisQueueAt: 0,   // epoch ms — used by ANALYSIS_FPS rate limiter
+      // Most recent JPEG frame (updated on every frame arrival, used by ONVIF snapshot)
+      _latestJpeg:          null, // { buf: Buffer, fw: number, fh: number }
       // Camera identity (for metrics display)
       cameraName:         camera.name || camera.id,
       // Analytics metrics — accumulated by local inference (combined/analysis mode)
@@ -479,6 +481,9 @@ class PipelineManager {
       const jpegSize  = getJpegSize(jpegBuffer);
       let frameWidth  = jpegSize?.width  ?? 640;
       let frameHeight = jpegSize?.height ?? 640;
+
+      // Keep a reference to the most recent frame for ONVIF event snapshot capture
+      ctx._latestJpeg = { buf: jpegBuffer, fw: frameWidth, fh: frameHeight };
 
       // Emit raw JPEG frame only for cameras NOT using WebRTC.
       // volatile: if the browser's WebSocket buffer is full (slow ACK), the frame
@@ -1260,6 +1265,17 @@ class PipelineManager {
       frameCount:  ctx.frameCount,
       lastFrameAt: ctx.lastFrameAt,
     };
+  }
+
+  /**
+   * Returns the most recent JPEG frame for the given camera, or null if not available.
+   * Used by ONVIF event snapshot capture to record the frame at event time.
+   * @param {string} cameraId
+   * @returns {{ buf: Buffer, fw: number, fh: number }|null}
+   */
+  getLatestFrame(cameraId) {
+    const ctx = this._pipelines.get(cameraId);
+    return ctx?._latestJpeg ?? null;
   }
 
   /**

@@ -1,12 +1,12 @@
 /**
- * OnvifTimelineOverlay — full-screen overlay that renders ONVIF events as a
- * horizontal timeline with zoom (scroll / keyboard ↑↓) and pan (keyboard ←→).
+ * OnvifTimelineOverlay — full-screen ONVIF event timeline.
  *
- * Timeline range presets: 1D · 1W · 1M · 1Y
- * Event icons are clickable → shows ONVIF parsed detail + Raw XML toggle.
+ * Rendering:
+ *   - state=true/false pairs → horizontal Gantt bars (one row per topicType:sourceToken)
+ *   - in-progress → dashed-right bar
+ *   - no-state events → diamond point markers
  *
- * Fetches events from GET /api/onvif-events and subscribes to Socket.IO
- * `onvif:event` for live updates.
+ * Controls: scroll=zoom, ↑↓ keyboard=zoom, ←→=pan, Esc=close.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState, WheelEvent } from 'react';
@@ -15,44 +15,78 @@ import { useOnvifEventStore, type OnvifEvent, type OnvifEventType, type OnvifSev
 import { parseOnvifXml } from '../utils/onvifParser';
 import { useSocket } from '../hooks/useSocket';
 
-// ── Constants ─────────────────────────────────────────────────────────────────
+// ── Layout ────────────────────────────────────────────────────────────────────
+
+const ROW_LABEL_W = 130;
+const ROW_H       = 44;
+const BAR_H       = 24;
+const BAR_TOP     = (ROW_H - BAR_H) / 2;
+const TICK_H      = 28;
+const DETAIL_W    = 300;
 
 const RANGE_OPTIONS = [
-  { label: '1D', ms: 24 * 60 * 60 * 1000 },
-  { label: '1W', ms: 7 * 24 * 60 * 60 * 1000 },
-  { label: '1M', ms: 30 * 24 * 60 * 60 * 1000 },
-  { label: '1Y', ms: 365 * 24 * 60 * 60 * 1000 },
+  { label: '1D', ms: 86_400_000 },
+  { label: '1W', ms: 7 * 86_400_000 },
+  { label: '1M', ms: 30 * 86_400_000 },
+  { label: '1Y', ms: 365 * 86_400_000 },
 ] as const;
-
 type RangeLabel = '1D' | '1W' | '1M' | '1Y';
 
-const SEVERITY_COLORS: Record<OnvifSeverity, string> = {
-  info:     'bg-blue-500 border-blue-400 text-white',
-  warning:  'bg-yellow-500 border-yellow-400 text-gray-900',
-  critical: 'bg-red-600 border-red-400 text-white',
+// ── Severity styling ──────────────────────────────────────────────────────────
+
+const SEV_BAR: Record<OnvifSeverity, string> = {
+  info:     'bg-blue-600/85',
+  warning:  'bg-amber-500/85',
+  critical: 'bg-red-600/85',
+};
+const SEV_DOT: Record<OnvifSeverity, string> = {
+  info:     'bg-blue-500',
+  warning:  'bg-amber-400',
+  critical: 'bg-red-500',
+};
+const SEV_TEXT: Record<OnvifSeverity, string> = {
+  info:     'text-blue-300',
+  warning:  'text-amber-300',
+  critical: 'text-red-400',
+};
+const SEV_BADGE: Record<OnvifSeverity, string> = {
+  info:     'bg-blue-500 text-white',
+  warning:  'bg-amber-500 text-gray-900',
+  critical: 'bg-red-600 text-white',
 };
 
-const SEVERITY_ICON: Record<string, string> = {
-  callRequest:  '📞',
-  motionAlarm:  '🚶',
-  lineCrossed:  '🚧',
-  fieldEntered: '⬛',
-  fieldExited:  '⬜',
-  fire:         '🔥',
-  smoke:        '💨',
-  unknown:      '❓',
-};
+// ── Interval / Row types ──────────────────────────────────────────────────────
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+interface OnvifInterval {
+  id: string;
+  cameraId: string;
+  topicType: string;
+  topicLabel: string;
+  severity: OnvifSeverity;
+  sourceToken: string | null;
+  startTs: number;
+  endTs: number;
+  isPoint: boolean;
+  inProgress: boolean;
+  durationMs: number;
+  startEvt: OnvifEvent;
+  endEvt: OnvifEvent | null;
+}
+
+interface OnvifRow {
+  key: string;
+  topicType: string;
+  topicLabel: string;
+  sourceToken: string | null;
+  severity: OnvifSeverity;
+  intervals: OnvifInterval[];
+}
+
+// ── Props ─────────────────────────────────────────────────────────────────────
 
 interface Props {
   cameraId?: string;
   onClose: () => void;
-}
-
-interface TimelineItem {
-  evt: OnvifEvent;
-  x: number; // 0..1 fraction along the visible viewport
 }
 
 // ── Hook: fetch + live ─────────────────────────────────────────────────────────
@@ -62,252 +96,181 @@ function useOnvifEvents(cameraId: string | undefined, rangeMs: number) {
   const { socket } = useSocket();
   const [loading, setLoading] = useState(false);
 
-  // Fetch event history
   useEffect(() => {
     setLoading(true);
-    const now   = Date.now();
-    const from  = new Date(now - rangeMs).toISOString();
-    const params = new URLSearchParams({ from, limit: '2000' });
+    const params = new URLSearchParams({
+      from: new Date(Date.now() - rangeMs).toISOString(),
+      limit: '2000',
+    });
     if (cameraId) params.set('cameraId', cameraId);
-
     fetch(`/api/onvif-events?${params}`)
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data.events)) {
-          setEvents(data.events as OnvifEvent[]);
-        }
-      })
+      .then(r => r.json())
+      .then(d => { if (Array.isArray(d.events)) setEvents(d.events as OnvifEvent[]); })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [cameraId, rangeMs, setEvents]);
 
-  // Fetch global type registry once on mount
   useEffect(() => {
     fetch('/api/onvif-event-types')
-      .then((r) => r.json())
-      .then((data) => {
-        if (Array.isArray(data.types)) setTypes(data.types as OnvifEventType[]);
-      })
+      .then(r => r.json())
+      .then(d => { if (Array.isArray(d.types)) setTypes(d.types as OnvifEventType[]); })
       .catch(() => {});
   }, [setTypes]);
 
-  // Live event + new type registration via Socket.IO
   useEffect(() => {
     if (!socket) return;
-    const onEvent = (evt: OnvifEvent) => {
-      if (cameraId && evt.cameraId !== cameraId) return;
-      pushEvent(evt);
-    };
-    const onTypeRegistered = (type: OnvifEventType) => {
-      addType(type);
-    };
+    const onEvent = (evt: OnvifEvent) => { if (!cameraId || evt.cameraId === cameraId) pushEvent(evt); };
+    const onType  = (t: OnvifEventType) => addType(t);
     socket.on('onvif:event', onEvent);
-    socket.on('onvif:type-registered', onTypeRegistered);
-    return () => {
-      socket.off('onvif:event', onEvent);
-      socket.off('onvif:type-registered', onTypeRegistered);
-    };
+    socket.on('onvif:type-registered', onType);
+    return () => { socket.off('onvif:event', onEvent); socket.off('onvif:type-registered', onType); };
   }, [socket, cameraId, pushEvent, addType]);
 
   return { events, types, loading };
-}
-
-// ── Sub-components ────────────────────────────────────────────────────────────
-
-function EventDetailPanel({ evt, onClose }: { evt: OnvifEvent; onClose: () => void }) {
-  const [showRaw, setShowRaw] = useState(false);
-  const parsed = evt.rawXml ? parseOnvifXml(evt.rawXml) : null;
-  const displayItems = parsed?.items ?? evt.items ?? {};
-
-  return (
-    <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 z-50
-                    w-80 bg-gray-900 border border-gray-600 rounded-lg shadow-2xl text-xs
-                    overflow-hidden">
-      {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 bg-gray-800 border-b border-gray-700">
-        <span className="font-semibold text-white">{evt.topicLabel}</span>
-        <button onClick={onClose} className="text-gray-400 hover:text-white p-0.5">✕</button>
-      </div>
-
-      {/* Parsed detail */}
-      <div className="px-3 py-2 space-y-1">
-        <Row label="Topic"     value={evt.topic} />
-        <Row label="Time"      value={new Date(evt.utcTime).toLocaleString()} />
-        <Row label="Operation" value={evt.operation} />
-        {evt.sourceToken && <Row label="Source"    value={evt.sourceToken} />}
-        {evt.state       && <Row label="State"     value={evt.state} />}
-        {Object.entries(displayItems)
-          .filter(([k]) => !['SourceToken', 'State'].includes(k))
-          .map(([k, v]) => <Row key={k} label={k} value={String(v)} />)}
-      </div>
-
-      {/* Raw XML toggle */}
-      {evt.rawXml && (
-        <div className="border-t border-gray-700">
-          <button
-            onClick={() => setShowRaw((v) => !v)}
-            className="w-full px-3 py-1.5 text-left text-[10px] text-gray-400 hover:text-gray-200
-                       hover:bg-gray-800 transition-colors font-mono"
-          >
-            {showRaw ? '▾ Hide Raw XML' : '▸ Show Raw XML'}
-          </button>
-          {showRaw && (
-            <pre className="px-3 py-2 text-[9px] text-green-400 bg-gray-950 overflow-x-auto
-                            max-h-40 leading-tight whitespace-pre-wrap break-all">
-              {evt.rawXml}
-            </pre>
-          )}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function Row({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="flex gap-2">
-      <span className="text-gray-500 flex-shrink-0 w-20 truncate">{label}</span>
-      <span className="text-gray-200 break-all">{value}</span>
-    </div>
-  );
 }
 
 // ── Main overlay ──────────────────────────────────────────────────────────────
 
 export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
   const { t } = useI18n();
-  const [range, setRange]           = useState<RangeLabel>('1D');
-  const [zoomLevel, setZoomLevel]   = useState(1);       // 1 = full range, >1 = zoomed in
-  const [panFraction, setPan]       = useState(0);        // 0..1 offset from end (0 = latest)
-  const [selected, setSelected]     = useState<OnvifEvent | null>(null);
-  const [selectedType, setSelectedType] = useState<string>('');  // '' = All Types
-  const containerRef                = useRef<HTMLDivElement>(null);
 
-  const rangeMs = RANGE_OPTIONS.find((r) => r.label === range)!.ms;
+  const [range, setRange]           = useState<RangeLabel>('1D');
+  const [zoomLevel, setZoomLevel]   = useState(1);
+  const [panFraction, setPan]       = useState(0);
+  const [selected, setSelected]     = useState<OnvifInterval | null>(null);
+  const [selectedType, setSelectedType] = useState('');
+  const [showRaw, setShowRaw]       = useState(false);
+  const [snapshot, setSnapshot]     = useState<string | null>(null);
+
+  const [nowMs, setNowMs] = useState(Date.now);
+  useEffect(() => {
+    const id = setInterval(() => setNowMs(Date.now()), 5_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const containerRef = useRef<HTMLDivElement>(null);
+  const rangeMs = RANGE_OPTIONS.find(r => r.label === range)!.ms;
   const { events, types, loading } = useOnvifEvents(cameraId, rangeMs);
 
-  // Close on Escape
+  // ── Viewport ────────────────────────────────────────────────────────────────
+  const viewSpan  = rangeMs / zoomLevel;
+  const viewEnd   = nowMs - panFraction * rangeMs;
+  const viewStart = viewEnd - viewSpan;
+
+  // ── Zoom / pan ──────────────────────────────────────────────────────────────
+  const handleZoom = useCallback((factor: number) =>
+    setZoomLevel(z => Math.max(1, Math.min(z * factor, 1000))), []);
+
+  const shiftPan = useCallback((delta: number) =>
+    setPan(p => Math.max(0, Math.min(1 - 1 / zoomLevel, p + delta))), [zoomLevel]);
+
+  const handleWheel = (e: WheelEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    if (e.deltaY < 0) handleZoom(1.3); else handleZoom(1 / 1.3);
+  };
+
+  // Keyboard navigation
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { onClose(); return; }
-      if (e.key === 'ArrowUp')    { e.preventDefault(); handleZoom(1.5);  }
-      if (e.key === 'ArrowDown')  { e.preventDefault(); handleZoom(1 / 1.5); }
-      if (e.key === 'ArrowLeft')  { e.preventDefault(); shiftPan(-0.1 / zoomLevel); }
-      if (e.key === 'ArrowRight') { e.preventDefault(); shiftPan( 0.1 / zoomLevel); }
+      if (e.key === 'Escape')      { onClose(); return; }
+      if (e.key === 'ArrowUp')     { e.preventDefault(); handleZoom(1.5); }
+      if (e.key === 'ArrowDown')   { e.preventDefault(); handleZoom(1 / 1.5); }
+      if (e.key === 'ArrowLeft')   { e.preventDefault(); shiftPan(-0.1 / zoomLevel); }
+      if (e.key === 'ArrowRight')  { e.preventDefault(); shiftPan(0.1 / zoomLevel); }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoomLevel, onClose]);
 
-  const handleZoom = useCallback((factor: number) => {
-    setZoomLevel((z) => Math.max(1, Math.min(z * factor, 1000)));
-  }, []);
+  // ── Fetch snapshot when interval selected ───────────────────────────────────
+  useEffect(() => {
+    if (!selected) { setSnapshot(null); return; }
+    fetch(`/api/onvif-snapshots?eventId=${selected.id}&limit=1`)
+      .then(r => r.json())
+      .then(d => setSnapshot(d.snapshots?.[0]?.frameData ?? null))
+      .catch(() => setSnapshot(null));
+  }, [selected?.id]);
 
-  const shiftPan = useCallback((delta: number) => {
-    setPan((p) => Math.max(0, Math.min(1 - 1 / zoomLevel, p + delta)));
-  }, [zoomLevel]);
+  // ── Build intervals + rows ──────────────────────────────────────────────────
+  const { rows, totalCount } = useMemo(() => {
+    const filtered = selectedType ? events.filter(e => e.topicType === selectedType) : events;
+    const intervals = buildIntervals(filtered, nowMs);
+    return { rows: buildRows(intervals), totalCount: filtered.length };
+  }, [events, selectedType, nowMs]);
 
-  const handleWheel = (e: WheelEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    if (e.deltaY < 0) handleZoom(1.3);
-    else              handleZoom(1 / 1.3);
-  };
+  const visibleCount = useMemo(() =>
+    rows.reduce((n, r) =>
+      n + r.intervals.filter(iv => iv.endTs >= viewStart && iv.startTs <= viewEnd).length, 0),
+  [rows, viewStart, viewEnd]);
 
-  // Viewport: [viewStart, viewEnd] as absolute timestamps
-  const now      = Date.now();
-  const rangeEnd = now;
-  const viewSpan = rangeMs / zoomLevel;
-  const viewEnd  = rangeEnd - panFraction * rangeMs;
-  const viewStart = viewEnd - viewSpan;
+  // ── Ticks ───────────────────────────────────────────────────────────────────
+  const ticks = useMemo(() =>
+    [0, 1/6, 2/6, 3/6, 4/6, 5/6, 1].map(f => ({
+      x: f,
+      label: formatTick(viewStart + f * viewSpan, viewSpan),
+    })),
+  [viewStart, viewSpan]);
 
-  // Map events to x positions [0..1] within current viewport (with optional type filter)
-  const items = useMemo<TimelineItem[]>(() => {
-    return events
-      .filter((e) => {
-        const ts = new Date(e.serverTs).getTime();
-        if (ts < viewStart || ts > viewEnd) return false;
-        if (selectedType && e.topicType !== selectedType) return false;
-        return true;
-      })
-      .map((e) => ({
-        evt: e,
-        x: (new Date(e.serverTs).getTime() - viewStart) / viewSpan,
-      }));
-  }, [events, viewStart, viewEnd, viewSpan, selectedType]);
-
-  // Timeline tick labels
-  const ticks = useMemo(() => {
-    const count  = 6;
-    const result = [];
-    for (let i = 0; i <= count; i++) {
-      const ts    = viewStart + (i / count) * viewSpan;
-      const label = formatTick(ts, viewSpan);
-      result.push({ x: i / count, label });
-    }
-    return result;
-  }, [viewStart, viewSpan]);
+  // ── Detail panel data ───────────────────────────────────────────────────────
+  const selEvt    = selected?.startEvt ?? null;
+  const parsed    = selEvt?.rawXml ? parseOnvifXml(selEvt.rawXml) : null;
+  const dispItems = parsed?.items ?? selEvt?.items ?? {};
 
   return (
     <div
       className="fixed inset-0 z-[200] flex flex-col bg-gray-950/95 backdrop-blur-sm"
-      onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}
     >
-      {/* ── Header ─────────────────────────────────────────────────────── */}
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between px-5 py-3 bg-gray-900 border-b border-gray-700 flex-shrink-0">
         <div className="flex items-center gap-3">
-          <span className="text-sm font-bold text-white tracking-wide">
-            {t.onvifTimelineTitle}
-          </span>
+          <span className="text-sm font-bold text-white tracking-wide">{t.onvifTimelineTitle}</span>
           {cameraId && (
             <span className="text-[10px] text-gray-400 bg-gray-800 px-2 py-0.5 rounded">
               {cameraId.slice(0, 8)}
             </span>
           )}
-          {loading && (
-            <span className="text-[10px] text-blue-400 animate-pulse">Loading…</span>
-          )}
+          {loading && <span className="text-[10px] text-blue-400 animate-pulse">Loading…</span>}
         </div>
 
-        {/* Range selector + Type filter */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2">
+          {/* Range buttons */}
           <div className="flex items-center gap-1">
             {RANGE_OPTIONS.map(({ label }) => (
               <button
                 key={label}
                 onClick={() => { setRange(label as RangeLabel); setZoomLevel(1); setPan(0); }}
                 className={`px-3 py-1 text-[11px] font-bold rounded transition-colors ${
-                  range === label
-                    ? 'bg-blue-600 text-white'
-                    : 'text-gray-400 hover:text-white hover:bg-gray-700'
+                  range === label ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white hover:bg-gray-700'
                 }`}
-              >
-                {label}
-              </button>
+              >{label}</button>
             ))}
           </div>
 
-          {/* Type filter — grows dynamically as new ONVIF types are detected */}
+          {/* Type filter */}
           <select
             value={selectedType}
-            onChange={(e) => setSelectedType(e.target.value)}
+            onChange={e => { setSelectedType(e.target.value); setSelected(null); }}
             className="text-[11px] bg-gray-800 text-gray-300 border border-gray-600
                        rounded px-2 py-1 hover:border-gray-400 focus:outline-none
                        focus:border-blue-500 transition-colors"
           >
             <option value="">All Types</option>
-            {types.map((t) => (
-              <option key={t.topicType} value={t.topicType}>
-                {t.topicLabel || t.topicType}
-              </option>
+            {types.map(tt => (
+              <option key={tt.topicType} value={tt.topicType}>{tt.topicLabel || tt.topicType}</option>
             ))}
           </select>
+
+          {zoomLevel > 1 && (
+            <span className="text-[11px] text-blue-400 bg-blue-900/30 px-2 py-0.5 rounded">
+              ×{zoomLevel.toFixed(1)}
+            </span>
+          )}
         </div>
 
         <div className="flex items-center gap-4">
-          <span className="text-[10px] text-gray-500 hidden sm:block">
-            {t.onvifTimelineHint}
-          </span>
+          <span className="text-[10px] text-gray-500 hidden sm:block">{t.onvifTimelineHint}</span>
           <button
             onClick={onClose}
             className="text-gray-400 hover:text-white p-1.5 rounded hover:bg-gray-700 transition-colors"
@@ -320,168 +283,360 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
         </div>
       </div>
 
-      {/* ── Timeline canvas ─────────────────────────────────────────────── */}
-      <div
-        ref={containerRef}
-        className="flex-1 relative overflow-hidden select-none cursor-crosshair"
-        onWheel={handleWheel}
-      >
-        {/* Tick marks + labels */}
-        <div className="absolute bottom-8 left-0 right-0 h-6 pointer-events-none">
-          {ticks.map(({ x, label }) => (
-            <div
-              key={x}
-              className="absolute flex flex-col items-center"
-              style={{ left: `${x * 100}%`, transform: 'translateX(-50%)' }}
-            >
-              <div className="w-px h-3 bg-gray-600" />
-              <span className="text-[9px] text-gray-500 whitespace-nowrap mt-0.5">{label}</span>
+      {/* ── Body: tracks + detail panel ─────────────────────────────────────── */}
+      <div className="flex flex-1 min-h-0 overflow-hidden">
+
+        {/* Track area */}
+        <div
+          ref={containerRef}
+          className="flex-1 flex flex-col overflow-hidden cursor-crosshair select-none"
+          onWheel={handleWheel}
+          onClick={() => setSelected(null)}
+        >
+          {/* Scrollable rows */}
+          <div className="flex-1 overflow-y-auto overflow-x-hidden">
+
+            {/* Empty state */}
+            {!loading && rows.length === 0 && (
+              <div className="flex items-center justify-center h-full">
+                <span className="text-gray-600 text-sm">{t.onvifTimelineEmpty}</span>
+              </div>
+            )}
+
+            {/* Track rows */}
+            {rows.map((row, rowIdx) => (
+              <div key={row.key} className="flex relative" style={{ height: ROW_H }}>
+
+                {/* Label */}
+                <div
+                  className="flex-shrink-0 flex items-center px-3 border-r border-gray-700/60 overflow-hidden"
+                  style={{ width: ROW_LABEL_W }}
+                >
+                  <div className="flex flex-col min-w-0">
+                    <span className={`text-[11px] font-semibold truncate ${SEV_TEXT[row.severity]}`}
+                          title={row.topicLabel}>
+                      {row.topicLabel}
+                    </span>
+                    {row.sourceToken && (
+                      <span className="text-[9px] text-gray-500 truncate">{row.sourceToken}</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* Track canvas */}
+                <div className="flex-1 relative overflow-hidden" style={{ height: ROW_H }}>
+                  {rowIdx % 2 === 1 && (
+                    <div className="absolute inset-0 bg-white/[0.02] pointer-events-none" />
+                  )}
+                  {/* Tick grid */}
+                  {[1/6, 2/6, 3/6, 4/6, 5/6].map(f => (
+                    <div key={f} className="absolute top-0 bottom-0 w-px bg-gray-700/30 pointer-events-none"
+                         style={{ left: `${f * 100}%` }} />
+                  ))}
+
+                  {row.intervals
+                    .filter(iv => iv.endTs >= viewStart && iv.startTs <= viewEnd)
+                    .map(iv => {
+                      const isSel = selected?.id === iv.id;
+
+                      if (iv.isPoint) {
+                        const x = (iv.startTs - viewStart) / viewSpan;
+                        if (x < -0.01 || x > 1.01) return null;
+                        return (
+                          <button
+                            key={iv.id}
+                            onClick={e => {
+                              e.stopPropagation();
+                              setSelected(sel => sel?.id === iv.id ? null : iv);
+                              setShowRaw(false);
+                            }}
+                            className={`absolute ${SEV_DOT[iv.severity]} hover:scale-125 transition-transform
+                                        ${isSel ? 'ring-2 ring-white scale-125' : 'opacity-85'}`}
+                            style={{
+                              left: `${x * 100}%`,
+                              top: BAR_TOP,
+                              width: 12, height: 12,
+                              transform: 'translateX(-50%) rotate(45deg)',
+                            }}
+                            title={`${iv.topicLabel} — ${new Date(iv.startTs).toLocaleString()}`}
+                          />
+                        );
+                      }
+
+                      const barL = Math.max(0, (iv.startTs - viewStart) / viewSpan);
+                      const barR = Math.min(1, (iv.endTs - viewStart) / viewSpan);
+                      const barW = Math.max(0.002, barR - barL);
+                      const dur  = iv.inProgress ? fmtDur(nowMs - iv.startTs) : fmtDur(iv.durationMs);
+
+                      return (
+                        <button
+                          key={iv.id}
+                          onClick={e => {
+                            e.stopPropagation();
+                            setSelected(sel => sel?.id === iv.id ? null : iv);
+                            setShowRaw(false);
+                          }}
+                          className={`absolute flex items-center px-2 overflow-hidden rounded
+                                      ${SEV_BAR[iv.severity]} text-white text-[11px] cursor-pointer
+                                      hover:opacity-100 transition-opacity
+                                      ${isSel ? 'ring-1 ring-white opacity-100' : 'opacity-80'}`}
+                          style={{
+                            left: `${barL * 100}%`,
+                            width: `${barW * 100}%`,
+                            top: BAR_TOP,
+                            height: BAR_H,
+                            borderRight: iv.inProgress ? '3px dashed rgba(255,255,255,0.5)' : undefined,
+                          }}
+                          title={`${iv.topicLabel}${iv.inProgress ? ' (in progress)' : ''} — ${dur}`}
+                        >
+                          <span className="truncate leading-none font-medium">
+                            {iv.inProgress ? '↦ ' : ''}{dur}
+                          </span>
+                        </button>
+                      );
+                    })
+                  }
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* Tick labels (sticky bottom) */}
+          <div className="flex-shrink-0 flex border-t border-gray-700/60 bg-gray-900/90"
+               style={{ height: TICK_H }}>
+            <div className="flex-shrink-0 border-r border-gray-700/60" style={{ width: ROW_LABEL_W }} />
+            <div className="flex-1 relative">
+              {ticks.map(({ x, label }) => (
+                <div key={x} className="absolute flex flex-col items-center pointer-events-none"
+                     style={{ left: `${x * 100}%` }}>
+                  <div className="w-px h-3 bg-gray-600" />
+                  <span className="text-[9px] text-gray-500 whitespace-nowrap mt-0.5">{label}</span>
+                </div>
+              ))}
             </div>
-          ))}
-          {/* Baseline */}
-          <div className="absolute bottom-0 left-0 right-0 h-px bg-gray-700" />
+          </div>
         </div>
 
-        {/* Event icons */}
-        {items.map(({ evt, x }) => (
-          <EventIcon
-            key={evt.id}
-            evt={evt}
-            x={x}
-            isSelected={selected?.id === evt.id}
-            onSelect={(e) => {
-              e.stopPropagation();
-              setSelected((prev) => prev?.id === evt.id ? null : evt);
-            }}
-          />
-        ))}
+        {/* ── Detail panel ─────────────────────────────────────────────────── */}
+        {selected && (
+          <div className="flex flex-col flex-shrink-0 border-l border-gray-700 bg-gray-900/90 overflow-hidden"
+               style={{ width: DETAIL_W }}>
 
-        {/* Empty state */}
-        {!loading && items.length === 0 && (
-          <div className="absolute inset-0 flex items-center justify-center">
-            <span className="text-gray-600 text-sm">{t.onvifTimelineEmpty}</span>
+            {/* Header */}
+            <div className="flex items-center justify-between px-3 py-2 bg-gray-800 border-b border-gray-700">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className={`text-xs px-1.5 py-0.5 rounded ${SEV_BADGE[selected.severity]}`}>
+                  {selected.severity}
+                </span>
+                <span className="font-semibold text-white text-sm truncate">{selected.topicLabel}</span>
+              </div>
+              <button onClick={() => setSelected(null)}
+                      className="text-gray-400 hover:text-white flex-shrink-0 ml-2">✕</button>
+            </div>
+
+            {/* Parsed / Raw XML toggle */}
+            {selEvt?.rawXml && (
+              <div className="flex border-b border-gray-700">
+                <button onClick={() => setShowRaw(false)}
+                        className={`flex-1 py-1 text-xs font-bold transition-colors ${!showRaw ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}>
+                  Parsed
+                </button>
+                <button onClick={() => setShowRaw(true)}
+                        className={`flex-1 py-1 text-xs font-bold transition-colors ${showRaw ? 'bg-green-900/50 text-green-300' : 'text-gray-500 hover:text-gray-300'}`}>
+                  Raw XML
+                </button>
+              </div>
+            )}
+
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto">
+              {showRaw ? (
+                <pre className="px-3 py-2 text-[10px] text-green-400 whitespace-pre-wrap break-all leading-tight">
+                  {selEvt?.rawXml}
+                </pre>
+              ) : (
+                <div className="px-3 py-2 space-y-1 text-xs">
+                  <DetailRow label="Start"  value={new Date(selected.startTs).toLocaleString()} />
+                  <DetailRow
+                    label="End"
+                    value={selected.inProgress ? '● In Progress' : new Date(selected.endTs).toLocaleString()}
+                    highlight={selected.inProgress}
+                  />
+                  <DetailRow label="Duration" value={selected.inProgress ? fmtDur(nowMs - selected.startTs) : fmtDur(selected.durationMs)} />
+                  {selected.sourceToken && <DetailRow label="Source" value={selected.sourceToken} />}
+                  {selEvt?.operation && <DetailRow label="Op" value={selEvt.operation} />}
+                  {Object.entries(dispItems)
+                    .filter(([k]) => !['SourceToken', 'State'].includes(k))
+                    .map(([k, v]) => <DetailRow key={k} label={k} value={String(v)} />)
+                  }
+                  <div className="pt-1 border-t border-gray-700/60">
+                    <DetailRow label="Topic" value={selEvt?.topic ?? ''} mono />
+                  </div>
+
+                  {snapshot && (
+                    <div className="pt-2">
+                      <div className="text-[10px] text-gray-500 mb-1">Frame at event start</div>
+                      <img src={snapshot} alt="onvif-snap"
+                           className="w-full rounded border border-gray-600/40 object-contain" />
+                    </div>
+                  )}
+                  {!snapshot && !selected.inProgress && (
+                    <div className="text-[10px] text-gray-600 italic pt-1">No frame snapshot</div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
         )}
-
-        {/* Zoom/pan controls hint */}
-        <div className="absolute top-3 right-4 text-[10px] text-gray-600 pointer-events-none">
-          {zoomLevel > 1 && (
-            <span className="bg-gray-800/80 px-2 py-0.5 rounded">
-              ×{zoomLevel.toFixed(1)}
-            </span>
-          )}
-        </div>
-
-        {/* Legend */}
-        <div className="absolute bottom-16 right-4 flex gap-2">
-          {(['info', 'warning', 'critical'] as OnvifSeverity[]).map((s) => (
-            <span key={s} className={`text-[9px] px-1.5 py-0.5 rounded ${SEVERITY_COLORS[s]}`}>
-              {s}
-            </span>
-          ))}
-        </div>
       </div>
 
-      {/* ── Pan controls ────────────────────────────────────────────────── */}
+      {/* ── Pan controls ─────────────────────────────────────────────────────── */}
       {zoomLevel > 1 && (
         <div className="flex items-center justify-center gap-3 py-2 bg-gray-900 border-t border-gray-700 flex-shrink-0">
-          <button
-            onClick={() => shiftPan(-0.15 / zoomLevel)}
-            className="px-3 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded"
-          >
+          <button onClick={() => shiftPan(-0.15 / zoomLevel)}
+                  className="px-3 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded">
             ← Older
           </button>
           <div className="flex-1 max-w-xs h-1.5 bg-gray-700 rounded-full relative">
-            <div
-              className="absolute h-full bg-blue-500 rounded-full"
-              style={{
-                left:  `${panFraction * zoomLevel * 100}%`,
-                width: `${(1 / zoomLevel) * 100}%`,
-              }}
-            />
+            <div className="absolute h-full bg-blue-500 rounded-full"
+                 style={{ left: `${panFraction * zoomLevel * 100}%`, width: `${(1 / zoomLevel) * 100}%` }} />
           </div>
-          <button
-            onClick={() => shiftPan(0.15 / zoomLevel)}
-            className="px-3 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded"
-          >
+          <button onClick={() => shiftPan(0.15 / zoomLevel)}
+                  className="px-3 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded">
             Newer →
           </button>
-          <button
-            onClick={() => { setZoomLevel(1); setPan(0); }}
-            className="px-3 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-400 rounded"
-          >
+          <button onClick={() => { setZoomLevel(1); setPan(0); }}
+                  className="px-3 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-400 rounded">
             Reset
           </button>
         </div>
       )}
 
-      {/* ── Event count footer ───────────────────────────────────────────── */}
-      <div className="px-5 py-1.5 bg-gray-900 border-t border-gray-700 flex-shrink-0">
+      {/* ── Footer ───────────────────────────────────────────────────────────── */}
+      <div className="px-5 py-1.5 bg-gray-900 border-t border-gray-700 flex-shrink-0 flex items-center justify-between">
         <span className="text-[10px] text-gray-500">
-          {t.onvifTimelineCount(items.length, events.length)}
+          {t.onvifTimelineCount(visibleCount, totalCount)}
         </span>
+        <div className="flex items-center gap-2">
+          {(['info', 'warning', 'critical'] as OnvifSeverity[]).map(s => (
+            <span key={s} className={`text-[9px] px-1.5 py-0.5 rounded ${SEV_BADGE[s]}`}>{s}</span>
+          ))}
+        </div>
       </div>
     </div>
   );
 }
 
-// ── Event icon ────────────────────────────────────────────────────────────────
+// ── Sub-components ────────────────────────────────────────────────────────────
 
-function EventIcon({
-  evt, x, isSelected, onSelect,
-}: {
-  evt: OnvifEvent;
-  x: number;
-  isSelected: boolean;
-  onSelect: (e: React.MouseEvent) => void;
+function DetailRow({ label, value, mono, highlight }: {
+  label: string; value: string; mono?: boolean; highlight?: boolean;
 }) {
-  const icon     = SEVERITY_ICON[evt.topicType] ?? SEVERITY_ICON.unknown;
-  const colorCls = SEVERITY_COLORS[evt.severity] ?? SEVERITY_COLORS.info;
-
   return (
-    <div
-      className="absolute"
-      style={{ left: `${x * 100}%`, bottom: '2.5rem', transform: 'translateX(-50%)' }}
-    >
-      <button
-        onClick={onSelect}
-        className={`w-7 h-7 rounded-full border-2 flex items-center justify-center
-                    text-sm transition-transform hover:scale-125 focus:outline-none
-                    shadow-lg ${colorCls}
-                    ${isSelected ? 'scale-125 ring-2 ring-white' : ''}`}
-        title={`${evt.topicLabel} — ${new Date(evt.serverTs).toLocaleString()}`}
-      >
-        {icon}
-      </button>
-
-      {/* Vertical stem */}
-      <div className="absolute top-full left-1/2 -translate-x-1/2 w-px h-4 bg-gray-600" />
-
-      {/* Detail popup */}
-      {isSelected && (
-        <EventDetailPanel evt={evt} onClose={() => onSelect({ stopPropagation: () => {} } as React.MouseEvent)} />
-      )}
+    <div className="flex gap-2 leading-snug">
+      <span className="text-gray-500 flex-shrink-0 w-16 truncate">{label}</span>
+      <span className={`break-all ${mono ? 'font-mono text-gray-400 text-[10px]' : ''} ${highlight ? 'text-green-400 font-bold' : 'text-gray-300'}`}>
+        {value}
+      </span>
     </div>
   );
 }
 
-// ── Helper: tick label format ──────────────────────────────────────────────────
+// ── Utility functions (mirrored from OnvifTimelineInline) ─────────────────────
+
+function mkPoint(evt: OnvifEvent): OnvifInterval {
+  const tsMs = new Date(evt.serverTs).getTime();
+  return {
+    id: evt.id, cameraId: evt.cameraId, topicType: evt.topicType,
+    topicLabel: evt.topicLabel, severity: evt.severity, sourceToken: evt.sourceToken,
+    startTs: tsMs, endTs: tsMs, isPoint: true, inProgress: false,
+    durationMs: 0, startEvt: evt, endEvt: null,
+  };
+}
+
+function buildIntervals(events: OnvifEvent[], nowMs: number): OnvifInterval[] {
+  const sorted = [...events].sort(
+    (a, b) => new Date(a.serverTs).getTime() - new Date(b.serverTs).getTime(),
+  );
+  const intervals: OnvifInterval[] = [];
+  const open = new Map<string, OnvifInterval>();
+
+  for (const evt of sorted) {
+    const key = `${evt.cameraId}:${evt.topicType}:${evt.sourceToken ?? ''}`;
+
+    if (evt.state === 'true') {
+      const existing = open.get(key);
+      if (existing) { intervals.push(existing); open.delete(key); }
+      const tsMs = new Date(evt.serverTs).getTime();
+      open.set(key, {
+        id: evt.id, cameraId: evt.cameraId, topicType: evt.topicType,
+        topicLabel: evt.topicLabel, severity: evt.severity, sourceToken: evt.sourceToken,
+        startTs: tsMs, endTs: nowMs, isPoint: false, inProgress: true,
+        durationMs: nowMs - tsMs, startEvt: evt, endEvt: null,
+      });
+    } else if (evt.state === 'false') {
+      const interval = open.get(key);
+      if (interval) {
+        const endTs = new Date(evt.serverTs).getTime();
+        interval.endTs = endTs;
+        interval.inProgress = false;
+        interval.durationMs = endTs - interval.startTs;
+        interval.endEvt = evt;
+        intervals.push(interval);
+        open.delete(key);
+      } else {
+        intervals.push(mkPoint(evt));
+      }
+    } else {
+      intervals.push(mkPoint(evt));
+    }
+  }
+
+  for (const iv of open.values()) {
+    iv.durationMs = nowMs - iv.startTs;
+    intervals.push(iv);
+  }
+
+  return intervals;
+}
+
+function buildRows(intervals: OnvifInterval[]): OnvifRow[] {
+  const rowMap = new Map<string, OnvifRow>();
+  for (const iv of intervals) {
+    const key = `${iv.topicType}:${iv.sourceToken ?? ''}`;
+    if (!rowMap.has(key)) {
+      rowMap.set(key, {
+        key,
+        topicType: iv.topicType,
+        topicLabel: iv.topicLabel,
+        sourceToken: iv.sourceToken,
+        severity: iv.severity,
+        intervals: [],
+      });
+    }
+    rowMap.get(key)!.intervals.push(iv);
+  }
+  return Array.from(rowMap.values());
+}
+
+function fmtDur(ms: number): string {
+  if (ms <= 0) return '0s';
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60); const rs = s % 60;
+  if (m < 60) return rs > 0 ? `${m}m${rs}s` : `${m}m`;
+  const h = Math.floor(m / 60); const rm = m % 60;
+  return rm > 0 ? `${h}h${rm}m` : `${h}h`;
+}
 
 function formatTick(ts: number, viewSpanMs: number): string {
   const d = new Date(ts);
-  if (viewSpanMs <= 2 * 60 * 60 * 1000) {
-    // ≤ 2 h → show HH:MM:SS
+  if (viewSpanMs <= 2 * 3_600_000)
     return d.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
-  }
-  if (viewSpanMs <= 24 * 60 * 60 * 1000) {
-    // ≤ 1 day → HH:MM
+  if (viewSpanMs <= 86_400_000)
     return d.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false });
-  }
-  if (viewSpanMs <= 7 * 24 * 60 * 60 * 1000) {
-    // ≤ 1 week → Mon 12:00
+  if (viewSpanMs <= 7 * 86_400_000)
     return d.toLocaleDateString('en', { weekday: 'short' }) + ' ' +
            d.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false });
-  }
-  // > 1 week → Jan 5
   return d.toLocaleDateString('en', { month: 'short', day: 'numeric' });
 }

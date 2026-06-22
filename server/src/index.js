@@ -32,7 +32,7 @@ const missingPersonsRouter   = require('./api/missingPersons');
 const youtubeStreamsRouter    = require('./api/youtubeStreams');
 const internalRouter         = require('./api/internal');
 const { router: ingestFrameRouter, setPipelineManager: setIngestPM, setSocketIO: setIngestIO, setDb: setIngestDb } = require('./routes/internalApi');
-const { router: onvifEventsRouter, typesRouter: onvifTypesRouter, setDb: setOnvifDb } = require('./routes/onvifApi');
+const { router: onvifEventsRouter, typesRouter: onvifTypesRouter, snapshotsRouter: onvifSnapshotsRouter, setDb: setOnvifDb } = require('./routes/onvifApi');
 const faceGalleryRouter      = require('./api/faceGallery');
 const { buildRouter: buildSnapshotsRouter } = require('./api/snapshots');
 const { buildRouter: buildSearchRouter }    = require('./api/search');
@@ -224,6 +224,7 @@ async function main() {
   setOnvifDb(db);
   app.use('/api/onvif-events', onvifEventsRouter);
   app.use('/api/onvif-event-types', onvifTypesRouter);
+  app.use('/api/onvif-snapshots', onvifSnapshotsRouter);
 
   // Face gallery — getter always resolves to the live FaceService once models are loaded
   const getFaceService = () => pipelineManager._attrPipeline?._face ?? null;
