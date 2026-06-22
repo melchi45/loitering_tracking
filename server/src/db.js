@@ -5,10 +5,9 @@
  *
  * Storage modes (controlled by DB_TYPE in .env):
  *   DB_TYPE=json     (default) — read/write storage/lts.json (async, debounced).
- *   DB_TYPE=mongodb  — on startup load from MongoDB; ALL writes go to MongoDB only.
- *                      lts.json is loaded on startup as warm-start fallback but
- *                      never written during normal operation.
- *                      If MongoDB disconnects, writes fall back to JSON automatically.
+ *   DB_TYPE=mongodb  — ALL writes go to MongoDB only. lts.json is read once on
+ *                      startup (warm-start) but NEVER written, even if MongoDB
+ *                      disconnects. Disconnected writes are held in-memory only.
  *
  * The in-memory store is always the source of truth for synchronous reads,
  * keeping the existing synchronous API unchanged for all route handlers.
@@ -61,6 +60,10 @@ let   _persistPending = false;
 let   _writingJson    = false; // one async write at a time
 
 function persistJson() {
+  // DB_TYPE=mongodb: MongoDB is the sole persistent store. JSON writes are
+  // unconditionally disabled — even as a disconnect fallback — to prevent
+  // stale lts.json files from appearing in the storage directory.
+  if (process.env.DB_TYPE === 'mongodb') return;
   _persistPending = true;
   if (_persistTimer) return;
   _persistTimer = setTimeout(() => {
@@ -87,24 +90,6 @@ const TABLE_ROW_CAPS = {
   audit_logs:                10000,
 };
 
-// Tables excluded from the JSON fallback write when MongoDB is (or was) the primary store.
-// These are high-volume transactional tables whose base64/binary payloads can reach
-// 20–100 MB when serialized — skipping them avoids event-loop stalls during fallback
-// writes and keeps lts.json small. Config and identity tables (cameras, zones, users…)
-// are always included so the server can restart cleanly without MongoDB.
-const JSON_FALLBACK_SKIP = new Set([
-  'detectionSnapshots',
-  'client_logs',
-  'client_webrtc_stats',
-  'onvif_events',
-  'onvif_snapshots',
-  'detectionTracks',
-  'analysisEvents',
-  'faceMatchHistory',
-  'missing_person_detections',
-  'events',
-  'audit_logs',
-]);
 
 /**
  * Async atomic write: serialize store → .tmp, then rename to final path.
@@ -112,13 +97,12 @@ const JSON_FALLBACK_SKIP = new Set([
  * Non-blocking: uses fs.promises so the event loop is never stalled.
  */
 async function _flushJson() {
+  // Safety guard: DB_TYPE=mongodb means JSON writes are unconditionally disabled.
+  if (process.env.DB_TYPE === 'mongodb') return;
   if (_writingJson) return; // concurrent write already in progress
   _writingJson = true;
   try {
-    // Skip high-volume tables in fallback mode to avoid event-loop stalls.
-    const payload = process.env.DB_TYPE === 'mongodb'
-      ? Object.fromEntries(Object.entries(store).filter(([t]) => !JSON_FALLBACK_SKIP.has(t)))
-      : store;
+    const payload = store;
     const json = JSON.stringify(payload, null, 2);
     await fs.promises.writeFile(TEMP_DB_PATH, json);
     await fs.promises.rename(TEMP_DB_PATH, DB_PATH);
@@ -139,14 +123,16 @@ function flushNow() {
     clearTimeout(_persistTimer);
     _persistTimer = null;
   }
+  // DB_TYPE=mongodb: never write to lts.json, not even on graceful shutdown.
+  if (process.env.DB_TYPE === 'mongodb') {
+    _persistPending = false;
+    return;
+  }
   if (_persistPending) {
     _persistPending = false;
     if (_writingJson) return; // async write in progress — it will complete on its own
     try {
-      const payload = process.env.DB_TYPE === 'mongodb'
-        ? Object.fromEntries(Object.entries(store).filter(([t]) => !JSON_FALLBACK_SKIP.has(t)))
-        : store;
-      fs.writeFileSync(TEMP_DB_PATH, JSON.stringify(payload, null, 2));
+      fs.writeFileSync(TEMP_DB_PATH, JSON.stringify(store, null, 2));
       fs.renameSync(TEMP_DB_PATH, DB_PATH);
     } catch (err) {
       console.error('[DB] flushNow persist error:', err.message);
@@ -182,10 +168,10 @@ _dbRateTimer.unref();
 // ── Row-level persistence dispatcher ─────────────────────────────────────────
 /**
  * Called after every in-memory mutation.
- * - MongoDB mode: write to MongoDB only (no JSON backup).
+ * - MongoDB mode: write to MongoDB only. JSON is never touched.
+ *   If MongoDB disconnects, writes are held in-memory until reconnect —
+ *   no JSON fallback; DB_TYPE=mongodb means MongoDB is the sole store.
  * - JSON mode: schedule debounced JSON write.
- * If MongoDB disconnects mid-session, _isMongo() returns false and writes
- * automatically fall back to JSON until the connection is restored.
  */
 let _jsonFallbackLogged = false;
 
@@ -207,9 +193,13 @@ function afterWrite(table, id, row, op) {
     }
     return; // MongoDB is the sole persistent store — skip JSON
   }
-  if (process.env.DB_TYPE === 'mongodb' && !_jsonFallbackLogged) {
-    console.warn('[DB] MongoDB not connected — falling back to lts.json until reconnect');
-    _jsonFallbackLogged = true;
+  if (process.env.DB_TYPE === 'mongodb') {
+    // MongoDB configured but currently disconnected: hold in-memory, no JSON write.
+    if (!_jsonFallbackLogged) {
+      console.error('[DB] MongoDB disconnected — writes are in-memory only until reconnect (JSON fallback disabled)');
+      _jsonFallbackLogged = true;
+    }
+    return;
   }
   persistJson();
 }
@@ -226,6 +216,7 @@ function afterDeleteWhere(table, removedIds) {
     );
     return; // MongoDB is the sole persistent store — skip JSON
   }
+  if (process.env.DB_TYPE === 'mongodb') return; // disconnected: in-memory only, no JSON
   persistJson();
 }
 

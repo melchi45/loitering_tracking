@@ -55,18 +55,18 @@
 │  ┌──────────────────────────▼──────────────────────────────────────────┐    │
 │  │  DB_TYPE=json:    persistJson() [debounced, async → lts.json]        │    │
 │  │  DB_TYPE=mongodb: mongoSvc.upsert/remove [async, fire-and-forget]   │    │
-│  │                   ↳ JSON only written if MongoDB disconnects          │    │
-│  │                     (JSON_FALLBACK_SKIP excludes high-volume tables)  │    │
+│  │                   lts.json is NEVER written in this mode             │    │
+│  │                   (disconnect → in-memory only until reconnect)      │    │
 │  └──────────────────────────────────────────────────────────────────────┘    │
 └──────────────┬──────────────────────────────────┬──────────────────────────┘
-               │  disconnect fallback only         │  primary in MongoDB mode
+               │  JSON mode only                   │  MongoDB mode only
                ▼                                  ▼
          lts.json                         MongoDB (mongoose)
     (storage/lts.json)                  20 collections matching
-    written ONLY when                   ALL_TABLES in db.js
-    MongoDB disconnects                 (cameras, zones, events,
-    (excludes high-volume               alerts, users, audit_logs, ...)
-     tables via JSON_FALLBACK_SKIP)
+    read on startup                     ALL_TABLES in db.js
+    (warm-start only;                   (cameras, zones, events,
+     never written in                    alerts, users, audit_logs, ...)
+     DB_TYPE=mongodb)
 ```
 
 ### 1.2 Dual-Mode Switch
@@ -99,7 +99,7 @@ server/
 │       ├── migrateToMongo.js         ← One-time JSON → MongoDB migration
 │       └── ensureMongodb.js          ← Startup health check: TCP probe → auto-restart → install guide
 ├── storage/
-│   ├── lts.json                      ← JSON fallback (written only when MongoDB disconnects)
+│   ├── lts.json                      ← JSON mode only (DB_TYPE=mongodb: read on startup, never written)
 │   ├── analytics.json                ← Analytics config (separate file, not db.js)
 │   ├── tracker.json                  ← Tracker config (separate file, not db.js)
 │   └── face_tracking.json            ← Face trajectory state (separate file, not db.js)
@@ -510,10 +510,11 @@ Route Handler                 db.js                  mongoDbService.js      Mong
      │                          │                           │                  │
      │  [on MongoDB disconnect]  │                           │                  │
      │                          │  _isMongo() === false     │                  │
-     │                          │  ──► persistJson() ──────────────────────────► lts.json
-     │                          │  (JSON_FALLBACK_SKIP      │                  │
-     │                          │   excludes high-volume    │                  │
-     │                          │   tables from fallback)   │                  │
+     │                          │  DB_TYPE=mongodb:          │                  │
+     │                          │  ──► in-memory only       │                  │
+     │                          │      (no JSON write)       │                  │
+     │                          │  log ERROR [DB] MongoDB   │                  │
+     │                          │  disconnected             │                  │
 ```
 
 ---
@@ -664,10 +665,8 @@ POST /api/cameras  →  camerasRouter.js
            { id, name, rtspUrl, ..., _id (hidden by lean()) }
 
   [on MongoDB disconnect]
-        └── persistJson() with JSON_FALLBACK_SKIP    [async, debounced]
-                │
-                ▼
-           storage/lts.json  (excludes detectionSnapshots, client_logs, etc.)
+        └── writes held in-memory only; NO JSON write (DB_TYPE=mongodb)
+            log ERROR: "[DB] MongoDB disconnected — writes are in-memory only"
 ```
 
 ### 11.3 Startup Hydration Flow (MongoDB Mode)
@@ -1035,3 +1034,4 @@ ensureMongoDB()  (runs once at server startup when DB_TYPE=mongodb)
 | 1.3 | 2026-06-10 | LTS Engineering Team | analysisEvents 스키마에 `cropData` 필드 추가 (감지 영역 JPEG Base64) |
 | 1.4 | 2026-06-17 | LTS Engineering Team | users, refresh_tokens, audit_logs 테이블 추가 — 인증 서비스 저장소 통합 |
 | 1.5 | 2026-06-18 | LTS Engineering Team | MongoDB-only 쓰기, timestamps:false, normalizeDates, LOAD_LIMITS, JSON_FALLBACK_SKIP, ensureMongodb.js, async _flushJson, 연결 옵션 업데이트 |
+| 1.6 | 2026-06-22 | LTS Engineering Team | DB_TYPE=mongodb 시 lts.json JSON fallback 완전 제거 — disconnect 시 in-memory only, flushNow/persistJson/afterWrite 전면 수정 |
