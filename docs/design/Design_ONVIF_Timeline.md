@@ -458,12 +458,28 @@ DB 이벤트:  true(t1) → true(t2) → true(t3) → false(t4)
 렌더 결과:  ───────────[         인터벌         ]───── (t1 ~ t4)
 ```
 
-#### 행(Row) 구조
+#### 행(Row) 레이아웃 — DetectionsTimelineInline 동일 스타일
+
+각 행은 Gantt 바(상단)와 프레임 썸네일 스트립(하단) 두 영역으로 구성됩니다.
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│  [████ motionAlarm 15s ████████████]  ← Gantt bar (BAR_H)   │ BAR_TOP px 아래
+│      [📷]                             ← frame snap 썸네일    │ SNAP_TOP px 아래
+└──────────────────────────────────────────────────────────────┘
+```
+
+| 상수 | Inline | Overlay | 설명 |
+|------|--------|---------|------|
+| `ROW_H`   | 52px  | 68px  | 전체 행 높이 |
+| `BAR_H`   | 16px  | 22px  | Gantt 바 높이 |
+| `BAR_TOP` | 4px   | 6px   | 바 상단 여백 |
+| `SNAP_H`  | 30px  | 36px  | 썸네일 높이 |
+| `SNAP_W`  | 44px  | 56px  | 썸네일 너비 |
+| `SNAP_TOP`| BAR_TOP+BAR_H+2 | BAR_TOP+BAR_H+4 | 썸네일 상단 위치 |
 
 - 각 `topicType:sourceToken` 조합 → 별도 행
 - 행 레이블 = `topicLabel (sourceToken)` (없으면 `topicLabel`만)
-- Inline: ROW_H=28px, BAR_H=16px
-- Overlay: ROW_H=44px, BAR_H=24px
 
 #### 바 렌더링
 
@@ -473,15 +489,21 @@ barRight = min(1, (endTs − viewStart) / viewSpan)      // [0, 1]
 barWidth = max(0.003, barRight − barLeft)               // min 0.3% (visibility)
 ```
 
-- **완료 인터벌**: 단색 바 (`SEV_BAR[severity]`)
-- **진행 중 인터벌** (`inProgress=true`): `borderRight: 3px dashed` 로 개방 표시; 라벨에 `↦` 프리픽스
-- **포인트 이벤트** (`isPoint=true`): 45° 회전한 다이아몬드(◇)
+- **완료 인터벌**: `SEV_COLOR[severity]cc` 배경 + `1px solid` 테두리; 바 내부에 `topicLabel + duration` 라벨
+- **진행 중 인터벌** (`inProgress=true`): `SEV_COLOR[severity]88` 반투명 + `1px dashed` 테두리; 라벨에 `↦` 프리픽스
+- **포인트 이벤트** (`isPoint=true`): 45° 회전한 다이아몬드(◇), `SEV_COLOR` 채색
 
-#### 스냅샷 연동
+#### 스냅샷 연동 (인라인 필름스트립)
 
+**저장 (서버):**
 - `state=true` 이벤트 저장 시 `pipelineManager.getLatestFrame(cameraId)` → `onvif_snapshots` 테이블에 JPEG 저장
-- 인터벌 선택 시 클라이언트가 `GET /api/onvif-snapshots?eventId=<id>&limit=1` 요청
-- 상세 패널 하단에 인라인 이미지 표시
+
+**렌더링 (클라이언트):**
+- `snapCache: Map<string, string>` — intervalId → frameData URL (또는 빈 문자열)
+- `fetchedRef: Set<string>` — 중복 fetch 방지
+- 뷰포트 내 보이는 인터벌이 변경될 때마다 `useEffect`에서 `GET /api/onvif-snapshots?eventId=<id>&limit=1` 지연 로딩
+- 캐시된 `frameData`가 있으면 Gantt 바 아래 `startTs` x좌표 위치에 썸네일 `<img>` 렌더링
+- **상세 패널**: `snapCache.get(selected.id)`로 선택된 인터벌의 원본 크기 이미지 표시 (별도 fetch 불필요)
 
 ---
 
@@ -543,3 +565,4 @@ User action:
 | 1.5 | 2026-06-22 | OnvifTimelineOverlay Type 필터 추가 (§5.8) — 마운트 시 `/api/onvif-event-types` fetch + `onvif:type-registered` 소켓 구독 → `onvifEventStore.types` 기반 드롭다운 |
 | 1.6 | 2026-06-22 | Gantt 인터벌 바 렌더링 추가 (§5.9) — state=true/false 쌍으로 수평 막대, 진행 중 대시 바, 포인트 이벤트 다이아몬드; ONVIF 스냅샷 저장 (`onvif_snapshots` DB + `/api/onvif-snapshots`); `pipelineManager.getLatestFrame()` 추가 |
 | 1.7 | 2026-06-22 | buildIntervals() coalesce 수정 — start→start→…→end 시퀀스를 단일 인터벌로 합산 (서버 재시작 artifact 처리) |
+| 1.8 | 2026-06-22 | §5.9 행 레이아웃 DetectionsTimelineInline 스타일 통합 — ROW_H 확장(Inline 52px/Overlay 68px), 인라인 필름스트립 스냅샷(snapCache + lazy-fetch), SEV_COLOR 인라인 스타일 바 |

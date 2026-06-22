@@ -9,7 +9,7 @@
  * Controls: scroll=zoom, ↑↓ keyboard=zoom, ←→=pan, Esc=close.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState, WheelEvent } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState, WheelEvent } from 'react';
 import { useI18n } from '../i18n';
 import { useOnvifEventStore, type OnvifEvent, type OnvifEventType, type OnvifSeverity } from '../stores/onvifEventStore';
 import { parseOnvifXml } from '../utils/onvifParser';
@@ -18,9 +18,12 @@ import { useSocket } from '../hooks/useSocket';
 // ── Layout ────────────────────────────────────────────────────────────────────
 
 const ROW_LABEL_W = 130;
-const ROW_H       = 44;
-const BAR_H       = 24;
-const BAR_TOP     = (ROW_H - BAR_H) / 2;
+const ROW_H       = 68;   // bar (22px) + snap strip (36px) + separator
+const BAR_H       = 22;
+const BAR_TOP     = 6;
+const SNAP_H      = 36;
+const SNAP_W      = 56;
+const SNAP_TOP    = BAR_TOP + BAR_H + 4;
 const TICK_H      = 28;
 const DETAIL_W    = 300;
 
@@ -34,15 +37,10 @@ type RangeLabel = '1D' | '1W' | '1M' | '1Y';
 
 // ── Severity styling ──────────────────────────────────────────────────────────
 
-const SEV_BAR: Record<OnvifSeverity, string> = {
-  info:     'bg-blue-600/85',
-  warning:  'bg-amber-500/85',
-  critical: 'bg-red-600/85',
-};
-const SEV_DOT: Record<OnvifSeverity, string> = {
-  info:     'bg-blue-500',
-  warning:  'bg-amber-400',
-  critical: 'bg-red-500',
+const SEV_COLOR: Record<OnvifSeverity, string> = {
+  info:     '#3b82f6',
+  warning:  '#f59e0b',
+  critical: '#ef4444',
 };
 const SEV_TEXT: Record<OnvifSeverity, string> = {
   info:     'text-blue-300',
@@ -152,10 +150,11 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
   const [range, setRange]           = useState<RangeLabel>('1D');
   const [zoomLevel, setZoomLevel]   = useState(1);
   const [panFraction, setPan]       = useState(0);
-  const [selected, setSelected]     = useState<OnvifInterval | null>(null);
+  const [selected, setSelected]         = useState<OnvifInterval | null>(null);
   const [selectedType, setSelectedType] = useState('');
-  const [showRaw, setShowRaw]       = useState(false);
-  const [snapshot, setSnapshot]     = useState<string | null>(null);
+  const [showRaw, setShowRaw]           = useState(false);
+  const [snapCache, setSnapCache]       = useState<Map<string, string>>(new Map());
+  const fetchedRef = useRef<Set<string>>(new Set());
 
   const [nowMs, setNowMs] = useState(Date.now);
   useEffect(() => {
@@ -166,6 +165,12 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const rangeMs = RANGE_OPTIONS.find(r => r.label === range)!.ms;
   const { events, types, loading } = useOnvifEvents(cameraId, rangeMs);
+
+  // Clear snap cache on range/camera change
+  useEffect(() => {
+    fetchedRef.current.clear();
+    setSnapCache(new Map());
+  }, [cameraId, rangeMs]);
 
   // ── Viewport ────────────────────────────────────────────────────────────────
   const viewSpan  = rangeMs / zoomLevel;
@@ -198,15 +203,6 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [zoomLevel, onClose]);
 
-  // ── Fetch snapshot when interval selected ───────────────────────────────────
-  useEffect(() => {
-    if (!selected) { setSnapshot(null); return; }
-    fetch(`/api/onvif-snapshots?eventId=${selected.id}&limit=1`)
-      .then(r => r.json())
-      .then(d => setSnapshot(d.snapshots?.[0]?.frameData ?? null))
-      .catch(() => setSnapshot(null));
-  }, [selected?.id]);
-
   // ── Build intervals + rows ──────────────────────────────────────────────────
   const { rows, totalCount } = useMemo(() => {
     const filtered = selectedType ? events.filter(e => e.topicType === selectedType) : events;
@@ -218,6 +214,25 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
     rows.reduce((n, r) =>
       n + r.intervals.filter(iv => iv.endTs >= viewStart && iv.startTs <= viewEnd).length, 0),
   [rows, viewStart, viewEnd]);
+
+  // ── Lazy-fetch inline snaps for visible intervals ────────────────────────────
+  useEffect(() => {
+    const visibleBars = rows.flatMap(r =>
+      r.intervals.filter(iv => !iv.isPoint && iv.endTs >= viewStart && iv.startTs <= viewEnd)
+    );
+    const toFetch = visibleBars.filter(iv => !fetchedRef.current.has(iv.id));
+    if (toFetch.length === 0) return;
+    toFetch.forEach(iv => {
+      fetchedRef.current.add(iv.id);
+      fetch(`/api/onvif-snapshots?eventId=${iv.id}&limit=1`)
+        .then(r => r.json())
+        .then(d => {
+          const fd = (d.snapshots?.[0]?.frameData as string | undefined) ?? '';
+          if (fd) setSnapCache(prev => { const m = new Map(prev); m.set(iv.id, fd); return m; });
+        })
+        .catch(() => {});
+    });
+  }, [rows, viewStart, viewEnd]);
 
   // ── Ticks ───────────────────────────────────────────────────────────────────
   const ticks = useMemo(() =>
@@ -231,6 +246,7 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
   const selEvt    = selected?.startEvt ?? null;
   const parsed    = selEvt?.rawXml ? parseOnvifXml(selEvt.rawXml) : null;
   const dispItems = parsed?.items ?? selEvt?.items ?? {};
+  const selSnap   = selected ? (snapCache.get(selected.id) ?? null) : null;
 
   return (
     <div
@@ -352,7 +368,9 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
                   {row.intervals
                     .filter(iv => iv.endTs >= viewStart && iv.startTs <= viewEnd)
                     .map(iv => {
-                      const isSel = selected?.id === iv.id;
+                      const isSel  = selected?.id === iv.id;
+                      const color  = SEV_COLOR[iv.severity];
+                      const snapFd = snapCache.get(iv.id) ?? '';
 
                       if (iv.isPoint) {
                         const x = (iv.startTs - viewStart) / viewSpan;
@@ -365,13 +383,17 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
                               setSelected(sel => sel?.id === iv.id ? null : iv);
                               setShowRaw(false);
                             }}
-                            className={`absolute ${SEV_DOT[iv.severity]} hover:scale-125 transition-transform
-                                        ${isSel ? 'ring-2 ring-white scale-125' : 'opacity-85'}`}
                             style={{
+                              position: 'absolute',
                               left: `${x * 100}%`,
-                              top: BAR_TOP,
-                              width: 12, height: 12,
+                              top: BAR_TOP + BAR_H / 2 - 7,
+                              width: 14, height: 14,
+                              backgroundColor: color,
                               transform: 'translateX(-50%) rotate(45deg)',
+                              opacity: isSel ? 1 : 0.85,
+                              outline: isSel ? '2px solid #fff' : undefined,
+                              cursor: 'pointer',
+                              zIndex: 2,
                             }}
                             title={`${iv.topicLabel} — ${new Date(iv.startTs).toLocaleString()}`}
                           />
@@ -381,33 +403,73 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
                       const barL = Math.max(0, (iv.startTs - viewStart) / viewSpan);
                       const barR = Math.min(1, (iv.endTs - viewStart) / viewSpan);
                       const barW = Math.max(0.002, barR - barL);
-                      const dur  = iv.inProgress ? fmtDur(nowMs - iv.startTs) : fmtDur(iv.durationMs);
+                      const dur  = fmtDur(iv.inProgress ? nowMs - iv.startTs : iv.durationMs);
+                      const xSnap = (iv.startTs - viewStart) / viewSpan;
+                      const snapLeft = Math.max(0, Math.min(97, xSnap * 100));
 
                       return (
-                        <button
-                          key={iv.id}
-                          onClick={e => {
-                            e.stopPropagation();
-                            setSelected(sel => sel?.id === iv.id ? null : iv);
-                            setShowRaw(false);
-                          }}
-                          className={`absolute flex items-center px-2 overflow-hidden rounded
-                                      ${SEV_BAR[iv.severity]} text-white text-[11px] cursor-pointer
-                                      hover:opacity-100 transition-opacity
-                                      ${isSel ? 'ring-1 ring-white opacity-100' : 'opacity-80'}`}
-                          style={{
-                            left: `${barL * 100}%`,
-                            width: `${barW * 100}%`,
-                            top: BAR_TOP,
-                            height: BAR_H,
-                            borderRight: iv.inProgress ? '3px dashed rgba(255,255,255,0.5)' : undefined,
-                          }}
-                          title={`${iv.topicLabel}${iv.inProgress ? ' (in progress)' : ''} — ${dur}`}
-                        >
-                          <span className="truncate leading-none font-medium">
-                            {iv.inProgress ? '↦ ' : ''}{dur}
-                          </span>
-                        </button>
+                        <React.Fragment key={iv.id}>
+                          {/* Gantt bar */}
+                          <div
+                            onClick={e => {
+                              e.stopPropagation();
+                              setSelected(sel => sel?.id === iv.id ? null : iv);
+                              setShowRaw(false);
+                            }}
+                            style={{
+                              position: 'absolute',
+                              left:   `${barL * 100}%`,
+                              width:  `${barW * 100}%`,
+                              top:    BAR_TOP,
+                              height: BAR_H,
+                              backgroundColor: color + (isSel ? 'ff' : iv.inProgress ? '88' : 'cc'),
+                              border: isSel
+                                ? '1px solid #fff'
+                                : iv.inProgress
+                                  ? `1px dashed ${color}`
+                                  : `1px solid ${color}`,
+                              borderRadius: 3,
+                              cursor: 'pointer',
+                              overflow: 'hidden',
+                              zIndex: 2,
+                              display: 'flex',
+                              alignItems: 'center',
+                            }}
+                            title={`${iv.topicLabel}${iv.inProgress ? ' (in progress)' : ''} — ${dur}`}
+                          >
+                            <span style={{ padding: '0 6px', fontSize: 10, fontWeight: 700, color: '#fff',
+                                           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {iv.inProgress ? '↦ ' : ''}{iv.topicLabel} {dur}
+                            </span>
+                          </div>
+
+                          {/* Inline frame snap at startTs */}
+                          {snapFd && (
+                            <img
+                              onClick={e => {
+                                e.stopPropagation();
+                                setSelected(sel => sel?.id === iv.id ? null : iv);
+                                setShowRaw(false);
+                              }}
+                              src={snapFd}
+                              alt=""
+                              style={{
+                                position: 'absolute',
+                                left: `${snapLeft}%`,
+                                top: SNAP_TOP,
+                                width: SNAP_W,
+                                height: SNAP_H,
+                                objectFit: 'cover',
+                                borderRadius: 3,
+                                border: isSel ? '1px solid #fff' : `1px solid ${color}66`,
+                                cursor: 'pointer',
+                                zIndex: 2,
+                                transform: 'translateX(-4px)',
+                              }}
+                              title={`Frame at ${new Date(iv.startTs).toLocaleTimeString()}`}
+                            />
+                          )}
+                        </React.Fragment>
                       );
                     })
                   }
@@ -488,14 +550,14 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
                     <DetailRow label="Topic" value={selEvt?.topic ?? ''} mono />
                   </div>
 
-                  {snapshot && (
+                  {selSnap && (
                     <div className="pt-2">
                       <div className="text-[10px] text-gray-500 mb-1">Frame at event start</div>
-                      <img src={snapshot} alt="onvif-snap"
+                      <img src={selSnap} alt="onvif-snap"
                            className="w-full rounded border border-gray-600/40 object-contain" />
                     </div>
                   )}
-                  {!snapshot && !selected.inProgress && (
+                  {!selSnap && !selected.inProgress && (
                     <div className="text-[10px] text-gray-600 italic pt-1">No frame snapshot</div>
                   )}
                 </div>

@@ -67,7 +67,18 @@ export const useOnvifEventStore = create<OnvifEventStore>((set) => ({
       return { events: [next, ...s.events].slice(0, 10000) };
     }),
 
-  setEvents: (evts) => set({ events: evts }),
+  setEvents: (evts) =>
+    set({
+      events: evts.map(evt => {
+        const items = typeof evt.items === 'string'
+          ? (() => { try { return JSON.parse(evt.items as unknown as string); } catch { return {}; } })()
+          : (evt.items ?? {});
+        const rawXml = evt.rawXml ?? (evt.rawPayload
+          ? (() => { try { return atob(evt.rawPayload!); } catch { return null; } })()
+          : null);
+        return { ...evt, items, rawXml };
+      }),
+    }),
   clearAll:  ()     => set({ events: [] }),
 
   setTypes: (types) => set({ types }),

@@ -1,39 +1,38 @@
 /**
- * OnvifTimelineInline — compact ONVIF timeline embedded in FullscreenCameraView.
+ * OnvifTimelineInline — compact ONVIF timeline, styled like DetectionsTimelineInline.
+ *
+ * Row layout (ROW_H = 52px):
+ *   ┌────────────────────────────────────────────────────────────────┐
+ *   │  [████ motionAlarm 15s ████]  ← Gantt bar (top 16px)          │
+ *   │       [📷]                   ← frame snap at startTs (34px)   │
+ *   └────────────────────────────────────────────────────────────────┘
  *
  * Rendering:
- *   - state=true/false pairs → horizontal Gantt bars (start→end)
- *   - in-progress (state=true, no matching false) → dashed-right bar
- *   - no-state events → diamond point markers
+ *   - state=true/false pairs   → horizontal Gantt bar + inline frame snap
+ *   - in-progress (no end yet) → dashed-right bar; snap shown when available
+ *   - no-state events          → diamond point markers
  *
- * Layout:
- *   ┌─────────────────────────────────────────────────────────────┐
- *   │ [1D][1W][1M][1Y][Custom]  [Type ▾]    ×2.0  5/12           │ ← control
- *   ├─────────────────────────────────────────────────────────────┤
- *   │ callRequest (Tok)│ ████░░░░ 3s ████          │ detail 200px │
- *   │ motionAlarm      │ ████████████████ 15s      │              │
- *   │──────────────────┼──────────────────────     │              │
- *   │ <tick labels>    │                           │              │
- *   ├─────────────────────────────────────────────────────────────┤
- *   │  ◀ ━━━━━━━━━━━━ ▶  ✕   (zoom > 1 only)                     │
- *   └─────────────────────────────────────────────────────────────┘
+ * start→start→start→end coalescing: first start wins, middle starts ignored.
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useI18n } from '../i18n';
 import { useOnvifEventStore, type OnvifEvent, type OnvifEventType, type OnvifSeverity } from '../stores/onvifEventStore';
 import { parseOnvifXml } from '../utils/onvifParser';
 import { useSocket } from '../hooks/useSocket';
 
-// ── Layout constants ──────────────────────────────────────────────────────────
+// ── Layout constants (matches DetectionsTimelineInline proportions) ────────────
 
-const ROW_LABEL_W = 80;         // px – fixed label column
-const ROW_H       = 28;         // px – each track row
-const BAR_H       = 16;         // px – Gantt bar height
-const BAR_TOP     = (ROW_H - BAR_H) / 2;
-const TICK_H      = 20;         // px – tick labels row
-const DETAIL_W    = 200;        // px – right split panel
-const DRAG_THRESH = 4;          // px
+const ROW_LABEL_W = 80;   // fixed left label column
+const ROW_H       = 52;   // bar (16px) + snap strip (34px) + separator
+const BAR_H       = 16;
+const BAR_TOP     = 4;
+const SNAP_H      = 30;   // inline frame thumbnail height
+const SNAP_W      = 44;   // inline frame thumbnail width
+const SNAP_TOP    = BAR_TOP + BAR_H + 2;
+const TICK_H      = 20;
+const DETAIL_W    = 220;
+const DRAG_THRESH = 4;
 
 // ── Range options ─────────────────────────────────────────────────────────────
 
@@ -45,17 +44,12 @@ const RANGE_OPTIONS = [
 ] as const;
 type RangeLabel = '1D' | '1W' | '1M' | '1Y' | 'custom';
 
-// ── Severity styling ──────────────────────────────────────────────────────────
+// ── Severity colour palette (matches DetectionsTimelineInline bar style) ───────
 
-const SEV_BAR: Record<OnvifSeverity, string> = {
-  info:     'bg-blue-600/90',
-  warning:  'bg-amber-500/90',
-  critical: 'bg-red-600/90',
-};
-const SEV_DOT: Record<OnvifSeverity, string> = {
-  info:     'bg-blue-500',
-  warning:  'bg-amber-400',
-  critical: 'bg-red-500',
+const SEV_COLOR: Record<OnvifSeverity, string> = {
+  info:     '#3b82f6',   // blue-500
+  warning:  '#f59e0b',   // amber-500
+  critical: '#ef4444',   // red-500
 };
 const SEV_TEXT: Record<OnvifSeverity, string> = {
   info:     'text-blue-300',
@@ -83,39 +77,47 @@ interface OnvifInterval {
 
 interface OnvifRow {
   key: string;
-  topicType: string;
   topicLabel: string;
-  sourceToken: string | null;
   severity: OnvifSeverity;
   intervals: OnvifInterval[];
 }
 
-// ── Props ─────────────────────────────────────────────────────────────────────
-
 interface Props { cameraId: string; }
 interface DragState { startX: number; startPan: number; }
+
+function Spinner() {
+  return (
+    <svg className="w-4 h-4 animate-spin text-blue-400" fill="none" viewBox="0 0 24 24">
+      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
+    </svg>
+  );
+}
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function OnvifTimelineInline({ cameraId }: Props) {
-  const { t }  = useI18n();
+  const { t }    = useI18n();
   const { socket } = useSocket();
   const { events, pushEvent, setEvents, types, setTypes, addType } = useOnvifEventStore();
 
-  const [range, setRange]       = useState<RangeLabel>('1D');
-  const [zoom, setZoom]         = useState(1);
-  const [pan, setPan]           = useState(0);
-  const [typeFilter, setTypeFilter] = useState('');
-  const [selected, setSelected] = useState<OnvifInterval | null>(null);
-  const [loading, setLoading]   = useState(false);
-  const [showRaw, setShowRaw]   = useState(false);
-  const [snapshot, setSnapshot] = useState<string | null>(null);
-  const [isDragging, setIsDragging] = useState(false);
-  const [customStart, setCustomStart] = useState('');
-  const [customEnd,   setCustomEnd]   = useState('');
+  const [range,         setRange]         = useState<RangeLabel>('1D');
+  const [zoom,          setZoom]          = useState(1);
+  const [pan,           setPan]           = useState(0);
+  const [typeFilter,    setTypeFilter]    = useState('');
+  const [selected,      setSelected]      = useState<OnvifInterval | null>(null);
+  const [loading,       setLoading]       = useState(false);
+  const [showRaw,       setShowRaw]       = useState(false);
+  const [isDragging,    setIsDragging]    = useState(false);
+  const [customStart,   setCustomStart]   = useState('');
+  const [customEnd,     setCustomEnd]     = useState('');
   const [customApplied, setCustomApplied] = useState<{ from: string; to: string } | null>(null);
 
-  // Periodic tick so in-progress intervals update their duration display
+  // Snap cache: intervalId → frameData URL (empty string = no snap / not available)
+  const [snapCache, setSnapCache] = useState<Map<string, string>>(new Map());
+  // Tracks which interval IDs have already been fetched (avoids duplicate requests)
+  const fetchedRef = useRef<Set<string>>(new Set());
+
   const [nowMs, setNowMs] = useState(Date.now);
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 5_000);
@@ -139,11 +141,13 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
   const viewEnd   = viewRangeEnd - pan * rangeMs;
   const viewStart = viewEnd - viewSpan;
 
-  // ── Fetch events on range/camera change ────────────────────────────────────
+  // ── Fetch events ─────────────────────────────────────────────────────────────
   useEffect(() => {
     if (range === 'custom' && !customApplied) return;
     setLoading(true);
     setSelected(null);
+    fetchedRef.current.clear();
+    setSnapCache(new Map());
     const params = new URLSearchParams({ cameraId, limit: '1000' });
     if (range === 'custom' && customApplied) {
       params.set('from', customApplied.from);
@@ -156,24 +160,19 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
       .then(d => {
         if (!Array.isArray(d.events)) return;
         setEvents(d.events);
-        // Defensive backfill: register any topicType present in events but missing
-        // from the global registry (e.g. events stored before the registry feature).
         const seen = new Set<string>();
         for (const evt of d.events as OnvifEvent[]) {
           if (!evt.topicType || seen.has(evt.topicType)) continue;
           seen.add(evt.topicType);
-          addType({
-            id: evt.topicType, topicType: evt.topicType,
-            topicLabel: evt.topicLabel, topic: evt.topic,
-            severity: evt.severity, firstSeenAt: evt.serverTs,
-          });
+          addType({ id: evt.topicType, topicType: evt.topicType, topicLabel: evt.topicLabel,
+                    topic: evt.topic, severity: evt.severity, firstSeenAt: evt.serverTs });
         }
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, [cameraId, range, customApplied, rangeMs, setEvents, addType]);
 
-  // ── Fetch global type registry ──────────────────────────────────────────────
+  // ── Global type registry ─────────────────────────────────────────────────────
   useEffect(() => {
     fetch('/api/onvif-event-types')
       .then(r => r.json())
@@ -181,26 +180,56 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
       .catch(() => {});
   }, [setTypes]);
 
-  // ── Live push via socket ────────────────────────────────────────────────────
+  // ── Live socket events ───────────────────────────────────────────────────────
   useEffect(() => {
     if (!socket) return;
     const onEvent = (evt: OnvifEvent) => { if (evt.cameraId === cameraId) pushEvent(evt); };
-    const onType  = (t: OnvifEventType) => addType(t);
+    const onType  = (type: OnvifEventType) => addType(type);
     socket.on('onvif:event', onEvent);
     socket.on('onvif:type-registered', onType);
     return () => { socket.off('onvif:event', onEvent); socket.off('onvif:type-registered', onType); };
   }, [socket, cameraId, pushEvent, addType]);
 
-  // ── Fetch snapshot when interval is selected ────────────────────────────────
-  useEffect(() => {
-    if (!selected) { setSnapshot(null); return; }
-    fetch(`/api/onvif-snapshots?eventId=${selected.id}&limit=1`)
-      .then(r => r.json())
-      .then(d => setSnapshot(d.snapshots?.[0]?.frameData ?? null))
-      .catch(() => setSnapshot(null));
-  }, [selected?.id]);
+  // ── Build intervals + rows ───────────────────────────────────────────────────
+  const { rows, totalCount } = useMemo(() => {
+    const filtered = typeFilter ? events.filter(e => e.topicType === typeFilter) : events;
+    const intervals = buildIntervals(filtered, nowMs);
+    return { rows: buildRows(intervals), totalCount: filtered.length };
+  }, [events, typeFilter, nowMs]);
 
-  // ── Zoom / pan helpers ──────────────────────────────────────────────────────
+  const visibleCount = useMemo(() =>
+    rows.reduce((n, r) =>
+      n + r.intervals.filter(iv => iv.endTs >= viewStart && iv.startTs <= viewEnd).length, 0),
+  [rows, viewStart, viewEnd]);
+
+  // ── Lazy-fetch inline snaps for visible intervals ────────────────────────────
+  useEffect(() => {
+    const visibleBars = rows.flatMap(r =>
+      r.intervals.filter(iv => !iv.isPoint && iv.endTs >= viewStart && iv.startTs <= viewEnd)
+    );
+    const toFetch = visibleBars.filter(iv => !fetchedRef.current.has(iv.id));
+    if (toFetch.length === 0) return;
+    toFetch.forEach(iv => {
+      fetchedRef.current.add(iv.id);
+      fetch(`/api/onvif-snapshots?eventId=${iv.id}&limit=1`)
+        .then(r => r.json())
+        .then(d => {
+          const fd = (d.snapshots?.[0]?.frameData as string | undefined) ?? '';
+          if (fd) setSnapCache(prev => { const m = new Map(prev); m.set(iv.id, fd); return m; });
+        })
+        .catch(() => {});
+    });
+  }, [rows, viewStart, viewEnd]);
+
+  // ── Ticks ────────────────────────────────────────────────────────────────────
+  const ticks = useMemo(() =>
+    [0, 0.25, 0.5, 0.75, 1].map(f => ({
+      x: f,
+      label: formatTick(viewStart + f * viewSpan, viewSpan),
+    })),
+  [viewStart, viewSpan]);
+
+  // ── Zoom / pan ───────────────────────────────────────────────────────────────
   const clampPan = useCallback((p: number, z: number) =>
     Math.max(0, Math.min(Math.max(0, 1 - 1 / z), p)), []);
 
@@ -210,97 +239,63 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
   const shiftPan = useCallback((delta: number) =>
     setPan(p => clampPan(p + delta, zoom)), [zoom, clampPan]);
 
+  useEffect(() => { if (zoom === 1) setPan(0); }, [zoom]);
+
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     if (e.deltaY < 0) applyZoom(1.4); else applyZoom(1 / 1.4);
   };
 
-  useEffect(() => { if (zoom === 1) setPan(0); }, [zoom]);
-
-  // ── Drag-to-pan ─────────────────────────────────────────────────────────────
+  // ── Drag to pan ───────────────────────────────────────────────────────────────
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return;
     dragRef.current = { startX: e.clientX, startPan: pan };
     hasDraggedRef.current = false;
     setIsDragging(false);
   };
-
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!dragRef.current || !containerRef.current) return;
-    const dx    = e.clientX - dragRef.current.startX;
+    const dx = e.clientX - dragRef.current.startX;
     const trackW = containerRef.current.getBoundingClientRect().width - ROW_LABEL_W;
     if (!hasDraggedRef.current && Math.abs(dx) < DRAG_THRESH) return;
     if (!hasDraggedRef.current) { hasDraggedRef.current = true; setIsDragging(true); }
     setPan(clampPan(dragRef.current.startPan + dx / trackW / zoom, zoom));
   };
-
   const stopDrag = () => { dragRef.current = null; setIsDragging(false); };
 
-  // ── Build intervals + rows ──────────────────────────────────────────────────
-  const { rows, totalCount } = useMemo(() => {
-    const filtered = typeFilter
-      ? events.filter(e => e.topicType === typeFilter)
-      : events;
-    const intervals = buildIntervals(filtered, nowMs);
-    return { rows: buildRows(intervals), totalCount: filtered.length };
-  }, [events, typeFilter, nowMs]);
-
-  const visibleCount = useMemo(() =>
-    rows.reduce((n, r) =>
-      n + r.intervals.filter(iv => iv.endTs >= viewStart && iv.startTs <= viewEnd).length,
-    0),
-  [rows, viewStart, viewEnd]);
-
-  // ── Tick labels ─────────────────────────────────────────────────────────────
-  const ticks = useMemo(() =>
-    [0, 0.25, 0.5, 0.75, 1].map(f => ({
-      x: f,
-      label: formatTick(viewStart + f * viewSpan, viewSpan),
-    })),
-  [viewStart, viewSpan]);
+  // ── Detail panel data ─────────────────────────────────────────────────────────
+  const selEvt    = selected?.startEvt ?? null;
+  const parsed    = selEvt?.rawXml ? parseOnvifXml(selEvt.rawXml) : null;
+  const dispItems = parsed?.items ?? selEvt?.items ?? {};
+  const selSnap   = selected ? (snapCache.get(selected.id) ?? null) : null;
 
   const cursorClass = isDragging ? 'cursor-grabbing' : 'cursor-grab';
-
-  // ── Detail panel data ───────────────────────────────────────────────────────
-  const selEvt     = selected?.startEvt ?? null;
-  const parsed     = selEvt?.rawXml ? parseOnvifXml(selEvt.rawXml) : null;
-  const dispItems  = parsed?.items ?? selEvt?.items ?? {};
 
   return (
     <div className="flex flex-col h-full text-[10px] select-none">
 
-      {/* ── Control row ──────────────────────────────────────────────────────── */}
+      {/* ── Control row ───────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-1 px-2 py-1 border-b border-gray-700/60
                       flex-shrink-0 bg-gray-900/60 flex-wrap">
-
-        {/* Range buttons */}
         <div className="flex items-center gap-0.5">
           {RANGE_OPTIONS.map(({ label }) => (
-            <button
-              key={label}
+            <button key={label}
               onClick={() => { setRange(label as RangeLabel); setZoom(1); setPan(0); }}
               className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-colors ${
-                range === label
-                  ? 'bg-blue-600 text-white'
-                  : 'text-gray-500 hover:text-gray-300 hover:bg-gray-700'
-              }`}
-            >{label}</button>
+                range === label ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-700'
+              }`}>{label}</button>
           ))}
           <button
             onClick={() => { setRange('custom'); setZoom(1); setPan(0); }}
             className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-colors ${
               range === 'custom' ? 'bg-purple-600 text-white' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-700'
-            }`}
-          >Custom</button>
+            }`}>Custom</button>
         </div>
 
-        {/* Type filter */}
-        <select
-          value={typeFilter}
+        <select value={typeFilter}
           onChange={e => { setTypeFilter(e.target.value); setSelected(null); }}
           className="bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-[9px]
-                     text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer"
-        >
+                     text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer">
           <option value="">All Types</option>
           {types.map(({ topicType, topicLabel }) => (
             <option key={topicType} value={topicType}>{topicLabel}</option>
@@ -313,16 +308,11 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
             ×{zoom.toFixed(1)}
           </span>
         )}
-        {loading && (
-          <svg className="w-4 h-4 animate-spin text-blue-400" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-          </svg>
-        )}
+        {loading ? <Spinner /> : null}
         <span className="text-gray-600">{visibleCount}/{totalCount}</span>
       </div>
 
-      {/* ── Custom date picker row ────────────────────────────────────────────── */}
+      {/* ── Custom date row ───────────────────────────────────────────────────── */}
       {range === 'custom' && (
         <div className="flex items-center gap-1 px-2 py-1 border-b border-gray-700/40
                         flex-shrink-0 bg-gray-900/40 flex-wrap">
@@ -342,19 +332,18 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
             }}
             disabled={!customStart || !customEnd}
             className="px-2 py-0.5 bg-purple-700 hover:bg-purple-600 disabled:opacity-40
-                       text-white rounded text-[9px] font-bold transition-colors"
-          >Apply</button>
+                       text-white rounded text-[9px] font-bold transition-colors">Apply</button>
           {customApplied && (
             <button onClick={() => { setCustomApplied(null); setCustomStart(''); setCustomEnd(''); }}
-                    className="text-gray-500 hover:text-gray-300 text-[9px] transition-colors" title="Clear">✕</button>
+                    className="text-gray-500 hover:text-gray-300 text-[9px]" title="Clear">✕</button>
           )}
         </div>
       )}
 
-      {/* ── Main split area ───────────────────────────────────────────────────── */}
+      {/* ── Main area ─────────────────────────────────────────────────────────── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
-        {/* ── Track area ───────────────────────────────────────────────────────── */}
+        {/* ── Gantt canvas ──────────────────────────────────────────────────────── */}
         <div
           ref={containerRef}
           className={`flex-1 flex flex-col overflow-hidden ${cursorClass}`}
@@ -368,23 +357,25 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
           {/* Scrollable rows */}
           <div className="flex-1 overflow-y-auto overflow-x-hidden">
 
-            {/* Empty state */}
             {!loading && rows.length === 0 && (
               <div className="flex items-center justify-center h-full pointer-events-none">
                 <span className="text-gray-600">{t.onvifTimelineEmpty}</span>
               </div>
             )}
 
-            {/* Track rows */}
             {rows.map((row, rowIdx) => (
-              <div key={row.key} className="flex relative" style={{ height: ROW_H }}>
+              <div key={row.key}
+                   className="flex relative"
+                   style={{
+                     height: ROW_H,
+                     borderBottom: '1px solid rgba(55,65,81,0.4)',
+                     backgroundColor: rowIdx % 2 === 1 ? 'rgba(255,255,255,0.015)' : undefined,
+                   }}>
 
                 {/* Label column */}
-                <div
-                  className="flex-shrink-0 flex items-center px-1.5 border-r border-gray-700/60 overflow-hidden"
-                  style={{ width: ROW_LABEL_W }}
-                >
-                  <span className={`text-[8px] truncate ${SEV_TEXT[row.severity] ?? 'text-gray-400'}`}
+                <div className="flex-shrink-0 flex items-start pt-1 px-1.5 border-r border-gray-700/60 overflow-hidden"
+                     style={{ width: ROW_LABEL_W }}>
+                  <span className={`text-[8px] truncate leading-tight ${SEV_TEXT[row.severity] ?? 'text-gray-400'}`}
                         title={row.topicLabel}>
                     {row.topicLabel}
                   </span>
@@ -393,14 +384,9 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                 {/* Track canvas */}
                 <div className="flex-1 relative overflow-hidden" style={{ height: ROW_H }}>
 
-                  {/* Alternating row bg */}
-                  {rowIdx % 2 === 1 && (
-                    <div className="absolute inset-0 bg-white/[0.025] pointer-events-none" />
-                  )}
-
-                  {/* Tick grid lines */}
+                  {/* Grid lines */}
                   {[0.25, 0.5, 0.75].map(f => (
-                    <div key={f} className="absolute top-0 bottom-0 w-px bg-gray-700/40 pointer-events-none"
+                    <div key={f} className="absolute top-0 bottom-0 w-px bg-gray-700/30 pointer-events-none"
                          style={{ left: `${f * 100}%` }} />
                   ))}
 
@@ -408,29 +394,32 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                   {row.intervals
                     .filter(iv => iv.endTs >= viewStart && iv.startTs <= viewEnd)
                     .map(iv => {
-                      const isSel = selected?.id === iv.id;
+                      const isSel  = selected?.id === iv.id;
+                      const color  = SEV_COLOR[iv.severity];
+                      const snapFd = snapCache.get(iv.id) ?? '';
 
                       if (iv.isPoint) {
                         const x = (iv.startTs - viewStart) / viewSpan;
                         if (x < -0.01 || x > 1.01) return null;
                         return (
-                          <button
-                            key={iv.id}
+                          <button key={iv.id}
                             onMouseDown={e => e.stopPropagation()}
                             onClick={e => {
                               e.stopPropagation();
                               if (!hasDraggedRef.current)
                                 setSelected(sel => sel?.id === iv.id ? null : iv);
                             }}
-                            className={`absolute w-3 h-3 ${SEV_DOT[iv.severity]} hover:scale-125
-                                        transition-transform cursor-pointer
-                                        ${isSel ? 'ring-1 ring-white scale-125' : 'opacity-90'}`}
                             style={{
+                              position: 'absolute',
                               left: `${x * 100}%`,
-                              top: BAR_TOP,
-                              height: BAR_H,
-                              width: 8,
+                              top: BAR_TOP + BAR_H / 2 - 5,
+                              width: 10, height: 10,
                               transform: 'translateX(-50%) rotate(45deg)',
+                              backgroundColor: color,
+                              opacity: isSel ? 1 : 0.85,
+                              outline: isSel ? '1px solid #fff' : undefined,
+                              cursor: 'pointer',
+                              zIndex: 2,
                             }}
                             title={`${iv.topicLabel} — ${new Date(iv.startTs).toLocaleTimeString()}`}
                           />
@@ -441,33 +430,81 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                       const barL = Math.max(0, (iv.startTs - viewStart) / viewSpan);
                       const barR = Math.min(1, (iv.endTs - viewStart) / viewSpan);
                       const barW = Math.max(0.003, barR - barL);
-                      const dur  = iv.inProgress ? fmtDur(nowMs - iv.startTs) : fmtDur(iv.durationMs);
+                      const dur  = fmtDur(iv.inProgress ? nowMs - iv.startTs : iv.durationMs);
+
+                      // Inline snap position (at startTs)
+                      const xSnap = (iv.startTs - viewStart) / viewSpan;
+                      const snapLeft = Math.max(0, Math.min(97, xSnap * 100));
 
                       return (
-                        <button
-                          key={iv.id}
-                          onMouseDown={e => e.stopPropagation()}
-                          onClick={e => {
-                            e.stopPropagation();
-                            if (!hasDraggedRef.current)
-                              setSelected(sel => sel?.id === iv.id ? null : iv);
-                            setShowRaw(false);
-                          }}
-                          className={`absolute flex items-center px-1 overflow-hidden rounded-sm
-                                      ${SEV_BAR[iv.severity]} text-white text-[8px] cursor-pointer
-                                      transition-opacity hover:opacity-100
-                                      ${isSel ? 'ring-1 ring-white opacity-100' : 'opacity-80'}`}
-                          style={{
-                            left: `${barL * 100}%`,
-                            width: `${barW * 100}%`,
-                            top: BAR_TOP,
-                            height: BAR_H,
-                            borderRight: iv.inProgress ? '2px dashed rgba(255,255,255,0.5)' : undefined,
-                          }}
-                          title={`${iv.topicLabel}${iv.inProgress ? ' (in progress)' : ''} — ${dur}`}
-                        >
-                          <span className="truncate leading-none">{iv.inProgress ? '↦ ' : ''}{dur}</span>
-                        </button>
+                        <React.Fragment key={iv.id}>
+                          {/* Bar */}
+                          <div
+                            onMouseDown={e => e.stopPropagation()}
+                            onClick={e => {
+                              e.stopPropagation();
+                              if (!hasDraggedRef.current) {
+                                setSelected(sel => sel?.id === iv.id ? null : iv);
+                                setShowRaw(false);
+                              }
+                            }}
+                            style={{
+                              position: 'absolute',
+                              left:   `${barL * 100}%`,
+                              width:  `${barW * 100}%`,
+                              top:    BAR_TOP,
+                              height: BAR_H,
+                              backgroundColor: color + (isSel ? 'ff' : iv.inProgress ? '88' : 'cc'),
+                              border: isSel
+                                ? '1px solid #fff'
+                                : iv.inProgress
+                                  ? `1px dashed ${color}`
+                                  : `1px solid ${color}`,
+                              borderRadius: 2,
+                              cursor: 'pointer',
+                              overflow: 'hidden',
+                              zIndex: 2,
+                              display: 'flex',
+                              alignItems: 'center',
+                            }}
+                            title={`${iv.topicLabel}${iv.inProgress ? ' (in progress)' : ''} — ${dur}`}
+                          >
+                            <span style={{ padding: '0 4px', fontSize: 7, fontWeight: 700, color: '#fff',
+                                           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                              {iv.inProgress ? '↦ ' : ''}{iv.topicLabel} {dur}
+                            </span>
+                          </div>
+
+                          {/* Inline frame snap at startTs */}
+                          {snapFd && (
+                            <img
+                              onMouseDown={e => e.stopPropagation()}
+                              onClick={e => {
+                                e.stopPropagation();
+                                if (!hasDraggedRef.current) {
+                                  setSelected(sel => sel?.id === iv.id ? null : iv);
+                                  setShowRaw(false);
+                                }
+                              }}
+                              src={snapFd}
+                              alt=""
+                              style={{
+                                position: 'absolute',
+                                left: `${snapLeft}%`,
+                                top: SNAP_TOP,
+                                width: SNAP_W,
+                                height: SNAP_H,
+                                objectFit: 'cover',
+                                borderRadius: 2,
+                                border: isSel ? '1px solid #fff' : `1px solid ${color}66`,
+                                cursor: 'pointer',
+                                zIndex: 2,
+                                transform: 'translateX(-4px)',
+                              }}
+                              title={`Frame at ${new Date(iv.startTs).toLocaleTimeString()}`}
+                            />
+                          )}
+                        </React.Fragment>
                       );
                     })
                   }
@@ -476,14 +513,13 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
             ))}
           </div>
 
-          {/* Tick labels row (sticky bottom) */}
+          {/* Tick labels (sticky bottom) */}
           <div className="flex-shrink-0 flex border-t border-gray-700/40 bg-gray-950/80"
                style={{ height: TICK_H }}>
             <div className="flex-shrink-0 border-r border-gray-700/60" style={{ width: ROW_LABEL_W }} />
             <div className="flex-1 relative">
               {ticks.map(({ x, label }) => (
-                <div key={x}
-                     className="absolute flex flex-col items-center pointer-events-none"
+                <div key={x} className="absolute flex flex-col items-center pointer-events-none"
                      style={{ left: `${x * 100}%` }}>
                   <div className="w-px h-2 bg-gray-600" />
                   <span className="text-[8px] text-gray-500 whitespace-nowrap mt-0.5">{label}</span>
@@ -493,38 +529,31 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
           </div>
         </div>
 
-        {/* ── Detail panel ─────────────────────────────────────────────────────── */}
+        {/* ── Detail panel ──────────────────────────────────────────────────────── */}
         {selected && (
           <div className="flex flex-col flex-shrink-0 border-l border-gray-700 bg-gray-900/80 overflow-hidden"
                style={{ width: DETAIL_W }}>
 
-            {/* Header */}
             <div className="flex items-center justify-between px-2 py-1.5
                             border-b border-gray-700/60 bg-gray-800/80 flex-shrink-0">
-              <div className="flex items-center gap-1 min-w-0">
-                <span className={`text-[9px] font-bold truncate ${SEV_TEXT[selected.severity]}`}>
-                  {selected.topicLabel}
-                </span>
-              </div>
+              <span className={`text-[9px] font-bold truncate ${SEV_TEXT[selected.severity]}`}>
+                {selected.topicLabel}
+              </span>
               <button onClick={() => setSelected(null)}
                       className="text-gray-500 hover:text-white flex-shrink-0 ml-1 text-[11px]">✕</button>
             </div>
 
-            {/* Parsed / Raw toggle */}
             {selEvt?.rawXml && (
               <div className="flex border-b border-gray-700/60 flex-shrink-0">
                 <button onClick={() => setShowRaw(false)}
                         className={`flex-1 py-0.5 text-[9px] font-bold ${!showRaw ? 'bg-gray-700 text-white' : 'text-gray-500 hover:text-gray-300'}`}>
-                  Parsed
-                </button>
+                  Parsed</button>
                 <button onClick={() => setShowRaw(true)}
                         className={`flex-1 py-0.5 text-[9px] font-bold ${showRaw ? 'bg-green-900/50 text-green-300' : 'text-gray-500 hover:text-gray-300'}`}>
-                  Raw XML
-                </button>
+                  Raw XML</button>
               </div>
             )}
 
-            {/* Content */}
             <div className="flex-1 overflow-y-auto">
               {showRaw ? (
                 <pre className="px-2 py-1 text-[8px] text-green-400 whitespace-pre-wrap break-all leading-tight">
@@ -532,14 +561,14 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                 </pre>
               ) : (
                 <div className="px-2 py-1 space-y-0.5">
-                  {/* Interval timing */}
                   <DetailRow label="Start" value={new Date(selected.startTs).toLocaleString()} />
                   <DetailRow
                     label="End"
                     value={selected.inProgress ? '● In Progress' : new Date(selected.endTs).toLocaleString()}
                     highlight={selected.inProgress}
                   />
-                  <DetailRow label="Dur" value={selected.inProgress ? fmtDur(nowMs - selected.startTs) : fmtDur(selected.durationMs)} />
+                  <DetailRow label="Dur"
+                    value={fmtDur(selected.inProgress ? nowMs - selected.startTs : selected.durationMs)} />
                   {selected.sourceToken && <DetailRow label="Source" value={selected.sourceToken} />}
                   {selEvt?.operation && <DetailRow label="Op" value={selEvt.operation} />}
                   {Object.entries(dispItems)
@@ -549,16 +578,14 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                   <div className="pt-0.5 border-t border-gray-700/40">
                     <DetailRow label="Topic" value={selEvt?.topic ?? ''} mono />
                   </div>
-
-                  {/* Snapshot */}
-                  {snapshot && (
+                  {/* Frame snapshot (full-size in detail panel) */}
+                  {selSnap ? (
                     <div className="pt-1">
                       <div className="text-[8px] text-gray-500 mb-1">Frame at event start</div>
-                      <img src={snapshot} alt="onvif-snap"
+                      <img src={selSnap} alt="onvif-snap"
                            className="w-full rounded border border-gray-600/40 object-contain" />
                     </div>
-                  )}
-                  {!snapshot && !selected.inProgress && (
+                  ) : !selected.inProgress && (
                     <div className="text-[8px] text-gray-600 italic pt-1">No frame snapshot</div>
                   )}
                 </div>
@@ -568,7 +595,7 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
         )}
       </div>
 
-      {/* ── Pan bar (zoom > 1 only) ───────────────────────────────────────────── */}
+      {/* ── Pan bar (zoom > 1) ────────────────────────────────────────────────── */}
       {zoom > 1 && (
         <div className="flex items-center gap-1 px-2 py-0.5 border-t border-gray-700/40
                         bg-gray-900/40 flex-shrink-0">
@@ -627,8 +654,7 @@ function buildIntervals(events: OnvifEvent[], nowMs: number): OnvifInterval[] {
 
     if (evt.state === 'true') {
       if (open.has(key)) {
-        // Consecutive start without end (server-restart artifact or camera re-trigger
-        // while still active). Coalesce: keep the original start time, ignore this event.
+        // start→start→start→end: coalesce — keep original startTs, ignore this event
         continue;
       }
       const tsMs = new Date(evt.serverTs).getTime();
@@ -642,20 +668,23 @@ function buildIntervals(events: OnvifEvent[], nowMs: number): OnvifInterval[] {
       const interval = open.get(key);
       if (interval) {
         const endTs = new Date(evt.serverTs).getTime();
-        interval.endTs = endTs;
+        interval.endTs    = endTs;
         interval.inProgress = false;
         interval.durationMs = endTs - interval.startTs;
-        interval.endEvt = evt;
+        interval.endEvt   = evt;
         intervals.push(interval);
         open.delete(key);
       } else {
+        // Orphaned end event → point marker
         intervals.push(mkPoint(evt));
       }
     } else {
+      // No state field → point marker
       intervals.push(mkPoint(evt));
     }
   }
 
+  // Remaining open intervals → in-progress
   for (const iv of open.values()) {
     iv.durationMs = nowMs - iv.startTs;
     intervals.push(iv);
@@ -670,7 +699,7 @@ function buildRows(intervals: OnvifInterval[]): OnvifRow[] {
     const key = `${iv.topicType}:${iv.sourceToken ?? ''}`;
     if (!rowMap.has(key)) {
       const label = iv.topicLabel + (iv.sourceToken ? ` (${iv.sourceToken})` : '');
-      rowMap.set(key, { key, topicType: iv.topicType, topicLabel: label, sourceToken: iv.sourceToken, severity: iv.severity, intervals: [] });
+      rowMap.set(key, { key, topicLabel: label, severity: iv.severity, intervals: [] });
     }
     rowMap.get(key)!.intervals.push(iv);
   }

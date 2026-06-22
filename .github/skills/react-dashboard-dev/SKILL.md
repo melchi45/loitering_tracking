@@ -549,28 +549,47 @@ ONVIF 메타데이터 이벤트를 DB에 저장(`onvif_events` 테이블)하고,
 1. **FullscreenCameraView.tsx** — 하단 패널 "ONVIF Timeline" **탭** (`videoTab='onvif'`) → `OnvifTimelineInline` 렌더
 2. **SearchFullscreen.tsx** — 필터 행 "ONVIF Timeline" 버튼 → `OnvifTimelineOverlay` 전체화면 오버레이
 
-### OnvifTimelineInline 레이아웃 (Gantt 행 분할 패널)
+### OnvifTimelineInline 레이아웃 — DetectionsTimelineInline 동일 스타일
 
-`state=true/false` 쌍 이벤트는 수평 Gantt 바, 상태 없는 이벤트는 다이아몬드 포인트 마커로 렌더링합니다.
+`state=true/false` 쌍 이벤트는 수평 Gantt 바 + 인라인 프레임 썸네일, 상태 없는 이벤트는 다이아몬드 포인트 마커로 렌더링합니다.
 각 `topicType:sourceToken` 조합이 별도의 행(row)으로 표시됩니다.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │ [1D][1W][1M][1Y][Custom]  [Event Type ▾]   ×2.0   5/12          │ ← control
 ├──────────────────────────────────────────────────────────────────┤
-│ callRequest (Tok1) │ ████░░ 3s ████                 │ detail     │
-│ motionAlarm        │ ████████████████ 15s            │ 200px      │
-│ lineCrossed (L1)   │ ████ 1s                        │            │
+│ callRequest (Tok1) │ [███ motionAlarm 15s ██████]    │ detail     │ BAR (16px)
+│                    │     [📷]                        │ 220px      │ SNAP (30px)
+│ motionAlarm        │ [████ 3s ████]                  │            │
+│                    │ [📷]                            │            │
 ├────────────────────┼────────────────────────────────┤            │
 │    <tick labels>   │                                │            │
 └──────────────────────────────────────────────────────────────────┘
 ```
 
-- **완료 인터벌**: 단색 바 (severity 색상)
-- **진행 중** (`inProgress=true`): `borderRight: dashed` 로 개방 표시; 라벨에 `↦` 프리픽스
+**레이아웃 상수 (Inline / Overlay):**
+
+| 상수 | Inline | Overlay |
+|------|--------|---------|
+| `ROW_H`   | 52px  | 68px  |
+| `BAR_H`   | 16px  | 22px  |
+| `BAR_TOP` | 4px   | 6px   |
+| `SNAP_H`  | 30px  | 36px  |
+| `SNAP_W`  | 44px  | 56px  |
+| `SNAP_TOP`| `BAR_TOP+BAR_H+2` | `BAR_TOP+BAR_H+4` |
+
+- **완료 인터벌**: `SEV_COLOR[sev]cc` 배경 + `1px solid` 테두리; 바 내부에 `topicLabel + duration` 라벨
+- **진행 중** (`inProgress=true`): `SEV_COLOR[sev]88` + `1px dashed` 테두리; 라벨에 `↦` 프리픽스
 - **포인트 이벤트** (state 없음): 45° 다이아몬드 마커
 
-구현: `{selected && <div style={{ width: 200 }}>…</div>}` — `selected` null 시 DOM에서 완전히 제거됩니다.
+**스냅샷 인라인 필름스트립:**
+- `snapCache: Map<string, string>` — intervalId → frameData URL
+- `fetchedRef: Set<string>` — 중복 fetch 방지
+- 뷰포트 내 보이는 bar가 바뀌면 `useEffect`에서 자동 lazy-fetch
+- 캐시 후 `startTs` x좌표 위치에 `<img>` 렌더링 (바 아래 `SNAP_TOP` 위치)
+- 상세 패널: `snapCache.get(selected.id)` 로 표시 (별도 fetch 불필요)
+
+구현: `{selected && <div style={{ width: DETAIL_W }}>…</div>}` — `selected` null 시 DOM에서 완전히 제거됩니다.
 
 ### 드래그 패닝 (OnvifTimelineInline)
 
@@ -671,7 +690,8 @@ itemX     = (eventTs − viewStart) / viewSpan   // [0..1]
 | 데이터 소스 | `pipelineManager.getLatestFrame(cameraId)` → `ctx._latestJpeg` |
 | DB 테이블 | `onvif_snapshots` (row cap 2,000) |
 | REST | `GET /api/onvif-snapshots?eventId=&cameraId=&topicType=&from=&to=&limit=` |
-| 클라이언트 | 인터벌 선택 시 자동 fetch → 상세 패널 하단 인라인 `<img>` |
+| 클라이언트 렌더링 | 뷰포트 내 bar 변경 → lazy-fetch → `snapCache` → bar 아래 인라인 `<img>` (DetectionsTimelineInline 필름스트립 스타일) |
+| 상세 패널 | `snapCache.get(selected.id)` — 별도 fetch 없이 이미 캐시된 이미지 사용 |
 
 ### REST API
 
