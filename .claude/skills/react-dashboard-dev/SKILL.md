@@ -652,10 +652,15 @@ itemX     = (eventTs − viewStart) / viewSpan   // [0..1]
 ```typescript
 // buildIntervals(events, nowMs) — state=true/false 쌍으로 인터벌 구성
 // key = cameraId:topicType:sourceToken
-// state='true'  → open Map[key] (inProgress=true, endTs=nowMs)
-// state='false' → close Map[key], set endTs
+// state='true':
+//   Map[key] already open → skip (coalesce, 원본 startTs 유지)
+//   Map[key] empty        → open new interval (inProgress=true, endTs=nowMs)
+// state='false' → close Map[key], set endTs, push; 없으면 point marker
 // no state      → point marker (isPoint=true)
 // flush         → remaining open = inProgress
+//
+// Coalesce: start→start→start→end 시퀀스는 단일 인터벌로 합산
+// (서버 재시작 후 _lastStates 초기화로 인한 artifact)
 ```
 
 ### ONVIF 스냅샷

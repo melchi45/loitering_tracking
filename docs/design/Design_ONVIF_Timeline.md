@@ -1,6 +1,6 @@
 # Design: ONVIF Event Timeline
 
-**Version:** 1.6
+**Version:** 1.7
 **Status:** Implemented
 **Related:** [Design_ONVIF_Metadata_Pipeline.md](Design_ONVIF_Metadata_Pipeline.md) · [Design_DataChannel_CameraEvents.md](Design_DataChannel_CameraEvents.md)
 
@@ -440,10 +440,22 @@ interface OnvifInterval {
 sorted events (by serverTs ASC)
 for each event:
   key = cameraId:topicType:sourceToken
-  state='true'  → open Map[key] = new interval (inProgress=true, endTs=nowMs)
-  state='false' → close Map[key] → set endTs, push to result
-  no state      → push point marker
+  state='true':
+    if Map[key] already open  → skip (coalesce: 원본 startTs 유지)
+    else                      → Map[key] = new interval (inProgress=true, endTs=nowMs)
+  state='false':
+    if Map[key] open → close, push to result
+    else             → orphaned end → point marker
+  no state           → push point marker
 flush Map → remaining open intervals (inProgress=true)
+```
+
+**Coalesce 처리 (start→start→start→end):**
+서버 재시작 후 `_lastStates` Map이 초기화되면, 카메라 heartbeat로 인해 `state='true'`가 연속 저장될 수 있습니다. 클라이언트는 이를 **단일 인터벌**로 합산합니다 — 첫 번째 `state='true'`의 `startTs`를 유지하고 중간 start 이벤트는 무시합니다.
+
+```
+DB 이벤트:  true(t1) → true(t2) → true(t3) → false(t4)
+렌더 결과:  ───────────[         인터벌         ]───── (t1 ~ t4)
 ```
 
 #### 행(Row) 구조
@@ -530,3 +542,4 @@ User action:
 | 1.4 | 2026-06-16 | OnvifTimelineInline Custom 날짜 범위 기능 추가 (Custom 버튼, datetime-local 입력, Apply, viewRangeEnd), SVG 로딩 스피너 교체 |
 | 1.5 | 2026-06-22 | OnvifTimelineOverlay Type 필터 추가 (§5.8) — 마운트 시 `/api/onvif-event-types` fetch + `onvif:type-registered` 소켓 구독 → `onvifEventStore.types` 기반 드롭다운 |
 | 1.6 | 2026-06-22 | Gantt 인터벌 바 렌더링 추가 (§5.9) — state=true/false 쌍으로 수평 막대, 진행 중 대시 바, 포인트 이벤트 다이아몬드; ONVIF 스냅샷 저장 (`onvif_snapshots` DB + `/api/onvif-snapshots`); `pipelineManager.getLatestFrame()` 추가 |
+| 1.7 | 2026-06-22 | buildIntervals() coalesce 수정 — start→start→…→end 시퀀스를 단일 인터벌로 합산 (서버 재시작 artifact 처리) |

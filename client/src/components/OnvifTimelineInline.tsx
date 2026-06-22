@@ -611,8 +611,11 @@ function buildIntervals(events: OnvifEvent[], nowMs: number): OnvifInterval[] {
     const key = `${evt.cameraId}:${evt.topicType}:${evt.sourceToken ?? ''}`;
 
     if (evt.state === 'true') {
-      const existing = open.get(key);
-      if (existing) { intervals.push(existing); open.delete(key); }
+      if (open.has(key)) {
+        // Consecutive start without end (server-restart artifact or camera re-trigger
+        // while still active). Coalesce: keep the original start time, ignore this event.
+        continue;
+      }
       const tsMs = new Date(evt.serverTs).getTime();
       open.set(key, {
         id: evt.id, cameraId: evt.cameraId, topicType: evt.topicType,
