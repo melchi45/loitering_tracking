@@ -65,11 +65,24 @@ Samsung IP 카메라가 RTSP App RTP 트랙으로 전달하는 XML 예시:
 |-------|------|---------|
 | `tns1:Device/tns1:Trigger/CallRequest` | 물리 콜 버튼(초인종) 이벤트 | `true`=누름, `false`=해제 |
 | `tns1:VideoSource/tns1:MotionAlarm` | 모션 감지 | `true`=감지, `false`=해제 |
+| `tns1:AudioAnalytics/tns1:Audio/tns1:DetectedSound` | 오디오 감지 (표준) | `true`=감지 |
+| `tns1:AudioAnalytics/tns1:Audio/tns1:AudioAlarm` | 오디오 알람 (표준) | `true`=알람 |
+| `tns1:VideoSource/tns1:GlobalSceneChange/*` | 탬퍼링 (블러/밝기/어둠) | `true`=탬퍼 |
 | `tns1:VideoAnalytics/tns1:Line/tns1:Crossed` | 라인 크로싱 | `true`=크로싱 |
 | `tns1:VideoAnalytics/tns1:Field/tns1:Entered` | 영역 진입 | `true`=진입 |
 | `tns1:VideoAnalytics/tns1:Field/tns1:Exited` | 영역 이탈 | `true`=이탈 |
-| `tnssamsung:IVA/Fire` | 화재 감지 (Samsung 전용) | `true`=감지 |
-| `tnssamsung:IVA/Smoke` | 연기 감지 (Samsung 전용) | `true`=감지 |
+| `tns1:RuleEngine/tns1:LineDetector/tns1:Crossed` | 라인 크로싱 (RuleEngine) | `true`=크로싱 |
+| `tnssamsung:IVA/Fire` | 화재 감지 | `true`=감지 |
+| `tnssamsung:IVA/Smoke` | 연기 감지 | `true`=감지 |
+| `tnssamsung:IVA/ObjectDetection` | 객체 감지 | `true`=감지 |
+| `tnssamsung:IVA/LoiteringDetection` | 배회 감지 | `true`=감지 |
+| `tnssamsung:IVA/AudioDetection` | 오디오 감지 (Samsung IVA) | `true`=감지 |
+| `tnssamsung:IVA/LineCrossing` | 라인 크로싱 (Samsung) | `true`=크로싱 |
+| `tnssamsung:AudioAlarm` / `tnssamsung:AudioDetection` | 오디오 알람 (Samsung) | `true`=알람 |
+| 위 목록 외 미인식 Topic | unknown → 전체 topic 경로를 topicType으로 저장 | 해당 있으면 state 추출 |
+
+**State 추출 우선순위** (`onvifParser.js extractState()`):
+`State` → `IsMotion` → `IsSoundDetected` → `IsAlarm` → `IsActive` → `Active` → `Enabled` → `IsEnabled` → `IsTriggered` → `IsDetected` → `Value` → (마지막 수단) token/channel이 아닌 첫 번째 boolean 값
 
 ---
 
@@ -305,3 +318,4 @@ function parseOnvifEvent(base64Payload) {
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-16 | 초기 작성 — RTSP App RTP ONVIF 메타데이터 파이프라인 전체 기술 |
+| 1.1 | 2026-06-22 | TOPIC_MAP 대폭 확장 (AudioAlarm·Tamper·Samsung IVA 계열), extractState() 다중 item 이름 지원, unknown topic은 full path를 topicType으로 저장 |

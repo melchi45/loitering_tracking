@@ -5,17 +5,93 @@
  *
  * Input:  base64-encoded RTSP application RTP packet payload
  * Output: ParsedOnvifEvent object  |  null (not ONVIF / parse error)
+ *
+ * TOPIC_MAP: maps exact topic path → { type, label, severity }
+ *   • type     — stored as topicType in DB, used as dropdown filter key
+ *   • label    — human-readable name shown in the UI timeline type dropdown
+ *   • severity — 'info' | 'warning' | 'critical'
+ *
+ * Unknown topics (not in TOPIC_MAP): type = full topic path, label = last
+ * path segment with namespace prefix stripped (e.g. 'tns1:DetectedSound' → 'DetectedSound').
+ * This ensures each unknown topic gets its own distinct row in the timeline.
  */
 
 const TOPIC_MAP = {
-  'tns1:Device/tns1:Trigger/CallRequest':        { type: 'callRequest',  label: 'Call Request',   severity: 'info'     },
-  'tns1:VideoSource/tns1:MotionAlarm':           { type: 'motionAlarm',  label: 'Motion Alarm',   severity: 'warning'  },
-  'tns1:VideoAnalytics/tns1:Line/tns1:Crossed':  { type: 'lineCrossed',  label: 'Line Crossing',  severity: 'warning'  },
-  'tns1:VideoAnalytics/tns1:Field/tns1:Entered': { type: 'fieldEntered', label: 'Area Entry',     severity: 'warning'  },
-  'tns1:VideoAnalytics/tns1:Field/tns1:Exited':  { type: 'fieldExited',  label: 'Area Exit',      severity: 'info'     },
-  'tnssamsung:IVA/Fire':                         { type: 'fire',         label: 'Fire Detected',  severity: 'critical' },
-  'tnssamsung:IVA/Smoke':                        { type: 'smoke',        label: 'Smoke Detected', severity: 'critical' },
+  // ── Standard ONVIF ────────────────────────────────────────────────────────
+  'tns1:VideoSource/tns1:MotionAlarm':                               { type: 'motionAlarm',        label: 'Motion Alarm',         severity: 'warning'  },
+  'tns1:AudioAnalytics/tns1:Audio/tns1:DetectedSound':              { type: 'audioAlarm',          label: 'Audio Alarm',          severity: 'warning'  },
+  'tns1:AudioAnalytics/tns1:Audio/tns1:AudioAlarm':                 { type: 'audioAlarm',          label: 'Audio Alarm',          severity: 'warning'  },
+  'tns1:VideoSource/tns1:GlobalSceneChange/tns1:ImageTooBlurry':    { type: 'tamperBlurry',        label: 'Tamper (Blur)',         severity: 'warning'  },
+  'tns1:VideoSource/tns1:GlobalSceneChange/tns1:ImageTooBright':    { type: 'tamperBright',        label: 'Tamper (Bright)',       severity: 'warning'  },
+  'tns1:VideoSource/tns1:GlobalSceneChange/tns1:ImageTooDark':      { type: 'tamperDark',          label: 'Tamper (Dark)',         severity: 'warning'  },
+  'tns1:VideoSource/tns1:GlobalSceneChange':                        { type: 'tamper',              label: 'Tamper Alarm',          severity: 'warning'  },
+  'tns1:VideoAnalytics/tns1:Line/tns1:Crossed':                     { type: 'lineCrossed',         label: 'Line Crossing',        severity: 'warning'  },
+  'tns1:VideoAnalytics/tns1:Field/tns1:Entered':                    { type: 'fieldEntered',        label: 'Area Entry',           severity: 'warning'  },
+  'tns1:VideoAnalytics/tns1:Field/tns1:Exited':                     { type: 'fieldExited',         label: 'Area Exit',            severity: 'info'     },
+  'tns1:RuleEngine/tns1:LineDetector/tns1:Crossed':                 { type: 'lineCrossed',         label: 'Line Crossing',        severity: 'warning'  },
+  'tns1:RuleEngine/tns1:FieldDetector/tns1:ObjectsInside':          { type: 'fieldEntered',        label: 'Area Intrusion',       severity: 'warning'  },
+  'tns1:Device/tns1:Trigger/CallRequest':                           { type: 'callRequest',         label: 'Call Request',         severity: 'info'     },
+  'tns1:Device/tns1:Trigger/tns1:DigitalInput':                     { type: 'digitalInput',        label: 'Digital Input',        severity: 'info'     },
+  'tns1:Device/tns1:HardwareFailure/tns1:StorageFailure':           { type: 'storageFailure',      label: 'Storage Failure',      severity: 'critical' },
+  // ── Samsung WiseNet (tnssamsung namespace) ────────────────────────────────
+  'tnssamsung:IVA/Fire':                                            { type: 'fire',                label: 'Fire Detected',        severity: 'critical' },
+  'tnssamsung:IVA/Smoke':                                           { type: 'smoke',               label: 'Smoke Detected',       severity: 'critical' },
+  'tnssamsung:IVA/ObjectDetection':                                 { type: 'objectDetection',     label: 'Object Detection',     severity: 'info'     },
+  'tnssamsung:IVA/LoiteringDetection':                              { type: 'loiteringDetection',  label: 'Loitering Detection',  severity: 'warning'  },
+  'tnssamsung:IVA/AudioDetection':                                  { type: 'audioAlarm',          label: 'Audio Alarm',          severity: 'warning'  },
+  'tnssamsung:IVA/LineCrossing':                                    { type: 'lineCrossed',         label: 'Line Crossing',        severity: 'warning'  },
+  'tnssamsung:IVA/DirectionalMotion':                               { type: 'directionalMotion',   label: 'Directional Motion',   severity: 'warning'  },
+  'tnssamsung:IVA/FogDetection':                                    { type: 'fogDetection',        label: 'Fog Detection',        severity: 'warning'  },
+  'tnssamsung:IVA/DefocusDetection':                                { type: 'defocusDetection',    label: 'Defocus Detection',    severity: 'warning'  },
+  'tnssamsung:IVA/ShockDetection':                                  { type: 'shockDetection',      label: 'Shock Detection',      severity: 'warning'  },
+  'tnssamsung:IVA/FaceDetection':                                   { type: 'faceDetection',       label: 'Face Detection',       severity: 'info'     },
+  'tnssamsung:IVA/LPR':                                            { type: 'lpr',                 label: 'LPR',                  severity: 'info'     },
+  'tnssamsung:AudioDetection':                                      { type: 'audioAlarm',          label: 'Audio Alarm',          severity: 'warning'  },
+  'tnssamsung:AudioAlarm':                                          { type: 'audioAlarm',          label: 'Audio Alarm',          severity: 'warning'  },
+  'tnssamsung:Tamper':                                              { type: 'tamper',              label: 'Tamper Alarm',         severity: 'warning'  },
+  'tnssamsung:VideoSource/tns1:MotionAlarm':                        { type: 'motionAlarm',         label: 'Motion Alarm',         severity: 'warning'  },
 };
+
+// ── State item names tried in order (standard ONVIF + vendor extensions) ──────
+// Samsung WiseNet uses 'State'. Other vendors may use 'IsMotion', 'IsSoundDetected', etc.
+const STATE_ITEM_NAMES = [
+  'State', 'IsMotion', 'IsSoundDetected', 'IsAlarm', 'IsActive', 'Active',
+  'Enabled', 'IsEnabled', 'IsTriggered', 'IsDetected', 'Value',
+];
+
+/**
+ * Extract boolean state from SimpleItem map.
+ * Returns 'true' | 'false' | null.
+ * Normalizes 'True'/'False', '1'/'0' to lowercase strings.
+ */
+function extractState(items) {
+  // Try well-known keys first
+  for (const key of STATE_ITEM_NAMES) {
+    const v = items[key];
+    if (v === 'true'  || v === 'True')  return 'true';
+    if (v === 'false' || v === 'False') return 'false';
+    if (v === '1') return 'true';
+    if (v === '0') return 'false';
+  }
+  // Last resort: any item whose value is a bare boolean string,
+  // excluding common non-boolean fields (tokens, channel ids, etc.)
+  for (const [k, v] of Object.entries(items)) {
+    const kl = k.toLowerCase();
+    if (kl.includes('token') || kl.includes('channel') || kl.includes('source')) continue;
+    if (v === 'true' || v === 'false') return v;
+  }
+  return null;
+}
+
+/**
+ * Strip namespace prefix from the last segment of a topic path.
+ * e.g. 'tns1:AudioAnalytics/tns1:Audio/tns1:DetectedSound' → 'DetectedSound'
+ *      'tnssamsung:AudioAlarm'                              → 'AudioAlarm'
+ */
+function topicLabel(topic) {
+  const last = topic.split('/').pop() || topic;
+  return last.replace(/^[^:]+:/, '') || last;
+}
 
 /**
  * Parse base64 ONVIF payload. Returns null if not a MetadataStream or on error.
@@ -31,8 +107,8 @@ function parseOnvifPayload(base64Payload) {
     const topic = topicMatch[1].trim();
 
     // UtcTime and PropertyOperation attributes
-    const utcTimeMatch  = xml.match(/UtcTime="([^"]+)"/);
-    const opMatch       = xml.match(/PropertyOperation="([^"]+)"/);
+    const utcTimeMatch = xml.match(/UtcTime="([^"]+)"/);
+    const opMatch      = xml.match(/PropertyOperation="([^"]+)"/);
     const utcTime   = utcTimeMatch ? utcTimeMatch[1] : new Date().toISOString();
     const operation = opMatch      ? opMatch[1]      : 'Changed';
 
@@ -45,17 +121,32 @@ function parseOnvifPayload(base64Payload) {
       const value = m[2] !== undefined ? m[2] : m[3];
       if (name !== undefined) items[name] = value;
     }
-    // Simpler fallback for common Samsung format: Name="X" Value="Y"
+    // Fallback: simpler regex for Samsung format where attrs are on same line
     if (Object.keys(items).length === 0) {
       const simple = /Name="([^"]+)"\s+Value="([^"]*)"/g;
       while ((m = simple.exec(xml)) !== null) { items[m[1]] = m[2]; }
     }
+    // Second fallback: reverse order Value="Y" Name="X"
+    if (Object.keys(items).length === 0) {
+      const rev = /Value="([^"]*)"\s+Name="([^"]+)"/g;
+      while ((m = rev.exec(xml)) !== null) { items[m[2]] = m[1]; }
+    }
 
+    // For unknown topics: use full topic path as unique type ID so different unknown
+    // topics each get their own timeline row; strip namespace prefix for the label.
     const info = TOPIC_MAP[topic] ?? {
-      type: 'unknown',
-      label: (topic.split('/').pop() || 'Event'),
+      type:     topic,
+      label:    topicLabel(topic),
       severity: 'info',
     };
+
+    // Source token: try multiple common item names
+    const sourceToken =
+      items['SourceToken'] ??
+      items['VideoSourceConfigurationToken'] ??
+      items['VideoAnalyticsConfigurationToken'] ??
+      items['AudioSourceConfigurationToken'] ??
+      null;
 
     return {
       topic,
@@ -64,8 +155,8 @@ function parseOnvifPayload(base64Payload) {
       severity:    info.severity,
       utcTime,
       operation,
-      sourceToken: items['SourceToken'] ?? null,
-      state:       items['State']       ?? null,
+      sourceToken,
+      state:       extractState(items),
       items,
     };
   } catch {
