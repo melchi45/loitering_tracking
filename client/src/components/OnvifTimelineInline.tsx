@@ -153,10 +153,25 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
     }
     fetch(`/api/onvif-events?${params}`)
       .then(r => r.json())
-      .then(d => { if (Array.isArray(d.events)) setEvents(d.events); })
+      .then(d => {
+        if (!Array.isArray(d.events)) return;
+        setEvents(d.events);
+        // Defensive backfill: register any topicType present in events but missing
+        // from the global registry (e.g. events stored before the registry feature).
+        const seen = new Set<string>();
+        for (const evt of d.events as OnvifEvent[]) {
+          if (!evt.topicType || seen.has(evt.topicType)) continue;
+          seen.add(evt.topicType);
+          addType({
+            id: evt.topicType, topicType: evt.topicType,
+            topicLabel: evt.topicLabel, topic: evt.topic,
+            severity: evt.severity, firstSeenAt: evt.serverTs,
+          });
+        }
+      })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [cameraId, range, customApplied, rangeMs, setEvents]);
+  }, [cameraId, range, customApplied, rangeMs, setEvents, addType]);
 
   // ── Fetch global type registry ──────────────────────────────────────────────
   useEffect(() => {

@@ -72,8 +72,30 @@ router.delete('/', (req, res) => {
 // ── GET /api/onvif-event-types ────────────────────────────────────────────────
 typesRouter.get('/', (req, res) => {
   if (!_db) return res.status(503).json({ error: 'DB not ready' });
-  const types = _db.all('onvif_event_types')
-    .sort((a, b) => (a.topicLabel > b.topicLabel ? 1 : -1));
+
+  const registry = _db.all('onvif_event_types');
+  const known    = new Set(registry.map(r => r.topicType));
+
+  // Backfill: scan onvif_events for topicTypes not yet in the registry.
+  // This handles events stored before the type registration feature existed,
+  // or after a server restart that reset the in-memory dedup state.
+  const seen = new Set(known);
+  for (const evt of _db.all('onvif_events')) {
+    if (!evt.topicType || seen.has(evt.topicType)) continue;
+    seen.add(evt.topicType);
+    const entry = {
+      id:          evt.topicType,
+      topicType:   evt.topicType,
+      topicLabel:  evt.topicLabel || evt.topicType,
+      topic:       evt.topic || '',
+      severity:    evt.severity || 'info',
+      firstSeenAt: evt.serverTs || evt.createdAt || new Date().toISOString(),
+    };
+    _db.insert('onvif_event_types', entry);
+    registry.push(entry);
+  }
+
+  const types = registry.sort((a, b) => (a.topicLabel > b.topicLabel ? 1 : -1));
   res.json({ total: types.length, types });
 });
 
