@@ -743,7 +743,7 @@ function AiModelsSection() {
     } finally { setModSaving(null); }
   };
 
-  const SERIES_ORDER = ['YOLO12', 'YOLO11', 'YOLOv8'];
+  const SERIES_ORDER = ['YOLO26', 'YOLO12', 'YOLO11', 'YOLOv8'];
 
   return (
     <div className="p-6 space-y-8">
@@ -775,7 +775,7 @@ function AiModelsSection() {
               <div key={series} className="border border-gray-800 rounded-lg overflow-hidden">
                 <div className="px-4 py-2 bg-gray-900 border-b border-gray-800 flex items-center gap-2">
                   <span className="text-xs font-bold text-gray-300">{series}</span>
-                  {series === 'YOLO12' && (
+                  {(series === 'YOLO26' || series === 'YOLO12') && (
                     <span className="text-[9px] bg-amber-900/50 text-amber-300 border border-amber-700/40 rounded px-1.5 py-0.5">
                       PT→ONNX auto-convert
                     </span>

@@ -1,8 +1,8 @@
 ---
 **Document:** Design_AI_Model_Catalog  
-**Version:** 1.0  
+**Version:** 1.1  
 **Status:** Draft  
-**Date:** 2026-06-17  
+**Date:** 2026-06-23  
 **Parent SRS:** [SRS_AI_Model_Catalog](../srs/SRS_AI_Model_Catalog.md)  
 **Parent TC:** [TC_AI_Model_Catalog](../tc/TC_AI_Model_Catalog.md)  
 **Implementation:** `server/src/routes/analysisApi.js`, `server/src/scripts/downloadModels.js`  
@@ -17,8 +17,9 @@
 ## 2. Architecture
 
 ```
-MODEL_CATALOG (static array, 15 entries)
+MODEL_CATALOG (static array, 20 entries)
   │
+  ├─ YOLO26 (n/s/m/l/x) — .pt from v8.4.0 → ultralytics export → ONNX
   ├─ YOLOv8 (n/s/m/l/x) — direct ONNX from Ultralytics v0.0.0
   ├─ YOLO11 (n/s/m/l/x) — direct ONNX from Ultralytics v8.3.0
   └─ YOLO12 (n/s/m/l/x) — .pt from v8.4.0 → ultralytics export → ONNX
@@ -34,9 +35,9 @@ _detector: DetectionService (current active model)
 
 ```javascript
 {
-  id:                 string,   // e.g. 'yolo12n'
-  label:              string,   // e.g. 'YOLO12n'
-  series:             string,   // 'YOLOv8' | 'YOLO11' | 'YOLO12'
+  id:                 string,   // e.g. 'yolo26n'
+  label:              string,   // e.g. 'YOLO26n'
+  series:             string,   // 'YOLO26' | 'YOLOv8' | 'YOLO11' | 'YOLO12'
   size:               number,   // input size (640)
   mAP:                number,   // COCO val2017 mAP50-95
   cpuMs:              number,   // inference ms on Intel i7-9750H
@@ -50,6 +51,18 @@ _detector: DetectionService (current active model)
 ```
 
 All entries produce output shape `[1, 84, 8400]` — compatible with `DetectionService._postprocess()` without modification.
+
+### YOLO26 모델 벤치마크 (COCO val2017 mAP50-95)
+
+| ID | mAP | CPU (ms) | T4 (ms) | Params | FLOPs |
+|---|---|---|---|---|---|
+| yolo26n | 40.9 | 38.9 | 1.7 | 2.4M | 5.4B |
+| yolo26s | 48.6 | 87.2 | 2.5 | 9.5M | 20.7B |
+| yolo26m | 53.1 | 220.0 | 4.7 | 20.4M | 68.2B |
+| yolo26l | 55.0 | 286.2 | 6.2 | 24.8M | 86.4B |
+| yolo26x | 57.5 | 525.8 | 11.8 | 55.7M | 193.9B |
+
+Download URL 패턴: `https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26{n,s,m,l,x}.pt`
 
 ## 4. Download Pipeline
 
@@ -70,10 +83,10 @@ POST /api/analysis/models/download { modelId }
   └─ _downloadProgress.set(modelId, { status:'done', percent:100 })
 ```
 
-### 4.2 PT→ONNX Conversion (YOLO12)
+### 4.2 PT→ONNX Conversion (YOLO26, YOLO12)
 
 ```
-POST /api/analysis/models/download { modelId: 'yolo12n' }
+POST /api/analysis/models/download { modelId: 'yolo26n' }  (YOLO26 예시, YOLO12도 동일)
   │
   ├─ _downloadProgress.set(modelId, { status:'downloading', percent:0 })
   ├─ doDownload(entry.url, ptPath, callback)   ← downloads .pt file
@@ -177,3 +190,4 @@ If none set, auto-detect falls back to `/usr/bin/python3` → `python3` → `pyt
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-17 | 초기 작성 — MODEL_CATALOG 구조, 다운로드 파이프라인, 런타임 전환, YOLO12 PT→ONNX 설계 |
+| 1.1 | 2026-06-23 | YOLO26 시리즈(n/s/m/l/x) 추가 — 카탈로그 20개, PT→ONNX 파이프라인 공유 |

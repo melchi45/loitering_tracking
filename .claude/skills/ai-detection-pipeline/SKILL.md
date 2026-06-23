@@ -49,19 +49,19 @@ RTSP/WebRTC 스트림
 4. `client/src/types/` 에 TypeScript 타입 추가
 5. 대시보드 컴포넌트에서 새 속성 표시
 
-### YOLO 모델 카탈로그 — 런타임 전환 (YOLOv8 / YOLO11 / YOLO12)
+### YOLO 모델 카탈로그 — 런타임 전환 (YOLOv8 / YOLO11 / YOLO12 / YOLO26)
 
-`analysisApi.js`는 15개 모델 카탈로그를 유지합니다. 서버 재시작 없이 모델 다운로드·전환이 가능합니다.
+`analysisApi.js`는 20개 모델 카탈로그를 유지합니다. 서버 재시작 없이 모델 다운로드·전환이 가능합니다.
 
 | API | 설명 |
 |---|---|
 | `GET /api/analysis/models` | 카탈로그 조회 (downloaded/active/downloading/converting 상태 포함) |
 | `POST /api/analysis/models/switch { modelId }` | 활성 모델 핫 스왑 |
-| `POST /api/analysis/models/download { modelId }` | 모델 다운로드 (YOLOv8/YOLO11: 직접 ONNX, YOLO12: PT→ONNX 변환) |
+| `POST /api/analysis/models/download { modelId }` | 모델 다운로드 (YOLOv8/YOLO11: 직접 ONNX, YOLO26/YOLO12: PT→ONNX 변환) |
 
-#### YOLO12 다운로드 특이사항
+#### YOLO26 / YOLO12 다운로드 특이사항
 
-Ultralytics는 YOLO12에 대해 `.pt`(PyTorch)만 공식 배포하며 ONNX 미제공. 서버가 자동으로:
+Ultralytics는 YOLO26·YOLO12에 대해 `.pt`(PyTorch)만 공식 배포하며 ONNX 미제공. 서버가 자동으로:
 1. `.pt` 다운로드 (Ultralytics v8.4.0 릴리스)
 2. Python `ultralytics export` 실행 → ONNX 변환 (최대 5분)
 3. `.pt` 삭제
@@ -74,6 +74,7 @@ PYTHON_EXEC → PYTHON_EXEC_LINUX → /usr/bin/python3 → python3 → python
 > ultralytics < 8.3.x는 YOLO12 아키텍처 미지원 → 해당 인터프리터 건너뜀.
 > 이 서버에서 `/usr/bin/python3` (Python 3.7.5, ultralytics 8.0.145)는 건너뛰고,
 > `python3` → `~/.local/bin/python3` (Python 3.11.9, ultralytics 8.4.63)이 선택됨.
+> YOLO26은 ultralytics ≥ 8.4.x 필요 — 동일 인터프리터 경로로 지원 가능.
 
 **`_lzma` 컴파일 (시스템 의존성 설정):**
 `~/.local/opt/python3.11`은 `_lzma` 없이 빌드됨 → torchvision import 시 오류.
@@ -97,6 +98,16 @@ gcc -O2 -fPIC -shared \
   -o ~/.local/opt/python3.11/lib/python3.11/lib-dynload/_lzma.cpython-311-x86_64-linux-gnu.so
 ```
 
+#### YOLO26 지원 모델 (mAP COCO val2017 50-95, 2026 출시 — NMS-free 엔드투엔드)
+
+| ID | mAP | CPU (ms) | T4 (ms) | Params |
+|---|---|---|---|---|
+| yolo26n | 40.9 | 38.9 | 1.7 | 2.4M |
+| yolo26s | 48.6 | 87.2 | 2.5 | 9.5M |
+| yolo26m | 53.1 | 220.0 | 4.7 | 20.4M |
+| yolo26l | 55.0 | 286.2 | 6.2 | 24.8M |
+| yolo26x | 57.5 | 525.8 | 11.8 | 55.7M |
+
 #### YOLO12 지원 모델 (mAP COCO val2017 50-95)
 
 | ID | mAP | CPU (ms) | T4 (ms) | Params |
@@ -107,7 +118,7 @@ gcc -O2 -fPIC -shared \
 | yolo12l | 53.7 | 250 | 6.5 | 26.4M |
 | yolo12x | 55.2 | 490 | 12.0 | 59.1M |
 
-모든 시리즈(v8/11/12) 출력 shape `[1, 84, 8400]` — `DetectionService._postprocess()` 변경 없이 호환.
+모든 시리즈(v8/11/12/26) 출력 shape `[1, 84, 8400]` — `DetectionService._postprocess()` 변경 없이 호환.
 
 #### 배치 다운로드 스크립트
 

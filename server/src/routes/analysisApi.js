@@ -32,6 +32,15 @@ const snapshotSvc      = require('../services/snapshotService');
 // ── YOLO Model catalog ────────────────────────────────────────────────────────
 // Each entry = one downloadable ONNX model.  file is relative to server/models/.
 const MODEL_CATALOG = [
+  // YOLO26 series (Ultralytics 2026 — NMS-free end-to-end, edge-optimised)
+  // Ultralytics releases only .pt for YOLO26; ONNX is produced by `ultralytics export`.
+  // requiresConversion: true → download handler fetches .pt then runs Python export.
+  // Output format identical to YOLO11/v8: [1, 84, 8400] — no parser changes needed.
+  { id: 'yolo26n', label: 'YOLO26n', series: 'YOLO26', size: 640, mAP: 40.9, cpuMs: 38.9,  t4Ms: 1.7,  params: '2.4M',  flops: '5.4B',   file: 'yolo26n.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26n.pt', requiresConversion: true },
+  { id: 'yolo26s', label: 'YOLO26s', series: 'YOLO26', size: 640, mAP: 48.6, cpuMs: 87.2,  t4Ms: 2.5,  params: '9.5M',  flops: '20.7B',  file: 'yolo26s.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26s.pt', requiresConversion: true },
+  { id: 'yolo26m', label: 'YOLO26m', series: 'YOLO26', size: 640, mAP: 53.1, cpuMs: 220.0, t4Ms: 4.7,  params: '20.4M', flops: '68.2B',  file: 'yolo26m.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26m.pt', requiresConversion: true },
+  { id: 'yolo26l', label: 'YOLO26l', series: 'YOLO26', size: 640, mAP: 55.0, cpuMs: 286.2, t4Ms: 6.2,  params: '24.8M', flops: '86.4B',  file: 'yolo26l.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26l.pt', requiresConversion: true },
+  { id: 'yolo26x', label: 'YOLO26x', series: 'YOLO26', size: 640, mAP: 57.5, cpuMs: 525.8, t4Ms: 11.8, params: '55.7M', flops: '193.9B', file: 'yolo26x.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo26x.pt', requiresConversion: true },
   // YOLOv12 series (Ultralytics 2025 — attention-based architecture)
   // Ultralytics releases only .pt for YOLO12; ONNX is produced by `ultralytics export`.
   // requiresConversion: true → download handler fetches .pt then runs Python export.
