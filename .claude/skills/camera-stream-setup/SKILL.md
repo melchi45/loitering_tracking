@@ -616,6 +616,27 @@ TURN_USERNAME_2=turn_user1
 TURN_CREDENTIAL_2=test1234
 ```
 
+### 알려진 버그 및 회귀 이슈
+
+#### PyAV `read_timeout` 속성 쓰기 오류 (2026-06-23 수정)
+
+**증상 로그:**
+```
+[ERROR] [Ingest] App RTP error: attribute 'read_timeout' of 'av.container.core.Container' objects is not writable — retry in 5.0s
+[ERROR] [Ingest] App RTP error: [Errno 808465656] Server returned 400 Bad Request: 'rtsp://127.0.0.1:8554/{cameraId}' — retry in 5.0s
+[INFO]  [MediaMTX] closed: maximum reader count reached
+```
+
+**원인:** 신 PyAV 버전에서 `av.open()` 이후 `inp.read_timeout = N` 속성 쓰기 불가 → App RTP 루프가 5초마다 즉시 실패하면서 MediaMTX RTSP 좀비 세션 누적 → `maxReaders: 10` 초과
+
+**수정:** `ingest_daemon.py::_app_rtp_ingest_once()` — `av.open()` 호출 시 `options={"timeout": str(µs)}` 방식으로 전달 (`AVFormatContext.io_timeout`에 매핑, RTSP keepalive와 무관)
+
+**회귀 테스트:** `test/ingest/test_apprtp.py::TestAppRtpOptions` — PyAV 버전 업그레이드 시 반드시 실행
+
+**관련 문서:** `docs/design/Design_ONVIF_Metadata_Pipeline.md §5.4`, `docs/srs/SRS_ONVIF_Metadata_Pipeline.md FR-ONVIF-APPRTP-002`
+
+---
+
 ### 자주 발생하는 오설정 패턴
 
 | 증상 | 원인 | 해결책 |
@@ -707,7 +728,7 @@ yt-dlp -F https://youtube.com/watch?v=...
 | `routes/internalApi.js` (apprtp 경로, ONVIF 저장) | `docs/design/Design_ONVIF_Metadata_Pipeline.md` §6, `docs/design/Design_ONVIF_Timeline.md` §3 |
 | `routes/onvifApi.js` (REST API) | `docs/design/Design_ONVIF_Timeline.md` §3.3, `CLAUDE.md` API 표 |
 | `db.js` (`onvif_events` 스키마) | `docs/design/Design_ONVIF_Timeline.md` §2.1 |
-| `ingest_daemon.py` (_app_rtp_* 변경) | `docs/design/Design_ONVIF_Metadata_Pipeline.md` §5 |
+| `ingest_daemon.py` (_app_rtp_* 변경) | `docs/design/Design_ONVIF_Metadata_Pipeline.md` §5, `docs/srs/SRS_ONVIF_Metadata_Pipeline.md`, `docs/tc/TC_ONVIF_Metadata_Pipeline.md` |
 | `rtspCapture.js` *(레거시)* | `docs/design/Design_FFmpeg_RTSP_Capture.md` (Deprecated) |
 | `gstreamerCapture.js` | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/ops/RTSP_Capture_Backend_Setup.md` |
 | `webrtcGateway.js`, `rtpIngestion.js` | `docs/design/Design_WebRTC_Media_Gateway.md` (Historical) |

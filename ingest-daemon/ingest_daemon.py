@@ -603,11 +603,14 @@ class CameraSession:
         # thread while demux() runs on an unknown-codec stream can segfault libav,
         # crashing the entire ingest-daemon process.
         #
-        # Instead set inp.read_timeout (AVFormatContext.io_timeout, microseconds).
+        # Pass timeout= at av.open() time (maps to AVFormatContext.io_timeout in µs).
         # libav interrupts each blocking demux call from within C when the timeout
         # fires — completely thread-safe, no cross-thread close() needed.
-        inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS)
-        inp.read_timeout = int(APP_RTP_READ_TIMEOUT * 1_000_000)
+        # NOTE: older PyAV exposed inp.read_timeout as a writable property, but
+        # newer versions removed it; passing the ffmpeg "timeout" option at open
+        # time is the portable equivalent.
+        _app_rtp_opts = {**_RTSP_OPTIONS, "timeout": str(int(APP_RTP_READ_TIMEOUT * 1_000_000))}
+        inp = av.open(self.rtsp_url, options=_app_rtp_opts)
         try:
             # Find non-video, non-audio streams (data, subtitle, application tracks).
             # Samsung / ONVIF metadata is typically exposed as a "data" or "subtitle"
