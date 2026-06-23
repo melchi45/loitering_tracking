@@ -179,8 +179,9 @@ async function reregisterCameras() {
 
   for (const cam of cameras) {
     if (!cam.id || !cam.rtspUrl) continue;
-    const callbackUrl = `${SERVER_PROTO}://127.0.0.1:${SERVER_PORT}/api/internal/frame/${cam.id}`;
-    const body = JSON.stringify({ id: cam.id, rtspUrl: cam.rtspUrl, callbackUrl });
+    const callbackUrl       = `${SERVER_PROTO}://127.0.0.1:${SERVER_PORT}/api/internal/frame/${cam.id}`;
+    const appRtpCallbackUrl = `${SERVER_PROTO}://127.0.0.1:${SERVER_PORT}/api/internal/apprtp/${cam.id}`;
+    const body = JSON.stringify({ id: cam.id, rtspUrl: cam.rtspUrl, callbackUrl, appRtpCallbackUrl });
 
     try {
       await new Promise((resolve, reject) => {
@@ -203,7 +204,7 @@ async function reregisterCameras() {
         req.write(body);
         req.end();
       });
-      console.log(`[ingest:restart]   ✓ 등록 (AI only, RTP 없음): ${cam.id.slice(0, 8)}`);
+      console.log(`[ingest:restart]   ✓ 등록 (AI + App RTP): ${cam.id.slice(0, 8)}`);
     } catch (e) {
       console.warn(`[ingest:restart]   ✗ 등록 실패 ${cam.id.slice(0, 8)}: ${e.message}`);
     }
