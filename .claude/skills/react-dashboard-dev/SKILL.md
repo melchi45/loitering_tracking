@@ -33,6 +33,7 @@ client/src/
 │   ├── AnalysisHistoryTab.tsx      — 저장된 분석 이벤트 이력 (레거시 — FullscreenCameraView에서 미사용)
 │   ├── OnvifTimelineInline.tsx     — ONVIF 이벤트 Gantt 타임라인 + 커스텀 날짜 범위 (FullscreenCameraView ONVIF 탭)
 │   ├── DetectionsTimelineInline.tsx — ByteTracker 트랙 Gantt 타임라인 (FullscreenCameraView Detections 탭)
+│   ├── ThermalOverlay.tsx          — 열상 카메라 온도 오버레이 (onvif:temperature, Area별 독립 Map 상태)
 │   └── FullscreenCameraView.tsx    — 전체화면 카메라 뷰 (3탭: Camera Events / ONVIF Timeline / Detections)
 ├── stores/                 — Zustand 상태 스토어
 ├── hooks/                  — 커스텀 훅
@@ -842,3 +843,48 @@ fallback 응답에는 `source: 'local-streaming'` 필드가 포함됩니다.
 3. `streaming` 모드: analysis 서버에 새 코드가 배포되었는가? (`analysisApi.js` track saving)
 4. `streaming` 모드: analysis 서버 다운 시 로컬 fallback으로 자동 전환되는가?
 5. objectId가 `"undefined"` 문자열로 저장되지 않았는가? (raw Track은 `.id` 사용, `.objectId` 아님)
+
+---
+
+## ThermalOverlay — 열상 카메라 온도 오버레이
+
+`ThermalOverlay.tsx`는 `CameraView` 안에 항상 마운트(`pointer-events-none`)되어 `onvif:temperature` 소켓 이벤트를 수신합니다.
+
+### Area별 독립 Map 상태 관리
+
+카메라는 Area(ItemID/AreaName)별로 **별도 이벤트**를 전송합니다. 최신 이벤트로 전체 교체하면 이전 Area가 사라지므로 `Map<areaKey, AreaSlot>`으로 각 Area를 독립 관리합니다.
+
+```ts
+// 상태: Map<areaKey, { reading, utcTime }>
+const [areas, setAreas] = useState<Map<string, AreaSlot>>(new Map());
+// 타이머: Map<areaKey, timer> — 각 Area 6초 독립 fade
+const timersRef = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+
+// 이벤트 처리: readings 배열을 Area별 upsert
+setAreas(prev => {
+  const next = new Map(prev);
+  evt.readings.forEach((r, idx) => {
+    const key = r.itemId ?? r.areaName ?? `area-${idx}`;
+    next.set(key, { reading: r, utcTime: evt.utcTime });
+    resetFadeTimer(key);  // Area별 독립 타이머 재설정
+  });
+  return next;
+});
+```
+
+### 렌더링 분기
+
+| 조건 | 표시 방식 |
+|---|---|
+| `AreaName="FullArea"` 또는 `ItemID="Z"` | 상단 배너 (crosshair 없음) — 여러 개면 나란히 표시 |
+| 그 외 좌표 Area | SVG crosshair (red=최고온도, sky=최저온도) + 좌하단 정보 패널 |
+
+- crosshair 라벨: `"AreaName 79.4°C"` 형식으로 Area 이름 포함
+- 온도 단위 heuristic: 값 > 200 → Kelvin (`352.5 (79.4°C)`), ≤ 200 → Celsius
+- 좌표 매핑: `getRenderArea()` 레터박스 보정 (CameraView detection overlay와 동일)
+
+### ThermalOverlay 수정 시 체크리스트
+
+1. `areaKey()` 반환값이 Area마다 고유한가? (`itemId → areaName → "area-{idx}"` 순서)
+2. `timersRef`와 `setAreas` 사이의 타이머/상태 동기화가 클로저 내에서 안전한가?
+3. `isFullArea()` 조건: `areaName === 'FullArea' || itemId === 'Z'` — 카메라 벤더별 값 확인

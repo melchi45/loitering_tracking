@@ -194,6 +194,31 @@ npm run ingest:restart -- --dry-run  # 설정 확인만
 
 ---
 
+## Ingest Daemon 정상 종료 (Graceful Shutdown)
+
+서버 종료 시 ingest-daemon이 Traceback 없이 깔끔하게 종료되도록 2-phase 구조를 사용합니다.
+
+### 종료 흐름
+
+```
+SIGINT 수신 → KeyboardInterrupt → finally
+  ↓
+_manager.stop_all()
+  ├── Phase 1 (즉시): 모든 세션 _signal_stop()
+  │     · self._stop.set()  ← 모든 스레드 루프에 즉시 종료 신호
+  │     · push_executor.shutdown(wait=False)
+  └── Phase 2 (대기): 모든 세션 _join_threads(timeout=3)
+        · t.join(timeout=3) — KeyboardInterrupt 수신 시 무시
+```
+
+### 핵심 설계 원칙
+
+- **Phase 1 선행**: 모든 세션 stop 신호를 동시에 설정 → MediaMTX 종료 후 Connection refused 경고 스팸 최소화
+- **`except KeyboardInterrupt: pass`**: `t.join()` 내부 및 `stop_all()` 전체에서 두 번째 SIGINT 무시
+- **스레드 루프 종료**: `while not self._stop.is_set()` + `except: if self._stop.is_set(): break` 패턴으로 stop 신호 후 예외는 조용히 종료
+
+---
+
 ## Ingest Daemon Watchdog 및 자동 복구
 
 LTS-2026은 세 계층의 Watchdog으로 스트림 고착·프로세스 충돌을 자동 복구합니다.

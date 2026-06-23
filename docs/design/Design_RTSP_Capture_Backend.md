@@ -654,7 +654,58 @@ if (!PYAV_AVAILABLE) {
 
 ---
 
-## 11. 향후 고려사항
+## 11. ingest-daemon 정상 종료 (Graceful Shutdown)
+
+서버 종료 시 ingest-daemon은 SIGINT를 수신하고 `main()`의 `except KeyboardInterrupt` 블록으로 진입합니다.
+
+### 11.1 종료 시퀀스
+
+```
+서버 종료
+  ↓
+MediaMTX 종료 (RTSP 127.0.0.1:8554 불응)
+  ↓
+ingest-daemon SIGINT 수신 → KeyboardInterrupt → finally
+  ↓
+_manager.stop_all()  ←─── 2-phase 구조
+  ├── Phase 1: 모든 CameraSession._signal_stop() (동시 실행)
+  │     · self._stop.set()           ← 모든 스레드 루프에 즉시 종료 신호
+  │     · self._push_executor.shutdown(wait=False)
+  ↓
+  └── Phase 2: 모든 CameraSession._join_threads(timeout=3) (순차 대기)
+        · t.join(timeout=3) — KeyboardInterrupt 수신 시 무시
+server.server_close()
+log.info("Ingest daemon stopped")
+```
+
+### 11.2 2-phase 설계 이유
+
+| 문제 | 원인 | 해결 |
+|---|---|---|
+| `KeyboardInterrupt` 스택 트레이스 | `t.join()` 내부 `_wait_for_tstate_lock`에서 두 번째 SIGINT | `_join_threads()`에서 `except KeyboardInterrupt: pass` |
+| Connection refused 경고 스팸 | 세션 A join 대기 중 세션 B,C,D가 `_stop` 미설정 상태로 연결 재시도 | Phase 1에서 **모든** 세션에 `_stop.set()` 선행 → Phase 2에서 join |
+| `stop_all()` 자체의 SIGINT | 두 번째 SIGINT가 `stop_all()` 실행 중 도착 | `main()` finally에서 `try/except KeyboardInterrupt` 감싸기 |
+
+### 11.3 스레드 루프 종료 흐름
+
+모든 루프(`_ai_loop`, `_video_rtp_loop`, `_audio_rtp_loop`, `_app_rtp_loop`)는 동일 패턴을 따릅니다:
+
+```python
+while not self._stop.is_set():
+    try:
+        self._xxx_ingest_once()   # 블로킹 PyAV open/demux
+    except Exception as exc:
+        if self._stop.is_set():   # stop 신호 후 예외 → 조용히 종료
+            break
+        log.warning(...)          # 실제 오류만 로그
+        self._stop.wait(retry_delay)  # stop 신호 오면 즉시 깨어남
+```
+
+`_stop.wait(retry_delay)`: Python `threading.Event.wait(timeout)`는 `_stop`이 set되는 순간 즉시 반환하므로 retry 지연 없이 빠르게 종료됩니다.
+
+---
+
+## 12. 향후 고려사항
 
 | 항목 | 설명 | 우선순위 |
 |---|---|---|
@@ -673,3 +724,4 @@ if (!PYAV_AVAILABLE) {
 | 1.0 | 2026-06-04 | 초기 작성 (ffmpeg / gstreamer / pyav 3가지 백엔드) |
 | 1.1 | 2026-06-11 | ingest-daemon 백엔드 추가 (현재 기본값); ffmpeg 레거시 분류; WEBRTC_ENGINE 환경변수 추가; captureFactory.js 코드 스니펫 업데이트 |
 | 1.2 | 2026-06-19 | §6.7 Watchdog 및 자동 복구 추가 — PyAV 내부 watchdog, Node.js 프레임 watchdog, startServer.js 자동 재시작, reregisterAllWithIngestDaemon() |
+| 1.3 | 2026-06-23 | §11 ingest-daemon 정상 종료 추가 — 2-phase stop (pre-signal all → join all), KeyboardInterrupt 보호, Connection refused 스팸 제거 |

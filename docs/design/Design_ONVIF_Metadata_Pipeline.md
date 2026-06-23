@@ -356,16 +356,46 @@ DB에는 저장하지 않습니다 — 실시간 스트리밍 전용입니다.
 
 `ThermalOverlay`는 `CameraView` 안에 항상 마운트(`pointer-events-none`)되어 `onvif:temperature` 이벤트를 수신합니다.
 
-#### 9.4.1 FullArea 판별
+#### 9.4.1 Area별 독립 Map 상태 관리
+
+카메라는 Area(ItemID/AreaName)별로 **별도 이벤트**를 전송하는 경우가 많습니다. 단순히 최신 이벤트 전체로 상태를 교체하면 이전 Area가 사라지므로, `Map<areaKey, AreaSlot>`으로 Area마다 독립 관리합니다.
+
+```ts
+// Area 식별 키: itemId → areaName → "area-{idx}" 순서로 결정
+function areaKey(r: ThermalReading, fallback: string): string {
+  return r.itemId ?? r.areaName ?? fallback;
+}
+
+// 상태 구조
+Map<string, { reading: ThermalReading; utcTime: string }>
+
+// 이벤트 처리 — 각 reading을 개별 upsert (다른 Area 유지)
+handler = (evt) => {
+  setAreas(prev => {
+    const next = new Map(prev);
+    evt.readings.forEach((r, idx) => {
+      const key = areaKey(r, `area-${idx}`);
+      next.set(key, { reading: r, utcTime: evt.utcTime });
+      // 기존 타이머 초기화 후 새 타이머 등록
+      resetFadeTimer(key);
+    });
+    return next;
+  });
+};
+```
+
+각 Area는 **독립된 6초 fade 타이머**를 가지며, 특정 Area의 데이터가 6초간 수신되지 않으면 해당 Area만 제거됩니다 (다른 Area 유지).
+
+#### 9.4.2 FullArea 판별
 
 | 조건 | 표시 방식 |
 |---|---|
 | `AreaName="FullArea"` 또는 `ItemID="Z"` | **상단 배너** — crosshair 없음, 전체 프레임 온도 요약 |
 | 그 외 특정 좌표 영역 | SVG **crosshair** (red=최고, sky-blue=최저) + 좌하단 정보 패널 |
 
-두 유형이 동시에 존재하면 모두 표시됩니다.
+두 유형이 동시에 존재하면 모두 표시됩니다. 복수의 FullArea 배너도 나란히 표시됩니다.
 
-#### 9.4.2 좌표 매핑
+#### 9.4.3 좌표 매핑
 
 카메라 픽셀 좌표 → 화면 좌표는 `getRenderArea()` 레터박스 보정 알고리즘을 사용합니다 (CameraView detection overlay와 동일):
 
@@ -376,16 +406,18 @@ function toScreen(px, py, fw, fh, cw, ch) {
 }
 ```
 
-#### 9.4.3 온도 단위 heuristic
+crosshair 라벨은 `"AreaName 79.4°C"` 형식으로 Area 이름을 포함하여 복수 Area 구분이 가능합니다.
+
+#### 9.4.4 온도 단위 heuristic
 
 | 값 범위 | 해석 | 표시 형식 |
 |---|---|---|
 | > 200 | Kelvin (FLIR 계열) | `352.5 (79.4°C)` |
 | ≤ 200 | Celsius | `79.4°C` |
 
-#### 9.4.4 Fade 타이머
+#### 9.4.5 Fade 타이머
 
-6초간 `onvif:temperature` 수신 없으면 오버레이 자동 소멸 (`FADE_MS = 6000`).
+`FADE_MS = 6000` — Area별 독립 타이머. `timersRef: Map<areaKey, timer>`로 관리하며 Area별로 마지막 수신 후 6초가 지나야 해당 Area만 제거됩니다.
 
 ---
 
@@ -412,3 +444,4 @@ function toScreen(px, py, fw, fh, cw, ch) {
 | 1.0 | 2026-06-16 | 초기 작성 — RTSP App RTP ONVIF 메타데이터 파이프라인 전체 기술 |
 | 1.1 | 2026-06-22 | TOPIC_MAP 대폭 확장 (AudioAlarm·Tamper·Samsung IVA 계열), extractState() 다중 item 이름 지원, unknown topic은 full path를 topicType으로 저장 |
 | 1.2 | 2026-06-23 | 열상 카메라 Radiometry 섹션 추가 — BoxTemperatureReading 파싱, onvif:temperature 소켓 이벤트, ThermalOverlay (FullArea 배너 + 좌표 crosshair) |
+| 1.3 | 2026-06-23 | §9.4 ThermalOverlay Area별 독립 Map 상태 관리로 전환 — 카메라가 Area별 별도 이벤트 전송 시 전체 교체 대신 upsert, Area별 독립 fade 타이머, crosshair 라벨에 AreaName 접두사 추가 |
