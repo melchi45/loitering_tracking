@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAM-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent SRS** | srs/SRS_Camera_Discovery.md |
@@ -472,13 +472,99 @@ const HTTP_TIMEOUT   = 4000; // ms — per SOAP call
 
 ### 7.3 WiseNet UDP Packet Specification
 
+**프로토콜 파라미터 (SUNAPI IP Installer 원본과 일치)**
+
 | Parameter | Value |
 |---|---|
-| Send target | 255.255.255.255 (broadcast) |
-| Send port | 7701 |
-| Receive port | 7711 |
-| Packet size | 160 bytes (fixed magic packet) |
-| Extended response | ≥ 261 bytes |
+| Send target | `255.255.255.255` (broadcast) |
+| Send port | `7701` — 카메라 수신 포트 |
+| Receive port | `7711` — 서버 수신 포트 |
+| Discovery 패킷 | 고정 바이너리 magic packet (257 bytes) |
+| 기본 응답 | 261 bytes |
+| 확장 응답 | ≥ 261 bytes (신형 펌웨어 포함) |
+
+**레퍼런스:** `submodules/WiseNetChromeIPInstaller/scripts/socket.js` (Chrome 확장 원본 소스)  
+**Node.js 포트:** `submodules/WiseNetChromeIPInstaller/nodejs/udpDiscovery.js`
+
+#### 응답 패킷 바이너리 레이아웃
+
+기본 261 bytes (공통 필드):
+
+| 오프셋 | 크기 | 필드명 | 타입 | 설명 |
+|--------|------|--------|------|------|
+| 0 | 1 | `nMode` | uint8 | 패킷 모드 |
+| 1 | 18 | `chPacketId` | bytes | 패킷 식별자 |
+| 19 | 18 | `chMac` | ASCII (null-term) | MAC 주소 (예: `00:09:18:XX:XX:XX`) |
+| 37 | 16 | `chIP` | ASCII (null-term) | IP 주소 |
+| 53 | 16 | `chSubnetMask` | ASCII (null-term) | 서브넷 마스크 |
+| 69 | 16 | `chGateway` | ASCII (null-term) | 게이트웨이 IP |
+| 85 | 20 | `chPassword` | ASCII (null-term) | 기본 패스워드 |
+| 105 | 1 | `isSupportSunapi` | uint8 | `1`=SUNAPI 지원 |
+| 106 | 2 | `nPort` | uint16 LE | RTSP 포트 (기본 554) |
+| 108 | 1 | `nStatus` | uint8 | 장치 상태 |
+| 109 | 10 | `chDeviceName` | ASCII (null-term) | 장치명 (짧은 버전) |
+| 119 | 1 | `Reserved2` | bytes | 예약 |
+| 120 | 2 | `nHttpPort` | uint16 LE | HTTP 포트 (기본 80) |
+| 122 | 2 | `nDevicePort` | uint16 LE | Device 서비스 포트 |
+| 124 | 2 | `nTcpPort` | uint16 LE | TCP(RTSP) 포트 |
+| 126 | 2 | `nUdpPort` | uint16 LE | UDP 포트 |
+| 128 | 2 | `nUploadPort` | uint16 LE | 업로드 포트 |
+| 130 | 2 | `nMulticastPort` | uint16 LE | 멀티캐스트 포트 |
+| 132 | 1 | `nNetworkMode` | uint8 | 네트워크 모드 |
+| 133 | 128 | `DDNSURL` | ASCII (null-term) | DDNS 호스트명 |
+
+확장 필드 (오프셋 261~, 패킷 길이 ≥ 261일 때):
+
+| 오프셋 | 크기 | 필드명 | 타입 | 설명 |
+|--------|------|--------|------|------|
+| 261 | 32 | `alias` | ASCII (null-term) | 별칭 |
+| 293 | 32 | `chDeviceNameNew` | ASCII (null-term) | 장치명 (전체) — UI 표시에 우선 사용 |
+| 325 | 1 | `modelType` | uint8 | 장치 모델 ID |
+| 326 | 2 | `version` | uint16 BE | 펌웨어 버전 |
+| 328 | 1 | `httpType` | uint8 | `0`=HTTP, `1`=HTTPS |
+| 329 | 1 | `Reserved3` | bytes | 예약 |
+| 330 | 2 | `nHttpsPort` | uint16 LE | HTTPS 포트 (기본 443) |
+| 332 | 1 | `noPassword` | uint8 | 비밀번호 없음 플래그 |
+
+> **포트 엔디언**: 모든 포트 필드(version 제외)는 **리틀엔디언** (바이트 스왑 필요).  
+> `version`만 빅엔디언 (스왑 없음).
+
+#### 편의 URL 생성 (`discoveryService.js` `mapUDPDevice()`)
+
+```
+httpType === 0 → rtspUrl = rtsp://{chIP}:{nTcpPort}/profile1/media.smp
+httpType === 1 → rtspUrl = rtsp://{chIP}:{nTcpPort}/profile1/media.smp
+url           = {http|https}://{chIP}:{nHttpPort|nHttpsPort}
+```
+
+`/profile1/media.smp` 경로는 WiseNet Profile S 카메라 기본 스트림 경로입니다.
+
+#### 원본 구현(SUNAPI)과 Node.js 포트 비교
+
+| 항목 | SUNAPI 원본 (`scripts/socket.js`) | Node.js 포트 | 비고 |
+|------|------|------|------|
+| 포트 (7701/7711) | ✓ | ✓ | 동일 |
+| Discovery 패킷 | ✓ | ✓ | 동일 hex blob |
+| 응답 패킷 필드·오프셋 | ✓ | ✓ | 모든 필드 일치 |
+| 포트 엔디언 (LE) | `ntohs(v, true)` | `r16(true)` | 동일 |
+| `version` 엔디언 (BE) | `ntohs(v)` (big=undefined) | `r16(false)` | 동일 |
+| DDNSURL 디코딩 | `Uint16Array` → UTF-16 | `latin1` | ASCII URL에서 동일 동작 |
+| `chDeviceNameNew` 정리 | regex 제어문자 제거 | 첫 null-byte에서 절단 | 결과 동일 |
+
+#### 서브모듈 vs 인라인 폴백
+
+`server/src/utils/udpDiscovery.js`는 두 구현 중 가용한 것을 자동 선택합니다:
+
+| 구현 | 파일 | Discovery 패킷 | 대상 카메라 |
+|------|------|------|------|
+| **서브모듈 (우선)** | `submodules/WiseNetChromeIPInstaller/nodejs/udpDiscovery.js` | WiseNet 바이너리 magic packet | Hanwha/WiseNet 전용 |
+| **인라인 폴백** | `server/src/utils/udpDiscovery.js` (`UDPDiscoveryFallback`) | ONVIF XML Probe | 범용 ONVIF — WiseNet 카메라 탐색 불가 |
+
+> **서브모듈 초기화 필수:** WiseNet/Hanwha 카메라를 탐색하려면 반드시 실행:
+> ```bash
+> git submodule update --init submodules/WiseNetChromeIPInstaller
+> ```
+> 서브모듈이 없으면 폴백 사용 시 WiseNet 카메라가 응답해도 탐색되지 않습니다.
 
 ---
 
@@ -504,3 +590,4 @@ const HTTP_TIMEOUT   = 4000; // ms — per SOAP call
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Camera Discovery |
+| 1.1 | 2026-06-23 | LTS Engineering Team | §7.3 WiseNet UDP 패킷 바이너리 레이아웃 상세화 — SUNAPI IP Installer 원본과 1:1 비교, 서브모듈 vs 인라인 폴백 차이점, 서브모듈 초기화 주의사항 추가 |

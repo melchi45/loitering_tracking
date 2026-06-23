@@ -316,6 +316,60 @@ python3 -c "import av, PIL; print(av.__version__)"
 3. 탐색 API 호출: `POST /api/cameras/discover`
 4. 반환된 카메라 목록에서 선택하여 등록
 
+### WiseNet/Hanwha UDP Discovery 프로토콜
+
+**레퍼런스:** SUNAPI IP Installer (`submodules/WiseNetChromeIPInstaller/scripts/socket.js`)  
+**포트:** 송신 `7701` (broadcast → 카메라), 수신 `7711` (카메라 → 서버)  
+**패킷:** 고정 바이너리 magic packet → 카메라가 바이너리 응답 반환
+
+응답 패킷 바이너리 레이아웃 (기본 261 bytes + 확장 72 bytes):
+
+| 오프셋 | 크기 | 필드 | 설명 |
+|--------|------|------|------|
+| 0 | 1 | `nMode` | 패킷 모드 |
+| 1 | 18 | `chPacketId` | 패킷 ID |
+| 19 | 18 | `chMac` | MAC 주소 (ASCII null-term) |
+| 37 | 16 | `chIP` | IP 주소 |
+| 53 | 16 | `chSubnetMask` | 서브넷 마스크 |
+| 69 | 16 | `chGateway` | 게이트웨이 |
+| 85 | 20 | `chPassword` | 기본 패스워드 |
+| 105 | 1 | `isSupportSunapi` | `1`=SUNAPI 지원 |
+| 106 | 2 | `nPort` | RTSP 포트 (uint16 **LE**) |
+| 108 | 1 | `nStatus` | 상태 |
+| 109 | 10 | `chDeviceName` | 장치명 (짧은) |
+| 119 | 1 | Reserved2 | — |
+| 120 | 2 | `nHttpPort` | HTTP 포트 (uint16 **LE**) |
+| 122 | 2 | `nDevicePort` | Device 포트 |
+| 124 | 2 | `nTcpPort` | TCP/RTSP 포트 |
+| 126–130 | 2+2+2 | `nUdpPort`, `nUploadPort`, `nMulticastPort` | 기타 포트 |
+| 132 | 1 | `nNetworkMode` | 네트워크 모드 |
+| 133 | 128 | `DDNSURL` | DDNS 호스트명 |
+| **261** | 32 | `alias` | 별칭 *(확장, ≥261 bytes 시)* |
+| 293 | 32 | `chDeviceNameNew` | 장치명 전체 (UI 표시 우선) |
+| 325 | 1 | `modelType` | 모델 ID |
+| 326 | 2 | `version` | 펌웨어 버전 (uint16 **BE** — 유일하게 빅엔디언) |
+| 328 | 1 | `httpType` | `0`=HTTP, `1`=HTTPS |
+| 329 | 1 | Reserved3 | — |
+| 330 | 2 | `nHttpsPort` | HTTPS 포트 (uint16 **LE**) |
+| 332 | 1 | `noPassword` | 비밀번호 없음 플래그 |
+
+**서브모듈 vs 인라인 폴백:**
+
+| 구현 | 파일 | Discovery 방식 | WiseNet 탐색 |
+|------|------|------|------|
+| 서브모듈 (우선) | `submodules/WiseNetChromeIPInstaller/nodejs/udpDiscovery.js` | WiseNet 바이너리 | ✓ 가능 |
+| 인라인 폴백 | `server/src/utils/udpDiscovery.js` (`UDPDiscoveryFallback`) | ONVIF XML Probe | ✗ 불가 |
+
+> **서브모듈 미초기화 시 WiseNet 카메라 탐색 불가.** 반드시 실행:
+> ```bash
+> git submodule update --init submodules/WiseNetChromeIPInstaller
+> ```
+
+RTSP URL은 `nTcpPort`를 사용하며 WiseNet Profile S 기본 경로 추가:
+```
+rtsp://{chIP}:{nTcpPort}/profile1/media.smp
+```
+
 ### YouTube 스트림 수집
 1. 대상 YouTube URL 준비 (라이브 또는 녹화, HLS 전용 스트림 포함)
 2. `server/src/services/youtubeStreamService.js`에서 yt-dlp 경로 확인
