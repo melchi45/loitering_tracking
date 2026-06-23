@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAM-01 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Active |
-| **Date** | 2026-05-26 |
+| **Date** | 2026-06-23 |
 | **Parent SRS** | srs/SRS_Camera_Discovery.md |
 
 ---
@@ -209,7 +209,20 @@ if (incoming.SupportOnvif)  merged.SupportOnvif  = true;
 // Profiles: take longer list
 if (incoming.profiles?.length > merged.profiles?.length)
   merged.profiles = incoming.profiles;
+
+// MaxChannel: take the larger value from either protocol
+merged.MaxChannel = Math.max(existing.MaxChannel || 1, incoming.MaxChannel || 1);
 ```
+
+**MaxChannel enrichment flow:**
+
+1. **ONVIF NVR**: `enrichDevice()` sets `MaxChannel = profiles.length` after `GetStreamUri`. An NVR with 4 connected cameras → `MaxChannel = 4`.
+2. **WiseNet UDP NVR**: After `mapUDPDevice()` (MaxChannel=1 default), `querySunapiMaxChannel()` is called asynchronously (no-auth, 2 s timeout):
+   - Queries `GET /stw-cgi/media.cgi?msubmenu=channellist&action=view` → parses `MaxChannel` or `ChannelIDList.length`
+   - Falls back to `GET /stw-cgi/system.cgi?msubmenu=systeminfo&action=view`
+   - Returns 1 on any failure (auth required, timeout, network error)
+   - If `> 1`, device is re-upserted and re-emitted via `discovery:result`
+3. **mergeDevices**: When UDP and ONVIF discover the same NVR, `MaxChannel = max(udp, onvif)` — the richer value wins.
 
 ### 3.2 ONVIFDiscovery (`server/src/services/onvifDiscovery.js`)
 
@@ -297,11 +310,13 @@ interface DeviceInfo {
   Model:          string;
   FirmwareVersion?: string;
   SerialNumber?:  string;
+  Channel?:       number;         // currently selected channel (1-based, default 1)
+  MaxChannel?:    number;         // total channel count; >1 indicates NVR/DVR
   SupportSunapi:  boolean;
   SupportOnvif:   boolean;
   SupportPTZ?:    boolean;
   rtspUrl?:       string;
-  profiles?:      OnvifProfile[];
+  profiles?:      OnvifProfile[]; // ONVIF stream profiles; index = channel-1 for NVRs
   URL?:           string;         // DDNS URL (WiseNet UDP only)
   xaddr?:         string;         // ONVIF device service endpoint
   epRef?:         string;         // ONVIF EndpointReference
@@ -577,6 +592,8 @@ url           = {http|https}://{chIP}:{nHttpPort|nHttpsPort}
 | Device with empty IP | `mapUDPDevice()` | Return `null`; skipped in `_runScan()` |
 | ONVIF SOAP auth required | `soapPost()` | Rejects with `AUTH_REQUIRED`; caught in `enrichDevice()` silently |
 | ONVIF SOAP timeout | `soapPost()` | Rejects with `Timeout`; caught in `enrichDevice()` silently |
+| SUNAPI MaxChannel auth required (401/403) | `querySunapiMaxChannel()` | Resolves 0; default MaxChannel=1 retained |
+| SUNAPI MaxChannel timeout / network error | `querySunapiMaxChannel()` | Resolves 0 within 2 s; default MaxChannel=1 retained |
 | stray `_onProtocolDone()` after `stop()` | Check `!this._scanning` | Return immediately; prevents timer re-arm |
 | `_pendingDone` underflow | Guard `_pendingDone <= 0` | Reset to 0; prevents negative count |
 | Camera DB insert failure | `camerasRouter` catch | HTTP 500 with error message |
@@ -591,3 +608,4 @@ url           = {http|https}://{chIP}:{nHttpPort|nHttpsPort}
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Camera Discovery |
 | 1.1 | 2026-06-23 | LTS Engineering Team | §7.3 WiseNet UDP 패킷 바이너리 레이아웃 상세화 — SUNAPI IP Installer 원본과 1:1 비교, 서브모듈 vs 인라인 폴백 차이점, 서브모듈 초기화 주의사항 추가 |
+| 1.2 | 2026-06-23 | LTS Engineering Team | MaxChannel 지원 추가 — ONVIF NVR profiles.length 기반 MaxChannel 도출, SUNAPI best-effort 쿼리, mergeDevices max 병합, DiscoveredCameraPanel 채널 선택 UI |

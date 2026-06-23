@@ -41,6 +41,14 @@ interface Props {
   onClose: () => void;
 }
 
+/** Generate RTSP URL for a specific channel number by replacing the profile index. */
+function channelRtspUrl(baseUrl: string, channel: number): string {
+  if (!baseUrl) return baseUrl;
+  if (/\/profile\d+\//i.test(baseUrl)) return baseUrl.replace(/\/profile\d+\//i, `/profile${channel}/`);
+  if (/\/profile\d+$/i.test(baseUrl))  return baseUrl.replace(/\/profile\d+$/i,  `/profile${channel}`);
+  return baseUrl;
+}
+
 export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
   const addCamera = useCameraStore((s) => s.addCamera);
   const [adding, setAdding]     = useState(false);
@@ -50,25 +58,40 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
     camera.profiles?.find((p) => p.rtspUrl) ?? null
   );
 
+  const maxChannel  = camera.MaxChannel ?? 1;
+  const hasChannels = maxChannel > 1;
+  const [selectedChannel, setSelectedChannel] = useState<number>(1);
+
   const scheme  = camera.HttpType ? 'https' : 'http';
   const webPort = camera.HttpType ? camera.HttpsPort : camera.HttpPort;
 
-  // Prefer selected ONVIF profile URL, then camera.rtspUrl, then fallback
-  const rtspUrl =
-    selectedProfile?.rtspUrl ||
-    camera.rtspUrl ||
-    `rtsp://${camera.IPAddress}:${camera.Port || 554}/profile1/media.smp`;
+  // Channel-aware RTSP URL: prefer ONVIF profile by index, else derive from base URL
+  const resolveRtspUrl = (channel: number): string => {
+    const profiles = camera.profiles ?? [];
+    if (profiles.length >= channel && profiles[channel - 1]?.rtspUrl) {
+      return profiles[channel - 1].rtspUrl;
+    }
+    const base = camera.rtspUrl || `rtsp://${camera.IPAddress}:${camera.Port || 554}/profile1/media.smp`;
+    return channel > 1 ? channelRtspUrl(base, channel) : base;
+  };
+
+  const rtspUrl = hasChannels
+    ? resolveRtspUrl(selectedChannel)
+    : (selectedProfile?.rtspUrl || camera.rtspUrl ||
+       `rtsp://${camera.IPAddress}:${camera.Port || 554}/profile1/media.smp`);
 
   const handleAdd = async () => {
     setAdding(true);
     setError('');
     try {
-      const port = camera.HttpType ? camera.HttpsPort : camera.HttpPort;
+      const port       = camera.HttpType ? camera.HttpsPort : camera.HttpPort;
+      const baseName   = camera.Model || camera.IPAddress;
+      const cameraName = hasChannels ? `${baseName} Ch${selectedChannel}` : baseName;
       const res = await fetch('/api/cameras', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name:     camera.Model || camera.IPAddress,
+          name:     cameraName,
           rtspUrl,
           ip:       camera.IPAddress,
           mac:      camera.MACAddress,
@@ -129,7 +152,53 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
             <span className="text-[11px] text-gray-500 w-24 flex-shrink-0">ONVIF</span>
             <Badge ok={!!camera.SupportOnvif} label="Yes" />
           </div>
+          {maxChannel > 1 && (
+            <div className="flex items-start gap-2 py-1 border-b border-gray-700/50">
+              <span className="text-[11px] text-gray-500 w-24 flex-shrink-0">Channels</span>
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-800 text-amber-300">
+                {maxChannel} CH
+              </span>
+            </div>
+          )}
         </div>
+
+        {/* Channel Selection (NVR — MaxChannel > 1) */}
+        {hasChannels && (
+          <div>
+            <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">
+              Channel Selection
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {Array.from({ length: maxChannel }, (_, i) => i + 1).map((ch) => {
+                const isActive = ch === selectedChannel;
+                const hasProfileUrl = !!(camera.profiles?.[ch - 1]?.rtspUrl);
+                return (
+                  <button
+                    key={ch}
+                    onClick={() => {
+                      setSelectedChannel(ch);
+                      if (camera.profiles?.[ch - 1]) setSelectedProfile(camera.profiles[ch - 1]);
+                    }}
+                    className={`px-2 py-1 rounded border text-[11px] font-semibold transition-all ${
+                      isActive
+                        ? 'border-amber-500 bg-amber-900/50 text-amber-200'
+                        : 'border-gray-700 bg-gray-900 text-gray-400 hover:border-gray-500 hover:text-gray-200'
+                    }`}
+                    title={hasProfileUrl ? resolveRtspUrl(ch) : undefined}
+                  >
+                    CH {ch}
+                    {hasProfileUrl && (
+                      <span className="ml-1 text-[9px] text-green-500">●</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="mt-1.5 text-[10px] text-gray-500">
+              ● ONVIF profile available &nbsp;· Adding will use name &quot;{camera.Model || camera.IPAddress} Ch{selectedChannel}&quot;
+            </div>
+          </div>
+        )}
 
         {/* Network */}
         <div>
@@ -199,7 +268,9 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
           )}
           <div className="py-1 border-b border-gray-700/50">
             <div className="text-[10px] text-gray-500 mb-0.5">
-              RTSP{selectedProfile ? ` (${selectedProfile.name || selectedProfile.token})` : ''}
+              {hasChannels
+                ? `RTSP (Ch ${selectedChannel})`
+                : `RTSP${selectedProfile ? ` (${selectedProfile.name || selectedProfile.token})` : ''}`}
             </div>
             <span className="text-[11px] text-green-400 break-all font-mono">{rtspUrl}</span>
           </div>
@@ -225,7 +296,11 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
             disabled={adding}
             className="w-full py-2 text-xs font-semibold rounded bg-blue-700 hover:bg-blue-600 disabled:opacity-50 text-white transition-colors"
           >
-            {adding ? 'Adding…' : '+ Add to System'}
+            {adding
+              ? 'Adding…'
+              : hasChannels
+              ? `+ Add Ch ${selectedChannel} to System`
+              : '+ Add to System'}
           </button>
         )}
       </div>

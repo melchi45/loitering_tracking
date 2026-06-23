@@ -221,6 +221,10 @@ async function enrichDevice(ip, xaddr) {
     result.rtspUrl = `rtsp://${ip}:554/`;
   }
 
+  // Set MaxChannel from profile count (NVR: multiple profiles = multiple channels)
+  result.MaxChannel = Math.max(1, result.profiles.length);
+  result.Channel    = 1;
+
   return result;
 }
 

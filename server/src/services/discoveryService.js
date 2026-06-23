@@ -1,10 +1,55 @@
 'use strict';
 
+const http  = require('http');
+const https = require('https');
+
 const { getUDPDiscovery }  = require('../utils/udpDiscovery');
 const { ONVIFDiscovery }   = require('./onvifDiscovery');
 
 const SCAN_TIMEOUT  = 10000; // each scan duration (ms)
 const SCAN_INTERVAL = 15000; // pause between scans — long enough for cameras to reset rate limits
+
+// ─── SUNAPI MaxChannel query (best-effort, no auth) ──────────────────────────
+
+/**
+ * Try to read MaxChannel from WiseNet/Hanwha SUNAPI channel list endpoint.
+ * Returns 1 on any failure (auth required, timeout, parse error).
+ * Resolves quickly (<2 s) so it doesn't block the discovery flow.
+ */
+async function querySunapiMaxChannel(ip, httpPort, httpType, timeoutMs = 2000) {
+  const proto = httpType ? https : http;
+  const port  = httpType ? (httpPort || 443) : (httpPort || 80);
+  const paths = [
+    '/stw-cgi/media.cgi?msubmenu=channellist&action=view',
+    '/stw-cgi/system.cgi?msubmenu=systeminfo&action=view',
+  ];
+
+  for (const path of paths) {
+    const result = await new Promise((resolve) => {
+      const req = proto.get(
+        { hostname: ip, port, path, timeout: timeoutMs,
+          headers: { Accept: 'application/json, */*' } },
+        (res) => {
+          if (res.statusCode === 401 || res.statusCode === 403) { resolve(0); return; }
+          let data = '';
+          res.on('data', (chunk) => { data += chunk; });
+          res.on('end', () => {
+            try {
+              const json = JSON.parse(data);
+              const maxCh = json.MaxChannel
+                || (Array.isArray(json.ChannelIDList) ? json.ChannelIDList.length : 0);
+              resolve(parseInt(maxCh, 10) || 0);
+            } catch { resolve(0); }
+          });
+        }
+      );
+      req.on('timeout', () => { req.destroy(); resolve(0); });
+      req.on('error',   () => resolve(0));
+    });
+    if (result > 0) return result;
+  }
+  return 1;
+}
 
 // ─── UDP device mapper ────────────────────────────────────────────────────────
 
@@ -117,6 +162,10 @@ function mergeDevices(existing, incoming) {
     merged.profiles = incoming.profiles;
   }
 
+  // MaxChannel: take the larger value from either protocol
+  const maxCh = Math.max(existing.MaxChannel || 1, incoming.MaxChannel || 1);
+  merged.MaxChannel = maxCh;
+
   return merged;
 }
 
@@ -218,11 +267,27 @@ class DiscoveryService {
       const udp = new UDPDiscovery({ timeout: SCAN_TIMEOUT });
       this._udpDisc = udp;
 
-      udp.on('device', (raw) => {
+      udp.on('device', async (raw) => {
         const device = mapUDPDevice(raw);
         if (!device) return;
+
+        // Emit immediately with MaxChannel=1
         const merged = this._upsert(device);
         this._emit(merged);
+
+        // Best-effort: try SUNAPI channel count (no auth, 2 s timeout)
+        if (device.SupportSunapi) {
+          try {
+            const maxCh = await querySunapiMaxChannel(
+              device.IPAddress, device.HttpPort, device.HttpType
+            );
+            if (maxCh > 1) {
+              device.MaxChannel = maxCh;
+              const updated = this._upsert(device);
+              this._emit(updated);
+            }
+          } catch (_) {}
+        }
       });
 
       udp.on('done',  () => { this._udpDisc = null;  this._onProtocolDone(); });

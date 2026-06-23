@@ -370,6 +370,39 @@ RTSP URL은 `nTcpPort`를 사용하며 WiseNet Profile S 기본 경로 추가:
 rtsp://{chIP}:{nTcpPort}/profile1/media.smp
 ```
 
+### MaxChannel 및 채널 선택 (NVR/DVR 지원)
+
+WiseNet NVR이나 ONVIF NVR 장비는 채널 수(`MaxChannel > 1`)를 반환합니다.
+
+**서버측 MaxChannel 도출 순서:**
+
+| 단계 | 방법 | 파일 |
+|------|------|------|
+| 1 | ONVIF `GetProfiles` 응답 → `profiles.length` | `onvifDiscovery.js` `enrichDevice()` |
+| 2 | SUNAPI best-effort 쿼리 (no-auth, 2 s timeout) | `discoveryService.js` `querySunapiMaxChannel()` |
+| 3 | `mergeDevices()` — 양쪽 MaxChannel 중 큰 값 | `discoveryService.js` |
+
+**SUNAPI MaxChannel 쿼리 엔드포인트 (우선순위):**
+1. `GET /stw-cgi/media.cgi?msubmenu=channellist&action=view` → `ChannelIDList.length` 또는 `MaxChannel`
+2. `GET /stw-cgi/system.cgi?msubmenu=systeminfo&action=view` → `MaxChannel`
+- 인증 필요(401/403) 또는 타임아웃 → `MaxChannel = 1` 유지
+
+**클라이언트측 채널 선택 UI (`DiscoveredCameraPanel.tsx`):**
+- `MaxChannel > 1` 인 경우:
+  - `CH N` 버튼 그리드 표시 (1..MaxChannel)
+  - ONVIF 프로필 URL 있는 채널은 `●` 초록 인디케이터
+  - 채널 클릭 시 RTSP URL 실시간 갱신
+  - "+ Add Ch N to System" 버튼 — 이름 자동 suffix: `"{모델명} Ch{N}"`
+- RTSP URL 채널별 생성 (`channelRtspUrl()`):
+  - ONVIF 프로필 있는 경우: `profiles[channel-1].rtspUrl` 사용
+  - 없는 경우: base URL의 `/profile1/` → `/profile{N}/` 치환
+
+**채널 추가 흐름 (NVR 8채널 예시):**
+1. 탐색 결과에서 NVR 클릭 → 패널 열림, "Channels: 8 CH" 배지 표시
+2. CH 1 ~ CH 8 버튼 중 원하는 채널 클릭 (기본 CH 1)
+3. RTSP URL 자동 갱신: `rtsp://192.168.1.100:554/profile3/media.smp` (CH 3 예시)
+4. "+ Add Ch 3 to System" 클릭 → `POST /api/cameras` body: `{ name: "XRN-810S Ch3", rtspUrl: "..." }`
+
 ### YouTube 스트림 수집
 1. 대상 YouTube URL 준비 (라이브 또는 녹화, HLS 전용 스트림 포함)
 2. `server/src/services/youtubeStreamService.js`에서 yt-dlp 경로 확인
