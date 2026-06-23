@@ -215,12 +215,23 @@ class CameraSession:
         t.start()
         self._threads.append(t)
 
-    def stop(self):
+    def _signal_stop(self):
+        """Phase 1 — set stop flag and shut down the push executor immediately."""
         self._stop.set()
         self._push_executor.shutdown(wait=False)
+
+    def _join_threads(self, timeout: float = 3.0):
+        """Phase 2 — wait for threads to exit after _signal_stop()."""
         for t in self._threads:
-            t.join(timeout=5)
+            try:
+                t.join(timeout=timeout)
+            except KeyboardInterrupt:
+                pass  # second SIGINT during shutdown — ignore
         log.info("[%s] Stopped", self.id[:8])
+
+    def stop(self):
+        self._signal_stop()
+        self._join_threads()
 
     # ── AI path ───────────────────────────────────────────────────────────────
 
@@ -681,8 +692,14 @@ class CameraManager:
         with self._lock:
             sessions = list(self._cameras.values())
             self._cameras.clear()
+        # Phase 1: signal every session to stop before joining any thread.
+        # This minimises the window where threads log "Connection refused"
+        # because MediaMTX has already exited but _stop is not yet set.
         for s in sessions:
-            s.stop()
+            s._signal_stop()
+        # Phase 2: join threads (they are already winding down)
+        for s in sessions:
+            s._join_threads()
 
 
 # ── HTTP API ──────────────────────────────────────────────────────────────────
@@ -773,8 +790,12 @@ def main():
         pass
     finally:
         log.info("Shutting down…")
-        _manager.stop_all()
+        try:
+            _manager.stop_all()
+        except KeyboardInterrupt:
+            pass  # second SIGINT during stop_all — ignore
         server.server_close()
+        log.info("Ingest daemon stopped")
 
 
 if __name__ == "__main__":
