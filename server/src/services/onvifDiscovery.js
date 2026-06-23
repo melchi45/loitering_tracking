@@ -186,6 +186,8 @@ async function enrichDevice(ip, xaddr) {
 
   // 3. GetProfiles at media URL
   let profileTokens = [];
+  // sourceTokenOrder maps SourceToken string → 1-based channel index (insertion order)
+  const sourceTokenOrder = new Map();
   try {
     const xml    = await soapPost(result.mediaUrl, buildGetProfiles());
     const blocks = splitProfileBlocks(xml);
@@ -197,21 +199,32 @@ async function enrichDevice(ip, xaddr) {
       const width    = parseInt(extractTag(block, 'Width')  || '0', 10);
       const height   = parseInt(extractTag(block, 'Height') || '0', 10);
       const fps      = parseInt(extractTag(block, 'FrameRateLimit') || '0', 10);
+      // SourceToken identifies the physical video input:
+      //   single-channel cameras share one SourceToken across all profiles (main/sub);
+      //   NVR channels each have a distinct SourceToken (one per physical input).
+      const srcToken = extractTag(block, 'SourceToken') || '';
+      if (srcToken && !sourceTokenOrder.has(srcToken)) {
+        sourceTokenOrder.set(srcToken, sourceTokenOrder.size + 1);
+      }
       if (token) {
         profileTokens.push(token);
-        result.profiles.push({ token, name, encoding, width, height, fps, rtspUrl: '' });
+        // channelIndex: 1-based channel this profile belongs to (same for main+sub of same channel)
+        const channelIndex = srcToken ? (sourceTokenOrder.get(srcToken) || 1) : 1;
+        result.profiles.push({ token, name, encoding, width, height, fps, rtspUrl: '',
+                                sourceToken: srcToken, channelIndex });
       }
     }
   } catch (_) {}
 
-  // 4. GetStreamUri for each profile (up to 4)
-  for (let i = 0; i < Math.min(profileTokens.length, 4); i++) {
+  // 4. GetStreamUri for each profile (up to 16 — cover large NVRs)
+  for (let i = 0; i < Math.min(profileTokens.length, 16); i++) {
     try {
       const xml = await soapPost(result.mediaUrl, buildGetStreamUri(profileTokens[i]));
       const uri = extractTag(xml, 'Uri');
       if (uri) {
         result.profiles[i].rtspUrl = uri;
-        if (i === 0 && !result.rtspUrl) result.rtspUrl = uri;
+        // Use first profile of channel 1 as the device-level rtspUrl
+        if (!result.rtspUrl && result.profiles[i].channelIndex === 1) result.rtspUrl = uri;
       }
     } catch (_) {}
   }
@@ -221,8 +234,11 @@ async function enrichDevice(ip, xaddr) {
     result.rtspUrl = `rtsp://${ip}:554/`;
   }
 
-  // Set MaxChannel from profile count (NVR: multiple profiles = multiple channels)
-  result.MaxChannel = Math.max(1, result.profiles.length);
+  // MaxChannel = number of distinct physical video inputs (SourceToken).
+  // Using sourceTokenOrder.size instead of profiles.length prevents counting
+  // multi-stream profiles (main/sub) of a single-channel camera as multiple channels.
+  // Falls back to 1 when SourceToken is absent from the ONVIF response.
+  result.MaxChannel = sourceTokenOrder.size > 0 ? sourceTokenOrder.size : 1;
   result.Channel    = 1;
 
   return result;

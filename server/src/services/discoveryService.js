@@ -335,4 +335,4 @@ function getDiscoveryService(io) {
   return _svc;
 }
 
-module.exports = { getDiscoveryService };
+module.exports = { getDiscoveryService, mapUDPDevice, querySunapiMaxChannel };

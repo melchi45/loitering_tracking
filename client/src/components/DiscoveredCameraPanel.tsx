@@ -65,9 +65,15 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
   const scheme  = camera.HttpType ? 'https' : 'http';
   const webPort = camera.HttpType ? camera.HttpsPort : camera.HttpPort;
 
-  // Channel-aware RTSP URL: prefer ONVIF profile by index, else derive from base URL
+  // Channel-aware RTSP URL:
+  //   1) ONVIF: first profile whose channelIndex matches the selected channel
+  //   2) Fallback: derive from base RTSP URL by replacing profile number
   const resolveRtspUrl = (channel: number): string => {
     const profiles = camera.profiles ?? [];
+    // Prefer profile with matching channelIndex (set by server SourceToken dedup)
+    const byChannel = profiles.find((p) => p.channelIndex === channel && p.rtspUrl);
+    if (byChannel) return byChannel.rtspUrl;
+    // Fallback: profiles array index (legacy; works when channelIndex not set)
     if (profiles.length >= channel && profiles[channel - 1]?.rtspUrl) {
       return profiles[channel - 1].rtspUrl;
     }
@@ -171,7 +177,9 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
             <div className="flex flex-wrap gap-1">
               {Array.from({ length: maxChannel }, (_, i) => i + 1).map((ch) => {
                 const isActive = ch === selectedChannel;
-                const hasProfileUrl = !!(camera.profiles?.[ch - 1]?.rtspUrl);
+                // Check if any ONVIF profile for this channel has an RTSP URL
+                const hasProfileUrl = !!(camera.profiles?.find((p) => p.channelIndex === ch && p.rtspUrl)
+                  ?? camera.profiles?.[ch - 1]?.rtspUrl);
                 return (
                   <button
                     key={ch}

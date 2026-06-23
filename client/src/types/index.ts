@@ -192,13 +192,15 @@ export interface Alert {
 }
 
 export interface OnvifProfile {
-  token:    string;
-  name:     string;
-  encoding: string;
-  width:    number;
-  height:   number;
-  fps:      number;
-  rtspUrl:  string;
+  token:         string;
+  name:          string;
+  encoding:      string;
+  width:         number;
+  height:        number;
+  fps:           number;
+  rtspUrl:       string;
+  sourceToken?:  string; // VideoSourceConfiguration/SourceToken — identifies physical video input
+  channelIndex?: number; // 1-based channel this profile belongs to (NVR: per-channel; single cam: always 1)
 }
 
 export interface DiscoveredCamera {

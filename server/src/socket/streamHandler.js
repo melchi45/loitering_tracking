@@ -2,7 +2,7 @@
 
 const { v4: uuidv4 }         = require('uuid');
 const { getUDPDiscovery }    = require('../utils/udpDiscovery');
-const { getDiscoveryService } = require('../services/discoveryService');
+const { getDiscoveryService, mapUDPDevice, querySunapiMaxChannel } = require('../services/discoveryService');
 
 /**
  * Register Socket.IO event handlers for streaming and discovery.
@@ -70,50 +70,23 @@ function registerStreamHandlers(io, socket, db, options = {}) {
     const discovery = new UDPDiscovery({ timeout });
     _discoveryInstance = discovery;
 
-    discovery.on('device', (raw) => {
-      const clean = (v) => String(v || '').replace(/\xff/g, '').replace(/[^\x20-\x7E]/g, '').trim();
-      const resolvePort = (a, b, fallback) => {
-        const v = parseInt(a != null ? a : b, 10);
-        return Number.isFinite(v) && v > 0 ? v : fallback;
-      };
+    discovery.on('device', async (raw) => {
+      const device = mapUDPDevice(raw);
+      if (!device) return;
 
-      // Map raw WiseNet binary fields exactly as the Chrome extension does
-      const strMacAddress = clean(raw.chMac || raw.MACAddress || raw.mac);
-      const strIpAddress  = clean(raw.chIP  || raw.IPAddress  || raw.ip);
-      const strModel      = (raw.chDeviceNameNew && raw.chDeviceNameNew !== '')
-                              ? raw.chDeviceNameNew
-                              : (raw.chDeviceName || raw.Model || raw.model || raw.name || '');
-      const numHttpPort   = resolvePort(raw.nHttpPort,  raw.httpPort ?? raw.HttpPort,  80);
-      const numHttpsPort  = resolvePort(raw.nHttpsPort, raw.httpsPort ?? raw.HttpsPort, 443);
-      const rtspPort      = resolvePort(raw.nPort,      raw.Port,                    554);
-      const httpType      = (raw.httpType != null)
-        ? (raw.httpType !== 0)
-        : (raw.HttpType != null ? !!raw.HttpType : false);
-      const supportSunapi = raw.isSupportSunapi === 1 || raw.SupportSunapi === true;
-      const rtspUrl       = clean(raw.rtspUrl) || `rtsp://${strIpAddress}:${rtspPort}/`;
-      const id            = strMacAddress ? `${strMacAddress}_${strIpAddress}` : `ip_${strIpAddress}`;
-
-      const device = {
-        id,
-        Model:        strModel,
-        Type:         raw.modelType,
-        Username:     '',
-        Password:     '',
-        IPAddress:    strIpAddress,
-        MACAddress:   strMacAddress,
-        Port:         rtspPort,
-        Channel:      1,
-        MaxChannel:   1,
-        HttpType:     httpType,
-        HttpPort:     numHttpPort,
-        HttpsPort:    numHttpsPort,
-        Gateway:      clean(raw.chGateway || raw.Gateway),
-        SubnetMask:   clean(raw.chSubnetMask || raw.SubnetMask),
-        SupportSunapi: supportSunapi,
-        URL:          clean(raw.DDNSURL || raw.URL),
-        rtspUrl,
-      };
+      // Emit immediately with MaxChannel=1
       socket.emit('discovery:result', { device });
+
+      // Best-effort SUNAPI channel count (no auth, 2 s timeout)
+      if (device.SupportSunapi) {
+        try {
+          const maxCh = await querySunapiMaxChannel(device.IPAddress, device.HttpPort, device.HttpType);
+          if (maxCh > 1) {
+            device.MaxChannel = maxCh;
+            socket.emit('discovery:result', { device });
+          }
+        } catch (_) {}
+      }
     });
 
     discovery.on('done', () => {
