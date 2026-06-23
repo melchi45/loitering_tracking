@@ -320,4 +320,4 @@ Application Layer (unchanged synchronous API)
 
 | Version | Date | Author | Description |
 |---|---|---|---|
-| 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for Storage MongoDB |
+| 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for DB Layer (pluggable storage backends) |

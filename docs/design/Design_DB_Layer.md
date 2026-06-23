@@ -4,10 +4,10 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-STORAGE-001 |
-| **Version** | 1.5 |
-| **Status** | Active — amended 2026-06-18 |
+| **Version** | 1.8 |
+| **Status** | Active — amended 2026-06-23 |
 | **Date** | 2026-05-27 |
-| **Parent SRS** | srs/SRS_Storage_MongoDB.md |
+| **Parent SRS** | srs/SRS_DB_Layer.md |
 
 ---
 
@@ -15,7 +15,7 @@
 
 1. [Architecture Overview](#1-architecture-overview)
 2. [File & Module Structure](#2-file--module-structure)
-3. [`db.js` — In-Memory Store Design](#3-dbjs--in-memory-store-design)
+3. [DB Interface & Backends](#3-db-interface--backends)
 4. [`mongoDbService.js` — MongoDB Adapter Design](#4-mongodbservicejs--mongodb-adapter-design)
 5. [Mongoose Schema Design](#5-mongoose-schema-design)
 6. [Index Strategy](#6-index-strategy)
@@ -43,46 +43,57 @@
 └─────────────────────────────┬───────────────────────────────────────────────┘
                               │ synchronous in-memory API
 ┌─────────────────────────────▼───────────────────────────────────────────────┐
-│                           db.js                                              │
+│                    db/index.js  (factory + public API)                       │
 │                                                                              │
-│  ┌─────────────────────────────────────────────────────────────────────┐    │
-│  │                    in-memory store (ALL_TABLES — 20 tables)          │    │
-│  │  cameras, zones, events, alerts, faceGalleries, faceGalleryFaces,   │    │
-│  │  settings, detectionSnapshots, analysisEvents, detectionTracks,     │    │
-│  │  users, refresh_tokens, audit_logs, onvif_events, ...               │    │
-│  └──────────────────────────┬──────────────────────────────────────────┘    │
-│                             │ afterWrite() — DB_TYPE determines path        │
-│  ┌──────────────────────────▼──────────────────────────────────────────┐    │
-│  │  DB_TYPE=json:    persistJson() [debounced, async → lts.json]        │    │
-│  │  DB_TYPE=mongodb: mongoSvc.upsert/remove [async, fire-and-forget]   │    │
-│  │                   lts.json is NEVER written in this mode             │    │
-│  │                   (disconnect → in-memory only until reconnect)      │    │
-│  └──────────────────────────────────────────────────────────────────────┘    │
-└──────────────┬──────────────────────────────────┬──────────────────────────┘
-               │  JSON mode only                   │  MongoDB mode only
-               ▼                                  ▼
-         lts.json                         MongoDB (mongoose)
-    (storage/lts.json)                  20 collections matching
-    read on startup                     ALL_TABLES in db.js
-    (warm-start only;                   (cameras, zones, events,
-     never written in                    alerts, users, audit_logs, ...)
-     DB_TYPE=mongodb)
+│  ┌────────────────────────────────────────────────────────────────────┐     │
+│  │  BaseDatabase  (abstract — src/db/BaseDatabase.js)                  │     │
+│  │  • insert / update / delete / find / findOne / all                  │     │
+│  │  • getStats() · getMode() · isConnected()                           │     │
+│  │  • prepare() shim (backward-compat)                                 │     │
+│  └──────────────┬──────────────────────────────────┬──────────────────┘     │
+│                 │                                  │                         │
+│  ┌──────────────▼─────────────┐  ┌────────────────▼──────────────────┐     │
+│  │  JsonDatabase               │  │  MongoDatabase                     │     │
+│  │  (src/db/JsonDatabase.js)   │  │  (src/db/MongoDatabase.js)         │     │
+│  │                             │  │                                    │     │
+│  │  in-memory store + debounced│  │  in-memory mirror + async          │     │
+│  │  async write to lts.json   │  │  fire-and-forget to MongoDB        │     │
+│  │  (atomic .tmp rename)       │  │  (disconnect → in-memory only)     │     │
+│  └─────────────┬───────────────┘  └────────────────┬──────────────────┘     │
+└────────────────┼──────────────────────────────────-┼────────────────────────┘
+                 ▼                                   ▼
+          storage/lts.json                    MongoDB (mongoose)
+          (DB_TYPE=json)                     20 collections
+                                             (DB_TYPE=mongodb)
 ```
 
-### 1.2 Dual-Mode Switch
+### 1.2 Backend Selection
 
 ```
 DB_TYPE=json  (default)               DB_TYPE=mongodb
 ┌─────────────────────┐               ┌─────────────────────────────────────┐
-│  loadFromJson()      │               │  ensureMongoDB() — TCP probe,       │
+│  JsonDatabase.init() │               │  ensureMongoDB() — TCP probe,       │
 │  reads lts.json      │               │    auto-restart or install guide    │
-│  into in-memory store│               │  loadFromJson() → loadAll() (mongo) │
-│                      │               │  overwrite in-memory from MongoDB   │
-│  afterWrite:         │               │                                     │
-│    persistJson() only│               │  afterWrite:                        │
-│    (debounced, async)│               │    mongoSvc.upsert/remove ONLY      │
-└─────────────────────┘               │    persistJson() only if disconnected│
+│  into in-memory store│               │  MongoDatabase.init()               │
+│                      │               │  → mongoSvc.loadAll() direct        │
+│  insert/update:      │               │  (lts.json NEVER read or written)   │
+│  → _schedulePersist()│               │                                     │
+│    [debounced 2s,    │               │  insert/update:                     │
+│     atomic rename]   │               │  → _persist() [async upsert]        │
+└─────────────────────┘               │  disconnect → in-memory only,       │
+                                      │    no JSON fallback                  │
                                       └─────────────────────────────────────┘
+```
+
+### 1.3 Extending with a New Backend
+
+```
+# To add SQLite (or Oracle, Redis, etc.):
+1. Create  server/src/db/SqliteDatabase.js  extending BaseDatabase
+2. Override: init(), insert(), update(), delete(), find(), findOne(), all(), getMode()
+3. Register in db/index.js:
+     case 'sqlite': return new SqliteDatabase();
+4. Set  DB_TYPE=sqlite  in server/.env
 ```
 
 ---
@@ -92,115 +103,146 @@ DB_TYPE=json  (default)               DB_TYPE=mongodb
 ```
 server/
 ├── src/
-│   ├── db.js                         ← In-memory store + dual-mode dispatch
+│   ├── db.js                         ← backward-compat shim: module.exports = require('./db/index')
+│   ├── db/                           ← DB layer (v1.7+)
+│   │   ├── index.js                  ← factory + public API (initDB / getDB / getStorageMode / getDbStats / flushNow)
+│   │   ├── BaseDatabase.js           ← abstract interface (extend to add SQLite, Oracle, etc.)
+│   │   ├── JsonDatabase.js           ← JSON file backend (DB_TYPE=json, default)
+│   │   ├── MongoDatabase.js          ← MongoDB backend   (DB_TYPE=mongodb)
+│   │   └── constants.js              ← ALL_TABLES, TABLE_ROW_CAPS, LEGACY_MIGRATIONS
 │   ├── services/
-│   │   └── mongoDbService.js         ← Mongoose-based MongoDB adapter
+│   │   └── mongoDbService.js         ← Mongoose-based MongoDB adapter (used by MongoDatabase)
 │   └── scripts/
 │       ├── migrateToMongo.js         ← One-time JSON → MongoDB migration
 │       └── ensureMongodb.js          ← Startup health check: TCP probe → auto-restart → install guide
 ├── storage/
-│   ├── lts.json                      ← JSON mode only (DB_TYPE=mongodb: read on startup, never written)
-│   ├── analytics.json                ← Analytics config (separate file, not db.js)
-│   ├── tracker.json                  ← Tracker config (separate file, not db.js)
-│   └── face_tracking.json            ← Face trajectory state (separate file, not db.js)
+│   ├── lts.json                      ← JSON mode only (DB_TYPE=mongodb: never read or written)
+│   ├── analytics.json                ← Analytics config (separate file, not db layer)
+│   ├── tracker.json                  ← Tracker config (separate file, not db layer)
+│   └── face_tracking.json            ← Face trajectory state (separate file, not db layer)
 ├── .env.example                      ← Environment variable template
 └── docker-compose.yml                ← Includes `mongo` service when DB_TYPE=mongodb
 ```
 
-> **Note**: `analytics.json`, `tracker.json`, and `face_tracking.json` are managed by their respective service modules directly (not through `db.js`). They are not MongoDB-backed.
+> **Note**: `analytics.json`, `tracker.json`, and `face_tracking.json` are managed by their respective service modules directly (not through the DB layer). They are not MongoDB-backed.
+>
+> **Node.js resolution**: `require('./db')` resolves to `db.js` (the shim), which delegates to `db/index.js`. All existing callers work without change.
 
 ---
 
-## 3. `db.js` — In-Memory Store Design
+## 3. DB Interface & Backends
 
-### 3.1 Module-Level State
+### 3.1 `BaseDatabase` — Abstract Interface (`db/BaseDatabase.js`)
+
+모든 백엔드가 상속해야 하는 추상 클래스. 하위클래스는 아래 메서드를 반드시 구현합니다.
 
 ```js
-// ── Constants ─────────────────────────────────────────────────────────────
-const ALL_TABLES = [
-  'cameras', 'zones', 'events', 'alerts',
-  'faceGalleries', 'faceGalleryFaces', 'settings',
-  'users', 'refresh_tokens', 'audit_logs',
-];
+class BaseDatabase {
+  // ── Abstract CRUD (must override) ─────────────────────────────────────
+  insert(table, row)         // row must include id field
+  update(table, id, data)    // merge data into matching row
+  delete(table, id)          // remove row by id
+  find(table, where = {})    // equality filter, returns array
+  findOne(table, where = {}) // first match or null
+  all(table)                 // shallow copy of all rows
 
-// ── In-memory store ───────────────────────────────────────────────────────
-let store = {};
-ALL_TABLES.forEach(t => { store[t] = []; });
+  // ── Abstract lifecycle ────────────────────────────────────────────────
+  async init()               // connect, load data, etc.
+  flushNow()                 // sync flush on graceful shutdown (no-op for MongoDB)
+  close()                    // cleanup timers/connections
 
-// ── MongoDB service reference ─────────────────────────────────────────────
-let mongoSvc = null;   // null = MongoDB not active
+  // ── Metadata ─────────────────────────────────────────────────────────
+  getMode()                  // 'json' | 'mongodb' | 'sqlite' | …
+  isConnected()              // true when ready to accept writes
+  getStats()                 // { mode, connected, rates, cumulative }
 
-// ── Internal helpers ──────────────────────────────────────────────────────
-function _isMongo() {
-  return process.env.DB_TYPE === 'mongodb'
-    && mongoSvc !== null
-    && mongoSvc.isConnected();
+  // ── Shared (inherited) ────────────────────────────────────────────────
+  prepare(sql)               // backward-compat SQL shim (INSERT/DELETE/SELECT)
+  pragma()                   // no-op shim
+  exec()                     // no-op shim
+  _sampleRates()             // internal — updates inserts/updates/deletes/finds per-sec
 }
 ```
 
-### 3.2 `prepare(sql)` — SQL Parser
-
-The parser uses regex to extract table name and operation from the SQL string:
+### 3.2 `JsonDatabase` — JSON File Backend (`db/JsonDatabase.js`)
 
 ```
-sql.trim().toLowerCase()
-  │
-  ├── match /^(select|insert|update|delete)/  → op
-  └── match /(?:from|into|update|table)\s+(\w+)/  → table
+JsonDatabase.init()
+  │  storagePath = STORAGE_PATH env || server/storage/
+  │  _loadFromDisk()  → reads lts.json into this._store
+  │  _runLegacyMigrations()  → one-time import from users.json/tokens.json/audit.json
+  │  console.log '[DB] Storage mode: JSON'
+  ▼
+insert/update/delete:
+  │  mutate this._store (in-memory)
+  │  enforce TABLE_ROW_CAPS (evict oldest when exceeded)
+  └─ _schedulePersist()  → debounced 2 s timer
+         └─ _flushAsync()
+               ├── fs.promises.writeFile(lts.json.tmp)
+               └── fs.promises.rename(lts.json.tmp → lts.json)   ← atomic
+
+flushNow()  (SIGTERM/SIGINT)
+  │  clearTimeout(timer)
+  └─ fs.writeFileSync(lts.json.tmp) + fs.renameSync(→ lts.json)
 ```
 
-Returns a `Statement` object with `all()`, `get()`, `run()` closures that close over `table` and `op`.
-
-### 3.3 Statement Execution Logic
+### 3.3 `MongoDatabase` — MongoDB Backend (`db/MongoDatabase.js`)
 
 ```
-stmt.run(params)
-  │
-  ├─ op === 'insert'
-  │    row = { createdAt: now, ...params }
-  │    store[table].push(row)
-  │    afterWrite(table, row.id, row, 'insert')
-  │    return { changes: 1, lastInsertRowid: row.id }
-  │
-  ├─ op === 'update'
-  │    extract _where from params
-  │    map store[table]: matching rows get { ...row, ...data, updatedAt: now }
-  │    call afterWrite per updated row
-  │    return { changes }
-  │
-  └─ op === 'delete'
-       removedIds = matching row ids
-       store[table] = store[table].filter(not matching)
-       afterDeleteWhere(table, removedIds)
-       return { changes }
+MongoDatabase.init()
+  │  require(mongoDbService).connect(MONGODB_URI, MONGODB_DB_NAME)
+  │  mongoSvc.loadAll()  → snapshot from all 21 collections
+  │  populate this._store  (in-memory mirror)
+  │  NOTE: lts.json is NEVER read or written by MongoDatabase
+  │  console.log '[DB] Storage mode: MongoDB'
+  ▼
+insert/update/delete:
+  │  mutate this._store (in-memory mirror, synchronous)
+  │  enforce TABLE_ROW_CAPS
+  └─ _persist(op, table, id, row)
+         ├─ isConnected() → mongoSvc.upsert/remove  [async, fire-and-forget]
+         └─ disconnected  → in-memory only, log ERROR (no JSON fallback)
+
+flushNow()  → no-op (MongoDB writes are async fire-and-forget)
 ```
 
-### 3.4 `initDb()` — Async Startup Hook
+### 3.4 `db/index.js` — Factory & Public API
 
 ```js
-async function initDb() {
-  loadFromJson();
-
-  if (process.env.DB_TYPE === 'mongodb') {
-    const uri = process.env.MONGODB_URI;
-    if (!uri) {
-      console.warn('[DB] MONGODB_URI not set — falling back to JSON mode');
-      return;
-    }
-    try {
-      mongoSvc = require('./services/mongoDbService');
-      await mongoSvc.connect(uri, process.env.MONGODB_DB || 'lts2026');
-      const mongoStore = await mongoSvc.loadAll();
-      for (const t of ALL_TABLES) {
-        if (Array.isArray(mongoStore[t])) store[t] = mongoStore[t];
+// initDB() — called once at server startup
+async function initDB() {
+  if (DB_TYPE === 'mongodb') {
+    if (!MONGODB_URI) {
+      // WARN → fall back to JsonDatabase
+    } else {
+      try {
+        backend = new MongoDatabase();
+        await backend.init();        // connects, loads from MongoDB
+        _db = backend;
+      } catch (err) {
+        // WARN → fall back to JsonDatabase (warm-start from lts.json)
+        _db = new JsonDatabase();
+        await _db.init();
       }
-      console.log('[DB] In-memory store hydrated from MongoDB');
-    } catch (err) {
-      console.error('[DB] MongoDB init failed, using JSON mode:', err.message);
-      mongoSvc = null;
     }
+  } else {
+    _db = new JsonDatabase();
+    await _db.init();
   }
+  return _db;
 }
+
+// Public API (backward-compatible with legacy db.js exports)
+module.exports = { initDB, getDB, getStorageMode, getDbStats, flushNow };
+```
+
+### 3.5 `db/constants.js` — Shared Constants
+
+```js
+ALL_TABLES         // 21-table list (all collections)
+TABLE_ROW_CAPS     // per-table in-memory eviction limits
+LEGACY_MIGRATIONS  // one-time import: users.json / tokens.json / audit.json
+                   // (JSON mode only — runs in JsonDatabase.init())
 ```
 
 ---
@@ -251,26 +293,52 @@ function model(table) {
 module.exports = { TABLES, connect, disconnect, isConnected, loadAll, upsert, remove, removeWhere };
 ```
 
-### 4.2 `connect()` Implementation
+### 4.2 `connect()` 및 Keep-Alive / Retry 설계 (v1.8)
+
+`connect()`는 초기 연결 성공 후 두 가지 백그라운드 루프를 시작합니다.
+
+#### Keep-Alive 핑 (5초 주기)
+
+```
+setInterval(5000) → mongoose.connection.db.command({ping:1})
+  성공 → [MongoDB] keep-alive ✓ connected | ping Xms | URI: ...
+  실패 → [MongoDB] keep-alive ping 실패: <error>
+```
+
+연결 상태(`readyState`)를 함께 로깅해 운영 중 DB 상태를 실시간 확인할 수 있습니다.
+
+#### 재연결 Retry (선형 back-off)
+
+`disconnected` 이벤트 발생 시 자동 retry 루프를 시작합니다:
+
+```
+attempt #N → delay = min(3000 × N, 30000) ms
+  [MongoDB] 재연결 대기 #N — Xs 후 재시도 | URI: ...
+  [MongoDB] 재연결 시도 #N | URI: ...
+  성공 → reconnected 이벤트 → _cancelRetry() → [MongoDB] 재연결 성공
+  실패 → [MongoDB] 재연결 실패 #N: <error> → scheduleRetry(N+1)
+```
+
+| 시도 | 대기 | | 시도 | 대기 |
+|---|---| |---|---|
+| #1 | 3s | | #6 | 18s |
+| #2 | 6s | | #7 | 21s |
+| #3 | 9s | | … | … |
+| #10+ | 30s (최대) | | | |
+
+이벤트 리스너는 `_listenersSet` 플래그로 중복 등록을 방지합니다.
 
 ```js
 async function connect(uri, dbName) {
-  const opts = {
-    serverSelectionTimeoutMS: 5000,
-    socketTimeoutMS: 45000,         // raised from 30000 — avoids false disconnects on slow queries
-    heartbeatFrequencyMS: 10000,    // monitor server health every 10 s
-    maxIdleTimeMS: 60000,           // close idle connections after 60 s
-    ...(dbName ? { dbName } : {}),
-  };
-  await mongoose.connect(uri, opts);
+  _uri = uri;
+  _connectOpts = { serverSelectionTimeoutMS: 5000, socketTimeoutMS: 45000,
+                   heartbeatFrequencyMS: 10000, maxIdleTimeMS: 60000,
+                   ...(dbName ? { dbName } : {}) };
+  _attachListeners();          // idempotent
+  await mongoose.connect(uri, _connectOpts);
   _connected = true;
-
-  // Register lifecycle event listeners
-  mongoose.connection.on('disconnected', () => { _connected = false; console.warn(...); });
-  mongoose.connection.on('reconnected',  () => { _connected = true;  console.log(...);  });
-  mongoose.connection.on('error', err   => { console.error('[MongoDB] error:', err.message); });
-
-  console.log('[MongoDB] connected →', uri);
+  _startKeepAlive();           // 5s interval ping
+  console.log('[MongoDB] connected | URI:', uri);
 }
 ```
 
@@ -429,42 +497,52 @@ Used in upsert filter: { id }             Ignored in application code
 Server Process Start
       │
       ▼
-  require('db.js')
-      │  initialises store = { cameras:[], ... }
-      ▼
-  app.js / index.js
-      │  await db.initDb()
-      ▼
-  loadFromJson()
-      │  reads lts.json → store (warm-start baseline)
+  require('./db')        ← db.js shim → db/index.js
       │
-      ├─── DB_TYPE !== 'mongodb' ──────────────────────────────────────────►
+      ▼
+  index.js: await initDB()
+      │
+      ├─── DB_TYPE !== 'mongodb' (or absent)
+      │        │
+      │        ▼
+      │    new JsonDatabase().init()
+      │        │  loadFromDisk() → reads lts.json into _store
+      │        │  runLegacyMigrations() (users.json / tokens.json / audit.json)
+      │        └─ console '[DB] Storage mode: JSON'
       │                                                            server.listen(3080)
       │
       └─── DB_TYPE === 'mongodb'
               │
               ▼
-          ensureMongoDB()  ← NEW (ensureMongodb.js)
-              │  TCP probe → if down: systemctl restart → wait 20 s
-              │  if not installed: print platform-specific install guide
+          MONGODB_URI present?
               │
-              ▼
-          mongoSvc.connect(MONGODB_URI, MONGODB_DB)
+              ├── NO → WARN → JsonDatabase fallback ──────────────► server.listen(3080)
               │
-              ├── timeout (5 s) ──► log WARN → fall back to JSON ──► server.listen(3080)
-              │
-              └── success
+              └── YES
                       │
                       ▼
-                  mongoSvc.loadAll()
-                      │  sorted by createdAt desc, capped per LOAD_LIMITS
-                      │  normalizeDates() converts Date → ISO string
-                      │  overwrites store with MongoDB data
-                      ▼
-                  log '[DB] In-memory store hydrated from MongoDB'
+                  ensureMongoDB()  (ensureMongodb.js)
+                      │  TCP probe → if down: systemctl restart → wait 20 s
+                      │  if not installed: platform-specific install guide
                       │
                       ▼
-                  server.listen(3080)
+                  new MongoDatabase().init()
+                      │
+                      ├── connect timeout (5 s)
+                      │    └─ WARN → JsonDatabase fallback ──────► server.listen(3080)
+                      │
+                      └── success
+                              │
+                              ▼
+                          mongoSvc.loadAll()
+                              │  sorted by createdAt desc, capped per LOAD_LIMITS
+                              │  normalizeDates() converts Date → ISO string
+                              │  populates _store (lts.json NOT read)
+                              ▼
+                          console '[DB] Storage mode: MongoDB'
+                              │
+                              ▼
+                          server.listen(3080)
 ```
 
 ---
@@ -474,47 +552,43 @@ Server Process Start
 ### 8.1 JSON Mode (`DB_TYPE=json`)
 
 ```
-Route Handler                 db.js                    lts.json
-     │                          │                          │
-     │  db.insert/update(...)   │                          │
-     │─────────────────────────►│                          │
-     │                          │  mutate in-memory store  │
-     │                          │  persistJson()           │
-     │                          │  [debounced 2 s, async]  │
-     │◄─ return row ────────────│                          │
-     │                          │  [2 s debounce fires]    │
-     │                          │  _flushJson() async ────►│
-     │                          │  fs.promises.writeFile   │  (atomic rename via .tmp)
+Route Handler              JsonDatabase              lts.json
+     │                          │                       │
+     │  db.insert/update(...)   │                       │
+     │─────────────────────────►│                       │
+     │                          │  mutate _store        │
+     │                          │  _schedulePersist()   │
+     │                          │  [debounced 2 s]      │
+     │◄─ return (synchronous) ──│                       │
+     │                          │  [2 s debounce fires] │
+     │                          │  _flushAsync()        │
+     │                          │  writeFile → .tmp ───►│
+     │                          │  rename(.tmp → lts)  ─┤  (atomic POSIX)
 ```
 
 ### 8.2 MongoDB Mode (`DB_TYPE=mongodb`)
 
 ```
-Route Handler                 db.js                  mongoDbService.js      MongoDB
-     │                          │                           │                  │
-     │  db.insert/update(...)   │                           │                  │
-     │─────────────────────────►│                           │                  │
-     │                          │  mutate in-memory store   │                  │
-     │                          │                           │                  │
-     │                          │  _isMongo() === true      │                  │
-     │                          │  ──► skip persistJson()   │                  │
-     │◄─ return row ────────────│                           │                  │
-     │                          │                           │                  │
-     │    (caller continues)    │  mongoSvc.upsert(...)     │                  │
-     │                          │  [async, fire-and-forget] │                  │
-     │                          │───────────────────────────►                  │
-     │                          │                           │  findOneAndUpdate│
-     │                          │                           │─────────────────►│
-     │                          │                           │◄── acknowledge ──│
-     │                          │  (error → log only)       │                  │
-     │                          │                           │                  │
-     │  [on MongoDB disconnect]  │                           │                  │
-     │                          │  _isMongo() === false     │                  │
-     │                          │  DB_TYPE=mongodb:          │                  │
-     │                          │  ──► in-memory only       │                  │
-     │                          │      (no JSON write)       │                  │
-     │                          │  log ERROR [DB] MongoDB   │                  │
-     │                          │  disconnected             │                  │
+Route Handler           MongoDatabase          mongoDbService.js     MongoDB
+     │                       │                        │                  │
+     │  db.insert/update()   │                        │                  │
+     │──────────────────────►│                        │                  │
+     │                       │  mutate _store (sync)  │                  │
+     │◄─ return (sync) ──────│                        │                  │
+     │                       │  _persist('upsert', …) │                  │
+     │                       │  [async, fire-and-      │                  │
+     │                       │   forget]              │                  │
+     │                       │───────────────────────►│                  │
+     │                       │                        │  findOneAndUpdate│
+     │                       │                        │─────────────────►│
+     │                       │                        │◄── acknowledge ──│
+     │                       │  (error → log only)    │                  │
+     │                       │                        │                  │
+     │  [on disconnect]      │                        │                  │
+     │                       │  isConnected() === false                  │
+     │                       │  → hold in-memory only │                  │
+     │                       │  → no JSON write       │                  │
+     │                       │  → log ERROR once      │                  │
 ```
 
 ---
@@ -714,11 +788,11 @@ This is tracked as a security enhancement (NFR-STORAGE-007 compliance).
 |---|---|---|---|
 | `lts.json` parse error | `loadFromJson()` | Catch, log, reset `store` to empty | Server starts; data lost from corrupted file |
 | `lts.json` write error | `persistJson()` | Catch, log ERROR | Data not persisted; in-memory still correct |
-| MongoDB connection timeout | `mongoDbService.connect()` | Throw to `initDb()`; caught → JSON mode | Server starts in JSON mode |
-| MongoDB upsert error | `mongoDbService.upsert()` | Caught inside upsert; logged | Write lost in MongoDB; no JSON fallback in MongoDB mode (fallback only on disconnect) |
+| MongoDB connection timeout (startup) | `mongoDbService.connect()` | Throw propagated to `initDB()` → server aborts startup | 서버 시작 거부 — JSON fallback 없음 (v1.8+) |
+| `MONGODB_URI` absent (DB_TYPE=mongodb) | `initDB()` | Throw with guidance message | 서버 시작 거부 — .env 수정 필요 |
+| MongoDB upsert error | `mongoDbService.upsert()` | Caught inside upsert; logged | Write lost in MongoDB; no JSON fallback |
 | MongoDB remove error | `mongoDbService.remove()` | Same as upsert | |
-| MongoDB disconnection | `mongoose.connection.disconnected` | `_connected = false`; logged | Subsequent writes go to JSON only until reconnect |
-| `MONGODB_URI` absent | `initDb()` | Log WARN; stay in JSON mode | No MongoDB writes |
+| MongoDB disconnection (runtime) | `mongoose.connection.on('disconnected')` | `_connected = false`; retry 스케줄링 시작 | writes held in-memory; keep-alive 5s 마다 상태 로깅; 자동 재연결 시도 |
 
 ### 13.2 Logging Format
 
@@ -1025,13 +1099,61 @@ ensureMongoDB()  (runs once at server startup when DB_TYPE=mongodb)
 
 ---
 
+## 18. v1.7 Amendment — Pluggable DB Backend Architecture
+
+### 18.1 Overview
+
+`db.js` (단일 파일 1,000+ 줄)를 추상 인터페이스 + 백엔드 클래스 구조로 분리하여 향후 SQLite, Oracle 등 새 백엔드를 최소 변경으로 추가할 수 있도록 아키텍처를 개선합니다.
+
+### 18.2 변경 요약
+
+| # | 변경 | 상세 |
+|---|---|---|
+| 1 | **`server/src/db/` 디렉토리 신설** | `BaseDatabase.js`, `JsonDatabase.js`, `MongoDatabase.js`, `constants.js`, `index.js` |
+| 2 | **`server/src/db.js` → shim** | `module.exports = require('./db/index')` — 모든 기존 `require('../db')` 호환 유지 |
+| 3 | **`BaseDatabase` 추상 클래스** | `insert/update/delete/find/findOne/all/init/getMode/isConnected/getStats` 정의; 미구현 시 Error throw |
+| 4 | **`JsonDatabase`** | 기존 JSON 파일 로직을 클래스로 분리; `_loadFromDisk`, `_runLegacyMigrations`, `_schedulePersist`, `_flushAsync` 유지 |
+| 5 | **`MongoDatabase`** | `init()` 에서 lts.json 를 **절대 읽지 않음** — MongoDB 스냅샷만 사용; 빈 배열도 정상 처리 |
+| 6 | **`constants.js`** | `ALL_TABLES`, `TABLE_ROW_CAPS`, `LEGACY_MIGRATIONS` 공유 상수 분리 |
+| 7 | **`db/index.js` 팩토리** | `DB_TYPE` → 백엔드 선택 → `initDB()` 실행; 실패 시 JsonDatabase 폴백 |
+| 8 | **`missingPersonService.js` 정리** | 죽은 코드 `_ensureTables()` + 7개 호출부 제거; `db._tables` 직접 접근 제거 |
+
+### 18.3 Analysis 서버 lts.json 오염 버그 수정
+
+이전 `db.js`는 `initDB()` 진입 시 항상 `loadFromJson()`을 먼저 호출하여 로컬 `lts.json`을 인메모리에 로드한 후 MongoDB 스냅샷으로 덮어썼습니다. Analysis 서버(별도 호스트)가 streaming 서버와 다른 lts.json을 갖고 있을 경우 공유 MongoDB를 오염시키는 버그였습니다.
+
+**`MongoDatabase.init()`** 은 lts.json을 읽지 않고 MongoDB snapshot만 사용합니다.
+
+### 18.4 새 백엔드 추가 방법
+
+```js
+// 1. server/src/db/SqliteDatabase.js 생성
+class SqliteDatabase extends BaseDatabase {
+  getMode() { return 'sqlite'; }
+  async init() { /* connect, load */ }
+  insert(table, row) { /* … */ }
+  // … 나머지 메서드 구현
+}
+module.exports = SqliteDatabase;
+
+// 2. db/index.js _createBackend()에 case 추가
+case 'sqlite': return new SqliteDatabase();
+
+// 3. server/.env 설정
+DB_TYPE=sqlite
+```
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
 |---|---|---|---|
-| 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Storage MongoDB |
+| 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for DB Layer (JSON/MongoDB/pluggable backends) |
 | 1.2 | 2026-06-10 | LTS Engineering Team | Section 15.8 추가: analysisEvents 컬렉션 스키마 및 저장 정책, ALL_TABLES v1.2 업데이트 |
 | 1.3 | 2026-06-10 | LTS Engineering Team | analysisEvents 스키마에 `cropData` 필드 추가 (감지 영역 JPEG Base64) |
 | 1.4 | 2026-06-17 | LTS Engineering Team | users, refresh_tokens, audit_logs 테이블 추가 — 인증 서비스 저장소 통합 |
 | 1.5 | 2026-06-18 | LTS Engineering Team | MongoDB-only 쓰기, timestamps:false, normalizeDates, LOAD_LIMITS, JSON_FALLBACK_SKIP, ensureMongodb.js, async _flushJson, 연결 옵션 업데이트 |
 | 1.6 | 2026-06-22 | LTS Engineering Team | DB_TYPE=mongodb 시 lts.json JSON fallback 완전 제거 — disconnect 시 in-memory only, flushNow/persistJson/afterWrite 전면 수정 |
+| 1.7 | 2026-06-23 | LTS Engineering Team | 플러그어블 DB 백엔드 아키텍처: BaseDatabase 추상 클래스, JsonDatabase/MongoDatabase 분리, db/index.js 팩토리, constants.js 공유, db.js shim |
+| 1.8 | 2026-06-23 | LTS Engineering Team | DB_TYPE=mongodb 시작 시 JSON fallback 완전 제거(서버 시작 거부) · mongoDbService 5초 keep-alive 핑 + 선형 back-off 재연결 Retry 추가 |

@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-ONVIF-01 |
-| **Version** | 1.0 |
+| **Version** | 1.2 |
 | **Status** | Active |
 | **Date** | 2026-06-16 |
 | **Related** | [Design_DataChannel_CameraEvents.md](Design_DataChannel_CameraEvents.md) · [Design_WebRTC_Engine_Modes.md](Design_WebRTC_Engine_Modes.md) · [Design_RTSP_Capture_Backend.md](Design_RTSP_Capture_Backend.md) |
@@ -300,16 +300,108 @@ function parseOnvifEvent(base64Payload) {
 
 ---
 
-## 9. 관련 파일
+## 9. 열상 카메라 — Radiometry BoxTemperatureReading (v1.2)
+
+### 9.1 XML 구조
+
+열상 카메라는 `tns1:VideoAnalytics/Radiometry/BoxTemperatureReading` 토픽으로 온도 데이터를 주기적으로 전송합니다.
+
+```xml
+<tt:MetadataStream xmlns:ttr="https://www.onvif.org/ver20/analytics/radiometry" ...>
+  <tt:Event>
+    <wsnt:NotificationMessage>
+      <wsnt:Topic ...>tns1:VideoAnalytics/Radiometry/BoxTemperatureReading</wsnt:Topic>
+      <wsnt:Message><tt:Message UtcTime="2026-04-19T21:32:08.104Z">
+        <tt:Data><tt:ElementItem Name="Reading">
+          <ttr:BoxTemperatureReading ItemID="D" AreaName="D"
+            MaxTemperature="352.5" MaxTemperatureCoordinatesX="243" MaxTemperatureCoordinatesY="217"
+            MinTemperature="329.6" MinTemperatureCoordinatesX="328" MinTemperatureCoordinatesY="261"
+            AverageTemperature="343.5"/>
+        </tt:ElementItem></tt:Data>
+      </tt:Message></wsnt:Message>
+    </wsnt:NotificationMessage>
+  </tt:Event>
+</tt:MetadataStream>
+```
+
+### 9.2 서버 파싱 — `parseRadiometryReadings()` (`onvifParser.js`)
+
+`parseOnvifPayload()` 내부에서 `BoxTemperatureReading`이 감지되면 `parseRadiometryReadings(xml)`을 호출합니다:
+
+```js
+// 반환 구조 (readings 배열)
+{
+  itemId:   "D",
+  areaName: "D",
+  maxTemp:  352.5, maxTempX: 243, maxTempY: 217,
+  minTemp:  329.6, minTempX: 328, minTempY: 261,
+  avgTemp:  343.5
+}
+```
+
+### 9.3 Socket.IO 이벤트 — `onvif:temperature`
+
+Radiometry 읽기는 **state-dedup 제외** — 같은 값이 반복되어도 매번 브로드캐스트합니다.
+
+```
+internalApi.js POST /apprtp/:cameraId
+  → parseOnvifPayload() → parsed.radiometry
+  → _io.emit('onvif:temperature', { cameraId, utcTime, readings })  ← dedup 전 즉시 방출
+  → (이후) dedup 체크 → onvif_events 저장 (state 변화 시만)
+```
+
+DB에는 저장하지 않습니다 — 실시간 스트리밍 전용입니다.
+
+### 9.4 클라이언트 오버레이 — `ThermalOverlay.tsx`
+
+`ThermalOverlay`는 `CameraView` 안에 항상 마운트(`pointer-events-none`)되어 `onvif:temperature` 이벤트를 수신합니다.
+
+#### 9.4.1 FullArea 판별
+
+| 조건 | 표시 방식 |
+|---|---|
+| `AreaName="FullArea"` 또는 `ItemID="Z"` | **상단 배너** — crosshair 없음, 전체 프레임 온도 요약 |
+| 그 외 특정 좌표 영역 | SVG **crosshair** (red=최고, sky-blue=최저) + 좌하단 정보 패널 |
+
+두 유형이 동시에 존재하면 모두 표시됩니다.
+
+#### 9.4.2 좌표 매핑
+
+카메라 픽셀 좌표 → 화면 좌표는 `getRenderArea()` 레터박스 보정 알고리즘을 사용합니다 (CameraView detection overlay와 동일):
+
+```ts
+function toScreen(px, py, fw, fh, cw, ch) {
+  const { rw, rh, ox, oy } = getRenderArea(fw, fh, cw, ch);
+  return { sx: ox + (px / fw) * rw, sy: oy + (py / fh) * rh };
+}
+```
+
+#### 9.4.3 온도 단위 heuristic
+
+| 값 범위 | 해석 | 표시 형식 |
+|---|---|---|
+| > 200 | Kelvin (FLIR 계열) | `352.5 (79.4°C)` |
+| ≤ 200 | Celsius | `79.4°C` |
+
+#### 9.4.4 Fade 타이머
+
+6초간 `onvif:temperature` 수신 없으면 오버레이 자동 소멸 (`FADE_MS = 6000`).
+
+---
+
+## 10. 관련 파일
 
 | 파일 | 역할 |
 |------|------|
 | `ingest-daemon/ingest_daemon.py` | `_app_rtp_loop()`, `_app_rtp_ingest_once()` |
-| `server/src/routes/internalApi.js` | `POST /api/internal/apprtp/:cameraId` |
+| `server/src/routes/internalApi.js` | `POST /api/internal/apprtp/:cameraId` — `onvif:temperature` 방출 |
+| `server/src/services/onvifParser.js` | `parseOnvifPayload()`, `parseRadiometryReadings()`, `TOPIC_MAP` |
 | `server/src/services/webrtc/mediasoupEngine.js` | `sendAppRtp()`, `dataProducer.send()` |
 | `client/src/hooks/useWebRTC.ts` | Socket.IO `appRtp` 리스너 |
 | `client/src/stores/dataChannelStore.ts` | seq dedup, history 관리 |
 | `client/src/components/FullscreenCameraView.tsx` | `CameraEventsTab` — decodePayload() |
+| `client/src/components/ThermalOverlay.tsx` | `onvif:temperature` 실시간 수신 · FullArea 배너 · 좌표 crosshair |
+| `client/src/components/CameraView.tsx` | `<ThermalOverlay>` 마운트 |
 
 ---
 
@@ -319,3 +411,4 @@ function parseOnvifEvent(base64Payload) {
 |---|---|---|
 | 1.0 | 2026-06-16 | 초기 작성 — RTSP App RTP ONVIF 메타데이터 파이프라인 전체 기술 |
 | 1.1 | 2026-06-22 | TOPIC_MAP 대폭 확장 (AudioAlarm·Tamper·Samsung IVA 계열), extractState() 다중 item 이름 지원, unknown topic은 full path를 topicType으로 저장 |
+| 1.2 | 2026-06-23 | 열상 카메라 Radiometry 섹션 추가 — BoxTemperatureReading 파싱, onvif:temperature 소켓 이벤트, ThermalOverlay (FullArea 배너 + 좌표 crosshair) |

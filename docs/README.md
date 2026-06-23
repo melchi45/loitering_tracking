@@ -110,7 +110,7 @@ test/              Test scripts (TC-based automation)
 | Dashboard Sidebar — Face ID | [rfp/](rfp/RFP_Dashboard_Sidebar_Face_ID.md) | [prd/](prd/PRD_Dashboard_Sidebar_Face_ID.md) | [srs/](srs/SRS_Dashboard_Sidebar_Face_ID.md) | [design/](design/Design_Dashboard_Sidebar_Face_ID.md) | [tc/](tc/TC_Dashboard_Sidebar_Face_ID.md) |
 | Mobile Layout | [rfp/](rfp/RFP_Mobile_Layout.md) | [prd/](prd/PRD_Mobile_Layout.md) | [srs/](srs/SRS_Mobile_Layout.md) | [design/](design/Design_Mobile_Layout.md) | [tc/](tc/TC_Mobile_Layout.md) |
 | LLM / MCP Integration | [rfp/](rfp/RFP_LLM_MCP_Integration.md) | [prd/](prd/PRD_LLM_MCP_Server.md) | [srs/](srs/SRS_LLM_MCP_Server.md) | [design/](design/Design_LLM_MCP_Server.md) | [tc/](tc/TC_LLM_MCP_Server.md) |
-| **Storage — JSON / MongoDB** | [rfp/](rfp/RFP_Storage_MongoDB.md) | [prd/](prd/PRD_Storage_MongoDB.md) | [srs/](srs/SRS_Storage_MongoDB.md) | [design/](design/Design_Storage_MongoDB.md) | [tc/](tc/TC_Storage_MongoDB.md) |
+| **Storage — JSON / MongoDB** | [rfp/](rfp/RFP_DB_Layer.md) | [prd/](prd/PRD_DB_Layer.md) | [srs/](srs/SRS_DB_Layer.md) | [design/](design/Design_DB_Layer.md) | [tc/](tc/TC_DB_Layer.md) |
 | **HTTPS / TLS Server** | [rfp/](rfp/RFP_HTTPS_TLS.md) | [prd/](prd/PRD_HTTPS_TLS.md) | [srs/](srs/SRS_HTTPS_TLS.md) | [design/](design/Design_HTTPS_TLS.md) | [tc/](tc/TC_HTTPS_TLS.md) |
 | **Detection Snapshot & Search** | [rfp/](rfp/RFP_Detection_Snapshot_Search.md) | [prd/](prd/PRD_Detection_Snapshot_Search.md) | [srs/](srs/SRS_Detection_Snapshot_Search.md) | [design/](design/Design_Detection_Snapshot_Search.md) | [tc/](tc/TC_Detection_Snapshot_Search.md) |
 | **Stats Dashboard Panel** | [rfp/](rfp/RFP_Stats_Panel.md) | [prd/](prd/PRD_Stats_Panel.md) | [srs/](srs/SRS_Stats_Panel.md) | [design/](design/Design_Stats_Panel.md) | [tc/](tc/TC_Stats_Panel.md) |
@@ -149,13 +149,13 @@ test/              Test scripts (TC-based automation)
 | ✅ `test/api/detection_snapshot_search.test.js` | [TC_Detection_Snapshot_Search](tc/TC_Detection_Snapshot_Search.md) | B, C, F, I (REST API + search + regression + filter chip tooltips, 26 cases) | `node test/api/detection_snapshot_search.test.js` |
 | ✅ `test/api/auth.test.js` | [TC_User_Authentication](tc/TC_User_Authentication.md) | A–G (registration, sign-in, JWT, logout, admin, RBAC, regression) | `node test/api/auth.test.js` |
 | 📋 `test/api/face_match_history.test.js` | [TC_Dashboard_Sidebar_Face_ID](tc/TC_Dashboard_Sidebar_Face_ID.md) | Group E (Match History CRUD) | `node test/api/face_match_history.test.js` |
-| 📋 `test/api/storage_json.test.js` | [TC_Storage_MongoDB](tc/TC_Storage_MongoDB.md) | Groups A, B (JSON mode unit) | `node test/api/storage_json.test.js` |
+| 📋 `test/api/storage_json.test.js` | [TC_DB_Layer](tc/TC_DB_Layer.md) | Groups A, B (JSON mode unit) | `node test/api/storage_json.test.js` |
 
 ### Phase-2 — Integration Tests (`test/integration/`)
 
 | Script | Target TC Document(s) | Groups Covered | Run Command |
 |---|---|---|---|
-| 🕐 `test/integration/storage_mongo.test.js` | [TC_Storage_MongoDB](tc/TC_Storage_MongoDB.md) | Groups C, D, E, F, G, H, I (MongoDB mode) | `node test/integration/storage_mongo.test.js` |
+| 🕐 `test/integration/storage_mongo.test.js` | [TC_DB_Layer](tc/TC_DB_Layer.md) | Groups C, D, E, F, G, H, I (MongoDB mode) | `node test/integration/storage_mongo.test.js` |
 | 🕐 `test/integration/face_pipeline.test.js` | [TC_AI_Face_Recognition](tc/TC_AI_Face_Recognition.md) | Groups D, F (Socket.IO face_match event) | `node test/integration/face_pipeline.test.js` |
 | 🕐 `test/integration/main_pipeline.test.js` | [TC_LTS2026_Loitering_Tracking_System](tc/TC_LTS2026_Loitering_Tracking_System.md) | Groups G, H (Socket.IO events, pipeline E2E) | `node test/integration/main_pipeline.test.js` |
 
@@ -220,13 +220,13 @@ node test/generate_report.js
 | 2026-05-27 | SDLC chain completed — missing Design (×4) and TC (×15) documents authored; all 25 modules fully covered |
 | 2026-05-27 | Face ID Sidebar module extracted as standalone SDLC chain — RFP/PRD/SRS/Design/TC_Dashboard_Sidebar_Face_ID.md authored; pipelineManager.js face_tracking.json persistence implemented |
 | 2026-05-27 | docs/README.md converted to English; test script status table updated with all 18 suites |
-| 2026-05-27 | Storage — JSON/MongoDB module SDLC chain authored — RFP/PRD/SRS/Design/TC_Storage_MongoDB.md; dual-mode db.js + mongoDbService.js specification, index strategy, migration script design |
+| 2026-05-27 | Storage — JSON/MongoDB module SDLC chain authored — RFP/PRD/SRS/Design/TC_DB_Layer.md; dual-mode db.js + mongoDbService.js specification, index strategy, migration script design |
 | 2026-05-27 | HTTPS/TLS module SDLC chain authored — RFP/PRD/SRS/Design/TC_HTTPS_TLS.md; `server/src/index.js` updated with conditional https.createServer, HTTP→HTTPS redirect, HSTS middleware; `server/.env` HTTPS variables added; test script `test/api/https_tls.test.js` created |
 | 2026-05-27 | Detection Snapshot & Search module SDLC chain authored — RFP/PRD/SRS/Design/TC_Detection_Snapshot_Search.md; `sharp`-based JPEG bbox crop design; `detectionSnapshots` DB table schema; `snapshotService.js`, `api/snapshots.js`, `api/search.js` specification; client `SearchBar.tsx` + `useSearch.ts` design; pipelineManager hook design; test script `test/api/detection_snapshot_search.test.js` |
 | 2026-05-27 | Face ID Sidebar v1.1 SDLC amendment — RFP/PRD/SRS/Design/TC_Dashboard_Sidebar_Face_ID.md all updated to v1.1; added Live Match Crop feature (`liveCropData` in `face_match` event via `setImmediate` + `sharp` crop of detected face bbox), `faceMatchHistory` DB table persistence, `GET /api/search?types=matches` endpoint, SearchBar `match` result type, MatchLog dual-photo layout |
 | 2026-05-27 | **DB persistence hardening** — `server/src/db.js` redesigned: `persistJson()` now debounced (2 s, coalesces rapid inserts), `_flushJson()` uses atomic write (`writeFileSync` → `renameSync` via `lts.json.tmp`), `flushNow()` exported for graceful shutdown; `server/src/index.js` calls `flushNow()` on `SIGTERM`/`SIGINT` before `httpServer.close()`; verified `server/storage/lts.json` (36.3 MB, 9 tables) as active DB path |
 | 2026-05-27 | **Search API improvements** — `server/src/api/search.js`: `DEFAULT_TYPES` extended with `events`, new events-table search branch (type/cameraName/className/zoneName/message), `isLoitering=true` keyword detection for `q=loitering`, all sort comparators replaced with `new Date(ts).getTime()` to fix `localeCompare` TypeError on Unix ms timestamps |
-| 2026-05-27 | **SDLC v1.1 amendments** — Design/SRS/TC_Detection_Snapshot_Search.md updated to v1.1 (§11 search improvements + persistence NFRs + Groups G/H test cases); Design/SRS/TC_Storage_MongoDB.md updated to v1.1 (§15 atomic write + debounce design, NFR-STORE-015/016/017, Group J test cases TC-J-001~006) |
+| 2026-05-27 | **SDLC v1.1 amendments** — Design/SRS/TC_Detection_Snapshot_Search.md updated to v1.1 (§11 search improvements + persistence NFRs + Groups G/H test cases); Design/SRS/TC_DB_Layer.md updated to v1.1 (§15 atomic write + debounce design, NFR-STORE-015/016/017, Group J test cases TC-J-001~006) |
 | 2026-05-27 | **SearchFullscreen filter chip i18n + search API bug fix** — `SearchFullscreen.tsx` `TYPE_CHIPS` replaced with `getTypeChips(t)` function so chip labels and tooltips reflect the selected language; search placeholder, sort, date, result-count strings fully i18n-ized; 15 language translation files updated with `searchChip*`, `searchPlaceholder`, etc. keys; `server/src/api/search.js` bug fixed where `types=faces` requests incorrectly included `faceMatchHistory` (`_type:match`) results |
 | 2026-05-28 | **docs/README.md restored to English** — all sections converted back from Korean to English |
 | 2026-05-28 | **User Authentication SDLC chain completed** — `RFP_User_Authentication.md` authored (FR-AUTH-001–030, NFR-AUTH-001–009, AC-001–010); `test/api/auth.test.js` created (Groups A–G: registration, sign-in, JWT, logout, admin mgmt, RBAC, regression); `docs/README.md` updated with module row and test script row |

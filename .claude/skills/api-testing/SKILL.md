@@ -148,7 +148,7 @@ npm test -- --testNamePattern="WebRTC ICE"
 | TC | [TC_AI_Face_Recognition](../../../docs/tc/TC_AI_Face_Recognition.md) · [TC_CrossCamera_Face_Tracking](../../../docs/tc/TC_CrossCamera_Face_Tracking.md) · [TC_Camera_Discovery](../../../docs/tc/TC_Camera_Discovery.md) |
 | TC | [TC_WebRTC_Media_Gateway](../../../docs/tc/TC_WebRTC_Media_Gateway.md) · [TC_STUN_TURN_ICE](../../../docs/tc/TC_STUN_TURN_ICE.md) · [TC_RTSP_Capture_Backend](../../../docs/tc/TC_RTSP_Capture_Backend.md) |
 | TC | [TC_User_Authentication](../../../docs/tc/TC_User_Authentication.md) · [TC_Dashboard_Sidebar_Alerts_Zones](../../../docs/tc/TC_Dashboard_Sidebar_Alerts_Zones.md) · [TC_LTS2026_YouTube_RTSP_Ingest](../../../docs/tc/TC_LTS2026_YouTube_RTSP_Ingest.md) |
-| TC | [TC_Storage_MongoDB](../../../docs/tc/TC_Storage_MongoDB.md) · [TC_HTTPS_TLS](../../../docs/tc/TC_HTTPS_TLS.md) · [TC_Stats_Panel](../../../docs/tc/TC_Stats_Panel.md) · [TC_Detection_Snapshot_Search](../../../docs/tc/TC_Detection_Snapshot_Search.md) |
+| TC | [TC_DB_Layer](../../../docs/tc/TC_DB_Layer.md) · [TC_HTTPS_TLS](../../../docs/tc/TC_HTTPS_TLS.md) · [TC_Stats_Panel](../../../docs/tc/TC_Stats_Panel.md) · [TC_Detection_Snapshot_Search](../../../docs/tc/TC_Detection_Snapshot_Search.md) |
 | TC (전체 목록) | [`docs/tc/`](../../../docs/tc/) 디렉토리 |
 
 ## 테스트 파일 ↔ TC 문서 매핑

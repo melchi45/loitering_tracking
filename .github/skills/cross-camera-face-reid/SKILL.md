@@ -112,7 +112,7 @@ Content-Type: multipart/form-data
 |-----------|------------------|
 | `faceService.js` (임베딩·검색·등록) | `docs/design/Design_AI_Face_Recognition.md`, `docs/srs/SRS_AI_Face_Recognition.md`, `docs/tc/TC_AI_Face_Recognition.md` |
 | `faceService.js` (유사도 임계값 변경) | `docs/srs/SRS_AI_Face_Recognition.md` 정확도 요구사항 + `docs/tc/TC_AI_Face_Recognition.md` 경계값 케이스 |
-| `mongoDbService.js` (Vector Search 인덱스) | `docs/design/Design_CrossCamera_Face_Tracking.md`, `docs/design/Design_Storage_MongoDB.md` |
+| `mongoDbService.js` (Vector Search 인덱스) | `docs/design/Design_CrossCamera_Face_Tracking.md`, `docs/design/Design_DB_Layer.md` |
 | `AuditService.js` (감사 로그 범위) | `docs/srs/SRS_AI_Face_Recognition.md` 개인정보 섹션 |
 | `snapshotService.js` | `docs/design/Design_Detection_Snapshot_Search.md`, `docs/tc/TC_Detection_Snapshot_Search.md` |
 | `FaceGalleryTab.tsx` | `docs/design/Design_Dashboard_Sidebar_Face_ID.md`, `docs/tc/TC_Dashboard_Sidebar_Face_ID.md` |
@@ -122,4 +122,4 @@ Content-Type: multipart/form-data
 - **새 기능 추가** → PRD + SRS + Design + TC 문서 모두 추가
 - **임베딩 모델 교체** → Design 아키텍처 다이어그램 + SRS 성능·정확도 요구사항 + TC 갱신
 - **개인정보 처리 변경** → SRS GDPR 섹션 필수 업데이트 (법적 요구사항)
-- **Atlas Vector Search 인덱스 변경** → `docs/design/Design_Storage_MongoDB.md` 인덱스 명세 업데이트
+- **Atlas Vector Search 인덱스 변경** → `docs/design/Design_DB_Layer.md` 인덱스 명세 업데이트

@@ -19,6 +19,8 @@
 const TOPIC_MAP = {
   // ── Standard ONVIF ────────────────────────────────────────────────────────
   'tns1:VideoSource/tns1:MotionAlarm':                               { type: 'motionAlarm',        label: 'Motion Alarm',         severity: 'warning'  },
+  // ── ONVIF Radiometry (thermal cameras) ───────────────────────────────────
+  'tns1:VideoAnalytics/Radiometry/BoxTemperatureReading':            { type: 'boxTemperatureReading', label: 'Box Temperature',   severity: 'info'     },
   'tns1:AudioAnalytics/tns1:Audio/tns1:DetectedSound':              { type: 'audioAlarm',          label: 'Audio Alarm',          severity: 'warning'  },
   'tns1:AudioAnalytics/tns1:Audio/tns1:AudioAlarm':                 { type: 'audioAlarm',          label: 'Audio Alarm',          severity: 'warning'  },
   'tns1:VideoSource/tns1:GlobalSceneChange/tns1:ImageTooBlurry':    { type: 'tamperBlurry',        label: 'Tamper (Blur)',         severity: 'warning'  },
@@ -81,6 +83,44 @@ function extractState(items) {
     if (v === 'true' || v === 'false') return v;
   }
   return null;
+}
+
+/**
+ * Extract BoxTemperatureReading elements from ONVIF Radiometry XML.
+ * Returns an array of readings (one per box area), or [] if none found.
+ *
+ * Element format:
+ *   <ttr:BoxTemperatureReading ItemID="D" AreaName="D"
+ *     MaxTemperature="352.5" MaxTemperatureCoordinatesX="243" MaxTemperatureCoordinatesY="217"
+ *     MinTemperature="329.6" MinTemperatureCoordinatesX="328" MinTemperatureCoordinatesY="261"
+ *     AverageTemperature="343.5"/>
+ */
+function parseRadiometryReadings(xml) {
+  const readings = [];
+  const re = /<(?:[^:>\s]+:)?BoxTemperatureReading\s+([^>]+?)\/>/g;
+  let m;
+  while ((m = re.exec(xml)) !== null) {
+    const attrs = m[1];
+    const getAttr = (name) => {
+      const mm = new RegExp(`${name}="([^"]*)"`).exec(attrs);
+      return mm ? mm[1] : null;
+    };
+    const maxTempStr = getAttr('MaxTemperature');
+    const minTempStr = getAttr('MinTemperature');
+    if (maxTempStr === null && minTempStr === null) continue;
+    readings.push({
+      itemId:   getAttr('ItemID'),
+      areaName: getAttr('AreaName') || getAttr('ItemID'),
+      maxTemp:  maxTempStr  !== null ? parseFloat(maxTempStr)  : null,
+      maxTempX: getAttr('MaxTemperatureCoordinatesX') !== null ? parseInt(getAttr('MaxTemperatureCoordinatesX'), 10) : null,
+      maxTempY: getAttr('MaxTemperatureCoordinatesY') !== null ? parseInt(getAttr('MaxTemperatureCoordinatesY'), 10) : null,
+      minTemp:  minTempStr  !== null ? parseFloat(minTempStr)  : null,
+      minTempX: getAttr('MinTemperatureCoordinatesX') !== null ? parseInt(getAttr('MinTemperatureCoordinatesX'), 10) : null,
+      minTempY: getAttr('MinTemperatureCoordinatesY') !== null ? parseInt(getAttr('MinTemperatureCoordinatesY'), 10) : null,
+      avgTemp:  getAttr('AverageTemperature') !== null ? parseFloat(getAttr('AverageTemperature')) : null,
+    });
+  }
+  return readings;
 }
 
 /**
@@ -148,6 +188,11 @@ function parseOnvifPayload(base64Payload) {
       items['AudioSourceConfigurationToken'] ??
       null;
 
+    // Radiometry: parse BoxTemperatureReading elements (thermal cameras)
+    const radiometry = xml.includes('BoxTemperatureReading')
+      ? parseRadiometryReadings(xml)
+      : null;
+
     return {
       topic,
       topicType:   info.type,
@@ -158,10 +203,11 @@ function parseOnvifPayload(base64Payload) {
       sourceToken,
       state:       extractState(items),
       items,
+      radiometry:  radiometry && radiometry.length > 0 ? radiometry : null,
     };
   } catch {
     return null;
   }
 }
 
-module.exports = { parseOnvifPayload, TOPIC_MAP };
+module.exports = { parseOnvifPayload, parseRadiometryReadings, TOPIC_MAP };

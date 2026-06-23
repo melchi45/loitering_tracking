@@ -656,7 +656,7 @@ POST /collections/faces/points
 | Server Architecture 설계서 | [design/Design_Server_Architecture.md](../design/Design_Server_Architecture.md) | SERVER_MODE 아키텍처 |
 | STUN/TURN ICE 설계서 | [design/Design_STUN_TURN_ICE.md](../design/Design_STUN_TURN_ICE.md) | ICE 설정 세부 사항 |
 | Distributed AI Pipeline RFP | [rfp/RFP_Distributed_AI_Pipeline.md](RFP_Distributed_AI_Pipeline.md) | M5 분산 클러스터 관련 |
-| Storage MongoDB 설계서 | [design/Design_Storage_MongoDB.md](../design/Design_Storage_MongoDB.md) | DB 스키마 및 확장 |
+| DB Layer 설계서 | [design/Design_DB_Layer.md](../design/Design_DB_Layer.md) | DB 스키마 및 확장 |
 
 ---
 

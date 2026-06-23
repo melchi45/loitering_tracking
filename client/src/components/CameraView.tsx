@@ -5,6 +5,7 @@ import { useWebRTC } from '../hooks/useWebRTC';
 import { useCameraStore } from '../stores/cameraStore';
 import { useI18n } from '../i18n';
 import ZoneEditor from './ZoneEditor';
+import ThermalOverlay from './ThermalOverlay';
 import type { Detection, Zone } from '../types';
 
 interface Props {
@@ -534,6 +535,14 @@ export default function CameraView({ cameraId, cameraName }: Props) {
           onClose={() => setEditZones(false)}
         />
       )}
+
+      {/* Thermal temperature overlay — always mounted so socket events are received;
+          content only renders when radiometry data arrives (ThermalOverlay is pointer-events-none) */}
+      <ThermalOverlay
+        cameraId={cameraId}
+        frameWidth={frameWidth}
+        frameHeight={frameHeight}
+      />
 
       {/* Status badge (top-left) */}
       <div className="absolute top-2 left-2 flex items-center gap-1.5 bg-black/60 rounded px-2 py-1">

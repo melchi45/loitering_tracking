@@ -169,6 +169,23 @@ cp /etc/letsencrypt/live/your-domain.com/privkey.pem server/certs/server.key
 
 ## MongoDB 설정
 
+### DB 백엔드 아키텍처 (v1.7+)
+
+LTS-2026 DB 레이어는 플러그어블 백엔드 구조입니다:
+
+```
+server/src/db/
+├── index.js          ← factory + public API
+├── BaseDatabase.js   ← abstract interface
+├── JsonDatabase.js   ← DB_TYPE=json (default)
+├── MongoDatabase.js  ← DB_TYPE=mongodb
+└── constants.js      ← 공유 상수
+```
+
+`server/src/db.js`는 shim으로 `require('./db/index')`를 재내보냅니다. 모든 기존 호출은 변경 없이 동작합니다.
+
+**주의**: `DB_TYPE=mongodb` 설정 시 `MongoDatabase`는 `lts.json`을 절대 읽거나 쓰지 않습니다. MongoDB 연결 실패 시에도 JSON fallback 없이 in-memory only로 동작합니다.
+
 ### 원격 MongoDB 초기 설정 (`npm run install_db`)
 별도 서버에 MongoDB가 설치된 경우 — 컬렉션·인덱스·`.env` 자동 구성:
 ```bash
@@ -180,7 +197,7 @@ node src/scripts/installDb.js \
   --admin-user admin --admin-pwd secret \
   --db lts --db-user ltsuser --db-pwd ltspwd
 ```
-수행 내용: 관리자 접속 → DB 사용자 생성 → 컬렉션 11개 + 인덱스 17개 초기화 → `server/.env` 자동 업데이트
+수행 내용: 관리자 접속 → DB 사용자 생성 → 컬렉션 + 인덱스 초기화 → `server/.env` 자동 업데이트
 
 ### 로컬 MongoDB 실행 (Docker)
 ```bash
@@ -288,11 +305,11 @@ chmod -R 755 server/models server/storage
 
 | 구분 | 문서 |
 |------|------|
-| RFP | [RFP_HTTPS_TLS](../../../docs/rfp/RFP_HTTPS_TLS.md) · [RFP_Storage_MongoDB](../../../docs/rfp/RFP_Storage_MongoDB.md) · [RFP_LTS2026_Loitering_Tracking_System](../../../docs/rfp/RFP_LTS2026_Loitering_Tracking_System.md) · [RFP_User_Authentication](../../../docs/rfp/RFP_User_Authentication.md) |
-| PRD | [PRD_HTTPS_TLS](../../../docs/prd/PRD_HTTPS_TLS.md) · [PRD_Storage_MongoDB](../../../docs/prd/PRD_Storage_MongoDB.md) · [PRD_LTS2026_Loitering_Tracking_System](../../../docs/prd/PRD_LTS2026_Loitering_Tracking_System.md) |
-| SRS | [SRS_HTTPS_TLS](../../../docs/srs/SRS_HTTPS_TLS.md) · [SRS_Storage_MongoDB](../../../docs/srs/SRS_Storage_MongoDB.md) · [SRS_LTS2026_Loitering_Tracking_System](../../../docs/srs/SRS_LTS2026_Loitering_Tracking_System.md) |
-| Design | [Design_HTTPS_TLS](../../../docs/design/Design_HTTPS_TLS.md) · [Design_Storage_MongoDB](../../../docs/design/Design_Storage_MongoDB.md) · [Design_LTS2026_Loitering_Tracking_System](../../../docs/design/Design_LTS2026_Loitering_Tracking_System.md) · [Design_Server_Architecture](../../../docs/design/Design_Server_Architecture.md) |
-| TC | [TC_HTTPS_TLS](../../../docs/tc/TC_HTTPS_TLS.md) · [TC_Storage_MongoDB](../../../docs/tc/TC_Storage_MongoDB.md) · [TC_LTS2026_Loitering_Tracking_System](../../../docs/tc/TC_LTS2026_Loitering_Tracking_System.md) |
+| RFP | [RFP_HTTPS_TLS](../../../docs/rfp/RFP_HTTPS_TLS.md) · [RFP_DB_Layer](../../../docs/rfp/RFP_DB_Layer.md) · [RFP_LTS2026_Loitering_Tracking_System](../../../docs/rfp/RFP_LTS2026_Loitering_Tracking_System.md) · [RFP_User_Authentication](../../../docs/rfp/RFP_User_Authentication.md) |
+| PRD | [PRD_HTTPS_TLS](../../../docs/prd/PRD_HTTPS_TLS.md) · [PRD_DB_Layer](../../../docs/prd/PRD_DB_Layer.md) · [PRD_LTS2026_Loitering_Tracking_System](../../../docs/prd/PRD_LTS2026_Loitering_Tracking_System.md) |
+| SRS | [SRS_HTTPS_TLS](../../../docs/srs/SRS_HTTPS_TLS.md) · [SRS_DB_Layer](../../../docs/srs/SRS_DB_Layer.md) · [SRS_LTS2026_Loitering_Tracking_System](../../../docs/srs/SRS_LTS2026_Loitering_Tracking_System.md) |
+| Design | [Design_HTTPS_TLS](../../../docs/design/Design_HTTPS_TLS.md) · [Design_DB_Layer](../../../docs/design/Design_DB_Layer.md) · [Design_LTS2026_Loitering_Tracking_System](../../../docs/design/Design_LTS2026_Loitering_Tracking_System.md) · [Design_Server_Architecture](../../../docs/design/Design_Server_Architecture.md) |
+| TC | [TC_HTTPS_TLS](../../../docs/tc/TC_HTTPS_TLS.md) · [TC_DB_Layer](../../../docs/tc/TC_DB_Layer.md) · [TC_LTS2026_Loitering_Tracking_System](../../../docs/tc/TC_LTS2026_Loitering_Tracking_System.md) |
 | Ops | [HTTPS_TLS_Setup](../../../docs/ops/HTTPS_TLS_Setup.md) · [MongoDB_Setup](../../../docs/ops/MongoDB_Setup.md) · [RTSP_Capture_Backend_Setup](../../../docs/ops/RTSP_Capture_Backend_Setup.md) · [MCP_Server_Setup](../../../docs/ops/MCP_Server_Setup.md) |
 
 ## 코드 수정 시 문서 동기화 의무
@@ -302,7 +319,7 @@ chmod -R 755 server/models server/storage
 | `docker-compose.yml` (서비스·포트 변경) | `docs/design/Design_LTS2026_Loitering_Tracking_System.md` 아키텍처 섹션 |
 | `server/.env` (환경변수 추가·변경) | 해당 기능의 SRS 설정 파라미터 섹션 + `docs/ops/` 관련 가이드 |
 | `server/src/index.js` (포트·TLS 설정) | `docs/design/Design_HTTPS_TLS.md`, `docs/ops/HTTPS_TLS_Setup.md`, `docs/tc/TC_HTTPS_TLS.md` |
-| `server/src/db.js`, `mongoDbService.js` | `docs/design/Design_Storage_MongoDB.md`, `docs/srs/SRS_Storage_MongoDB.md`, `docs/tc/TC_Storage_MongoDB.md` |
+| `server/src/db/` (BaseDatabase, JsonDatabase, MongoDatabase, index.js), `mongoDbService.js` | `docs/design/Design_DB_Layer.md`, `docs/srs/SRS_DB_Layer.md`, `docs/tc/TC_DB_Layer.md` |
 | `server/certs/` (인증서 구조 변경) | `docs/ops/HTTPS_TLS_Setup.md` |
 | `mediamtx.yml` | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/ops/RTSP_Capture_Backend_Setup.md`, `docs/design/Design_Server_Architecture.md` |
 | `server/.env` (`SERVER_MODE` 변경) | `docs/design/Design_Server_Architecture.md` 모드별 기능 매트릭스 |
@@ -312,5 +329,5 @@ chmod -R 755 server/models server/storage
 - **포트 변경** → Design 아키텍처 포트 표 + SRS 시스템 제약 + Ops 가이드 업데이트
 - **환경변수 추가** → `.env.example` + 해당 기능 SRS + Ops 가이드 반영
 - **TLS 인증서 경로 변경** → `docs/ops/HTTPS_TLS_Setup.md` 설치 절차 업데이트
-- **MongoDB 스키마 변경** → `docs/design/Design_Storage_MongoDB.md` 컬렉션 명세 업데이트
+- **MongoDB 스키마 변경** → `docs/design/Design_DB_Layer.md` 컬렉션 명세 업데이트
 - **Docker 이미지 버전 업그레이드** → Ops 가이드 버전 표 + TC 호환성 케이스 갱신

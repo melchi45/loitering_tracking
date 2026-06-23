@@ -78,7 +78,7 @@ const TC_DOC_IDS = {
   'TC_Object_Tracking.md':                   'TC-LTS-TRACK-01',
   'TC_STUN_TURN_ICE.md':                     'TC-LTS-WEB-02',
   'TC_Stats_Panel.md':                       'TC-LTS-UI-07',
-  'TC_Storage_MongoDB.md':                   'TC-LTS-DB-01',
+  'TC_DB_Layer.md':                   'TC-LTS-DB-01',
   'TC_User_Authentication.md':               'TC-LTS-AUTH-01',
   'TC_User_Profile.md':                      'TC-LTS-AUTH-02',
   'TC_WebRTC_Media_Gateway.md':              'TC-LTS-WEB-01',

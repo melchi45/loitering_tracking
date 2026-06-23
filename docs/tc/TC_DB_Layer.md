@@ -7,7 +7,7 @@
 | **Version** | 1.1 |
 | **Status** | Active — amended 2026-05-27 |
 | **Date** | 2026-05-27 |
-| **Parent SRS** | srs/SRS_Storage_MongoDB.md |
+| **Parent SRS** | srs/SRS_DB_Layer.md |
 | **Test Scripts** | test/api/storage_json.test.js · test/integration/storage_mongo.test.js |
 
 ---
@@ -1041,4 +1041,4 @@ Covers **NFR-STORE-015**, **NFR-STORE-016**, **NFR-STORE-017**.
 
 | Version | Date | Author | Description |
 |---|---|---|---|
-| 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for Storage MongoDB |
+| 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for DB Layer (JSON/MongoDB backends) |

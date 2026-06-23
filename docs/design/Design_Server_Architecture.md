@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-SA-01 |
-| **Version** | 1.3 |
+| **Version** | 1.5 |
 | **Status** | Active |
 | **Date** | 2026-06-11 |
 | **Author** | LTS-2026 Engineering |
@@ -365,34 +365,44 @@ ANALYSIS_MAX_CONCURRENT=100
 
 ## 4. DB 서버 아키텍처
 
-`DB_TYPE` 환경변수로 스토리지 백엔드를 선택합니다.
+`DB_TYPE` 환경변수로 스토리지 백엔드를 선택합니다. DB 레이어는 **플러그어블 백엔드 아키텍처**(`server/src/db/`)로 구현됩니다.
+
+```
+server/src/db/
+├── index.js          ← factory + public API (initDB / getDB / getStorageMode)
+├── BaseDatabase.js   ← abstract interface — extend to add SQLite, Oracle, etc.
+├── JsonDatabase.js   ← DB_TYPE=json  (default)
+├── MongoDatabase.js  ← DB_TYPE=mongodb
+└── constants.js      ← ALL_TABLES, TABLE_ROW_CAPS, LEGACY_MIGRATIONS
+```
+
+> `server/src/db.js`는 backward-compat shim입니다 (`module.exports = require('./db/index')`). 모든 기존 `require('../db')` 호출은 변경 없이 동작합니다.
 
 ### 4.1 JSON 파일 DB (기본값)
 
 ```mermaid
 graph LR
-    SRV[Node.js Server] -- "db.js 추상화" --> JSON[(storage/lts.json)]
-    JSON -- "인메모리 캐시\n+ 디바운스 쓰기" --> SRV
+    SRV[Node.js Server] -- "JsonDatabase (db/ 레이어)" --> JSON[(storage/lts.json)]
+    JSON -- "인메모리 캐시\n+ 디바운스 2s 쓰기" --> SRV
 ```
 
 - `storage/lts.json` — 카메라, 구역, 알림, 이벤트, 설정
 - `storage/face_tracking.json` — 얼굴 추적 데이터
 - `storage/analytics.json` — 분석 통계
-- 메모리 내 캐시 + 디바운스(500 ms) 파일 쓰기
+- 인메모리 캐시 + 디바운스 2 s 비동기 쓰기 (atomic `.tmp` → rename)
 - 외부 의존성 없음 — 개발/단일 서버에 최적
 
 ### 4.2 MongoDB (선택)
 
 ```mermaid
 graph LR
-    SRV[Node.js Server] -- "db.js 추상화" --> JSON[(storage/lts.json\n워밍 스탠바이)]
-    SRV -- "write-through" --> MONGO[(MongoDB\nAtlas / Standalone)]
-    MONGO -- read --> SRV
+    SRV[Node.js Server] -- "MongoDatabase (db/ 레이어)" --> MONGO[(MongoDB\nAtlas / Standalone)]
+    MONGO -- "startup: loadAll()" --> SRV
 ```
 
-- `DB_TYPE=mongodb` 설정 시 MongoDB에 write-through
-- `lts.json`은 MongoDB 연결 장애 시 fallback 역할
-- `MONGODB_URI` = Atlas (cloud) 또는 `mongodb://host:27017/lts` (standalone)
+- `DB_TYPE=mongodb` 설정 시 MongoDB에 async write-through (fire-and-forget)
+- `lts.json`은 **완전히 무시**됨 — MongoDB 연결 실패 시에도 JSON fallback 없음 (in-memory only)
+- `MONGODB_URI` = Atlas (cloud) 또는 `mongodb://host:27017` (standalone)
 - 분산 배포 시 여러 Node.js 프로세스가 동일 DB 공유 가능
 
 ```dotenv
@@ -884,3 +894,4 @@ if (subscribedRef.current.size > 0 && !subscribedRef.current.has(ev.cameraId)) r
 | 1.2 | 2026-06-10 | streaming 모드 `GET /api/analysis/client-status` 엔드포인트 추가 — circuit-breaker 상태·통계 노출, DashboardDetectionPanel 분석 서버 연결 상태 배너 |
 | 1.3 | 2026-06-11 | CAPTURE_BACKEND 기본값 `ingest-daemon`으로 변경; RTSPCapture 표기를 CaptureBackend로 일반화 |
 | 1.4 | 2026-06-17 | analysis 모드 불필요 서비스 억제: MediaMTX(CAPTURE_BACKEND 무관), YouTubeStream 바이너리 탐색, UDPDiscovery 서브모듈 로그 모두 비활성화 |
+| 1.5 | 2026-06-23 | Section 4 DB 아키텍처 업데이트: 플러그어블 백엔드(BaseDatabase/JsonDatabase/MongoDatabase), server/src/db/ 구조, MongoDB 모드 lts.json 완전 제거 반영 |

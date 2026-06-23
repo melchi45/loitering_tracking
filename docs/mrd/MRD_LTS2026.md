@@ -432,7 +432,7 @@ The following table maps planned market releases to engineering phases and targe
 | SRS — Loitering Tracking System | `docs/srs/SRS_LTS2026_Loitering_Tracking_System.md` | Software requirements spec |
 | Design — Loitering Tracking System | `docs/design/Design_LTS2026_Loitering_Tracking_System.md` | Technical design |
 | RFP — User Authentication | `docs/rfp/RFP_User_Authentication.md` | Auth module |
-| RFP — Storage / MongoDB | `docs/rfp/RFP_Storage_MongoDB.md` | Storage module |
+| RFP — Storage / MongoDB | `docs/rfp/RFP_DB_Layer.md` | Storage module |
 | RFP — LLM / MCP Integration | `docs/rfp/RFP_LLM_MCP_Integration.md` | LLM integration |
 | RFP — WebRTC Media Gateway | `docs/rfp/RFP_WebRTC_Media_Gateway.md` | Streaming module |
 | RFP — Cross-Camera Face Tracking | `docs/rfp/RFP_CrossCamera_Face_Tracking.md` | Re-ID module |

@@ -85,6 +85,16 @@ router.post(
       try {
         const parsed = parseOnvifPayload(data.payload);
         if (parsed) {
+          // Radiometry (thermal camera): emit real-time temperature event every reading.
+          // Do NOT dedup — the live overlay needs every update.
+          if (parsed.radiometry && parsed.radiometry.length > 0 && _io) {
+            _io.emit('onvif:temperature', {
+              cameraId,
+              utcTime:  parsed.utcTime,
+              readings: parsed.radiometry,
+            });
+          }
+
           // Dedup: only store when state actually changes for this camera+topic+sourceToken
           const dedupKey = `${cameraId}:${parsed.topic}:${parsed.sourceToken}`;
           const lastState = _lastStates.get(dedupKey);
@@ -108,8 +118,8 @@ router.post(
             };
             _db.insert('onvif_events', event);
 
-            // On state=true (event START), capture the latest camera frame as a snapshot
-            if (parsed.state === 'true' && _pipelineManager) {
+            // On state=true (event START) or point events (no state), capture snapshot
+            if ((parsed.state === 'true' || parsed.state == null) && _pipelineManager) {
               setImmediate(() => {
                 try {
                   const frame = _pipelineManager.getLatestFrame(cameraId);

@@ -7,7 +7,7 @@
 | **Version** | 1.0 |
 | **Status** | Active |
 | **Date** | 2026-05-27 |
-| **Related RFP** | rfp/RFP_Storage_MongoDB.md |
+| **Related RFP** | rfp/RFP_DB_Layer.md |
 
 ---
 
@@ -262,4 +262,4 @@ STORAGE_PATH=./storage
 
 | Version | Date | Author | Description |
 |---|---|---|---|
-| 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for Storage MongoDB |
+| 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for DB Layer (pluggable storage backends) |

@@ -28,7 +28,13 @@
 loitering_tracking/
 ├── server/src/
 │   ├── index.js                    # Express 진입점 (SERVER_MODE별 분기)
-│   ├── db.js                       # JSON DB 추상화 (직접 파일 I/O 금지)
+│   ├── db.js                       # backward-compat shim → require('./db/index')
+│   ├── db/                         # 플러그어블 DB 레이어 (v1.7+)
+│   │   ├── index.js                # factory + public API (initDB/getDB/getStorageMode)
+│   │   ├── BaseDatabase.js         # 추상 인터페이스 (SQLite·Oracle 확장용)
+│   │   ├── JsonDatabase.js         # DB_TYPE=json 백엔드 (기본값)
+│   │   ├── MongoDatabase.js        # DB_TYPE=mongodb 백엔드
+│   │   └── constants.js            # ALL_TABLES, TABLE_ROW_CAPS, LEGACY_MIGRATIONS
 │   ├── services/
 │   │   ├── detection.js            # YOLOv8 ONNX 추론 (640×640)
 │   │   ├── tracking.js             # ByteTrack + KalmanFilter
@@ -58,7 +64,7 @@ loitering_tracking/
 │   │   ├── UserService.js          # 사용자 CRUD
 │   │   ├── AuditService.js         # 감사 로그
 │   │   ├── MsalService.js          # Microsoft MSAL 인증
-│   │   ├── mongoDbService.js       # MongoDB Atlas 연결
+│   │   ├── mongoDbService.js       # MongoDB 연결 · 5초 keep-alive 핑 · 재연결 Retry (선형 back-off)
 │   │   └── analyticsConfig.js      # 분석 설정
 │   ├── routes/
 │   │   ├── admin.js                # 관리자 라우터
@@ -96,7 +102,8 @@ loitering_tracking/
 │   │   ├── AnalysisEventsTab.tsx   # Detections 탭 — 이벤트 히스토리 (analysis 모드)
 │   │   ├── OnvifTimelineOverlay.tsx # ONVIF 이벤트 타임라인 오버레이 (줌/팬/상세/Raw XML)
 │   │   ├── DetectionsTimelineInline.tsx # 감지 트랙 Gantt 타임라인 (FullscreenCameraView Detections 탭)
-│   │   └── AnalysisHistoryTab.tsx  # 분석 이벤트 이력 탭 (저장된 fire/smoke/loitering)
+│   │   ├── AnalysisHistoryTab.tsx  # 분석 이벤트 이력 탭 (저장된 fire/smoke/loitering)
+│   │   └── ThermalOverlay.tsx      # 열상 카메라 온도 오버레이 (onvif:temperature, FullArea 배너 + 좌표 crosshair)
 │   ├── stores/                     # Zustand 상태 스토어
 │   ├── hooks/                      # 커스텀 React 훅
 │   ├── i18n/                       # 다국어(ko/en) 리소스
@@ -242,6 +249,7 @@ loitering_tracking/
 | `client:webrtc-stats` | Client → Server | WebRTC PeerConnection getStats() 폴링 결과 |
 | `onvif:event` | Server → Client | ONVIF 상태 변화 이벤트 (DB 저장 후 브로드캐스트) |
 | `onvif:type-registered` | Server → Client | 신규 ONVIF topicType 최초 감지 시 브로드캐스트 (타입 레지스트리 실시간 동기화) |
+| `onvif:temperature` | Server → Client | 열상 카메라 BoxTemperatureReading 실시간 스트림 (DB 미저장, ThermalOverlay 전용) |
 
 ---
 
@@ -376,7 +384,7 @@ Claude에서 직접 사용 가능한 LTS-2026 MCP 도구:
 | 새 API 엔드포인트 추가/삭제 | `CLAUDE.md` API 표, 관련 `docs/design/`, `docs/srs/` |
 | Socket.IO 이벤트 추가/변경 | `CLAUDE.md` 이벤트 표, `docs/design/` |
 | 서비스 파일 추가/제거 (`services/*.js`) | `CLAUDE.md` 디렉토리 구조, `pipelineManager.js`에 등록 |
-| DB 스키마/컬렉션 변경 (`db.js`) | `docs/design/Design_Storage_MongoDB.md`, `docs/ops/MongoDB_Setup.md` |
+| DB 스키마/컬렉션 변경 (`db.js`) | `docs/design/Design_DB_Layer.md`, `docs/ops/MongoDB_Setup.md` |
 | 환경변수 추가/변경 | `docs/ops/` 관련 설정 가이드, `docker-deploy/SKILL.md` `.env` 예시 |
 | npm 스크립트 추가 (`package.json`) | `CLAUDE.md` 개발 명령어, `.github/copilot-instructions.md` |
 | 새 AI 서비스 추가 | `ai-detection-pipeline/SKILL.md`, `docs/design/` |

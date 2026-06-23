@@ -7,8 +7,8 @@
 | **Version** | 1.1 |
 | **Status** | Active — amended 2026-05-27 |
 | **Date** | 2026-05-27 |
-| **Parent PRD** | prd/PRD_Storage_MongoDB.md |
-| **Parent RFP** | rfp/RFP_Storage_MongoDB.md |
+| **Parent PRD** | prd/PRD_DB_Layer.md |
+| **Parent RFP** | rfp/RFP_DB_Layer.md |
 
 ---
 
@@ -41,7 +41,7 @@ This SRS specifies all functional and non-functional requirements for the **LTS-
 - `server/src/services/mongoDbService.js` — Mongoose-based MongoDB adapter.
 - `server/src/scripts/migrateToMongo.js` — one-time data migration script.
 
-Each requirement is identified by a unique ID (`FR-STORAGE-NNN` / `NFR-STORAGE-NNN`) traceable to acceptance criteria in [PRD_Storage_MongoDB.md](../prd/PRD_Storage_MongoDB.md).
+Each requirement is identified by a unique ID (`FR-STORAGE-NNN` / `NFR-STORAGE-NNN`) traceable to acceptance criteria in [PRD_DB_Layer.md](../prd/PRD_DB_Layer.md).
 
 ### 1.2 Scope
 
@@ -630,4 +630,4 @@ const ALL_TABLES = [
 
 | Version | Date | Author | Description |
 |---|---|---|---|
-| 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for Storage MongoDB |
+| 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for DB Layer (pluggable storage backends) |

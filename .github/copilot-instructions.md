@@ -66,7 +66,8 @@ loitering_tracking/
 │   │   ├── AnalysisDetectionPanel.tsx  # 이벤트 히스토리 오버레이 (배회/화재/연기)
 │   │   ├── AnalysisEventsTab.tsx   # Detections 탭 — 이벤트 히스토리 (analysis 모드)
 │   │   ├── DetectionsTimelineInline.tsx # 감지 트랙 Gantt 타임라인 (FullscreenCameraView Detections 탭)
-│   │   └── AnalysisHistoryTab.tsx  # 분석 이벤트 이력 탭 (저장된 fire/smoke/loitering)
+│   │   ├── AnalysisHistoryTab.tsx  # 분석 이벤트 이력 탭 (저장된 fire/smoke/loitering)
+│   │   └── ThermalOverlay.tsx      # 열상 카메라 온도 오버레이 (onvif:temperature, FullArea 배너 + 좌표 crosshair)
 │   ├── stores/            # Zustand 상태 관리
 │   ├── hooks/             # 커스텀 React 훅
 │   ├── i18n/              # 다국어(ko/en) 리소스
@@ -250,7 +251,7 @@ cd mcp-server && npm run start:http  # HTTP+SSE 모드 (원격 LLM)
 | 새 API 엔드포인트 추가/삭제 | `copilot-instructions.md` API 표, `docs/design/`, `docs/srs/` |
 | Socket.IO 이벤트 추가/변경 | `copilot-instructions.md` 이벤트 표, `docs/design/` |
 | 서비스 파일 추가/제거 | `copilot-instructions.md` 디렉토리 구조, `pipelineManager.js` 등록 |
-| DB 스키마/컬렉션 변경 | `docs/design/Design_Storage_MongoDB.md`, `docs/ops/MongoDB_Setup.md` |
+| DB 스키마/컬렉션 변경 | `docs/design/Design_DB_Layer.md`, `docs/ops/MongoDB_Setup.md` |
 | 환경변수 추가/변경 | 관련 `docs/ops/` 가이드, `docker-deploy/SKILL.md` `.env` 예시 |
 | npm 스크립트 추가 | `copilot-instructions.md` 개발 명령어 섹션 |
 | Docker/배포 설정 변경 | `docker-deploy/SKILL.md`, `docs/ops/` |

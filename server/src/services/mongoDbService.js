@@ -13,6 +13,8 @@
  *     MongoDB's own `_id` is kept but never exposed to the application layer.
  *   - Writes are async fire-and-forget from the caller's perspective.
  *   - On startup `loadAll()` hydrates the in-memory store.
+ *   - Keep-alive ping every 5 s — logs connection state and round-trip latency.
+ *   - On disconnect: automatic retry with linear back-off (3 s × attempt, max 30 s).
  */
 
 const mongoose = require('mongoose');
@@ -86,46 +88,141 @@ function model(table) {
   return _models[table];
 }
 
-// ── Connection state ─────────────────────────────────────────────────────────
-let _connected = false;
+// ── Connection state ──────────────────────────────────────────────────────────
+let _connected        = false;
+let _uri              = null;
+let _connectOpts      = null;
+let _keepAliveTimer   = null;
+let _retryTimer       = null;
+let _retryCount       = 0;
+let _listenersSet     = false;   // guards against duplicate event registration
 
-/**
- * Connect to MongoDB.
- * Throws on failure — caller should fall back to JSON mode.
- * @param {string} uri   Full MongoDB connection URI
- * @param {string} [dbName]  Override database name (optional)
- */
-async function connect(uri, dbName) {
-  const opts = {
-    serverSelectionTimeoutMS: 5000,
-    socketTimeoutMS: 45000,
-    heartbeatFrequencyMS: 10000,
-    maxIdleTimeMS: 60000,
-  };
-  if (dbName) opts.dbName = dbName;
+const KEEPALIVE_MS  = 5000;   // ping interval
+const RETRY_STEP_MS = 3000;   // linear back-off step
+const RETRY_MAX_MS  = 30000;  // ceiling for retry delay
 
-  await mongoose.connect(uri, opts);
-  _connected = true;
+// ── Keep-alive ────────────────────────────────────────────────────────────────
+
+function _startKeepAlive() {
+  if (_keepAliveTimer) return;
+  _keepAliveTimer = setInterval(async () => {
+    const state = mongoose.connection.readyState;
+    // 0=disconnected 1=connected 2=connecting 3=disconnecting
+    const labels = ['disconnected', 'connected', 'connecting', 'disconnecting'];
+    const label  = labels[state] ?? String(state);
+
+    if (state === 1) {
+      try {
+        const t0 = Date.now();
+        await mongoose.connection.db.command({ ping: 1 });
+        console.log(`[MongoDB] keep-alive ✓ connected | ping ${Date.now() - t0}ms | URI: ${_uri}`);
+      } catch (err) {
+        console.warn(`[MongoDB] keep-alive ping 실패: ${err.message}`);
+      }
+    } else {
+      console.warn(`[MongoDB] keep-alive — 상태: ${label} | URI: ${_uri}`);
+    }
+  }, KEEPALIVE_MS);
+}
+
+function _stopKeepAlive() {
+  if (_keepAliveTimer) {
+    clearInterval(_keepAliveTimer);
+    _keepAliveTimer = null;
+  }
+}
+
+// ── Retry ─────────────────────────────────────────────────────────────────────
+
+function _cancelRetry() {
+  if (_retryTimer) {
+    clearTimeout(_retryTimer);
+    _retryTimer = null;
+  }
+  _retryCount = 0;
+}
+
+function _scheduleRetry() {
+  if (_retryTimer) return;   // retry already queued
+  if (_connected)  return;   // reconnected while we were deciding
+
+  _retryCount++;
+  const delay = Math.min(RETRY_STEP_MS * _retryCount, RETRY_MAX_MS);
+  console.warn(
+    `[MongoDB] 재연결 대기 #${_retryCount} — ${(delay / 1000).toFixed(0)}초 후 재시도 | URI: ${_uri}`
+  );
+
+  _retryTimer = setTimeout(async () => {
+    _retryTimer = null;
+    if (_connected) { _cancelRetry(); return; }
+
+    console.log(`[MongoDB] 재연결 시도 #${_retryCount} | URI: ${_uri}`);
+    try {
+      await mongoose.connect(_uri, _connectOpts);
+      // 성공 시 'reconnected' 이벤트가 발생해 _connected = true + _cancelRetry() 처리됨
+    } catch (err) {
+      console.error(`[MongoDB] 재연결 실패 #${_retryCount}: ${err.message}`);
+      _scheduleRetry();   // next attempt
+    }
+  }, delay);
+}
+
+// ── Event listeners (singleton, registered once) ──────────────────────────────
+
+function _attachListeners() {
+  if (_listenersSet) return;
+  _listenersSet = true;
 
   mongoose.connection.on('disconnected', () => {
     _connected = false;
-    console.warn('[MongoDB] disconnected — writes will be buffered or lost until reconnect');
-  });
-  mongoose.connection.on('reconnected', () => {
-    _connected = true;
-    console.log('[MongoDB] reconnected');
-  });
-  mongoose.connection.on('error', (err) => {
-    console.error('[MongoDB] connection error:', err.message);
+    console.warn('[MongoDB] 연결 끊김 — 재연결 시도를 시작합니다');
+    _scheduleRetry();
   });
 
-  console.log('[MongoDB] connected →', uri);
+  mongoose.connection.on('reconnected', () => {
+    _connected = true;
+    _cancelRetry();
+    console.log(`[MongoDB] 재연결 성공 | URI: ${_uri}`);
+  });
+
+  mongoose.connection.on('error', (err) => {
+    console.error('[MongoDB] 연결 오류:', err.message);
+  });
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/**
+ * Connect to MongoDB.
+ * Starts keep-alive pings and sets up disconnect-retry on success.
+ * Throws on failure — caller (MongoDatabase.init) should propagate the error.
+ * @param {string} uri       Full MongoDB connection URI
+ * @param {string} [dbName]  Override database name (optional)
+ */
+async function connect(uri, dbName) {
+  _uri = uri;
+  _connectOpts = {
+    serverSelectionTimeoutMS: 5000,
+    socketTimeoutMS:          45000,
+    heartbeatFrequencyMS:     10000,
+    maxIdleTimeMS:            60000,
+  };
+  if (dbName) _connectOpts.dbName = dbName;
+
+  _attachListeners();   // idempotent — safe to call every time
+  await mongoose.connect(uri, _connectOpts);
+  _connected = true;
+
+  console.log(`[MongoDB] connected | URI: ${uri}`);
+  _startKeepAlive();
 }
 
 /**
  * Disconnect from MongoDB (used in tests / graceful shutdown).
  */
 async function disconnect() {
+  _stopKeepAlive();
+  _cancelRetry();
   if (_connected) {
     await mongoose.disconnect();
     _connected = false;

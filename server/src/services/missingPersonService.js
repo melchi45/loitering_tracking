@@ -18,12 +18,6 @@ class MissingPersonService {
     return dbModule.getDB();
   }
 
-  _ensureTables() {
-    const db = this._db();
-    if (!Array.isArray(db._tables.missing_persons)) db._tables.missing_persons = [];
-    if (!Array.isArray(db._tables.missing_person_detections)) db._tables.missing_person_detections = [];
-  }
-
   _seededEmbedding(seed) {
     const safe = String(seed || 'missing-person');
     const out = new Array(512);
@@ -45,7 +39,6 @@ class MissingPersonService {
   }
 
   async reloadCache() {
-    this._ensureTables();
     const db = this._db();
     this.missingPersonsCache = db.all('missing_persons');
     this.cacheTimestamp = Date.now();
@@ -97,7 +90,6 @@ class MissingPersonService {
 
   async registerMissingPerson(data) {
     this.validateMissingPersonInput(data);
-    this._ensureTables();
 
     const faceEmbedding = Array.isArray(data.faceEmbedding) && data.faceEmbedding.length === 512
       ? data.faceEmbedding
@@ -223,7 +215,6 @@ class MissingPersonService {
   }
 
   async createDetectionEvent(data) {
-    this._ensureTables();
     const event = {
       id: uuidv4(),
       missingPersonId: data.missingPersonId,
@@ -247,7 +238,6 @@ class MissingPersonService {
   }
 
   async getDetectionsByDate(date, options = {}) {
-    this._ensureTables();
     const { missingPersonId, status, limit = 50, cameraId } = options;
 
     const dateObj = new Date(`${date}T00:00:00Z`);
@@ -287,7 +277,6 @@ class MissingPersonService {
   }
 
   async updateMissingPersonStatus(missingPersonId, newStatus, notes = null) {
-    this._ensureTables();
     const db = this._db();
     const person = db.findOne('missing_persons', { id: missingPersonId });
     if (!person) {
@@ -307,7 +296,6 @@ class MissingPersonService {
   }
 
   async updateDetectionStatus(detectionId, newStatus, confirmedBy = null) {
-    this._ensureTables();
     const db = this._db();
     const detection = db.findOne('missing_person_detections', { id: detectionId });
     if (!detection) {
@@ -322,7 +310,6 @@ class MissingPersonService {
   }
 
   async getStatistics() {
-    this._ensureTables();
     await this._refreshCacheIfNeeded();
 
     const detections = this._db().all('missing_person_detections');
