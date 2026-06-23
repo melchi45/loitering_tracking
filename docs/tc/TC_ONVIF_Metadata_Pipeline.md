@@ -1,0 +1,438 @@
+# TEST CASES
+# ONVIF Metadata Pipeline — App RTP 수집 검증
+
+| | |
+|---|---|
+| **Document ID** | TC-LTS-ONVIF-01 |
+| **Version** | 1.2 |
+| **Status** | Active |
+| **Date** | 2026-06-23 |
+| **Related SRS** | [SRS_ONVIF_Metadata_Pipeline.md](../srs/SRS_ONVIF_Metadata_Pipeline.md) |
+| **Related Design** | [Design_ONVIF_Metadata_Pipeline.md](../design/Design_ONVIF_Metadata_Pipeline.md) |
+| **Test Files** | `test/ingest/test_apprtp.py`, `test/api/onvif_apprtp.test.js`, `test/api/onvif_metadata_pipeline.test.js` |
+
+---
+
+## 사전 조건
+
+- Python 3.9+ 및 `pytest` 설치: `pip install pytest`
+- Node.js 18+ 및 Jest 설치: `cd server && npm install`
+- 단위 테스트(TC-APPRTP-001 ~ TC-APPRTP-010)는 실제 카메라·MediaMTX 없이 mock으로 수행
+- TC-APPRTP-011 ~ TC-APPRTP-012는 실 카메라(Samsung ONVIF) 필요
+
+---
+
+## TC-APPRTP-001 — av.open() 에 timeout 옵션 포함 여부 (회귀)
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | `_app_rtp_ingest_once()`가 `av.open()` 호출 시 `options["timeout"]`을 포함하는지 확인 |
+| **SRS 참조** | FR-ONVIF-APPRTP-002 |
+| **우선순위** | P0 — 회귀 방지 |
+| **자동화** | `test/ingest/test_apprtp.py::TestAppRtpOptions::test_timeout_in_av_open_options` |
+
+**절차:**
+```bash
+cd /data6/youngho/workspace/loitering_tracking
+python -m pytest test/ingest/test_apprtp.py::TestAppRtpOptions::test_timeout_in_av_open_options -v
+```
+
+**합격 기준:**
+- `av.open()` 호출 시 `options` 키워드 인자에 `"timeout"` 키가 존재
+- `timeout` 값이 `APP_RTP_READ_TIMEOUT * 1_000_000` 마이크로초 문자열
+
+---
+
+## TC-APPRTP-002 — read_timeout 속성 설정 금지 (회귀)
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | `av.open()` 이후 컨테이너에 `read_timeout` 속성을 설정하지 않는지 확인 |
+| **SRS 참조** | FR-ONVIF-APPRTP-002 |
+| **우선순위** | P0 — 회귀 방지 |
+| **자동화** | `test/ingest/test_apprtp.py::TestAppRtpOptions::test_no_read_timeout_attribute_set` |
+| **배경** | 구 코드(`inp.read_timeout = N`)는 신 PyAV에서 `AttributeError: not writable`을 발생시켜 App RTP 루프가 즉각 실패하고 MediaMTX maxReaders를 소진시킴 |
+
+**절차:**
+```bash
+python -m pytest test/ingest/test_apprtp.py::TestAppRtpOptions::test_no_read_timeout_attribute_set -v
+```
+
+**합격 기준:**
+- `read_timeout` 쓰기가 `AttributeError`를 발생시키는 컨테이너 목 사용 시에도 `_app_rtp_ingest_once()`가 `AttributeError`를 발생시키지 않음
+
+---
+
+## TC-APPRTP-003 — 컨테이너 명시적 close() 보장
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | `_app_rtp_ingest_once()` 종료 시 (정상·예외 모두) `inp.close()`가 호출되는지 확인 |
+| **SRS 참조** | FR-ONVIF-APPRTP-006 |
+| **우선순위** | P1 |
+| **자동화** | `test/ingest/test_apprtp.py::TestAppRtpCleanup::test_close_called_on_no_app_stream` |
+
+**절차:**
+```bash
+python -m pytest test/ingest/test_apprtp.py::TestAppRtpCleanup -v
+```
+
+**합격 기준:**
+- Application 트랙 없음 → RuntimeError 발생 → `mock_container.close()` 1회 호출
+- 정상 demux 완료 → `mock_container.close()` 1회 호출
+
+---
+
+## TC-APPRTP-004 — No application stream 조용한 종료
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | RTSP 스트림에 data/subtitle 트랙이 없을 때 스레드가 재시도 없이 종료되는지 확인 |
+| **SRS 참조** | FR-ONVIF-APPRTP-003, FR-ONVIF-APPRTP-005 |
+| **우선순위** | P1 |
+| **자동화** | `test/ingest/test_apprtp.py::TestAppRtpLoop::test_no_app_stream_exits_quietly` |
+
+**절차:**
+```bash
+python -m pytest test/ingest/test_apprtp.py::TestAppRtpLoop::test_no_app_stream_exits_quietly -v
+```
+
+**합격 기준:**
+- `av.open()` 이후 스트림 목록이 video/audio만인 경우 `_app_rtp_loop()`가 재시도 없이 종료
+- 경고 로그 미출력
+
+---
+
+## TC-APPRTP-005 — 재시도 백오프
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | 연결 실패 시 retry_delay가 0.5s → 최대 5.0s 지수 증가하는지 확인 |
+| **SRS 참조** | FR-ONVIF-APPRTP-004 |
+| **우선순위** | P2 |
+| **자동화** | `test/ingest/test_apprtp.py::TestAppRtpLoop::test_retry_backoff` |
+
+**절차:**
+```bash
+python -m pytest test/ingest/test_apprtp.py::TestAppRtpLoop::test_retry_backoff -v
+```
+
+**합격 기준:**
+- 3회 연속 실패 시 `_stop.wait()` 인수가 `[0.5, 0.75, 1.125]` 순서로 증가
+- 재시도 지연이 5.0s를 초과하지 않음
+
+---
+
+## TC-APPRTP-006 — 페이로드 base64 HTTP POST 형식
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | App RTP 패킷이 올바른 JSON 형식으로 `appRtpCallbackUrl`에 POST되는지 확인 |
+| **SRS 참조** | FR-ONVIF-APPRTP-008 |
+| **우선순위** | P1 |
+| **자동화** | `test/ingest/test_apprtp.py::TestAppRtpPayload::test_post_body_format` |
+
+**합격 기준:**
+- POST body가 `{ pt, timestamp, seq, payload }` 형식의 JSON
+- `payload`가 유효한 base64 문자열
+- `seq`가 0부터 단조 증가
+
+---
+
+## TC-APPRTP-007 — Node.js 내부 API 브로드캐스트
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | `POST /api/internal/apprtp/:cameraId`가 Socket.IO `appRtp` 이벤트를 브로드캐스트하는지 확인 |
+| **SRS 참조** | FR-ONVIF-APPRTP-009 |
+| **우선순위** | P1 |
+| **자동화** | `test/api/onvif_apprtp.test.js::AppRtpInternalApi::broadcasts appRtp via socket.io` |
+
+**절차:**
+```bash
+cd server && npx jest test/api/onvif_apprtp.test.js --runInBand --forceExit -v
+```
+
+**합격 기준:**
+- `io.emit('appRtp', { cameraId, pt, timestamp, seq, payload })` 호출됨
+- `cameraId`가 URL 파라미터와 일치
+
+---
+
+## TC-APPRTP-008 — ONVIF 구조화 파싱 통합
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | base64 ONVIF MetadataStream 페이로드가 파싱되어 `onvif_events` DB에 저장되는지 확인 |
+| **SRS 참조** | FR-ONVIF-APPRTP-009 |
+| **우선순위** | P1 |
+| **자동화** | `test/api/onvif_apprtp.test.js::AppRtpInternalApi::parses ONVIF payload and saves event` |
+
+**합격 기준:**
+- `parseOnvifPayload()` 결과에 `topic`, `state`, `sourceToken`이 포함됨
+- DB `insert('onvif_events', event)` 호출됨
+- `io.emit('onvif:event', event)` 브로드캐스트됨
+
+---
+
+## TC-APPRTP-009 — Radiometry 데이터 즉시 브로드캐스트 (dedup 제외)
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | `BoxTemperatureReading` 포함 페이로드가 state-dedup 없이 `onvif:temperature`로 즉시 방출되는지 확인 |
+| **SRS 참조** | Design §9.3 |
+| **우선순위** | P2 |
+| **자동화** | `test/api/onvif_apprtp.test.js::AppRtpInternalApi::emits onvif:temperature for radiometry` |
+
+**합격 기준:**
+- `io.emit('onvif:temperature', { cameraId, utcTime, readings })` 호출됨
+- `onvif_events` DB insert 미호출 (radiometry는 DB 저장 안 함)
+
+---
+
+## TC-APPRTP-010 — stop 신호 후 3초 이내 종료
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | `_signal_stop()` 호출 후 App RTP 스레드가 3초 이내 종료되는지 확인 |
+| **SRS 참조** | FR-ONVIF-APPRTP-010 |
+| **우선순위** | P2 |
+| **자동화** | `test/ingest/test_apprtp.py::TestAppRtpLoop::test_stop_exits_within_timeout` |
+
+**합격 기준:**
+- `session._signal_stop()` 호출 후 3000ms 이내에 apprtp 스레드 종료
+
+---
+
+## TC-APPRTP-011 — 실 카메라 App RTP 수신 (통합 테스트)
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | Samsung ONVIF 카메라에서 App RTP 패킷이 실제로 수신·파싱·저장되는지 확인 |
+| **SRS 참조** | 전체 파이프라인 |
+| **우선순위** | P1 |
+| **자동화** | 수동 — 실 카메라 필요 |
+
+**절차:**
+1. Samsung IP 카메라 RTSP URL 확인
+2. ingest-daemon에 카메라 등록 (`appRtpCallbackUrl` 포함)
+3. 30초 대기
+4. `GET /api/onvif-events?cameraId={id}&limit=10` 조회
+
+**합격 기준:**
+- ONVIF 이벤트 1개 이상 DB 저장
+- `[Ingest] App RTP loop starting` 로그 확인
+- `WARNING … App RTP error:` 로그 없음
+- MediaMTX 로그에 `maximum reader count reached` 없음
+
+---
+
+## TC-APPRTP-012 — MediaMTX maxReaders 소진 재현 방지 (회귀)
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | App RTP 루프 반복 재시도 시 MediaMTX 세션이 `maxReaders`를 초과하지 않음을 확인 |
+| **SRS 참조** | FR-ONVIF-APPRTP-007 |
+| **우선순위** | P0 |
+| **자동화** | 수동 (MediaMTX + ingest-daemon 실행 환경 필요) |
+
+**절차:**
+```bash
+# 1. MediaMTX 세션 수 모니터링
+watch -n 1 "curl -s http://127.0.0.1:9997/v3/paths/list | python3 -c \
+  \"import sys,json; paths=json.load(sys.stdin)['items']; \
+  [print(p['name'], 'readers:', len(p.get('readers',[]))) for p in paths]\""
+
+# 2. 3분 관찰 — reader 수가 10을 초과하지 않아야 함
+```
+
+**합격 기준:**
+- 각 카메라 경로의 RTSP reader 수가 `maxReaders`(10) 미만 유지
+- MediaMTX 로그에 `maximum reader count reached` 없음
+- ingest-daemon 로그에 `Server returned 400 Bad Request` 없음
+
+---
+
+---
+
+## TC-PARSER-001 — 단일 NotificationMessage → 배열[1] 반환
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | 단일 NotificationMessage를 가진 MetadataStream이 길이 1인 배열로 파싱되는지 확인 |
+| **SRS 참조** | FR-ONVIF-PARSER-002, FR-ONVIF-PARSER-003 |
+| **우선순위** | P0 |
+| **자동화** | `test/api/onvif_metadata_pipeline.test.js::TC-PARSER-001` |
+
+**입력:** 단일 `wsnt:NotificationMessage` (MotionAlarm, State=true)
+
+**합격 기준:**
+- `parseOnvifPayload(payload)` 반환값이 배열
+- `result.length === 1`
+- `result[0].topic === 'tns1:VideoSource/tns1:MotionAlarm'`
+- `result[0].state === 'true'`
+
+---
+
+## TC-PARSER-002 — 다중 NotificationMessage → 배열[N] 반환 (회귀 방지)
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | 3개 NotificationMessage를 가진 패킷이 3개 이벤트 배열로 파싱되는지 확인. 이전 버그(첫 번째만 파싱)의 회귀를 방지한다 |
+| **SRS 참조** | FR-ONVIF-PARSER-003 |
+| **우선순위** | P0 — 버그 수정 회귀 방지 |
+| **자동화** | `test/api/onvif_metadata_pipeline.test.js::TC-PARSER-002` |
+
+**입력:** 3개 NotificationMessage (MotionAlarm + DigitalInput + AudioDetection)
+
+**합격 기준:**
+- `result.length === 3`
+- `result[0].topic`, `result[1].topic`, `result[2].topic`이 각각 다른 토픽
+- `result[0].utcTime !== result[1].utcTime` (각 블록 UtcTime 독립)
+- 각 원소의 `items`가 다른 블록 SimpleItem과 교차 오염되지 않음
+
+---
+
+## TC-PARSER-003 — 비-MetadataStream 페이로드 → null
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | MetadataStream이 아닌 페이로드가 null을 반환하는지 확인 |
+| **SRS 참조** | FR-ONVIF-PARSER-001 |
+| **우선순위** | P1 |
+| **자동화** | `test/api/onvif_metadata_pipeline.test.js::TC-PARSER-003` |
+
+**합격 기준:** `parseOnvifPayload(btoa('not-onvif-data')) === null`
+
+---
+
+## TC-PARSER-004 — TOPIC_MAP 알려진 토픽 정규화
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | 표준 ONVIF 토픽이 TOPIC_MAP의 type/label/severity로 정확히 정규화되는지 확인 |
+| **SRS 참조** | FR-ONVIF-PARSER-005 |
+| **우선순위** | P1 |
+| **자동화** | `test/api/onvif_metadata_pipeline.test.js::TC-PARSER-004` |
+
+| 입력 토픽 | 기대 topicType | 기대 severity |
+|---|---|---|
+| `tns1:VideoSource/tns1:MotionAlarm` | `motionAlarm` | `warning` |
+| `tns1:Device/tns1:Trigger/tns1:Relay` | `relay` | `info` |
+| `tns1:VideoSource/RadiometryAlarm` | `radiometryAlarm` | `warning` |
+
+---
+
+## TC-PARSER-005 — Samsung namespace 변형 정규화 (회귀 방지)
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | Samsung 전용 namespace 변형이 표준 type으로 정규화되는지 확인 |
+| **SRS 참조** | FR-ONVIF-PARSER-006 |
+| **우선순위** | P0 — 이번 버그 수정에 추가된 토픽 |
+| **자동화** | `test/api/onvif_metadata_pipeline.test.js::TC-PARSER-005` |
+
+| 입력 토픽 | 기대 topicType |
+|---|---|
+| `tns1:Device/tns1:Trigger/tnssamsung:DigitalInput` | `digitalInput` |
+| `tns1:VideoAnalytics/tnssamsung:MotionDetection` | `motionAlarm` |
+| `tns1:AudioSource/tnssamsung:AudioDetection` | `audioAlarm` |
+| `tns1:VideoSource/MotionAlarm` | `motionAlarm` |
+
+---
+
+## TC-PARSER-006 — Unknown 토픽 처리
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | TOPIC_MAP에 없는 토픽이 전체 경로를 topicType으로, 마지막 세그먼트를 label로 사용하는지 확인 |
+| **SRS 참조** | FR-ONVIF-PARSER-007 |
+| **우선순위** | P1 |
+| **자동화** | `test/api/onvif_metadata_pipeline.test.js::TC-PARSER-006` |
+
+**입력:** topic = `tns1:Custom/UnknownEvent`
+
+**합격 기준:**
+- `topicType === 'tns1:Custom/UnknownEvent'`
+- `topicLabel === 'UnknownEvent'`
+- `severity === 'info'`
+
+---
+
+## TC-PARSER-007 — State 추출 우선순위
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | `State`보다 `IsMotion`이 있을 때, `State` 없으면 `IsMotion`으로 폴백하는지 확인 |
+| **SRS 참조** | FR-ONVIF-PARSER-008 |
+| **우선순위** | P1 |
+| **자동화** | `test/api/onvif_metadata_pipeline.test.js::TC-PARSER-007` |
+
+| 시나리오 | items | 기대 state |
+|---|---|---|
+| State 최우선 | `{ State: 'true' }` | `'true'` |
+| IsMotion 폴백 | `{ IsMotion: 'false' }` | `'false'` |
+| Value `'1'` 정규화 | `{ Value: '1' }` | `'true'` |
+| 빈 items | `{}` | `null` |
+
+---
+
+## TC-PARSER-008 — 다중 이벤트 독립 Dedup (API 통합)
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | 3개 NotificationMessage 패킷 전송 시 3개 이벤트가 독립적으로 dedup되어 모두 저장되는지 확인 |
+| **SRS 참조** | FR-ONVIF-ROUTE-001 |
+| **우선순위** | P0 — 핵심 버그 수정 검증 |
+| **자동화** | `test/api/onvif_metadata_pipeline.test.js::TC-PARSER-008` |
+| **사전 조건** | 서버 실행 중 (`http://localhost:3080`) |
+
+**절차:**
+1. `DELETE /api/onvif-events` 초기화
+2. 3개 NotificationMessage 패킷 `POST /api/internal/apprtp/test-cam-001`
+3. `GET /api/onvif-events?cameraId=test-cam-001&limit=10` 조회
+
+**합격 기준:**
+- `events.length === 3`
+- 3개 이벤트의 `topic`이 각각 다름
+
+---
+
+## TC-PARSER-009 — 상태 변화 Dedup (동일 state 반복 저장 방지)
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | 동일 state 패킷을 2회 전송 시 두 번째는 저장되지 않는지 확인 |
+| **SRS 참조** | FR-ONVIF-ROUTE-002 |
+| **우선순위** | P1 |
+| **자동화** | `test/api/onvif_metadata_pipeline.test.js::TC-PARSER-009` |
+
+**절차:**
+1. MotionAlarm state=true 패킷 전송 → 저장 확인
+2. 동일 패킷 재전송
+3. `GET /api/onvif-events` 조회
+
+**합격 기준:** `events.length === 1` (중복 저장 없음)
+
+---
+
+## TC-PARSER-010 — 파싱 오류 시 200 응답 유지
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | 손상된 base64 페이로드에도 POST /apprtp가 200을 반환하는지 확인 |
+| **SRS 참조** | FR-ONVIF-ROUTE-005 |
+| **우선순위** | P1 |
+| **자동화** | `test/api/onvif_metadata_pipeline.test.js::TC-PARSER-010` |
+
+**합격 기준:** HTTP 응답 상태 200, 서버 프로세스 정상 유지
+
+---
+
+## Revision History
+
+| 버전 | 날짜 | 변경 내용 |
+|---|---|---|
+| 1.0 | 2026-06-23 | 초기 작성 — App RTP 수집 파이프라인 TC-APPRTP-001 ~ 012 정의 |
+| 1.1 | 2026-06-23 | TC-APPRTP-001~002 회귀 케이스 추가 — PyAV read_timeout 속성 쓰기 오류 및 MediaMTX maxReaders 소진 재현 방지 |
+| 1.2 | 2026-06-23 | TC-PARSER-001~010 추가 — onvifParser.js 다중 NotificationMessage 파싱 버그 수정 검증 및 Samsung namespace 변형·State 추출·Dedup 회귀 방지 |

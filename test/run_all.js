@@ -173,6 +173,13 @@ const SUITES = [
     tags:  ['capture', 'rtsp', 'gstreamer', 'pyav', 'ffmpeg'],
   },
 
+  // ── ONVIF Metadata Pipeline ───────────────────────────────────────────────
+  {
+    file:  'test/api/onvif_metadata_pipeline.test.js',
+    label: 'TC_ONVIF_Metadata_Pipeline — parser unit + API integration (multi-notification)',
+    tags:  ['onvif', 'parser', 'metadata', 'unit', 'regression'],
+  },
+
   // ── Dashboard & Mobile E2E (Phase-3 placeholder) ─────────────────────────
   {
     file:  'test/e2e/dashboard_e2e.test.js',
