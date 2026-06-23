@@ -619,7 +619,33 @@ function DetailRow({ label, value, mono, highlight }: {
   );
 }
 
-// ── Utility functions (mirrored from OnvifTimelineInline) ─────────────────────
+// ── Utility functions ─────────────────────────────────────────────────────────
+
+const STATE_KEYS = ['State', 'IsMotion', 'IsSoundDetected', 'IsAlarm', 'IsActive',
+                    'Active', 'Enabled', 'IsEnabled', 'IsTriggered', 'IsDetected', 'Value'];
+
+/**
+ * Resolve boolean state for an event.
+ * Priority: evt.state → items fallback (handles legacy events with state=null in DB
+ * but items.State='true'/'false' from stored XML SimpleItems).
+ */
+function getEventState(evt: OnvifEvent): 'true' | 'false' | null {
+  if (evt.state === 'true'  || evt.state === 'false')  return evt.state;
+  const items = evt.items as Record<string, string> | undefined;
+  if (!items) return null;
+  for (const key of STATE_KEYS) {
+    const v = items[key];
+    if (v === 'true'  || v === 'True')  return 'true';
+    if (v === 'false' || v === 'False') return 'false';
+    if (v === '1') return 'true';
+    if (v === '0') return 'false';
+  }
+  for (const [k, v] of Object.entries(items)) {
+    if (k.toLowerCase().includes('token') || k.toLowerCase().includes('source')) continue;
+    if (v === 'true'  || v === 'false') return v as 'true' | 'false';
+  }
+  return null;
+}
 
 function mkPoint(evt: OnvifEvent): OnvifInterval {
   const tsMs = new Date(evt.serverTs).getTime();
@@ -639,12 +665,12 @@ function buildIntervals(events: OnvifEvent[], nowMs: number): OnvifInterval[] {
   const open = new Map<string, OnvifInterval>();
 
   for (const evt of sorted) {
-    const key = `${evt.cameraId}:${evt.topicType}:${evt.sourceToken ?? ''}`;
+    const key   = `${evt.cameraId}:${evt.topicType}:${evt.sourceToken ?? ''}`;
+    const state = getEventState(evt);
 
-    if (evt.state === 'true') {
+    if (state === 'true') {
       if (open.has(key)) {
-        // Consecutive start without end (server-restart artifact or camera re-trigger
-        // while still active). Coalesce: keep the original start time, ignore this event.
+        // start→start→start→end coalesce: keep original startTs, ignore middle starts
         continue;
       }
       const tsMs = new Date(evt.serverTs).getTime();
@@ -654,14 +680,14 @@ function buildIntervals(events: OnvifEvent[], nowMs: number): OnvifInterval[] {
         startTs: tsMs, endTs: nowMs, isPoint: false, inProgress: true,
         durationMs: nowMs - tsMs, startEvt: evt, endEvt: null,
       });
-    } else if (evt.state === 'false') {
+    } else if (state === 'false') {
       const interval = open.get(key);
       if (interval) {
         const endTs = new Date(evt.serverTs).getTime();
-        interval.endTs = endTs;
+        interval.endTs      = endTs;
         interval.inProgress = false;
         interval.durationMs = endTs - interval.startTs;
-        interval.endEvt = evt;
+        interval.endEvt     = evt;
         intervals.push(interval);
         open.delete(key);
       } else {

@@ -493,6 +493,23 @@ barWidth = max(0.003, barRight − barLeft)               // min 0.3% (visibilit
 - **진행 중 인터벌** (`inProgress=true`): `SEV_COLOR[severity]88` 반투명 + `1px dashed` 테두리; 라벨에 `↦` 프리픽스
 - **포인트 이벤트** (`isPoint=true`): 45° 회전한 다이아몬드(◇), `SEV_COLOR` 채색
 
+#### `getEventState()` — 클라이언트 state 결정 함수
+
+`buildIntervals`는 `evt.state`를 직접 사용하지 않고 `getEventState(evt)`를 통해 state를 결정합니다.
+
+```
+getEventState 우선순위:
+  1. evt.state ('true'|'false') — 서버 파서가 정상 추출한 경우
+  2. evt.items 폴백 — 구버전 파서로 저장된 이벤트(state=null)에서 items.State 등 추출
+     (STATE_KEYS: State, IsMotion, IsSoundDetected, IsAlarm, IsActive, Active, Enabled, ...)
+  3. 마지막 수단: token/source를 제외한 첫 번째 boolean 값 항목
+  → 모두 없으면 null → 포인트 마커
+```
+
+**이 패턴이 필요한 이유**: 서버 파서 업그레이드 이전에 저장된 이벤트는 DB에 `state: null`이지만,
+`items` 필드에 `State: 'true'`/'false'`가 정상 저장되어 있습니다. DB 마이그레이션 없이 기존 이벤트도
+바(bar)로 표시됩니다.
+
 #### 스냅샷 연동 (인라인 필름스트립)
 
 **저장 (서버):**
@@ -566,3 +583,4 @@ User action:
 | 1.6 | 2026-06-22 | Gantt 인터벌 바 렌더링 추가 (§5.9) — state=true/false 쌍으로 수평 막대, 진행 중 대시 바, 포인트 이벤트 다이아몬드; ONVIF 스냅샷 저장 (`onvif_snapshots` DB + `/api/onvif-snapshots`); `pipelineManager.getLatestFrame()` 추가 |
 | 1.7 | 2026-06-22 | buildIntervals() coalesce 수정 — start→start→…→end 시퀀스를 단일 인터벌로 합산 (서버 재시작 artifact 처리) |
 | 1.8 | 2026-06-22 | §5.9 행 레이아웃 DetectionsTimelineInline 스타일 통합 — ROW_H 확장(Inline 52px/Overlay 68px), 인라인 필름스트립 스냅샷(snapCache + lazy-fetch), SEV_COLOR 인라인 스타일 바 |
+| 1.9 | 2026-06-23 | §5.9 getEventState() 함수 추가 — evt.state=null인 구버전 이벤트도 items 폴백으로 bar 렌더링; DB 마이그레이션 불필요 |

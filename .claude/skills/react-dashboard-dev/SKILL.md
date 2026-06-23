@@ -669,17 +669,25 @@ itemX     = (eventTs − viewStart) / viewSpan   // [0..1]
 ### Gantt 인터벌 로직
 
 ```typescript
-// buildIntervals(events, nowMs) — state=true/false 쌍으로 인터벌 구성
+// buildIntervals(events, nowMs) — getEventState()로 state 결정 후 인터벌 구성
 // key = cameraId:topicType:sourceToken
-// state='true':
-//   Map[key] already open → skip (coalesce, 원본 startTs 유지)
-//   Map[key] empty        → open new interval (inProgress=true, endTs=nowMs)
-// state='false' → close Map[key], set endTs, push; 없으면 point marker
-// no state      → point marker (isPoint=true)
-// flush         → remaining open = inProgress
 //
-// Coalesce: start→start→start→end 시퀀스는 단일 인터벌로 합산
-// (서버 재시작 후 _lastStates 초기화로 인한 artifact)
+// getEventState(evt): 'true' | 'false' | null
+//   1. evt.state ('true'|'false') — 서버 파서 정상 추출값
+//   2. items 폴백 — state=null인 구버전 이벤트에서 items.State 등 추출
+//      (STATE_KEYS: State, IsMotion, IsSoundDetected, IsAlarm, IsActive, Active, Enabled, ...)
+//   3. 마지막 수단: token/source 제외 첫 번째 boolean 값
+//   → 없으면 null → 포인트 마커
+//
+// state='true'  → open interval (inProgress=true, endTs=nowMs)
+//   Map[key] already open → SKIP (coalesce: start→start→end = single interval)
+// state='false' → close Map[key], push interval; 없으면 point marker
+// null          → point marker (isPoint=true)
+// flush         → remaining open = inProgress bar (dashed right edge)
+//
+// ⚠ items 폴백이 필요한 이유: 서버 파서 업그레이드 전 저장된 이벤트는
+//   DB state=null이지만 items.State='true'/'false'는 정상 저장됨.
+//   DB 마이그레이션 없이 기존 이벤트도 bar로 표시.
 ```
 
 ### ONVIF 스냅샷

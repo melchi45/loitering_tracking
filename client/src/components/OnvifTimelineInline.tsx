@@ -23,15 +23,14 @@ import { useSocket } from '../hooks/useSocket';
 
 // ── Layout constants (matches DetectionsTimelineInline proportions) ────────────
 
-const ROW_LABEL_W = 80;   // fixed left label column
-const ROW_H       = 52;   // bar (16px) + snap strip (34px) + separator
-const BAR_H       = 16;
-const BAR_TOP     = 4;
-const SNAP_H      = 30;   // inline frame thumbnail height
-const SNAP_W      = 44;   // inline frame thumbnail width
-const SNAP_TOP    = BAR_TOP + BAR_H + 2;
-const TICK_H      = 20;
-const DETAIL_W    = 220;
+const ROW_H      = 52;   // bar (16px) + snap strip (30px) + separator
+const BAR_H      = 16;
+const BAR_TOP    = 4;
+const SNAP_H     = 28;   // inline frame thumbnail height
+const SNAP_W     = 40;   // inline frame thumbnail width
+const SNAP_TOP   = BAR_TOP + BAR_H + 2;
+const TICK_H     = 20;
+const DETAIL_W   = 220;
 const DRAG_THRESH = 4;
 
 // ── Range options ─────────────────────────────────────────────────────────────
@@ -44,15 +43,15 @@ const RANGE_OPTIONS = [
 ] as const;
 type RangeLabel = '1D' | '1W' | '1M' | '1Y' | 'custom';
 
-// ── Severity colour palette (matches DetectionsTimelineInline bar style) ───────
+// ── Severity colour palette ───────────────────────────────────────────────────
 
 const SEV_COLOR: Record<OnvifSeverity, string> = {
-  info:     '#3b82f6',   // blue-500
+  info:     '#6366f1',   // indigo-500
   warning:  '#f59e0b',   // amber-500
   critical: '#ef4444',   // red-500
 };
 const SEV_TEXT: Record<OnvifSeverity, string> = {
-  info:     'text-blue-300',
+  info:     'text-indigo-300',
   warning:  'text-amber-300',
   critical: 'text-red-400',
 };
@@ -87,7 +86,7 @@ interface DragState { startX: number; startPan: number; }
 
 function Spinner() {
   return (
-    <svg className="w-4 h-4 animate-spin text-blue-400" fill="none" viewBox="0 0 24 24">
+    <svg className="w-4 h-4 animate-spin text-indigo-400" fill="none" viewBox="0 0 24 24">
       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
     </svg>
@@ -109,9 +108,12 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
   const [loading,       setLoading]       = useState(false);
   const [showRaw,       setShowRaw]       = useState(false);
   const [isDragging,    setIsDragging]    = useState(false);
+  const [fetchKey,      setFetchKey]      = useState(0);
   const [customStart,   setCustomStart]   = useState('');
   const [customEnd,     setCustomEnd]     = useState('');
   const [customApplied, setCustomApplied] = useState<{ from: string; to: string } | null>(null);
+  // Zoomed snapshot for detail panel
+  const [zoomedSnap, setZoomedSnap] = useState<string | null>(null);
 
   // Snap cache: intervalId → frameData URL (empty string = no snap / not available)
   const [snapCache, setSnapCache] = useState<Map<string, string>>(new Map());
@@ -170,7 +172,7 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [cameraId, range, customApplied, rangeMs, setEvents, addType]);
+  }, [cameraId, range, customApplied, rangeMs, fetchKey, setEvents, addType]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Global type registry ─────────────────────────────────────────────────────
   useEffect(() => {
@@ -197,14 +199,20 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
     return { rows: buildRows(intervals), totalCount: filtered.length };
   }, [events, typeFilter, nowMs]);
 
-  const visibleCount = useMemo(() =>
-    rows.reduce((n, r) =>
-      n + r.intervals.filter(iv => iv.endTs >= viewStart && iv.startTs <= viewEnd).length, 0),
+  const visibleRows = useMemo(() =>
+    rows.filter(r =>
+      r.intervals.some(iv => iv.endTs >= viewStart && iv.startTs <= viewEnd)
+    ),
   [rows, viewStart, viewEnd]);
+
+  const visibleCount = useMemo(() =>
+    visibleRows.reduce((n, r) =>
+      n + r.intervals.filter(iv => iv.endTs >= viewStart && iv.startTs <= viewEnd).length, 0),
+  [visibleRows, viewStart, viewEnd]);
 
   // ── Lazy-fetch inline snaps for visible intervals ────────────────────────────
   useEffect(() => {
-    const visibleBars = rows.flatMap(r =>
+    const visibleBars = visibleRows.flatMap(r =>
       r.intervals.filter(iv => !iv.isPoint && iv.endTs >= viewStart && iv.startTs <= viewEnd)
     );
     const toFetch = visibleBars.filter(iv => !fetchedRef.current.has(iv.id));
@@ -219,7 +227,21 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
         })
         .catch(() => {});
     });
-  }, [rows, viewStart, viewEnd]);
+    // Also fetch snaps for visible point events
+    const visiblePoints = visibleRows.flatMap(r =>
+      r.intervals.filter(iv => iv.isPoint && iv.endTs >= viewStart && iv.startTs <= viewEnd)
+    );
+    visiblePoints.filter(iv => !fetchedRef.current.has(iv.id)).forEach(iv => {
+      fetchedRef.current.add(iv.id);
+      fetch(`/api/onvif-snapshots?eventId=${iv.id}&limit=1`)
+        .then(r => r.json())
+        .then(d => {
+          const fd = (d.snapshots?.[0]?.frameData as string | undefined) ?? '';
+          if (fd) setSnapCache(prev => { const m = new Map(prev); m.set(iv.id, fd); return m; });
+        })
+        .catch(() => {});
+    });
+  }, [visibleRows, viewStart, viewEnd]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Ticks ────────────────────────────────────────────────────────────────────
   const ticks = useMemo(() =>
@@ -256,10 +278,10 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!dragRef.current || !containerRef.current) return;
     const dx = e.clientX - dragRef.current.startX;
-    const trackW = containerRef.current.getBoundingClientRect().width - ROW_LABEL_W;
+    const trackW = containerRef.current.getBoundingClientRect().width;
     if (!hasDraggedRef.current && Math.abs(dx) < DRAG_THRESH) return;
     if (!hasDraggedRef.current) { hasDraggedRef.current = true; setIsDragging(true); }
-    setPan(clampPan(dragRef.current.startPan + dx / trackW / zoom, zoom));
+    setPan(clampPan(dragRef.current.startPan - dx / trackW / zoom, zoom));
   };
   const stopDrag = () => { dragRef.current = null; setIsDragging(false); };
 
@@ -269,7 +291,7 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
   const dispItems = parsed?.items ?? selEvt?.items ?? {};
   const selSnap   = selected ? (snapCache.get(selected.id) ?? null) : null;
 
-  const cursorClass = isDragging ? 'cursor-grabbing' : 'cursor-grab';
+  const cursorClass = isDragging ? 'cursor-grabbing' : zoom > 1 ? 'cursor-grab' : 'cursor-default';
 
   return (
     <div className="flex flex-col h-full text-[10px] select-none">
@@ -282,7 +304,7 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
             <button key={label}
               onClick={() => { setRange(label as RangeLabel); setZoom(1); setPan(0); }}
               className={`px-1.5 py-0.5 rounded text-[9px] font-bold transition-colors ${
-                range === label ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-700'
+                range === label ? 'bg-indigo-600 text-white' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-700'
               }`}>{label}</button>
           ))}
           <button
@@ -295,7 +317,7 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
         <select value={typeFilter}
           onChange={e => { setTypeFilter(e.target.value); setSelected(null); }}
           className="bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-[9px]
-                     text-gray-300 focus:outline-none focus:border-blue-500 cursor-pointer">
+                     text-gray-300 focus:outline-none focus:border-indigo-500 cursor-pointer">
           <option value="">All Types</option>
           {types.map(({ topicType, topicLabel }) => (
             <option key={topicType} value={topicType}>{topicLabel}</option>
@@ -304,11 +326,14 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
 
         <div className="flex-1" />
         {zoom > 1 && (
-          <span className="text-[9px] text-blue-400 bg-blue-900/30 px-1.5 py-0.5 rounded">
+          <span className="text-[9px] text-indigo-400 bg-indigo-900/30 px-1.5 py-0.5 rounded">
             ×{zoom.toFixed(1)}
           </span>
         )}
-        {loading ? <Spinner /> : null}
+        {loading ? <Spinner /> : (
+          <button onClick={() => setFetchKey(k => k + 1)}
+                  className="text-gray-500 hover:text-gray-300 transition-colors" title="Refresh">↺</button>
+        )}
         <span className="text-gray-600">{visibleCount}/{totalCount}</span>
       </div>
 
@@ -343,71 +368,80 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
       {/* ── Main area ─────────────────────────────────────────────────────────── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
-        {/* ── Gantt canvas ──────────────────────────────────────────────────────── */}
+        {/* ── Gantt canvas (absolute positioning, matches DetectionsTimeline) ─── */}
         <div
           ref={containerRef}
-          className={`flex-1 flex flex-col overflow-hidden ${cursorClass}`}
+          className={`flex-1 relative overflow-hidden ${cursorClass}`}
           onWheel={handleWheel}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={stopDrag}
           onMouseLeave={stopDrag}
-          onClick={() => { if (!hasDraggedRef.current) setSelected(null); }}
         >
+          {/* Tick labels at absolute bottom */}
+          <div className="absolute bottom-0 left-0 right-0 pointer-events-none bg-gray-900/60"
+               style={{ height: TICK_H, borderTop: '1px solid rgba(55,65,81,0.4)' }}>
+            {ticks.map(({ x, label }) => (
+              <div key={x} className="absolute flex flex-col items-center"
+                   style={{ left: `${x * 100}%`, transform: 'translateX(-50%)', bottom: 2 }}>
+                <div className="w-px h-2 bg-gray-600 mb-0.5" />
+                <span className="text-[7px] text-gray-600 whitespace-nowrap">{label}</span>
+              </div>
+            ))}
+          </div>
+
           {/* Scrollable rows */}
-          <div className="flex-1 overflow-y-auto overflow-x-hidden">
+          <div className="absolute top-0 left-0 right-0 overflow-y-auto"
+               style={{ bottom: TICK_H }}>
 
             {!loading && rows.length === 0 && (
-              <div className="flex items-center justify-center h-full pointer-events-none">
-                <span className="text-gray-600">{t.onvifTimelineEmpty}</span>
+              <div className="flex items-center justify-center h-full text-gray-600 text-xs">
+                {t.onvifTimelineEmpty}
               </div>
             )}
 
-            {rows.map((row, rowIdx) => (
+            {visibleRows.map((row, rowIdx) => (
               <div key={row.key}
-                   className="flex relative"
+                   className="relative overflow-hidden"
                    style={{
                      height: ROW_H,
                      borderBottom: '1px solid rgba(55,65,81,0.4)',
                      backgroundColor: rowIdx % 2 === 1 ? 'rgba(255,255,255,0.015)' : undefined,
                    }}>
 
-                {/* Label column */}
-                <div className="flex-shrink-0 flex items-start pt-1 px-1.5 border-r border-gray-700/60 overflow-hidden"
-                     style={{ width: ROW_LABEL_W }}>
-                  <span className={`text-[8px] truncate leading-tight ${SEV_TEXT[row.severity] ?? 'text-gray-400'}`}
-                        title={row.topicLabel}>
-                    {row.topicLabel}
-                  </span>
-                </div>
+                {/* Row index */}
+                <span className="absolute left-0.5 text-[7px] text-gray-700 pointer-events-none"
+                      style={{ top: BAR_TOP + 2, zIndex: 1 }}>
+                  {rowIdx + 1}
+                </span>
 
-                {/* Track canvas */}
-                <div className="flex-1 relative overflow-hidden" style={{ height: ROW_H }}>
+                {/* Grid lines */}
+                {[0.25, 0.5, 0.75].map(f => (
+                  <div key={f} className="absolute top-0 bottom-0 w-px bg-gray-700/30 pointer-events-none"
+                       style={{ left: `${f * 100}%` }} />
+                ))}
 
-                  {/* Grid lines */}
-                  {[0.25, 0.5, 0.75].map(f => (
-                    <div key={f} className="absolute top-0 bottom-0 w-px bg-gray-700/30 pointer-events-none"
-                         style={{ left: `${f * 100}%` }} />
-                  ))}
+                {/* Intervals */}
+                {row.intervals
+                  .filter(iv => iv.endTs >= viewStart && iv.startTs <= viewEnd)
+                  .map(iv => {
+                    const isSel  = selected?.id === iv.id;
+                    const color  = SEV_COLOR[iv.severity];
+                    const snapFd = snapCache.get(iv.id) ?? '';
 
-                  {/* Intervals */}
-                  {row.intervals
-                    .filter(iv => iv.endTs >= viewStart && iv.startTs <= viewEnd)
-                    .map(iv => {
-                      const isSel  = selected?.id === iv.id;
-                      const color  = SEV_COLOR[iv.severity];
-                      const snapFd = snapCache.get(iv.id) ?? '';
-
-                      if (iv.isPoint) {
-                        const x = (iv.startTs - viewStart) / viewSpan;
-                        if (x < -0.01 || x > 1.01) return null;
-                        return (
-                          <button key={iv.id}
+                    if (iv.isPoint) {
+                      const x = (iv.startTs - viewStart) / viewSpan;
+                      if (x < -0.01 || x > 1.01) return null;
+                      return (
+                        <React.Fragment key={iv.id}>
+                          <button
                             onMouseDown={e => e.stopPropagation()}
                             onClick={e => {
                               e.stopPropagation();
-                              if (!hasDraggedRef.current)
+                              if (!hasDraggedRef.current) {
                                 setSelected(sel => sel?.id === iv.id ? null : iv);
+                                setZoomedSnap(null);
+                              }
                             }}
                             style={{
                               position: 'absolute',
@@ -423,59 +457,7 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                             }}
                             title={`${iv.topicLabel} — ${new Date(iv.startTs).toLocaleTimeString()}`}
                           />
-                        );
-                      }
-
-                      // Gantt bar
-                      const barL = Math.max(0, (iv.startTs - viewStart) / viewSpan);
-                      const barR = Math.min(1, (iv.endTs - viewStart) / viewSpan);
-                      const barW = Math.max(0.003, barR - barL);
-                      const dur  = fmtDur(iv.inProgress ? nowMs - iv.startTs : iv.durationMs);
-
-                      // Inline snap position (at startTs)
-                      const xSnap = (iv.startTs - viewStart) / viewSpan;
-                      const snapLeft = Math.max(0, Math.min(97, xSnap * 100));
-
-                      return (
-                        <React.Fragment key={iv.id}>
-                          {/* Bar */}
-                          <div
-                            onMouseDown={e => e.stopPropagation()}
-                            onClick={e => {
-                              e.stopPropagation();
-                              if (!hasDraggedRef.current) {
-                                setSelected(sel => sel?.id === iv.id ? null : iv);
-                                setShowRaw(false);
-                              }
-                            }}
-                            style={{
-                              position: 'absolute',
-                              left:   `${barL * 100}%`,
-                              width:  `${barW * 100}%`,
-                              top:    BAR_TOP,
-                              height: BAR_H,
-                              backgroundColor: color + (isSel ? 'ff' : iv.inProgress ? '88' : 'cc'),
-                              border: isSel
-                                ? '1px solid #fff'
-                                : iv.inProgress
-                                  ? `1px dashed ${color}`
-                                  : `1px solid ${color}`,
-                              borderRadius: 2,
-                              cursor: 'pointer',
-                              overflow: 'hidden',
-                              zIndex: 2,
-                              display: 'flex',
-                              alignItems: 'center',
-                            }}
-                            title={`${iv.topicLabel}${iv.inProgress ? ' (in progress)' : ''} — ${dur}`}
-                          >
-                            <span style={{ padding: '0 4px', fontSize: 7, fontWeight: 700, color: '#fff',
-                                           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              {iv.inProgress ? '↦ ' : ''}{iv.topicLabel} {dur}
-                            </span>
-                          </div>
-
-                          {/* Inline frame snap at startTs */}
+                          {/* Inline snap for point event */}
                           {snapFd && (
                             <img
                               onMouseDown={e => e.stopPropagation()}
@@ -483,14 +465,14 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                                 e.stopPropagation();
                                 if (!hasDraggedRef.current) {
                                   setSelected(sel => sel?.id === iv.id ? null : iv);
-                                  setShowRaw(false);
+                                  setZoomedSnap(prev => prev === snapFd ? null : snapFd);
                                 }
                               }}
                               src={snapFd}
                               alt=""
                               style={{
                                 position: 'absolute',
-                                left: `${snapLeft}%`,
+                                left: `${Math.max(0, Math.min(97, x * 100))}%`,
                                 top: SNAP_TOP,
                                 width: SNAP_W,
                                 height: SNAP_H,
@@ -506,42 +488,127 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                           )}
                         </React.Fragment>
                       );
-                    })
-                  }
-                </div>
+                    }
+
+                    // Gantt bar
+                    const barL = Math.max(0, (iv.startTs - viewStart) / viewSpan);
+                    const barR = Math.min(1, (iv.endTs - viewStart) / viewSpan);
+                    const barW = Math.max(0.003, barR - barL);
+                    const dur  = fmtDur(iv.inProgress ? nowMs - iv.startTs : iv.durationMs);
+
+                    // Inline snap position (at startTs)
+                    const xSnap = (iv.startTs - viewStart) / viewSpan;
+                    const snapLeft = Math.max(0, Math.min(97, xSnap * 100));
+
+                    return (
+                      <React.Fragment key={iv.id}>
+                        {/* Bar */}
+                        <div
+                          className="absolute flex items-center overflow-hidden rounded-sm"
+                          onMouseDown={e => e.stopPropagation()}
+                          onClick={e => {
+                            e.stopPropagation();
+                            if (!hasDraggedRef.current) {
+                              setSelected(sel => sel?.id === iv.id ? null : iv);
+                              setZoomedSnap(null);
+                            }
+                          }}
+                          style={{
+                            left:            `${barL * 100}%`,
+                            width:           `${barW * 100}%`,
+                            top:             BAR_TOP,
+                            height:          BAR_H,
+                            backgroundColor: color + (isSel ? 'ff' : iv.inProgress ? '88' : 'cc'),
+                            border:          isSel
+                              ? '1px solid #fff'
+                              : iv.inProgress
+                                ? `1px dashed ${color}`
+                                : `1px solid ${color}`,
+                            cursor: 'pointer',
+                            zIndex: 2,
+                          }}
+                          title={`${iv.topicLabel}${iv.inProgress ? ' (in progress)' : ''} — ${dur}`}
+                        >
+                          <span style={{ padding: '0 4px', fontSize: 7, fontWeight: 700, color: '#fff',
+                                         whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {iv.inProgress ? '↦ ' : ''}{iv.topicLabel} {dur}
+                          </span>
+                        </div>
+
+                        {/* Inline frame snap at startTs */}
+                        {snapFd && (
+                          <div
+                            className="absolute overflow-hidden rounded border cursor-pointer hover:border-white/60 hover:z-20 transition-all"
+                            onMouseDown={e => e.stopPropagation()}
+                            onClick={e => {
+                              e.stopPropagation();
+                              if (!hasDraggedRef.current) {
+                                setSelected(sel => sel?.id === iv.id ? null : iv);
+                                setZoomedSnap(prev => prev === snapFd ? null : snapFd);
+                              }
+                            }}
+                            style={{
+                              position: 'absolute',
+                              left: `${snapLeft}%`,
+                              top: SNAP_TOP,
+                              width: SNAP_W,
+                              height: SNAP_H,
+                              borderColor: isSel ? '#fff' : `${color}66`,
+                              zIndex: 2,
+                              transform: 'translateX(-4px)',
+                            }}
+                            title={`Frame at ${new Date(iv.startTs).toLocaleTimeString()}`}
+                          >
+                            <img src={snapFd} alt=""
+                                 className="w-full h-full object-cover" />
+                          </div>
+                        )}
+                      </React.Fragment>
+                    );
+                  })
+                }
               </div>
             ))}
           </div>
 
-          {/* Tick labels (sticky bottom) */}
-          <div className="flex-shrink-0 flex border-t border-gray-700/40 bg-gray-950/80"
-               style={{ height: TICK_H }}>
-            <div className="flex-shrink-0 border-r border-gray-700/60" style={{ width: ROW_LABEL_W }} />
-            <div className="flex-1 relative">
-              {ticks.map(({ x, label }) => (
-                <div key={x} className="absolute flex flex-col items-center pointer-events-none"
-                     style={{ left: `${x * 100}%` }}>
-                  <div className="w-px h-2 bg-gray-600" />
-                  <span className="text-[8px] text-gray-500 whitespace-nowrap mt-0.5">{label}</span>
-                </div>
-              ))}
-            </div>
-          </div>
+          {/* Background click = deselect */}
+          <div className="absolute inset-0 -z-10"
+               onClick={() => { if (!hasDraggedRef.current) { setSelected(null); setZoomedSnap(null); } }} />
         </div>
 
         {/* ── Detail panel ──────────────────────────────────────────────────────── */}
         {selected && (
-          <div className="flex flex-col flex-shrink-0 border-l border-gray-700 bg-gray-900/80 overflow-hidden"
+          <div className="flex flex-col flex-shrink-0 border-l border-gray-700 bg-gray-900/90 overflow-hidden"
                style={{ width: DETAIL_W }}>
 
             <div className="flex items-center justify-between px-2 py-1.5
                             border-b border-gray-700/60 bg-gray-800/80 flex-shrink-0">
-              <span className={`text-[9px] font-bold truncate ${SEV_TEXT[selected.severity]}`}>
-                {selected.topicLabel}
-              </span>
-              <button onClick={() => setSelected(null)}
+              <div className="flex items-center gap-1 min-w-0">
+                <span className="w-2 h-2 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: SEV_COLOR[selected.severity] }} />
+                <span className={`text-[9px] font-bold truncate ${SEV_TEXT[selected.severity]}`}>
+                  {selected.topicLabel}
+                </span>
+              </div>
+              <button onClick={() => { setSelected(null); setZoomedSnap(null); }}
                       className="text-gray-500 hover:text-white flex-shrink-0 ml-1 text-[11px]">✕</button>
             </div>
+
+            {/* Zoomed snapshot view */}
+            {zoomedSnap && (
+              <div className="flex-shrink-0 px-1 pt-1 pb-0.5 border-b border-gray-700/50 bg-black/40">
+                <div className="relative overflow-hidden rounded border border-white/20">
+                  <img src={zoomedSnap} alt="onvif-snap"
+                       className="w-full object-cover" style={{ maxHeight: 120 }} />
+                  <span className="absolute bottom-0 left-0 right-0 text-[7px] text-gray-200
+                                   bg-black/70 px-1 py-0.5 text-center">
+                    Frame at event start
+                  </span>
+                  <button onClick={() => setZoomedSnap(null)}
+                          className="absolute top-1 left-1 text-gray-400 hover:text-white bg-black/50 rounded px-1 text-[8px]">✕</button>
+                </div>
+              </div>
+            )}
 
             {selEvt?.rawXml && (
               <div className="flex border-b border-gray-700/60 flex-shrink-0">
@@ -551,6 +618,24 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                 <button onClick={() => setShowRaw(true)}
                         className={`flex-1 py-0.5 text-[9px] font-bold ${showRaw ? 'bg-green-900/50 text-green-300' : 'text-gray-500 hover:text-gray-300'}`}>
                   Raw XML</button>
+              </div>
+            )}
+
+            {/* Snap thumbnail (full-size in detail panel, when not zoomed) */}
+            {!zoomedSnap && selSnap && (
+              <div className="flex-shrink-0 border-b border-gray-700/50 overflow-y-auto"
+                   style={{ maxHeight: 120 }}>
+                <div className="p-1">
+                  <div className="relative overflow-hidden rounded border border-gray-700 cursor-pointer hover:border-gray-500"
+                       onClick={() => setZoomedSnap(selSnap)}>
+                    <img src={selSnap} alt="onvif-snap"
+                         className="w-full object-cover" style={{ height: 80 }} />
+                    <span className="absolute bottom-0 left-0 right-0 text-[7px] text-gray-200
+                                     bg-black/70 px-1 py-0.5 text-center">
+                      Frame at event start
+                    </span>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -564,11 +649,13 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                   <DetailRow label="Start" value={new Date(selected.startTs).toLocaleString()} />
                   <DetailRow
                     label="End"
-                    value={selected.inProgress ? '● In Progress' : new Date(selected.endTs).toLocaleString()}
+                    value={selected.inProgress ? '● In Progress' : selected.isPoint ? '—' : new Date(selected.endTs).toLocaleString()}
                     highlight={selected.inProgress}
                   />
-                  <DetailRow label="Dur"
-                    value={fmtDur(selected.inProgress ? nowMs - selected.startTs : selected.durationMs)} />
+                  {!selected.isPoint && (
+                    <DetailRow label="Dur"
+                      value={fmtDur(selected.inProgress ? nowMs - selected.startTs : selected.durationMs)} />
+                  )}
                   {selected.sourceToken && <DetailRow label="Source" value={selected.sourceToken} />}
                   {selEvt?.operation && <DetailRow label="Op" value={selEvt.operation} />}
                   {Object.entries(dispItems)
@@ -578,14 +665,7 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                   <div className="pt-0.5 border-t border-gray-700/40">
                     <DetailRow label="Topic" value={selEvt?.topic ?? ''} mono />
                   </div>
-                  {/* Frame snapshot (full-size in detail panel) */}
-                  {selSnap ? (
-                    <div className="pt-1">
-                      <div className="text-[8px] text-gray-500 mb-1">Frame at event start</div>
-                      <img src={selSnap} alt="onvif-snap"
-                           className="w-full rounded border border-gray-600/40 object-contain" />
-                    </div>
-                  ) : !selected.inProgress && (
+                  {!selSnap && !selected.inProgress && (
                     <div className="text-[8px] text-gray-600 italic pt-1">No frame snapshot</div>
                   )}
                 </div>
@@ -602,7 +682,7 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
           <button onClick={() => shiftPan(-0.1 / zoom)}
                   className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded text-[9px]">◀</button>
           <div className="flex-1 h-1 bg-gray-700 rounded-full relative">
-            <div className="absolute h-full bg-blue-500 rounded-full"
+            <div className="absolute h-full bg-indigo-500 rounded-full"
                  style={{ left: `${pan * zoom * 100}%`, width: `${(1 / zoom) * 100}%` }} />
           </div>
           <button onClick={() => shiftPan(0.1 / zoom)}
@@ -632,6 +712,34 @@ function DetailRow({ label, value, mono, highlight }: {
 
 // ── Utility functions ─────────────────────────────────────────────────────────
 
+// State item names tried in order (mirrors onvifParser.js extractState)
+const STATE_KEYS = ['State', 'IsMotion', 'IsSoundDetected', 'IsAlarm', 'IsActive',
+                    'Active', 'Enabled', 'IsEnabled', 'IsTriggered', 'IsDetected', 'Value'];
+
+/**
+ * Resolve boolean state for an event.
+ * Priority: evt.state (set by server parser) → items fallback (for events stored
+ * before server-side parser fix, where state=null but items.State='true'/'false').
+ */
+function getEventState(evt: OnvifEvent): 'true' | 'false' | null {
+  if (evt.state === 'true'  || evt.state === 'false')  return evt.state;
+  const items = evt.items as Record<string, string> | undefined;
+  if (!items) return null;
+  for (const key of STATE_KEYS) {
+    const v = items[key];
+    if (v === 'true'  || v === 'True')  return 'true';
+    if (v === 'false' || v === 'False') return 'false';
+    if (v === '1') return 'true';
+    if (v === '0') return 'false';
+  }
+  // Last resort: first non-token boolean item
+  for (const [k, v] of Object.entries(items)) {
+    if (k.toLowerCase().includes('token') || k.toLowerCase().includes('source')) continue;
+    if (v === 'true'  || v === 'false') return v as 'true' | 'false';
+  }
+  return null;
+}
+
 function mkPoint(evt: OnvifEvent): OnvifInterval {
   const tsMs = new Date(evt.serverTs).getTime();
   return {
@@ -650,9 +758,10 @@ function buildIntervals(events: OnvifEvent[], nowMs: number): OnvifInterval[] {
   const open = new Map<string, OnvifInterval>();
 
   for (const evt of sorted) {
-    const key = `${evt.cameraId}:${evt.topicType}:${evt.sourceToken ?? ''}`;
+    const key   = `${evt.cameraId}:${evt.topicType}:${evt.sourceToken ?? ''}`;
+    const state = getEventState(evt);
 
-    if (evt.state === 'true') {
+    if (state === 'true') {
       if (open.has(key)) {
         // start→start→start→end: coalesce — keep original startTs, ignore this event
         continue;
@@ -664,27 +773,25 @@ function buildIntervals(events: OnvifEvent[], nowMs: number): OnvifInterval[] {
         startTs: tsMs, endTs: nowMs, isPoint: false, inProgress: true,
         durationMs: nowMs - tsMs, startEvt: evt, endEvt: null,
       });
-    } else if (evt.state === 'false') {
+    } else if (state === 'false') {
       const interval = open.get(key);
       if (interval) {
         const endTs = new Date(evt.serverTs).getTime();
-        interval.endTs    = endTs;
+        interval.endTs      = endTs;
         interval.inProgress = false;
         interval.durationMs = endTs - interval.startTs;
-        interval.endEvt   = evt;
+        interval.endEvt     = evt;
         intervals.push(interval);
         open.delete(key);
       } else {
-        // Orphaned end event → point marker
         intervals.push(mkPoint(evt));
       }
     } else {
-      // No state field → point marker
+      // No state → point marker
       intervals.push(mkPoint(evt));
     }
   }
 
-  // Remaining open intervals → in-progress
   for (const iv of open.values()) {
     iv.durationMs = nowMs - iv.startTs;
     intervals.push(iv);
