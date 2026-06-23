@@ -64,7 +64,10 @@ IDR_WAIT_TIMEOUT   = float(os.environ.get("IDR_WAIT_TIMEOUT", "2"))
 # responses (OPTIONS / GET_PARAMETER) do NOT call wd.reset(), so the watchdog
 # correctly detects "keepalives alive but no video" — unlike stimeout which is
 # reset by any socket data including keepalives.
-RTSP_READ_TIMEOUT  = float(os.environ.get("RTSP_READ_TIMEOUT", "5"))
+RTSP_READ_TIMEOUT     = float(os.environ.get("RTSP_READ_TIMEOUT", "5"))
+# App RTP carries sparse ONVIF metadata (events may be minutes apart).
+# Use a much longer idle timeout than video/audio tracks.
+APP_RTP_READ_TIMEOUT  = float(os.environ.get("APP_RTP_READ_TIMEOUT", "60"))
 
 _RTSP_OPTIONS = {
     "rtsp_transport": "tcp",
@@ -595,9 +598,16 @@ class CameraSession:
                 retry_delay = min(retry_delay * 1.5, 5.0)
 
     def _app_rtp_ingest_once(self):
-        wd = _Watchdog(RTSP_READ_TIMEOUT, f"[{self.id[:8]}] apprtp", self._stop)
+        # App RTP carries sparse ONVIF metadata (codec=unknown data track).
+        # Do NOT use _Watchdog here: calling container.close() from a background
+        # thread while demux() runs on an unknown-codec stream can segfault libav,
+        # crashing the entire ingest-daemon process.
+        #
+        # Instead set inp.read_timeout (AVFormatContext.io_timeout, microseconds).
+        # libav interrupts each blocking demux call from within C when the timeout
+        # fires — completely thread-safe, no cross-thread close() needed.
         inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS)
-        wd.arm(inp)
+        inp.read_timeout = int(APP_RTP_READ_TIMEOUT * 1_000_000)
         try:
             # Find non-video, non-audio streams (data, subtitle, application tracks).
             # Samsung / ONVIF metadata is typically exposed as a "data" or "subtitle"
@@ -614,8 +624,8 @@ class CameraSession:
             log.info("[%s] App RTP stream: type=%s codec=%s",
                      self.id[:8], ds.type, codec_name)
 
-            ctx   = _SSL_CTX_NOVERIFY if self.app_rtp_callback_url.startswith("https://") else None
-            seq   = 0
+            ctx        = _SSL_CTX_NOVERIFY if self.app_rtp_callback_url.startswith("https://") else None
+            seq        = 0
             push_count = 0
 
             for pkt in inp.demux(ds):
@@ -623,7 +633,6 @@ class CameraSession:
                     break
                 if pkt.size == 0:
                     continue
-                wd.reset()  # RTP packet arrived → keep watchdog alive
 
                 payload_b64 = base64.b64encode(bytes(pkt)).decode("ascii")
                 body = json.dumps({
@@ -649,7 +658,6 @@ class CameraSession:
                 except Exception as e:
                     log.debug("[%s] App RTP callback failed: %s", self.id[:8], e)
         finally:
-            wd.disarm()
             try:
                 inp.close()
             except Exception:
