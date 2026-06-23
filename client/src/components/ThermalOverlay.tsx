@@ -143,6 +143,12 @@ export default function ThermalOverlay({ cameraId, frameWidth, frameHeight }: Pr
   const allReadings    = Array.from(areas.values());
   const fullAreaSlots  = allReadings.filter(s => isFullArea(s.reading));
   const pointSlots     = allReadings.filter(s => !isFullArea(s.reading));
+  // FullArea readings also carry max/min hotspot coordinates — render crosshairs for all
+  const coordSlots     = allReadings.filter(s => {
+    const r = s.reading;
+    return (r.maxTempX !== null && r.maxTempY !== null) ||
+           (r.minTempX !== null && r.minTempY !== null);
+  });
 
   if (allReadings.length === 0) {
     return <div ref={containerRef} className="absolute inset-0 pointer-events-none" />;
@@ -187,15 +193,15 @@ export default function ThermalOverlay({ cameraId, frameWidth, frameHeight }: Pr
         </div>
       )}
 
-      {/* ── Coordinate-based area readings: SVG crosshairs + bottom-left panel ── */}
-      {pointSlots.length > 0 && (
+      {/* ── Coordinate-based crosshairs: all readings that have hotspot/coldspot coords ── */}
+      {coordSlots.length > 0 && (
         <>
           <svg
             className="absolute inset-0"
             style={{ width: w || '100%', height: h || '100%' }}
             overflow="visible"
           >
-            {pointSlots.map(({ reading: r }, i) => {
+            {coordSlots.map(({ reading: r }, i) => {
               const markers: React.ReactNode[] = [];
               const areaLabel = r.areaName || r.itemId || `A${i + 1}`;
 
@@ -243,7 +249,7 @@ export default function ThermalOverlay({ cameraId, frameWidth, frameHeight }: Pr
             })}
           </svg>
 
-          {/* Bottom-left info panel — one card per point area */}
+          {/* Bottom-left info panel — named box areas only (FullArea shown in top banner) */}
           <div className="absolute bottom-8 left-2 flex flex-col gap-1">
             {pointSlots.map(({ reading: r }, i) => (
               <div
