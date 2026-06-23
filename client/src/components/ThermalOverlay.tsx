@@ -143,11 +143,13 @@ export default function ThermalOverlay({ cameraId, frameWidth, frameHeight }: Pr
   const allReadings    = Array.from(areas.values());
   const fullAreaSlots  = allReadings.filter(s => isFullArea(s.reading));
   const pointSlots     = allReadings.filter(s => !isFullArea(s.reading));
-  // FullArea readings also carry max/min hotspot coordinates — render crosshairs for all
+  // Only named box areas get crosshairs; FullArea (ItemID=Z / AreaName=FullArea) uses the top banner only
   const coordSlots     = allReadings.filter(s => {
     const r = s.reading;
-    return (r.maxTempX !== null && r.maxTempY !== null) ||
-           (r.minTempX !== null && r.minTempY !== null);
+    return !isFullArea(r) && (
+      (r.maxTempX !== null && r.maxTempY !== null) ||
+      (r.minTempX !== null && r.minTempY !== null)
+    );
   });
 
   if (allReadings.length === 0) {

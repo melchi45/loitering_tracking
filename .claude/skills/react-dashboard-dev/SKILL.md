@@ -848,6 +848,11 @@ fallback 응답에는 `source: 'local-streaming'` 필드가 포함됩니다.
 
 ## ThermalOverlay — 열상 카메라 온도 오버레이
 
+**설계 문서:** [Design_Thermal_Radiometry_Overlay.md](../../../docs/design/Design_Thermal_Radiometry_Overlay.md)
+**SRS:** [SRS_Thermal_Radiometry_Overlay.md](../../../docs/srs/SRS_Thermal_Radiometry_Overlay.md)
+**TC:** [TC_Thermal_Radiometry_Overlay.md](../../../docs/tc/TC_Thermal_Radiometry_Overlay.md)
+**테스트:** `test/api/thermal_radiometry_overlay.test.js`
+
 `ThermalOverlay.tsx`는 `CameraView` 안에 항상 마운트(`pointer-events-none`)되어 `onvif:temperature` 소켓 이벤트를 수신합니다.
 
 ### Area별 독립 Map 상태 관리
@@ -876,8 +881,29 @@ setAreas(prev => {
 
 | 조건 | 표시 방식 |
 |---|---|
-| `AreaName="FullArea"` 또는 `ItemID="Z"` | 상단 배너 (crosshair 없음) — 여러 개면 나란히 표시 |
-| 그 외 좌표 Area | SVG crosshair (red=최고온도, sky=최저온도) + 좌하단 정보 패널 |
+| `AreaName="FullArea"` 또는 `ItemID="Z"` | 상단 배너만 (crosshair **없음**) — 여러 개면 나란히 표시 |
+| 그 외 명명된 Box Area (좌표 있음) | SVG crosshair (red=최고온도, sky=최저온도) + 좌하단 정보 패널 |
+
+### coordSlots FullArea 명시적 제외 (중요 불변 조건)
+
+```typescript
+// ✅ 올바른 코드 (FR-THERMAL-023)
+const coordSlots = allReadings.filter(s => {
+  const r = s.reading;
+  return !isFullArea(r) && (           // ← FullArea 명시적 제외 필수
+    (r.maxTempX !== null && r.maxTempY !== null) ||
+    (r.minTempX !== null && r.minTempY !== null)
+  );
+});
+
+// ❌ 잘못된 코드 — FullArea에 좌표가 있으면 crosshair가 렌더링됨
+// const coordSlots = allReadings.filter(s =>
+//   (s.reading.maxTempX !== null && s.reading.maxTempY !== null) || ...
+// );
+```
+
+> 일부 열상 카메라는 FullArea 리딩에도 좌표 속성을 포함해 전송합니다.  
+> `!isFullArea(r)` 체크 없이 좌표 존재만 확인하면 FullArea에 crosshair가 잘못 표시됩니다.
 
 - crosshair 라벨: `"AreaName 79.4°C"` 형식으로 Area 이름 포함
 - 온도 단위 heuristic: 값 > 200 → Kelvin (`352.5 (79.4°C)`), ≤ 200 → Celsius
@@ -888,3 +914,5 @@ setAreas(prev => {
 1. `areaKey()` 반환값이 Area마다 고유한가? (`itemId → areaName → "area-{idx}"` 순서)
 2. `timersRef`와 `setAreas` 사이의 타이머/상태 동기화가 클로저 내에서 안전한가?
 3. `isFullArea()` 조건: `areaName === 'FullArea' || itemId === 'Z'` — 카메라 벤더별 값 확인
+4. `coordSlots`에 `!isFullArea(r)` 가드가 포함되어 있는가? (FullArea crosshair 렌더링 금지)
+5. 변경 후 `test/api/thermal_radiometry_overlay.test.js` 실행 (특히 TC-C-001~004)
