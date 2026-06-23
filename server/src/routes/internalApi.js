@@ -88,12 +88,23 @@ router.post(
           for (const parsed of parsedList) {
             // Radiometry (thermal camera): emit real-time temperature event every reading.
             // Do NOT dedup — the live overlay needs every update.
-            if (parsed.radiometry && parsed.radiometry.length > 0 && _io) {
-              _io.emit('onvif:temperature', {
-                cameraId,
-                utcTime:  parsed.utcTime,
-                readings: parsed.radiometry,
+            if (parsed.radiometry && parsed.radiometry.length > 0) {
+              parsed.radiometry.forEach((r, ri) => {
+                console.debug(
+                  `[internalApi][BoxTemperatureReading] cam=${cameraId} ` +
+                  `area="${r.areaName ?? r.itemId ?? ri}" ` +
+                  `max=${r.maxTemp}(${r.maxTempX},${r.maxTempY}) ` +
+                  `min=${r.minTemp}(${r.minTempX},${r.minTempY}) ` +
+                  `avg=${r.avgTemp} utc=${parsed.utcTime}`
+                );
               });
+              if (_io) {
+                _io.emit('onvif:temperature', {
+                  cameraId,
+                  utcTime:  parsed.utcTime,
+                  readings: parsed.radiometry,
+                });
+              }
             }
 
             // Dedup: only store when state actually changes for this camera+topic+sourceToken
