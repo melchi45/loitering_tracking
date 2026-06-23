@@ -83,80 +83,82 @@ router.post(
     // 3. Parse ONVIF metadata and store state-change events
     if (_db && data.payload) {
       try {
-        const parsed = parseOnvifPayload(data.payload);
-        if (parsed) {
-          // Radiometry (thermal camera): emit real-time temperature event every reading.
-          // Do NOT dedup — the live overlay needs every update.
-          if (parsed.radiometry && parsed.radiometry.length > 0 && _io) {
-            _io.emit('onvif:temperature', {
-              cameraId,
-              utcTime:  parsed.utcTime,
-              readings: parsed.radiometry,
-            });
-          }
-
-          // Dedup: only store when state actually changes for this camera+topic+sourceToken
-          const dedupKey = `${cameraId}:${parsed.topic}:${parsed.sourceToken}`;
-          const lastState = _lastStates.get(dedupKey);
-          if (lastState !== parsed.state) {
-            _lastStates.set(dedupKey, parsed.state);
-            const now = new Date().toISOString();
-            const event = {
-              id:          uuidv4(),
-              cameraId,
-              topic:       parsed.topic,
-              topicType:   parsed.topicType,
-              topicLabel:  parsed.topicLabel,
-              severity:    parsed.severity,
-              utcTime:     parsed.utcTime,
-              operation:   parsed.operation,
-              sourceToken: parsed.sourceToken,
-              state:       parsed.state,
-              items:       JSON.stringify(parsed.items),
-              rawPayload:  data.payload,
-              serverTs:    now,
-            };
-            _db.insert('onvif_events', event);
-
-            // On state=true (event START) or point events (no state), capture snapshot
-            if ((parsed.state === 'true' || parsed.state == null) && _pipelineManager) {
-              setImmediate(() => {
-                try {
-                  const frame = _pipelineManager.getLatestFrame(cameraId);
-                  if (frame && frame.buf) {
-                    _db.insert('onvif_snapshots', {
-                      id:          uuidv4(),
-                      eventId:     event.id,
-                      cameraId,
-                      topicType:   parsed.topicType,
-                      timestamp:   now,
-                      frameData:   frame.buf.toString('base64'),
-                      frameWidth:  frame.fw,
-                      frameHeight: frame.fh,
-                      createdAt:   now,
-                    });
-                  }
-                } catch (_e) { /* never block ONVIF path */ }
+        const parsedList = parseOnvifPayload(data.payload);
+        if (Array.isArray(parsedList)) {
+          for (const parsed of parsedList) {
+            // Radiometry (thermal camera): emit real-time temperature event every reading.
+            // Do NOT dedup — the live overlay needs every update.
+            if (parsed.radiometry && parsed.radiometry.length > 0 && _io) {
+              _io.emit('onvif:temperature', {
+                cameraId,
+                utcTime:  parsed.utcTime,
+                readings: parsed.radiometry,
               });
             }
 
-            // Register topicType globally if first time seen
-            const knownTypes = _db.all('onvif_event_types');
-            if (!knownTypes.some(r => r.topicType === parsed.topicType)) {
-              const typeEntry = {
-                id:          parsed.topicType,
+            // Dedup: only store when state actually changes for this camera+topic+sourceToken
+            const dedupKey = `${cameraId}:${parsed.topic}:${parsed.sourceToken}`;
+            const lastState = _lastStates.get(dedupKey);
+            if (lastState !== parsed.state) {
+              _lastStates.set(dedupKey, parsed.state);
+              const now = new Date().toISOString();
+              const event = {
+                id:          uuidv4(),
+                cameraId,
+                topic:       parsed.topic,
                 topicType:   parsed.topicType,
                 topicLabel:  parsed.topicLabel,
-                topic:       parsed.topic,
                 severity:    parsed.severity,
-                firstSeenAt: now,
+                utcTime:     parsed.utcTime,
+                operation:   parsed.operation,
+                sourceToken: parsed.sourceToken,
+                state:       parsed.state,
+                items:       JSON.stringify(parsed.items),
+                rawPayload:  data.payload,
+                serverTs:    now,
               };
-              _db.insert('onvif_event_types', typeEntry);
-              if (_io) _io.emit('onvif:type-registered', typeEntry);
-            }
+              _db.insert('onvif_events', event);
 
-            // Notify connected clients of the new event
-            if (_io) _io.emit('onvif:event', event);
+              // On state=true (event START) or point events (no state), capture snapshot
+              if ((parsed.state === 'true' || parsed.state == null) && _pipelineManager) {
+                setImmediate(() => {
+                  try {
+                    const frame = _pipelineManager.getLatestFrame(cameraId);
+                    if (frame && frame.buf) {
+                      _db.insert('onvif_snapshots', {
+                        id:          uuidv4(),
+                        eventId:     event.id,
+                        cameraId,
+                        topicType:   parsed.topicType,
+                        timestamp:   now,
+                        frameData:   frame.buf.toString('base64'),
+                        frameWidth:  frame.fw,
+                        frameHeight: frame.fh,
+                        createdAt:   now,
+                      });
+                    }
+                  } catch (_e) { /* never block ONVIF path */ }
+                });
+              }
+
+              // Register topicType globally if first time seen
+              const knownTypes = _db.all('onvif_event_types');
+              if (!knownTypes.some(r => r.topicType === parsed.topicType)) {
+                const typeEntry = {
+                  id:          parsed.topicType,
+                  topicType:   parsed.topicType,
+                  topicLabel:  parsed.topicLabel,
+                  topic:       parsed.topic,
+                  severity:    parsed.severity,
+                  firstSeenAt: now,
+                };
+                _db.insert('onvif_event_types', typeEntry);
+                if (_io) _io.emit('onvif:type-registered', typeEntry);
+              }
+
+              // Notify connected clients of the new event
+              if (_io) _io.emit('onvif:event', event);
+            }
           }
         }
       } catch (err) {

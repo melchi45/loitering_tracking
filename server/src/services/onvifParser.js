@@ -4,7 +4,10 @@
  * ONVIF MetadataStream XML parser — lightweight regex-based, no external deps.
  *
  * Input:  base64-encoded RTSP application RTP packet payload
- * Output: ParsedOnvifEvent object  |  null (not ONVIF / parse error)
+ * Output: ParsedOnvifEvent[]  |  null (not ONVIF / parse error)
+ *
+ * A single MetadataStream packet may contain multiple NotificationMessage blocks.
+ * parseOnvifPayload() returns an ARRAY — one entry per NotificationMessage found.
  *
  * TOPIC_MAP: maps exact topic path → { type, label, severity }
  *   • type     — stored as topicType in DB, used as dropdown filter key
@@ -18,40 +21,53 @@
 
 const TOPIC_MAP = {
   // ── Standard ONVIF ────────────────────────────────────────────────────────
-  'tns1:VideoSource/tns1:MotionAlarm':                               { type: 'motionAlarm',        label: 'Motion Alarm',         severity: 'warning'  },
+  'tns1:VideoSource/tns1:MotionAlarm':                               { type: 'motionAlarm',           label: 'Motion Alarm',          severity: 'warning'  },
+  'tns1:VideoSource/MotionAlarm':                                    { type: 'motionAlarm',           label: 'Motion Alarm',          severity: 'warning'  },
   // ── ONVIF Radiometry (thermal cameras) ───────────────────────────────────
-  'tns1:VideoAnalytics/Radiometry/BoxTemperatureReading':            { type: 'boxTemperatureReading', label: 'Box Temperature',   severity: 'info'     },
-  'tns1:AudioAnalytics/tns1:Audio/tns1:DetectedSound':              { type: 'audioAlarm',          label: 'Audio Alarm',          severity: 'warning'  },
-  'tns1:AudioAnalytics/tns1:Audio/tns1:AudioAlarm':                 { type: 'audioAlarm',          label: 'Audio Alarm',          severity: 'warning'  },
-  'tns1:VideoSource/tns1:GlobalSceneChange/tns1:ImageTooBlurry':    { type: 'tamperBlurry',        label: 'Tamper (Blur)',         severity: 'warning'  },
-  'tns1:VideoSource/tns1:GlobalSceneChange/tns1:ImageTooBright':    { type: 'tamperBright',        label: 'Tamper (Bright)',       severity: 'warning'  },
-  'tns1:VideoSource/tns1:GlobalSceneChange/tns1:ImageTooDark':      { type: 'tamperDark',          label: 'Tamper (Dark)',         severity: 'warning'  },
-  'tns1:VideoSource/tns1:GlobalSceneChange':                        { type: 'tamper',              label: 'Tamper Alarm',          severity: 'warning'  },
-  'tns1:VideoAnalytics/tns1:Line/tns1:Crossed':                     { type: 'lineCrossed',         label: 'Line Crossing',        severity: 'warning'  },
-  'tns1:VideoAnalytics/tns1:Field/tns1:Entered':                    { type: 'fieldEntered',        label: 'Area Entry',           severity: 'warning'  },
-  'tns1:VideoAnalytics/tns1:Field/tns1:Exited':                     { type: 'fieldExited',         label: 'Area Exit',            severity: 'info'     },
-  'tns1:RuleEngine/tns1:LineDetector/tns1:Crossed':                 { type: 'lineCrossed',         label: 'Line Crossing',        severity: 'warning'  },
-  'tns1:RuleEngine/tns1:FieldDetector/tns1:ObjectsInside':          { type: 'fieldEntered',        label: 'Area Intrusion',       severity: 'warning'  },
-  'tns1:Device/tns1:Trigger/CallRequest':                           { type: 'callRequest',         label: 'Call Request',         severity: 'info'     },
-  'tns1:Device/tns1:Trigger/tns1:DigitalInput':                     { type: 'digitalInput',        label: 'Digital Input',        severity: 'info'     },
-  'tns1:Device/tns1:HardwareFailure/tns1:StorageFailure':           { type: 'storageFailure',      label: 'Storage Failure',      severity: 'critical' },
+  'tns1:VideoAnalytics/Radiometry/BoxTemperatureReading':            { type: 'boxTemperatureReading', label: 'Box Temperature',        severity: 'info'     },
+  'tns1:VideoSource/RadiometryAlarm':                                { type: 'radiometryAlarm',       label: 'Radiometry Alarm',       severity: 'warning'  },
+  'tns1:RuleEngine/Radiometry/TemperatureAlarm':                     { type: 'temperatureAlarm',      label: 'Temperature Alarm',      severity: 'warning'  },
+  'tns1:RuleEngine/Detection/TemperatureDifference':                 { type: 'temperatureDifference', label: 'Temperature Difference', severity: 'info'     },
+  // ── Audio ─────────────────────────────────────────────────────────────────
+  'tns1:AudioAnalytics/tns1:Audio/tns1:DetectedSound':              { type: 'audioAlarm',            label: 'Audio Alarm',            severity: 'warning'  },
+  'tns1:AudioAnalytics/tns1:Audio/tns1:AudioAlarm':                 { type: 'audioAlarm',            label: 'Audio Alarm',            severity: 'warning'  },
+  // ── Tamper ────────────────────────────────────────────────────────────────
+  'tns1:VideoSource/tns1:GlobalSceneChange/tns1:ImageTooBlurry':    { type: 'tamperBlurry',          label: 'Tamper (Blur)',          severity: 'warning'  },
+  'tns1:VideoSource/tns1:GlobalSceneChange/tns1:ImageTooBright':    { type: 'tamperBright',          label: 'Tamper (Bright)',        severity: 'warning'  },
+  'tns1:VideoSource/tns1:GlobalSceneChange/tns1:ImageTooDark':      { type: 'tamperDark',            label: 'Tamper (Dark)',          severity: 'warning'  },
+  'tns1:VideoSource/tns1:GlobalSceneChange':                        { type: 'tamper',                label: 'Tamper Alarm',           severity: 'warning'  },
+  // ── Line / Area ───────────────────────────────────────────────────────────
+  'tns1:VideoAnalytics/tns1:Line/tns1:Crossed':                     { type: 'lineCrossed',           label: 'Line Crossing',          severity: 'warning'  },
+  'tns1:VideoAnalytics/tns1:Field/tns1:Entered':                    { type: 'fieldEntered',          label: 'Area Entry',             severity: 'warning'  },
+  'tns1:VideoAnalytics/tns1:Field/tns1:Exited':                     { type: 'fieldExited',           label: 'Area Exit',              severity: 'info'     },
+  'tns1:RuleEngine/tns1:LineDetector/tns1:Crossed':                 { type: 'lineCrossed',           label: 'Line Crossing',          severity: 'warning'  },
+  'tns1:RuleEngine/tns1:FieldDetector/tns1:ObjectsInside':          { type: 'fieldEntered',          label: 'Area Intrusion',         severity: 'warning'  },
+  // ── Device triggers ───────────────────────────────────────────────────────
+  'tns1:Device/tns1:Trigger/CallRequest':                           { type: 'callRequest',           label: 'Call Request',           severity: 'info'     },
+  'tns1:Device/tns1:Trigger/tns1:DigitalInput':                     { type: 'digitalInput',          label: 'Digital Input',          severity: 'info'     },
+  'tns1:Device/tns1:Trigger/tnssamsung:DigitalInput':               { type: 'digitalInput',          label: 'Digital Input',          severity: 'info'     },
+  'tns1:Device/tns1:Trigger/tns1:Relay':                            { type: 'relay',                 label: 'Relay Output',           severity: 'info'     },
+  'tns1:Device/tns1:HardwareFailure/tns1:StorageFailure':           { type: 'storageFailure',        label: 'Storage Failure',        severity: 'critical' },
   // ── Samsung WiseNet (tnssamsung namespace) ────────────────────────────────
-  'tnssamsung:IVA/Fire':                                            { type: 'fire',                label: 'Fire Detected',        severity: 'critical' },
-  'tnssamsung:IVA/Smoke':                                           { type: 'smoke',               label: 'Smoke Detected',       severity: 'critical' },
-  'tnssamsung:IVA/ObjectDetection':                                 { type: 'objectDetection',     label: 'Object Detection',     severity: 'info'     },
-  'tnssamsung:IVA/LoiteringDetection':                              { type: 'loiteringDetection',  label: 'Loitering Detection',  severity: 'warning'  },
-  'tnssamsung:IVA/AudioDetection':                                  { type: 'audioAlarm',          label: 'Audio Alarm',          severity: 'warning'  },
-  'tnssamsung:IVA/LineCrossing':                                    { type: 'lineCrossed',         label: 'Line Crossing',        severity: 'warning'  },
-  'tnssamsung:IVA/DirectionalMotion':                               { type: 'directionalMotion',   label: 'Directional Motion',   severity: 'warning'  },
-  'tnssamsung:IVA/FogDetection':                                    { type: 'fogDetection',        label: 'Fog Detection',        severity: 'warning'  },
-  'tnssamsung:IVA/DefocusDetection':                                { type: 'defocusDetection',    label: 'Defocus Detection',    severity: 'warning'  },
-  'tnssamsung:IVA/ShockDetection':                                  { type: 'shockDetection',      label: 'Shock Detection',      severity: 'warning'  },
-  'tnssamsung:IVA/FaceDetection':                                   { type: 'faceDetection',       label: 'Face Detection',       severity: 'info'     },
-  'tnssamsung:IVA/LPR':                                            { type: 'lpr',                 label: 'LPR',                  severity: 'info'     },
-  'tnssamsung:AudioDetection':                                      { type: 'audioAlarm',          label: 'Audio Alarm',          severity: 'warning'  },
-  'tnssamsung:AudioAlarm':                                          { type: 'audioAlarm',          label: 'Audio Alarm',          severity: 'warning'  },
-  'tnssamsung:Tamper':                                              { type: 'tamper',              label: 'Tamper Alarm',         severity: 'warning'  },
-  'tnssamsung:VideoSource/tns1:MotionAlarm':                        { type: 'motionAlarm',         label: 'Motion Alarm',         severity: 'warning'  },
+  'tnssamsung:IVA/Fire':                                            { type: 'fire',                  label: 'Fire Detected',          severity: 'critical' },
+  'tnssamsung:IVA/Smoke':                                           { type: 'smoke',                 label: 'Smoke Detected',         severity: 'critical' },
+  'tnssamsung:IVA/ObjectDetection':                                 { type: 'objectDetection',       label: 'Object Detection',       severity: 'info'     },
+  'tnssamsung:IVA/LoiteringDetection':                              { type: 'loiteringDetection',    label: 'Loitering Detection',    severity: 'warning'  },
+  'tnssamsung:IVA/AudioDetection':                                  { type: 'audioAlarm',            label: 'Audio Alarm',            severity: 'warning'  },
+  'tnssamsung:IVA/LineCrossing':                                    { type: 'lineCrossed',           label: 'Line Crossing',          severity: 'warning'  },
+  'tnssamsung:IVA/DirectionalMotion':                               { type: 'directionalMotion',     label: 'Directional Motion',     severity: 'warning'  },
+  'tnssamsung:IVA/FogDetection':                                    { type: 'fogDetection',          label: 'Fog Detection',          severity: 'warning'  },
+  'tnssamsung:IVA/DefocusDetection':                                { type: 'defocusDetection',      label: 'Defocus Detection',      severity: 'warning'  },
+  'tnssamsung:IVA/ShockDetection':                                  { type: 'shockDetection',        label: 'Shock Detection',        severity: 'warning'  },
+  'tnssamsung:IVA/FaceDetection':                                   { type: 'faceDetection',         label: 'Face Detection',         severity: 'info'     },
+  'tnssamsung:IVA/LPR':                                            { type: 'lpr',                   label: 'LPR',                    severity: 'info'     },
+  'tnssamsung:AudioDetection':                                      { type: 'audioAlarm',            label: 'Audio Alarm',            severity: 'warning'  },
+  'tnssamsung:AudioAlarm':                                          { type: 'audioAlarm',            label: 'Audio Alarm',            severity: 'warning'  },
+  'tnssamsung:Tamper':                                              { type: 'tamper',                label: 'Tamper Alarm',           severity: 'warning'  },
+  'tnssamsung:VideoSource/tns1:MotionAlarm':                        { type: 'motionAlarm',           label: 'Motion Alarm',           severity: 'warning'  },
+  // ── Samsung WiseNet — full-path variants ─────────────────────────────────
+  'tns1:VideoAnalytics/tnssamsung:MotionDetection':                 { type: 'motionAlarm',           label: 'Motion Alarm',           severity: 'warning'  },
+  'tns1:AudioSource/tnssamsung:AudioDetection':                     { type: 'audioAlarm',            label: 'Audio Alarm',            severity: 'warning'  },
 };
 
 // ── State item names tried in order (standard ONVIF + vendor extensions) ──────
@@ -134,77 +150,100 @@ function topicLabel(topic) {
 }
 
 /**
- * Parse base64 ONVIF payload. Returns null if not a MetadataStream or on error.
+ * Parse a single NotificationMessage block (inner XML between the tags).
+ * Returns ParsedOnvifEvent | null.
+ */
+function parseSingleNotification(blockXml) {
+  const topicMatch = blockXml.match(/<[^:>\s]*:?Topic[^>]*>([^<]+)<\/[^:>\s]*:?Topic>/);
+  if (!topicMatch) return null;
+  const topic = topicMatch[1].trim();
+
+  const utcTimeMatch = blockXml.match(/UtcTime="([^"]+)"/);
+  const opMatch      = blockXml.match(/PropertyOperation="([^"]+)"/);
+  const utcTime   = utcTimeMatch ? utcTimeMatch[1] : new Date().toISOString();
+  const operation = opMatch      ? opMatch[1]      : 'Changed';
+
+  // All SimpleItem Name/Value pairs (handles both attr orderings)
+  const items = {};
+  const siRe = /SimpleItem(?:[^>]*?\s(?:Name="([^"]+)"[^/]*?Value="([^"]*)"|Value="([^"]*)"[^/]*?Name="([^"]+)"))/g;
+  let m;
+  while ((m = siRe.exec(blockXml)) !== null) {
+    const name  = m[1] || m[4];
+    const value = m[2] !== undefined ? m[2] : m[3];
+    if (name !== undefined) items[name] = value;
+  }
+  // Fallback: simpler regex for Samsung format where attrs are on same line
+  if (Object.keys(items).length === 0) {
+    const simple = /Name="([^"]+)"\s+Value="([^"]*)"/g;
+    while ((m = simple.exec(blockXml)) !== null) { items[m[1]] = m[2]; }
+  }
+  // Second fallback: reverse order Value="Y" Name="X"
+  if (Object.keys(items).length === 0) {
+    const rev = /Value="([^"]*)"\s+Name="([^"]+)"/g;
+    while ((m = rev.exec(blockXml)) !== null) { items[m[2]] = m[1]; }
+  }
+
+  const info = TOPIC_MAP[topic] ?? {
+    type:     topic,
+    label:    topicLabel(topic),
+    severity: 'info',
+  };
+
+  const sourceToken =
+    items['SourceToken'] ??
+    items['VideoSourceConfigurationToken'] ??
+    items['VideoAnalyticsConfigurationToken'] ??
+    items['AudioSourceConfigurationToken'] ??
+    null;
+
+  const radiometry = blockXml.includes('BoxTemperatureReading')
+    ? parseRadiometryReadings(blockXml)
+    : null;
+
+  return {
+    topic,
+    topicType:   info.type,
+    topicLabel:  info.label,
+    severity:    info.severity,
+    utcTime,
+    operation,
+    sourceToken,
+    state:       extractState(items),
+    items,
+    radiometry:  radiometry && radiometry.length > 0 ? radiometry : null,
+  };
+}
+
+/**
+ * Parse base64 ONVIF payload.
+ * Returns ParsedOnvifEvent[] (one per NotificationMessage), or null if not
+ * a MetadataStream or on error.
+ *
+ * A MetadataStream packet typically batches multiple NotificationMessage
+ * blocks together. Each is parsed independently so no data is lost.
  */
 function parseOnvifPayload(base64Payload) {
   try {
     const xml = Buffer.from(base64Payload, 'base64').toString('utf-8');
     if (!xml.includes('MetadataStream')) return null;
 
-    // Topic text (any namespace prefix)
-    const topicMatch = xml.match(/<[^:>\s]*:?Topic[^>]*>([^<]+)<\/[^:>\s]*:?Topic>/);
-    if (!topicMatch) return null;
-    const topic = topicMatch[1].trim();
-
-    // UtcTime and PropertyOperation attributes
-    const utcTimeMatch = xml.match(/UtcTime="([^"]+)"/);
-    const opMatch      = xml.match(/PropertyOperation="([^"]+)"/);
-    const utcTime   = utcTimeMatch ? utcTimeMatch[1] : new Date().toISOString();
-    const operation = opMatch      ? opMatch[1]      : 'Changed';
-
-    // All SimpleItem Name/Value pairs (handles both attr orderings)
-    const items = {};
-    const siRe = /SimpleItem(?:[^>]*?\s(?:Name="([^"]+)"[^/]*?Value="([^"]*)"|Value="([^"]*)"[^/]*?Name="([^"]+)"))/g;
+    // Extract each NotificationMessage block individually
+    const notifRe = /<(?:[^:>\s]+:)?NotificationMessage>([\s\S]*?)<\/(?:[^:>\s]+:)?NotificationMessage>/g;
+    const results = [];
     let m;
-    while ((m = siRe.exec(xml)) !== null) {
-      const name  = m[1] || m[4];
-      const value = m[2] !== undefined ? m[2] : m[3];
-      if (name !== undefined) items[name] = value;
-    }
-    // Fallback: simpler regex for Samsung format where attrs are on same line
-    if (Object.keys(items).length === 0) {
-      const simple = /Name="([^"]+)"\s+Value="([^"]*)"/g;
-      while ((m = simple.exec(xml)) !== null) { items[m[1]] = m[2]; }
-    }
-    // Second fallback: reverse order Value="Y" Name="X"
-    if (Object.keys(items).length === 0) {
-      const rev = /Value="([^"]*)"\s+Name="([^"]+)"/g;
-      while ((m = rev.exec(xml)) !== null) { items[m[2]] = m[1]; }
+    while ((m = notifRe.exec(xml)) !== null) {
+      const parsed = parseSingleNotification(m[1]);
+      if (parsed) results.push(parsed);
     }
 
-    // For unknown topics: use full topic path as unique type ID so different unknown
-    // topics each get their own timeline row; strip namespace prefix for the label.
-    const info = TOPIC_MAP[topic] ?? {
-      type:     topic,
-      label:    topicLabel(topic),
-      severity: 'info',
-    };
+    // Fallback: no NotificationMessage wrappers found — treat whole XML as one message
+    if (results.length === 0) {
+      const parsed = parseSingleNotification(xml);
+      if (parsed) return [parsed];
+      return null;
+    }
 
-    // Source token: try multiple common item names
-    const sourceToken =
-      items['SourceToken'] ??
-      items['VideoSourceConfigurationToken'] ??
-      items['VideoAnalyticsConfigurationToken'] ??
-      items['AudioSourceConfigurationToken'] ??
-      null;
-
-    // Radiometry: parse BoxTemperatureReading elements (thermal cameras)
-    const radiometry = xml.includes('BoxTemperatureReading')
-      ? parseRadiometryReadings(xml)
-      : null;
-
-    return {
-      topic,
-      topicType:   info.type,
-      topicLabel:  info.label,
-      severity:    info.severity,
-      utcTime,
-      operation,
-      sourceToken,
-      state:       extractState(items),
-      items,
-      radiometry:  radiometry && radiometry.length > 0 ? radiometry : null,
-    };
+    return results;
   } catch {
     return null;
   }

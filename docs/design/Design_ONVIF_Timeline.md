@@ -545,15 +545,16 @@ All other languages use English fallback values.
 ingest-daemon
   └─ POST /api/internal/apprtp/:cameraId
        └─ internalApi.js
-            ├─ parseOnvifPayload()                  ← onvifParser.js
-            ├─ state-change dedup                   ← _lastStates Map
-            ├─ db.insert('onvif_events', event)
-            ├─ [NEW] if first time topicType:
-            │    db.insert('onvif_event_types', ...)
-            │    io.emit('onvif:type-registered', typeEntry)
-            │         └─ OnvifTimelineInline / OnvifTimelineOverlay: addType()
-            └─ io.emit('onvif:event', evt)
-                 └─ OnvifTimelineInline / OnvifTimelineOverlay: pushEvent()
+            ├─ parseOnvifPayload()                  ← onvifParser.js → ParsedOnvifEvent[]
+            └─ for (const parsed of parsedList)     ← 패킷 내 NotificationMessage 1개 이상
+                 ├─ state-change dedup              ← _lastStates Map (per cameraId:topic:sourceToken)
+                 ├─ db.insert('onvif_events', event)
+                 ├─ if first time topicType:
+                 │    db.insert('onvif_event_types', ...)
+                 │    io.emit('onvif:type-registered', typeEntry)
+                 │         └─ OnvifTimelineInline / OnvifTimelineOverlay: addType()
+                 └─ io.emit('onvif:event', evt)
+                      └─ OnvifTimelineInline / OnvifTimelineOverlay: pushEvent()
 
 Client on mount (OnvifTimelineInline 또는 OnvifTimelineOverlay):
   GET /api/onvif-event-types                → onvifEventStore.setTypes()  [type filter combobox]
@@ -584,3 +585,4 @@ User action:
 | 1.7 | 2026-06-22 | buildIntervals() coalesce 수정 — start→start→…→end 시퀀스를 단일 인터벌로 합산 (서버 재시작 artifact 처리) |
 | 1.8 | 2026-06-22 | §5.9 행 레이아웃 DetectionsTimelineInline 스타일 통합 — ROW_H 확장(Inline 52px/Overlay 68px), 인라인 필름스트립 스냅샷(snapCache + lazy-fetch), SEV_COLOR 인라인 스타일 바 |
 | 1.9 | 2026-06-23 | §5.9 getEventState() 함수 추가 — evt.state=null인 구버전 이벤트도 items 폴백으로 bar 렌더링; DB 마이그레이션 불필요 |
+| 2.0 | 2026-06-23 | §7 데이터 플로우 업데이트 — parseOnvifPayload() 배열 반환 반영; 패킷 내 다중 NotificationMessage 각각 독립 dedup·저장·브로드캐스트 |
