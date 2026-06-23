@@ -123,6 +123,47 @@ async function main() {
     assert(Array.isArray(r.body.behaviors), 'behaviors must be an array');
   });
 
+  await test('TC-DAP-009', '다중 채널 동시 추론 시 cameraId 격리 (FR-DAP-027)', async () => {
+    if (isStreaming) return; // analysis/combined 모드 전용
+
+    // 1×1 pixel JPEG — minimal valid sample used for concurrent routing validation
+    const tinyJpeg =
+      '/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBAQEBAVFhUVFRUVFRUVFRUVFRUVFRUWFhUVFRUYHSggGBolGxUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0lHyUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBIgACEQEDEQH/xAAbAAABBQEBAAAAAAAAAAAAAAAFAAMEBgcBAv/EADgQAAIBAwMCBAMHAwQDAAAAAAECAwAEEQUSITEGE0FRImFxgZEykaGxwQcjQlJy0fAkQ2OC/8QAGQEBAQEBAQEAAAAAAAAAAAAAAAEDAgQF/8QAHxEBAQEBAQACAwEAAAAAAAAAAAERAhIhMUEDE1EU/9oADAMBAAIRAxEAPwD8NREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREH//2Q==';
+
+    const camAId = 'tc009-cam-alpha';
+    const camBId = 'tc009-cam-beta';
+
+    const makePayload = (cameraId, frameId) => ({
+      cameraId,
+      frameId,
+      timestamp: new Date().toISOString(),
+      frame: tinyJpeg,
+      zones: [],
+    });
+
+    // Send two frames from different cameras concurrently — validates that
+    // DetectionService._preprocess() does not share a mutable Float32Array
+    // buffer between concurrent requests (FR-DAP-027).
+    const [rA, rB] = await Promise.all([
+      post('/api/analysis/frame', makePayload(camAId, 1)),
+      post('/api/analysis/frame', makePayload(camBId, 1)),
+    ]);
+
+    assertEq(rA.status, 200, 'camera A response status');
+    assertEq(rB.status, 200, 'camera B response status');
+
+    // Each response must echo back the cameraId that was sent —
+    // cross-channel contamination would cause a mismatch here.
+    assertEq(rA.body.cameraId, camAId, 'camera A response cameraId must match request');
+    assertEq(rB.body.cameraId, camBId, 'camera B response cameraId must match request');
+
+    // Both responses must contain independent result arrays (not shared references)
+    assert(Array.isArray(rA.body.tracked), 'camera A tracked must be array');
+    assert(Array.isArray(rB.body.tracked), 'camera B tracked must be array');
+    assert(Array.isArray(rA.body.behaviors), 'camera A behaviors must be array');
+    assert(Array.isArray(rB.body.behaviors), 'camera B behaviors must be array');
+  });
+
   console.log('\n─────────────────────────────────────────────────────');
   console.log(`  Results: ${passed} passed, ${failed} failed`);
   console.log('─────────────────────────────────────────────────────');

@@ -705,7 +705,44 @@ while not self._stop.is_set():
 
 ---
 
-## 12. 향후 고려사항
+## 12. App RTP 안전 타임아웃 — `read_timeout` (`AVFormatContext.io_timeout`)
+
+### 12.1 배경 — App RTP watchdog segfault
+
+`_Watchdog`은 AI/Video/Audio 루프에서 h264 등 알려진 코덱에 대해 안전하게 동작합니다. 그러나 App RTP (ONVIF 메타데이터, `codec=unknown` 데이터 스트림)에서는:
+
+1. 5초 무패킷 → watchdog background thread → `container.close()` 호출
+2. `inp.demux(ds)` 실행 중인 app_rtp thread와 **cross-thread close**
+3. `codec=unknown` 데이터 트랙은 libav가 close() 시 내부 상태를 정리 못함 → **segfault**
+4. 전체 Python 프로세스 종료 → 모든 카메라 RTSP 세션 동시 끊김
+
+### 12.2 해결책 — `inp.read_timeout`
+
+```python
+# APP_RTP_READ_TIMEOUT 기본값 60s (env: APP_RTP_READ_TIMEOUT)
+# ONVIF 메타데이터는 이벤트 사이 간격이 수십 초 이상이므로 5s watchdog은 과민
+inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS)
+inp.read_timeout = int(APP_RTP_READ_TIMEOUT * 1_000_000)  # μs 단위
+```
+
+`read_timeout`은 `AVFormatContext.io_timeout`에 매핑됩니다. libav가 각 블로킹 demux 호출마다 C 레벨에서 타임아웃을 체크하고, 초과 시 `av.AVError`를 발생시킵니다. **완전 thread-safe** — background thread가 container를 닫지 않습니다.
+
+| | `_Watchdog` + `container.close()` | `read_timeout` |
+|---|---|---|
+| 스레드 안전성 | ❌ cross-thread close (codec=unknown에서 segfault) | ✅ libav 내부 처리 |
+| ONVIF 메타데이터 적합성 | ❌ 5s 타임아웃 — 이벤트 간격보다 짧음 | ✅ 60s 타임아웃 |
+| AI/Video/Audio | ✅ 동일 Watchdog 유지 | — |
+
+### 12.3 스트림별 타임아웃 전략
+
+| 스트림 | 방식 | 타임아웃 | 근거 |
+|---|---|---|---|
+| AI (JPEG), Video RTP, Audio RTP | `_Watchdog` + `container.close()` | `RTSP_READ_TIMEOUT=5s` | h264/opus — 연속 고빈도 스트림, cross-thread close 안전 |
+| App RTP (ONVIF metadata) | `inp.read_timeout` | `APP_RTP_READ_TIMEOUT=60s` | codec=unknown — cross-thread close 불안전, 이벤트 간격 길음 |
+
+---
+
+## 13. 향후 고려사항
 
 | 항목 | 설명 | 우선순위 |
 |---|---|---|
@@ -725,3 +762,4 @@ while not self._stop.is_set():
 | 1.1 | 2026-06-11 | ingest-daemon 백엔드 추가 (현재 기본값); ffmpeg 레거시 분류; WEBRTC_ENGINE 환경변수 추가; captureFactory.js 코드 스니펫 업데이트 |
 | 1.2 | 2026-06-19 | §6.7 Watchdog 및 자동 복구 추가 — PyAV 내부 watchdog, Node.js 프레임 watchdog, startServer.js 자동 재시작, reregisterAllWithIngestDaemon() |
 | 1.3 | 2026-06-23 | §11 ingest-daemon 정상 종료 추가 — 2-phase stop (pre-signal all → join all), KeyboardInterrupt 보호, Connection refused 스팸 제거 |
+| 1.4 | 2026-06-23 | §12 App RTP watchdog segfault 수정 — _Watchdog→read_timeout(AVFormatContext.io_timeout) 교체, codec=unknown cross-thread close 금지, APP_RTP_READ_TIMEOUT=60s |

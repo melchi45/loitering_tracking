@@ -126,10 +126,6 @@ class DetectionService {
     this._session     = null;
     this._loading     = null;
     this._numClasses  = null; // inferred from first inference output dims
-    // Pre-allocated input tensor buffer — reused across frames (safe because
-    // pipelineManager serialises inference with _inferring; the previous run's
-    // session.run() has already resolved before the next _preprocess() call).
-    this._float32Buf  = new Float32Array(3 * INPUT_SIZE * INPUT_SIZE);
   }
 
   /**
@@ -229,9 +225,10 @@ class DetectionService {
       .raw()
       .toBuffer();
 
-    // HWC uint8 → CHW float32 using pre-allocated buffer (avoids per-frame GC)
+    // HWC uint8 → CHW float32 — allocate per call so concurrent requests
+    // (analysis server, multi-camera) cannot overwrite each other's tensor data
     const numPixels = INPUT_SIZE * INPUT_SIZE;
-    const float32   = this._float32Buf;
+    const float32   = new Float32Array(3 * numPixels);
     const inv255    = 1 / 255;
     for (let i = 0; i < numPixels; i++) {
       const j = i * 3;

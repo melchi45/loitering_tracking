@@ -701,3 +701,34 @@ const { data: cropBuf } = await snapshotSvc.cropJpeg(
 - `server/src/routes/analysisProxy.js` — `proxyGetWithFallback()`, `_localDetectionTracks()`, `_localDetectionSnapshots()`
 - `server/src/services/pipelineManager.js` — `_processRemoteResult()` 내 `_trackMeta` 업데이트, active flush timer stale 처리
 - `server/src/routes/analysisApi.js` — analysis 모드 트랙 저장 (`_trackMeta`, `popRemovedTracks()`, active flush)
+
+---
+
+### 12. detection.js — 다중 채널 동시 추론 시 채널 데이터 오염 버그 수정 (2026-06-23)
+
+**증상:** analysis 서버에서 간헐적으로 Camera A의 감지 결과가 Camera B의 cameraId로 전달됨. 특히 카메라 수가 많을수록(4채널 이상) 빈도 증가.
+
+**원인:** `DetectionService._preprocess()` 내부의 CHW Float32Array 입력 버퍼(`this._float32Buf`)를 생성자에서 단 한 번 할당하고 모든 호출에서 재사용.
+
+```
+// 레이스 컨디션 시나리오 (analysis 서버, 다중 카메라 동시 요청)
+Camera A: _preprocess() → _float32Buf ← Camera A 픽셀 쓰기 완료
+Camera B: _preprocess() → _float32Buf ← Camera B 픽셀로 덮어씀  ← 레이스!
+Camera A: session.run()  → Camera B 픽셀로 추론 → A cameraId로 B 결과 반환
+```
+
+combined 모드 `pipelineManager.js`는 `ctx._inferring = true` 플래그로 카메라별 추론을 직렬화하므로 공유 버퍼가 안전했음. 그러나 analysis 서버의 `POST /api/analysis/frame`은 직렬화 없이 동시에 처리됨.
+
+**수정 (`server/src/services/detection.js`):**
+```javascript
+// 수정 전 — constructor에 공유 버퍼, _preprocess에서 재사용
+// this._float32Buf = new Float32Array(3 * INPUT_SIZE * INPUT_SIZE);
+// const float32 = this._float32Buf;
+
+// 수정 후 — 호출마다 독립 할당
+const float32 = new Float32Array(3 * numPixels);
+```
+
+**주의:** `ort.Tensor`는 TypedArray의 참조를 보유하므로, `detect()` 스코프에서 `tensor` 변수가 살아있는 동안 `float32` 버퍼가 GC되지 않음 → 안전.
+
+**SRS:** FR-DAP-027 / **TC:** TC-DAP-009 (`test/api/distributed_pipeline.test.js`)

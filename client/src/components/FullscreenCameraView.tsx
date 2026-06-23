@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { useCamera } from '../hooks/useCamera';
 import { useCrossCameraStore } from '../stores/crossCameraStore';
 import { useClothingReIdStore } from '../stores/clothingReIdStore';
@@ -837,10 +837,20 @@ export function CameraEventsTab({ cameraId }: { cameraId: string }) {
   );
 }
 
+const PANEL_MIN_H  = 60;
+const PANEL_MAX_H  = 600;
+const PANEL_STORAGE_KEY = 'lts_fullscreen_panel_height';
+
 export default function FullscreenCameraView({ cameraId, cameraName, onClose }: Props) {
   const [videoTab, setVideoTab] = useState<'events' | 'onvif' | 'detections'>('onvif');
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const { t } = useI18n();
+
+  // Bottom panel height — persisted in localStorage
+  const [panelHeight, setPanelHeight] = useState<number>(() => {
+    const saved = parseInt(localStorage.getItem(PANEL_STORAGE_KEY) ?? '', 10);
+    return isNaN(saved) ? 200 : Math.max(PANEL_MIN_H, Math.min(PANEL_MAX_H, saved));
+  });
 
   // Close on Escape key
   useEffect(() => {
@@ -856,7 +866,44 @@ export default function FullscreenCameraView({ cameraId, cameraName, onClose }: 
     return () => window.removeEventListener('resize', onResize);
   }, []);
 
-  const tabHeight = videoTab === 'detections' ? 300 : videoTab === 'onvif' ? 200 : 160;
+  // Splitbar drag — mouse
+  const handleSplitbarMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startY  = e.clientY;
+    const startH  = panelHeight;
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const next = Math.max(PANEL_MIN_H, Math.min(PANEL_MAX_H, startH + (startY - ev.clientY)));
+      setPanelHeight(next);
+    };
+    const onMouseUp = (ev: MouseEvent) => {
+      const next = Math.max(PANEL_MIN_H, Math.min(PANEL_MAX_H, startH + (startY - ev.clientY)));
+      localStorage.setItem(PANEL_STORAGE_KEY, String(next));
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup',   onMouseUp);
+    };
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup',   onMouseUp);
+  }, [panelHeight]);
+
+  // Splitbar drag — touch
+  const handleSplitbarTouchStart = useCallback((e: React.TouchEvent) => {
+    const startY = e.touches[0].clientY;
+    const startH = panelHeight;
+
+    const onTouchMove = (ev: TouchEvent) => {
+      ev.preventDefault();
+      const next = Math.max(PANEL_MIN_H, Math.min(PANEL_MAX_H, startH + (startY - ev.touches[0].clientY)));
+      setPanelHeight(next);
+    };
+    const onTouchEnd = () => {
+      setPanelHeight(prev => { localStorage.setItem(PANEL_STORAGE_KEY, String(prev)); return prev; });
+      document.removeEventListener('touchmove', onTouchMove);
+      document.removeEventListener('touchend',  onTouchEnd);
+    };
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    document.addEventListener('touchend',  onTouchEnd);
+  }, [panelHeight]);
 
   return (
     <div
@@ -888,10 +935,20 @@ export default function FullscreenCameraView({ cameraId, cameraName, onClose }: 
           <CameraView cameraId={cameraId} cameraName={cameraName} />
         </div>
 
+        {/* ── Splitbar ──────────────────────────────────────────────── */}
+        <div
+          className="flex-shrink-0 flex items-center justify-center h-2 bg-gray-800/80 hover:bg-indigo-900/60 active:bg-indigo-800/70 cursor-row-resize group border-t border-b border-gray-700/60 transition-colors select-none"
+          onMouseDown={handleSplitbarMouseDown}
+          onTouchStart={handleSplitbarTouchStart}
+          title="Drag to resize panel"
+        >
+          <div className="w-10 h-0.5 rounded-full bg-gray-600 group-hover:bg-indigo-400 transition-colors" />
+        </div>
+
         {/* ── Bottom tab bar + content ───────────────────────────────── */}
         <div
-          className="flex-shrink-0 flex flex-col border-t border-gray-700 bg-gray-900"
-          style={{ height: tabHeight }}
+          className="flex-shrink-0 flex flex-col bg-gray-900"
+          style={{ height: panelHeight }}
         >
           {/* Tab bar */}
           <div className="flex items-center border-b border-gray-700/60 flex-shrink-0 bg-gray-900/80">

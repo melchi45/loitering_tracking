@@ -535,6 +535,35 @@ if (SERVER_MODE === 'streaming' && !process.env.ANALYSIS_SERVER_URL) {
 
 `analysis` 모드의 BehaviorEngine은 `zones` 배열을 직접 인자로 받아 사용합니다. `zoneManager`는 `null`로 초기화되며 zones는 요청 페이로드에서 직접 전달받습니다.
 
+### 4.4 DetectionService 동시 추론 채널 격리
+
+`analysis` 서버는 다중 카메라 채널 요청을 **동시에** 처리하므로, `DetectionService` 인스턴스는 공유하되 내부 가변 버퍼는 호출 간에 격리되어야 합니다.
+
+#### 레이스 컨디션 (수정 전)
+
+```
+Camera A ──► _preprocess() : _float32Buf ← A 픽셀 쓰기
+Camera B ──► _preprocess() : _float32Buf ← B 픽셀 덮어씀 ← 레이스!
+Camera A ──► session.run() : B 픽셀로 추론 실행 → A의 cameraId로 B 결과 반환
+```
+
+combined 모드의 `pipelineManager.js`는 `ctx._inferring = true` 플래그로 카메라별 추론을 직렬화하므로 공유 버퍼가 안전합니다. 그러나 analysis 서버는 `POST /api/analysis/frame`을 직렬화 없이 동시에 처리합니다.
+
+#### 수정 후 구현
+
+`detection.js`의 `_preprocess()` 메서드는 클래스 멤버 `_float32Buf`를 제거하고 호출마다 새 `Float32Array`를 할당합니다:
+
+```javascript
+// 수정 전 — 레이스 컨디션
+// constructor: this._float32Buf = new Float32Array(3 * 640 * 640);
+// _preprocess: const float32 = this._float32Buf; // 공유 버퍼 재사용
+
+// 수정 후 — 채널 격리 보장
+// _preprocess: const float32 = new Float32Array(3 * numPixels); // 호출별 독립 할당
+```
+
+`ort.Tensor`는 TypedArray에 대한 참조를 보유하므로, `detect()` 함수 내에서 `tensor` 변수가 `session.run()` 완료까지 스코프에 유지되어 조기 GC 없이 안전합니다.
+
 ---
 
 ## 5. Backpressure Strategy
@@ -927,3 +956,4 @@ Browser
 |---|---|---|
 | 1.0 | 2026-06-08 | 초기 작성 |
 | 1.1 | 2026-06-17 | 섹션 11 추가: DetectionTrack 생명주기, _trackMeta 구조, streaming 모드 시퀀스, fallback 흐름 |
+| 1.2 | 2026-06-23 | 섹션 4.4 추가: DetectionService 동시 추론 채널 격리 설계 (_float32Buf 공유 버퍼 레이스 컨디션 수정) |

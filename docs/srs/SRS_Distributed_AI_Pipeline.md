@@ -247,6 +247,17 @@ HTTP 연결 오류(ECONNREFUSED, ECONNRESET, EHOSTUNREACH 등) 발생 시 해당
 5. 결과 JSON 조합 후 응답
 6. `_trackMeta` 업데이트 + 이탈 트랙 `detectionTracks` DB 저장 (비동기)
 
+### FR-DAP-027: DetectionService 동시 추론 채널 격리
+
+`analysis` 서버의 `DetectionService.detect(jpegBuffer)`는 다수의 카메라 채널 요청이 동시에(concurrent) 처리될 때 각 채널의 입력 데이터가 다른 채널의 추론 결과에 영향을 주어서는 안 된다.
+
+구현 요구사항:
+- YOLOv8 전처리(`_preprocess`) 단계에서 생성하는 CHW Float32Array 입력 텐서 버퍼는 **호출마다 독립적으로 할당**해야 한다.
+- 클래스 또는 모듈 수준에서 공유되는 사전 할당(pre-allocated) 버퍼를 여러 동시 요청이 재사용하는 구현은 금지된다.
+- `DetectionService` 인스턴스는 모든 카메라 채널이 공유하되(FR-DAP-024), 내부 가변 상태(mutable buffer)가 요청 간에 공유되어서는 안 된다.
+
+> **배경**: `pipelineManager.js`(combined 모드)는 `_inferring` 플래그로 단일 카메라의 추론을 직렬화하므로 공유 버퍼가 안전하다. 그러나 analysis 서버는 다중 카메라 요청을 동시에 처리하므로 공유 버퍼는 레이스 컨디션을 유발한다.
+
 ### FR-DAP-026: Analysis 서버 감지 트랙 저장
 
 `analysis` 모드 `POST /api/analysis/frame` 처리 중 다음 조건을 만족하는 트랙은 `detectionTracks` DB에 저장해야 한다:
@@ -464,6 +475,7 @@ ANALYSIS_MAX_CONCURRENT=4
 | FR-DAP-023 | TC-DAP-007 |
 | FR-DAP-024 | TC-DAP-003 |
 | FR-DAP-025 | TC-DAP-003 |
+| FR-DAP-027 | TC-DAP-009 |
 | FR-DAP-030 | TC-DAP-005 |
 | FR-DAP-031 | TC-DAP-005 |
 | FR-DAP-032 | TC-DAP-004 |
@@ -481,3 +493,4 @@ ANALYSIS_MAX_CONCURRENT=4
 |---|---|---|
 | 1.0 | 2026-06-08 | 초기 작성 |
 | 1.1 | 2026-06-17 | FR-DAP-014~016 (streaming 로컬 shadow copy·fallback·원본 크롭), FR-DAP-026 (analysis 트랙 저장) 추가 |
+| 1.2 | 2026-06-23 | FR-DAP-027 추가: analysis 서버 다중 채널 동시 추론 시 채널 격리 요구사항 (DetectionService 버퍼 per-call 할당) |

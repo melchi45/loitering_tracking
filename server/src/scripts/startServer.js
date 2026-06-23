@@ -206,6 +206,16 @@ async function main() {
         });
       }
 
+      async function _killPortOrphan() {
+        // Kill any process still holding ingestPort so the fresh spawn can bind.
+        // fuser -k is Linux-only; safe to ignore on other platforms or if nothing occupies the port.
+        try {
+          const { execSync } = require('child_process');
+          execSync(`fuser -k ${ingestPort}/tcp`, { stdio: 'ignore' });
+          await new Promise(r => setTimeout(r, 300));
+        } catch (_) {}
+      }
+
       async function _respawnIngest() {
         if (_shuttingDown) return;
         const delay = Math.min(1_000 * Math.pow(1.5, _ingestRestartAttempts), 30_000);
@@ -213,6 +223,9 @@ async function main() {
         console.warn(`[Start] ingest-daemon crashed — restarting in ${(delay / 1000).toFixed(1)}s (attempt #${_ingestRestartAttempts})`);
         await new Promise(r => setTimeout(r, delay));
         if (_shuttingDown) return;
+
+        // Evict any orphan process left on the port before spawning a fresh daemon.
+        await _killPortOrphan();
 
         try {
           const proc = spawn(ingestExec, ingestArgs, {
@@ -224,11 +237,15 @@ async function main() {
           console.log(`[Start] ingest-daemon restarting on ${ingestAddr}`);
 
           // Wait for the daemon to bind its port (up to 15 s).
+          // Only count the port as ready when the spawned process is still alive
+          // (exitCode === null), so we don't mistake a surviving orphan for success.
           const deadline = Date.now() + 15_000;
           let ready = false;
           while (Date.now() < deadline) {
             await new Promise(r => setTimeout(r, 300));
             if (_shuttingDown || !ingestDaemonChild) break;
+            // Process already exited — bind failed; abort this poll round.
+            if (ingestDaemonChild.exitCode !== null || ingestDaemonChild.signalCode !== null) break;
             const up = await new Promise(resolve => {
               const s = new net.Socket();
               s.setTimeout(400);
