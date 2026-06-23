@@ -100,26 +100,29 @@ export default function ThermalOverlay({ cameraId, frameWidth, frameHeight }: Pr
     const handler = (evt: ThermalEvent) => {
       if (evt.cameraId !== cameraId) return;
 
+      // ── Side effects OUTSIDE the state updater ──────────────────────────
+      // React 18 Concurrent Mode may call state updaters multiple times.
+      // Timer management must not live inside the updater (not a pure fn).
+      evt.readings.forEach((r, idx) => {
+        const key = areaKey(r, `area-${idx}`);
+        const existing = timersRef.current.get(key);
+        if (existing) clearTimeout(existing);
+        const timer = setTimeout(() => {
+          setAreas(m => {
+            const upd = new Map(m);
+            upd.delete(key);
+            return upd;
+          });
+          timersRef.current.delete(key);
+        }, FADE_MS);
+        timersRef.current.set(key, timer);
+      });
+
+      // ── Pure state update: upsert each area, preserve others ────────────
       setAreas(prev => {
         const next = new Map(prev);
         evt.readings.forEach((r, idx) => {
-          const key = areaKey(r, `area-${idx}`);
-
-          // Update area slot
-          next.set(key, { reading: r, utcTime: evt.utcTime });
-
-          // Reset this area's fade timer
-          const existing = timersRef.current.get(key);
-          if (existing) clearTimeout(existing);
-          const t = setTimeout(() => {
-            setAreas(m => {
-              const upd = new Map(m);
-              upd.delete(key);
-              return upd;
-            });
-            timersRef.current.delete(key);
-          }, FADE_MS);
-          timersRef.current.set(key, t);
+          next.set(areaKey(r, `area-${idx}`), { reading: r, utcTime: evt.utcTime });
         });
         return next;
       });
@@ -128,7 +131,6 @@ export default function ThermalOverlay({ cameraId, frameWidth, frameHeight }: Pr
     socket.on('onvif:temperature', handler);
     return () => {
       socket.off('onvif:temperature', handler);
-      // Clear all timers on unmount
       timersRef.current.forEach(t => clearTimeout(t));
       timersRef.current.clear();
     };
