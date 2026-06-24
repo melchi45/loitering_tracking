@@ -315,7 +315,274 @@
 
 ---
 
-## 10. Test Execution Order
+## 10. Test Group H — NVR MaxChannel & Channel Selection
+
+**SRS References**: FR-CAM-060, FR-CAM-061, FR-CAM-062, FR-CAM-063, FR-CAM-064, FR-CAM-065, FR-CAM-066, FR-CAM-067  
+**Test Script**: `test/api/nvr_channel_discovery.test.js`
+
+---
+
+### TC-H-001 — SourceToken-Based MaxChannel (ONVIF NVR)
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-001 |
+| **SRS** | FR-CAM-060 |
+| **Priority** | P1 |
+| **Type** | Unit |
+
+**Precondition**: `enrichDevice()` mock returns a `GetProfiles` response with 4 profiles using 4 distinct `SourceToken` values (VideoSrc_01 … VideoSrc_04).
+
+**Steps**:
+1. Call `enrichDevice(ip, xaddr)` with the mocked SOAP server.
+2. Inspect `result.MaxChannel`.
+
+**Expected**: `result.MaxChannel === 4`.
+
+---
+
+### TC-H-002 — Single-Channel Camera Is Not Counted as Multi-Channel
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-002 |
+| **SRS** | FR-CAM-060 |
+| **Priority** | P1 |
+| **Type** | Unit |
+
+**Precondition**: Mock `GetProfiles` returns 2 profiles (main + sub stream) with the same `SourceToken = "VideoSrc_00"`.
+
+**Steps**:
+1. Call `enrichDevice()`.
+2. Inspect `result.MaxChannel`.
+
+**Expected**: `result.MaxChannel === 1` (not 2).
+
+---
+
+### TC-H-003 — channelIndex Assignment
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-003 |
+| **SRS** | FR-CAM-061 |
+| **Priority** | P1 |
+| **Type** | Unit |
+
+**Precondition**: Mock `GetProfiles` returns 4 profiles:
+- Profile A, B → `SourceToken = "VideoSrc_01"` (channel 1 main + sub)
+- Profile C, D → `SourceToken = "VideoSrc_02"` (channel 2 main + sub)
+
+**Expected**:
+- Profile A `channelIndex === 1`, Profile B `channelIndex === 1`
+- Profile C `channelIndex === 2`, Profile D `channelIndex === 2`
+
+---
+
+### TC-H-004 — SUNAPI MaxChannel Query Success
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-004 |
+| **SRS** | FR-CAM-062 |
+| **Priority** | P2 |
+| **Type** | Unit |
+
+**Precondition**: Mock HTTP server at `GET /stw-cgi/media.cgi?msubmenu=channellist&action=view` returns `{ "MaxChannel": 8 }`.
+
+**Steps**:
+1. Call `querySunapiMaxChannel(ip, httpPort, false)`.
+2. Inspect return value.
+
+**Expected**: Returns `8`.
+
+---
+
+### TC-H-005 — SUNAPI MaxChannel Query Auth Failure
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-005 |
+| **SRS** | FR-CAM-062 |
+| **Priority** | P1 |
+| **Type** | Unit |
+
+**Precondition**: Mock HTTP server returns HTTP 401 for both SUNAPI endpoints.
+
+**Steps**:
+1. Call `querySunapiMaxChannel(ip, httpPort, false)`.
+2. Inspect return value.
+
+**Expected**: Returns `1` within 2 100 ms (no hang).
+
+---
+
+### TC-H-006 — SUNAPI MaxChannel Query Timeout
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-006 |
+| **SRS** | FR-CAM-062 |
+| **Priority** | P1 |
+| **Type** | Unit |
+
+**Precondition**: Mock HTTP server never responds (simulated timeout).
+
+**Steps**:
+1. Call `querySunapiMaxChannel(ip, httpPort, false, 500)` (500 ms timeout).
+2. Await result.
+
+**Expected**: Returns `1` within 1 200 ms.
+
+---
+
+### TC-H-007 — mergeDevices MaxChannel Max Rule
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-007 |
+| **SRS** | FR-CAM-063 |
+| **Priority** | P1 |
+| **Type** | Unit |
+
+**Precondition**: Two device objects for the same IP:
+- UDP device: `MaxChannel = 1`
+- ONVIF device: `MaxChannel = 4`
+
+**Steps**:
+1. Call `mergeDevices(udpDevice, onvifDevice)`.
+2. Inspect `merged.MaxChannel`.
+
+**Expected**: `merged.MaxChannel === 4`.
+
+---
+
+### TC-H-008 — Discovery Card MaxChannel Badge Visibility
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-008 |
+| **SRS** | FR-CAM-064 |
+| **Priority** | P1 |
+| **Type** | UI / Component |
+
+**Precondition**: A discovered camera entry with `MaxChannel = 8` in the discovery store.
+
+**Steps**:
+1. Render the camera discovery list card.
+2. Check for amber badge element containing `"8CH"`.
+
+**Expected**: Badge `"8CH"` is visible with amber styling.  
+**Negative**: Camera with `MaxChannel = 1` shows **no** channel badge.
+
+---
+
+### TC-H-009 — Channel Selection Buttons Appear for NVR
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-009 |
+| **SRS** | FR-CAM-065 |
+| **Priority** | P1 |
+| **Type** | UI / Component |
+
+**Precondition**: `DiscoveredCameraPanel` rendered with `camera.MaxChannel = 4`, `camera.profiles` containing 4 profiles with `channelIndex` 1–4 and valid `rtspUrl`.
+
+**Steps**:
+1. Render `DiscoveredCameraPanel`.
+2. Check for "Channel Selection" heading.
+3. Count channel buttons.
+4. Check green ● indicators on buttons with `rtspUrl`.
+
+**Expected**:
+- "Channel Selection" heading present.
+- 4 buttons labeled "CH 1", "CH 2", "CH 3", "CH 4".
+- All 4 buttons show `●` indicator.
+
+---
+
+### TC-H-010 — Channel Button Click Updates RTSP URL
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-010 |
+| **SRS** | FR-CAM-065, FR-CAM-066 |
+| **Priority** | P1 |
+| **Type** | UI / Component |
+
+**Precondition**: NVR with 4 channels, channel 2 RTSP = `rtsp://192.168.1.10:554/profile3/media.smp`.
+
+**Steps**:
+1. Render panel (default CH 1 selected).
+2. Click "CH 2" button.
+3. Read displayed RTSP URL.
+
+**Expected**: URL changes to `rtsp://192.168.1.10:554/profile3/media.smp`.
+
+---
+
+### TC-H-011 — channelRtspUrl Fallback URL Generation
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-011 |
+| **SRS** | FR-CAM-066 |
+| **Priority** | P2 |
+| **Type** | Unit |
+
+**Precondition**: Base RTSP URL `rtsp://192.168.1.10:554/profile1/media.smp`.
+
+**Steps**:
+1. Call `channelRtspUrl(baseUrl, 3)`.
+2. Inspect result.
+
+**Expected**: `rtsp://192.168.1.10:554/profile3/media.smp`.
+
+---
+
+### TC-H-012 — Channel Camera Name Format
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-012 |
+| **SRS** | FR-CAM-067 |
+| **Priority** | P1 |
+| **Type** | Integration |
+
+**Precondition**: NVR device with `Model = "XRN-810S"`, `MaxChannel = 8`. User selects CH 5 and clicks "+ Add Ch 5 to System".
+
+**Steps**:
+1. Intercept the `POST /api/cameras` request body.
+2. Inspect `body.name`.
+
+**Expected**: `body.name === "XRN-810S Ch5"`.
+
+---
+
+### TC-H-013 — Single-Channel Camera Unaffected
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-013 |
+| **SRS** | FR-CAM-064, FR-CAM-065, FR-CAM-067 |
+| **Priority** | P1 |
+| **Type** | UI / Integration |
+
+**Precondition**: Single-channel camera `MaxChannel = 1`.
+
+**Steps**:
+1. Check discovery card → no channel badge.
+2. Open detail panel → no "Channel Selection" section.
+3. Click "+ Add to System" → `POST /api/cameras` body.
+
+**Expected**:
+- No `NCH` badge on card.
+- No Channel Selection section.
+- Camera name = `"{Model}"` (no ` Ch1` suffix).
+
+---
+
+## 11. Test Execution Order
 
 ```
 Group B (camera API) → Group C (registry) → Group A (trigger API) → Group D (Socket.IO) → Group E (UDP) → Group F (ONVIF) → Group G (edge cases)
@@ -335,6 +602,7 @@ Group B camera records created during tests must be cleaned up after each group.
 | UDP scan | Correct 160-byte packet; 10s timeout respected; auto-recovery |
 | ONVIF | Multicast probe; XAddrs extraction; graceful 401 fallback |
 | Security | No credentials in logs; discovery-only localhost exposure |
+| NVR MaxChannel | SourceToken-based count; SUNAPI query returns 1 on auth failure; merge takes max; card badge visible; channel selection panel; RTSP URL per channel; name suffix Ch{N} |
 
 ---
 
@@ -343,3 +611,4 @@ Group B camera records created during tests must be cleaned up after each group.
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for Camera Discovery |
+| 1.1 | 2026-06-23 | LTS Engineering Team | §10 Test Group H 추가 — NVR MaxChannel TC-H-001~TC-H-013 (SourceToken, channelIndex, SUNAPI, mergeDevices, UI badge, channel panel, RTSP URL) |

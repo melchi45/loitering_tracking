@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-003 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Draft |
 | **Date** | 2026-05-21 |
 | **Related RFP** | RFP_Camera_Discovery.md |
@@ -262,8 +262,51 @@ interface OnvifProfile {
 
 ---
 
+## 9. NVR Multi-Channel Support
+
+### 9.1 Problem Statement
+
+WiseNet NVR devices (Network Video Recorders) contain multiple physical camera channels under a single IP address. Prior to this feature, the system treated every discovered device as a single-channel camera, making it impossible to add individual NVR channels to the monitoring pipeline.
+
+### 9.2 Product Goals
+
+| Goal | Metric |
+|---|---|
+| Correct channel count | `MaxChannel` ≥ 2 for any NVR device discovered on the LAN |
+| UI clarity | Channel count badge visible on all NVR cards in the discovery list |
+| Zero-friction add | Operator can select a channel and add it in ≤ 3 clicks |
+| RTSP correctness | Each channel produces a valid, distinct RTSP URL |
+
+### 9.3 User Stories
+
+| Story | Acceptance Criterion |
+|---|---|
+| As an operator, I want to see how many channels an NVR has at a glance | `MaxChannel` badge (e.g., `4CH`) visible on the discovery card |
+| As an operator, I want to select a specific NVR channel to monitor | Channel selection grid visible in the detail panel when MaxChannel > 1 |
+| As an operator, I want the correct RTSP URL auto-populated for each channel | RTSP URL changes when a different channel button is clicked |
+| As an operator, I want the camera name to reflect the channel I added | Camera added as `"{Model} Ch{N}"` in the camera list |
+
+### 9.4 Out of Scope
+
+- Bulk-adding all NVR channels at once (add one at a time)
+- Real-time NVR channel status (connected / disconnected per channel)
+- SUNAPI credential-based channel query (only no-auth best-effort is supported)
+
+### 9.5 Technical Approach
+
+| Layer | Implementation |
+|---|---|
+| ONVIF enrichment | `enrichDevice()` counts distinct `SourceToken` values → `MaxChannel` |
+| SUNAPI best-effort | `querySunapiMaxChannel()` — HTTP GET without auth, 2 s timeout |
+| Merge rule | `mergeDevices()` takes `max(existing.MaxChannel, incoming.MaxChannel)` |
+| UI card badge | `{MaxChannel}CH` amber badge when `MaxChannel > 1` |
+| Channel panel | `channelIndex`-based profile lookup; `channelRtspUrl()` fallback |
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for Camera Discovery |
+| 1.1 | 2026-06-23 | LTS Engineering Team | §9 추가 — NVR MaxChannel 다중 채널 제품 요구사항, 사용자 스토리, 기술 접근법 |

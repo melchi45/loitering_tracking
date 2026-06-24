@@ -374,34 +374,54 @@ rtsp://{chIP}:{nTcpPort}/profile1/media.smp
 
 WiseNet NVR이나 ONVIF NVR 장비는 채널 수(`MaxChannel > 1`)를 반환합니다.
 
-**서버측 MaxChannel 도출 순서:**
+> **중요**: `MaxChannel = profiles.length` 는 잘못된 방식입니다. 단일 카메라도 메인/서브 2개 프로필을 가지므로 반드시 **SourceToken 기반** 판별을 사용합니다.
+
+**서버측 MaxChannel 도출 순서 (FR-CAM-060~063):**
 
 | 단계 | 방법 | 파일 |
 |------|------|------|
-| 1 | ONVIF `GetProfiles` 응답 → `profiles.length` | `onvifDiscovery.js` `enrichDevice()` |
+| 1 | ONVIF `GetProfiles` → 고유 `SourceToken` 수 카운트 (`sourceTokenOrder.size`) | `onvifDiscovery.js` `enrichDevice()` |
 | 2 | SUNAPI best-effort 쿼리 (no-auth, 2 s timeout) | `discoveryService.js` `querySunapiMaxChannel()` |
-| 3 | `mergeDevices()` — 양쪽 MaxChannel 중 큰 값 | `discoveryService.js` |
+| 3 | `mergeDevices()` — `Math.max(existing, incoming)` 병합 | `discoveryService.js` |
 
-**SUNAPI MaxChannel 쿼리 엔드포인트 (우선순위):**
+**SourceToken 규칙 (FR-CAM-060):**
+- 단일채널 카메라: 모든 프로필이 동일한 `SourceToken` → `MaxChannel = 1`
+- 4채널 NVR: 4개의 다른 `SourceToken` → `MaxChannel = 4`
+- 각 프로필에 `channelIndex` (1-based) 부여 — 같은 채널의 메인/서브 프로필은 동일 `channelIndex`
+
+**SUNAPI MaxChannel 쿼리 엔드포인트 (FR-CAM-062):**
 1. `GET /stw-cgi/media.cgi?msubmenu=channellist&action=view` → `ChannelIDList.length` 또는 `MaxChannel`
 2. `GET /stw-cgi/system.cgi?msubmenu=systeminfo&action=view` → `MaxChannel`
 - 인증 필요(401/403) 또는 타임아웃 → `MaxChannel = 1` 유지
 
-**클라이언트측 채널 선택 UI (`DiscoveredCameraPanel.tsx`):**
+**클라이언트 CameraList.tsx 탐색 목록 카드 (FR-CAM-064):**
+```
+┌──────────────────────────────┐
+│ ● XRN-810S              8CH │  ← amber 배지, MaxChannel > 1 시 표시
+│   Hanwha Vision · 192.168.1.10
+│                        SUNAPI│
+│                        ONVIF │
+└──────────────────────────────┘
+```
+
+**DiscoveredCameraPanel.tsx 채널 선택 UI (FR-CAM-065~067):**
 - `MaxChannel > 1` 인 경우:
   - `CH N` 버튼 그리드 표시 (1..MaxChannel)
-  - ONVIF 프로필 URL 있는 채널은 `●` 초록 인디케이터
+  - `channelIndex === N` 이고 `rtspUrl` 있는 채널에 `●` 초록 인디케이터
   - 채널 클릭 시 RTSP URL 실시간 갱신
   - "+ Add Ch N to System" 버튼 — 이름 자동 suffix: `"{모델명} Ch{N}"`
-- RTSP URL 채널별 생성 (`channelRtspUrl()`):
-  - ONVIF 프로필 있는 경우: `profiles[channel-1].rtspUrl` 사용
-  - 없는 경우: base URL의 `/profile1/` → `/profile{N}/` 치환
+- RTSP URL 채널별 생성 (우선순위):
+  1. `profiles.find(p => p.channelIndex === N && p.rtspUrl)` — ONVIF profile 우선
+  2. `profiles[N-1].rtspUrl` — 레거시 인덱스 fallback
+  3. `channelRtspUrl(base, N)` — `/profile1/` → `/profileN/` 치환
 
 **채널 추가 흐름 (NVR 8채널 예시):**
-1. 탐색 결과에서 NVR 클릭 → 패널 열림, "Channels: 8 CH" 배지 표시
-2. CH 1 ~ CH 8 버튼 중 원하는 채널 클릭 (기본 CH 1)
-3. RTSP URL 자동 갱신: `rtsp://192.168.1.100:554/profile3/media.smp` (CH 3 예시)
-4. "+ Add Ch 3 to System" 클릭 → `POST /api/cameras` body: `{ name: "XRN-810S Ch3", rtspUrl: "..." }`
+1. 탐색 결과 카드에 `8CH` 앰버 배지 표시
+2. 카드 클릭 → 패널 열림, "Channel Selection" 섹션에 CH 1~8 버튼 그리드
+3. CH 3 클릭 → RTSP URL 자동 갱신: `rtsp://192.168.1.10:554/profile5/media.smp`
+4. "+ Add Ch 3 to System" 클릭 → `POST /api/cameras { name: "XRN-810S Ch3", rtspUrl: "..." }`
+
+**테스트 스크립트:** `test/api/nvr_channel_discovery.test.js` (TC-H-001~TC-H-013)
 
 ### YouTube 스트림 수집
 1. 대상 YouTube URL 준비 (라이브 또는 녹화, HLS 전용 스트림 포함)

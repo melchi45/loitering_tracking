@@ -1,6 +1,6 @@
 # RFP — Camera Discovery & Network Search Subsystem
 **Document ID**: LTS-2026-002  
-**Version**: 1.0  
+**Version**: 1.1  
 **Date**: 2026-05-18  
 **Project**: Loitering Detection & Tracking System (LTS-2026)  
 **Status**: Draft
@@ -457,8 +457,58 @@ interface OnvifProfile {
 
 ---
 
+## 10. NVR Multi-Channel Discovery
+
+### 10.1 Background
+
+Hanwha Vision NVR devices (e.g., XRN-410S, XRN-810S, XRN-1610S) expose multiple physical camera inputs — referred to as **channels** — through a single network address. The number of channels is indicated by the `MaxChannel` field returned in SUNAPI or ONVIF responses. Each channel has an independent RTSP stream URL and must be registered as a separate entry in the LTS monitoring pipeline.
+
+### 10.2 Requirements
+
+| ID | Requirement |
+|---|---|
+| RFP-CH-001 | The system **shall** detect `MaxChannel` for all WiseNet NVR devices discovered via UDP or ONVIF |
+| RFP-CH-002 | When `MaxChannel > 1`, the device card in the CAMERAS discovery panel **shall** display a channel count badge (e.g., `4CH`) |
+| RFP-CH-003 | Selecting a discovered NVR device **shall** present a channel selection grid (CH 1 … CH N) in the side panel |
+| RFP-CH-004 | Each channel button **shall** show a green indicator (●) when an ONVIF RTSP URL is available for that channel |
+| RFP-CH-005 | Clicking a channel button **shall** update the displayed RTSP URL to the corresponding stream URL |
+| RFP-CH-006 | The "+ Add to System" action **shall** register the selected channel with name format `"{DeviceName} Ch{N}"` |
+| RFP-CH-007 | `MaxChannel` **shall** be derived from ONVIF `GetProfiles` by counting distinct `VideoSourceConfiguration/SourceToken` values |
+| RFP-CH-008 | For SUNAPI devices without ONVIF enrichment, a best-effort SUNAPI REST query **shall** be attempted (no-auth, 2 s timeout) |
+| RFP-CH-009 | When both ONVIF and SUNAPI yield `MaxChannel`, the larger value **shall** win |
+| RFP-CH-010 | SUNAPI query failure (auth required, timeout) **shall** gracefully fall back to `MaxChannel = 1` without error |
+
+### 10.3 UI Specification
+
+**Camera Discovery List Card** (CAMERAS panel → Found tab):
+
+```
+┌─────────────────────────────────┐
+│ ● XRN-810S                 4CH │  ← amber badge when MaxChannel > 1
+│   Hanwha Vision · 192.168.1.10  │
+│                           SUNAPI│
+│                           ONVIF │
+└─────────────────────────────────┘
+```
+
+**Channel Selection Panel** (side panel, opened on device click):
+
+```
+Channel Selection
+[ CH 1 ●] [ CH 2 ●] [ CH 3  ] [ CH 4 ●]   ← ● = ONVIF RTSP available
+● ONVIF profile available · Adding will use "XRN-810S Ch2"
+
+RTSP (Ch 2)
+rtsp://192.168.1.10:554/profile3/media.smp
+
+[ + Add Ch 2 to System ]
+```
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for Camera Discovery |
+| 1.1 | 2026-06-23 | LTS Engineering Team | §10 추가 — NVR MaxChannel 다중 채널 탐색 요구사항 및 UI 명세 |

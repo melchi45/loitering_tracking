@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-CAM-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent PRD** | prd/PRD_Camera_Discovery.md |
@@ -286,6 +286,128 @@ Server start
 
 ---
 
+## 7b. Functional Requirements — NVR Multi-Channel (MaxChannel)
+
+### FR-CAM-060 — SourceToken-Based MaxChannel
+
+| Attribute | Value |
+|---|---|
+| **ID** | FR-CAM-060 |
+| **Title** | ONVIF SourceToken 기반 MaxChannel 판별 |
+| **Priority** | Must-Have |
+
+The system **shall** determine `MaxChannel` by counting the number of distinct `VideoSourceConfiguration/SourceToken` values in the ONVIF `GetProfiles` response. Using `profiles.length` is explicitly prohibited because single-channel cameras expose multiple stream profiles (main/sub) from the same physical input.
+
+```
+MaxChannel = |{unique SourceToken values across all profiles}|
+```
+
+If no `SourceToken` is present in the response (non-conformant ONVIF device), `MaxChannel` defaults to `1`.
+
+---
+
+### FR-CAM-061 — channelIndex Assignment
+
+| Attribute | Value |
+|---|---|
+| **ID** | FR-CAM-061 |
+| **Title** | 프로필별 channelIndex 부여 |
+| **Priority** | Must-Have |
+
+Each ONVIF profile **shall** be annotated with a `channelIndex` (1-based integer) representing the physical input it belongs to. The index is assigned in insertion order of first-encountered `SourceToken`. Profiles sharing the same `SourceToken` receive the same `channelIndex`.
+
+---
+
+### FR-CAM-062 — SUNAPI MaxChannel Query
+
+| Attribute | Value |
+|---|---|
+| **ID** | FR-CAM-062 |
+| **Title** | SUNAPI 채널 수 best-effort 쿼리 |
+| **Priority** | Should-Have |
+
+When a UDP-discovered device has `SupportSunapi = true`, the system **shall** attempt an unauthenticated HTTP GET to retrieve `MaxChannel`:
+
+1. `GET /stw-cgi/media.cgi?msubmenu=channellist&action=view` → parse `ChannelIDList.length` or `MaxChannel`
+2. `GET /stw-cgi/system.cgi?msubmenu=systeminfo&action=view` → parse `MaxChannel`
+
+Rules:
+- Timeout: 2 000 ms per request
+- Auth failure (HTTP 401/403): resolve `0` immediately (no retry)
+- Network error / JSON parse error: resolve `0`
+- If both endpoints return `0`, `MaxChannel` stays `1`
+
+---
+
+### FR-CAM-063 — MaxChannel Merge Rule
+
+| Attribute | Value |
+|---|---|
+| **ID** | FR-CAM-063 |
+| **Title** | MaxChannel 병합 규칙 |
+| **Priority** | Must-Have |
+
+`mergeDevices()` **shall** set `merged.MaxChannel = Math.max(existing.MaxChannel || 1, incoming.MaxChannel || 1)`. The larger value always wins, ensuring ONVIF and SUNAPI enrichment results are not lost on cross-protocol merge.
+
+---
+
+### FR-CAM-064 — Discovery Card MaxChannel Badge
+
+| Attribute | Value |
+|---|---|
+| **ID** | FR-CAM-064 |
+| **Title** | 탐색 목록 카드 MaxChannel 배지 |
+| **Priority** | Must-Have |
+
+When `MaxChannel > 1`, the device card in the CAMERAS panel Found tab **shall** display an amber `{MaxChannel}CH` badge in the top-right badge area of the card, above the SUNAPI/ONVIF protocol badges.
+
+---
+
+### FR-CAM-065 — Channel Selection Panel
+
+| Attribute | Value |
+|---|---|
+| **ID** | FR-CAM-065 |
+| **Title** | 채널 선택 패널 |
+| **Priority** | Must-Have |
+
+When a device with `MaxChannel > 1` is opened in `DiscoveredCameraPanel`:
+
+a. A **Channel Selection** section **shall** appear with `MaxChannel` buttons labeled `CH 1` … `CH N`.  
+b. Channels with a valid ONVIF RTSP URL **shall** show a green `●` indicator.  
+c. Clicking a channel button **shall** update the displayed RTSP URL and the `+Add` button label.  
+d. Default selected channel **shall** be `1`.
+
+---
+
+### FR-CAM-066 — Channel RTSP URL Resolution
+
+| Attribute | Value |
+|---|---|
+| **ID** | FR-CAM-066 |
+| **Title** | 채널별 RTSP URL 생성 |
+| **Priority** | Must-Have |
+
+The RTSP URL for channel `N` **shall** be resolved in priority order:
+
+1. First ONVIF profile where `channelIndex === N` and `rtspUrl` is non-empty
+2. Profile at array index `N-1` (legacy fallback, no `channelIndex` set)
+3. `channelRtspUrl(camera.rtspUrl, N)` — replaces `/profile{M}/` with `/profile{N}/` in the base URL
+
+---
+
+### FR-CAM-067 — Channel Camera Name
+
+| Attribute | Value |
+|---|---|
+| **ID** | FR-CAM-067 |
+| **Title** | 채널 추가 시 카메라 이름 |
+| **Priority** | Must-Have |
+
+When `MaxChannel > 1` and the operator adds channel `N`, the camera name sent to `POST /api/cameras` **shall** be `"{camera.Model || camera.IPAddress} Ch{N}"`. When `MaxChannel === 1`, the original model/IP name is used unchanged.
+
+---
+
 ## 8. Non-Functional Requirements
 
 ### FR-CAM-050 — Discovery Latency
@@ -372,22 +494,26 @@ interface DeviceInfo {
   Model:          string;
   FirmwareVersion?: string;
   SerialNumber?:  string;
+  Channel?:       number;           // currently selected channel (1-based, default 1)
+  MaxChannel?:    number;           // physical input count; >1 = NVR/DVR (FR-CAM-060)
   SupportSunapi:  boolean;
   SupportOnvif:   boolean;
   SupportPTZ?:    boolean;
   rtspUrl?:       string;
-  profiles?:      OnvifProfile[];
+  profiles?:      OnvifProfile[];   // index = profile order; channelIndex maps to physical input
   URL?:           string;           // DDNS URL
 }
 
 interface OnvifProfile {
-  token:     string;
-  name:      string;
-  encoding:  string;    // "H264" | "H265" | "MJPEG"
-  width:     number;
-  height:    number;
-  fps:       number;
-  rtspUrl:   string;
+  token:         string;
+  name:          string;
+  encoding:      string;    // "H264" | "H265" | "MJPEG"
+  width:         number;
+  height:        number;
+  fps:           number;
+  rtspUrl:       string;
+  sourceToken?:  string;    // VideoSourceConfiguration/SourceToken (FR-CAM-060)
+  channelIndex?: number;    // 1-based physical channel index (FR-CAM-061)
 }
 ```
 
@@ -413,3 +539,4 @@ interface OnvifProfile {
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for Camera Discovery |
+| 1.1 | 2026-06-23 | LTS Engineering Team | §7b 추가 — FR-CAM-060~067 NVR MaxChannel 요구사항; DeviceInfo/OnvifProfile 스키마에 Channel·MaxChannel·sourceToken·channelIndex 필드 추가 |

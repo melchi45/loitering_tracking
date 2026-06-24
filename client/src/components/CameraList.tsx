@@ -605,6 +605,11 @@ export default function CameraList() {
                         )}
                       </div>
                       <div className="flex flex-col items-end gap-0.5 flex-shrink-0 mt-0.5">
+                        {(cam.MaxChannel ?? 1) > 1 && (
+                          <span className="text-[9px] px-1 py-0.5 rounded bg-amber-800 text-amber-300 font-bold">
+                            {cam.MaxChannel}CH
+                          </span>
+                        )}
                         {(src === 'udp' || src === 'both') && cam.SupportSunapi && (
                           <span className="text-[9px] px-1 py-0.5 rounded bg-green-900 text-green-400">
                             SUNAPI
