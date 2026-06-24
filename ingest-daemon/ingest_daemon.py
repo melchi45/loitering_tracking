@@ -600,16 +600,17 @@ class CameraSession:
             except OSError as exc:
                 if self._stop.is_set():
                     break
-                # EADDRINUSE on a MediaMTX URL means the server does not forward
-                # ONVIF data tracks — retrying will never succeed.  Exit cleanly
-                # after a small number of consecutive failures to avoid log spam.
-                if exc.errno == 98:  # EADDRINUSE
+                # EADDRINUSE (98) or EADDRNOTAVAIL (99): address-level errors
+                # that will not resolve with retries (source has no data track,
+                # or the local address cannot be assigned).  Exit cleanly after
+                # a few consecutive failures to avoid log spam.
+                if exc.errno in (98, 99):  # EADDRINUSE / EADDRNOTAVAIL
                     addr_in_use_n += 1
                     if addr_in_use_n >= 3:
                         log.warning(
-                            "[%s] App RTP: persistent EADDRINUSE (%d) on %s — "
-                            "source does not carry a data track; exiting",
-                            self.id[:8], addr_in_use_n, self.app_rtp_rtsp_url,
+                            "[%s] App RTP: persistent address error errno=%d (%d×) on %s"
+                            " — source has no data track or address unreachable; exiting",
+                            self.id[:8], exc.errno, addr_in_use_n, self.app_rtp_rtsp_url,
                         )
                         return
                 log.warning("[%s] App RTP error: %s — retry in %.1fs",
@@ -632,13 +633,12 @@ class CameraSession:
         # thread while demux() runs on an unknown-codec stream can segfault libav,
         # crashing the entire ingest-daemon process.
         #
-        # Pass timeout= at av.open() time (maps to AVFormatContext.io_timeout in µs).
-        # libav interrupts each blocking demux call from within C when the timeout
-        # fires — completely thread-safe, no cross-thread close() needed.
-        # NOTE: older PyAV exposed inp.read_timeout as a writable property, but
-        # newer versions removed it; passing the ffmpeg "timeout" option at open
-        # time is the portable equivalent.
-        _app_rtp_opts = {**_RTSP_OPTIONS, "timeout": str(int(APP_RTP_READ_TIMEOUT * 1_000_000))}
+        # Use stimeout= (socket I/O timeout, µs) — NOT "timeout" which is the
+        # deprecated RTSP listen-mode option and triggers RTSP_FLAG_LISTEN,
+        # causing FFmpeg to bind to the camera's IP address and fail with EADDRNOTAVAIL.
+        # stimeout overrides the 30s value in _RTSP_OPTIONS with the longer
+        # APP_RTP_READ_TIMEOUT (default 60s) to tolerate sparse ONVIF data tracks.
+        _app_rtp_opts = {**_RTSP_OPTIONS, "stimeout": str(int(APP_RTP_READ_TIMEOUT * 1_000_000))}
         # Use app_rtp_rtsp_url (original camera URL) — not rtsp_url which may be a
         # MediaMTX re-publish URL that strips ONVIF data tracks.
         inp = av.open(self.app_rtp_rtsp_url, options=_app_rtp_opts)
