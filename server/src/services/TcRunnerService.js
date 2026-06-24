@@ -14,7 +14,6 @@ const path        = require('path');
 const fs          = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const { getDB }   = require('../db');
-const logger      = require('../utils/logger');
 
 const ROOT = path.resolve(__dirname, '../../..');
 
@@ -92,12 +91,12 @@ let _lastRunId = null;
  */
 function runOnStartup(port) {
   if (process.env.TC_STARTUP_RUN === 'false') {
-    logger.info('[TcRunner] TC_STARTUP_RUN=false — startup tests disabled');
+    console.log('[TcRunner] TC_STARTUP_RUN=false — startup tests disabled');
     return;
   }
-  logger.info(`[TcRunner] Startup tests scheduled in ${STARTUP_DELAY_MS / 1000}s`);
+  console.log(`[TcRunner] Startup tests scheduled in ${STARTUP_DELAY_MS / 1000}s`);
   setTimeout(() => _run(port).catch(err => {
-    logger.error('[TcRunner] Unhandled error in test run:', err.message);
+    console.error('[TcRunner] Unhandled error in test run:', err.message);
   }), STARTUP_DELAY_MS);
 }
 
@@ -107,7 +106,7 @@ function runOnStartup(port) {
  */
 function runNow(port) {
   if (_running) return false;
-  _run(port).catch(err => logger.error('[TcRunner] Manual run error:', err.message));
+  _run(port).catch(err => console.error('[TcRunner] Manual run error:', err.message));
   return true;
 }
 
@@ -156,7 +155,7 @@ function clearResults() {
 
 async function _run(port) {
   if (_running) {
-    logger.warn('[TcRunner] A run is already in progress — skipping');
+    console.warn('[TcRunner] A run is already in progress — skipping');
     return;
   }
   _running   = true;
@@ -167,7 +166,7 @@ async function _run(port) {
   const ltsUrl = `http://localhost:${port}`;
   let totalPass = 0, totalFail = 0, totalSkip = 0;
 
-  logger.info(`[TcRunner] Run ${runId.slice(0, 8)} started — ${SUITES.length} suites, LTS_URL=${ltsUrl}`);
+  console.log(`[TcRunner] Run ${runId.slice(0, 8)} started — ${SUITES.length} suites, LTS_URL=${ltsUrl}`);
 
   for (const suite of SUITES) {
     const absPath = path.resolve(ROOT, suite.file);
@@ -200,7 +199,7 @@ async function _run(port) {
   }
 
   _running = false;
-  logger.info(`[TcRunner] Run ${runId.slice(0, 8)} complete: ${totalPass} pass, ${totalFail} fail, ${totalSkip} skip`);
+  console.log(`[TcRunner] Run ${runId.slice(0, 8)} complete: ${totalPass} pass, ${totalFail} fail, ${totalSkip} skip`);
 }
 
 /**
@@ -279,7 +278,7 @@ function _save(runId, runAt, suite, tcId, tcDesc, status, errorMsg) {
       errorMsg:   errorMsg ?? null,
     });
   } catch (err) {
-    logger.warn(`[TcRunner] DB save failed for ${tcId}: ${err.message}`);
+    console.warn(`[TcRunner] DB save failed for ${tcId}: ${err.message}`);
   }
 }
 
