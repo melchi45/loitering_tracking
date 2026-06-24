@@ -2,14 +2,25 @@
 
 const fs = require('fs');
 const path = require('path');
-const { spawnSync } = require('child_process');
+const { spawnSync, execSync } = require('child_process');
+
+// process.execPath may point to the glibc loader on systems where node is
+// installed as a wrapper (e.g. /opt/glibc-2.33 + shell shim).
+// Resolve the actual 'node' binary via PATH instead.
+const NODE_BIN = (() => {
+  try {
+    const p = execSync('which node', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (p) return p;
+  } catch (_) {}
+  return process.execPath;
+})();
 
 const serverDir = path.resolve(__dirname, '..', '..');
 const projectDir = path.resolve(serverDir, '..');
 const clientDir = path.resolve(projectDir, 'client');
 
 function runNodeScript(scriptPath, args, cwd) {
-  const result = spawnSync(process.execPath, [scriptPath, ...args], {
+  const result = spawnSync(NODE_BIN, [scriptPath, ...args], {
     cwd,
     stdio: 'inherit',
     env: process.env,
@@ -79,7 +90,7 @@ function main() {
     process.exit(1);
   }
 
-  console.log(`[Client Build] Node: ${process.execPath}`);
+  console.log(`[Client Build] Node: ${NODE_BIN}`);
   console.log(`[Client Build] Client dir: ${clientDir}`);
 
   if (!ensureClientDependencies()) {
