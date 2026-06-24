@@ -389,6 +389,7 @@ class PipelineManager {
     let _ingestRtspUrl           = null;
     let _ingestCallbackUrl       = null;
     let _ingestAppRtpCallbackUrl = null;
+    let daemonAppRtpRtspUrl      = null;
     if (CAPTURE_BACKEND === 'ingest-daemon') {
       const isHttps     = (process.env.HTTPS_ENABLED || '').toLowerCase() === 'true';
       const serverProto = isHttps ? 'https' : 'http';
@@ -402,7 +403,7 @@ class PipelineManager {
       // App RTP must read from the original camera RTSP URL to access ONVIF data tracks
       // that MediaMTX does not re-publish.  Pass appRtpRtspUrl so the ingest-daemon
       // opens a separate direct connection to the camera for ONVIF metadata.
-      const daemonAppRtpRtspUrl = mediamtxReady ? rtspUrl : undefined;
+      daemonAppRtpRtspUrl = mediamtxReady ? rtspUrl : undefined;
 
       const needsDirectIngestReg = WEBRTC_ENGINE !== 'mediasoup' || !altWebRTCReady;
       if (needsDirectIngestReg) {
