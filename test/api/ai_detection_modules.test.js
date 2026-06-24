@@ -162,6 +162,19 @@ const MODULES = [
 
 // ── Prerequisites ─────────────────────────────────────────────────────────────
 
+/**
+ * Returns the server mode string, or null if health check fails.
+ * FR-DAP-TC-SKIP-001: Analysis-only suites must skip in SERVER_MODE=streaming.
+ */
+async function getServerMode() {
+  try {
+    const { body } = await get('/health');
+    return (body.serverMode || 'combined').trim().toLowerCase();
+  } catch (_) {
+    return null;
+  }
+}
+
 async function checkPrerequisites() {
   console.log('\n[Prerequisites]');
 
@@ -346,6 +359,14 @@ async function main() {
   console.log('╔══════════════════════════════════════════════════════╗');
   console.log('║  TC AI Detection Modules — Config & Capabilities    ║');
   console.log('╚══════════════════════════════════════════════════════╝');
+
+  // FR-DAP-TC-SKIP-001: skip entirely in streaming mode — no local AI pipeline
+  const serverMode = await getServerMode();
+  if (serverMode === 'streaming') {
+    console.log('\n  ⊘ TC-AI-MOD-SKIP: AI Detection Modules — skipped (SERVER_MODE=streaming, Analysis Server only)');
+    console.log('\n  Results: 0 passed, 0 failed (suite skipped — streaming mode)\n');
+    process.exit(0);
+  }
 
   try {
     await checkPrerequisites();

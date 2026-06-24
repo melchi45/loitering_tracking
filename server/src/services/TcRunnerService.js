@@ -36,11 +36,11 @@ const SUITES = [
   // Auth / User
   { file: 'test/api/auth.test.js',                          srs: 'FR-USR-AUTH-001~020', label: 'User Authentication' },
   { file: 'test/api/user_profile.test.js',                  srs: 'FR-USR-PROF-001~010', label: 'User Profile' },
-  // AI Detection
+  // AI Detection (analysisOnly: skip in SERVER_MODE=streaming)
   { file: 'test/api/human_detection.test.js',               srs: 'FR-HDT-017, FR-HDT-020, FR-HDT-032', label: 'Human Detection' },
-  { file: 'test/api/ai_detection_modules.test.js',          srs: 'FR-AI-MOD-001~010', label: 'AI Detection Modules' },
-  { file: 'test/api/analytics_config.test.js',              srs: 'FR-ANA-CFG-001~010', label: 'Analytics Config Toggle' },
-  { file: 'test/api/model_catalog.test.js',                 srs: 'FR-MODEL-001~010', label: 'YOLO Model Catalog' },
+  { file: 'test/api/ai_detection_modules.test.js',          srs: 'FR-AI-MOD-001~010', label: 'AI Detection Modules', analysisOnly: true },
+  { file: 'test/api/analytics_config.test.js',              srs: 'FR-ANA-CFG-001~010', label: 'Analytics Config Toggle', analysisOnly: true },
+  { file: 'test/api/model_catalog.test.js',                 srs: 'FR-MODEL-001~010', label: 'YOLO Model Catalog', analysisOnly: true },
   // Tracking / Zones / Alerts
   { file: 'test/api/object_tracking.test.js',               srs: 'FR-TRK-001~030', label: 'Object Tracking  A+B+G' },
   { file: 'test/api/sidebar_alerts_zones.test.js',          srs: 'FR-ZONE-001, FR-ALERT-001', label: 'Alerts & Zones  B+D' },
@@ -163,12 +163,22 @@ async function _run(port) {
   const runAt = new Date().toISOString();
   _lastRunId  = runId;
 
-  const ltsUrl = `http://localhost:${port}`;
+  const ltsUrl    = `http://localhost:${port}`;
+  const serverMode = (process.env.SERVER_MODE || 'combined').trim().toLowerCase();
+  const isStreaming = serverMode === 'streaming';
   let totalPass = 0, totalFail = 0, totalSkip = 0;
 
-  console.log(`[TcRunner] Run ${runId.slice(0, 8)} started — ${SUITES.length} suites, LTS_URL=${ltsUrl}`);
+  console.log(`[TcRunner] Run ${runId.slice(0, 8)} started — ${SUITES.length} suites, SERVER_MODE=${serverMode}, LTS_URL=${ltsUrl}`);
 
   for (const suite of SUITES) {
+    // Analysis-only suites are skipped in streaming mode (no local AI pipeline)
+    if (isStreaming && suite.analysisOnly) {
+      _save(runId, runAt, suite, 'TC-SKIP',
+        `${suite.label} — skipped (SERVER_MODE=streaming, Analysis Server only)`, 'skip', null);
+      totalSkip++;
+      continue;
+    }
+
     const absPath = path.resolve(ROOT, suite.file);
     if (!fs.existsSync(absPath)) {
       _save(runId, runAt, suite, 'TC-SKIP', `${suite.label} — file missing`, 'skip', null);

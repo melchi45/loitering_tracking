@@ -29,8 +29,10 @@
 12. [TC-DAP-009: 모드별 Dashboard 탭 정책](#12-tc-dap-009-모드별-dashboard-탭-정책)
 13. [TC-DAP-010: analysis 모드 discovery 비활성](#13-tc-dap-010-analysis-모드-discovery-비활성)
 14. [TC-DAP-011: streaming 모드 eager 모델 로드 금지](#14-tc-dap-011-streaming-모드-eager-모델-로드-금지)
-15. [Test Execution Order](#15-test-execution-order)
-16. [Pass/Fail Criteria](#16-passfail-criteria)
+15. [TC-DAP-013: TcRunnerService — Analysis-only 스위트 Streaming 모드 스킵](#15-tc-dap-013-tcrunnerservice--analysis-only-스위트-streaming-모드-스킵)
+16. [TC-DAP-012: analysis Dashboard 카메라 입력 상태/FPS 표시](#16-tc-dap-012-analysis-dashboard-카메라-입력-상태fps-표시)
+17. [Test Execution Order](#17-test-execution-order)
+18. [Pass/Fail Criteria](#18-passfail-criteria)
 
 ---
 
@@ -608,6 +610,25 @@ describe('TC-DAP-008: WebRTC 스트림과 분석 결과 동시 표시', () => {
 
 ---
 
+## 15. TC-DAP-013: TcRunnerService — Analysis-only 스위트 Streaming 모드 스킵
+
+**SRS Ref**: FR-DAP-028  
+**목적**: `SERVER_MODE=streaming`에서 AI 전용 테스트 스위트(ai_detection_modules, analytics_config, model_catalog)가 실행되지 않고 Audit UI에도 표시되지 않는지 검증한다.
+
+| 단계 | 테스트 항목 | 전제 조건 | 예상 결과 |
+|---|---|---|---|
+| TC-DAP-013-01 | TcRunnerService analysisOnly 플래그 스킵 | `SERVER_MODE=streaming` 환경 | `ai_detection_modules.test.js`, `analytics_config.test.js`, `model_catalog.test.js` 스위트가 `skip` 상태로 DB 저장 |
+| TC-DAP-013-02 | 스킵 메시지 확인 | TC-DAP-013-01 실행 후 | `tc_results`의 `tcDesc` 필드에 `"skipped (SERVER_MODE=streaming, Analysis Server only)"` 포함 |
+| TC-DAP-013-03 | 테스트 스크립트 자체 스킵 | `node test/api/ai_detection_modules.test.js` (streaming 서버) | `exit 0`으로 종료, stdout에 `"skipped (SERVER_MODE=streaming"` 출력 |
+| TC-DAP-013-04 | analytics_config 스크립트 자체 스킵 | `node test/api/analytics_config.test.js` (streaming 서버) | `exit 0`으로 종료, stdout에 `"skipped (SERVER_MODE=streaming"` 출력 |
+| TC-DAP-013-05 | Audit UI — streaming 배너 표시 | Admin Dashboard → Audit → Startup Tests, `SERVER_MODE=streaming` | 노란색 배너: "Streaming Server mode — AI Detection Modules and Analytics Config Toggle suites are hidden" |
+| TC-DAP-013-06 | Audit UI — Analysis-only 스위트 미표시 | TC-DAP-013-05 환경 | `ai_detection_modules`, `analytics_config`, `model_catalog` 스위트가 목록에 없음 |
+| TC-DAP-013-07 | Audit UI — combined 모드 정상 표시 | `SERVER_MODE=combined` | 배너 없음, 세 스위트 모두 정상 표시 |
+
+**자동화 스크립트**: `test/api/ai_detection_modules.test.js`, `test/api/analytics_config.test.js` (streaming 모드 자체 skip 로직 포함)
+
+---
+
 ## 15. TC-DAP-012: analysis Dashboard 카메라 입력 상태/FPS 표시
 
 | 단계 | 테스트 항목 | 입력 | 예상 결과 |
@@ -654,4 +675,14 @@ describe('TC-DAP-008: WebRTC 스트림과 분석 결과 동시 표시', () => {
 - TC-DAP-001 실패: 하위 호환성 문제 — 병합 차단 (Critical)
 - TC-DAP-004 실패: 프로덕션 장애 위험 — 병합 차단 (Critical)
 - TC-DAP-005 실패: GPU 과부하 위험 — 병합 차단 (Critical)
+- TC-DAP-013 실패: streaming 모드에서 오탐(false positive) 발생 위험 — 높음
 - 기타 실패: 기능 결함 — 버그 등록 후 수정 후 재검증
+
+---
+
+## Revision History
+
+| 버전 | 날짜 | 변경 내용 |
+|---|---|---|
+| 1.0 | 2026-06-08 | 초기 작성 |
+| 1.1 | 2026-06-24 | TC-DAP-013 추가: TcRunnerService analysis-only 스위트 streaming 모드 스킵 검증 (FR-DAP-028)

@@ -239,7 +239,7 @@ export default function AdminUsersPage() {
           {section === 'users'     && <UsersSection apiFetch={apiFetch} />}
           {section === 'ai-models' && <AiModelsSection />}
           {section === 'onvif'     && <OnvifSection apiFetch={apiFetch} />}
-          {section === 'audit'     && <AuditSection apiFetch={apiFetch} />}
+          {section === 'audit'     && <AuditSection apiFetch={apiFetch} isStreaming={isStreaming} />}
           {section === 'system'    && <SystemSection apiFetch={apiFetch} />}
         </main>
       </div>
@@ -546,7 +546,13 @@ function OnvifSection({ apiFetch }: { apiFetch: (p: string, o?: RequestInit) => 
 
 type AuditTab = 'tests' | 'activity';
 
-function AuditSection({ apiFetch }: { apiFetch: (p: string, o?: RequestInit) => Promise<unknown> }) {
+function AuditSection({
+  apiFetch,
+  isStreaming = false,
+}: {
+  apiFetch: (p: string, o?: RequestInit) => Promise<unknown>;
+  isStreaming?: boolean;
+}) {
   const [tab, setTab] = useState<AuditTab>('tests');
 
   return (
@@ -571,7 +577,7 @@ function AuditSection({ apiFetch }: { apiFetch: (p: string, o?: RequestInit) => 
         ))}
       </div>
 
-      {tab === 'tests'    && <TcResultsPanel apiFetch={apiFetch} />}
+      {tab === 'tests'    && <TcResultsPanel apiFetch={apiFetch} isStreaming={isStreaming} />}
       {tab === 'activity' && <ActivityLogPanel apiFetch={apiFetch} />}
     </div>
   );
@@ -581,7 +587,20 @@ function AuditSection({ apiFetch }: { apiFetch: (p: string, o?: RequestInit) => 
 
 type TcFilter = 'all' | 'pass' | 'fail' | 'skip';
 
-function TcResultsPanel({ apiFetch }: { apiFetch: (p: string, o?: RequestInit) => Promise<unknown> }) {
+// Analysis-only suite files — hidden in streaming mode (no local AI pipeline)
+const ANALYSIS_ONLY_SUITES = [
+  'ai_detection_modules.test.js',
+  'analytics_config.test.js',
+  'model_catalog.test.js',
+];
+
+function TcResultsPanel({
+  apiFetch,
+  isStreaming = false,
+}: {
+  apiFetch: (p: string, o?: RequestInit) => Promise<unknown>;
+  isStreaming?: boolean;
+}) {
   const [run,     setRun]     = useState<TcRun | null>(null);
   const [results, setResults] = useState<TcResult[]>([]);
   const [loading, setLoading] = useState(true);
@@ -659,8 +678,13 @@ function TcResultsPanel({ apiFetch }: { apiFetch: (p: string, o?: RequestInit) =
     return true;
   });
 
+  // Hide analysis-only suites in streaming mode (no local AI pipeline available)
+  const visibleResults = isStreaming
+    ? filtered.filter(r => !ANALYSIS_ONLY_SUITES.some(s => r.suiteFile.includes(s)))
+    : filtered;
+
   // Group by suite
-  const suiteGroups = filtered.reduce<Record<string, TcResult[]>>((acc, r) => {
+  const suiteGroups = visibleResults.reduce<Record<string, TcResult[]>>((acc, r) => {
     if (!acc[r.suiteFile]) acc[r.suiteFile] = [];
     acc[r.suiteFile].push(r);
     return acc;
@@ -751,6 +775,14 @@ function TcResultsPanel({ apiFetch }: { apiFetch: (p: string, o?: RequestInit) =
       </div>
 
       {error && <ErrorBar msg={error} />}
+
+      {isStreaming && (
+        <div className="mb-3 px-3 py-2 rounded-lg bg-yellow-900/20 border border-yellow-700/40 text-[11px] text-yellow-400">
+          Streaming Server mode — AI Detection Modules and Analytics Config Toggle suites are
+          hidden (Analysis Server only). Switch to <code className="font-mono">combined</code> or{' '}
+          <code className="font-mono">analysis</code> mode to see these results.
+        </div>
+      )}
 
       {loading ? (
         <EmptyState msg="Loading…" />

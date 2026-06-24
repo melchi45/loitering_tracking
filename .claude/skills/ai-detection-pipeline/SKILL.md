@@ -732,3 +732,52 @@ const float32 = new Float32Array(3 * numPixels);
 **주의:** `ort.Tensor`는 TypedArray의 참조를 보유하므로, `detect()` 스코프에서 `tensor` 변수가 살아있는 동안 `float32` 버퍼가 GC되지 않음 → 안전.
 
 **SRS:** FR-DAP-027 / **TC:** TC-DAP-009 (`test/api/distributed_pipeline.test.js`)
+
+---
+
+### 13. TcRunnerService — Analysis-only 스위트 Streaming 모드 스킵 (2026-06-24)
+
+**배경:** `ai_detection_modules.test.js`, `analytics_config.test.js`, `model_catalog.test.js` 세 스위트는 `/api/analytics/config`, `/api/analysis/models` 등 로컬 AI 파이프라인 API에 의존한다. `SERVER_MODE=streaming` 서버는 이 API를 보유하지 않으므로, 해당 스위트가 실행되면 항상 실패하거나 오탐(false positive)을 생성한다.
+
+**구현:**
+
+1. **TcRunnerService.js** — `SUITES` 항목에 `analysisOnly: true` 플래그 추가, `_run()` 내부에서 `SERVER_MODE=streaming` 시 스킵:
+   ```javascript
+   { file: 'test/api/ai_detection_modules.test.js', ..., analysisOnly: true },
+   { file: 'test/api/analytics_config.test.js', ..., analysisOnly: true },
+   { file: 'test/api/model_catalog.test.js', ..., analysisOnly: true },
+   // _run() 내부:
+   if (isStreaming && suite.analysisOnly) {
+     _save(runId, runAt, suite, 'TC-SKIP',
+       `${suite.label} — skipped (SERVER_MODE=streaming, Analysis Server only)`, 'skip', null);
+     continue;
+   }
+   ```
+
+2. **테스트 스크립트 자체 skip** — `ai_detection_modules.test.js`, `analytics_config.test.js` 두 파일 모두 `main()` 진입 시 `/health`로 `serverMode` 확인 후 streaming이면 `exit 0`:
+   ```javascript
+   const serverMode = await getServerMode();
+   if (serverMode === 'streaming') {
+     console.log('⊘ TC-XXX-SKIP: ... skipped (SERVER_MODE=streaming, Analysis Server only)');
+     process.exit(0);
+   }
+   ```
+
+3. **AdminUsersPage.tsx TcResultsPanel** — `isStreaming` prop 추가, Analysis-only 스위트 결과 필터링:
+   ```typescript
+   const ANALYSIS_ONLY_SUITES = [
+     'ai_detection_modules.test.js', 'analytics_config.test.js', 'model_catalog.test.js',
+   ];
+   const visibleResults = isStreaming
+     ? filtered.filter(r => !ANALYSIS_ONLY_SUITES.some(s => r.suiteFile.includes(s)))
+     : filtered;
+   ```
+   streaming 모드 시 노란 안내 배너 표시.
+
+**코드 위치:**
+- `server/src/services/TcRunnerService.js` — `analysisOnly` 플래그, `_run()` 스킵 로직
+- `test/api/ai_detection_modules.test.js` — `getServerMode()` + main() 조기 종료
+- `test/api/analytics_config.test.js` — 동일
+- `client/src/pages/admin/AdminUsersPage.tsx` — `TcResultsPanel` `isStreaming` prop + 필터 + 배너
+
+**SRS:** FR-DAP-028 / **TC:** TC-DAP-013 / **PRD:** AC-DAP-10 / **RFP:** FR-DAP-11

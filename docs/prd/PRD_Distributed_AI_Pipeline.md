@@ -255,6 +255,17 @@ So that 분석 서버의 성능 상태를 실시간으로 파악할 수 있다.
 ### AC-DAP-07: 헬스 엔드포인트
 - [ ] `GET /api/analysis/health`가 `{ status, mode, activeCameras, concurrentRequests, processedFrames, droppedFrames, timeoutFrames }` 구조로 응답함
 
+### AC-DAP-10: Streaming 모드 Analysis-only TC 스킵
+
+**목표**: `streaming` 서버에서 AI 전용 테스트 스위트가 실행·표시되지 않아 오탐(false test result)이 발생하지 않아야 한다.
+
+- [x] `TcRunnerService` SUITES에서 `ai_detection_modules.test.js`, `analytics_config.test.js`, `model_catalog.test.js`에 `analysisOnly: true` 설정됨
+- [x] `SERVER_MODE=streaming`일 때 `analysisOnly` 스위트가 자동 `skip` 처리되고 DB에 저장됨
+- [x] `ai_detection_modules.test.js` 스크립트가 `/health` 조회 후 streaming 모드이면 `exit 0`으로 종료
+- [x] `analytics_config.test.js` 스크립트가 `/health` 조회 후 streaming 모드이면 `exit 0`으로 종료
+- [x] Admin Dashboard → Audit → Startup Tests에서 `streaming` 모드 시 노란 배너 표시
+- [x] Audit UI가 `streaming` 모드 시 analysis-only 스위트 결과를 목록에서 숨김
+
 ---
 
 ## 8. Milestones & TODO
@@ -279,6 +290,7 @@ So that 분석 서버의 성능 상태를 실시간으로 파악할 수 있다.
 |---|---|---|
 | 1.0 | 2026-06-08 | 초기 작성 |
 | 1.1 | 2026-06-17 | DetectionsTimeline 트랙 영구 저장 요구사항(AC-DAP-08~09), 스냅샷 원본 크롭 정책 추가 |
+| 1.2 | 2026-06-24 | AC-DAP-10 추가: streaming 모드 analysis-only TC 스킵 (TcRunnerService + Audit UI + 테스트 스크립트) |
 
 ---
 

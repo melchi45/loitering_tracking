@@ -153,6 +153,7 @@ SERVER_MODE=analysis   # AI 추론 전담 서버
 | FR-DAP-08 | `analysis` 모드에서 5분간 프레임이 수신되지 않은 카메라의 상태(tracker, behavior context)를 자동 정리해야 한다. | Should |
 | FR-DAP-09 | `GET /api/analysis/health` 엔드포인트로 분석 서버 상태를 조회할 수 있어야 한다. | Should |
 | FR-DAP-10 | `streaming` 모드에서 분석 결과를 받아 WebRTC/Socket.IO 스트림에 오버레이로 합성해야 한다. | Must |
+| FR-DAP-11 | Startup TC 실행기(`TcRunnerService`)는 `SERVER_MODE=streaming` 시 AI 전용 테스트 스위트(`ai_detection_modules`, `analytics_config`, `model_catalog`)를 실행하지 않고 `skip` 상태로 DB에 저장해야 한다. 해당 스위트는 Admin Dashboard Audit UI에서도 숨겨야 한다. | Must |
 
 ### 4.2 신규 생성 파일
 
@@ -226,3 +227,12 @@ SERVER_MODE=analysis   # AI 추론 전담 서버
 | Graceful Degradation | 분석 서버 장애 시 스트리밍을 계속 유지하되 AI 오버레이만 제거하는 동작 |
 | Backpressure | 처리 용량 초과 요청을 드롭하여 서버 과부하를 방지하는 메커니즘 |
 | Per-Camera Context | analysis 서버에서 카메라별로 독립적으로 관리하는 ByteTracker + BehaviorEngine 상태 |
+
+---
+
+## Revision History
+
+| 버전 | 날짜 | 변경 내용 |
+|---|---|---|
+| 1.0 | 2026-06-08 | 초기 작성 |
+| 1.1 | 2026-06-24 | FR-DAP-11 추가: streaming 모드에서 analysis-only TC 스위트 스킵 및 Audit UI 필터링 요구사항 |

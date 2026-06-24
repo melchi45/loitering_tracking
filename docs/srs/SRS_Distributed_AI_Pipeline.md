@@ -341,6 +341,18 @@ HTTP 연결 오류(ECONNREFUSED, ECONNRESET, EHOSTUNREACH 등) 발생 시 해당
 [Server] SERVER_MODE=combined  | (all-in-one mode)
 ```
 
+### FR-DAP-028: TcRunnerService — Analysis-only 스위트 Streaming 모드 스킵
+
+`TcRunnerService`는 `SERVER_MODE=streaming` 환경에서 `analysisOnly: true`로 표시된 테스트 스위트를 실행해서는 안 된다.
+
+구현 요구사항:
+- `SUITES` 배열의 `ai_detection_modules.test.js`, `analytics_config.test.js`, `model_catalog.test.js` 항목에 `analysisOnly: true` 속성을 설정한다.
+- `_run()` 함수는 `process.env.SERVER_MODE === 'streaming'`일 때 `analysisOnly` 스위트를 건너뛰고 `skip` 상태로 DB에 저장한다 (스킵 메시지: `"— skipped (SERVER_MODE=streaming, Analysis Server only)"`).
+- 테스트 스크립트 자체(`ai_detection_modules.test.js`, `analytics_config.test.js`)도 `/health` API로 `serverMode`를 확인하여 `streaming`이면 TC 실행 없이 `exit 0`으로 종료한다.
+- Admin Dashboard → Audit → Startup Tests에서 `SERVER_MODE=streaming` 시 Analysis-only 스위트 결과를 숨기고 안내 배너를 표시한다.
+
+> **배경**: `streaming` 서버는 로컬 AI 추론 파이프라인(`/api/analytics/config`, YOLO 모델 등)을 보유하지 않으므로 해당 API 테스트는 항상 실패하거나 의미 없는 결과를 반환한다.
+
 ### FR-DAP-042: Analysis Metrics 카메라 입력 지표
 
 `GET /api/analysis/metrics`의 `cameras[]` 각 항목은 아래 필드를 포함해야 한다.
@@ -476,6 +488,7 @@ ANALYSIS_MAX_CONCURRENT=4
 | FR-DAP-024 | TC-DAP-003 |
 | FR-DAP-025 | TC-DAP-003 |
 | FR-DAP-027 | TC-DAP-009 |
+| FR-DAP-028 | TC-DAP-012 |
 | FR-DAP-030 | TC-DAP-005 |
 | FR-DAP-031 | TC-DAP-005 |
 | FR-DAP-032 | TC-DAP-004 |
@@ -494,3 +507,4 @@ ANALYSIS_MAX_CONCURRENT=4
 | 1.0 | 2026-06-08 | 초기 작성 |
 | 1.1 | 2026-06-17 | FR-DAP-014~016 (streaming 로컬 shadow copy·fallback·원본 크롭), FR-DAP-026 (analysis 트랙 저장) 추가 |
 | 1.2 | 2026-06-23 | FR-DAP-027 추가: analysis 서버 다중 채널 동시 추론 시 채널 격리 요구사항 (DetectionService 버퍼 per-call 할당) |
+| 1.3 | 2026-06-24 | FR-DAP-028 추가: TcRunnerService analysis-only 스위트 streaming 모드 스킵 요구사항 (Audit UI 필터링 포함) |
