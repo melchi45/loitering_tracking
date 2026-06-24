@@ -9,14 +9,19 @@ const { ONVIFDiscovery }   = require('./onvifDiscovery');
 const SCAN_TIMEOUT  = 10000; // each scan duration (ms)
 const SCAN_INTERVAL = 15000; // pause between scans — long enough for cameras to reset rate limits
 
-// ─── SUNAPI MaxChannel query (best-effort, no auth) ──────────────────────────
+// ─── SUNAPI MaxChannel query (best-effort) ────────────────────────────────────
 
 /**
  * Try to read MaxChannel from WiseNet/Hanwha SUNAPI channel list endpoint.
+ * Falls back to env default credentials when no explicit credentials given.
  * Returns 1 on any failure (auth required, timeout, parse error).
  * Resolves quickly (<2 s) so it doesn't block the discovery flow.
  */
-async function querySunapiMaxChannel(ip, httpPort, httpType, timeoutMs = 2000) {
+async function querySunapiMaxChannel(
+  ip, httpPort, httpType, timeoutMs = 2000,
+  username = process.env.RTSP_DEFAULT_USERNAME || '',
+  password = process.env.RTSP_DEFAULT_PASSWORD || '',
+) {
   const proto = httpType ? https : http;
   const port  = httpType ? (httpPort || 443) : (httpPort || 80);
   const paths = [
@@ -24,11 +29,16 @@ async function querySunapiMaxChannel(ip, httpPort, httpType, timeoutMs = 2000) {
     '/stw-cgi/system.cgi?msubmenu=systeminfo&action=view',
   ];
 
+  const authHeader = (username && password)
+    ? 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64')
+    : null;
+
   for (const path of paths) {
     const result = await new Promise((resolve) => {
+      const headers = { Accept: 'application/json, */*' };
+      if (authHeader) headers['Authorization'] = authHeader;
       const req = proto.get(
-        { hostname: ip, port, path, timeout: timeoutMs,
-          headers: { Accept: 'application/json, */*' } },
+        { hostname: ip, port, path, timeout: timeoutMs, headers },
         (res) => {
           if (res.statusCode === 401 || res.statusCode === 403) { resolve(0); return; }
           let data = '';

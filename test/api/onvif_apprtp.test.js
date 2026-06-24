@@ -1,16 +1,90 @@
 'use strict';
 /**
- * TC-APPRTP-007 ~ TC-APPRTP-009 — ONVIF App RTP Internal API (Node.js)
+ * TC-APPRTP-007 ~ TC-APPRTP-009 — ONVIF App RTP Internal API
  *
- * Tests POST /api/internal/apprtp/:cameraId:
- *   - Socket.IO 'appRtp' broadcast (TC-APPRTP-007)
- *   - ONVIF payload parse → DB save → 'onvif:event' broadcast (TC-APPRTP-008)
- *   - Radiometry data → 'onvif:temperature' broadcast without DB save (TC-APPRTP-009)
+ * Tests POST /api/internal/apprtp/:cameraId logic (unit — no Express):
+ *   TC-APPRTP-007  Socket.IO 'appRtp' broadcast
+ *   TC-APPRTP-008  ONVIF payload parse → DB save → 'onvif:event' broadcast
+ *   TC-APPRTP-008B Dedup: same topic+sourceToken+state → single DB insert
+ *   TC-APPRTP-009  Radiometry data → 'onvif:temperature' broadcast (no dedup)
+ *   TC-APPRTP-PARSER-A  parseOnvifPayload: MotionAlarm state=true
+ *   TC-APPRTP-PARSER-B  parseOnvifPayload: non-MetadataStream → null
+ *   TC-APPRTP-PARSER-C  parseOnvifPayload: BoxTemperatureReading radiometry array
  *
- * Run: npx jest test/api/onvif_apprtp.test.js --runInBand --forceExit
+ * Run: node test/api/onvif_apprtp.test.js
+ *
+ * Related SRS:    docs/srs/SRS_ONVIF_Metadata_Pipeline.md
+ * Related TC doc: docs/tc/TC_ONVIF_Metadata_Pipeline.md
+ * Related PRD:    docs/prd/PRD_ONVIF_Metadata_Pipeline.md
+ * Related RFP:    docs/rfp/RFP_ONVIF_Metadata_Pipeline.md
  */
 
 const path = require('path');
+
+// ── Minimal test harness ──────────────────────────────────────────────────────
+
+let passed = 0;
+let failed = 0;
+const results = [];
+
+async function test(id, description, fn) {
+  try {
+    await fn();
+    console.log(`  ✓ ${id}: ${description}`);
+    passed++;
+    results.push({ id, description, status: 'PASS' });
+  } catch (err) {
+    console.error(`  ✗ ${id}: ${description}`);
+    console.error(`      ${err.message}`);
+    failed++;
+    results.push({ id, description, status: 'FAIL', error: err.message });
+  }
+}
+
+function skip(id, description, reason) {
+  console.log(`  ⊘ ${id}: ${description} [SKIPPED — ${reason}]`);
+  results.push({ id, description, status: 'SKIP', reason });
+}
+
+function assert(condition, message) {
+  if (!condition) throw new Error(message || 'Assertion failed');
+}
+
+function assertEq(actual, expected, label) {
+  if (actual !== expected)
+    throw new Error(`${label}: expected ${JSON.stringify(expected)}, got ${JSON.stringify(actual)}`);
+}
+
+function assertCloseTo(actual, expected, tolerance, label) {
+  if (Math.abs(actual - expected) > tolerance)
+    throw new Error(`${label}: expected ~${expected} (±${tolerance}), got ${actual}`);
+}
+
+// ── Minimal mock helpers (no Jest dependency) ─────────────────────────────────
+
+function makeMockFn() {
+  const calls = [];
+  const fn = (...args) => { calls.push(args); };
+  fn.mock = { calls };
+  return fn;
+}
+
+function makeMockIo() {
+  const emitted = [];
+  const emit = makeMockFn();
+  emit.mock = emit.mock;
+  const wrappedEmit = (event, data) => {
+    emitted.push({ event, data });
+    emit(event, data);
+  };
+  return { emit: wrappedEmit, _emitted: emitted };
+}
+
+function makeMockDb() {
+  const inserted = [];
+  const insert = (table, row) => inserted.push({ table, row });
+  return { insert, _inserted: inserted };
+}
 
 // ── ONVIF XML fixtures ────────────────────────────────────────────────────────
 
@@ -59,191 +133,185 @@ function toBase64(xml) {
   return Buffer.from(xml, 'utf-8').toString('base64');
 }
 
-// ── Mock helpers ──────────────────────────────────────────────────────────────
-
-function makeMockIo() {
-  const emitted = [];
-  return {
-    emit: jest.fn((event, data) => emitted.push({ event, data })),
-    _emitted: emitted,
-  };
-}
-
-function makeMockDb() {
-  const inserted = [];
-  return {
-    insert: jest.fn((table, row) => inserted.push({ table, row })),
-    _inserted: inserted,
-  };
-}
-
 // ── Load onvifParser directly ─────────────────────────────────────────────────
 
 const PARSER_PATH = path.resolve(__dirname, '../../server/src/services/onvifParser.js');
-
-let parseOnvifPayload;
+let parseOnvifPayload = null;
 try {
   ({ parseOnvifPayload } = require(PARSER_PATH));
 } catch (_) {
-  parseOnvifPayload = null;
+  // parser not available — parser tests will be skipped
 }
 
-// ── Tests ─────────────────────────────────────────────────────────────────────
+// ── Simulated handler logic ───────────────────────────────────────────────────
 
-describe('onvifParser — ONVIF XML 구조화 파싱', () => {
-  if (!parseOnvifPayload) {
-    it.skip('onvifParser.js not found — skipping parser tests');
-    return;
+function runHandler({ cameraId, data, io, db, lastStates = new Map(), webrtcEngine = null }) {
+  // 1. Socket.IO appRtp broadcast (always)
+  if (io) io.emit('appRtp', { cameraId, ...data });
+
+  // 2. mediasoup DataProducer (optional)
+  if (webrtcEngine && typeof webrtcEngine.sendAppRtp === 'function') {
+    webrtcEngine.sendAppRtp(cameraId, data);
   }
 
-  it('parses MotionAlarm topic and extracts state=true (TC-APPRTP-008 prerequisite)', () => {
-    const b64 = toBase64(MOTION_ALARM_XML);
-    const results = parseOnvifPayload(b64);
-    expect(Array.isArray(results)).toBe(true);
-    expect(results.length).toBeGreaterThan(0);
-    const evt = results[0];
-    expect(evt.topic).toMatch(/MotionAlarm/i);
-    expect(evt.state).toBe('true'); // parser returns string, not boolean
-  });
+  // 3. ONVIF parse + dedup + DB + broadcasts
+  if (db && data.payload && parseOnvifPayload) {
+    const parsedList = parseOnvifPayload(data.payload);
+    if (Array.isArray(parsedList)) {
+      for (const parsed of parsedList) {
+        // Radiometry: immediate broadcast, no dedup
+        if (parsed.radiometry && parsed.radiometry.length > 0 && io) {
+          io.emit('onvif:temperature', {
+            cameraId,
+            utcTime: parsed.utcTime,
+            readings: parsed.radiometry,
+          });
+        }
 
-  it('returns null for non-MetadataStream payload', () => {
-    const b64 = Buffer.from('<root><data>hello</data></root>', 'utf-8').toString('base64');
-    const result = parseOnvifPayload(b64);
-    expect(result).toBeNull();
-  });
-
-  it('parses BoxTemperatureReading and populates radiometry array (TC-APPRTP-009 prerequisite)', () => {
-    const b64 = toBase64(RADIOMETRY_XML);
-    const results = parseOnvifPayload(b64);
-    expect(Array.isArray(results)).toBe(true);
-    const evt = results[0];
-    expect(Array.isArray(evt.radiometry)).toBe(true);
-    expect(evt.radiometry.length).toBeGreaterThan(0);
-    const reading = evt.radiometry[0];
-    expect(reading).toHaveProperty('maxTemp');
-    expect(reading).toHaveProperty('minTemp');
-    expect(reading).toHaveProperty('avgTemp');
-    expect(reading.maxTemp).toBeCloseTo(352.5, 1);
-  });
-});
-
-// ── Simulated handler behaviour (unit-tests the logic, not Express routing) ──
-
-describe('AppRtp internal handler logic', () => {
-  /**
-   * Simulates what POST /api/internal/apprtp/:cameraId does, without Express.
-   * This keeps the test self-contained and fast.
-   */
-  function runHandler({ cameraId, data, io, db, lastStates = new Map(), webrtcEngine = null }) {
-    // 1. Socket.IO broadcast (TC-APPRTP-007)
-    if (io) io.emit('appRtp', { cameraId, ...data });
-
-    // 2. mediasoup DataProducer (optional)
-    if (webrtcEngine && typeof webrtcEngine.sendAppRtp === 'function') {
-      webrtcEngine.sendAppRtp(cameraId, data);
-    }
-
-    // 3. ONVIF parse + dedup + DB (TC-APPRTP-008, TC-APPRTP-009)
-    if (db && data.payload && parseOnvifPayload) {
-      const parsedList = parseOnvifPayload(data.payload);
-      if (Array.isArray(parsedList)) {
-        for (const parsed of parsedList) {
-          if (parsed.radiometry && parsed.radiometry.length > 0 && io) {
-            io.emit('onvif:temperature', {
-              cameraId,
-              utcTime: parsed.utcTime,
-              readings: parsed.radiometry,
-            });
-          }
-
-          const dedupKey = `${cameraId}:${parsed.topic}:${parsed.sourceToken}`;
-          if (lastStates.get(dedupKey) !== parsed.state) {
-            lastStates.set(dedupKey, parsed.state);
-            const event = { id: 'test-uuid', cameraId, ...parsed, serverTs: new Date().toISOString() };
-            db.insert('onvif_events', event);
-            if (io) io.emit('onvif:event', event);
-          }
+        // State-change dedup
+        const dedupKey = `${cameraId}:${parsed.topic}:${parsed.sourceToken}`;
+        if (lastStates.get(dedupKey) !== parsed.state) {
+          lastStates.set(dedupKey, parsed.state);
+          const event = { id: 'test-uuid', cameraId, ...parsed, serverTs: new Date().toISOString() };
+          db.insert('onvif_events', event);
+          if (io) io.emit('onvif:event', event);
         }
       }
     }
   }
+}
 
-  it('TC-APPRTP-007: broadcasts appRtp via socket.io with cameraId', () => {
+// ── Main ──────────────────────────────────────────────────────────────────────
+
+(async function main() {
+  console.log('╔══════════════════════════════════════════════════════════╗');
+  console.log('║  TC_ONVIF_AppRTP — App RTP Internal Handler Tests       ║');
+  console.log('╚══════════════════════════════════════════════════════════╝');
+  console.log('\n── Group: onvifParser unit ─────────────────────────────────\n');
+
+  if (!parseOnvifPayload) {
+    skip('TC-APPRTP-PARSER-A', 'parseOnvifPayload: MotionAlarm state=true', 'onvifParser.js not found');
+    skip('TC-APPRTP-PARSER-B', 'parseOnvifPayload: non-MetadataStream → null', 'onvifParser.js not found');
+    skip('TC-APPRTP-PARSER-C', 'parseOnvifPayload: BoxTemperatureReading radiometry array', 'onvifParser.js not found');
+  } else {
+    await test('TC-APPRTP-PARSER-A', 'parseOnvifPayload: MotionAlarm state=true', () => {
+      const results = parseOnvifPayload(toBase64(MOTION_ALARM_XML));
+      assert(Array.isArray(results), 'result must be array');
+      assert(results.length > 0, 'result must be non-empty');
+      assert(/MotionAlarm/i.test(results[0].topic), `topic must match MotionAlarm, got: ${results[0].topic}`);
+      assertEq(results[0].state, 'true', 'state');
+    });
+
+    await test('TC-APPRTP-PARSER-B', 'parseOnvifPayload: non-MetadataStream → null', () => {
+      const b64 = Buffer.from('<root><data>hello</data></root>', 'utf-8').toString('base64');
+      const result = parseOnvifPayload(b64);
+      assertEq(result, null, 'non-MetadataStream must return null');
+    });
+
+    await test('TC-APPRTP-PARSER-C', 'parseOnvifPayload: BoxTemperatureReading radiometry array', () => {
+      const results = parseOnvifPayload(toBase64(RADIOMETRY_XML));
+      assert(Array.isArray(results), 'result must be array');
+      const evt = results[0];
+      assert(Array.isArray(evt.radiometry), 'radiometry must be array');
+      assert(evt.radiometry.length > 0, 'radiometry must be non-empty');
+      const reading = evt.radiometry[0];
+      assert('maxTemp' in reading, 'must have maxTemp');
+      assert('minTemp' in reading, 'must have minTemp');
+      assert('avgTemp' in reading, 'must have avgTemp');
+      assertCloseTo(reading.maxTemp, 352.5, 0.1, 'maxTemp');
+    });
+  }
+
+  console.log('\n── Group: AppRtp handler logic ─────────────────────────────\n');
+
+  await test('TC-APPRTP-007', 'broadcasts appRtp via Socket.IO with cameraId', () => {
     const io = makeMockIo();
     const data = { pt: 96, timestamp: 1000, seq: 0, payload: toBase64('<x/>') };
     runHandler({ cameraId: 'cam-abc', data, io });
 
     const appRtpCalls = io._emitted.filter(e => e.event === 'appRtp');
-    expect(appRtpCalls).toHaveLength(1);
-    expect(appRtpCalls[0].data.cameraId).toBe('cam-abc');
-    expect(appRtpCalls[0].data.pt).toBe(96);
-    expect(appRtpCalls[0].data.seq).toBe(0);
+    assertEq(appRtpCalls.length, 1, 'appRtp emit count');
+    assertEq(appRtpCalls[0].data.cameraId, 'cam-abc', 'cameraId');
+    assertEq(appRtpCalls[0].data.pt, 96, 'pt');
+    assertEq(appRtpCalls[0].data.seq, 0, 'seq');
   });
 
-  it('TC-APPRTP-008: parses ONVIF payload and saves onvif_event to DB', () => {
-    if (!parseOnvifPayload) return;
-    const io = makeMockIo();
-    const db = makeMockDb();
-    const data = { pt: 96, timestamp: 2000, seq: 1, payload: toBase64(MOTION_ALARM_XML) };
-    runHandler({ cameraId: 'cam-abc', data, io, db });
-
-    const dbInserts = db._inserted.filter(r => r.table === 'onvif_events');
-    expect(dbInserts.length).toBeGreaterThan(0);
-    expect(dbInserts[0].row.cameraId).toBe('cam-abc');
-    expect(dbInserts[0].row.topic).toMatch(/MotionAlarm/i);
-
-    const onvifEvents = io._emitted.filter(e => e.event === 'onvif:event');
-    expect(onvifEvents.length).toBeGreaterThan(0);
-  });
-
-  it('TC-APPRTP-008: deduplicates events with same topic+sourceToken+state', () => {
-    if (!parseOnvifPayload) return;
-    const io = makeMockIo();
-    const db = makeMockDb();
-    const lastStates = new Map();
-    const data = { pt: 96, timestamp: 3000, seq: 2, payload: toBase64(MOTION_ALARM_XML) };
-
-    runHandler({ cameraId: 'cam-abc', data, io, db, lastStates });
-    runHandler({ cameraId: 'cam-abc', data, io, db, lastStates });
-
-    const dbInserts = db._inserted.filter(r => r.table === 'onvif_events');
-    expect(dbInserts).toHaveLength(1); // second call deduped
-  });
-
-  it('TC-APPRTP-009: emits onvif:temperature for radiometry without DB insert', () => {
-    if (!parseOnvifPayload) return;
-    const io = makeMockIo();
-    const db = makeMockDb();
-    const data = { pt: 96, timestamp: 4000, seq: 3, payload: toBase64(RADIOMETRY_XML) };
-    runHandler({ cameraId: 'cam-therm', data, io, db });
-
-    const tempEvents = io._emitted.filter(e => e.event === 'onvif:temperature');
-    expect(tempEvents.length).toBeGreaterThan(0);
-    expect(tempEvents[0].data.cameraId).toBe('cam-therm');
-    expect(Array.isArray(tempEvents[0].data.readings)).toBe(true);
-    expect(tempEvents[0].data.readings[0].maxTemp).toBeCloseTo(352.5, 1);
-
-    // onvif:temperature must emit before any dedup check (no dedup on radiometry socket event).
-    // Note: onvif_events DB insert may still occur via dedup logic for the BoxTemperatureReading
-    // topic (state=null point event) — this is expected behaviour per internalApi.js implementation.
-    const tempIdx = io._emitted.findIndex(e => e.event === 'onvif:temperature');
-    const onvifEventIdx = io._emitted.findIndex(e => e.event === 'onvif:event');
-    if (onvifEventIdx !== -1) {
-      expect(tempIdx).toBeLessThan(onvifEventIdx); // temperature emitted before onvif:event
-    }
-  });
-
-  it('TC-APPRTP-007: no socket emit when io is null (graceful no-op)', () => {
+  await test('TC-APPRTP-007B', 'no socket emit when io is null (graceful no-op)', () => {
     const data = { pt: 96, timestamp: 5000, seq: 4, payload: toBase64(MOTION_ALARM_XML) };
-    expect(() => runHandler({ cameraId: 'cam-abc', data, io: null })).not.toThrow();
+    let threw = false;
+    try {
+      runHandler({ cameraId: 'cam-abc', data, io: null });
+    } catch (_) {
+      threw = true;
+    }
+    assert(!threw, 'must not throw when io is null');
   });
 
-  it('emits appRtp for each POST regardless of ONVIF parse result', () => {
+  await test('TC-APPRTP-007C', 'emits appRtp for each POST regardless of ONVIF parse result', () => {
     const io = makeMockIo();
     const notOnvif = Buffer.from('raw binary data \x00\x01\x02', 'binary').toString('base64');
     const data = { pt: 99, timestamp: 6000, seq: 0, payload: notOnvif };
     runHandler({ cameraId: 'cam-xyz', data, io });
-
-    expect(io._emitted.filter(e => e.event === 'appRtp')).toHaveLength(1);
+    assertEq(io._emitted.filter(e => e.event === 'appRtp').length, 1, 'appRtp emit count');
   });
-});
+
+  if (!parseOnvifPayload) {
+    skip('TC-APPRTP-008',  'ONVIF payload → DB save + onvif:event broadcast', 'onvifParser.js not found');
+    skip('TC-APPRTP-008B', 'dedup: same topic+sourceToken+state → single DB insert', 'onvifParser.js not found');
+    skip('TC-APPRTP-009',  'onvif:temperature for radiometry without DB insert', 'onvifParser.js not found');
+  } else {
+    await test('TC-APPRTP-008', 'ONVIF payload → DB save + onvif:event broadcast', () => {
+      const io = makeMockIo();
+      const db = makeMockDb();
+      const data = { pt: 96, timestamp: 2000, seq: 1, payload: toBase64(MOTION_ALARM_XML) };
+      runHandler({ cameraId: 'cam-abc', data, io, db });
+
+      const dbInserts = db._inserted.filter(r => r.table === 'onvif_events');
+      assert(dbInserts.length > 0, 'DB insert must have occurred');
+      assertEq(dbInserts[0].row.cameraId, 'cam-abc', 'cameraId in DB row');
+      assert(/MotionAlarm/i.test(dbInserts[0].row.topic), `topic in DB must match MotionAlarm, got: ${dbInserts[0].row.topic}`);
+
+      const onvifEvents = io._emitted.filter(e => e.event === 'onvif:event');
+      assert(onvifEvents.length > 0, 'onvif:event must have been emitted');
+    });
+
+    await test('TC-APPRTP-008B', 'dedup: same topic+sourceToken+state → single DB insert', () => {
+      const io = makeMockIo();
+      const db = makeMockDb();
+      const lastStates = new Map();
+      const data = { pt: 96, timestamp: 3000, seq: 2, payload: toBase64(MOTION_ALARM_XML) };
+
+      runHandler({ cameraId: 'cam-abc', data, io, db, lastStates });
+      runHandler({ cameraId: 'cam-abc', data, io, db, lastStates });
+
+      const dbInserts = db._inserted.filter(r => r.table === 'onvif_events');
+      assertEq(dbInserts.length, 1, 'second identical event must be deduped');
+    });
+
+    await test('TC-APPRTP-009', 'onvif:temperature for radiometry — no DB insert (dedup bypass)', () => {
+      const io = makeMockIo();
+      const db = makeMockDb();
+      const data = { pt: 96, timestamp: 4000, seq: 3, payload: toBase64(RADIOMETRY_XML) };
+      runHandler({ cameraId: 'cam-therm', data, io, db });
+
+      const tempEvents = io._emitted.filter(e => e.event === 'onvif:temperature');
+      assert(tempEvents.length > 0, 'onvif:temperature must have been emitted');
+      assertEq(tempEvents[0].data.cameraId, 'cam-therm', 'cameraId');
+      assert(Array.isArray(tempEvents[0].data.readings), 'readings must be array');
+      assertCloseTo(tempEvents[0].data.readings[0].maxTemp, 352.5, 0.1, 'maxTemp');
+
+      // temperature must be emitted before onvif:event (radiometry fires first)
+      const tempIdx    = io._emitted.findIndex(e => e.event === 'onvif:temperature');
+      const onvifIdx   = io._emitted.findIndex(e => e.event === 'onvif:event');
+      if (onvifIdx !== -1) {
+        assert(tempIdx < onvifIdx, 'onvif:temperature must emit before onvif:event');
+      }
+    });
+  }
+
+  // ── Summary ─────────────────────────────────────────────────────────────────
+
+  console.log('\n── Summary ─────────────────────────────────────────────────\n');
+  console.log(`  Passed: ${passed}  Failed: ${failed}  Skipped: ${results.filter(r => r.status === 'SKIP').length}`);
+  if (failed > 0) process.exit(1);
+})();

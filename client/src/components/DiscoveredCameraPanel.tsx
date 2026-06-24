@@ -58,8 +58,8 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
     camera.profiles?.find((p) => p.rtspUrl) ?? null
   );
 
-  const maxChannel  = camera.MaxChannel ?? 1;
-  const hasChannels = maxChannel > 1;
+  const [channelCount, setChannelCount] = useState<number>(camera.MaxChannel ?? 1);
+  const hasChannels = channelCount > 1;
   const [selectedChannel, setSelectedChannel] = useState<number>(1);
 
   const scheme  = camera.HttpType ? 'https' : 'http';
@@ -97,11 +97,12 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name:     cameraName,
+          name:         cameraName,
           rtspUrl,
-          ip:       camera.IPAddress,
-          mac:      camera.MACAddress,
-          httpPort: port,
+          ip:           camera.IPAddress,
+          mac:          camera.MACAddress,
+          httpPort:     port,
+          channelIndex: hasChannels ? selectedChannel : undefined,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -158,14 +159,29 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
             <span className="text-[11px] text-gray-500 w-24 flex-shrink-0">ONVIF</span>
             <Badge ok={!!camera.SupportOnvif} label="Yes" />
           </div>
-          {maxChannel > 1 && (
-            <div className="flex items-start gap-2 py-1 border-b border-gray-700/50">
-              <span className="text-[11px] text-gray-500 w-24 flex-shrink-0">Channels</span>
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-800 text-amber-300">
-                {maxChannel} CH
-              </span>
+          <div className="flex items-start gap-2 py-1 border-b border-gray-700/50">
+            <span className="text-[11px] text-gray-500 w-24 flex-shrink-0">Channels</span>
+            <div className="flex items-center gap-1.5">
+              {(camera.MaxChannel ?? 1) > 1 && (
+                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-800 text-amber-300">
+                  {camera.MaxChannel} CH
+                </span>
+              )}
+              <input
+                type="number"
+                min={1}
+                max={64}
+                value={channelCount}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  if (v >= 1) { setChannelCount(v); setSelectedChannel(1); }
+                }}
+                className="w-14 bg-gray-900 border border-gray-600 rounded px-1.5 py-0.5 text-[11px] text-white text-center focus:outline-none focus:border-blue-500"
+                title="Override channel count (if auto-detection failed)"
+              />
+              <span className="text-[10px] text-gray-500">manual</span>
             </div>
-          )}
+          </div>
         </div>
 
         {/* Channel Selection (NVR — MaxChannel > 1) */}
@@ -175,7 +191,7 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
               Channel Selection
             </div>
             <div className="flex flex-wrap gap-1">
-              {Array.from({ length: maxChannel }, (_, i) => i + 1).map((ch) => {
+              {Array.from({ length: channelCount }, (_, i) => i + 1).map((ch) => {
                 const isActive = ch === selectedChannel;
                 // Check if any ONVIF profile for this channel has an RTSP URL
                 const hasProfileUrl = !!(camera.profiles?.find((p) => p.channelIndex === ch && p.rtspUrl)

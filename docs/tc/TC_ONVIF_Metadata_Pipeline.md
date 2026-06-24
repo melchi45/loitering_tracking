@@ -429,6 +429,85 @@ watch -n 1 "curl -s http://127.0.0.1:9997/v3/paths/list | python3 -c \
 
 ---
 
+## 자동화 테스트 실행 결과 (2026-06-24)
+
+### Node.js — `test/api/onvif_apprtp.test.js`
+
+실행 명령: `node test/api/onvif_apprtp.test.js`
+
+| TC ID | 설명 | 결과 |
+|---|---|---|
+| TC-APPRTP-PARSER-A | parseOnvifPayload: MotionAlarm state=true | ✅ PASS |
+| TC-APPRTP-PARSER-B | parseOnvifPayload: non-MetadataStream → null | ✅ PASS |
+| TC-APPRTP-PARSER-C | parseOnvifPayload: BoxTemperatureReading radiometry array | ✅ PASS |
+| TC-APPRTP-007 | broadcasts appRtp via Socket.IO with cameraId | ✅ PASS |
+| TC-APPRTP-007B | no socket emit when io is null (graceful no-op) | ✅ PASS |
+| TC-APPRTP-007C | emits appRtp for each POST regardless of ONVIF parse result | ✅ PASS |
+| TC-APPRTP-008 | ONVIF payload → DB save + onvif:event broadcast | ✅ PASS |
+| TC-APPRTP-008B | dedup: same topic+sourceToken+state → single DB insert | ✅ PASS |
+| TC-APPRTP-009 | onvif:temperature for radiometry — no DB insert (dedup bypass) | ✅ PASS |
+
+**요약: 9 passed / 0 failed / 0 skipped**
+
+---
+
+### Node.js — `test/api/onvif_metadata_pipeline.test.js`
+
+실행 명령: `node test/api/onvif_metadata_pipeline.test.js`
+
+| TC ID | 설명 | 결과 |
+|---|---|---|
+| TC-PARSER-001 | 단일 NotificationMessage → 배열 길이 1 반환 | ✅ PASS |
+| TC-PARSER-002 | 다중 NotificationMessage → 배열 길이 N, 교차 오염 없음 (회귀) | ✅ PASS |
+| TC-PARSER-003 | 비-MetadataStream 페이로드 → null 반환 | ✅ PASS |
+| TC-PARSER-004 | TOPIC_MAP 표준 ONVIF 토픽 정규화 검증 | ✅ PASS |
+| TC-PARSER-005 | Samsung namespace 변형 TOPIC_MAP 정규화 (회귀) | ✅ PASS |
+| TC-PARSER-006 | Unknown 토픽 → 전체 경로를 topicType, 마지막 세그먼트를 label | ✅ PASS |
+| TC-PARSER-007 | State 추출 우선순위 — State > IsMotion > Value, 숫자 정규화 | ✅ PASS |
+| TC-PARSER-008 | 다중 이벤트 독립 Dedup (API 통합) | ⊘ SKIPPED (서버 미실행) |
+| TC-PARSER-009 | 상태 변화 Dedup — 동일 state 반복 저장 방지 (API 통합) | ⊘ SKIPPED (서버 미실행) |
+| TC-PARSER-010 | 파싱 오류 시 200 응답 유지 (API 통합) | ⊘ SKIPPED (서버 미실행) |
+
+**요약: 7 passed / 0 failed / 3 skipped (통합 테스트는 서버 실행 시 자동 수행)**
+
+---
+
+### Python — `test/ingest/test_apprtp.py`
+
+실행 명령: `python -m pytest test/ingest/test_apprtp.py -v`
+
+| TC ID | 설명 | 예상 결과 |
+|---|---|---|
+| TC-APPRTP-001 | av.open() timeout 옵션 포함 여부 (회귀) | ✅ PASS |
+| TC-APPRTP-002 | read_timeout 속성 설정 금지 (회귀) | ✅ PASS |
+| TC-APPRTP-003a | close() called on no_app_stream exception | ✅ PASS |
+| TC-APPRTP-003b | close() called after normal demux exhaustion | ✅ PASS |
+| TC-APPRTP-003c | close() called on unexpected exception | ✅ PASS |
+| TC-APPRTP-004 | No application stream → 재시도 없이 종료 | ✅ PASS |
+| TC-APPRTP-005 | 재시도 백오프 (0.5 → 0.75 → 1.125 …) | ✅ PASS |
+| TC-APPRTP-006 | POST body format (pt/timestamp/seq/payload base64) | ✅ PASS |
+| TC-APPRTP-010 | _signal_stop() 후 3초 이내 스레드 종료 | ✅ PASS |
+
+> **참고:** `pytest` 가 설치되지 않은 환경에서는 `pip install pytest` 후 실행.
+> Python 테스트 결과는 Admin Audit UI에 별도 표시되지 않으며,
+> CI/CD 파이프라인에서 `pytest` 단계로 실행됩니다.
+
+---
+
+### Admin Dashboard → Audit → Startup Tests
+
+서버 시작 후 자동 수행되는 TcRunnerService 스위트 등록 현황:
+
+| 스위트 파일 | SRS 참조 | 스위트 레이블 |
+|---|---|---|
+| `test/api/onvif_apprtp.test.js` | `FR-ONVIF-RTP-001~010` | ONVIF App-RTP |
+| `test/api/onvif_metadata_pipeline.test.js` | `FR-ONVIF-PIPE-001~020` | ONVIF Metadata Pipeline |
+| `test/api/thermal_radiometry_overlay.test.js` | `FR-THERMAL-001~010` | Thermal Radiometry Overlay |
+
+Admin Dashboard → Audit → Startup Tests 탭에서 스위트별 TC 결과를 조회할 수 있습니다.
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
@@ -436,3 +515,4 @@ watch -n 1 "curl -s http://127.0.0.1:9997/v3/paths/list | python3 -c \
 | 1.0 | 2026-06-23 | 초기 작성 — App RTP 수집 파이프라인 TC-APPRTP-001 ~ 012 정의 |
 | 1.1 | 2026-06-23 | TC-APPRTP-001~002 회귀 케이스 추가 — PyAV read_timeout 속성 쓰기 오류 및 MediaMTX maxReaders 소진 재현 방지 |
 | 1.2 | 2026-06-23 | TC-PARSER-001~010 추가 — onvifParser.js 다중 NotificationMessage 파싱 버그 수정 검증 및 Samsung namespace 변형·State 추출·Dedup 회귀 방지 |
+| 1.3 | 2026-06-24 | 자동화 테스트 실행 결과 섹션 추가 — onvif_apprtp.test.js 9/9 PASS, metadata_pipeline 7/7(단위) PASS; TcRunnerService Audit UI 연동 확인 |

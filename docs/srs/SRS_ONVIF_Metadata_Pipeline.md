@@ -274,3 +274,4 @@ Radiometry 이벤트 (`parsed.radiometry` 존재)는 dedup 없이 매 수신 시
 | 1.0 | 2026-06-23 | 초기 작성 — App RTP 파이프라인 기능 요구사항 정의 |
 | 1.1 | 2026-06-23 | FR-ONVIF-APPRTP-002 추가 — PyAV `read_timeout` 속성 쓰기 폐지 대응, `av.open()` 시점 timeout 옵션 전달 요구사항 명세 |
 | 1.2 | 2026-06-23 | §3 FR-ONVIF-PARSER-001~009 추가 — 다중 NotificationMessage 파싱·TOPIC_MAP Samsung 변형·State 추출; §3-B FR-ONVIF-ROUTE-001~005 추가 — 독립 Dedup·저장·브로드캐스트·Radiometry 격리 |
+| 1.3 | 2026-06-24 | 연관 문서 링크 추가 — [RFP_ONVIF_Metadata_Pipeline.md](../rfp/RFP_ONVIF_Metadata_Pipeline.md), [PRD_ONVIF_Metadata_Pipeline.md](../prd/PRD_ONVIF_Metadata_Pipeline.md); test/api/onvif_apprtp.test.js node 하네스 전환 완료 (TC-APPRTP-007~009 + PARSER-A~C 9/9 PASS) |

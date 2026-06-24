@@ -175,6 +175,11 @@ const SUITES = [
 
   // ── ONVIF Metadata Pipeline ───────────────────────────────────────────────
   {
+    file:  'test/api/onvif_apprtp.test.js',
+    label: 'TC_ONVIF_AppRTP       — App RTP handler unit (TC-APPRTP-007~009, PARSER-A~C)',
+    tags:  ['onvif', 'apprtp', 'unit', 'regression'],
+  },
+  {
     file:  'test/api/onvif_metadata_pipeline.test.js',
     label: 'TC_ONVIF_Metadata_Pipeline — parser unit + API integration (multi-notification)',
     tags:  ['onvif', 'parser', 'metadata', 'unit', 'regression'],

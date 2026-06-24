@@ -106,11 +106,11 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
   /**
    * POST /api/cameras
    * Add a new camera.
-   * Body: { name, rtspUrl, username?, password?, ip?, mac?, httpPort? }
+   * Body: { name, rtspUrl, username?, password?, ip?, mac?, httpPort?, channelIndex? }
    */
   router.post('/', (req, res) => {
     try {
-      const { name, rtspUrl, username, password, ip, mac, httpPort } = req.body;
+      const { name, rtspUrl, username, password, ip, mac, httpPort, channelIndex } = req.body;
       if (!name || !rtspUrl) {
         return res.status(400).json({ success: false, error: 'name and rtspUrl are required' });
       }
@@ -123,12 +123,13 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       const id = uuidv4();
       db.insert('cameras', {
         id, name, rtspUrl: normalizedRtsp.value,
-        username:  username  || process.env.RTSP_DEFAULT_USERNAME || null,
-        password:  password  || process.env.RTSP_DEFAULT_PASSWORD || null,
-        ip:        ip        || null,
-        mac:       mac       || null,
-        httpPort:  httpPort  || null,
-        status:    'offline',
+        username:     username     || process.env.RTSP_DEFAULT_USERNAME || null,
+        password:     password     || process.env.RTSP_DEFAULT_PASSWORD || null,
+        ip:           ip           || null,
+        mac:          mac          || null,
+        httpPort:     httpPort     || null,
+        channelIndex: channelIndex ? parseInt(channelIndex, 10) : null,
+        status:       'offline',
       });
 
       const camera = db.findOne('cameras', { id });
