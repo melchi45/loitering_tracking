@@ -9,11 +9,22 @@
  * Enabled by default; set TC_STARTUP_RUN=false to disable.
  */
 
-const { spawn }   = require('child_process');
+const { spawn, execSync } = require('child_process');
 const path        = require('path');
 const fs          = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const { getDB }   = require('../db');
+
+// process.execPath may point to the glibc loader on systems where node is
+// installed as a wrapper script (e.g. /opt/glibc-2.33 + shell shim).
+// Resolve the actual 'node' binary via PATH instead.
+const NODE_BIN = (() => {
+  try {
+    const p = execSync('which node', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    if (p) return p;
+  } catch (_) {}
+  return process.execPath;
+})();
 
 const ROOT = path.resolve(__dirname, '../../..');
 
@@ -65,6 +76,8 @@ const SUITES = [
   { file: 'test/api/onvif_metadata_pipeline.test.js',       srs: 'FR-ONVIF-PIPE-001~020', label: 'ONVIF Metadata Pipeline' },
   { file: 'test/api/onvif_apprtp.test.js',                  srs: 'FR-ONVIF-RTP-001~010', label: 'ONVIF App-RTP' },
   { file: 'test/api/thermal_radiometry_overlay.test.js',    srs: 'FR-THERMAL-001~010', label: 'Thermal Radiometry Overlay' },
+  // Timeline range — streaming only (camera capture + ONVIF pipeline required)
+  { file: 'test/api/timeline_range.test.js', srs: 'FR-TIMELINE-RANGE-001~008', label: 'Timeline 1H Range  Streaming', streamingOnly: true },
   // Capture / Pipeline
   { file: 'test/api/capture-backend.test.js',               srs: 'FR-CAP-001~020', label: 'RTSP Capture Backend' },
   { file: 'test/api/distributed_pipeline.test.js',          srs: 'FR-DIST-001~020', label: 'Distributed Pipeline  SERVER_MODE' },
@@ -178,6 +191,13 @@ async function _run(port) {
       totalSkip++;
       continue;
     }
+    // Streaming-only suites are skipped in analysis/combined mode (need camera capture pipeline)
+    if (!isStreaming && suite.streamingOnly) {
+      _save(runId, runAt, suite, 'TC-SKIP',
+        `${suite.label} — skipped (SERVER_MODE=${serverMode}, Streaming Server only)`, 'skip', null);
+      totalSkip++;
+      continue;
+    }
 
     const absPath = path.resolve(ROOT, suite.file);
     if (!fs.existsSync(absPath)) {
@@ -220,7 +240,7 @@ function _runSuite(absPath, ltsUrl) {
     let stdout = '';
     let stderr = '';
 
-    const proc = spawn(process.execPath, [absPath], {
+    const proc = spawn(NODE_BIN, [absPath], {
       cwd: ROOT,
       env: { ...process.env, LTS_URL: ltsUrl },
       stdio: ['ignore', 'pipe', 'pipe'],

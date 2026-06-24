@@ -1,6 +1,6 @@
 # PRD: Fullscreen Camera View — 탭 확장 & 이력 데이터 통합
 
-**Version:** 1.0
+**Version:** 1.1
 **Status:** Implemented
 **SDLC:** [RFP](../rfp/RFP_Fullscreen_Camera_View.md) · [SRS](../srs/SRS_Fullscreen_Camera_View.md) · [Design](../design/Design_Fullscreen_Camera_View.md) · [TC](../tc/TC_Fullscreen_Camera_View.md)
 
@@ -52,7 +52,7 @@
 
 ### 3.3 OnvifTimelineInline 커스텀 범위
 
-`[1D][1W][1M][1Y][Custom]` — Custom 선택 시 날짜 입력 행 추가 노출:
+`[1H][6H][1D][1W][1M][1Y][Custom]` — 기본 선택: `1H`. Custom 선택 시 날짜 입력 행 추가 노출:
 
 ```
 From [datetime-local]  To [datetime-local]  [Apply]  [✕]
@@ -89,3 +89,4 @@ Apply 클릭 전까지 fetch 없음. Apply 클릭 시 지정 범위로 `GET /api
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-16 | 초기 작성 — Fullscreen Camera View 탭 확장 PRD |
+| 1.1 | 2026-06-24 | OnvifTimelineInline 범위 프리셋 `[1H][6H][1D][1W][1M][1Y][Custom]`으로 업데이트, 기본값 1H |

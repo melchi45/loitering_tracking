@@ -1,6 +1,6 @@
 # SRS — ONVIF Metadata Pipeline (App RTP)
 **Document ID**: SRS-LTS-ONVIF-01  
-**Version**: 1.2  
+**Version**: 1.5  
 **Date**: 2026-06-23  
 **Project**: Loitering Detection & Tracking System (LTS-2026)  
 **Status**: Active  
@@ -272,6 +272,34 @@ App RTP 루프가 `OSError(errno=98)`(EADDRINUSE)를 3회 연속으로 만나면
 
 ---
 
+## 3-C. 타임라인 범위 요구사항 (`FR-ONVIF-RANGE`)
+
+### FR-ONVIF-RANGE-001: 최소 범위 프리셋 1H
+
+- `OnvifTimelineInline` 컴포넌트는 `1H`(1시간) 범위 버튼을 가장 좌측에 제공한다.
+- `1H` 범위를 선택하면 `from = Date.now() − 3,600,000ms` 로 `/api/onvif-events`를 호출한다.
+
+### FR-ONVIF-RANGE-002: 6H 범위 프리셋
+
+- `6H`(6시간) 범위 버튼을 `1H` 다음 위치에 제공한다.
+- `6H` 범위를 선택하면 `from = Date.now() − 21,600,000ms` 로 호출한다.
+
+### FR-ONVIF-RANGE-003: 기본 범위 1H
+
+- 컴포넌트 초기 마운트 시 기본 선택 범위는 `1H`이다 (이전: `1D`).
+
+### FR-ONVIF-RANGE-004: from 파라미터 경계 검증
+
+- 서버 `GET /api/onvif-events`는 `from` ISO 8601 파라미터를 수신 시 `r.serverTs >= from` 조건으로 필터링한다.
+- 반환된 모든 이벤트의 `serverTs`는 요청의 `from` 이상임을 보장한다.
+
+### FR-ONVIF-RANGE-005: Detection tracks 동일 범위 지원
+
+- `GET /api/analysis/detection-tracks`도 동일한 `from` 파라미터를 지원한다.
+- `1H` 범위 선택 시 `firstSeenAt` 또는 `lastSeenAt` 이 `from` 이후인 트랙만 반환한다.
+
+---
+
 ## 4. 환경변수
 
 | 변수 | 기본값 | 설명 |
@@ -302,3 +330,4 @@ App RTP 루프가 `OSError(errno=98)`(EADDRINUSE)를 3회 연속으로 만나면
 | 1.2 | 2026-06-23 | §3 FR-ONVIF-PARSER-001~009 추가 — 다중 NotificationMessage 파싱·TOPIC_MAP Samsung 변형·State 추출; §3-B FR-ONVIF-ROUTE-001~005 추가 — 독립 Dedup·저장·브로드캐스트·Radiometry 격리 |
 | 1.3 | 2026-06-24 | 연관 문서 링크 추가 — [RFP_ONVIF_Metadata_Pipeline.md](../rfp/RFP_ONVIF_Metadata_Pipeline.md), [PRD_ONVIF_Metadata_Pipeline.md](../prd/PRD_ONVIF_Metadata_Pipeline.md); test/api/onvif_apprtp.test.js node 하네스 전환 완료 (TC-APPRTP-007~009 + PARSER-A~C 9/9 PASS) |
 | 1.4 | 2026-06-24 | FR-ONVIF-APPRTP-004~005 추가 — MediaMTX 환경 App RTP URL 분리(appRtpRtspUrl), EADDRINUSE 3회 방어 종료 |
+| 1.5 | 2026-06-24 | §3-C FR-ONVIF-RANGE-001~005 추가 — ONVIF Timeline 1H/6H 범위 프리셋, 기본값 1H, Detection tracks 동일 범위 지원 |

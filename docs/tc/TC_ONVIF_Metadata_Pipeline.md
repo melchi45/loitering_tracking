@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-ONVIF-01 |
-| **Version** | 1.2 |
+| **Version** | 1.5 |
 | **Status** | Active |
 | **Date** | 2026-06-23 |
 | **Related SRS** | [SRS_ONVIF_Metadata_Pipeline.md](../srs/SRS_ONVIF_Metadata_Pipeline.md) |
@@ -469,6 +469,111 @@ watch -n 1 "curl -s http://127.0.0.1:9997/v3/paths/list | python3 -c \
 
 ---
 
+## TC-TIMELINE-RANGE-001 — ONVIF 이벤트 API: 1H from 파라미터 → 200 + 경계 검증
+
+| 항목 | 내용 |
+|---|---|
+| **ID** | TC-TIMELINE-RANGE-001 |
+| **SRS** | FR-ONVIF-RANGE-001, FR-ONVIF-RANGE-004 |
+| **조건** | `streamingOnly` — `SERVER_MODE=streaming`일 때만 실행 |
+| **목적** | `GET /api/onvif-events?from=<now-1H>` 가 200을 반환하고 모든 이벤트 `serverTs ≥ from` |
+| **절차** | `from = Date.now() - 3,600,000ms` ISO 8601 → `GET /api/onvif-events?from=…&limit=1000` |
+| **기대** | HTTP 200, `events` 배열, `total` number, 각 이벤트 `serverTs ≥ from` |
+| **스크립트** | `test/api/timeline_range.test.js` |
+
+---
+
+## TC-TIMELINE-RANGE-002 — ONVIF 이벤트 API: from 없이 전체 조회
+
+| 항목 | 내용 |
+|---|---|
+| **ID** | TC-TIMELINE-RANGE-002 |
+| **SRS** | FR-ONVIF-RANGE-004 |
+| **조건** | `streamingOnly` |
+| **목적** | `from` 파라미터 없이도 `GET /api/onvif-events` 가 정상 응답 |
+| **절차** | `GET /api/onvif-events?limit=10` |
+| **기대** | HTTP 200, `events` 배열, `total` number |
+
+---
+
+## TC-TIMELINE-RANGE-003 — ONVIF 이벤트 API: cameraId + 1H 범위 조합
+
+| 항목 | 내용 |
+|---|---|
+| **ID** | TC-TIMELINE-RANGE-003 |
+| **SRS** | FR-ONVIF-RANGE-001, FR-ONVIF-RANGE-004 |
+| **조건** | `streamingOnly`; 카메라 미등록 시 skip |
+| **목적** | cameraId + from 조합 필터 시 해당 카메라 이벤트만 반환 |
+| **절차** | 첫 번째 카메라 ID 취득 → `GET /api/onvif-events?cameraId=…&from=<now-1H>&limit=500` |
+| **기대** | 모든 반환 이벤트의 `cameraId`가 요청 cameraId와 일치; `serverTs ≥ from` |
+
+---
+
+## TC-TIMELINE-RANGE-004 — ONVIF 이벤트 API: to 파라미터 미래 시간 경계
+
+| 항목 | 내용 |
+|---|---|
+| **ID** | TC-TIMELINE-RANGE-004 |
+| **SRS** | FR-ONVIF-RANGE-004 |
+| **조건** | `streamingOnly` |
+| **목적** | `to`가 미래 시간이어도 정상 응답 (서버 에러 없음) |
+| **절차** | `from = now-1H`, `to = now+60s` → `GET /api/onvif-events?from=…&to=…` |
+| **기대** | HTTP 200, `events` 배열 |
+
+---
+
+## TC-TIMELINE-RANGE-005 — Detection tracks API: 1H from 파라미터
+
+| 항목 | 내용 |
+|---|---|
+| **ID** | TC-TIMELINE-RANGE-005 |
+| **SRS** | FR-ONVIF-RANGE-005 |
+| **조건** | `streamingOnly` |
+| **목적** | `GET /api/analysis/detection-tracks?from=<now-1H>` 가 200 반환; 트랙 경계 검증 |
+| **절차** | `from = Date.now() - 3,600,000ms` → `GET /api/analysis/detection-tracks?from=…&limit=500` |
+| **기대** | HTTP 200, `tracks` 배열, 각 트랙 `firstSeenAt ≥ from` 또는 `lastSeenAt ≥ from` |
+
+---
+
+## TC-TIMELINE-RANGE-006 — Detection tracks API: from 없이 전체 조회
+
+| 항목 | 내용 |
+|---|---|
+| **ID** | TC-TIMELINE-RANGE-006 |
+| **SRS** | FR-ONVIF-RANGE-005 |
+| **조건** | `streamingOnly` |
+| **목적** | `from` 파라미터 없이도 Detection tracks API 정상 응답 |
+| **절차** | `GET /api/analysis/detection-tracks?limit=10` |
+| **기대** | HTTP 200, `tracks` 배열 |
+
+---
+
+## TC-TIMELINE-RANGE-007 — Detection tracks API: cameraId + 1H 범위 조합
+
+| 항목 | 내용 |
+|---|---|
+| **ID** | TC-TIMELINE-RANGE-007 |
+| **SRS** | FR-ONVIF-RANGE-005 |
+| **조건** | `streamingOnly`; 카메라 미등록 시 skip |
+| **목적** | cameraId 필터 적용 시 해당 카메라 트랙만 반환 |
+| **절차** | 첫 번째 카메라 ID 취득 → `GET /api/analysis/detection-tracks?cameraId=…&from=<now-1H>` |
+| **기대** | 모든 반환 트랙의 `cameraId`가 요청 cameraId와 일치 |
+
+---
+
+## TC-TIMELINE-RANGE-008 — ONVIF 이벤트 API: 6H from 경계 값 검증
+
+| 항목 | 내용 |
+|---|---|
+| **ID** | TC-TIMELINE-RANGE-008 |
+| **SRS** | FR-ONVIF-RANGE-002, FR-ONVIF-RANGE-004 |
+| **조건** | `streamingOnly` |
+| **목적** | `from = now-6H` 경계에서 반환된 이벤트가 `[from, now]` 구간 내에 있음 |
+| **절차** | `GET /api/onvif-events?from=<now-6H>&limit=500` |
+| **기대** | HTTP 200; 모든 이벤트 `serverTs ≥ from` 및 `serverTs ≤ now`; `total ≤ 500` |
+
+---
+
 ## 자동화 테스트 실행 결과 (2026-06-24)
 
 ### Node.js — `test/api/onvif_apprtp.test.js`
@@ -538,13 +643,15 @@ watch -n 1 "curl -s http://127.0.0.1:9997/v3/paths/list | python3 -c \
 
 서버 시작 후 자동 수행되는 TcRunnerService 스위트 등록 현황:
 
-| 스위트 파일 | SRS 참조 | 스위트 레이블 |
-|---|---|---|
-| `test/api/onvif_apprtp.test.js` | `FR-ONVIF-RTP-001~010` | ONVIF App-RTP |
-| `test/api/onvif_metadata_pipeline.test.js` | `FR-ONVIF-PIPE-001~020` | ONVIF Metadata Pipeline |
-| `test/api/thermal_radiometry_overlay.test.js` | `FR-THERMAL-001~010` | Thermal Radiometry Overlay |
+| 스위트 파일 | SRS 참조 | 스위트 레이블 | 조건 |
+|---|---|---|---|
+| `test/api/onvif_apprtp.test.js` | `FR-ONVIF-RTP-001~010` | ONVIF App-RTP | — |
+| `test/api/onvif_metadata_pipeline.test.js` | `FR-ONVIF-PIPE-001~020` | ONVIF Metadata Pipeline | — |
+| `test/api/thermal_radiometry_overlay.test.js` | `FR-THERMAL-001~010` | Thermal Radiometry Overlay | — |
+| `test/api/timeline_range.test.js` | `FR-TIMELINE-RANGE-001~008` | Timeline 1H Range  Streaming | `streamingOnly` — Streaming Server 모드에서만 실행 |
 
 Admin Dashboard → Audit → Startup Tests 탭에서 스위트별 TC 결과를 조회할 수 있습니다.
+`streamingOnly` 스위트는 `SERVER_MODE=streaming`일 때만 실행되며, 그 외 모드에서는 `SKIP` 처리됩니다.
 
 ---
 
@@ -557,3 +664,4 @@ Admin Dashboard → Audit → Startup Tests 탭에서 스위트별 TC 결과를 
 | 1.2 | 2026-06-23 | TC-PARSER-001~010 추가 — onvifParser.js 다중 NotificationMessage 파싱 버그 수정 검증 및 Samsung namespace 변형·State 추출·Dedup 회귀 방지 |
 | 1.3 | 2026-06-24 | 자동화 테스트 실행 결과 섹션 추가 — onvif_apprtp.test.js 9/9 PASS, metadata_pipeline 7/7(단위) PASS; TcRunnerService Audit UI 연동 확인 |
 | 1.4 | 2026-06-24 | TC-APPRTP-013~014 추가 — MediaMTX App RTP URL 분리 검증 + EADDRINUSE 3회 종료 방어 처리 |
+| 1.5 | 2026-06-24 | TC-TIMELINE-RANGE-001~008 추가 — ONVIF 이벤트·Detection tracks API 1H/6H 범위 파라미터 검증 (streamingOnly); Admin Audit 스위트 표에 timeline_range 추가 |

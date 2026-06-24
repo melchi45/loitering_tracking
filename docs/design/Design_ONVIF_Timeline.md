@@ -1,6 +1,6 @@
 # Design: ONVIF Event Timeline
 
-**Version:** 1.7
+**Version:** 2.1
 **Status:** Implemented
 **Related:** [Design_ONVIF_Metadata_Pipeline.md](Design_ONVIF_Metadata_Pipeline.md) · [Design_DataChannel_CameraEvents.md](Design_DataChannel_CameraEvents.md)
 
@@ -18,7 +18,7 @@ Key capabilities:
 - **Overlay UI**: opens over `FullscreenCameraView` or `SearchFullscreen`
 - **Zoom**: scroll-wheel or keyboard `↑` / `↓` (1× – 1000×)
 - **Pan**: keyboard `←` / `→` or on-screen buttons; scrollbar indicator
-- **Range presets**: `1D` · `1W` · `1M` · `1Y` (both in timeline header and `SearchFullscreen`)
+- **Range presets**: `1H` · `6H` · `1D` · `1W` · `1M` · `1Y` (both in timeline header and `SearchFullscreen`; default `1H`)
 - **Event detail**: click icon → structured ONVIF parsed data + Raw XML toggle
 - **Client-side parser**: `DOMParser`-based, mirrors server `onvifParser.js`
 
@@ -221,7 +221,7 @@ interface ParsedOnvifData {
 
 | State     | Type             | Description |
 |-----------|------------------|-------------|
-| `range`   | `'1D'…'1Y'`      | 선택된 범위 프리셋 |
+| `range`   | `'1H'\|'6H'\|'1D'…'1Y'` | 선택된 범위 프리셋 (기본: `'1H'`) |
 | `zoom`    | number           | 1 = 전체 범위; >1 = 확대 (max 500×) |
 | `pan`     | number           | 0..1 오프셋 (0=현재, 1=rangeMs 이전) |
 | `selected`| `OnvifInterval \| null` | 상세 패널에 표시 중인 인터벌 |
@@ -586,3 +586,4 @@ User action:
 | 1.8 | 2026-06-22 | §5.9 행 레이아웃 DetectionsTimelineInline 스타일 통합 — ROW_H 확장(Inline 52px/Overlay 68px), 인라인 필름스트립 스냅샷(snapCache + lazy-fetch), SEV_COLOR 인라인 스타일 바 |
 | 1.9 | 2026-06-23 | §5.9 getEventState() 함수 추가 — evt.state=null인 구버전 이벤트도 items 폴백으로 bar 렌더링; DB 마이그레이션 불필요 |
 | 2.0 | 2026-06-23 | §7 데이터 플로우 업데이트 — parseOnvifPayload() 배열 반환 반영; 패킷 내 다중 NotificationMessage 각각 독립 dedup·저장·브로드캐스트 |
+| 2.1 | 2026-06-24 | 범위 프리셋 `1H` · `6H` 추가 — ONVIF 이벤트 기본 범위를 1D → 1H로 단축; §5.1 range state 타입 업데이트 |

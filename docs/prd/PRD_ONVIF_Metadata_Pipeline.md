@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-ONVIF-01 |
-| **Version** | 1.0 |
+| **Version** | 1.2 |
 | **Status** | Active |
 | **Date** | 2026-06-24 |
 | **Related RFP** | [RFP_ONVIF_Metadata_Pipeline.md](../rfp/RFP_ONVIF_Metadata_Pipeline.md) |
@@ -92,6 +92,7 @@ Gantt 타임라인 UI에 표시하는 기능을 제공합니다.
 | PRD-ONVIF-043 | `ThermalOverlay.tsx` | 열상 온도 오버레이 — 영역별 min/max/avg 표시 | P0 |
 | PRD-ONVIF-044 | `ThermalOverlay.tsx` | `onvif:temperature` 수신 후 6초 페이드 타이머 | P1 |
 | PRD-ONVIF-045 | Admin ONVIF 탭 | 이벤트 타입 레지스트리 테이블 | P1 |
+| PRD-ONVIF-046 | `OnvifTimelineInline.tsx` | 범위 프리셋 `1H`/`6H`/`1D`/`1W`/`1M`/`1Y`/`Custom` 제공; 기본값 `1H` | P1 |
 
 ---
 
@@ -167,3 +168,4 @@ Gantt 타임라인 UI에 표시하는 기능을 제공합니다.
 |---|---|---|
 | 1.0 | 2026-06-24 | 초기 작성 — ONVIF App RTP 수집 파이프라인 PRD |
 | 1.1 | 2026-06-24 | PRD-ONVIF-008~009 추가 — MediaMTX 환경 App RTP URL 분리 및 EADDRINUSE 방어 처리 |
+| 1.2 | 2026-06-24 | PRD-ONVIF-046 추가 — OnvifTimelineInline 범위 프리셋 1H/6H 추가, 기본값 1H |

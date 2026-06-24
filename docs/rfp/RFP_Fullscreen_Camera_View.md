@@ -1,6 +1,6 @@
 # RFP: Fullscreen Camera View — 탭 확장 & 이력 데이터 통합
 
-**Version:** 1.0
+**Version:** 1.1
 **Status:** Fulfilled
 **SDLC:** [PRD](../prd/PRD_Fullscreen_Camera_View.md) · [SRS](../srs/SRS_Fullscreen_Camera_View.md) · [Design](../design/Design_Fullscreen_Camera_View.md) · [TC](../tc/TC_Fullscreen_Camera_View.md)
 
@@ -12,8 +12,8 @@ LTS-2026의 메인 대시보드에서 카메라를 선택하면 전체화면 오
 현재 구현은 우측에 항상 표시되는 실시간 AI 감지 패널(DetectionPanel)과 두 개의 하단 탭(Camera Events / ONVIF Timeline)으로 구성되어 있습니다.
 
 운영자 요구사항:
-1. **ONVIF 이벤트 이력 조회**: 서버 재시작 후에도 과거 ONVIF 이벤트가 표시되어야 함 (현재는 기본 1D 범위만 적용)
-2. **커스텀 날짜 범위**: 프리셋(1D/1W/1M/1Y) 외에 임의 Start/End 날짜를 지정해 이벤트 검색
+1. **ONVIF 이벤트 이력 조회**: 서버 재시작 후에도 과거 ONVIF 이벤트가 표시되어야 함 (기본 범위 1H, 프리셋 1H/6H/1D/1W/1M/1Y)
+2. **커스텀 날짜 범위**: 프리셋 외에 임의 Start/End 날짜를 지정해 이벤트 검색
 3. **분석 이벤트 이력 탭**: 저장된 AI 감지 이벤트(loitering/fire/smoke)를 별도 탭에서 조회
 4. **실시간 감지 유지**: 우측 DetectionPanel은 항상 보이며 실시간 데이터를 표시
 
@@ -69,3 +69,4 @@ LTS-2026의 메인 대시보드에서 카메라를 선택하면 전체화면 오
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-16 | 초기 작성 — Fullscreen Camera View 탭 확장 및 이력 데이터 통합 RFP |
+| 1.1 | 2026-06-24 | 범위 프리셋 `1H`/`6H` 추가 반영 — 기본 범위 1D → 1H 업데이트; REQ 설명 수정 |

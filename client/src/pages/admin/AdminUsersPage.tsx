@@ -594,6 +594,11 @@ const ANALYSIS_ONLY_SUITES = [
   'model_catalog.test.js',
 ];
 
+// Streaming-only suite files — shown only in streaming mode (camera capture + ONVIF pipeline)
+const STREAMING_ONLY_SUITES = [
+  'timeline_range.test.js',
+];
+
 function TcResultsPanel({
   apiFetch,
   isStreaming = false,
@@ -679,9 +684,12 @@ function TcResultsPanel({
   });
 
   // Hide analysis-only suites in streaming mode (no local AI pipeline available)
-  const visibleResults = isStreaming
-    ? filtered.filter(r => !ANALYSIS_ONLY_SUITES.some(s => r.suiteFile.includes(s)))
-    : filtered;
+  // Hide streaming-only suites in non-streaming mode (no camera capture pipeline)
+  const visibleResults = filtered.filter(r => {
+    if (isStreaming  && ANALYSIS_ONLY_SUITES.some(s => r.suiteFile.includes(s)))  return false;
+    if (!isStreaming && STREAMING_ONLY_SUITES.some(s => r.suiteFile.includes(s))) return false;
+    return true;
+  });
 
   // Group by suite
   const suiteGroups = visibleResults.reduce<Record<string, TcResult[]>>((acc, r) => {

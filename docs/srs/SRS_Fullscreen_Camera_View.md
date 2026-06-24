@@ -1,6 +1,6 @@
 # SRS: Fullscreen Camera View — 탭 확장 & 이력 데이터 통합
 
-**Version:** 1.0
+**Version:** 1.1
 **Status:** Implemented
 **SDLC:** [RFP](../rfp/RFP_Fullscreen_Camera_View.md) · [PRD](../prd/PRD_Fullscreen_Camera_View.md) · [Design](../design/Design_Fullscreen_Camera_View.md) · [TC](../tc/TC_Fullscreen_Camera_View.md)
 
@@ -42,7 +42,7 @@
 
 ### FR-04: OnvifTimelineInline 커스텀 범위
 
-- **SRS-04-1**: `OnvifTimelineInline`은 `1D`/`1W`/`1M`/`1Y`/`Custom` 범위 버튼을 제공한다
+- **SRS-04-1**: `OnvifTimelineInline`은 `1H`/`6H`/`1D`/`1W`/`1M`/`1Y`/`Custom` 범위 버튼을 제공하며 기본값은 `1H`이다
 - **SRS-04-2**: `Custom` 선택 시 `datetime-local` Start(From) / End(To) 입력 행이 컨트롤 행 아래에 표시된다
 - **SRS-04-3**: `Custom` 상태에서 `customApplied`가 null이면 서버 fetch를 실행하지 않는다
 - **SRS-04-4**: Apply 클릭 시 `customApplied = { from, to }` 를 설정하고 fetch를 실행한다
@@ -90,3 +90,4 @@
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-16 | 초기 작성 — Fullscreen Camera View 탭 확장 SRS |
+| 1.1 | 2026-06-24 | SRS-04-1 업데이트 — OnvifTimelineInline 범위 버튼 1H/6H 추가, 기본값 1D → 1H |

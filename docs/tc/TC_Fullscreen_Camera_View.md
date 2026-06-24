@@ -1,6 +1,6 @@
 # TC: Fullscreen Camera View — 탭 확장 & Detections Timeline
 
-**Version:** 1.0
+**Version:** 1.1
 **Status:** Ready for Test
 **SDLC:** [RFP](../rfp/RFP_Fullscreen_Camera_View.md) · [PRD](../prd/PRD_Fullscreen_Camera_View.md) · [SRS](../srs/SRS_Fullscreen_Camera_View.md) · [Design](../design/Design_Fullscreen_Camera_View.md)
 
@@ -149,8 +149,42 @@ curl -X DELETE "http://localhost:3080/api/analysis/detection-tracks"
 
 ---
 
+## ONVIF Timeline 범위 프리셋 TC
+
+> 이 섹션의 TC는 `SERVER_MODE=streaming`에서만 실행됩니다 (`streamingOnly`).
+> 자동화 스크립트: `test/api/timeline_range.test.js`
+
+### TC-16: ONVIF Timeline 기본 범위가 1H임을 확인
+
+| 항목 | 내용 |
+|------|------|
+| **SRS** | SRS-04-1 (기본값 `1H`) |
+| **절차** | ONVIF Timeline 탭 진입 → 컨트롤 행에서 활성 버튼 확인 |
+| **기대** | `[1H]` 버튼이 활성(강조) 상태; 타임라인이 현재 시각 기준 1시간 범위 표시 |
+
+### TC-17: 1H 범위 선택 시 올바른 from 파라미터 전송
+
+| 항목 | 내용 |
+|------|------|
+| **SRS** | SRS-04-1, FR-ONVIF-RANGE-001 |
+| **조건** | `streamingOnly` — `test/api/timeline_range.test.js TC-TIMELINE-RANGE-001` 참조 |
+| **절차** | `GET /api/onvif-events?from=<now-1H>&limit=1000` 호출 |
+| **기대** | HTTP 200; 반환된 모든 이벤트 `serverTs ≥ from` |
+
+### TC-18: 6H 범위 버튼 선택
+
+| 항목 | 내용 |
+|------|------|
+| **SRS** | SRS-04-1, FR-ONVIF-RANGE-002 |
+| **조건** | `streamingOnly` — `test/api/timeline_range.test.js TC-TIMELINE-RANGE-008` 참조 |
+| **절차** | ONVIF Timeline 탭에서 `[6H]` 버튼 클릭 → API 호출 관찰 |
+| **기대** | `GET /api/onvif-events?from=<now-6H>` 호출; 반환 이벤트 모두 `[from, now]` 구간 내 |
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-16 | 초기 작성 — Fullscreen Camera View 탭 확장 + Detections Timeline TC |
+| 1.1 | 2026-06-24 | TC-16~18 추가 — ONVIF Timeline 1H/6H 범위 프리셋 및 기본값 1H 검증 (streamingOnly) |

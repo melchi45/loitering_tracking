@@ -36,12 +36,14 @@ const DRAG_THRESH = 4;
 // ── Range options ─────────────────────────────────────────────────────────────
 
 const RANGE_OPTIONS = [
+  { label: '1H', ms:       3_600_000 },
+  { label: '6H', ms:  6 * 3_600_000 },
   { label: '1D', ms: 86_400_000 },
   { label: '1W', ms: 7 * 86_400_000 },
   { label: '1M', ms: 30 * 86_400_000 },
   { label: '1Y', ms: 365 * 86_400_000 },
 ] as const;
-type RangeLabel = '1D' | '1W' | '1M' | '1Y' | 'custom';
+type RangeLabel = '1H' | '6H' | '1D' | '1W' | '1M' | '1Y' | 'custom';
 
 // ── Severity colour palette ───────────────────────────────────────────────────
 
@@ -100,7 +102,7 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
   const { socket } = useSocket();
   const { events, pushEvent, setEvents, types, setTypes, addType } = useOnvifEventStore();
 
-  const [range,         setRange]         = useState<RangeLabel>('1D');
+  const [range,         setRange]         = useState<RangeLabel>('1H');
   const [zoom,          setZoom]          = useState(1);
   const [pan,           setPan]           = useState(0);
   const [typeFilter,    setTypeFilter]    = useState('');
@@ -161,7 +163,7 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
   // ── Viewport math ───────────────────────────────────────────────────────────
   const rangeMs = range === 'custom' && customApplied
     ? Math.max(1, new Date(customApplied.to).getTime() - new Date(customApplied.from).getTime())
-    : (RANGE_OPTIONS.find(r => r.label === range)?.ms ?? 86_400_000);
+    : (RANGE_OPTIONS.find(r => r.label === range)?.ms ?? 3_600_000);
 
   const viewRangeEnd = range === 'custom' && customApplied
     ? new Date(customApplied.to).getTime()
