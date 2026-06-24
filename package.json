@@ -23,6 +23,7 @@
     "clean": "rm -rf server/node_modules client/node_modules client/dist"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1"
+    "concurrently": "^9.2.1",
+    "typescript": "^6.0.3"
   }
 }
