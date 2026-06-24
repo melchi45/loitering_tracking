@@ -621,6 +621,10 @@ async function main() {
   console.log(`[Server] Loitering Tracking System backend listening on port ${ACTIVE_PORT}`);
   console.log(`[Server] Health: ${ACTIVE_PROTO}://localhost:${ACTIVE_PORT}/health`);
 
+  // ── Startup TC test run (background, non-blocking) ────────────────────────
+  const TcRunnerService = require('./services/TcRunnerService');
+  TcRunnerService.runOnStartup(ACTIVE_PORT);
+
   // ── Graceful shutdown ────────────────────────────────────────────────────
   const shutdown = async (signal) => {
     console.log(`\n[Server] Received ${signal} — shutting down gracefully…`);

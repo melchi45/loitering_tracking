@@ -3,9 +3,10 @@
 const express = require('express');
 const router  = express.Router();
 
-const UserService   = require('../services/UserService');
-const TokenService  = require('../services/TokenService');
-const AuditService  = require('../services/AuditService');
+const UserService    = require('../services/UserService');
+const TokenService   = require('../services/TokenService');
+const AuditService   = require('../services/AuditService');
+const TcRunnerService = require('../services/TcRunnerService');
 const { verifyAccessToken } = require('../middleware/auth');
 const { requireRole }       = require('../middleware/role');
 const { getSystemMetrics }  = require('../services/systemMetrics');
@@ -106,6 +107,30 @@ router.get('/audit', (req, res) => {
     limit: limit ? parseInt(limit) : 100,
   });
   res.json({ events, total: events.length });
+});
+
+// ── GET /admin/tc-results ─────────────────────────────────────────────────────
+// Returns the latest startup test run results.
+// Response: { run: { runId, runAt, passed, failed, skipped, total }, results: [...], running: bool }
+router.get('/tc-results', (req, res) => {
+  res.json(TcRunnerService.getLatestRun());
+});
+
+// ── DELETE /admin/tc-results ──────────────────────────────────────────────────
+// Clears all stored TC results.
+router.delete('/tc-results', (req, res) => {
+  const deleted = TcRunnerService.clearResults();
+  res.json({ success: true, deleted });
+});
+
+// ── POST /admin/tc-results/run ────────────────────────────────────────────────
+// Triggers a manual re-run of all startup tests.
+// Body: { port?: number }  (defaults to process.env.PORT || 3080)
+router.post('/tc-results/run', (req, res) => {
+  const port = req.body?.port ?? parseInt(process.env.PORT || '3080', 10);
+  const started = TcRunnerService.runNow(port);
+  if (!started) return res.status(409).json({ error: 'A test run is already in progress' });
+  res.json({ success: true, message: `Test run started on port ${port}` });
 });
 
 module.exports = router;

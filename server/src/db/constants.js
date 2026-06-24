@@ -8,6 +8,7 @@ const ALL_TABLES = [
   'analysisEvents', 'client_logs', 'client_webrtc_stats',
   'onvif_events', 'onvif_event_types', 'onvif_snapshots',
   'detectionTracks', 'users', 'refresh_tokens', 'audit_logs',
+  'tc_results',
 ];
 
 // Maximum rows kept in-memory per table. Oldest records evicted when cap is exceeded.
@@ -24,6 +25,7 @@ const TABLE_ROW_CAPS = {
   detectionTracks:           10000,
   refresh_tokens:            10000,
   audit_logs:                10000,
+  tc_results:                10000,
 };
 
 // One-time migration from legacy separate JSON files (JSON mode only, first startup).

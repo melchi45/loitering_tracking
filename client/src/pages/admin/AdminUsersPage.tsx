@@ -31,6 +31,28 @@ interface AuditEntry {
   createdAt: string;
 }
 
+interface TcResult {
+  id:         string;
+  runId:      string;
+  runAt:      string;
+  suiteFile:  string;
+  suiteLabel: string;
+  srsRefs:    string;
+  tcId:       string;
+  tcDesc:     string;
+  status:     'pass' | 'fail' | 'skip';
+  errorMsg:   string | null;
+}
+
+interface TcRun {
+  runId:   string;
+  runAt:   string;
+  passed:  number;
+  failed:  number;
+  skipped: number;
+  total:   number;
+}
+
 type StatusFilter = 'all' | 'pending' | 'active' | 'rejected' | 'revoked';
 type AdminSection = 'users' | 'onvif' | 'audit' | 'ai-models' | 'system';
 
@@ -522,7 +544,291 @@ function OnvifSection({ apiFetch }: { apiFetch: (p: string, o?: RequestInit) => 
 
 // ── Section: Audit Log ────────────────────────────────────────────────────
 
+type AuditTab = 'tests' | 'activity';
+
 function AuditSection({ apiFetch }: { apiFetch: (p: string, o?: RequestInit) => Promise<unknown> }) {
+  const [tab, setTab] = useState<AuditTab>('tests');
+
+  return (
+    <div className="p-6">
+      <SectionHeader title="Audit Log" subtitle="Startup test results and system activity" />
+
+      {/* Tab switcher */}
+      <div className="flex gap-1 mb-5 bg-gray-800 rounded-lg p-1 w-fit">
+        {([
+          { id: 'tests',    label: '🧪 Startup Tests' },
+          { id: 'activity', label: '📋 System Activity' },
+        ] as { id: AuditTab; label: string }[]).map(t => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            className={`px-4 py-1.5 rounded-md text-xs font-medium transition-colors ${
+              tab === t.id ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+            }`}
+          >
+            {t.label}
+          </button>
+        ))}
+      </div>
+
+      {tab === 'tests'    && <TcResultsPanel apiFetch={apiFetch} />}
+      {tab === 'activity' && <ActivityLogPanel apiFetch={apiFetch} />}
+    </div>
+  );
+}
+
+// ── TC Results Panel ──────────────────────────────────────────────────────────
+
+type TcFilter = 'all' | 'pass' | 'fail' | 'skip';
+
+function TcResultsPanel({ apiFetch }: { apiFetch: (p: string, o?: RequestInit) => Promise<unknown> }) {
+  const [run,     setRun]     = useState<TcRun | null>(null);
+  const [results, setResults] = useState<TcResult[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [error,   setError]   = useState('');
+  const [filter,  setFilter]  = useState<TcFilter>('all');
+  const [search,  setSearch]  = useState('');
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  async function load() {
+    setLoading(true); setError('');
+    try {
+      const data = await apiFetch('/admin/tc-results') as {
+        run: TcRun | null; results: TcResult[]; running: boolean;
+      };
+      setRun(data.run ?? null);
+      setResults(data.results ?? []);
+      setRunning(data.running ?? false);
+    } catch (e: unknown) { setError((e as Error).message); }
+    finally { setLoading(false); }
+  }
+
+  async function handleReRun() {
+    try {
+      await apiFetch('/admin/tc-results/run', { method: 'POST' });
+      setRunning(true);
+    } catch (e: unknown) { alert((e as Error).message); }
+  }
+
+  async function handleClear() {
+    if (!confirm('Delete all stored TC results?')) return;
+    try {
+      await apiFetch('/admin/tc-results', { method: 'DELETE' });
+      setRun(null); setResults([]);
+    } catch (e: unknown) { alert((e as Error).message); }
+  }
+
+  // Poll while a run is in progress
+  useEffect(() => {
+    load();
+  }, []);
+
+  useEffect(() => {
+    if (running) {
+      if (pollRef.current) return;
+      pollRef.current = setInterval(async () => {
+        try {
+          const data = await apiFetch('/admin/tc-results') as {
+            run: TcRun | null; results: TcResult[]; running: boolean;
+          };
+          setRun(data.run ?? null);
+          setResults(data.results ?? []);
+          if (!data.running) {
+            setRunning(false);
+            clearInterval(pollRef.current!);
+            pollRef.current = null;
+          }
+        } catch { /* ignore poll errors */ }
+      }, 3000);
+    } else {
+      if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+    }
+    return () => { if (pollRef.current) { clearInterval(pollRef.current!); pollRef.current = null; } };
+  }, [running]);
+
+  const filtered = results.filter(r => {
+    if (filter !== 'all' && r.status !== filter) return false;
+    if (search) {
+      const q = search.toLowerCase();
+      return r.tcId.toLowerCase().includes(q)
+        || r.tcDesc.toLowerCase().includes(q)
+        || r.srsRefs.toLowerCase().includes(q)
+        || r.suiteLabel.toLowerCase().includes(q);
+    }
+    return true;
+  });
+
+  // Group by suite
+  const suiteGroups = filtered.reduce<Record<string, TcResult[]>>((acc, r) => {
+    if (!acc[r.suiteFile]) acc[r.suiteFile] = [];
+    acc[r.suiteFile].push(r);
+    return acc;
+  }, {});
+
+  return (
+    <div>
+      {/* Summary row */}
+      {run && (
+        <div className="flex flex-wrap items-center gap-3 mb-4">
+          <div className="grid grid-cols-4 gap-3 flex-1 min-w-0">
+            <StatCard label="Passed"  value={run.passed}  color="green" />
+            <StatCard label="Failed"  value={run.failed}  color="red" />
+            <StatCard label="Skipped" value={run.skipped} color="yellow" />
+            <StatCard label="Total"   value={run.total}   color="blue" />
+          </div>
+        </div>
+      )}
+
+      {run && (
+        <div className="mb-4 text-[11px] text-gray-500">
+          Last run: <span className="text-gray-400">{new Date(run.runAt).toLocaleString()}</span>
+          {running && <span className="ml-2 text-blue-400 animate-pulse">● Running…</span>}
+        </div>
+      )}
+
+      {!run && !loading && !running && (
+        <div className="mb-4 text-sm text-gray-500">
+          No test results yet. Tests run automatically after server startup.
+        </div>
+      )}
+
+      {running && !run && (
+        <div className="mb-4 text-sm text-blue-400 animate-pulse">● Test run in progress…</div>
+      )}
+
+      {/* Controls */}
+      <div className="flex flex-wrap items-center gap-2 mb-4">
+        {/* Status filter */}
+        <div className="flex bg-gray-800 rounded-lg p-1 gap-1">
+          {(['all', 'pass', 'fail', 'skip'] as TcFilter[]).map(s => (
+            <button
+              key={s}
+              onClick={() => setFilter(s)}
+              className={`px-3 py-1.5 rounded-md text-xs font-medium capitalize transition-colors ${
+                filter === s ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
+              }`}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+
+        <input
+          type="search"
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          placeholder="Filter TC ID, description, SRS…"
+          className="flex-1 min-w-[180px] bg-gray-800 border border-gray-700 rounded-lg
+                     px-3 py-2 text-xs text-white placeholder-gray-500
+                     focus:outline-none focus:border-blue-500"
+        />
+
+        <button onClick={load} disabled={loading}
+          className="px-3 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50
+                     text-gray-300 rounded-lg text-xs font-medium transition-colors">
+          {loading ? '…' : '↺'}
+        </button>
+
+        <button
+          onClick={handleReRun}
+          disabled={running}
+          className="px-3 py-2 bg-blue-700/70 hover:bg-blue-700 disabled:opacity-40
+                     text-blue-200 rounded-lg text-xs font-medium transition-colors border border-blue-600/40"
+        >
+          {running ? 'Running…' : '▶ Re-run Tests'}
+        </button>
+
+        <button
+          onClick={handleClear}
+          disabled={!run || running}
+          className="px-3 py-2 bg-transparent hover:bg-red-900/30 disabled:opacity-40
+                     text-red-400 hover:text-red-300 rounded-lg text-xs font-medium
+                     transition-colors border border-red-900/40"
+        >
+          Clear
+        </button>
+      </div>
+
+      {error && <ErrorBar msg={error} />}
+
+      {loading ? (
+        <EmptyState msg="Loading…" />
+      ) : Object.keys(suiteGroups).length === 0 ? (
+        <EmptyState msg={results.length === 0
+          ? (running ? 'Test run in progress — results will appear here…' : 'No test results available.')
+          : `No results match the current filter.`}
+        />
+      ) : (
+        <div className="space-y-3">
+          {Object.entries(suiteGroups).map(([suiteFile, rows]) => {
+            const srsRefs    = rows[0].srsRefs;
+            const suiteLabel = rows[0].suiteLabel;
+            const suitePass  = rows.filter(r => r.status === 'pass').length;
+            const suiteFail  = rows.filter(r => r.status === 'fail').length;
+            return (
+              <div key={suiteFile} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
+                {/* Suite header */}
+                <div className="px-4 py-2.5 border-b border-gray-800 flex items-center justify-between gap-3 bg-gray-900/80">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${suiteFail > 0 ? 'bg-red-500' : 'bg-green-500'}`} />
+                    <span className="text-xs font-semibold text-gray-200 truncate">{suiteLabel}</span>
+                    <span className="text-[10px] text-gray-500 font-mono truncate hidden sm:block">{srsRefs}</span>
+                  </div>
+                  <div className="flex items-center gap-2 flex-shrink-0 text-[10px]">
+                    {suitePass > 0 && <span className="text-green-400 font-medium">✓ {suitePass}</span>}
+                    {suiteFail > 0 && <span className="text-red-400 font-medium">✗ {suiteFail}</span>}
+                  </div>
+                </div>
+
+                {/* TC rows */}
+                <table className="w-full text-xs">
+                  <tbody>
+                    {rows.map(r => (
+                      <tr key={r.id} className="border-b border-gray-800/40 last:border-0 hover:bg-gray-800/20 transition-colors">
+                        <td className="px-4 py-2 w-28 flex-shrink-0">
+                          <span className="font-mono text-blue-400 text-[11px]">{r.tcId}</span>
+                        </td>
+                        <td className="px-2 py-2">
+                          <div className="text-gray-300 leading-snug">{r.tcDesc}</div>
+                          {r.errorMsg && (
+                            <div className="text-red-400/80 text-[10px] mt-0.5 font-mono truncate max-w-xs" title={r.errorMsg}>
+                              {r.errorMsg}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-right w-20">
+                          <StatusBadge status={r.status} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function StatusBadge({ status }: { status: 'pass' | 'fail' | 'skip' }) {
+  const map = {
+    pass: 'bg-green-900/50 text-green-300 border border-green-700/50',
+    fail: 'bg-red-900/50 text-red-300 border border-red-700/50',
+    skip: 'bg-gray-700 text-gray-400 border border-gray-600',
+  };
+  return (
+    <span className={`inline-block px-2 py-0.5 rounded text-[10px] font-bold uppercase ${map[status]}`}>
+      {status}
+    </span>
+  );
+}
+
+// ── Activity Log Panel ────────────────────────────────────────────────────────
+
+function ActivityLogPanel({ apiFetch }: { apiFetch: (p: string, o?: RequestInit) => Promise<unknown> }) {
   const [entries, setEntries] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState('');
@@ -547,10 +853,8 @@ function AuditSection({ apiFetch }: { apiFetch: (p: string, o?: RequestInit) => 
   );
 
   return (
-    <div className="p-6">
-      <SectionHeader title="Audit Log" subtitle="Recent system activity and administrative actions (latest 200 entries)" />
-
-      <div className="flex items-center gap-3 mb-5">
+    <div>
+      <div className="flex items-center gap-3 mb-4">
         <input
           type="search"
           value={search}
@@ -571,7 +875,7 @@ function AuditSection({ apiFetch }: { apiFetch: (p: string, o?: RequestInit) => 
       {loading ? (
         <EmptyState msg="Loading…" />
       ) : filtered.length === 0 ? (
-        <EmptyState msg={search ? `No entries matching "${search}".` : 'No audit entries found.'} />
+        <EmptyState msg={search ? `No entries matching "${search}".` : 'No audit entries yet. Login/logout and user management events appear here.'} />
       ) : (
         <div className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
           <table className="w-full text-xs">
@@ -617,11 +921,12 @@ function SectionHeader({ title, subtitle }: { title: string; subtitle: string })
   );
 }
 
-function StatCard({ label, value, color }: { label: string; value: number; color: 'blue' | 'red' | 'yellow' }) {
+function StatCard({ label, value, color }: { label: string; value: number; color: 'blue' | 'red' | 'yellow' | 'green' }) {
   const colors = {
     blue:   'bg-blue-900/20 border-blue-800/40 text-blue-400',
     red:    'bg-red-900/20  border-red-800/40  text-red-400',
     yellow: 'bg-yellow-900/20 border-yellow-800/40 text-yellow-400',
+    green:  'bg-green-900/20 border-green-800/40 text-green-400',
   };
   return (
     <div className={`rounded-xl border p-4 ${colors[color]}`}>

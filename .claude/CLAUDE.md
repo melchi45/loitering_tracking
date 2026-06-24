@@ -228,6 +228,9 @@ loitering_tracking/
 | DELETE | `/api/onvif-event-types` | ONVIF 이벤트 타입 레지스트리 초기화 (Admin 페이지용) |
 | GET | `/api/onvif-snapshots` | ONVIF 이벤트 시작 시점 프레임 조회 (query: eventId, cameraId, topicType, from, to, limit — frameData=base64 JPEG) |
 | GET | `/admin/system` | CPU·메모리·GPU·디스크 I/O·스토리지·DB 쿼리 통계 (admin 전용) |
+| GET | `/admin/tc-results` | 최신 서버 시작 시 TC 테스트 실행 결과 (TC번호·SRS·Pass/Fail, admin 전용) |
+| DELETE | `/admin/tc-results` | TC 테스트 결과 전체 삭제 (admin 전용) |
+| POST | `/admin/tc-results/run` | TC 테스트 수동 재실행 트리거 (admin 전용, body: { port? }) |
 
 ---
 
