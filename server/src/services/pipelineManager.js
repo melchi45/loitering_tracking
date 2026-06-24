@@ -359,6 +359,12 @@ class PipelineManager {
       ? `rtsp://127.0.0.1:${mediamtxRtspPort}/${camera.id}`
       : rtspUrl;
 
+    // When MediaMTX is active the capture URL is the loopback re-publish URL, but
+    // ONVIF Application RTP data tracks are NOT re-published by MediaMTX.  The
+    // ingest-daemon App RTP thread must connect directly to the original camera URL.
+    // Computed here (before registerAltEngine) so it can be passed to addCameraStream.
+    let daemonAppRtpRtspUrl = mediamtxReady ? rtspUrl : null;
+
     // For non-mediamtx WebRTC engines (mediasoup), register the stream with the engine.
     // mediasoupEngine.addCameraStream() internally calls ingest-daemon with both the
     // AI callbackUrl AND the mediasoup RTP ports, so we skip the separate ingest-daemon
@@ -373,7 +379,7 @@ class PipelineManager {
       // Retry up to 3 times with a 2-second delay — ingest-daemon may still be
       // binding its port when the first addCameraStream call arrives on startup.
       for (let attempt = 0; attempt < 3; attempt++) {
-        altWebRTCReady = await getWebRTCEngine().addCameraStream(camera.id, captureUrl).catch(() => false);
+        altWebRTCReady = await getWebRTCEngine().addCameraStream(camera.id, captureUrl, daemonAppRtpRtspUrl).catch(() => false);
         if (altWebRTCReady) break;
         if (attempt < 2) {
           console.warn(`[PipelineManager][${camera.id.slice(0,8)}] addCameraStream attempt ${attempt + 1} failed — retrying in 2s`);
@@ -389,7 +395,6 @@ class PipelineManager {
     let _ingestRtspUrl           = null;
     let _ingestCallbackUrl       = null;
     let _ingestAppRtpCallbackUrl = null;
-    let daemonAppRtpRtspUrl      = null;
     if (CAPTURE_BACKEND === 'ingest-daemon') {
       const isHttps     = (process.env.HTTPS_ENABLED || '').toLowerCase() === 'true';
       const serverProto = isHttps ? 'https' : 'http';
@@ -399,11 +404,9 @@ class PipelineManager {
       const callbackUrl       = `${serverProto}://127.0.0.1:${serverPort}/api/internal/frame/${camera.id}`;
       const appRtpCallbackUrl = `${serverProto}://127.0.0.1:${serverPort}/api/internal/apprtp/${camera.id}`;
       const daemonRtspUrl = mediamtxReady ? captureUrl : rtspUrl;
-      // When MediaMTX is active, the AI path uses the MediaMTX URL (video/audio only).
-      // App RTP must read from the original camera RTSP URL to access ONVIF data tracks
-      // that MediaMTX does not re-publish.  Pass appRtpRtspUrl so the ingest-daemon
-      // opens a separate direct connection to the camera for ONVIF metadata.
-      daemonAppRtpRtspUrl = mediamtxReady ? rtspUrl : undefined;
+      // daemonAppRtpRtspUrl computed above (before registerAltEngine) — original camera
+      // URL for App RTP so the ingest-daemon can access ONVIF data tracks that MediaMTX
+      // does not re-publish.
 
       const needsDirectIngestReg = WEBRTC_ENGINE !== 'mediasoup' || !altWebRTCReady;
       if (needsDirectIngestReg) {
@@ -1137,7 +1140,7 @@ class PipelineManager {
           } else if (CAPTURE_BACKEND === 'ingest-daemon' && WEBRTC_ENGINE !== 'mediamtx') {
             // mediasoup path: _ingestRtspUrl is null because mediasoupEngine.addCameraStream()
             // handled registration. Re-register via the engine (recreates PlainTransports + re-POST to daemon).
-            const ok = await getWebRTCEngine().addCameraStream(camera.id, ctx._captureUrl).catch(() => false);
+            const ok = await getWebRTCEngine().addCameraStream(camera.id, ctx._captureUrl, ctx._ingestAppRtpRtspUrl).catch(() => false);
             if (!ok) {
               console.error(`[PipelineManager][${camera.id}] Frame watchdog: mediasoup re-registration failed`);
             }
@@ -1337,7 +1340,7 @@ class PipelineManager {
           results[cameraId] = { ok };
         } else if (CAPTURE_BACKEND === 'ingest-daemon') {
           // mediasoup path: engine re-creates PlainTransports and re-POSTs to daemon
-          const ok = await getWebRTCEngine().addCameraStream(cameraId, ctx._captureUrl).catch(() => false);
+          const ok = await getWebRTCEngine().addCameraStream(cameraId, ctx._captureUrl, ctx._ingestAppRtpRtspUrl).catch(() => false);
           results[cameraId] = { ok };
         }
       } catch (e) {

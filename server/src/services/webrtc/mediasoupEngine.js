@@ -189,7 +189,7 @@ function _closeCam(cam, cameraId) {
 
 // ── Camera stream management ───────────────────────────────────────────────────
 
-async function addCameraStream(cameraId, rtspUrl) {
+async function addCameraStream(cameraId, rtspUrl, appRtpRtspUrl = undefined) {
   try {
     const router = await _ensureRouter();
     await removeCameraStream(cameraId);
@@ -258,14 +258,20 @@ async function addCameraStream(cameraId, rtspUrl) {
     const proto = isHttps ? 'https' : 'http';
     const base  = `${proto}://127.0.0.1:${serverPort}`;
 
-    const status = await _ingestPost('/cameras', {
+    const ingestBody = {
       id:                 cameraId,
       rtspUrl,
       callbackUrl:        `${base}/api/internal/frame/${cameraId}`,
       appRtpCallbackUrl:  `${base}/api/internal/apprtp/${cameraId}`,
       mediasoupPort:      videoPort,
       mediasoupAudioPort: audioPort,
-    });
+    };
+    // When rtspUrl is a MediaMTX loopback URL, pass the original camera URL as
+    // appRtpRtspUrl so the ingest-daemon App RTP thread can access ONVIF data
+    // tracks that MediaMTX does not re-publish.
+    if (appRtpRtspUrl) ingestBody.appRtpRtspUrl = appRtpRtspUrl;
+
+    const status = await _ingestPost('/cameras', ingestBody);
 
     if (status !== 200 && status !== 201) {
       throw new Error(`ingest-daemon returned HTTP ${status}`);
@@ -273,6 +279,7 @@ async function addCameraStream(cameraId, rtspUrl) {
 
     _cameras.set(cameraId, {
       rtspUrl,
+      appRtpRtspUrl,
       videoPlain, videoProducer,
       audioPlain, audioProducer,
       directTransport, dataProducer,
@@ -891,14 +898,16 @@ async function reregisterAllWithIngest() {
     try {
       const videoPort = cam.videoPlain?.tuple?.localPort;
       const audioPort = cam.audioPlain?.tuple?.localPort;
-      const status = await _ingestPost('/cameras', {
+      const reregBody = {
         id:                 cameraId,
         rtspUrl:            cam.rtspUrl,
         callbackUrl:        `${base}/api/internal/frame/${cameraId}`,
         appRtpCallbackUrl:  `${base}/api/internal/apprtp/${cameraId}`,
         mediasoupPort:      videoPort,
         mediasoupAudioPort: audioPort,
-      });
+      };
+      if (cam.appRtpRtspUrl) reregBody.appRtpRtspUrl = cam.appRtpRtspUrl;
+      const status = await _ingestPost('/cameras', reregBody);
       results[cameraId] = { ok: status === 200 || status === 201, status, videoPort, audioPort };
     } catch (e) {
       results[cameraId] = { ok: false, error: e.message };
