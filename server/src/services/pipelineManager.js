@@ -395,10 +395,14 @@ class PipelineManager {
       const callbackUrl       = `${serverProto}://127.0.0.1:${serverPort}/api/internal/frame/${camera.id}`;
       const appRtpCallbackUrl = `${serverProto}://127.0.0.1:${serverPort}/api/internal/apprtp/${camera.id}`;
       const daemonRtspUrl = mediamtxReady ? captureUrl : rtspUrl;
+      // MediaMTX re-publishes only video/audio — ONVIF data tracks are stripped.
+      // Sending appRtpCallbackUrl when rtspUrl is a MediaMTX URL causes ingest-daemon
+      // to repeatedly fail with EADDRINUSE (PyAV RTCP socket conflicts).
+      const daemonAppRtpUrl = mediamtxReady ? undefined : appRtpCallbackUrl;
 
       const needsDirectIngestReg = WEBRTC_ENGINE !== 'mediasoup' || !altWebRTCReady;
       if (needsDirectIngestReg) {
-        const daemonReady = await _ingestRegisterCamera(camera.id, daemonRtspUrl, callbackUrl, appRtpCallbackUrl);
+        const daemonReady = await _ingestRegisterCamera(camera.id, daemonRtspUrl, callbackUrl, daemonAppRtpUrl);
         if (!daemonReady) {
           console.error(`[PipelineManager][${camera.id}] Ingest daemon registration failed — no AI frames for this camera`);
         } else {
@@ -406,7 +410,7 @@ class PipelineManager {
         }
         _ingestRtspUrl          = daemonRtspUrl;
         _ingestCallbackUrl      = callbackUrl;
-        _ingestAppRtpCallbackUrl = appRtpCallbackUrl;
+        _ingestAppRtpCallbackUrl = daemonAppRtpUrl ?? null;
       }
     }
 

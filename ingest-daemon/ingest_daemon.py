@@ -576,17 +576,38 @@ class CameraSession:
     def _app_rtp_loop(self):
         log.info("[%s] App RTP loop starting → %s",
                  self.id[:8], self.app_rtp_callback_url[:60])
-        retry_delay = 0.5
+        retry_delay   = 0.5
+        addr_in_use_n = 0  # consecutive EADDRINUSE counter
         while not self._stop.is_set():
             t0 = time.monotonic()
             try:
                 self._app_rtp_ingest_once()
-                retry_delay = 0.5
+                retry_delay   = 0.5
+                addr_in_use_n = 0
             except RuntimeError as exc:
                 if "No application stream" in str(exc):
                     log.info("[%s] No application stream — app RTP thread exiting", self.id[:8])
                     return
                 raise
+            except OSError as exc:
+                if self._stop.is_set():
+                    break
+                # EADDRINUSE on a MediaMTX URL means the server does not forward
+                # ONVIF data tracks — retrying will never succeed.  Exit cleanly
+                # after a small number of consecutive failures to avoid log spam.
+                if exc.errno == 98:  # EADDRINUSE
+                    addr_in_use_n += 1
+                    if addr_in_use_n >= 3:
+                        log.warning(
+                            "[%s] App RTP: persistent EADDRINUSE (%d) — "
+                            "RTSP source likely does not carry a data track; exiting",
+                            self.id[:8], addr_in_use_n,
+                        )
+                        return
+                log.warning("[%s] App RTP error: %s — retry in %.1fs",
+                            self.id[:8], exc, retry_delay)
+                self._stop.wait(retry_delay)
+                retry_delay = min(retry_delay * 1.5, 5.0)
             except Exception as exc:
                 if self._stop.is_set():
                     break
