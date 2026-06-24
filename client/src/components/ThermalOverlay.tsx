@@ -54,7 +54,10 @@ function getRenderArea(fw: number, fh: number, cw: number, ch: number) {
 function toScreen(px: number, py: number, fw: number, fh: number, cw: number, ch: number) {
   if (!fw || !fh || !cw || !ch) return { sx: -9999, sy: -9999 };
   const { rw, rh, ox, oy } = getRenderArea(fw, fh, cw, ch);
-  return { sx: ox + (px / fw) * rw, sy: oy + (py / fh) * rh };
+  // Clamp to render area so crosshairs never appear in letterbox bars
+  const sx = Math.max(ox, Math.min(ox + rw, ox + (px / fw) * rw));
+  const sy = Math.max(oy, Math.min(oy + rh, oy + (py / fh) * rh));
+  return { sx, sy };
 }
 
 function formatTemp(t: number | null): string {
@@ -199,7 +202,7 @@ export default function ThermalOverlay({ cameraId, frameWidth, frameHeight }: Pr
           <svg
             className="absolute inset-0"
             style={{ width: w || '100%', height: h || '100%' }}
-            overflow="visible"
+            overflow="hidden"
           >
             {coordSlots.map(({ reading: r }, i) => {
               const markers: React.ReactNode[] = [];
@@ -209,7 +212,8 @@ export default function ThermalOverlay({ cameraId, frameWidth, frameHeight }: Pr
                 const { sx, sy } = toScreen(r.maxTempX, r.maxTempY, fw, fh, w, h);
                 const lbl = `${areaLabel} ${crosshairLabel(r.maxTemp)}`;
                 const lw  = textWidth(lbl);
-                const lx  = sx + 14 + lw < w ? sx + 14 : sx - lw - 6;
+                const lx  = Math.max(2, sx + 14 + lw < w - 2 ? sx + 14 : sx - lw - 6);
+                const ly  = Math.max(2, Math.min(h - 18, sy - 9));
                 markers.push(
                   <g key={`tmax-${i}`}>
                     <line x1={sx - 12} y1={sy} x2={sx + 12} y2={sy} stroke="#ef4444" strokeWidth={1.5} />
@@ -217,8 +221,8 @@ export default function ThermalOverlay({ cameraId, frameWidth, frameHeight }: Pr
                     <circle cx={sx} cy={sy} r={3.5} fill="none" stroke="#ef4444" strokeWidth={1.5} />
                     {lbl && (
                       <>
-                        <rect x={lx - 2} y={sy - 9} width={lw} height={16} rx={3} fill="rgba(0,0,0,0.72)" />
-                        <text x={lx} y={sy + 3} fill="#ef4444" fontSize={11} fontFamily="monospace" fontWeight="bold">{lbl}</text>
+                        <rect x={lx - 2} y={ly} width={lw} height={16} rx={3} fill="rgba(0,0,0,0.72)" />
+                        <text x={lx} y={ly + 11} fill="#ef4444" fontSize={11} fontFamily="monospace" fontWeight="bold">{lbl}</text>
                       </>
                     )}
                   </g>
@@ -229,7 +233,8 @@ export default function ThermalOverlay({ cameraId, frameWidth, frameHeight }: Pr
                 const { sx, sy } = toScreen(r.minTempX, r.minTempY, fw, fh, w, h);
                 const lbl = `${areaLabel} ${crosshairLabel(r.minTemp)}`;
                 const lw  = textWidth(lbl);
-                const lx  = sx + 14 + lw < w ? sx + 14 : sx - lw - 6;
+                const lx  = Math.max(2, sx + 14 + lw < w - 2 ? sx + 14 : sx - lw - 6);
+                const ly  = Math.max(2, Math.min(h - 18, sy - 9));
                 markers.push(
                   <g key={`tmin-${i}`}>
                     <line x1={sx - 12} y1={sy} x2={sx + 12} y2={sy} stroke="#38bdf8" strokeWidth={1.5} />
@@ -237,8 +242,8 @@ export default function ThermalOverlay({ cameraId, frameWidth, frameHeight }: Pr
                     <circle cx={sx} cy={sy} r={3.5} fill="none" stroke="#38bdf8" strokeWidth={1.5} />
                     {lbl && (
                       <>
-                        <rect x={lx - 2} y={sy - 9} width={lw} height={16} rx={3} fill="rgba(0,0,0,0.72)" />
-                        <text x={lx} y={sy + 3} fill="#38bdf8" fontSize={11} fontFamily="monospace" fontWeight="bold">{lbl}</text>
+                        <rect x={lx - 2} y={ly} width={lw} height={16} rx={3} fill="rgba(0,0,0,0.72)" />
+                        <text x={lx} y={ly + 11} fill="#38bdf8" fontSize={11} fontFamily="monospace" fontWeight="bold">{lbl}</text>
                       </>
                     )}
                   </g>
