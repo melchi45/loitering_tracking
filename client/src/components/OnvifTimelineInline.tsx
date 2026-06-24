@@ -680,7 +680,12 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                   {selected.ruleName && <DetailRow label="RuleName" value={selected.ruleName} />}
                   {selEvt?.operation && <DetailRow label="Op" value={selEvt.operation} />}
                   {Object.entries(dispItems)
-                    .filter(([k]) => !['SourceToken', 'State', 'RuleName', 'Rule'].includes(k))
+                    .filter(([k]) => {
+                      if (k === 'SourceToken' || k === 'State') return false;
+                      // Only suppress RuleName/Rule from items when already shown as a dedicated field above
+                      if ((k === 'RuleName' || k === 'Rule') && selected?.ruleName) return false;
+                      return true;
+                    })
                     .map(([k, v]) => <DetailRow key={k} label={k} value={String(v)} />)
                   }
                   <div className="pt-0.5 border-t border-gray-700/40">
