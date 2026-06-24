@@ -107,8 +107,10 @@ router.post(
               }
             }
 
-            // Dedup: only store when state actually changes for this camera+topic+sourceToken
-            const dedupKey = `${cameraId}:${parsed.topic}:${parsed.sourceToken}`;
+            // Dedup: only store when state actually changes for this camera+topic+sourceToken+ruleName
+            // RuleName distinguishes multiple analytics rules on the same source — each rule is
+            // an independent event stream and must not be collapsed across rule boundaries.
+            const dedupKey = `${cameraId}:${parsed.topic}:${parsed.sourceToken}:${parsed.ruleName ?? ''}`;
             const lastState = _lastStates.get(dedupKey);
             if (lastState !== parsed.state) {
               _lastStates.set(dedupKey, parsed.state);
@@ -123,6 +125,7 @@ router.post(
                 utcTime:     parsed.utcTime,
                 operation:   parsed.operation,
                 sourceToken: parsed.sourceToken,
+                ruleName:    parsed.ruleName ?? null,
                 state:       parsed.state,
                 items:       JSON.stringify(parsed.items),
                 rawPayload:  data.payload,

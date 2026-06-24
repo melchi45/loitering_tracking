@@ -67,6 +67,7 @@ interface OnvifInterval {
   topicLabel: string;
   severity: OnvifSeverity;
   sourceToken: string | null;
+  ruleName: string | null;
   startTs: number;
   endTs: number;        // = nowMs for in-progress
   isPoint: boolean;
@@ -676,9 +677,10 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                       value={fmtDur(selected.inProgress ? nowMs - selected.startTs : selected.durationMs)} />
                   )}
                   {selected.sourceToken && <DetailRow label="Source" value={selected.sourceToken} />}
+                  {selected.ruleName && <DetailRow label="RuleName" value={selected.ruleName} />}
                   {selEvt?.operation && <DetailRow label="Op" value={selEvt.operation} />}
                   {Object.entries(dispItems)
-                    .filter(([k]) => !['SourceToken', 'State'].includes(k))
+                    .filter(([k]) => !['SourceToken', 'State', 'RuleName', 'Rule'].includes(k))
                     .map(([k, v]) => <DetailRow key={k} label={k} value={String(v)} />)
                   }
                   <div className="pt-0.5 border-t border-gray-700/40">
@@ -764,6 +766,7 @@ function mkPoint(evt: OnvifEvent): OnvifInterval {
   return {
     id: evt.id, cameraId: evt.cameraId, topicType: evt.topicType,
     topicLabel: evt.topicLabel, severity: evt.severity, sourceToken: evt.sourceToken,
+    ruleName: evt.ruleName ?? null,
     startTs: tsMs, endTs: tsMs, isPoint: true, inProgress: false,
     durationMs: 0, startEvt: evt, endEvt: null,
   };
@@ -777,7 +780,9 @@ function buildIntervals(events: OnvifEvent[], nowMs: number): OnvifInterval[] {
   const open = new Map<string, OnvifInterval>();
 
   for (const evt of sorted) {
-    const key   = `${evt.cameraId}:${evt.topicType}:${evt.sourceToken ?? ''}`;
+    // Include ruleName in the key so events with different RuleName values are
+    // treated as independent event streams and never coalesced across rule boundaries.
+    const key   = `${evt.cameraId}:${evt.topicType}:${evt.sourceToken ?? ''}:${evt.ruleName ?? ''}`;
     const state = getEventState(evt);
 
     if (state === 'true') {
@@ -789,6 +794,7 @@ function buildIntervals(events: OnvifEvent[], nowMs: number): OnvifInterval[] {
       open.set(key, {
         id: evt.id, cameraId: evt.cameraId, topicType: evt.topicType,
         topicLabel: evt.topicLabel, severity: evt.severity, sourceToken: evt.sourceToken,
+        ruleName: evt.ruleName ?? null,
         startTs: tsMs, endTs: nowMs, isPoint: false, inProgress: true,
         durationMs: nowMs - tsMs, startEvt: evt, endEvt: null,
       });
@@ -822,9 +828,12 @@ function buildIntervals(events: OnvifEvent[], nowMs: number): OnvifInterval[] {
 function buildRows(intervals: OnvifInterval[]): OnvifRow[] {
   const rowMap = new Map<string, OnvifRow>();
   for (const iv of intervals) {
-    const key = `${iv.topicType}:${iv.sourceToken ?? ''}`;
+    // Each unique (topicType, sourceToken, ruleName) triple gets its own timeline row.
+    const key = `${iv.topicType}:${iv.sourceToken ?? ''}:${iv.ruleName ?? ''}`;
     if (!rowMap.has(key)) {
-      const label = iv.topicLabel + (iv.sourceToken ? ` (${iv.sourceToken})` : '');
+      let label = iv.topicLabel;
+      if (iv.sourceToken) label += ` (${iv.sourceToken})`;
+      if (iv.ruleName)    label += ` [${iv.ruleName}]`;
       rowMap.set(key, { key, topicLabel: label, severity: iv.severity, intervals: [] });
     }
     rowMap.get(key)!.intervals.push(iv);

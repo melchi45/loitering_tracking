@@ -196,6 +196,10 @@ function parseSingleNotification(blockXml) {
     items['AudioSourceConfigurationToken'] ??
     null;
 
+  // RuleName distinguishes multiple rules on the same source (e.g. VideoAnalytics rules).
+  // Events with different RuleNames must be treated as independent event streams.
+  const ruleName = items['RuleName'] ?? items['Rule'] ?? null;
+
   const radiometry = blockXml.includes('BoxTemperatureReading')
     ? parseRadiometryReadings(blockXml)
     : null;
@@ -208,6 +212,7 @@ function parseSingleNotification(blockXml) {
     utcTime,
     operation,
     sourceToken,
+    ruleName,
     state:       extractState(items),
     items,
     radiometry:  radiometry && radiometry.length > 0 ? radiometry : null,

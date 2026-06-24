@@ -283,6 +283,36 @@ async function runUnitTests() {
     // 빈 items → null
     assertEq(wrap([]), null, 'empty items → null');
   });
+
+  // TC-PARSER-007b: RuleName 추출 — Source SimpleItem에서 ruleName 필드 반환
+  await test('TC-PARSER-007b', 'RuleName SimpleItem → parsed.ruleName 필드 반환', () => {
+    const xmlWithRule = makeMetadataStream(
+      makeNotification(
+        'tns1:VideoAnalytics/tns1:RuleAlarm',
+        '2026-06-24T10:00:00.000Z',
+        'Changed',
+        [['VideoSourceConfigurationToken', 'VS-1'], ['RuleName', 'Zone1_Loitering']],
+        [['IsActive', 'true']]
+      )
+    );
+    const result = parseOnvifPayload(toBase64(xmlWithRule));
+    assert(Array.isArray(result) && result.length === 1, 'expect 1 parsed notification');
+    assertEq(result[0].ruleName, 'Zone1_Loitering', 'ruleName must be extracted from RuleName SimpleItem');
+
+    // 이벤트가 없을 때 ruleName은 null
+    const xmlNoRule = makeMetadataStream(
+      makeNotification(
+        'tns1:VideoSource/tns1:MotionAlarm',
+        '2026-06-24T10:00:01.000Z',
+        'Changed',
+        [['SourceToken', 'VS-1']],
+        [['State', 'true']]
+      )
+    );
+    const result2 = parseOnvifPayload(toBase64(xmlNoRule));
+    assert(Array.isArray(result2) && result2.length === 1, 'expect 1 parsed notification');
+    assertEq(result2[0].ruleName, null, 'ruleName must be null when RuleName SimpleItem is absent');
+  });
 }
 
 // ── Integration Tests (server required) ──────────────────────────────────────
@@ -388,6 +418,59 @@ async function runIntegrationTests() {
       seq: 99,
     });
     assertEq(r.status, 200, 'corrupt payload must still return 200');
+  });
+
+  // TC-PARSER-011: RuleName 기반 이벤트 분리
+  // ONVIF Source SimpleItem에 Name="RuleName"이 다른 두 이벤트는 서로 다른
+  // 이벤트 스트림으로 간주되어야 하며 동일 topicType이어도 별도 저장되어야 한다.
+  await test('TC-PARSER-011', 'RuleName이 다른 두 이벤트 → DB에 별도 2행 저장', async () => {
+    const RULE_CAM_ID   = `tc-onvif-rulename-${Date.now()}`;
+    const RULE_RTP_PATH = `/api/internal/apprtp/${RULE_CAM_ID}`;
+
+    // Cleanup before test
+    await del(`/api/onvif-events?cameraId=${RULE_CAM_ID}`);
+
+    // Event A: RuleName=Zone1
+    const xmlA = makeMetadataStream(
+      makeNotification(
+        'tns1:VideoAnalytics/tns1:RuleAlarm',
+        new Date().toISOString(),
+        'Changed',
+        [['VideoSourceConfigurationToken', 'VS-1'], ['RuleName', 'Zone1']],
+        [['IsActive', 'true']]
+      )
+    );
+    // Event B: RuleName=Zone2 (different rule on same source)
+    const xmlB = makeMetadataStream(
+      makeNotification(
+        'tns1:VideoAnalytics/tns1:RuleAlarm',
+        new Date().toISOString(),
+        'Changed',
+        [['VideoSourceConfigurationToken', 'VS-1'], ['RuleName', 'Zone2']],
+        [['IsActive', 'true']]
+      )
+    );
+
+    const makePayload = (xml) => ({
+      payload: toBase64(xml),
+      pt: 96,
+      timestamp: Date.now(),
+      seq: Math.floor(Math.random() * 9999),
+    });
+
+    await post(RULE_RTP_PATH, makePayload(xmlA));
+    await new Promise(r => setTimeout(r, 150));
+    await post(RULE_RTP_PATH, makePayload(xmlB));
+    await new Promise(r => setTimeout(r, 150));
+
+    const q = await get(`/api/onvif-events?cameraId=${RULE_CAM_ID}&limit=20`);
+    assertEq(q.status, 200, 'GET /api/onvif-events status');
+
+    const evts = q.body.events ?? [];
+    const ruleNames = evts.map(e => e.ruleName).filter(Boolean);
+    assert(ruleNames.includes('Zone1'), 'event with RuleName=Zone1 must be stored');
+    assert(ruleNames.includes('Zone2'), 'event with RuleName=Zone2 must be stored');
+    assertEq(evts.length, 2, 'two events must be stored (one per RuleName)');
   });
 }
 

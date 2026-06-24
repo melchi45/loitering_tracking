@@ -59,6 +59,7 @@ const SUPPRESS_PATTERNS = (() => {
 const DEBUG_DOWNGRADE_PATTERNS = [
   /\[[a-z0-9_-]+\s*@\s*0x[0-9a-f]+\]/i,  // ffmpeg component: [hls @ 0x...], [mp4 @ 0x...]
   /^(?:EXT-X-|#EXT-X-)/,                  // raw HLS playlist tags
+  /BoxTemperatureReading/,                 // thermal radiometry readings — high-frequency, debug only
 ];
 
 // ─── Level detection ──────────────────────────────────────────────────────────

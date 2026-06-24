@@ -12,6 +12,7 @@ export interface OnvifEvent {
   utcTime: string;
   operation: string;
   sourceToken: string | null;
+  ruleName: string | null;
   state: string | null;
   items: Record<string, string>;
   rawXml: string | null;

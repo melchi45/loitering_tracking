@@ -300,6 +300,35 @@ App RTP 루프가 `OSError(errno=98)`(EADDRINUSE)를 3회 연속으로 만나면
 
 ---
 
+## 3-D. RuleName 기반 이벤트 분리 (`FR-ONVIF-RULENAME`)
+
+### FR-ONVIF-RULENAME-001: RuleName 파싱
+
+- `onvifParser.js`는 Source 섹션의 `SimpleItem Name="RuleName"` (또는 `Name="Rule"`) 값을 `ruleName` 필드로 추출해 반환해야 한다.
+- 해당 SimpleItem이 없으면 `ruleName`은 `null`이다.
+
+### FR-ONVIF-RULENAME-002: RuleName 포함 dedup 키
+
+- `internalApi.js`의 dedup 키는 `${cameraId}:${topic}:${sourceToken}:${ruleName ?? ''}` 형식이어야 한다.
+- 동일한 `cameraId`, `topic`, `sourceToken`이라도 `ruleName`이 다르면 별도 이벤트 스트림으로 처리한다.
+
+### FR-ONVIF-RULENAME-003: ruleName DB 저장
+
+- `onvif_events` 레코드에 `ruleName` 필드가 저장되어야 한다.
+- `GET /api/onvif-events` 응답에도 `ruleName`이 포함되어야 한다.
+
+### FR-ONVIF-RULENAME-004: 타임라인 행 분리
+
+- `OnvifTimelineInline` 및 `OnvifTimelineOverlay`는 `(topicType, sourceToken, ruleName)` 3-튜플을 행 키로 사용해야 한다.
+- `ruleName`이 다른 이벤트는 서로 다른 타임라인 행으로 렌더링된다.
+- 행 레이블은 `topicLabel (sourceToken) [ruleName]` 형식을 따른다 (없는 항목 생략).
+
+### FR-ONVIF-RULENAME-005: 상세 패널 RuleName 표시
+
+- 이벤트 선택 시 상세 패널에 `RuleName` 항목이 표시되어야 한다 (값이 있을 때만).
+
+---
+
 ## 4. 환경변수
 
 | 변수 | 기본값 | 설명 |
@@ -331,3 +360,4 @@ App RTP 루프가 `OSError(errno=98)`(EADDRINUSE)를 3회 연속으로 만나면
 | 1.3 | 2026-06-24 | 연관 문서 링크 추가 — [RFP_ONVIF_Metadata_Pipeline.md](../rfp/RFP_ONVIF_Metadata_Pipeline.md), [PRD_ONVIF_Metadata_Pipeline.md](../prd/PRD_ONVIF_Metadata_Pipeline.md); test/api/onvif_apprtp.test.js node 하네스 전환 완료 (TC-APPRTP-007~009 + PARSER-A~C 9/9 PASS) |
 | 1.4 | 2026-06-24 | FR-ONVIF-APPRTP-004~005 추가 — MediaMTX 환경 App RTP URL 분리(appRtpRtspUrl), EADDRINUSE 3회 방어 종료 |
 | 1.5 | 2026-06-24 | §3-C FR-ONVIF-RANGE-001~005 추가 — ONVIF Timeline 1H/6H 범위 프리셋, 기본값 1H, Detection tracks 동일 범위 지원 |
+| 1.6 | 2026-06-24 | §3-D FR-ONVIF-RULENAME-001~005 추가 — RuleName 파싱·dedup·DB 저장·타임라인 행 분리·상세 패널 표시 |

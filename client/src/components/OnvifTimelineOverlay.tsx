@@ -62,6 +62,7 @@ interface OnvifInterval {
   topicLabel: string;
   severity: OnvifSeverity;
   sourceToken: string | null;
+  ruleName: string | null;
   startTs: number;
   endTs: number;
   isPoint: boolean;
@@ -76,6 +77,7 @@ interface OnvifRow {
   topicType: string;
   topicLabel: string;
   sourceToken: string | null;
+  ruleName: string | null;
   severity: OnvifSeverity;
   intervals: OnvifInterval[];
 }
@@ -351,6 +353,9 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
                     {row.sourceToken && (
                       <span className="text-[9px] text-gray-500 truncate">{row.sourceToken}</span>
                     )}
+                    {row.ruleName && (
+                      <span className="text-[9px] text-indigo-400/70 truncate">[{row.ruleName}]</span>
+                    )}
                   </div>
                 </div>
 
@@ -541,9 +546,10 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
                   />
                   <DetailRow label="Duration" value={selected.inProgress ? fmtDur(nowMs - selected.startTs) : fmtDur(selected.durationMs)} />
                   {selected.sourceToken && <DetailRow label="Source" value={selected.sourceToken} />}
+                  {selected.ruleName && <DetailRow label="RuleName" value={selected.ruleName} />}
                   {selEvt?.operation && <DetailRow label="Op" value={selEvt.operation} />}
                   {Object.entries(dispItems)
-                    .filter(([k]) => !['SourceToken', 'State'].includes(k))
+                    .filter(([k]) => !['SourceToken', 'State', 'RuleName', 'Rule'].includes(k))
                     .map(([k, v]) => <DetailRow key={k} label={k} value={String(v)} />)
                   }
                   <div className="pt-1 border-t border-gray-700/60">
@@ -652,6 +658,7 @@ function mkPoint(evt: OnvifEvent): OnvifInterval {
   return {
     id: evt.id, cameraId: evt.cameraId, topicType: evt.topicType,
     topicLabel: evt.topicLabel, severity: evt.severity, sourceToken: evt.sourceToken,
+    ruleName: evt.ruleName ?? null,
     startTs: tsMs, endTs: tsMs, isPoint: true, inProgress: false,
     durationMs: 0, startEvt: evt, endEvt: null,
   };
@@ -665,7 +672,9 @@ function buildIntervals(events: OnvifEvent[], nowMs: number): OnvifInterval[] {
   const open = new Map<string, OnvifInterval>();
 
   for (const evt of sorted) {
-    const key   = `${evt.cameraId}:${evt.topicType}:${evt.sourceToken ?? ''}`;
+    // Include ruleName in the key so events with different RuleName values are
+    // treated as independent event streams and never coalesced across rule boundaries.
+    const key   = `${evt.cameraId}:${evt.topicType}:${evt.sourceToken ?? ''}:${evt.ruleName ?? ''}`;
     const state = getEventState(evt);
 
     if (state === 'true') {
@@ -677,6 +686,7 @@ function buildIntervals(events: OnvifEvent[], nowMs: number): OnvifInterval[] {
       open.set(key, {
         id: evt.id, cameraId: evt.cameraId, topicType: evt.topicType,
         topicLabel: evt.topicLabel, severity: evt.severity, sourceToken: evt.sourceToken,
+        ruleName: evt.ruleName ?? null,
         startTs: tsMs, endTs: nowMs, isPoint: false, inProgress: true,
         durationMs: nowMs - tsMs, startEvt: evt, endEvt: null,
       });
@@ -709,15 +719,17 @@ function buildIntervals(events: OnvifEvent[], nowMs: number): OnvifInterval[] {
 function buildRows(intervals: OnvifInterval[]): OnvifRow[] {
   const rowMap = new Map<string, OnvifRow>();
   for (const iv of intervals) {
-    const key = `${iv.topicType}:${iv.sourceToken ?? ''}`;
+    // Each unique (topicType, sourceToken, ruleName) triple gets its own timeline row.
+    const key = `${iv.topicType}:${iv.sourceToken ?? ''}:${iv.ruleName ?? ''}`;
     if (!rowMap.has(key)) {
       rowMap.set(key, {
         key,
-        topicType: iv.topicType,
-        topicLabel: iv.topicLabel,
+        topicType:   iv.topicType,
+        topicLabel:  iv.topicLabel,
         sourceToken: iv.sourceToken,
-        severity: iv.severity,
-        intervals: [],
+        ruleName:    iv.ruleName,
+        severity:    iv.severity,
+        intervals:   [],
       });
     }
     rowMap.get(key)!.intervals.push(iv);

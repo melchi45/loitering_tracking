@@ -439,7 +439,7 @@ interface OnvifInterval {
 ```
 sorted events (by serverTs ASC)
 for each event:
-  key = cameraId:topicType:sourceToken
+  key = cameraId:topicType:sourceToken:ruleName   // ruleName 포함으로 Rule별 독립 스트림
   state='true':
     if Map[key] already open  → skip (coalesce: 원본 startTs 유지)
     else                      → Map[key] = new interval (inProgress=true, endTs=nowMs)
@@ -478,8 +478,8 @@ DB 이벤트:  true(t1) → true(t2) → true(t3) → false(t4)
 | `SNAP_W`  | 44px  | 56px  | 썸네일 너비 |
 | `SNAP_TOP`| BAR_TOP+BAR_H+2 | BAR_TOP+BAR_H+4 | 썸네일 상단 위치 |
 
-- 각 `topicType:sourceToken` 조합 → 별도 행
-- 행 레이블 = `topicLabel (sourceToken)` (없으면 `topicLabel`만)
+- 각 `topicType:sourceToken:ruleName` 3-튜플 → 별도 행 (RuleName이 다르면 무조건 분리)
+- 행 레이블 = `topicLabel (sourceToken) [ruleName]` (있는 것만 조합)
 
 #### 바 렌더링
 
@@ -587,3 +587,4 @@ User action:
 | 1.9 | 2026-06-23 | §5.9 getEventState() 함수 추가 — evt.state=null인 구버전 이벤트도 items 폴백으로 bar 렌더링; DB 마이그레이션 불필요 |
 | 2.0 | 2026-06-23 | §7 데이터 플로우 업데이트 — parseOnvifPayload() 배열 반환 반영; 패킷 내 다중 NotificationMessage 각각 독립 dedup·저장·브로드캐스트 |
 | 2.1 | 2026-06-24 | 범위 프리셋 `1H` · `6H` 추가 — ONVIF 이벤트 기본 범위를 1D → 1H로 단축; §5.1 range state 타입 업데이트 |
+| 2.2 | 2026-06-24 | RuleName 기반 타임라인 행 분리 — buildIntervals/buildRows 키에 ruleName 포함; 행 레이블 `[RuleName]` 표시; detail panel RuleName 항목 추가; `OnvifEvent.ruleName` 필드 추가 |
