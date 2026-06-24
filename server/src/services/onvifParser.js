@@ -191,6 +191,7 @@ function parseSingleNotification(blockXml) {
 
   const sourceToken =
     items['SourceToken'] ??
+    items['VideoSourceToken'] ??
     items['VideoSourceConfigurationToken'] ??
     items['VideoAnalyticsConfigurationToken'] ??
     items['AudioSourceConfigurationToken'] ??
