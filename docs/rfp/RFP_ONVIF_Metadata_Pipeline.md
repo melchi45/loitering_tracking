@@ -107,12 +107,13 @@ Application RTP로 식별하고, 해당 트랙의 RTP 패킷을 수집해야 합
 
 동일 상태의 반복 이벤트를 제거(dedup)하여 DB에 저장해야 합니다.
 
-**dedup 기준:** `cameraId + topic + sourceToken + state` 조합
+**dedup 기준:** `cameraId + topic + sourceToken + ruleName + state` 조합
 
 **인수 기준:**
 - 상태 변화 시에만 DB `onvif_events` 테이블 삽입
 - 동일 상태 반복 시 무시 (중복 저장 없음)
 - 열상 데이터(`BoxTemperatureReading`)는 dedup 없이 매 패킷 브로드캐스트
+- `RuleName`이 다른 이벤트는 동일 topic/sourceToken이라도 별도 이벤트 스트림으로 처리
 
 ### RF-ONVIF-006: 이벤트 조회 REST API
 
@@ -135,6 +136,18 @@ Application RTP로 식별하고, 해당 트랙의 RTP 패킷을 수집해야 합
 - 카메라별 이벤트 타입 레지스트리 표시
 - 열상 카메라 온도 데이터 실시간 오버레이 표시
 - 범위 프리셋 `1H`/`6H`/`1D`/`1W`/`1M`/`1Y`/`Custom` 제공; 기본값 `1H`
+- **동일 `topicType`이라도 `RuleName`이 다르면 별도 타임라인 행으로 표시**
+- 타임라인 행 레이블: `topicLabel (sourceToken) [RuleName]` (있는 항목만 조합)
+
+### RF-ONVIF-008: RuleName 기반 이벤트 분리
+
+카메라가 단일 소스에 다수의 분석 규칙(Zone1, Zone2 등)을 가질 경우, 각 규칙의 이벤트는 독립적으로 처리되어야 합니다.
+
+**인수 기준:**
+- `RuleName` SimpleItem이 있을 때 `parsed.ruleName` 필드로 추출
+- `ruleName`이 다른 두 이벤트가 동일 `topic + sourceToken`을 가져도 서로 dedup되지 않음
+- DB에 `ruleName` 필드 저장; REST API 응답에 포함
+- 타임라인에서 RuleName별 독립 행 표시
 
 ---
 
@@ -234,3 +247,4 @@ ONVIF 이벤트가 카메라에서 발생한 후 브라우저에 표시되기까
 | 1.0 | 2026-06-24 | 초기 작성 — ONVIF App RTP 수집 파이프라인 RFP |
 | 1.1 | 2026-06-24 | NF-ONVIF-005 추가 — MediaMTX 환경에서 ONVIF 이벤트·열상 온도 정상 수신 요구사항 |
 | 1.2 | 2026-06-24 | RF-ONVIF-007 인수 기준 업데이트 — 범위 프리셋 1H/6H 추가, 기본값 1H 명시 |
+| 1.3 | 2026-06-24 | RF-ONVIF-005 dedup 기준 RuleName 추가; RF-ONVIF-007 타임라인 RuleName 행 분리 명시; RF-ONVIF-008 신규 — RuleName 기반 이벤트 분리 요구사항 |

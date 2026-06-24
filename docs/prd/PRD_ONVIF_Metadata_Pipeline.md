@@ -93,6 +93,10 @@ Gantt 타임라인 UI에 표시하는 기능을 제공합니다.
 | PRD-ONVIF-044 | `ThermalOverlay.tsx` | `onvif:temperature` 수신 후 6초 페이드 타이머 | P1 |
 | PRD-ONVIF-045 | Admin ONVIF 탭 | 이벤트 타입 레지스트리 테이블 | P1 |
 | PRD-ONVIF-046 | `OnvifTimelineInline.tsx` | 범위 프리셋 `1H`/`6H`/`1D`/`1W`/`1M`/`1Y`/`Custom` 제공; 기본값 `1H` | P1 |
+| PRD-ONVIF-047 | `onvifParser.js` | Source SimpleItem `RuleName` (또는 `Rule`) 추출 → `parsed.ruleName` 필드 반환 | P0 |
+| PRD-ONVIF-048 | `internalApi.js` | dedup 키에 `ruleName` 포함 — 동일 topic/source라도 RuleName이 다르면 별도 스트림 | P0 |
+| PRD-ONVIF-049 | `onvif_events` DB | `ruleName` 필드 저장, GET 응답에 포함 | P0 |
+| PRD-ONVIF-050 | `OnvifTimelineInline.tsx` `OnvifTimelineOverlay.tsx` | `(topicType, sourceToken, ruleName)` 3-튜플로 행 분리 — RuleName별 독립 타임라인 행 렌더링 | P0 |
 
 ---
 
@@ -169,3 +173,4 @@ Gantt 타임라인 UI에 표시하는 기능을 제공합니다.
 | 1.0 | 2026-06-24 | 초기 작성 — ONVIF App RTP 수집 파이프라인 PRD |
 | 1.1 | 2026-06-24 | PRD-ONVIF-008~009 추가 — MediaMTX 환경 App RTP URL 분리 및 EADDRINUSE 방어 처리 |
 | 1.2 | 2026-06-24 | PRD-ONVIF-046 추가 — OnvifTimelineInline 범위 프리셋 1H/6H 추가, 기본값 1H |
+| 1.3 | 2026-06-24 | PRD-ONVIF-047~050 추가 — RuleName 기반 이벤트 분리: 파싱·dedup·DB 저장·타임라인 행 분리 |

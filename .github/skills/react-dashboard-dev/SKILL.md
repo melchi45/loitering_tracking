@@ -553,7 +553,7 @@ ONVIF 메타데이터 이벤트를 DB에 저장(`onvif_events` 테이블)하고,
 ### OnvifTimelineInline 레이아웃 — DetectionsTimelineInline 동일 스타일
 
 `state=true/false` 쌍 이벤트는 수평 Gantt 바 + 인라인 프레임 썸네일, 상태 없는 이벤트는 다이아몬드 포인트 마커로 렌더링합니다.
-각 `topicType:sourceToken` 조합이 별도의 행(row)으로 표시됩니다.
+각 `(topicType, sourceToken, ruleName)` 3-튜플이 별도의 행(row)으로 표시됩니다. `RuleName`이 다른 이벤트는 동일 topic/source라도 독립 행으로 분리됩니다.
 
 ```
 ┌──────────────────────────────────────────────────────────────────┐
@@ -671,7 +671,7 @@ itemX     = (eventTs − viewStart) / viewSpan   // [0..1]
 
 ```typescript
 // buildIntervals(events, nowMs) — getEventState()로 state 결정 후 인터벌 구성
-// key = cameraId:topicType:sourceToken
+// key = cameraId:topicType:sourceToken:ruleName  ← RuleName 포함으로 Rule별 독립 스트림
 //
 // getEventState(evt): 'true' | 'false' | null
 //   1. evt.state ('true'|'false') — 서버 파서 정상 추출값

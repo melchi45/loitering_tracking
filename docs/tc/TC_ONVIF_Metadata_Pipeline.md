@@ -469,6 +469,44 @@ watch -n 1 "curl -s http://127.0.0.1:9997/v3/paths/list | python3 -c \
 
 ---
 
+## TC-PARSER-007b — RuleName SimpleItem → parsed.ruleName 필드 반환 (유닛)
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | `onvifParser.js`가 Source `RuleName` SimpleItem을 `parsed.ruleName`으로 정확히 추출하는지 검증 |
+| **SRS 참조** | FR-ONVIF-RULENAME-001 |
+| **우선순위** | P0 |
+| **자동화** | `test/api/onvif_metadata_pipeline.test.js::TC-PARSER-007b` |
+
+**입력:** `Name="RuleName" Value="Zone1_Loitering"` SimpleItem 포함 ONVIF XML  
+**합격 기준:**
+- `parsed.ruleName === 'Zone1_Loitering'`
+- RuleName 없는 XML → `parsed.ruleName === null`
+
+---
+
+## TC-PARSER-011 — RuleName 기반 이벤트 분리 (API 통합)
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | 동일 topic/source이지만 RuleName이 다른 두 이벤트가 DB에 별도 2행으로 저장되는지 검증 |
+| **SRS 참조** | FR-ONVIF-RULENAME-001~003 |
+| **우선순위** | P0 |
+| **자동화** | `test/api/onvif_metadata_pipeline.test.js::TC-PARSER-011` |
+
+**절차:**
+1. 새 `cameraId` 생성 (캐시 오염 방지)
+2. `RuleName=Zone1` 이벤트 POST → 150ms 대기
+3. `RuleName=Zone2` 이벤트 POST (동일 topic, sourceToken) → 150ms 대기
+4. `GET /api/onvif-events?cameraId={id}` 조회
+
+**합격 기준:**
+- HTTP 200
+- `events.length === 2`
+- `events`에 `ruleName='Zone1'`과 `ruleName='Zone2'` 모두 존재
+
+---
+
 ## TC-TIMELINE-RANGE-001 — ONVIF 이벤트 API: 1H from 파라미터 → 200 + 경계 검증
 
 | 항목 | 내용 |
@@ -612,6 +650,8 @@ watch -n 1 "curl -s http://127.0.0.1:9997/v3/paths/list | python3 -c \
 | TC-PARSER-008 | 다중 이벤트 독립 Dedup (API 통합) | ⊘ SKIPPED (서버 미실행) |
 | TC-PARSER-009 | 상태 변화 Dedup — 동일 state 반복 저장 방지 (API 통합) | ⊘ SKIPPED (서버 미실행) |
 | TC-PARSER-010 | 파싱 오류 시 200 응답 유지 (API 통합) | ⊘ SKIPPED (서버 미실행) |
+| TC-PARSER-007b | RuleName SimpleItem → parsed.ruleName 필드 반환 (유닛) | ✓ PASS |
+| TC-PARSER-011 | RuleName 기반 이벤트 분리 — 2행 독립 저장 (API 통합) | ⊘ SKIPPED (서버 미실행) |
 
 **요약: 7 passed / 0 failed / 3 skipped (통합 테스트는 서버 실행 시 자동 수행)**
 
@@ -665,3 +705,4 @@ Admin Dashboard → Audit → Startup Tests 탭에서 스위트별 TC 결과를 
 | 1.3 | 2026-06-24 | 자동화 테스트 실행 결과 섹션 추가 — onvif_apprtp.test.js 9/9 PASS, metadata_pipeline 7/7(단위) PASS; TcRunnerService Audit UI 연동 확인 |
 | 1.4 | 2026-06-24 | TC-APPRTP-013~014 추가 — MediaMTX App RTP URL 분리 검증 + EADDRINUSE 3회 종료 방어 처리 |
 | 1.5 | 2026-06-24 | TC-TIMELINE-RANGE-001~008 추가 — ONVIF 이벤트·Detection tracks API 1H/6H 범위 파라미터 검증 (streamingOnly); Admin Audit 스위트 표에 timeline_range 추가 |
+| 1.6 | 2026-06-24 | TC-PARSER-007b (유닛) + TC-PARSER-011 (통합) 추가 — RuleName 기반 이벤트 분리 검증; Traceability Matrix에 두 TC 추가 |
