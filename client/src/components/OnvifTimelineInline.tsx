@@ -120,6 +120,34 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
   // Tracks which interval IDs have already been fetched (avoids duplicate requests)
   const fetchedRef = useRef<Set<string>>(new Set());
 
+  // Rate-limit concurrent snapshot requests to prevent overwhelming the server.
+  // Unlimited simultaneous fetches starve the Node.js event loop and interrupt
+  // the Socket.IO frame stream and WebRTC ICE keepalives.
+  const MAX_SNAP_CONCURRENCY = 4;
+  const activeSnapFetchesRef = useRef(0);
+  const snapFetchQueueRef    = useRef<Array<{ id: string; gen: number }>>([]);
+  const snapGenerationRef    = useRef(0);
+
+  const drainSnapQueue = useCallback(() => {
+    while (activeSnapFetchesRef.current < MAX_SNAP_CONCURRENCY && snapFetchQueueRef.current.length > 0) {
+      const item = snapFetchQueueRef.current.shift()!;
+      const { id, gen } = item;
+      activeSnapFetchesRef.current++;
+      fetch(`/api/onvif-snapshots?eventId=${id}&limit=1`)
+        .then(r => r.json())
+        .then(d => {
+          if (snapGenerationRef.current !== gen) return;
+          const fd = (d.snapshots?.[0]?.frameData as string | undefined) ?? '';
+          if (fd) setSnapCache(prev => { const m = new Map(prev); m.set(id, fd); return m; });
+        })
+        .catch(() => {})
+        .finally(() => {
+          activeSnapFetchesRef.current--;
+          drainSnapQueue();
+        });
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [nowMs, setNowMs] = useState(Date.now);
   useEffect(() => {
     const id = setInterval(() => setNowMs(Date.now()), 5_000);
@@ -149,6 +177,8 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
     setLoading(true);
     setSelected(null);
     fetchedRef.current.clear();
+    snapFetchQueueRef.current = [];
+    snapGenerationRef.current++;
     setSnapCache(new Map());
     const params = new URLSearchParams({ cameraId, limit: '1000' });
     if (range === 'custom' && customApplied) {
@@ -210,38 +240,25 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
       n + r.intervals.filter(iv => iv.endTs >= viewStart && iv.startTs <= viewEnd).length, 0),
   [visibleRows, viewStart, viewEnd]);
 
-  // ── Lazy-fetch inline snaps for visible intervals ────────────────────────────
+  // ── Lazy-fetch inline snaps for visible intervals (rate-limited) ─────────────
   useEffect(() => {
-    const visibleBars = visibleRows.flatMap(r =>
-      r.intervals.filter(iv => !iv.isPoint && iv.endTs >= viewStart && iv.startTs <= viewEnd)
-    );
-    const toFetch = visibleBars.filter(iv => !fetchedRef.current.has(iv.id));
-    if (toFetch.length === 0) return;
-    toFetch.forEach(iv => {
+    const gen = snapGenerationRef.current;
+    const newItems = [
+      ...visibleRows.flatMap(r =>
+        r.intervals.filter(iv => !iv.isPoint && iv.endTs >= viewStart && iv.startTs <= viewEnd)
+      ),
+      ...visibleRows.flatMap(r =>
+        r.intervals.filter(iv => iv.isPoint && iv.endTs >= viewStart && iv.startTs <= viewEnd)
+      ),
+    ].filter(iv => !fetchedRef.current.has(iv.id));
+
+    if (newItems.length === 0) return;
+    newItems.forEach(iv => {
       fetchedRef.current.add(iv.id);
-      fetch(`/api/onvif-snapshots?eventId=${iv.id}&limit=1`)
-        .then(r => r.json())
-        .then(d => {
-          const fd = (d.snapshots?.[0]?.frameData as string | undefined) ?? '';
-          if (fd) setSnapCache(prev => { const m = new Map(prev); m.set(iv.id, fd); return m; });
-        })
-        .catch(() => {});
+      snapFetchQueueRef.current.push({ id: iv.id, gen });
     });
-    // Also fetch snaps for visible point events
-    const visiblePoints = visibleRows.flatMap(r =>
-      r.intervals.filter(iv => iv.isPoint && iv.endTs >= viewStart && iv.startTs <= viewEnd)
-    );
-    visiblePoints.filter(iv => !fetchedRef.current.has(iv.id)).forEach(iv => {
-      fetchedRef.current.add(iv.id);
-      fetch(`/api/onvif-snapshots?eventId=${iv.id}&limit=1`)
-        .then(r => r.json())
-        .then(d => {
-          const fd = (d.snapshots?.[0]?.frameData as string | undefined) ?? '';
-          if (fd) setSnapCache(prev => { const m = new Map(prev); m.set(iv.id, fd); return m; });
-        })
-        .catch(() => {});
-    });
-  }, [visibleRows, viewStart, viewEnd]); // eslint-disable-line react-hooks/exhaustive-deps
+    drainSnapQueue();
+  }, [visibleRows, viewStart, viewEnd, drainSnapQueue]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Ticks ────────────────────────────────────────────────────────────────────
   const ticks = useMemo(() =>

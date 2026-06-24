@@ -117,14 +117,22 @@ snapshotsRouter.get('/', (req, res) => {
   const { eventId, cameraId, topicType, from, to, limit } = req.query;
   const maxRows = Math.min(parseInt(limit, 10) || 50, 200);
 
-  let rows = _db.all('onvif_snapshots');
+  // Filter by indexed fields first before loading the full table.
+  // onvif_snapshots rows contain large frameData blobs — filtering early
+  // avoids sorting and serializing thousands of rows on every request.
+  const exactWhere = {};
+  if (eventId)   exactWhere.eventId   = eventId;
+  if (cameraId)  exactWhere.cameraId  = cameraId;
+  if (topicType) exactWhere.topicType = topicType;
+
+  let rows = Object.keys(exactWhere).length > 0
+    ? _db.find('onvif_snapshots', exactWhere)
+    : _db.all('onvif_snapshots');
+
   rows.sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1)); // newest first
 
-  if (eventId)   rows = rows.filter(r => r.eventId === eventId);
-  if (cameraId)  rows = rows.filter(r => r.cameraId === cameraId);
-  if (topicType) rows = rows.filter(r => r.topicType === topicType);
-  if (from)      rows = rows.filter(r => r.timestamp >= from);
-  if (to)        rows = rows.filter(r => r.timestamp <= to);
+  if (from) rows = rows.filter(r => r.timestamp >= from);
+  if (to)   rows = rows.filter(r => r.timestamp <= to);
 
   rows = rows.slice(0, maxRows);
 
