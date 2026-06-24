@@ -623,7 +623,7 @@ async function main() {
 
   // ── Startup TC test run (background, non-blocking) ────────────────────────
   const TcRunnerService = require('./services/TcRunnerService');
-  TcRunnerService.runOnStartup(ACTIVE_PORT);
+  TcRunnerService.runOnStartup(ACTIVE_PORT, ACTIVE_PROTO);
 
   // ── Graceful shutdown ────────────────────────────────────────────────────
   const shutdown = async (signal) => {

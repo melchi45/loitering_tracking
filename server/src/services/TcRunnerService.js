@@ -100,15 +100,16 @@ let _lastRunId = null;
 /**
  * Schedule the startup test run after a delay.
  * Must be called after the server is listening.
- * @param {number} port  The HTTP port the server is listening on
+ * @param {number} port   The port the server is listening on
+ * @param {string} proto  'http' or 'https' (default 'http')
  */
-function runOnStartup(port) {
+function runOnStartup(port, proto = 'http') {
   if (process.env.TC_STARTUP_RUN === 'false') {
     console.log('[TcRunner] TC_STARTUP_RUN=false — startup tests disabled');
     return;
   }
   console.log(`[TcRunner] Startup tests scheduled in ${STARTUP_DELAY_MS / 1000}s`);
-  setTimeout(() => _run(port).catch(err => {
+  setTimeout(() => _run(port, proto).catch(err => {
     console.error('[TcRunner] Unhandled error in test run:', err.message);
   }), STARTUP_DELAY_MS);
 }
@@ -116,10 +117,11 @@ function runOnStartup(port) {
 /**
  * Trigger a manual re-run immediately.
  * @param {number} port
+ * @param {string} proto  'http' or 'https' (default 'http')
  */
-function runNow(port) {
+function runNow(port, proto = 'http') {
   if (_running) return false;
-  _run(port).catch(err => console.error('[TcRunner] Manual run error:', err.message));
+  _run(port, proto).catch(err => console.error('[TcRunner] Manual run error:', err.message));
   return true;
 }
 
@@ -166,7 +168,7 @@ function clearResults() {
 
 // ── Internal ──────────────────────────────────────────────────────────────────
 
-async function _run(port) {
+async function _run(port, proto = 'http') {
   if (_running) {
     console.warn('[TcRunner] A run is already in progress — skipping');
     return;
@@ -176,7 +178,7 @@ async function _run(port) {
   const runAt = new Date().toISOString();
   _lastRunId  = runId;
 
-  const ltsUrl    = `http://localhost:${port}`;
+  const ltsUrl    = `${proto}://localhost:${port}`;
   const serverMode = (process.env.SERVER_MODE || 'combined').trim().toLowerCase();
   const isStreaming = serverMode === 'streaming';
   let totalPass = 0, totalFail = 0, totalSkip = 0;
@@ -240,9 +242,12 @@ function _runSuite(absPath, ltsUrl) {
     let stdout = '';
     let stderr = '';
 
+    const spawnEnv = { ...process.env, LTS_URL: ltsUrl };
+    // Allow self-signed TLS certificates in test children when server is HTTPS
+    if (ltsUrl.startsWith('https://')) spawnEnv.NODE_TLS_REJECT_UNAUTHORIZED = '0';
     const proc = spawn(NODE_BIN, [absPath], {
       cwd: ROOT,
-      env: { ...process.env, LTS_URL: ltsUrl },
+      env: spawnEnv,
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 

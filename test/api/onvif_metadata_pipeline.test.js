@@ -349,27 +349,32 @@ async function runIntegrationTests() {
   });
 
   // TC-PARSER-009: 상태 변화 Dedup — 동일 state 반복 저장 방지
+  // Use a SEPARATE cameraId to avoid _lastStates cache pollution from TC-PARSER-008
+  // (the in-memory dedup map persists across tests; sharing CAM_ID would pre-seed the cache).
   await test('TC-PARSER-009', '동일 state 패킷 2회 전송 → DB 저장 1회만', async () => {
+    const DEDUP_CAM_ID   = `tc-onvif-dedup-${Date.now()}`;
+    const DEDUP_RTP_PATH = `/api/internal/apprtp/${DEDUP_CAM_ID}`;
+
     await del('/api/onvif-events');
 
     const xml = makeMetadataStream(
       makeNotification(
         'tns1:VideoSource/tns1:MotionAlarm',
         '2026-06-23T12:20:00.000Z', 'Changed',
-        [['Source', 'VS-dedup']], [['State', 'true']]
+        [['SourceToken', 'VS-dedup']], [['State', 'true']]
       )
     );
     const payload = { payload: toBase64(xml), pt: 96, timestamp: 0, seq: 1 };
 
     // 동일 패킷 2회 전송
-    await post(APPRTP_PATH, payload);
-    await post(APPRTP_PATH, payload);
+    await post(DEDUP_RTP_PATH, payload);
+    await post(DEDUP_RTP_PATH, payload);
 
-    await new Promise(res => setTimeout(res, 100));
+    await new Promise(res => setTimeout(res, 200));
 
-    const q = await get(`/api/onvif-events?cameraId=${CAM_ID}&limit=20`);
+    const q = await get(`/api/onvif-events?cameraId=${DEDUP_CAM_ID}&limit=20`);
     const events = (q.body.events || []).filter(e =>
-      e.topic === 'tns1:VideoSource/tns1:MotionAlarm' && e.sourceToken === 'VS-dedup'
+      e.topic === 'tns1:VideoSource/tns1:MotionAlarm'
     );
     assertEq(events.length, 1, 'dedup: same state must be stored only once');
   });

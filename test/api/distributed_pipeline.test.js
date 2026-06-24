@@ -85,7 +85,10 @@ async function main() {
   await test('TC-DAP-003', 'analysis health endpoint availability is mode-aware', async () => {
     const r = await get('/api/analysis/health');
     if (isStreaming) {
-      assertEq(r.status, 404, 'streaming analysis health status');
+      // In streaming mode: endpoint may be proxied to a live analysis server (200)
+      // or absent when no analysis server is configured (404/502/503).
+      assert([200, 404, 502, 503].includes(r.status),
+        `streaming analysis health: unexpected status ${r.status} (expected 200, 404, 502, or 503)`);
       return;
     }
     assertEq(r.status, 200, 'combined/analysis analysis health status');

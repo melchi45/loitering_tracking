@@ -169,12 +169,17 @@ async function groupD() {
     for (const id of ['TC-HTTPS-D-001', 'TC-HTTPS-D-002', 'TC-HTTPS-D-003']) {
       await skip(id, 'REST/HSTS over HTTPS', 'LTS_HTTPS_URL not set');
     }
-    // D-004: HSTS absent on HTTP — testable regardless
-    await test('TC-HTTPS-D-004', 'HSTS header absent in HTTP mode', async () => {
-      const res = await request(`${BASE_URL}/health`);
-      const hsts = res.headers['strict-transport-security'];
-      assert(!hsts, `HSTS header should NOT be present in HTTP mode, got: ${hsts}`);
-    });
+    // D-004: HSTS absent on HTTP — only testable when BASE_URL is http://
+    if (BASE_URL.startsWith('https://')) {
+      await skip('TC-HTTPS-D-004', 'HSTS header absent in HTTP mode',
+        'BASE_URL (LTS_URL) is https — server is HTTPS-only, no HTTP port to check');
+    } else {
+      await test('TC-HTTPS-D-004', 'HSTS header absent in HTTP mode', async () => {
+        const res = await request(`${BASE_URL}/health`);
+        const hsts = res.headers['strict-transport-security'];
+        assert(!hsts, `HSTS header should NOT be present in HTTP mode, got: ${hsts}`);
+      });
+    }
     return;
   }
 

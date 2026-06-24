@@ -12,8 +12,16 @@
  * constants (GST_AVAILABLE, PYAV_AVAILABLE, HW_DECODER) are controlled in
  * each test through jest.isolateModules() + env-var overrides.
  *
- * Run: npx jest test/api/capture-backend.test.js --runInBand --forceExit
+ * Run: cd server && npx jest ../test/api/capture-backend.test.js --runInBand --forceExit
+ * (Requires Jest — cannot be run with plain node)
  */
+
+// Guard: this file requires Jest's module mocking infrastructure.
+// When executed with plain node (e.g. via run_all.js), exit cleanly.
+if (typeof jest === 'undefined') {
+  console.log('  ⊘ TC_RTSP_Capture_Backend — requires Jest (run: cd server && npx jest ../test/api/capture-backend.test.js)');
+  process.exit(0);
+}
 
 const { EventEmitter } = require('events');
 const path             = require('path');

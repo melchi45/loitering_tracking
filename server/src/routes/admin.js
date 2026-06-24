@@ -125,12 +125,18 @@ router.delete('/tc-results', (req, res) => {
 
 // ── POST /admin/tc-results/run ────────────────────────────────────────────────
 // Triggers a manual re-run of all startup tests.
-// Body: { port?: number }  (defaults to process.env.PORT || 3080)
+// Body: { port?: number, proto?: string }
 router.post('/tc-results/run', (req, res) => {
-  const port = req.body?.port ?? parseInt(process.env.PORT || '3080', 10);
-  const started = TcRunnerService.runNow(port);
+  const httpsEnabled = process.env.HTTPS_ENABLED === 'true';
+  const httpsPort = parseInt(process.env.HTTPS_PORT || '3443', 10);
+  const httpPort  = parseInt(process.env.PORT || '3080', 10);
+  const defaultPort  = httpsEnabled ? httpsPort : httpPort;
+  const defaultProto = httpsEnabled ? 'https' : 'http';
+  const port  = req.body?.port  ?? defaultPort;
+  const proto = req.body?.proto ?? defaultProto;
+  const started = TcRunnerService.runNow(port, proto);
   if (!started) return res.status(409).json({ error: 'A test run is already in progress' });
-  res.json({ success: true, message: `Test run started on port ${port}` });
+  res.json({ success: true, message: `Test run started on ${proto}://localhost:${port}` });
 });
 
 module.exports = router;

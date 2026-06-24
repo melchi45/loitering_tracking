@@ -184,8 +184,94 @@
 
 ---
 
+## 3. Audit Page — TC Runner (TcRunnerService) Test Cases
+
+TcRunnerService는 서버 시작 시 TC 스크립트를 자동 실행하고 결과를 `tc_results` DB에 저장합니다.
+Admin Dashboard의 **Audit** 탭에서 결과를 확인할 수 있습니다.
+
+### TC-AUDIT-001: HTTPS 프로토콜 전파 (TcRunnerService)
+
+**조건:** `HTTPS_ENABLED=true`, `HTTPS_PORT=3443`  
+**동작:**  
+1. `index.js`가 `runOnStartup(ACTIVE_PORT, ACTIVE_PROTO)` 호출
+2. `TcRunnerService._run(port, 'https')` 실행
+3. 생성된 `LTS_URL = https://localhost:3443`이 자식 프로세스에 전달
+4. 자식 프로세스 환경에 `NODE_TLS_REJECT_UNAUTHORIZED=0` 자동 설정
+
+**기대:** TC 스크립트가 `fetch failed` 없이 정상 실행됨  
+**관련 버그:** HTTPS 서버에서 `http://localhost:3443`으로 접근하여 모든 TC 실패하던 문제  
+**Priority:** P1
+
+---
+
+### TC-AUDIT-002: SERVER_MODE별 스위트 스킵
+
+| 스위트 | `streaming` 모드 | `analysis` 모드 | `combined` 모드 |
+|---|---|---|---|
+| `analysisOnly: true` 스위트 | SKIP | 실행 | 실행 |
+| `streamingOnly: true` 스위트 | 실행 | SKIP | SKIP |
+| 플래그 없음 | 실행 | 실행 | 실행 |
+
+**기대:** 모드에 맞지 않는 스위트는 `TC-SKIP`으로 표시됨  
+**Priority:** P1
+
+---
+
+### TC-AUDIT-003: MCP 서버 도구·리소스 카탈로그 검증
+
+**현재 카탈로그 (2026-06-24 기준):**
+- **도구 수:** 18개 (`query_loitering_events` ~ `get_missing_person_statistics`)
+- **리소스 수:** 7개 (`lts://cameras` ~ `missing-persons://detections/{date}`)
+
+**기대:** `TC-A-001` 및 `TC-A-003` 검증이 실제 카탈로그 크기와 일치  
+**Priority:** P2
+
+---
+
+### TC-AUDIT-004: Auth 테스트 — 기존 DB 환경 대응
+
+**전제:** DB에 이미 사용자가 존재하는 환경  
+**동작:**
+- 신규 등록 사용자가 `pending` 상태로 생성됨 → `existingDbMode = true`
+- `LTS_ADMIN_EMAIL` + `LTS_ADMIN_PASSWORD` 환경변수로 admin 로그인 대체
+- 환경변수 미설정 시 admin 의존 TC 자동 SKIP
+
+**기대:** TC-AUTH-A-001이 FAIL 대신 PASS (환경 인식 후 조건부 통과)  
+**Priority:** P1
+
+---
+
+### TC-AUDIT-005: ONVIF Dedup — 메모리 캐시 격리
+
+**전제:** TC-PARSER-008과 TC-PARSER-009이 동일 세션에서 순차 실행  
+**문제 원인:** `_lastStates` Map이 서버 메모리에 유지됨; `DELETE /api/onvif-events`로 DB를 지워도 캐시는 보존됨  
+**수정:** TC-PARSER-009에 별도 `CAM_ID`와 `SourceToken` 사용으로 캐시 오염 방지  
+**기대:** TC-PARSER-009 `events.length === 1` 검증 통과  
+**Priority:** P1
+
+---
+
+### TC-AUDIT-006: WebRTC 로그 파일 없을 때 TC-H 그룹 SKIP
+
+**조건:** `WEBRTC_LOG_PATH` 환경변수 미설정 AND `--log` 인수 미제공  
+**기대:** TC-H-001~004가 FAIL이 아닌 SKIP으로 표시됨  
+**Priority:** P2
+
+---
+
+### TC-AUDIT-007: capture-backend.test.js Jest-only 가드
+
+**조건:** `run_all.js`에서 plain node로 실행  
+**동작:** `typeof jest === 'undefined'` 검사 후 `process.exit(0)` 실행  
+**기대:** `TC_RTSP_Capture_Backend` 스위트가 PASS(exit 0)로 집계됨  
+**참고:** Jest로 실행: `cd server && npx jest ../test/api/capture-backend.test.js`  
+**Priority:** P2
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-17 | 초기 작성 — TC-AD-001~011, AI Models 섹션 및 접근 제어 테스트 |
+| 1.1 | 2026-06-24 | TC-AUDIT-001~007 추가 — Streaming/Analysis 모드 TC 구분, HTTPS 프로토콜 전파, MCP 카탈로그 업데이트, Auth/Dedup/WebRTC/capture-backend 수정 내용 반영 |

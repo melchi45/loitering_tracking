@@ -194,12 +194,12 @@ async function runGroupA() {
   console.log('\n[Group A] Server Startup & HTTP Transport\n');
 
   // TC-A-001 — static catalog sizes (no process needed)
-  await test('TC-A-001', 'TOOL_CATALOG has exactly 10 tools', async () => {
-    assertEq(TOOL_CATALOG.length, 10, 'tool count');
+  await test('TC-A-001', 'TOOL_CATALOG has expected tools', async () => {
+    assertEq(TOOL_CATALOG.length, 18, 'tool count');
   });
 
-  await test('TC-A-001b', 'RESOURCE_CATALOG has exactly 4 resources', async () => {
-    assertEq(RESOURCE_CATALOG.length, 4, 'resource count');
+  await test('TC-A-001b', 'RESOURCE_CATALOG has expected resources', async () => {
+    assertEq(RESOURCE_CATALOG.length, 7, 'resource count');
   });
 
   await test('TC-A-001c', 'Every tool has name, access, description', async () => {
@@ -228,8 +228,8 @@ async function runGroupA() {
       assertEq(status, 200, 'HTTP status');
       assert(Array.isArray(body.tools),     'tools is array');
       assert(Array.isArray(body.resources), 'resources is array');
-      assertEq(body.tools.length,     10, 'tools count');
-      assertEq(body.resources.length,  4, 'resources count');
+      assertEq(body.tools.length,     18, 'tools count');
+      assertEq(body.resources.length,  7, 'resources count');
     });
 
     await test('TC-A-003b', 'GET /schema — sseUrl and name fields present', async () => {
