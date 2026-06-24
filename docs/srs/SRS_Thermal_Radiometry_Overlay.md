@@ -72,6 +72,16 @@ Out of scope: 온도 히스토리 저장, DB 기록, 알림 생성.
 - **조건:** `pipelineManager.js` 및 `restartIngestDaemon.js` 모두 해당
 - **검증:** ingest-daemon 로그에 `[cameraId] App RTP loop starting → <url>` 출력 확인
 
+### FR-THERMAL-004: MediaMTX 환경 App RTP URL 분리
+
+MediaMTX RTSP 프록시 사용 시(`mediamtxReady=true`), App RTP는 MediaMTX 재전송 URL 대신 **원본 카메라 RTSP URL**에서 데이터를 수집해야 한다.
+
+- `pipelineManager.js`: `appRtpRtspUrl = rtspUrl` (원본 카메라 URL)을 ingest-daemon 등록 body에 포함
+- ingest-daemon: `self.app_rtp_rtsp_url = cfg.get("appRtpRtspUrl", cfg["rtspUrl"])` 사용
+- `_app_rtp_ingest_once()`: `av.open(self.app_rtp_rtsp_url, ...)` 사용
+
+**근거:** MediaMTX는 ONVIF BoxTemperatureReading 데이터 트랙을 제거하므로, 열상 카메라 온도 데이터가 MediaMTX URL에서는 수신되지 않는다.
+
 ### FR-THERMAL-002: BoxTemperatureReading 정규식 파싱
 
 `parseRadiometryReadings(xml)` 함수는 XML에서 `BoxTemperatureReading` 요소를 모두 추출해야 한다.
@@ -187,3 +197,4 @@ const coordSlots = allReadings.filter(s => {
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-23 | 초기 작성 — FR-THERMAL-001~023, NFR 정의 |
+| 1.1 | 2026-06-24 | FR-THERMAL-004 추가 — MediaMTX 환경에서 App RTP가 원본 카메라 URL 사용 (온도 데이터 수신 보장) |

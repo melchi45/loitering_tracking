@@ -77,6 +77,10 @@
 | FR-CAM-054 | TC-G-004 |
 | FR-CAM-055 | TC-G-005 |
 | FR-CAM-056 | TC-G-006 |
+| FR-CAM-068 | TC-H-017 |
+| FR-CAM-069 | TC-H-015 |
+| FR-CAM-070 | TC-H-016 |
+| FR-CAM-071 | TC-H-014, TC-H-015 |
 
 ### 1.3 Test Data
 
@@ -582,6 +586,91 @@
 
 ---
 
+### TC-H-014 — channelCountMax = SUNAPI MaxChannel for SUNAPI Cameras
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-014 |
+| **SRS** | FR-CAM-071 |
+| **Priority** | P1 |
+| **Type** | Unit |
+
+**Precondition**: Camera with `SupportSunapi = true`, `MaxChannel = 8`.
+
+**Steps**:
+1. Compute `channelCountMax` using the FR-CAM-071 rule.
+
+**Expected**: `channelCountMax === 8`.
+
+**Negative**: Camera with `SupportSunapi = false`, `MaxChannel = 8` → `channelCountMax === 64`.
+
+---
+
+### TC-H-015 — channelCountMax = 64 for Non-SUNAPI Cameras
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-015 |
+| **SRS** | FR-CAM-071 |
+| **Priority** | P1 |
+| **Type** | Unit |
+
+**Precondition**: Camera with `SupportSunapi = false` (ONVIF-only), `MaxChannel = 4`.
+
+**Steps**:
+1. Compute `channelCountMax`.
+
+**Expected**: `channelCountMax === 64` (SUNAPI MaxChannel not authoritative; liberal cap applies).
+
+---
+
+### TC-H-016 — channelIndex Stored in Camera Record
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-016 |
+| **SRS** | FR-CAM-070 |
+| **Priority** | P1 |
+| **Type** | Integration (API) |
+
+**Precondition**: Server running; NVR camera with `MaxChannel = 4`.
+
+**Steps**:
+1. `POST /api/cameras` with body `{ name: "XRN-810S Ch3", rtspUrl: "...", channelIndex: 3 }`.
+2. `GET /api/cameras/:id` for the created camera.
+
+**Expected**:
+- HTTP 201 on POST; `body.data.channelIndex === 3`.
+- HTTP 200 on GET; `body.data.channelIndex === 3`.
+
+**Cleanup**: `DELETE /api/cameras/:id`.
+
+---
+
+### TC-H-017 — SUNAPI Query Sends Basic Auth Header
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-017 |
+| **SRS** | FR-CAM-068 |
+| **Priority** | P2 |
+| **Type** | Unit |
+
+**Precondition**: Mock HTTP server at `/stw-cgi/media.cgi?msubmenu=channellist&action=view` checks for `Authorization` header; returns `{ "MaxChannel": 4 }` only when auth header is present and valid.
+
+**Steps**:
+1. Set `RTSP_DEFAULT_USERNAME = "admin"`, `RTSP_DEFAULT_PASSWORD = "password"`.
+2. Call `querySunapiMaxChannel(ip, httpPort, false)`.
+3. Inspect return value and captured HTTP request headers.
+
+**Expected**:
+- Return value `4`.
+- HTTP request includes `Authorization: Basic YWRtaW46cGFzc3dvcmQ=` (base64 of `admin:password`).
+
+**Negative**: When `RTSP_DEFAULT_PASSWORD` is empty, no `Authorization` header is sent.
+
+---
+
 ## 11. Test Execution Order
 
 ```
@@ -602,7 +691,7 @@ Group B camera records created during tests must be cleaned up after each group.
 | UDP scan | Correct 160-byte packet; 10s timeout respected; auto-recovery |
 | ONVIF | Multicast probe; XAddrs extraction; graceful 401 fallback |
 | Security | No credentials in logs; discovery-only localhost exposure |
-| NVR MaxChannel | SourceToken-based count; SUNAPI query returns 1 on auth failure; merge takes max; card badge visible; channel selection panel; RTSP URL per channel; name suffix Ch{N} |
+| NVR MaxChannel | SourceToken-based count; SUNAPI query with Basic auth; merge takes max; card badge visible; channel selection panel; RTSP URL per channel; name suffix Ch{N}; channelIndex stored; SUNAPI MaxChannel as input cap |
 
 ---
 
@@ -612,3 +701,4 @@ Group B camera records created during tests must be cleaned up after each group.
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for Camera Discovery |
 | 1.1 | 2026-06-23 | LTS Engineering Team | §10 Test Group H 추가 — NVR MaxChannel TC-H-001~TC-H-013 (SourceToken, channelIndex, SUNAPI, mergeDevices, UI badge, channel panel, RTSP URL) |
+| 1.2 | 2026-06-24 | LTS Engineering Team | TC-H-014~017 추가 — SUNAPI MaxChannel 상한, 비-SUNAPI 상한, channelIndex API 저장, SUNAPI Basic 인증 헤더 |

@@ -147,6 +147,14 @@ App RTP 루프가 반복 재시도하더라도 MediaMTX RTSP 리더 수가 `maxR
 - `inp.close()`를 항상 호출하여 RTSP 세션 즉시 해제
 - 재시도 시 지수 백오프로 연결 빈도 제한
 
+### NF-ONVIF-005: 안정성 — MediaMTX 프록시 환경 ONVIF 데이터 수신 보장
+
+MediaMTX를 RTSP 프록시로 사용하는 환경에서도 ONVIF 이벤트 및 열상 온도 데이터가 정상 수신되어야 합니다.
+
+- App RTP 수집은 MediaMTX URL이 아닌 **원본 카메라 RTSP URL**을 사용
+- AI 영상 캡처(MediaMTX 경유)와 ONVIF 메타데이터 수집(카메라 직접)이 독립된 연결로 동작
+- ONVIF 타임라인(`OnvifTimelineOverlay`)과 열상 오버레이(`ThermalOverlay`)가 MediaMTX 환경에서도 정상 표시
+
 ### NF-ONVIF-002: 안정성 — PyAV 버전 독립성
 
 PyAV 10.x, 11.x, 12.x 어느 버전에서도 동일하게 동작해야 합니다.
@@ -223,3 +231,4 @@ ONVIF 이벤트가 카메라에서 발생한 후 브라우저에 표시되기까
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-24 | 초기 작성 — ONVIF App RTP 수집 파이프라인 RFP |
+| 1.1 | 2026-06-24 | NF-ONVIF-005 추가 — MediaMTX 환경에서 ONVIF 이벤트·열상 온도 정상 수신 요구사항 |

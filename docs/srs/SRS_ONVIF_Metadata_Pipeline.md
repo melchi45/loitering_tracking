@@ -232,6 +232,32 @@ Radiometry 이벤트 (`parsed.radiometry` 존재)는 dedup 없이 매 수신 시
 
 ## 4. 비기능 요구사항
 
+### FR-ONVIF-APPRTP-004: MediaMTX 환경 App RTP URL 분리
+
+`mediamtxReady=true`인 경우 `pipelineManager.js`는 ingest-daemon에 `appRtpRtspUrl` 필드를 전달해야 한다.
+
+- `appRtpRtspUrl` 값: 원본 카메라 RTSP URL (`rtspUrl`)
+- AI 캡처(`rtspUrl`)는 MediaMTX URL, App RTP(`appRtpRtspUrl`)는 원본 카메라 URL로 분리
+- ingest-daemon의 `CameraSession.app_rtp_rtsp_url`이 `cfg.get("appRtpRtspUrl", cfg["rtspUrl"])`로 설정되어야 한다
+
+**근거:** MediaMTX는 ONVIF data 트랙을 재전송하지 않으므로, App RTP는 원본 카메라에 직접 연결해야 한다.
+
+**수용 기준:**
+- MediaMTX 사용 환경에서 ONVIF 이벤트가 `onvif_events` DB에 저장된다
+- 열상 카메라의 경우 `onvif:temperature` Socket.IO 이벤트가 수신된다
+- App RTP 로그에 `EADDRINUSE` 에러가 지속 발생하지 않는다
+
+---
+
+### FR-ONVIF-APPRTP-005: EADDRINUSE 방어 처리
+
+App RTP 루프가 `OSError(errno=98)`(EADDRINUSE)를 3회 연속으로 만나면 재시도 없이 스레드를 종료해야 한다.
+
+- 이는 data 트랙이 없는 URL에 App RTP를 시도했을 때의 방어 처리
+- 로그: `App RTP: persistent EADDRINUSE … source does not carry a data track; exiting`
+
+---
+
 ### NFR-ONVIF-APPRTP-001: PyAV 버전 호환성
 
 구현은 PyAV 9.x ~ 14.x (현재 기준 최신) 에서 `AttributeError` 없이 동작해야 한다. `av.Container.read_timeout` 속성 쓰기에 의존하지 않는다.
@@ -275,3 +301,4 @@ Radiometry 이벤트 (`parsed.radiometry` 존재)는 dedup 없이 매 수신 시
 | 1.1 | 2026-06-23 | FR-ONVIF-APPRTP-002 추가 — PyAV `read_timeout` 속성 쓰기 폐지 대응, `av.open()` 시점 timeout 옵션 전달 요구사항 명세 |
 | 1.2 | 2026-06-23 | §3 FR-ONVIF-PARSER-001~009 추가 — 다중 NotificationMessage 파싱·TOPIC_MAP Samsung 변형·State 추출; §3-B FR-ONVIF-ROUTE-001~005 추가 — 독립 Dedup·저장·브로드캐스트·Radiometry 격리 |
 | 1.3 | 2026-06-24 | 연관 문서 링크 추가 — [RFP_ONVIF_Metadata_Pipeline.md](../rfp/RFP_ONVIF_Metadata_Pipeline.md), [PRD_ONVIF_Metadata_Pipeline.md](../prd/PRD_ONVIF_Metadata_Pipeline.md); test/api/onvif_apprtp.test.js node 하네스 전환 완료 (TC-APPRTP-007~009 + PARSER-A~C 9/9 PASS) |
+| 1.4 | 2026-06-24 | FR-ONVIF-APPRTP-004~005 추가 — MediaMTX 환경 App RTP URL 분리(appRtpRtspUrl), EADDRINUSE 3회 방어 종료 |

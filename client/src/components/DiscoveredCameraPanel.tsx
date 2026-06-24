@@ -58,6 +58,10 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
     camera.profiles?.find((p) => p.rtspUrl) ?? null
   );
 
+  // SUNAPI MaxChannel is authoritative when available — use it as the upper bound
+  const channelCountMax = camera.SupportSunapi && (camera.MaxChannel ?? 1) > 1
+    ? (camera.MaxChannel as number)
+    : 64;
   const [channelCount, setChannelCount] = useState<number>(camera.MaxChannel ?? 1);
   const hasChannels = channelCount > 1;
   const [selectedChannel, setSelectedChannel] = useState<number>(1);
@@ -170,14 +174,14 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
               <input
                 type="number"
                 min={1}
-                max={64}
+                max={channelCountMax}
                 value={channelCount}
                 onChange={(e) => {
-                  const v = parseInt(e.target.value, 10);
+                  const v = Math.min(parseInt(e.target.value, 10) || 1, channelCountMax);
                   if (v >= 1) { setChannelCount(v); setSelectedChannel(1); }
                 }}
                 className="w-14 bg-gray-900 border border-gray-600 rounded px-1.5 py-0.5 text-[11px] text-white text-center focus:outline-none focus:border-blue-500"
-                title="Override channel count (if auto-detection failed)"
+                title={`Override channel count${camera.SupportSunapi && channelCountMax < 64 ? ` (max ${channelCountMax} from SUNAPI)` : ''}`}
               />
               <span className="text-[10px] text-gray-500">manual</span>
             </div>

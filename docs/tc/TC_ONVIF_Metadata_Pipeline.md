@@ -227,6 +227,46 @@ cd server && npx jest test/api/onvif_apprtp.test.js --runInBand --forceExit -v
 
 ---
 
+## TC-APPRTP-013 — MediaMTX 환경에서 App RTP가 원본 카메라 URL 사용 (unit)
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | `mediamtxReady=true`일 때 `pipelineManager.js`가 `appRtpRtspUrl=원본URL`을 ingest-daemon에 전달하는지 확인 |
+| **SRS 참조** | FR-ONVIF-APPRTP-004 |
+| **우선순위** | P0 |
+| **자동화** | `test/api/onvif_apprtp.test.js::TC-APPRTP-013` |
+
+**절차:**
+1. `pipelineManager._ingestRegisterCamera(id, mediamtxUrl, callbackUrl, appRtpUrl, originalCameraUrl)` 호출 모킹
+2. `body.appRtpRtspUrl === originalCameraUrl` 검증
+
+**합격 기준:**
+- `body.appRtpRtspUrl`이 원본 카메라 RTSP URL과 동일
+- `body.rtspUrl`은 MediaMTX URL (AI 경로)
+- `body.appRtpCallbackUrl`이 설정됨
+
+---
+
+## TC-APPRTP-014 — EADDRINUSE 3회 → 스레드 종료 (unit)
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | App RTP 루프가 `OSError(errno=98)` 3회 연속 발생 시 재시도 없이 조용히 종료하는지 확인 |
+| **SRS 참조** | FR-ONVIF-APPRTP-005 |
+| **우선순위** | P0 |
+| **자동화** | `test/api/onvif_apprtp.test.js::TC-APPRTP-014` |
+
+**절차:**
+1. `_app_rtp_loop` 내부 `addr_in_use_n` 카운터 로직 검증
+2. EADDRINUSE 3회 발생 시 `return`으로 루프 탈출 확인
+
+**합격 기준:**
+- 3회 이후 루프 탈출
+- `log.warning` 호출 (경고 로그 남김)
+- 재시도 없음 (자원 낭비 없음)
+
+---
+
 ## TC-APPRTP-012 — MediaMTX maxReaders 소진 재현 방지 (회귀)
 
 | 항목 | 내용 |
@@ -516,3 +556,4 @@ Admin Dashboard → Audit → Startup Tests 탭에서 스위트별 TC 결과를 
 | 1.1 | 2026-06-23 | TC-APPRTP-001~002 회귀 케이스 추가 — PyAV read_timeout 속성 쓰기 오류 및 MediaMTX maxReaders 소진 재현 방지 |
 | 1.2 | 2026-06-23 | TC-PARSER-001~010 추가 — onvifParser.js 다중 NotificationMessage 파싱 버그 수정 검증 및 Samsung namespace 변형·State 추출·Dedup 회귀 방지 |
 | 1.3 | 2026-06-24 | 자동화 테스트 실행 결과 섹션 추가 — onvif_apprtp.test.js 9/9 PASS, metadata_pipeline 7/7(단위) PASS; TcRunnerService Audit UI 연동 확인 |
+| 1.4 | 2026-06-24 | TC-APPRTP-013~014 추가 — MediaMTX App RTP URL 분리 검증 + EADDRINUSE 3회 종료 방어 처리 |

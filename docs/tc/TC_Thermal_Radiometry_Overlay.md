@@ -75,6 +75,16 @@
 | **기대** | `parsed.topicType === "boxTemperatureReading"` |
 | **기대** | `parsed.radiometry[0].itemId === "D"` |
 
+### TC-A-009: MediaMTX 환경에서 appRtpRtspUrl이 원본 카메라 URL로 설정됨
+
+| 항목 | 내용 |
+|------|------|
+| **SRS** | FR-THERMAL-004 |
+| **전제** | `mediamtxReady=true`인 환경 시뮬레이션 |
+| **입력** | `rtspUrl = rtsp://10.0.0.5/live`, `captureUrl = rtsp://127.0.0.1:8554/{uuid}`, `appRtpCallbackUrl = http://127.0.0.1:3080/api/internal/apprtp/{id}` |
+| **기대** | ingest-daemon 등록 body: `rtspUrl === captureUrl` (MediaMTX URL), `appRtpRtspUrl === rtspUrl` (원본 카메라 URL) |
+| **자동화** | `test/api/onvif_apprtp.test.js::TC-APPRTP-013` |
+
 ### TC-A-008: appRtpCallbackUrl 누락 시 App RTP 스레드 미시작
 
 | 항목 | 내용 |
@@ -235,3 +245,4 @@
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-23 | 초기 작성 — TC-A~E 전체 정의 |
+| 1.1 | 2026-06-24 | TC-A-009 추가 — MediaMTX 환경 App RTP URL 분리 검증 |

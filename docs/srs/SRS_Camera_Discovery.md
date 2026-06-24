@@ -408,6 +408,71 @@ When `MaxChannel > 1` and the operator adds channel `N`, the camera name sent to
 
 ---
 
+### FR-CAM-068 — SUNAPI MaxChannel Query with Default Credentials
+
+| Attribute | Value |
+|---|---|
+| **ID** | FR-CAM-068 |
+| **Title** | SUNAPI MaxChannel 쿼리 — env 기본 인증 |
+| **Priority** | Should-Have |
+
+`querySunapiMaxChannel()` **shall** include HTTP Basic Authorization header when `RTSP_DEFAULT_USERNAME` and `RTSP_DEFAULT_PASSWORD` env vars are both non-empty. The Authorization value **shall** be `"Basic " + base64("{username}:{password}")`. Authentication failure (401/403) **shall** still resolve `0` without retry. The function signature **shall** default to env var values so all existing call sites automatically benefit.
+
+---
+
+### FR-CAM-069 — Manual Channel Count Override
+
+| Attribute | Value |
+|---|---|
+| **ID** | FR-CAM-069 |
+| **Title** | 수동 채널 수 오버라이드 |
+| **Priority** | Should-Have |
+
+The `DiscoveredCameraPanel` detail panel **shall** display a number input labelled "Channels" that is always visible (not conditional on MaxChannel). The input **shall**:
+
+a. Default to `camera.MaxChannel ?? 1` on mount.  
+b. Accept integer values from `1` to `channelCountMax` (see FR-CAM-071).  
+c. Clamp entered values to `[1, channelCountMax]` on change.  
+d. Reset `selectedChannel` to `1` whenever the channel count is changed.
+
+---
+
+### FR-CAM-070 — channelIndex Persistence in Camera Record
+
+| Attribute | Value |
+|---|---|
+| **ID** | FR-CAM-070 |
+| **Title** | channelIndex 카메라 레코드 저장 |
+| **Priority** | Must-Have |
+
+a. `POST /api/cameras` **shall** accept an optional `channelIndex` integer in the request body.  
+b. When `channelIndex` is provided, it **shall** be stored in the camera DB record as an integer.  
+c. When `MaxChannel > 1` and the operator adds a channel, the client **shall** send `channelIndex = selectedChannel`.  
+d. When `MaxChannel === 1`, `channelIndex` **shall** be omitted (stored as `null`).
+
+---
+
+### FR-CAM-071 — Channel Count Input Limit from SUNAPI MaxChannel
+
+| Attribute | Value |
+|---|---|
+| **ID** | FR-CAM-071 |
+| **Title** | SUNAPI MaxChannel 상한 적용 |
+| **Priority** | Should-Have |
+
+The `channelCountMax` for the channel count input **shall** be computed as follows:
+
+```
+channelCountMax =
+  camera.SupportSunapi === true AND camera.MaxChannel > 1
+    ? camera.MaxChannel   // SUNAPI MaxChannel is authoritative; cap to known count
+    : 64                  // No SUNAPI MaxChannel available; allow liberal manual entry
+```
+
+The HTML `<input max>` attribute and the `onChange` clamp **shall** both enforce this limit. When the cap is derived from SUNAPI, the input's tooltip **shall** state `"max {N} from SUNAPI"`.
+
+---
+
 ## 8. Non-Functional Requirements
 
 ### FR-CAM-050 — Discovery Latency
@@ -540,3 +605,4 @@ interface OnvifProfile {
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for Camera Discovery |
 | 1.1 | 2026-06-23 | LTS Engineering Team | §7b 추가 — FR-CAM-060~067 NVR MaxChannel 요구사항; DeviceInfo/OnvifProfile 스키마에 Channel·MaxChannel·sourceToken·channelIndex 필드 추가 |
+| 1.2 | 2026-06-24 | LTS Engineering Team | §7b 확장 — FR-CAM-068(SUNAPI env 인증), FR-CAM-069(수동 오버라이드), FR-CAM-070(channelIndex 저장), FR-CAM-071(SUNAPI MaxChannel 상한) 추가 |

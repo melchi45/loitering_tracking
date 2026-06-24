@@ -60,10 +60,13 @@ const SERVER_MODE = process.env.SERVER_MODE || 'combined';
 
 const _INGEST_DAEMON_URL = (process.env.INGEST_DAEMON_URL || 'http://127.0.0.1:7070').replace(/\/$/, '');
 
-async function _ingestRegisterCamera(cameraId, rtspUrl, callbackUrl, appRtpCallbackUrl) {
+async function _ingestRegisterCamera(cameraId, rtspUrl, callbackUrl, appRtpCallbackUrl, appRtpRtspUrl) {
   try {
     const body = { id: cameraId, rtspUrl, callbackUrl };
     if (appRtpCallbackUrl) body.appRtpCallbackUrl = appRtpCallbackUrl;
+    // When MediaMTX is in use, rtspUrl is the MediaMTX URL (video/audio only).
+    // App RTP must read from the original camera URL which carries ONVIF data tracks.
+    if (appRtpRtspUrl) body.appRtpRtspUrl = appRtpRtspUrl;
     const resp = await fetch(`${_INGEST_DAEMON_URL}/cameras`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -395,22 +398,23 @@ class PipelineManager {
       const callbackUrl       = `${serverProto}://127.0.0.1:${serverPort}/api/internal/frame/${camera.id}`;
       const appRtpCallbackUrl = `${serverProto}://127.0.0.1:${serverPort}/api/internal/apprtp/${camera.id}`;
       const daemonRtspUrl = mediamtxReady ? captureUrl : rtspUrl;
-      // MediaMTX re-publishes only video/audio — ONVIF data tracks are stripped.
-      // Sending appRtpCallbackUrl when rtspUrl is a MediaMTX URL causes ingest-daemon
-      // to repeatedly fail with EADDRINUSE (PyAV RTCP socket conflicts).
-      const daemonAppRtpUrl = mediamtxReady ? undefined : appRtpCallbackUrl;
+      // When MediaMTX is active, the AI path uses the MediaMTX URL (video/audio only).
+      // App RTP must read from the original camera RTSP URL to access ONVIF data tracks
+      // that MediaMTX does not re-publish.  Pass appRtpRtspUrl so the ingest-daemon
+      // opens a separate direct connection to the camera for ONVIF metadata.
+      const daemonAppRtpRtspUrl = mediamtxReady ? rtspUrl : undefined;
 
       const needsDirectIngestReg = WEBRTC_ENGINE !== 'mediasoup' || !altWebRTCReady;
       if (needsDirectIngestReg) {
-        const daemonReady = await _ingestRegisterCamera(camera.id, daemonRtspUrl, callbackUrl, daemonAppRtpUrl);
+        const daemonReady = await _ingestRegisterCamera(camera.id, daemonRtspUrl, callbackUrl, appRtpCallbackUrl, daemonAppRtpRtspUrl);
         if (!daemonReady) {
           console.error(`[PipelineManager][${camera.id}] Ingest daemon registration failed — no AI frames for this camera`);
         } else {
-          console.log(`[PipelineManager][${camera.id}] Ingest daemon registered (AI-only) → ${daemonRtspUrl}`);
+          console.log(`[PipelineManager][${camera.id}] Ingest daemon registered → AI:${daemonRtspUrl}${daemonAppRtpRtspUrl ? ` AppRTP:${daemonAppRtpRtspUrl}` : ''}`);
         }
         _ingestRtspUrl          = daemonRtspUrl;
         _ingestCallbackUrl      = callbackUrl;
-        _ingestAppRtpCallbackUrl = daemonAppRtpUrl ?? null;
+        _ingestAppRtpCallbackUrl = appRtpCallbackUrl;
       }
     }
 
@@ -465,6 +469,7 @@ class PipelineManager {
       _ingestRtspUrl,
       _ingestCallbackUrl,
       _ingestAppRtpCallbackUrl,
+      _ingestAppRtpRtspUrl: daemonAppRtpRtspUrl ?? null,
       _captureUrl: captureUrl,   // URL ingest-daemon reads from (for mediasoup watchdog re-reg)
     };
 
@@ -1124,7 +1129,7 @@ class PipelineManager {
           if (CAPTURE_BACKEND === 'ingest-daemon' && ctx._ingestRtspUrl) {
             // AI-only or mediamtx-engine path: re-register directly with ingest-daemon.
             await _ingestRemoveCamera(camera.id);
-            const ok = await _ingestRegisterCamera(camera.id, ctx._ingestRtspUrl, ctx._ingestCallbackUrl, ctx._ingestAppRtpCallbackUrl);
+            const ok = await _ingestRegisterCamera(camera.id, ctx._ingestRtspUrl, ctx._ingestCallbackUrl, ctx._ingestAppRtpCallbackUrl, ctx._ingestAppRtpRtspUrl);
             if (!ok) {
               console.error(`[PipelineManager][${camera.id}] Frame watchdog: ingest-daemon re-registration failed`);
             }
@@ -1327,7 +1332,7 @@ class PipelineManager {
         if (ctx._ingestRtspUrl) {
           // mediamtx engine or direct AI-only path: re-register directly
           await _ingestRemoveCamera(cameraId);
-          const ok = await _ingestRegisterCamera(cameraId, ctx._ingestRtspUrl, ctx._ingestCallbackUrl, ctx._ingestAppRtpCallbackUrl);
+          const ok = await _ingestRegisterCamera(cameraId, ctx._ingestRtspUrl, ctx._ingestCallbackUrl, ctx._ingestAppRtpCallbackUrl, ctx._ingestAppRtpRtspUrl);
           results[cameraId] = { ok };
         } else if (CAPTURE_BACKEND === 'ingest-daemon') {
           // mediasoup path: engine re-creates PlainTransports and re-POSTs to daemon

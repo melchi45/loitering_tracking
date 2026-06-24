@@ -252,17 +252,112 @@ async function runApiTests() {
     if (body.data?.id) await del(`/api/cameras/${body.data.id}`);
   });
 
+  await test('TC-H-013c', 'POST /api/cameras: channelIndex stored in camera record (FR-CAM-070)', async () => {
+    const { status, body } = await post('/api/cameras', {
+      name:         'XRN-810S Ch3',
+      rtspUrl:      'rtsp://127.0.0.4:554/profile5/media.smp',
+      channelIndex: 3,
+    });
+    assert(status === 201, `Expected 201, got ${status}: ${JSON.stringify(body)}`);
+    assertEq(body.data?.channelIndex, 3, 'channelIndex in POST response');
+
+    // Verify persisted via GET
+    if (body.data?.id) {
+      const getRes = await fetch(`${BASE_URL}/api/cameras/${body.data.id}`);
+      const getData = await getRes.json().catch(() => ({}));
+      assertEq(getData.data?.channelIndex, 3, 'channelIndex in GET response');
+      await del(`/api/cameras/${body.data.id}`);
+    }
+  });
+
   // Cleanup
   if (createdId) await del(`/api/cameras/${createdId}`);
+}
+
+// ── TC-H-014 … TC-H-017: channelCountMax + SUNAPI auth logic ────────────────
+
+/**
+ * channelCountMax — mirrors DiscoveredCameraPanel.tsx FR-CAM-071 rule
+ */
+function computeChannelCountMax(camera) {
+  return camera.SupportSunapi && (camera.MaxChannel ?? 1) > 1
+    ? camera.MaxChannel
+    : 64;
+}
+
+/**
+ * SUNAPI Basic-auth header builder — mirrors querySunapiMaxChannel()
+ */
+function buildBasicAuth(username, password) {
+  if (!username || !password) return null;
+  return 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
+}
+
+async function runChannelCountMaxTests() {
+  console.log('\n── channelCountMax + SUNAPI Auth Tests ──────────────────────\n');
+
+  await test('TC-H-014', 'channelCountMax = SUNAPI MaxChannel when SupportSunapi=true (FR-CAM-071)', async () => {
+    const cam = { SupportSunapi: true, MaxChannel: 8 };
+    assertEq(computeChannelCountMax(cam), 8, 'channelCountMax');
+  });
+
+  await test('TC-H-015', 'channelCountMax = 64 when SupportSunapi=false (FR-CAM-071)', async () => {
+    const cam = { SupportSunapi: false, MaxChannel: 4 };
+    assertEq(computeChannelCountMax(cam), 64, 'channelCountMax (non-SUNAPI)');
+  });
+
+  await test('TC-H-015b', 'channelCountMax = 64 when SupportSunapi=true but MaxChannel=1 (FR-CAM-071)', async () => {
+    const cam = { SupportSunapi: true, MaxChannel: 1 };
+    assertEq(computeChannelCountMax(cam), 64, 'channelCountMax (SUNAPI single-ch)');
+  });
+
+  await test('TC-H-015c', 'channelCountMax = 64 when MaxChannel is undefined (FR-CAM-071)', async () => {
+    const cam = { SupportSunapi: true };
+    assertEq(computeChannelCountMax(cam), 64, 'channelCountMax (MaxChannel undefined)');
+  });
+
+  await test('TC-H-017', 'SUNAPI Basic auth header: admin:password → correct base64 (FR-CAM-068)', async () => {
+    const header = buildBasicAuth('admin', 'password');
+    assertEq(header, 'Basic YWRtaW46cGFzc3dvcmQ=', 'Authorization header');
+  });
+
+  await test('TC-H-017b', 'SUNAPI Basic auth: empty password → no header (FR-CAM-068)', async () => {
+    const header = buildBasicAuth('admin', '');
+    assertEq(header, null, 'No header when password empty');
+  });
+
+  await test('TC-H-017c', 'SUNAPI Basic auth: both empty → no header (FR-CAM-068)', async () => {
+    const header = buildBasicAuth('', '');
+    assertEq(header, null, 'No header when both empty');
+  });
+
+  // channelCountMax onChange clamp logic (mirrors component onChange)
+  await test('TC-H-014b', 'channelCount onChange clamps to channelCountMax (FR-CAM-069)', async () => {
+    const cam = { SupportSunapi: true, MaxChannel: 4 };
+    const max = computeChannelCountMax(cam);
+    // Simulate entering 10 (above SUNAPI MaxChannel of 4)
+    const rawInput = 10;
+    const clamped = Math.min(rawInput || 1, max);
+    assertEq(clamped, 4, 'clamped to SUNAPI MaxChannel');
+  });
+
+  await test('TC-H-014c', 'channelCount onChange allows values up to 64 for non-SUNAPI (FR-CAM-069)', async () => {
+    const cam = { SupportSunapi: false, MaxChannel: 4 };
+    const max = computeChannelCountMax(cam);
+    const rawInput = 32;
+    const clamped = Math.min(rawInput || 1, max);
+    assertEq(clamped, 32, 'not clamped below 64');
+  });
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 (async () => {
-  console.log('=== NVR Channel Discovery Tests (TC-H-001 ~ TC-H-013) ===');
+  console.log('=== NVR Channel Discovery Tests (TC-H-001 ~ TC-H-017) ===');
 
   await runUnitTests();
   await runResolveUrlTests();
+  await runChannelCountMaxTests();
   await runApiTests();
 
   console.log(`\n══════════════════════════════════════════════════════`);

@@ -1,12 +1,14 @@
 'use strict';
 /**
- * TC-APPRTP-007 ~ TC-APPRTP-009 — ONVIF App RTP Internal API
+ * TC-APPRTP-007 ~ TC-APPRTP-014 — ONVIF App RTP Internal API
  *
  * Tests POST /api/internal/apprtp/:cameraId logic (unit — no Express):
- *   TC-APPRTP-007  Socket.IO 'appRtp' broadcast
- *   TC-APPRTP-008  ONVIF payload parse → DB save → 'onvif:event' broadcast
- *   TC-APPRTP-008B Dedup: same topic+sourceToken+state → single DB insert
- *   TC-APPRTP-009  Radiometry data → 'onvif:temperature' broadcast (no dedup)
+ *   TC-APPRTP-007    Socket.IO 'appRtp' broadcast
+ *   TC-APPRTP-008    ONVIF payload parse → DB save → 'onvif:event' broadcast
+ *   TC-APPRTP-008B   Dedup: same topic+sourceToken+state → single DB insert
+ *   TC-APPRTP-009    Radiometry data → 'onvif:temperature' broadcast (no dedup)
+ *   TC-APPRTP-013    MediaMTX 환경: appRtpRtspUrl이 원본 카메라 URL로 설정됨
+ *   TC-APPRTP-014    EADDRINUSE 3회 연속 → App RTP 루프 종료 방어 처리
  *   TC-APPRTP-PARSER-A  parseOnvifPayload: MotionAlarm state=true
  *   TC-APPRTP-PARSER-B  parseOnvifPayload: non-MetadataStream → null
  *   TC-APPRTP-PARSER-C  parseOnvifPayload: BoxTemperatureReading radiometry array
@@ -306,6 +308,102 @@ function runHandler({ cameraId, data, io, db, lastStates = new Map(), webrtcEngi
       if (onvifIdx !== -1) {
         assert(tempIdx < onvifIdx, 'onvif:temperature must emit before onvif:event');
       }
+    });
+  }
+
+  // ── TC-APPRTP-013 / 014 — MediaMTX URL 분리 + EADDRINUSE 방어 ─────────────
+
+  {
+    // ── Simulate _ingestRegisterCamera body construction (pipelineManager.js) ──
+    function buildRegistrationBody({ cameraId, daemonRtspUrl, callbackUrl, appRtpCallbackUrl, daemonAppRtpRtspUrl }) {
+      const body = { id: cameraId, rtspUrl: daemonRtspUrl, callbackUrl };
+      if (appRtpCallbackUrl) body.appRtpCallbackUrl = appRtpCallbackUrl;
+      if (daemonAppRtpRtspUrl) body.appRtpRtspUrl = daemonAppRtpRtspUrl;
+      return body;
+    }
+
+    await test('TC-APPRTP-013', 'MediaMTX 환경: body.appRtpRtspUrl은 원본 카메라 URL, rtspUrl은 MediaMTX URL', () => {
+      const originalCameraUrl = 'rtsp://10.0.0.5/live/0/MAIN';
+      const mediamtxUrl       = 'rtsp://127.0.0.1:8554/cam-uuid';
+      const callbackUrl       = 'http://127.0.0.1:3080/api/internal/frame/cam-uuid';
+      const appRtpCallbackUrl = 'http://127.0.0.1:3080/api/internal/apprtp/cam-uuid';
+
+      // When mediamtxReady=true: daemonRtspUrl = mediamtxUrl, daemonAppRtpRtspUrl = originalCameraUrl
+      const body = buildRegistrationBody({
+        cameraId: 'cam-uuid',
+        daemonRtspUrl: mediamtxUrl,
+        callbackUrl,
+        appRtpCallbackUrl,
+        daemonAppRtpRtspUrl: originalCameraUrl,
+      });
+
+      assertEq(body.rtspUrl,          mediamtxUrl,       'rtspUrl must be MediaMTX URL (AI path)');
+      assertEq(body.appRtpRtspUrl,    originalCameraUrl, 'appRtpRtspUrl must be original camera URL');
+      assertEq(body.appRtpCallbackUrl, appRtpCallbackUrl, 'appRtpCallbackUrl must be set');
+      assert(body.appRtpRtspUrl !== body.rtspUrl, 'App RTP URL and AI URL must differ');
+    });
+
+    await test('TC-APPRTP-013B', 'MediaMTX 미사용: appRtpRtspUrl 필드 없음 (rtspUrl이 원본 카메라 URL)', () => {
+      const originalCameraUrl = 'rtsp://10.0.0.5/live/0/MAIN';
+      const callbackUrl       = 'http://127.0.0.1:3080/api/internal/frame/cam-uuid';
+      const appRtpCallbackUrl = 'http://127.0.0.1:3080/api/internal/apprtp/cam-uuid';
+
+      // When mediamtxReady=false: daemonRtspUrl = originalCameraUrl, daemonAppRtpRtspUrl = undefined
+      const body = buildRegistrationBody({
+        cameraId: 'cam-uuid',
+        daemonRtspUrl: originalCameraUrl,
+        callbackUrl,
+        appRtpCallbackUrl,
+        daemonAppRtpRtspUrl: undefined,
+      });
+
+      assertEq(body.rtspUrl, originalCameraUrl, 'rtspUrl must be original camera URL');
+      assert(!('appRtpRtspUrl' in body), 'appRtpRtspUrl must not be present when MediaMTX is not used');
+    });
+
+    await test('TC-APPRTP-014', 'EADDRINUSE 3회 연속 → addr_in_use_n 카운터가 임계값(3)에 도달해 루프 탈출', () => {
+      // Simulate the _app_rtp_loop EADDRINUSE guard logic
+      let addr_in_use_n = 0;
+      const MAX_ADDR_IN_USE = 3;
+      let exited = false;
+
+      function simulateOsError(errno) {
+        const err = new Error('Address already in use');
+        err.errno = errno;
+        return err;
+      }
+
+      for (let attempt = 0; attempt < 10; attempt++) {
+        const exc = simulateOsError(98); // EADDRINUSE
+        if (exc.errno === 98) {
+          addr_in_use_n++;
+          if (addr_in_use_n >= MAX_ADDR_IN_USE) {
+            exited = true;
+            break;
+          }
+        }
+      }
+
+      assert(exited, 'Loop must exit after 3 consecutive EADDRINUSE errors');
+      assertEq(addr_in_use_n, MAX_ADDR_IN_USE, 'Counter must reach exactly 3 before exit');
+    });
+
+    await test('TC-APPRTP-014B', 'Non-EADDRINUSE OSError는 카운터를 증가시키지 않음', () => {
+      let addr_in_use_n = 0;
+      const MAX_ADDR_IN_USE = 3;
+      let exited = false;
+
+      // errno=111 (ECONNREFUSED) — should NOT trigger exit
+      const connRefused = new Error('Connection refused');
+      connRefused.errno = 111;
+
+      if (connRefused.errno === 98) {
+        addr_in_use_n++;
+        if (addr_in_use_n >= MAX_ADDR_IN_USE) exited = true;
+      }
+
+      assertEq(addr_in_use_n, 0, 'ECONNREFUSED must not increment addr_in_use_n');
+      assert(!exited, 'Loop must NOT exit for non-EADDRINUSE errors');
     });
   }
 

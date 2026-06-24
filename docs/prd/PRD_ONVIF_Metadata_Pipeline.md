@@ -46,6 +46,8 @@ Gantt 타임라인 UI에 표시하는 기능을 제공합니다.
 | PRD-ONVIF-005 | 항상 `inp.close()` 호출 (MediaMTX 세션 누수 방지) | P0 |
 | PRD-ONVIF-006 | `_signal_stop()` 후 3초 이내 스레드 종료 | P1 |
 | PRD-ONVIF-007 | RTP 패킷을 `{pt, timestamp, seq, payload}` JSON으로 HTTP POST | P0 |
+| PRD-ONVIF-008 | MediaMTX 환경에서 `appRtpRtspUrl` (원본 카메라 URL)을 별도 전달해 ONVIF 데이터 트랙 수집 보장 | P0 |
+| PRD-ONVIF-009 | `EADDRINUSE` 3회 연속 발생 시 App RTP 스레드 자동 종료 (로그 스팸 방지) | P1 |
 
 ### 3.2 서버 라우팅 (`POST /api/internal/apprtp/:cameraId`)
 
@@ -164,3 +166,4 @@ Gantt 타임라인 UI에 표시하는 기능을 제공합니다.
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-24 | 초기 작성 — ONVIF App RTP 수집 파이프라인 PRD |
+| 1.1 | 2026-06-24 | PRD-ONVIF-008~009 추가 — MediaMTX 환경 App RTP URL 분리 및 EADDRINUSE 방어 처리 |

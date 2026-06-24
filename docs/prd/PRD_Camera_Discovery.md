@@ -276,6 +276,9 @@ WiseNet NVR devices (Network Video Recorders) contain multiple physical camera c
 | UI clarity | Channel count badge visible on all NVR cards in the discovery list |
 | Zero-friction add | Operator can select a channel and add it in ≤ 3 clicks |
 | RTSP correctness | Each channel produces a valid, distinct RTSP URL |
+| Channel override | Operator can manually set channel count when auto-detection fails |
+| SUNAPI auth | `RTSP_DEFAULT_USERNAME`/`PASSWORD` env vars used for SUNAPI MaxChannel query |
+| channelIndex persistence | Selected channel index stored in camera record |
 
 ### 9.3 User Stories
 
@@ -285,22 +288,27 @@ WiseNet NVR devices (Network Video Recorders) contain multiple physical camera c
 | As an operator, I want to select a specific NVR channel to monitor | Channel selection grid visible in the detail panel when MaxChannel > 1 |
 | As an operator, I want the correct RTSP URL auto-populated for each channel | RTSP URL changes when a different channel button is clicked |
 | As an operator, I want the camera name to reflect the channel I added | Camera added as `"{Model} Ch{N}"` in the camera list |
+| As an operator, I want to manually specify channel count when auto-detection fails | Channels number input always visible in detail panel; adjustable from 1 to 64 (or SUNAPI MaxChannel limit) |
+| As an installer, I want the system to use site credentials to get accurate channel count | SUNAPI MaxChannel query sends HTTP Basic auth from `RTSP_DEFAULT_USERNAME`/`PASSWORD` |
+| As an operator, I want to know which channel I added | `channelIndex` stored in camera record; retrievable via `GET /api/cameras/:id` |
 
 ### 9.4 Out of Scope
 
 - Bulk-adding all NVR channels at once (add one at a time)
 - Real-time NVR channel status (connected / disconnected per channel)
-- SUNAPI credential-based channel query (only no-auth best-effort is supported)
+- ONVIF Digest auth for GetProfiles during discovery (post-add credential flow only)
 
 ### 9.5 Technical Approach
 
 | Layer | Implementation |
 |---|---|
 | ONVIF enrichment | `enrichDevice()` counts distinct `SourceToken` values → `MaxChannel` |
-| SUNAPI best-effort | `querySunapiMaxChannel()` — HTTP GET without auth, 2 s timeout |
+| SUNAPI with auth | `querySunapiMaxChannel()` — HTTP Basic auth from `RTSP_DEFAULT_USERNAME`/`PASSWORD` env vars; 2 s timeout |
 | Merge rule | `mergeDevices()` takes `max(existing.MaxChannel, incoming.MaxChannel)` |
 | UI card badge | `{MaxChannel}CH` amber badge when `MaxChannel > 1` |
 | Channel panel | `channelIndex`-based profile lookup; `channelRtspUrl()` fallback |
+| Channel count input | Number input in detail panel; `max = camera.MaxChannel` when SUNAPI MaxChannel known; otherwise `max = 64` |
+| channelIndex storage | `POST /api/cameras` body includes `channelIndex`; stored in DB camera record |
 
 ---
 
@@ -310,3 +318,4 @@ WiseNet NVR devices (Network Video Recorders) contain multiple physical camera c
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for Camera Discovery |
 | 1.1 | 2026-06-23 | LTS Engineering Team | §9 추가 — NVR MaxChannel 다중 채널 제품 요구사항, 사용자 스토리, 기술 접근법 |
+| 1.2 | 2026-06-24 | LTS Engineering Team | §9 업데이트 — SUNAPI env 인증, 수동 채널 수 오버라이드, SUNAPI MaxChannel 상한 적용, channelIndex DB 저장 |

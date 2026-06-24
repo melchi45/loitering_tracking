@@ -180,7 +180,11 @@ class CameraSession:
     Required: id, rtspUrl, callbackUrl  (AI JPEG path)
     Optional: mediasoupPort             (H264 RTP → mediasoup video)
               mediasoupAudioPort        (Opus RTP → mediasoup audio)
-              appRtpCallbackUrl         (App RTP forwarding — future)
+              appRtpCallbackUrl         (App RTP forwarding — ONVIF metadata)
+              appRtpRtspUrl             (RTSP URL for App RTP; defaults to rtspUrl.
+                                         Use to point App RTP at the original camera
+                                         when rtspUrl is a MediaMTX re-publish URL
+                                         that strips ONVIF data tracks.)
     """
 
     def __init__(self, cfg: dict):
@@ -190,6 +194,10 @@ class CameraSession:
         self.mediasoup_video_port  = cfg.get("mediasoupPort")
         self.mediasoup_audio_port  = cfg.get("mediasoupAudioPort")
         self.app_rtp_callback_url  = cfg.get("appRtpCallbackUrl")
+        # When the server uses MediaMTX as a proxy, rtsp_url points to the MediaMTX
+        # re-publish URL which carries only video/audio.  appRtpRtspUrl (if set)
+        # points to the original camera URL where ONVIF data tracks live.
+        self.app_rtp_rtsp_url      = cfg.get("appRtpRtspUrl", cfg["rtspUrl"])
 
         self._stop = threading.Event()
 
@@ -599,9 +607,9 @@ class CameraSession:
                     addr_in_use_n += 1
                     if addr_in_use_n >= 3:
                         log.warning(
-                            "[%s] App RTP: persistent EADDRINUSE (%d) — "
-                            "RTSP source likely does not carry a data track; exiting",
-                            self.id[:8], addr_in_use_n,
+                            "[%s] App RTP: persistent EADDRINUSE (%d) on %s — "
+                            "source does not carry a data track; exiting",
+                            self.id[:8], addr_in_use_n, self.app_rtp_rtsp_url,
                         )
                         return
                 log.warning("[%s] App RTP error: %s — retry in %.1fs",
@@ -631,7 +639,9 @@ class CameraSession:
         # newer versions removed it; passing the ffmpeg "timeout" option at open
         # time is the portable equivalent.
         _app_rtp_opts = {**_RTSP_OPTIONS, "timeout": str(int(APP_RTP_READ_TIMEOUT * 1_000_000))}
-        inp = av.open(self.rtsp_url, options=_app_rtp_opts)
+        # Use app_rtp_rtsp_url (original camera URL) — not rtsp_url which may be a
+        # MediaMTX re-publish URL that strips ONVIF data tracks.
+        inp = av.open(self.app_rtp_rtsp_url, options=_app_rtp_opts)
         try:
             # Find non-video, non-audio streams (data, subtitle, application tracks).
             # Samsung / ONVIF metadata is typically exposed as a "data" or "subtitle"

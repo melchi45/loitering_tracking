@@ -474,9 +474,12 @@ Hanwha Vision NVR devices (e.g., XRN-410S, XRN-810S, XRN-1610S) expose multiple 
 | RFP-CH-005 | Clicking a channel button **shall** update the displayed RTSP URL to the corresponding stream URL |
 | RFP-CH-006 | The "+ Add to System" action **shall** register the selected channel with name format `"{DeviceName} Ch{N}"` |
 | RFP-CH-007 | `MaxChannel` **shall** be derived from ONVIF `GetProfiles` by counting distinct `VideoSourceConfiguration/SourceToken` values |
-| RFP-CH-008 | For SUNAPI devices without ONVIF enrichment, a best-effort SUNAPI REST query **shall** be attempted (no-auth, 2 s timeout) |
+| RFP-CH-008 | For SUNAPI devices, a best-effort SUNAPI REST query **shall** be attempted with HTTP Basic auth using `RTSP_DEFAULT_USERNAME` / `RTSP_DEFAULT_PASSWORD` env vars (2 s timeout) |
 | RFP-CH-009 | When both ONVIF and SUNAPI yield `MaxChannel`, the larger value **shall** win |
-| RFP-CH-010 | SUNAPI query failure (auth required, timeout) **shall** gracefully fall back to `MaxChannel = 1` without error |
+| RFP-CH-010 | SUNAPI query failure (auth failure, timeout) **shall** gracefully fall back to `MaxChannel = 1` without error |
+| RFP-CH-011 | The detail panel **shall** always show a "Channels" number input allowing manual override of the detected channel count |
+| RFP-CH-012 | When `SupportSunapi = true` and `MaxChannel > 1` (from SUNAPI), the channel count input max **shall** be capped at `MaxChannel`; otherwise the cap is 64 |
+| RFP-CH-013 | The `channelIndex` (1-based, selected channel) **shall** be stored in the camera record when `POST /api/cameras` is called for an NVR channel |
 
 ### 10.3 UI Specification
 
@@ -512,3 +515,4 @@ rtsp://192.168.1.10:554/profile3/media.smp
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for Camera Discovery |
 | 1.1 | 2026-06-23 | LTS Engineering Team | §10 추가 — NVR MaxChannel 다중 채널 탐색 요구사항 및 UI 명세 |
+| 1.2 | 2026-06-24 | LTS Engineering Team | §10.2 업데이트 — RFP-CH-008 SUNAPI 인증 추가, RFP-CH-011~013 수동 오버라이드·상한·channelIndex 저장 추가 |
