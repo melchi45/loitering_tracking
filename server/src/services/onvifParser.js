@@ -51,6 +51,9 @@ const TOPIC_MAP = {
   // ── Samsung WiseNet (tnssamsung namespace) ────────────────────────────────
   'tnssamsung:IVA/Fire':                                            { type: 'fire',                  label: 'Fire Detected',          severity: 'critical' },
   'tnssamsung:IVA/Smoke':                                           { type: 'smoke',                 label: 'Smoke Detected',         severity: 'critical' },
+  'tnssamsung:IVA/EarlyFireDetection':                              { type: 'earlyFireDetection',    label: 'Early Fire Detection',   severity: 'critical' },
+  'tns1:RuleEngine/tnssamsung:EarlyFireDetection':                  { type: 'earlyFireDetection',    label: 'Early Fire Detection',   severity: 'critical' },
+  'tns1:VideoAnalytics/tnssamsung:EarlyFireDetection':              { type: 'earlyFireDetection',    label: 'Early Fire Detection',   severity: 'critical' },
   'tnssamsung:IVA/ObjectDetection':                                 { type: 'objectDetection',       label: 'Object Detection',       severity: 'info'     },
   'tnssamsung:IVA/LoiteringDetection':                              { type: 'loiteringDetection',    label: 'Loitering Detection',    severity: 'warning'  },
   'tnssamsung:IVA/AudioDetection':                                  { type: 'audioAlarm',            label: 'Audio Alarm',            severity: 'warning'  },

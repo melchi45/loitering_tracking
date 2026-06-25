@@ -84,6 +84,14 @@ router.post(
     if (_db && data.payload) {
       try {
         const parsedList = parseOnvifPayload(data.payload);
+        // Log unparseable payloads (non-MetadataStream) at debug level so the raw XML
+        // can be inspected when investigating missing ONVIF event types (e.g. EarlyFireDetection).
+        if (parsedList === null) {
+          const xml = (() => { try { return Buffer.from(data.payload, 'base64').toString('utf-8'); } catch { return null; } })();
+          if (xml && xml.length > 64) {
+            console.debug(`[internalApi][ONVIF] cam=${cameraId} payload not MetadataStream (${xml.length}B): ${xml.slice(0, 200)}`);
+          }
+        }
         if (Array.isArray(parsedList)) {
           for (const parsed of parsedList) {
             // Radiometry (thermal camera): emit real-time temperature event every reading.
