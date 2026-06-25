@@ -318,6 +318,12 @@ grep '\[ERROR\]' /var/log/lts/lts-$(date +%Y-%m-%d).log
 # ── MCP 서버 ─────────────────────────────────────────────────────────────────
 cd mcp-server && npm start           # stdio 모드 (Claude Code 연동)
 cd mcp-server && npm run start:http  # HTTP+SSE 모드 (원격 LLM 연동)
+
+# server npm 스크립트로 HTTP 모드 MCP 서버 관리 (server/.env의 MCP_PORT 사용, 기본 3002)
+cd server
+npm run mcp:start    # MCP HTTP 서버 백그라운드 시작 (TRANSPORT=http)
+npm run mcp:stop     # MCP HTTP 서버 종료
+npm run mcp:restart  # MCP HTTP 서버 재시작
 ```
 
 ---
