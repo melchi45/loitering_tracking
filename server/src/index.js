@@ -548,8 +548,15 @@ async function main() {
 
   // Global error handler
   app.use((err, req, res, next) => {
-    console.error('[Express] Unhandled error:', err);
-    res.status(500).json({ success: false, error: err.message });
+    // body-parser JSON parse failures are client errors — return 400 silently
+    if (err.type === 'entity.parse.failed') {
+      return res.status(400).json({ success: false, error: 'Invalid JSON body' });
+    }
+    const status = err.status || err.statusCode || 500;
+    if (status >= 500) {
+      console.error('[Express] Unhandled error:', err);
+    }
+    res.status(status).json({ success: false, error: err.message });
   });
 
   // ── Socket.IO Handlers ────────────────────────────────────────────────────
