@@ -324,6 +324,11 @@ cd server
 npm run mcp:start    # MCP HTTP 서버 백그라운드 시작 (TRANSPORT=http)
 npm run mcp:stop     # MCP HTTP 서버 종료
 npm run mcp:restart  # MCP HTTP 서버 재시작
+
+# 루트 workspace npm 스크립트 (cd 없이 사용 가능)
+npm run mcp:start    # → server/npm run mcp:start
+npm run mcp:stop     # → server/npm run mcp:stop
+npm run mcp:restart  # → server/npm run mcp:restart
 ```
 
 ---
