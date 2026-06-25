@@ -189,7 +189,7 @@ function _closeCam(cam, cameraId) {
 
 // ── Camera stream management ───────────────────────────────────────────────────
 
-async function addCameraStream(cameraId, rtspUrl, appRtpRtspUrl = undefined) {
+async function addCameraStream(cameraId, rtspUrl, appRtpRtspUrl = undefined, captureFps = 0) {
   try {
     const router = await _ensureRouter();
     await removeCameraStream(cameraId);
@@ -270,6 +270,9 @@ async function addCameraStream(cameraId, rtspUrl, appRtpRtspUrl = undefined) {
     // appRtpRtspUrl so the ingest-daemon App RTP thread can access ONVIF data
     // tracks that MediaMTX does not re-publish.
     if (appRtpRtspUrl) ingestBody.appRtpRtspUrl = appRtpRtspUrl;
+    // Per-camera FPS target — ingest daemon uses time-based throttling when set.
+    const _captureFps = captureFps || parseInt(process.env.CAPTURE_FPS, 10) || 0;
+    if (_captureFps > 0) ingestBody.captureFps = _captureFps;
 
     const status = await _ingestPost('/cameras', ingestBody);
 
@@ -280,6 +283,7 @@ async function addCameraStream(cameraId, rtspUrl, appRtpRtspUrl = undefined) {
     _cameras.set(cameraId, {
       rtspUrl,
       appRtpRtspUrl,
+      captureFps: _captureFps,
       videoPlain, videoProducer,
       audioPlain, audioProducer,
       directTransport, dataProducer,
@@ -907,6 +911,7 @@ async function reregisterAllWithIngest() {
         mediasoupAudioPort: audioPort,
       };
       if (cam.appRtpRtspUrl) reregBody.appRtpRtspUrl = cam.appRtpRtspUrl;
+      if (cam.captureFps > 0) reregBody.captureFps = cam.captureFps;
       const status = await _ingestPost('/cameras', reregBody);
       results[cameraId] = { ok: status === 200 || status === 201, status, videoPort, audioPort };
     } catch (e) {

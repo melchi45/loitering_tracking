@@ -13,14 +13,15 @@ HTTP API (default :7070):
   POST   /cameras   { "id", "rtspUrl", "callbackUrl",
                       "mediasoupPort"?,      # H264 RTP → mediasoup video PlainTransport
                       "mediasoupAudioPort"?, # Opus RTP → mediasoup audio PlainTransport
-                      "appRtpCallbackUrl"?   # App RTP → server → DataChannel
+                      "appRtpCallbackUrl"?,  # App RTP → server → DataChannel
+                      "captureFps"?          # target AI frame rate (default: AI_FRAME_INTERVAL)
                     }
   DELETE /cameras/:id
   GET    /cameras   → { "count": N }
   GET    /health    → { "status": "ok", "cameras": N }
 
 Environment:
-  AI_FRAME_INTERVAL — push every Nth decoded frame to AI (default: 3)
+  AI_FRAME_INTERVAL — push every Nth decoded frame to AI (default: 3, overridden per-camera by captureFps)
   JPEG_QUALITY      — JPEG encode quality 1-95 (default: 85)
   AI_MAX_WIDTH      — resize AI frames to at most this width (default: 640)
   IDR_WAIT_TIMEOUT  — seconds to wait for first IDR keyframe (default: 2)
@@ -198,6 +199,12 @@ class CameraSession:
         # re-publish URL which carries only video/audio.  appRtpRtspUrl (if set)
         # points to the original camera URL where ONVIF data tracks live.
         self.app_rtp_rtsp_url      = cfg.get("appRtpRtspUrl", cfg["rtspUrl"])
+        # Per-camera target AI FPS.  When > 0, time-based throttling replaces
+        # the global AI_FRAME_INTERVAL counter so different cameras can run at
+        # different rates regardless of their native stream FPS.
+        _fps = cfg.get("captureFps", 0)
+        self._ai_push_interval = (1.0 / float(_fps)) if _fps and float(_fps) > 0 else 0.0
+        self._ai_last_push     = 0.0
 
         self._stop = threading.Event()
 
@@ -282,9 +289,9 @@ class CameraSession:
                      vs.codec_context.width,
                      vs.codec_context.height)
 
-            idr_seen     = False
-            idr_deadline = time.monotonic() + IDR_WAIT_TIMEOUT
-            frame_counter = 0
+            idr_seen      = False
+            idr_deadline  = time.monotonic() + IDR_WAIT_TIMEOUT
+            packet_counter = 0  # counts all IDR-past packets, decoded or not
 
             for packet in container.demux(vs):
                 if self._stop.is_set():
@@ -304,11 +311,25 @@ class CameraSession:
                     else:
                         continue
 
+                # Decide whether to decode BEFORE doing the expensive H264 decode.
+                # RTSP packet reads (demux) are cheap; H264 decode is CPU-intensive.
+                # Skipping decode for frames we won't push keeps the RTSP reader fast
+                # and prevents MediaMTX "reader is too slow / discarding frames" warnings.
+                packet_counter += 1
+                if self._ai_push_interval > 0:
+                    _now = time.monotonic()
+                    _should_push = (_now - self._ai_last_push >= self._ai_push_interval)
+                else:
+                    _should_push = (packet_counter % AI_FRAME_INTERVAL == 0)
+
+                if not _should_push:
+                    continue  # consume RTSP packet without decoding
+
                 try:
                     for frame in packet.decode():
-                        frame_counter += 1
-                        if frame_counter % AI_FRAME_INTERVAL == 0:
-                            self._push_jpeg(frame)
+                        if self._ai_push_interval > 0:
+                            self._ai_last_push = time.monotonic()
+                        self._push_jpeg(frame)
                         break
                 except Exception as dec_err:
                     log.debug("[%s] decode: %s", self.id[:8], dec_err)
@@ -510,14 +531,19 @@ class CameraSession:
             },
         )
 
+        # Both passthrough and transcode paths use stimeout (socket-level I/O
+        # timeout) instead of _Watchdog.  Calling container.close() from a
+        # _Watchdog background thread while inp.demux() is blocking on a socket
+        # read is not thread-safe in libav and can segfault the process even for
+        # passthrough (demux+mux only, no explicit decode).  stimeout fires
+        # inside libav's own I/O layer and raises an exception on the foreground
+        # demux thread, which is always safe.
+        _audio_opts = {**_RTSP_OPTIONS,
+                       "stimeout": str(int(RTSP_READ_TIMEOUT * 1_000_000))}
+
         # Pass through if already Opus; transcode everything else.
         if codec_name == "opus":
-            # Opus passthrough: only demux+mux, no decode — _Watchdog is safe here
-            # because container.close() from a background thread cannot race with
-            # any libav decode/resample operation.
-            wd  = _Watchdog(RTSP_READ_TIMEOUT, f"[{self.id[:8]}] artp", self._stop)
-            inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS)
-            wd.arm(inp)
+            inp = av.open(self.rtsp_url, options=_audio_opts)
             try:
                 as_ = next((s for s in inp.streams if s.type == "audio"), None)
                 if as_ is None:
@@ -532,7 +558,6 @@ class CameraSession:
                             break
                         if pkt.size == 0:
                             continue
-                        wd.reset()
                         if pkt.dts is not None:
                             if last_dts is not None and pkt.dts <= last_dts:
                                 pkt.dts = last_dts + 1
@@ -547,21 +572,12 @@ class CameraSession:
                 finally:
                     out.close()
             finally:
-                wd.disarm()
                 try:
                     inp.close()
                 except Exception:
                     pass
         else:
-            # Transcoding path (e.g. pcm_mulaw → opus): pkt.decode() +
-            # resampler.resample() run while the container is open.  Calling
-            # container.close() from a _Watchdog background thread while those
-            # libav operations are in flight can segfault the process.  Use
-            # stimeout (libav socket-level I/O timeout) instead — it fires
-            # inside libav's own I/O layer so there is no cross-thread race.
-            _transcode_opts = {**_RTSP_OPTIONS,
-                               "stimeout": str(int(RTSP_READ_TIMEOUT * 1_000_000))}
-            inp = av.open(self.rtsp_url, options=_transcode_opts)
+            inp = av.open(self.rtsp_url, options=_audio_opts)
             try:
                 as_ = next((s for s in inp.streams if s.type == "audio"), None)
                 if as_ is None:

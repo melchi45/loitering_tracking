@@ -60,13 +60,15 @@ const SERVER_MODE = process.env.SERVER_MODE || 'combined';
 
 const _INGEST_DAEMON_URL = (process.env.INGEST_DAEMON_URL || 'http://127.0.0.1:7070').replace(/\/$/, '');
 
-async function _ingestRegisterCamera(cameraId, rtspUrl, callbackUrl, appRtpCallbackUrl, appRtpRtspUrl) {
+async function _ingestRegisterCamera(cameraId, rtspUrl, callbackUrl, appRtpCallbackUrl, appRtpRtspUrl, captureFps) {
   try {
     const body = { id: cameraId, rtspUrl, callbackUrl };
     if (appRtpCallbackUrl) body.appRtpCallbackUrl = appRtpCallbackUrl;
     // When MediaMTX is in use, rtspUrl is the MediaMTX URL (video/audio only).
     // App RTP must read from the original camera URL which carries ONVIF data tracks.
     if (appRtpRtspUrl) body.appRtpRtspUrl = appRtpRtspUrl;
+    // Per-camera FPS target — ingest daemon uses time-based throttling when set.
+    if (captureFps && captureFps > 0) body.captureFps = captureFps;
     const resp = await fetch(`${_INGEST_DAEMON_URL}/cameras`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -379,7 +381,7 @@ class PipelineManager {
       // Retry up to 3 times with a 2-second delay — ingest-daemon may still be
       // binding its port when the first addCameraStream call arrives on startup.
       for (let attempt = 0; attempt < 3; attempt++) {
-        altWebRTCReady = await getWebRTCEngine().addCameraStream(camera.id, captureUrl, daemonAppRtpRtspUrl).catch(() => false);
+        altWebRTCReady = await getWebRTCEngine().addCameraStream(camera.id, captureUrl, daemonAppRtpRtspUrl, captureFps).catch(() => false);
         if (altWebRTCReady) break;
         if (attempt < 2) {
           console.warn(`[PipelineManager][${camera.id.slice(0,8)}] addCameraStream attempt ${attempt + 1} failed — retrying in 2s`);
@@ -410,7 +412,7 @@ class PipelineManager {
 
       const needsDirectIngestReg = WEBRTC_ENGINE !== 'mediasoup' || !altWebRTCReady;
       if (needsDirectIngestReg) {
-        const daemonReady = await _ingestRegisterCamera(camera.id, daemonRtspUrl, callbackUrl, appRtpCallbackUrl, daemonAppRtpRtspUrl);
+        const daemonReady = await _ingestRegisterCamera(camera.id, daemonRtspUrl, callbackUrl, appRtpCallbackUrl, daemonAppRtpRtspUrl, captureFps);
         if (!daemonReady) {
           console.error(`[PipelineManager][${camera.id}] Ingest daemon registration failed — no AI frames for this camera`);
         } else {
@@ -681,6 +683,7 @@ class PipelineManager {
                   };
                   this._personTrajectory.set(f.faceId, newTraj);
                   this._scheduleFaceTrackingSave();
+                  this._upsertTrajectoryToDb(newTraj);
                   this._io.emit('person:trajectory-update', newTraj);
                 } else {
                   // Existing person in same camera — update exitTime silently
@@ -720,6 +723,7 @@ class PipelineManager {
                   traj.lastSeenAt      = ev.timestamp;
                 }
                 this._scheduleFaceTrackingSave();
+                this._upsertTrajectoryToDb(traj);
                 this._io.emit('person:trajectory-update', traj);
 
                 this._io.emit('face:reidentified', {
@@ -1140,7 +1144,7 @@ class PipelineManager {
           } else if (CAPTURE_BACKEND === 'ingest-daemon' && WEBRTC_ENGINE !== 'mediamtx') {
             // mediasoup path: _ingestRtspUrl is null because mediasoupEngine.addCameraStream()
             // handled registration. Re-register via the engine (recreates PlainTransports + re-POST to daemon).
-            const ok = await getWebRTCEngine().addCameraStream(camera.id, ctx._captureUrl, ctx._ingestAppRtpRtspUrl).catch(() => false);
+            const ok = await getWebRTCEngine().addCameraStream(camera.id, ctx._captureUrl, ctx._ingestAppRtpRtspUrl, parseInt(process.env.CAPTURE_FPS, 10) || 0).catch(() => false);
             if (!ok) {
               console.error(`[PipelineManager][${camera.id}] Frame watchdog: mediasoup re-registration failed`);
             }
@@ -1660,6 +1664,7 @@ class PipelineManager {
           };
           this._personTrajectory.set(f.faceId, newTraj);
           this._scheduleFaceTrackingSave();
+          this._upsertTrajectoryToDb(newTraj);
           this._io.emit('person:trajectory-update', newTraj);
         } else {
           const lastSeg = traj.segments[traj.segments.length - 1];
@@ -1696,6 +1701,7 @@ class PipelineManager {
           traj.lastSeenAt      = ev.timestamp;
         }
         this._scheduleFaceTrackingSave();
+        this._upsertTrajectoryToDb(traj);
         this._io.emit('person:trajectory-update', traj);
 
         this._io.emit('face:reidentified', {
@@ -2127,9 +2133,33 @@ class PipelineManager {
   // Face tracking persistence — face_tracking.json
   // ---------------------------------------------------------------------------
 
-  /** Load persisted trajectory state from storage/face_tracking.json on startup. */
+  /** Load persisted trajectory state on startup. MongoDB mode loads from DB; JSON mode loads from face_tracking.json. */
   _loadFaceTracking() {
     try {
+      // MongoDB mode: DB mirror was loaded from MongoDB at init time — use it.
+      if (this._db && this._db.getMode() === 'mongodb') {
+        const rows = this._db.all('faceTrajectories');
+        for (const row of rows) {
+          if (!row.faceId) continue;
+          this._personTrajectory.set(row.faceId, {
+            faceId:          row.faceId,
+            alias:           row.alias,
+            firstSeenAt:     row.firstSeenAt,
+            lastSeenAt:      row.lastSeenAt,
+            currentCameraId: row.currentCameraId,
+            segments:        row.segments || [],
+          });
+          // Derive counters from stored IDs so they don't reset on restart.
+          const idNum    = parseInt(row.faceId.slice(1))  || 0;
+          const aliasNum = parseInt((row.alias || '').slice(1)) || 0;
+          if (idNum    > this._faceCounter)        this._faceCounter        = idNum;
+          if (aliasNum > this._personAliasCounter) this._personAliasCounter = aliasNum;
+        }
+        console.log(`[PipelineManager] Loaded face tracking from MongoDB: faceCounter=${this._faceCounter}, persons=${this._personTrajectory.size}`);
+        return;
+      }
+
+      // JSON mode: load from face_tracking.json backup file.
       if (!fs.existsSync(FACE_TRACKING_PATH)) return;
       const raw = fs.readFileSync(FACE_TRACKING_PATH, 'utf8');
       const data = JSON.parse(raw);
@@ -2162,6 +2192,12 @@ class PipelineManager {
   }
 
   _saveFaceTracking() {
+    // MongoDB mode: _upsertTrajectoryToDb() already persists each trajectory
+    // individually as events occur — no batch file write needed.
+    // Skipping the synchronous JSON.stringify + writeFileSync (5+ MB) prevents
+    // event loop blocking that would stall frame delivery from ingest-daemon.
+    if (this._db && this._db.getMode() === 'mongodb') return;
+
     try {
       const trajectories = [...this._personTrajectory.values()].map(t => ({
         faceId: t.faceId,
@@ -2177,26 +2213,44 @@ class PipelineManager {
         })),
       }));
 
-      // ── File backup (face_tracking.json) ──────────────────────────────────
+      // JSON mode: write file backup asynchronously to avoid blocking the event loop.
       const data = { faceCounter: this._faceCounter, personAliasCounter: this._personAliasCounter, trajectories };
       const dir = path.dirname(FACE_TRACKING_PATH);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      fs.writeFileSync(FACE_TRACKING_PATH, JSON.stringify(data, null, 2), 'utf8');
+      fs.promises.writeFile(FACE_TRACKING_PATH, JSON.stringify(data, null, 2), 'utf8')
+        .catch(e => console.warn('[PipelineManager] _saveFaceTracking write error:', e.message));
 
-      // ── DB persistence (faceTrajectories table) ───────────────────────────
-      if (this._db) {
-        for (const t of trajectories) {
-          const row = { id: t.faceId, ...t };
-          const existing = this._db.findOne('faceTrajectories', { id: t.faceId });
-          if (existing) {
-            this._db.update('faceTrajectories', t.faceId, row);
-          } else {
-            this._db.insert('faceTrajectories', row);
-          }
-        }
-      }
     } catch (e) {
       console.warn('[PipelineManager] _saveFaceTracking error:', e.message);
+    }
+  }
+
+  // DB upsert for a single trajectory — called when a trajectory is created or
+  // transitions to a new camera. Avoids the O(n²) cost of batch-upsert in _saveFaceTracking().
+  _upsertTrajectoryToDb(traj) {
+    if (!this._db) return;
+    try {
+      const row = {
+        id: traj.faceId,
+        faceId: traj.faceId,
+        alias: traj.alias,
+        firstSeenAt: traj.firstSeenAt,
+        lastSeenAt: traj.lastSeenAt,
+        currentCameraId: traj.currentCameraId,
+        segments: (traj.segments || []).map(s => ({
+          cameraId: s.cameraId,
+          objectId: s.objectId ?? null,
+          entryTime: s.entryTime,
+          exitTime: s.exitTime ?? null,
+        })),
+      };
+      if (this._db.findOne('faceTrajectories', { id: traj.faceId })) {
+        this._db.update('faceTrajectories', traj.faceId, row);
+      } else {
+        this._db.insert('faceTrajectories', row);
+      }
+    } catch (e) {
+      console.warn('[PipelineManager] _upsertTrajectoryToDb error:', e.message);
     }
   }
 
