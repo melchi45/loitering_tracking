@@ -52,6 +52,7 @@ async function addCameraPath(cameraId, rtspUrl) {
       source:            rtspUrl,
       sourceOnDemand:    false,
       overridePublisher: true,
+      sourceProtocol:    'tcp',   // avoids "rtcp: packet too short" from cameras with non-standard UDP RTCP
     });
 
     // Try v3 API first (MediaMTX 1.0+), fall back to v2 on 404

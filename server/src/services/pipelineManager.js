@@ -257,6 +257,11 @@ class PipelineManager {
   }
 
   async _doStartCamera(camera) {
+    if (SERVER_MODE === 'analysis') {
+      console.warn(`[PipelineManager][${camera.id.slice(0, 8)}] startCamera called in analysis mode — skipping (this server receives frames, not cameras)`);
+      return;
+    }
+
     if (this._pipelines.has(camera.id)) {
       await this.stopCamera(camera.id);
     }

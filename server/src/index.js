@@ -190,8 +190,10 @@ async function main() {
   if (SERVER_MODE === 'combined') {
     app.set('pipelineManager', pipelineManager);
   }
-  const youtubeSvc          = new YouTubeStreamService(db, pipelineManager);
-  youtubeSvc.init(); // Restore YouTube cameras from DB into in-memory streams Map
+  // YouTube stream management is only needed in combined/streaming mode.
+  // In analysis mode this server has no capture backend, so skip it entirely.
+  const youtubeSvc = SERVER_MODE !== 'analysis' ? new YouTubeStreamService(db, pipelineManager) : null;
+  if (youtubeSvc) youtubeSvc.init();
 
   // ── Auth / Admin Routes ───────────────────────────────────────────────────
   app.use('/auth',  authRouter);
@@ -210,8 +212,10 @@ async function main() {
   app.use('/api/tracker',         trackerRouter);
   app.use('/api/settings',        settingsRouter);
   app.use('/api/missing-persons', missingPersonsRouter());
-  app.use('/api/youtube-streams', youtubeStreamsRouter(youtubeSvc));
-  app.use('/internal',            internalRouter(youtubeSvc));
+  if (SERVER_MODE !== 'analysis') {
+    app.use('/api/youtube-streams', youtubeStreamsRouter(youtubeSvc));
+    app.use('/internal',            internalRouter(youtubeSvc));
+  }
 
   // Ingest daemon frame callback — receives JPEG frames from the external ingest daemon.
   // Only used when CAPTURE_BACKEND=ingest-daemon (WEBRTC_ENGINE=mediasoup path).
