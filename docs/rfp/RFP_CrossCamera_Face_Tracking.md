@@ -192,9 +192,14 @@ If a person's trajectory contains the same `cameraId` more than once (return vis
 
 | Scope | Storage | Notes |
 |---|---|---|
-| Current (in-process) | `Map` in PipelineManager | Survives until server restart; entries never deleted (GC concern for long sessions → add TTL cleanup) |
-| Phase-2 | SQLite `persons` table | Persist trajectories across restarts; query by date range |
+| In-process (runtime) | `Map` in PipelineManager | Fast access; rebuilt from DB on server restart |
+| DB (`faceTrajectories`) | `lts.json` / MongoDB | Persisted via `_saveFaceTracking()` — debounced 1 s; upsert by faceId; max 5 000 rows |
 | Phase-3 (multi-server) | Redis or Qdrant | See §2.3.2 upgrade path in `RFP_LTS2026_Loitering_Tracking_System.md` |
+
+REST endpoints for DB-persisted trajectories:
+- `GET  /api/analysis/face-trajectories` — query by faceId / alias / cameraId / from / to / limit
+- `DELETE /api/analysis/face-trajectories` — clear all DB records
+- MCP tool: `query_face_trajectories` (see `docs/design/Design_LLM_MCP_Server.md`)
 
 ---
 
@@ -205,14 +210,17 @@ If a person's trajectory contains the same `cameraId` more than once (return vis
 | PersonTrajectory data model | ✅ Done | `PersonSegment` + `PersonTrajectory` types |
 | Server trajectory tracking | ✅ Done | `_personTrajectory` Map in PipelineManager |
 | `person:trajectory-update` event | ✅ Done | Emitted on first detection + camera transition |
-| `GET /api/persons/active` | ✅ Done | Query param `maxAgeMs` |
+| `GET /api/persons/active` | ✅ Done | Query param `maxAgeMs` (in-memory) |
 | `usePersonTrajectoryStore` | ✅ Done | Zustand store |
 | Socket listener in App.tsx | ✅ Done | + hydration on mount |
 | Person Trails panel | ✅ Done | Collapsible, shows trail with camera names |
 | Alias badge in DetectionRow | ✅ Done | Teal `P3` chip next to `[F7]` |
+| DB persistence (`faceTrajectories`) | ✅ Done | `_saveFaceTracking()` upserts to DB; migration from `face_tracking.json` |
+| `GET /api/analysis/face-trajectories` | ✅ Done | DB-persisted query endpoint (FR-CCFR-044) |
+| `DELETE /api/analysis/face-trajectories` | ✅ Done | Clear DB records (FR-CCFR-045) |
+| MCP tool `query_face_trajectories` | ✅ Done | LLM-accessible trajectory search |
 | Multi-camera dwell aggregation | 🔵 Phase-2 | Not yet implemented |
 | Return pattern detection | 🔵 Phase-2 | Not yet implemented |
-| SQLite persistence | 🔵 Phase-2 | In-memory only for now |
 
 ---
 
@@ -221,3 +229,4 @@ If a person's trajectory contains the same `cameraId` more than once (return vis
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for CrossCamera Face Tracking |
+| 1.1 | 2026-06-25 | LTS Engineering Team | §6 Persistence 업데이트 — DB 영속화 완료; §7 Feature Status 업데이트 (Phase-2 항목 완료 표시) |

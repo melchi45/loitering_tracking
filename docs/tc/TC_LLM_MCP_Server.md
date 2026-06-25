@@ -427,9 +427,9 @@
 
 ### TC-N-catalog — All New Tools in Catalog
 
-- **SRS:** FR-MCP-070 ~ FR-MCP-102
-- **Steps:** Import `TOOL_CATALOG` from `create-server.js`; check for all 10 new tool names
-- **Expected:** `get_server_status`, `add_camera`, `update_camera`, `delete_camera`, `toggle_camera_ai`, `query_onvif_events`, `get_onvif_event_types`, `query_analysis_events`, `get_detection_tracks`, `get_analysis_metrics` — all present in catalog
+- **SRS:** FR-MCP-070 ~ FR-MCP-102, FR-MCP-110
+- **Steps:** Import `TOOL_CATALOG` from `create-server.js`; check for all 11 new tool names
+- **Expected:** `get_server_status`, `add_camera`, `update_camera`, `delete_camera`, `toggle_camera_ai`, `query_onvif_events`, `get_onvif_event_types`, `query_analysis_events`, `get_detection_tracks`, `get_analysis_metrics`, `query_face_trajectories` — all present in catalog
 
 ### TC-N-access-tags — Access Tags
 
@@ -438,28 +438,57 @@
 
 ---
 
-## 17. Test Execution Order (v1.1)
+## 17. Test Group O — Face Trajectory MCP Tool (v1.2)
+
+### TC-O-001 — query_face_trajectories 기본 응답
+
+- **SRS:** FR-MCP-110
+- **Steps:** Call `query_face_trajectories({})` via MockMcpServer; mock `GET /api/analysis/face-trajectories` returns `{ trajectories: [], total: 0 }`
+- **Expected:** Tool returns text `"No face trajectory records found..."` (empty result path)
+
+### TC-O-002 — query_face_trajectories faceId 필터
+
+- **SRS:** FR-MCP-110
+- **Steps:** Call `query_face_trajectories({ faceId: 'F3' })`; mock returns 1 trajectory record with `faceId: 'F3'`
+- **Expected:** Output contains `Face F3`
+
+### TC-O-003 — query_face_trajectories cameraId 필터 전달
+
+- **SRS:** FR-MCP-110
+- **Steps:** Call `query_face_trajectories({ cameraId: 'cam-abc' })`; verify the HTTP GET request includes `?cameraId=cam-abc`
+- **Expected:** Query param forwarded correctly
+
+### TC-O-004 — query_face_trajectories limit 준수
+
+- **SRS:** FR-MCP-110
+- **Steps:** Call `query_face_trajectories({ limit: 5 })`; mock returns 5 records
+- **Expected:** Output shows 5 records; `Found 5 face trajectory record(s)`
+
+---
+
+## 18. Test Execution Order (v1.2)
 
 ```
 [Suite 1 — mcp_server.test.js]
 Group A (startup) → Group B (loitering) → Group C (alerts) → Group D (camera/zone) → Group E (analytics) → Group F (resources) → Group G (HTTP SSE) → Group H (security) → Group I (stats dashboard)
 
 [Suite 2 — mcp_server_extended.test.js]
-Group J (system) → Group K (camera CRUD) → Group L (ONVIF events) → Group M (AI detections) → Group N (catalog)
+Group J (system) → Group K (camera CRUD) → Group L (ONVIF events) → Group M (AI detections) → Group N (catalog) → Group O (face trajectories)
 ```
 
 ---
 
-## 18. Pass/Fail Criteria (v1.1)
+## 19. Pass/Fail Criteria (v1.2)
 
 | Category | Pass Condition |
 |---|---|
-| Startup | 21 tools + 5 resources registered; transport selection correct |
+| Startup | 22 tools + 5 resources registered; transport selection correct |
 | System Tool | `get_server_status` returns status text; `isError` not set on success |
 | Camera CRUD | add/update/delete/toggle all succeed on valid inputs; error returned for invalid IDs |
 | ONVIF Tools | `query_onvif_events` and `get_onvif_event_types` return text; no crash on empty results or bad filters |
 | Detection Tools | All three tools return text content; `get_analysis_metrics` gracefully handles non-analysis mode |
-| Catalog | All 21 tools present with valid access tags |
+| Face Trajectory Tool | `query_face_trajectories` returns trajectory records; empty result handled gracefully |
+| Catalog | All 22 tools present with valid access tags |
 | Error handling | `isError: true` on failures; no unhandled exceptions |
 | Security | Auth token enforced on HTTP transport; RTSP credentials masked in `add_camera` response |
 
@@ -471,3 +500,4 @@ Group J (system) → Group K (camera CRUD) → Group L (ONVIF events) → Group 
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for LLM MCP Server |
 | 1.1 | 2026-06-25 | LTS Engineering Team | Groups J~N 추가 (확장 도구 v1.1): System, Camera CRUD, ONVIF, AI Detections, Catalog (FR-MCP-070~102 추적); TC-LTS-MCP-02 연계 |
+| 1.2 | 2026-06-25 | LTS Engineering Team | Group O 추가 (TC-O-001~O-004) — query_face_trajectories (FR-MCP-110); §18 실행 순서·§19 Pass/Fail 기준 업데이트 |

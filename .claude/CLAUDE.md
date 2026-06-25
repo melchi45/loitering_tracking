@@ -210,6 +210,8 @@ loitering_tracking/
 | GET | `/api/analysis/detection-tracks` | 감지 트랙 이력 조회 (query: cameraId, from, to, class, limit — dwell≥1s 저장, inProgress 플래그) |
 | DELETE | `/api/analysis/detection-tracks` | 감지 트랙 이력 전체 삭제 |
 | GET | `/api/analysis/detection-snapshots` | bbox crop 이미지 조회 (query: objectId(필수), cameraId, from, to, limit — cropData base64 JPEG) |
+| GET | `/api/analysis/face-trajectories` | 크로스카메라 얼굴 궤적 DB 조회 (query: faceId, alias, cameraId, from, to, limit — max 500) |
+| DELETE | `/api/analysis/face-trajectories` | 얼굴 궤적 이력 전체 삭제 |
 | GET | `/api/analysis/models` | YOLO 모델 카탈로그 조회 (다운로드 상태·활성 모델 포함) |
 | POST | `/api/analysis/models/switch` | 활성 YOLO 탐지 모델 런타임 전환 (body: modelId) |
 | POST | `/api/analysis/models/download` | YOLO 모델 다운로드 시작 (body: modelId) |
@@ -360,6 +362,7 @@ Claude에서 직접 사용 가능한 LTS-2026 MCP 도구 (v1.1 — 21종):
 |------|------|
 | `mcp_lts_query_loitering_events` | 배회 이벤트 조회 |
 | `mcp_lts_get_tracking_history` | 인물 추적 이력 조회 |
+| `mcp_lts_query_face_trajectories` | 크로스카메라 얼굴 궤적 DB 조회 (faceId/alias/cameraId/from/to 필터) |
 
 ### 알림
 | 도구 | 설명 |

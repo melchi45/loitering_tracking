@@ -401,6 +401,44 @@ It shall **not** be emitted for same-camera frame-by-frame updates.
 - `total` shall reflect the count of persons in the `persons` array.
 - Each `PersonTrajectory` in the response shall include the full `segments` array.
 
+### FR-CCFR-043 — DB Persistence (faceTrajectories table)
+
+- **Trigger:** Each call to `_saveFaceTracking()` (debounced 1 s after any trajectory update)
+- **Behavior:**
+  - The system shall upsert each `PersonTrajectory` into the `faceTrajectories` DB table using `faceId` as the primary key (`id`).
+  - The stored row shall contain: `id` (= `faceId`), `faceId`, `alias`, `firstSeenAt` (ms), `lastSeenAt` (ms), `currentCameraId`, `segments[]`.
+  - Each segment shall contain: `cameraId`, `objectId`, `entryTime` (ms), `exitTime` (ms | null).
+  - Embedding vectors shall not be persisted (space efficiency).
+  - Maximum 5 000 rows in the `faceTrajectories` table; oldest records are evicted on overflow.
+- **Startup migration:** On first startup, if `storage/face_tracking.json` exists and `faceTrajectories` table is empty, the system shall import the `trajectories` array and map `faceId` → `id`.
+
+### FR-CCFR-044 — GET /api/analysis/face-trajectories
+
+- **Method:** GET
+- **Path:** `/api/analysis/face-trajectories`
+- **Query params:**
+  | Param | Type | Description |
+  |---|---|---|
+  | `faceId` | string | Filter by face ID (e.g. `F3`) |
+  | `alias` | string | Filter by person alias (e.g. `P3`) |
+  | `cameraId` | string | Include only trajectories that visited this camera |
+  | `from` | ISO 8601 | `lastSeenAt >= from` |
+  | `to` | ISO 8601 | `firstSeenAt <= to` |
+  | `limit` | integer | Max results (default 50, max 500) |
+- **Response 200:**
+  ```json
+  { "trajectories": PersonTrajectory[], "total": 3 }
+  ```
+- Results shall be sorted by `lastSeenAt` descending.
+- `cameraId` filter shall match against `currentCameraId` or any `segments[].cameraId`.
+
+### FR-CCFR-045 — DELETE /api/analysis/face-trajectories
+
+- **Method:** DELETE
+- **Path:** `/api/analysis/face-trajectories`
+- **Response 200:** `{ "deleted": N }`
+- Deletes all rows from the `faceTrajectories` DB table. Does not affect the `face_tracking.json` file or in-memory `_personTrajectory`.
+
 ---
 
 ## 10. Functional Requirements — Socket.IO Events
@@ -469,9 +507,11 @@ It shall **not** be emitted for same-camera frame-by-frame updates.
 
 | Method | Endpoint | Auth | FR | Description |
 |--------|----------|------|----|-------------|
-| GET | `/api/faces/trajectories` | None | FR-CCFR-040 | List person trajectories with optional age filter |
+| GET | `/api/faces/trajectories` | None | FR-CCFR-040 | List person trajectories with optional age filter (in-memory) |
 | GET | `/api/faces/cross-camera-stats` | None | FR-CCFR-041 | List cross-camera Re-ID statistics |
-| GET | `/api/persons/active` | None | FR-CCFR-042 | List active persons (seen within maxAgeMs) |
+| GET | `/api/persons/active` | None | FR-CCFR-042 | List active persons (seen within maxAgeMs, in-memory) |
+| GET | `/api/analysis/face-trajectories` | None | FR-CCFR-044 | Query DB-persisted face trajectory history |
+| DELETE | `/api/analysis/face-trajectories` | None | FR-CCFR-045 | Clear all face trajectory records from DB |
 
 ### 12.2 Socket.IO Event Summary
 
@@ -494,7 +534,7 @@ The `_assignFaceIds()` method shall return an object containing:
 | ID | Constraint / Assumption |
 |----|------------------------|
 | C-01 | The system is single-server only; cross-server trajectory sharing is out of scope (Phase-3 Redis). |
-| C-02 | `_personTrajectory` is in-process in-memory only; data is lost on server restart. |
+| C-02 | `_personTrajectory` is in-process in-memory only; the in-memory view is rebuilt from the `faceTrajectories` DB table on startup via `_loadFaceTracking()`. |
 | C-03 | Face embedding extraction requires `AttributePipeline` with ArcFace ONNX model loaded. Frames without ArcFace output do not contribute to gallery matching or trajectory updates. |
 | C-04 | ByteTracker `objectId` values are camera-local; the same numeric ID may exist on different cameras for different people. Cross-camera object ID correlation is achieved only through face embedding matching. |
 | C-05 | Maximum supported active cameras for this subsystem is 16; beyond this, the single-server in-process model may encounter performance degradation. |
@@ -509,3 +549,4 @@ The `_assignFaceIds()` method shall return an object containing:
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for CrossCamera Face Tracking |
+| 1.1 | 2026-06-25 | LTS Engineering Team | FR-CCFR-043~045 추가 — faceTrajectories DB 영속화, REST API (GET/DELETE /api/analysis/face-trajectories), C-02 수정 |

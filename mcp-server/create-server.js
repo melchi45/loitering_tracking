@@ -20,7 +20,7 @@ import { registerResources }      from './resources.js';
 export function createServer(baseUrl) {
   const server = new McpServer({
     name:        'lts-mcp-server',
-    version:     '1.1.0',
+    version:     '1.2.0',
     description: 'LTS-2026 Loitering Tracking System — LLM integration via MCP',
   });
 
@@ -47,8 +47,9 @@ export const TOOL_CATALOG = [
   // ── System ────────────────────────────────────────────────────────────────
   { name: 'get_server_status',        access: 'read',  description: 'LTS server health, mode (combined/streaming/analysis), uptime, DB type, active cameras.' },
   // ── Loitering / Tracking ─────────────────────────────────────────────────
-  { name: 'query_loitering_events',   access: 'read',  description: 'Query loitering detection events with optional time/camera/dwell filters.' },
-  { name: 'get_tracking_history',     access: 'read',  description: 'Full appearance history for a specific tracked object.' },
+  { name: 'query_loitering_events',    access: 'read',  description: 'Query loitering detection events with optional time/camera/dwell filters.' },
+  { name: 'get_tracking_history',      access: 'read',  description: 'Full appearance history for a specific tracked object.' },
+  { name: 'query_face_trajectories',   access: 'read',  description: 'Query cross-camera face trajectory history from DB: cameras visited, segments, first/last seen.' },
   // ── Alerts ───────────────────────────────────────────────────────────────
   { name: 'get_active_alerts',        access: 'read',  description: 'Current unacknowledged loitering alerts sorted by recency.' },
   { name: 'explain_alert',            access: 'read',  description: 'Contextual explanation of an alert: risk assessment, zone config, object history.' },

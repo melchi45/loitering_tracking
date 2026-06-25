@@ -514,7 +514,101 @@ No additional npm packages — uses built-in fetch (Node 18+)
 
 ---
 
-## 10. Test Execution Order
+## 10. Test Group H — DB-Persisted Face Trajectory API
+
+### TC-H-001 — GET /api/analysis/face-trajectories (정상 응답)
+
+| Field | Value |
+|-------|-------|
+| **SRS** | FR-CCFR-044 |
+| **Priority** | High |
+| **Type** | REST API |
+
+**Steps:**
+1. `GET /api/analysis/face-trajectories`
+
+**Expected:** HTTP 200, body `{ "trajectories": Array, "total": Number }`.
+
+---
+
+### TC-H-002 — faceId 필터
+
+| Field | Value |
+|-------|-------|
+| **SRS** | FR-CCFR-044 |
+| **Priority** | High |
+| **Type** | REST API |
+
+**Steps:**
+1. `GET /api/analysis/face-trajectories?faceId=F1`
+
+**Expected:** All returned records have `faceId === "F1"` or `id === "F1"`.
+
+---
+
+### TC-H-003 — cameraId 필터 (segment 포함)
+
+| Field | Value |
+|-------|-------|
+| **SRS** | FR-CCFR-044 |
+| **Priority** | Medium |
+| **Type** | REST API |
+
+**Steps:**
+1. `GET /api/analysis/face-trajectories?cameraId=<camId>`
+
+**Expected:** Each returned record has `currentCameraId === camId` OR at least one `segments[].cameraId === camId`.
+
+---
+
+### TC-H-004 — limit 파라미터 준수
+
+| Field | Value |
+|-------|-------|
+| **SRS** | FR-CCFR-044 |
+| **Priority** | Medium |
+| **Type** | REST API |
+
+**Steps:**
+1. `GET /api/analysis/face-trajectories?limit=2`
+
+**Expected:** `total <= 2`, `trajectories.length <= 2`.
+
+---
+
+### TC-H-005 — DELETE /api/analysis/face-trajectories
+
+| Field | Value |
+|-------|-------|
+| **SRS** | FR-CCFR-045 |
+| **Priority** | Medium |
+| **Type** | REST API |
+
+**Steps:**
+1. `DELETE /api/analysis/face-trajectories`
+2. `GET /api/analysis/face-trajectories`
+
+**Expected (step 1):** HTTP 200, `{ "deleted": N }` (N >= 0).  
+**Expected (step 2):** `total === 0`.
+
+---
+
+### TC-H-006 — from / to 필터
+
+| Field | Value |
+|-------|-------|
+| **SRS** | FR-CCFR-044 |
+| **Priority** | Low |
+| **Type** | REST API |
+
+**Steps:**
+1. `GET /api/analysis/face-trajectories?from=2026-01-01T00:00:00Z&to=2099-01-01T00:00:00Z`
+
+**Expected:** Only records with `lastSeenAt >= from` AND `firstSeenAt <= to` are returned.
+
+---
+
+## 11. Test Execution Order
 
 ```
 Phase 1 — Prerequisite Checks
@@ -547,13 +641,17 @@ Phase 7 — Socket.IO Integration (Group F)
 
 Phase 8 — Edge Cases (Group G)
   TC-G-001 through TC-G-005
+
+Phase 9 — DB-Persisted Trajectory API (Group H)
+  TC-H-001 through TC-H-006
+  (Independent; no camera required)
 ```
 
 ---
 
-## 11. Pass/Fail Criteria
+## 12. Pass/Fail Criteria
 
-### 11.1 Release Criteria
+### 12.1 Release Criteria
 
 | Group | Required Pass Rate | Blocking |
 |-------|--------------------|----------|
@@ -564,8 +662,9 @@ Phase 8 — Edge Cases (Group G)
 | E — Person Registry | 100% (8/8) | Yes |
 | F — Socket.IO Events | ≥ 75% (3/4) | Yes |
 | G — Edge Cases | ≥ 80% (4/5) | Yes |
+| H — DB-Persisted Trajectory API | 100% (6/6) | Yes |
 
-### 11.2 Known Skip Conditions
+### 12.2 Known Skip Conditions
 
 | Test | Skip Condition |
 |------|----------------|
@@ -575,11 +674,11 @@ Phase 8 — Edge Cases (Group G)
 | TC-F-001 through TC-F-004 | Require live cross-camera face detection; skip if no cameras |
 | TC-G-002 (35-second wait) | Long-running; skip in fast CI mode |
 
-### 11.3 Failure Response
+### 12.3 Failure Response
 
 | Severity | Condition | Action |
 |----------|-----------|--------|
-| Critical | Any Group A, B, or C REST endpoint failure | Block release; REST endpoints are the integration contract |
+| Critical | Any Group A, B, C, or H REST endpoint failure | Block release; REST endpoints are the integration contract |
 | High | Any Group D or E unit test failure | Block release; gallery and registry logic is core |
 | Medium | Group F Socket.IO test failure | Investigate emission path; may block if cross-camera events are not reaching clients |
 | Low | Group G edge case failures | Log; fix in next sprint |
@@ -591,3 +690,4 @@ Phase 8 — Edge Cases (Group G)
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for CrossCamera Face Tracking |
+| 1.1 | 2026-06-25 | LTS Engineering Team | Group H (TC-H-001~H-006) 추가 — DB 영속화 face-trajectories REST API 테스트 |

@@ -1245,6 +1245,56 @@ router.delete('/detection-tracks', (req, res) => {
   }
 });
 
+// ── GET /api/analysis/face-trajectories ──────────────────────────────────────
+// Cross-camera face trajectory history persisted in DB (faceTrajectories table).
+// Query: faceId, alias, cameraId, from (ISO), to (ISO), limit (default 50, max 500)
+router.get('/face-trajectories', (req, res) => {
+  const db = req.app.get('db');
+  if (!db) return res.status(503).json({ error: 'DB not available' });
+
+  try {
+    const limit      = Math.min(500, Math.max(1, parseInt(String(req.query.limit || '50'), 10) || 50));
+    const faceFilter = req.query.faceId   ? String(req.query.faceId)   : null;
+    const aliasFilter= req.query.alias    ? String(req.query.alias)    : null;
+    const camFilter  = req.query.cameraId ? String(req.query.cameraId) : null;
+    const fromTs     = req.query.from     ? new Date(String(req.query.from)).getTime() : null;
+    const toTs       = req.query.to       ? new Date(String(req.query.to)).getTime()   : null;
+
+    let rows = db.all('faceTrajectories');
+    if (faceFilter)  rows = rows.filter(r => r.faceId  === faceFilter  || r.id === faceFilter);
+    if (aliasFilter) rows = rows.filter(r => r.alias   === aliasFilter);
+    if (camFilter)   rows = rows.filter(r =>
+      r.currentCameraId === camFilter ||
+      (Array.isArray(r.segments) && r.segments.some(s => s.cameraId === camFilter))
+    );
+    if (fromTs) rows = rows.filter(r => (r.lastSeenAt  || 0) >= fromTs);
+    if (toTs)   rows = rows.filter(r => (r.firstSeenAt || 0) <= toTs);
+
+    rows.sort((a, b) => (b.lastSeenAt || 0) - (a.lastSeenAt || 0));
+    rows = rows.slice(0, limit);
+
+    res.json({ trajectories: rows, total: rows.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── DELETE /api/analysis/face-trajectories ────────────────────────────────────
+router.delete('/face-trajectories', (req, res) => {
+  const db = req.app.get('db');
+  if (!db) return res.status(503).json({ error: 'DB not available' });
+
+  try {
+    const all = db.all('faceTrajectories');
+    for (const r of all) {
+      if (r.id) db.delete('faceTrajectories', r.id);
+    }
+    res.json({ deleted: all.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── GET /api/analysis/detection-snapshots ─────────────────────────────────────
 // Returns saved crop images for a given objectId (detection track)
 // Query: objectId (required), cameraId, from (ISO), to (ISO), limit (default 20, max 100)

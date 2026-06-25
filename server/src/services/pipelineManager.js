@@ -2163,27 +2163,38 @@ class PipelineManager {
 
   _saveFaceTracking() {
     try {
-      const data = {
-        faceCounter: this._faceCounter,
-        personAliasCounter: this._personAliasCounter,
-        // Strip large embedding buffers from trajectory segments to save space
-        trajectories: [...this._personTrajectory.values()].map(t => ({
-          faceId: t.faceId,
-          alias: t.alias,
-          firstSeenAt: t.firstSeenAt,
-          lastSeenAt: t.lastSeenAt,
-          currentCameraId: t.currentCameraId,
-          segments: (t.segments || []).map(s => ({
-            cameraId: s.cameraId,
-            objectId: s.objectId ?? null,
-            entryTime: s.entryTime,
-            exitTime: s.exitTime ?? null,
-          })),
+      const trajectories = [...this._personTrajectory.values()].map(t => ({
+        faceId: t.faceId,
+        alias: t.alias,
+        firstSeenAt: t.firstSeenAt,
+        lastSeenAt: t.lastSeenAt,
+        currentCameraId: t.currentCameraId,
+        segments: (t.segments || []).map(s => ({
+          cameraId: s.cameraId,
+          objectId: s.objectId ?? null,
+          entryTime: s.entryTime,
+          exitTime: s.exitTime ?? null,
         })),
-      };
+      }));
+
+      // ── File backup (face_tracking.json) ──────────────────────────────────
+      const data = { faceCounter: this._faceCounter, personAliasCounter: this._personAliasCounter, trajectories };
       const dir = path.dirname(FACE_TRACKING_PATH);
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
       fs.writeFileSync(FACE_TRACKING_PATH, JSON.stringify(data, null, 2), 'utf8');
+
+      // ── DB persistence (faceTrajectories table) ───────────────────────────
+      if (this._db) {
+        for (const t of trajectories) {
+          const row = { id: t.faceId, ...t };
+          const existing = this._db.findOne('faceTrajectories', { id: t.faceId });
+          if (existing) {
+            this._db.update('faceTrajectories', t.faceId, row);
+          } else {
+            this._db.insert('faceTrajectories', row);
+          }
+        }
+      }
     } catch (e) {
       console.warn('[PipelineManager] _saveFaceTracking error:', e.message);
     }

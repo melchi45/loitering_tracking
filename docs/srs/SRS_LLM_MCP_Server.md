@@ -485,6 +485,21 @@ Network failures shall produce: `"Error: LTS API <status>: <statusText>: <body>"
 
 ---
 
+## §10c — 얼굴 궤적 MCP 도구 (v1.2)
+
+### FR-MCP-110 — `query_face_trajectories`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | 크로스카메라 얼굴 궤적 이력 DB 조회 |
+| 입력 | `faceId?` · `alias?` · `cameraId?` · `from?` (ISO 8601) · `to?` · `limit?` (1–500, 기본 20) |
+| 처리 | `GET /api/analysis/face-trajectories` 호출 |
+| 출력 | 각 인물별 `faceId`, `alias`, `firstSeenAt`, `lastSeenAt`, `currentCameraId`, `segments[]` |
+| 오류 | API 오류 시 `isError: true` + 메시지 |
+| 비고 | `cameraId` 필터는 `currentCameraId` 및 `segments[].cameraId` 모두에 적용됨 |
+
+---
+
 ## 11. Non-Functional Requirements
 
 | ID | Category | Requirement |
@@ -533,6 +548,7 @@ Network failures shall produce: `"Error: LTS API <status>: <statusText>: <body>"
 | `query_analysis_events` | `GET /api/analysis/events` |
 | `get_detection_tracks` | `GET /api/analysis/detection-tracks` |
 | `get_analysis_metrics` | `GET /api/analysis/metrics` |
+| `query_face_trajectories` | `GET /api/analysis/face-trajectories` |
 
 ### 12.2 Claude Code Integration
 
@@ -588,3 +604,4 @@ Registered in `.vscode/mcp.json`.
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for LLM MCP Server |
 | 1.1 | 2026-06-25 | LTS Engineering Team | §10b 확장 도구 10종 추가 (FR-MCP-070~102): get_server_status, 카메라 CRUD, ONVIF 이벤트, AI 감지 분석 |
+| 1.2 | 2026-06-25 | LTS Engineering Team | §10c 추가 — FR-MCP-110 query_face_trajectories (크로스카메라 얼굴 궤적 DB 조회) |

@@ -1,15 +1,16 @@
 'use strict';
 /**
  * MCP Server Extended Integration Tests
- * TC: TC-LTS-MCP-02 Groups J~N
- * SRS: FR-MCP-070 ~ FR-MCP-120
+ * TC: TC-LTS-MCP-02 Groups J~O
+ * SRS: FR-MCP-070 ~ FR-MCP-110
  *
- * Tests new MCP tools added in v1.1:
+ * Tests new MCP tools added in v1.1/v1.2:
  *   Group J — System tools (get_server_status)
  *   Group K — Camera CRUD (add_camera, update_camera, delete_camera, toggle_camera_ai)
  *   Group L — ONVIF Events (query_onvif_events, get_onvif_event_types)
  *   Group M — AI Detection tools (query_analysis_events, get_detection_tracks, get_analysis_metrics)
  *   Group N — Schema catalog completeness check
+ *   Group O — Face Trajectory tool (query_face_trajectories)
  *
  * Prerequisites:
  *   - LTS server running on LTS_URL (default http://localhost:3080)
@@ -70,7 +71,7 @@ class MockMcpServer {
 
 // ── Dynamic import of ESM modules ────────────────────────────────────────────
 
-let LTSClient, registerSystemTools, registerOnvifTools, registerDetectionTools, registerCameraTools, TOOL_CATALOG;
+let LTSClient, registerSystemTools, registerOnvifTools, registerDetectionTools, registerCameraTools, registerLoiteringTools, TOOL_CATALOG;
 
 async function loadModules() {
   const ltsClientMod   = await import(`file://${MCP_DIR}/lts-client.js`);
@@ -78,14 +79,16 @@ async function loadModules() {
   const onvifMod       = await import(`file://${MCP_DIR}/tools/onvif.js`);
   const detectionsMod  = await import(`file://${MCP_DIR}/tools/detections.js`);
   const camerasMod     = await import(`file://${MCP_DIR}/tools/cameras.js`);
+  const loiteringMod   = await import(`file://${MCP_DIR}/tools/loitering.js`);
   const serverMod      = await import(`file://${MCP_DIR}/create-server.js`);
 
-  LTSClient              = ltsClientMod.LTSClient;
-  registerSystemTools    = systemMod.registerSystemTools;
-  registerOnvifTools     = onvifMod.registerOnvifTools;
-  registerDetectionTools = detectionsMod.registerDetectionTools;
-  registerCameraTools    = camerasMod.registerCameraTools;
-  TOOL_CATALOG           = serverMod.TOOL_CATALOG;
+  LTSClient               = ltsClientMod.LTSClient;
+  registerSystemTools     = systemMod.registerSystemTools;
+  registerOnvifTools      = onvifMod.registerOnvifTools;
+  registerDetectionTools  = detectionsMod.registerDetectionTools;
+  registerCameraTools     = camerasMod.registerCameraTools;
+  registerLoiteringTools  = loiteringMod.registerLoiteringTools;
+  TOOL_CATALOG            = serverMod.TOOL_CATALOG;
 }
 
 // ── Prerequisites check ──────────────────────────────────────────────────────
@@ -284,6 +287,7 @@ async function runGroupN() {
     'query_analysis_events', 'get_detection_tracks', 'get_analysis_metrics',
     'query_loitering_events', 'get_active_alerts', 'acknowledge_alert',
     'get_analytics_summary', 'generate_security_report',
+    'query_face_trajectories',
   ];
 
   const catalogNames = new Set(TOOL_CATALOG.map(t => t.name));
@@ -304,11 +308,89 @@ async function runGroupN() {
   });
 }
 
+// ── Group O — Face Trajectory MCP Tool ────────────────────────────────────────
+
+async function runGroupO() {
+  console.log('\n[Group O] Face Trajectory MCP Tool\n');
+
+  // Build a mock client that intercepts GET /api/analysis/face-trajectories
+  function makeFaceTrajClient(mockTrajectories = []) {
+    return {
+      get: async (path) => {
+        if (path === '/api/analysis/face-trajectories') {
+          return { data: { trajectories: mockTrajectories, total: mockTrajectories.length } };
+        }
+        return { data: {} };
+      },
+    };
+  }
+
+  const mockTrajectory = {
+    id: 'F3', faceId: 'F3', alias: 'P3',
+    firstSeenAt: 1782218348368, lastSeenAt: 1782218870848,
+    currentCameraId: 'cam-aaa',
+    segments: [
+      { cameraId: 'cam-aaa', objectId: 'obj-001', entryTime: 1782218348368, exitTime: 1782218358694 },
+      { cameraId: 'cam-bbb', objectId: null, entryTime: 1782218358694, exitTime: 1782218390702 },
+    ],
+  };
+
+  await test('TC-O-001', 'query_face_trajectories — empty result handled gracefully', async () => {
+    const mock = new MockMcpServer();
+    registerLoiteringTools(mock, makeFaceTrajClient([]));
+    const result = await mock.tools['query_face_trajectories']({});
+    assert(Array.isArray(result.content), 'content must be array');
+    assert(result.content[0].text.includes('No face trajectory'), `Expected empty message, got: ${result.content[0].text}`);
+  });
+
+  await test('TC-O-002', 'query_face_trajectories — faceId in response text', async () => {
+    const mock = new MockMcpServer();
+    registerLoiteringTools(mock, makeFaceTrajClient([mockTrajectory]));
+    const result = await mock.tools['query_face_trajectories']({ faceId: 'F3' });
+    assert(!result.isError, 'Should not be error');
+    const text = result.content[0].text;
+    assert(text.includes('F3'), `Expected faceId F3 in output, got: ${text.slice(0, 200)}`);
+    assert(text.includes('P3'), `Expected alias P3 in output`);
+  });
+
+  await test('TC-O-003', 'query_face_trajectories — segment cameras shown', async () => {
+    const mock = new MockMcpServer();
+    registerLoiteringTools(mock, makeFaceTrajClient([mockTrajectory]));
+    const result = await mock.tools['query_face_trajectories']({});
+    const text = result.content[0].text;
+    assert(text.includes('cam-aaa') || text.includes('cam-bbb'), `Expected camera IDs in output`);
+  });
+
+  await test('TC-O-004', 'query_face_trajectories — result count header', async () => {
+    const mock = new MockMcpServer();
+    registerLoiteringTools(mock, makeFaceTrajClient([mockTrajectory]));
+    const result = await mock.tools['query_face_trajectories']({ limit: 10 });
+    const text = result.content[0].text;
+    assert(text.includes('Found 1 face trajectory record'), `Expected count header, got: ${text.slice(0, 100)}`);
+  });
+
+  // REST API integration test (live server)
+  await test('TC-O-005', 'GET /api/analysis/face-trajectories — HTTP 200', async () => {
+    const res = await httpGet(`${BASE_URL}/api/analysis/face-trajectories`);
+    assert(res.status === 200, `Expected 200, got ${res.status}`);
+    const body = res.json();
+    assert(Array.isArray(body.trajectories), 'trajectories must be an array');
+    assert(typeof body.total === 'number', 'total must be a number');
+  });
+
+  await test('TC-O-006', 'GET /api/analysis/face-trajectories?limit=1 — limit respected', async () => {
+    const res = await httpGet(`${BASE_URL}/api/analysis/face-trajectories?limit=1`);
+    assert(res.status === 200, `Expected 200, got ${res.status}`);
+    const body = res.json();
+    assert(body.trajectories.length <= 1, `Expected at most 1 record, got ${body.trajectories.length}`);
+  });
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
   console.log('╔══════════════════════════════════════════════════════════╗');
-  console.log('║  TC-LTS-MCP-02 — MCP Server Extended Tests (v1.1)        ║');
+  console.log('║  TC-LTS-MCP-02 — MCP Server Extended Tests (v1.2)        ║');
   console.log('╚══════════════════════════════════════════════════════════╝');
 
   await loadModules();
@@ -318,6 +400,7 @@ async function main() {
   await runGroupL();
   await runGroupM();
   await runGroupN();
+  await runGroupO();
 
   console.log('\n─────────────────────────────────────────────────────────');
   console.log(`  Results: ${passed} passed, ${failed} failed`);

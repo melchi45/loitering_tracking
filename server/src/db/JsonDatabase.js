@@ -128,7 +128,7 @@ class JsonDatabase extends BaseDatabase {
   }
 
   _runLegacyMigrations(storagePath) {
-    for (const { table, file, key } of LEGACY_MIGRATIONS) {
+    for (const { table, file, key, idField } of LEGACY_MIGRATIONS) {
       if (this._store[table].length > 0) continue;
       const legacyPath = path.join(storagePath, file);
       if (!fs.existsSync(legacyPath)) continue;
@@ -136,7 +136,10 @@ class JsonDatabase extends BaseDatabase {
         const raw  = JSON.parse(fs.readFileSync(legacyPath, 'utf8'));
         const rows = raw[key];
         if (Array.isArray(rows) && rows.length > 0) {
-          this._store[table] = rows;
+          // If idField is specified, map the alternate key to `id`
+          this._store[table] = idField
+            ? rows.map(r => ({ ...r, id: r.id ?? r[idField] }))
+            : rows;
           console.log(`[DB:json] Migrated ${rows.length} rows: ${file} → ${table}`);
         }
       } catch (e) {

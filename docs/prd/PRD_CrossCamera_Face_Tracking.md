@@ -290,14 +290,13 @@ GET /api/crosscamera/stats
 | M5 | Person Trails panel + alias badge in FullscreenCameraView.tsx | TBD | May 2026 | ✅ Done |
 | M6 | Multi-camera dwell aggregation (Phase 2) | TBD | - | ⏳ Pending |
 | M7 | Return pattern detection (Phase 2) | TBD | - | ⏳ Pending |
-| M8 | SQLite persistence for trajectories across restarts (Phase 2) | TBD | - | ⏳ Pending |
+| M8 | DB persistence — `faceTrajectories` table + `GET /api/analysis/face-trajectories` + MCP tool | Jun 2026 | Jun 2026 | ✅ Done |
 
 ### 8.2 TODO
 
 - [ ] Implement TTL cleanup for the in-process `_personTrajectory` Map to prevent memory growth in long sessions
 - [ ] Implement multi-camera dwell aggregation: `totalDwell = Σ(segment.exitTime − segment.entryTime)` across all segments
 - [ ] Implement return pattern detection: flag when a person's trajectory contains the same `cameraId` more than once
-- [ ] Add SQLite `persons` table for trajectory persistence across server restarts
 - [ ] Expose BehaviorEngine loitering alerts with cumulative cross-camera dwell as an additional risk factor
 - [ ] Write unit tests for trajectory creation, segment append, and cross-camera transition logic in `pipelineManager.js`
 - [ ] Write integration tests for `person:trajectory-update` Socket.IO event emission
@@ -311,3 +310,4 @@ GET /api/crosscamera/stats
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for CrossCamera Face Tracking |
+| 1.1 | 2026-06-25 | LTS Engineering Team | M8 완료 — DB 영속화 (faceTrajectories), REST API, MCP tool query_face_trajectories |
