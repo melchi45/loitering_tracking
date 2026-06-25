@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-DAP-01 |
-| **Version** | 1.1 |
+| **Version** | 1.3 |
 | **Status** | Draft |
-| **Date** | 2026-06-08 |
+| **Date** | 2026-06-25 |
 | **Related RFP** | [rfp/RFP_Distributed_AI_Pipeline.md](../rfp/RFP_Distributed_AI_Pipeline.md) |
 
 ---
@@ -266,6 +266,17 @@ So that 분석 서버의 성능 상태를 실시간으로 파악할 수 있다.
 - [x] Admin Dashboard → Audit → Startup Tests에서 `streaming` 모드 시 노란 배너 표시
 - [x] Audit UI가 `streaming` 모드 시 analysis-only 스위트 결과를 목록에서 숨김
 
+#### AC-DAP-11: captureOnly TC 스위트 analysis 모드 스킵
+
+- `SERVER_MODE=analysis`에서 `npm run test:tc`를 실행하면 captureOnly 스위트 7개가 SKIP 처리된다
+- Admin Dashboard Audit 패널에서 해당 스위트에 `streaming+combined` 모드 태그가 표시된다
+- analysis 서버 로그에 캡처 관련 오류(MediaMTX ECONNREFUSED, YouTube stream 생성)가 발생하지 않는다
+
+#### AC-DAP-12: TC 스위트 레지스트리 이중 동기화
+
+- `tc_runner_cli.js`와 `TcRunnerService.js`의 SUITES 배열이 동일하다
+- 신규 스위트 추가 시 반드시 두 파일을 동시에 수정한다
+
 ---
 
 ## 8. Milestones & TODO
@@ -291,6 +302,7 @@ So that 분석 서버의 성능 상태를 실시간으로 파악할 수 있다.
 | 1.0 | 2026-06-08 | 초기 작성 |
 | 1.1 | 2026-06-17 | DetectionsTimeline 트랙 영구 저장 요구사항(AC-DAP-08~09), 스냅샷 원본 크롭 정책 추가 |
 | 1.2 | 2026-06-24 | AC-DAP-10 추가: streaming 모드 analysis-only TC 스킵 (TcRunnerService + Audit UI + 테스트 스크립트) |
+| 1.3 | 2026-06-25 | AC-DAP-11~12 추가: captureOnly 스위트 analysis 스킵, TC 레지스트리 이중 동기화 |
 
 ---
 

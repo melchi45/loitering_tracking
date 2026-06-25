@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-DAP-01 |
-| **Version** | 1.1 |
+| **Version** | 1.4 |
 | **Status** | Active |
-| **Date** | 2026-06-08 |
+| **Date** | 2026-06-25 |
 | **Parent PRD** | [prd/PRD_Distributed_AI_Pipeline.md](../prd/PRD_Distributed_AI_Pipeline.md) |
 | **Parent RFP** | [rfp/RFP_Distributed_AI_Pipeline.md](../rfp/RFP_Distributed_AI_Pipeline.md) |
 
@@ -363,6 +363,36 @@ HTTP 연결 오류(ECONNREFUSED, ECONNRESET, EHOSTUNREACH 등) 발생 시 해당
 
 analysis 모드 Dashboard는 위 필드를 이용해 카메라별 영상 입력 존재 여부와 1초당 입력 프레임 수를 표시해야 한다.
 
+#### FR-DAP-029: captureOnly TC 스위트 analysis 모드 자동 스킵
+
+**설명**: `SERVER_MODE=analysis`에서 RTSP 캡처 백엔드가 필요한 TC 스위트(captureOnly: true)는
+자동으로 스킵되어야 한다. 이는 analysis 서버에 캡처 기능이 없으므로 해당 TC를 실행하면
+반드시 실패하기 때문이다.
+
+**대상 스위트**: Camera Discovery, NVR MaxChannel, ONVIF Metadata Pipeline, ONVIF App-RTP,
+RTSP Capture Backend, YouTube RTSP Ingest, LTS2026 YouTube Schema
+
+**우선순위**: Must Have
+**검증**: TC-DAP-014
+
+#### FR-DAP-043: TC 스위트 레지스트리 이중 동기화 유지
+
+**설명**: `test/tc_runner_cli.js`의 SUITES 배열과
+`server/src/services/TcRunnerService.js`의 SUITES 배열은 항상 동일한 내용이어야 한다.
+두 파일 중 하나만 수정하면 CLI 실행 결과와 Admin Dashboard(Audit 패널) 결과가 다르게 된다.
+
+**우선순위**: Must Have
+**검증**: 코드 리뷰
+
+#### FR-DAP-044: TC 플래그 결정 매트릭스 문서화
+
+**설명**: analysisOnly / streamingOnly / captureOnly 세 플래그의 적용 기준과
+각 서버 모드(combined/streaming/analysis)에서의 실행 여부를 Design 문서로 유지해야 한다.
+신규 TC 스위트 추가 시 이 문서를 참조하여 플래그를 선택한다.
+
+**우선순위**: Should Have
+**검증**: `docs/design/Design_TC_Mode_Execution_Policy.md` 존재 및 최신 상태
+
 ---
 
 ## 8. Non-Functional Requirements
@@ -494,6 +524,9 @@ ANALYSIS_MAX_CONCURRENT=4
 | FR-DAP-032 | TC-DAP-004 |
 | FR-DAP-040 | TC-DAP-005 |
 | FR-DAP-041 | TC-DAP-001, TC-DAP-002, TC-DAP-003 |
+| FR-DAP-029 | TC-DAP-014 |
+| FR-DAP-043 | 코드 리뷰 |
+| FR-DAP-044 | Design_TC_Mode_Execution_Policy.md |
 | NFR-DAP-001 | TC-DAP-003 |
 | NFR-DAP-004 | TC-DAP-004 |
 | NFR-DAP-005 | TC-DAP-007 |
@@ -508,3 +541,4 @@ ANALYSIS_MAX_CONCURRENT=4
 | 1.1 | 2026-06-17 | FR-DAP-014~016 (streaming 로컬 shadow copy·fallback·원본 크롭), FR-DAP-026 (analysis 트랙 저장) 추가 |
 | 1.2 | 2026-06-23 | FR-DAP-027 추가: analysis 서버 다중 채널 동시 추론 시 채널 격리 요구사항 (DetectionService 버퍼 per-call 할당) |
 | 1.3 | 2026-06-24 | FR-DAP-028 추가: TcRunnerService analysis-only 스위트 streaming 모드 스킵 요구사항 (Audit UI 필터링 포함) |
+| 1.4 | 2026-06-25 | FR-DAP-029, FR-DAP-043~044 추가: captureOnly TC 스위트 analysis 모드 스킵 요구사항, 레지스트리 이중 동기화, 플래그 문서화 |

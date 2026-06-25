@@ -3,8 +3,8 @@
 | | |
 |---|---|
 | **Document ID** | RFP-LTS-DAP-01 |
-| **Version** | 1.0 |
-| **Date** | 2026-06-08 |
+| **Version** | 1.2 |
+| **Date** | 2026-06-25 |
 | **Project** | Loitering Detection & Tracking System (LTS-2026) |
 | **Status** | Draft |
 
@@ -190,6 +190,13 @@ SERVER_MODE=analysis   # AI 추론 전담 서버
 | 상태 유지 정확성 | 15% | tracker ID 연속성, BehaviorEngine 상태 일관성 |
 | 운영 용이성 | 10% | 환경변수 설정만으로 모드 전환 가능 |
 
+### TC 모드별 실행 정책
+
+분산 AI 파이프라인은 세 가지 SERVER_MODE(combined/streaming/analysis)로 운영되므로,
+각 모드에서 실행 가능한 TC 스위트가 다르다. RTSP 캡처, ONVIF, YouTube 스트림 관련
+TC는 analysis 서버에서 스킵되어야 하며, AI 추론 관련 TC는 streaming 서버에서 스킵되어야 한다.
+상세 정책은 [Design_TC_Mode_Execution_Policy.md](../design/Design_TC_Mode_Execution_Policy.md)를 참조한다.
+
 ---
 
 ## 7. Out of Scope
@@ -236,3 +243,4 @@ SERVER_MODE=analysis   # AI 추론 전담 서버
 |---|---|---|
 | 1.0 | 2026-06-08 | 초기 작성 |
 | 1.1 | 2026-06-24 | FR-DAP-11 추가: streaming 모드에서 analysis-only TC 스위트 스킵 및 Audit UI 필터링 요구사항 |
+| 1.2 | 2026-06-25 | TC 모드별 실행 정책 참조 추가 (Design_TC_Mode_Execution_Policy.md) |

@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-DAP-01 |
-| **Version** | 1.0 |
+| **Version** | 1.2 |
 | **Status** | Active |
-| **Date** | 2026-06-08 |
+| **Date** | 2026-06-25 |
 | **Parent SRS** | [srs/SRS_Distributed_AI_Pipeline.md](../srs/SRS_Distributed_AI_Pipeline.md) |
 | **Parent Design** | [design/Design_Distributed_AI_Pipeline.md](../design/Design_Distributed_AI_Pipeline.md) |
 | **Test Scripts** | `test/api/distributed_pipeline.test.js` |
@@ -31,8 +31,9 @@
 14. [TC-DAP-011: streaming 모드 eager 모델 로드 금지](#14-tc-dap-011-streaming-모드-eager-모델-로드-금지)
 15. [TC-DAP-013: TcRunnerService — Analysis-only 스위트 Streaming 모드 스킵](#15-tc-dap-013-tcrunnerservice--analysis-only-스위트-streaming-모드-스킵)
 16. [TC-DAP-012: analysis Dashboard 카메라 입력 상태/FPS 표시](#16-tc-dap-012-analysis-dashboard-카메라-입력-상태fps-표시)
-17. [Test Execution Order](#17-test-execution-order)
-18. [Pass/Fail Criteria](#18-passfail-criteria)
+17. [TC-DAP-014: captureOnly 스위트 analysis 모드 스킵 검증](#tc-dap-014-captureonly-스위트-analysis-모드-스킵-검증)
+18. [Test Execution Order](#16-test-execution-order)
+19. [Pass/Fail Criteria](#17-passfail-criteria)
 
 ---
 
@@ -640,6 +641,48 @@ describe('TC-DAP-008: WebRTC 스트림과 분석 결과 동시 표시', () => {
 
 ---
 
+## TC-DAP-014: captureOnly 스위트 analysis 모드 스킵 검증
+
+| | |
+|---|---|
+| **TC ID** | TC-DAP-014 |
+| **SRS** | FR-DAP-029 |
+| **우선순위** | High |
+| **자동화** | ✓ (tc_runner_cli.js --server-mode analysis) |
+
+### 전제 조건
+- LTS 서버가 `SERVER_MODE=analysis`로 실행 중
+- `npm run test:tc -- --server-mode analysis` 또는 `SERVER_MODE=analysis npm run test:tc`
+
+### 테스트 절차
+
+| 단계 | 입력 | 예상 결과 |
+|---|---|---|
+| 1 | `SERVER_MODE=analysis npm run test:tc` 실행 | TC Runner 시작 |
+| 2 | Camera Discovery 스위트 처리 | `⊘ Camera Discovery  (captureOnly — SERVER_MODE=analysis has no capture backend)` 출력 |
+| 3 | NVR MaxChannel 스위트 처리 | SKIP 출력 |
+| 4 | ONVIF Metadata Pipeline 스위트 처리 | SKIP 출력 |
+| 5 | ONVIF App-RTP 스위트 처리 | SKIP 출력 |
+| 6 | RTSP Capture Backend 스위트 처리 | SKIP 출력 |
+| 7 | YouTube RTSP Ingest 스위트 처리 | SKIP 출력 |
+| 8 | LTS2026 YouTube Schema 스위트 처리 | SKIP 출력 |
+| 9 | AI Detection Modules 스위트 처리 | **RUN** (analysisOnly → analysis에서 실행) |
+| 10 | Streaming Model-Load Guard 스위트 처리 | SKIP (streamingOnly) |
+
+### 통과 기준
+- captureOnly 스위트 7개 모두 SKIP 처리됨
+- analysisOnly 스위트가 analysis 모드에서 실행됨
+- streamingOnly 스위트가 analysis 모드에서 스킵됨
+- 실행 결과 JSON에 각 스킵 스위트의 `status: "skip"` 항목 존재
+
+### 검증 명령
+```bash
+SERVER_MODE=analysis node test/tc_runner_cli.js --url http://localhost:3080 --output-json /tmp/tc-analysis.json
+# JSON 확인: .results[] 중 suiteFile이 camera_discovery, nvr_channel 등인 항목의 status === "skip"
+```
+
+---
+
 ## 16. Test Execution Order
 
 ```
@@ -685,4 +728,5 @@ describe('TC-DAP-008: WebRTC 스트림과 분석 결과 동시 표시', () => {
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-08 | 초기 작성 |
-| 1.1 | 2026-06-24 | TC-DAP-013 추가: TcRunnerService analysis-only 스위트 streaming 모드 스킵 검증 (FR-DAP-028)
+| 1.1 | 2026-06-24 | TC-DAP-013 추가: TcRunnerService analysis-only 스위트 streaming 모드 스킵 검증 (FR-DAP-028) |
+| 1.2 | 2026-06-25 | TC-DAP-014 추가: captureOnly 스위트 analysis 모드 스킵 검증 (FR-DAP-029) |
