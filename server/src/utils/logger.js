@@ -60,6 +60,9 @@ const DEBUG_DOWNGRADE_PATTERNS = [
   /\[[a-z0-9_-]+\s*@\s*0x[0-9a-f]+\]/i,  // ffmpeg component: [hls @ 0x...], [mp4 @ 0x...]
   /^(?:EXT-X-|#EXT-X-)/,                  // raw HLS playlist tags
   /BoxTemperatureReading/,                 // thermal radiometry readings — high-frequency, debug only
+  /\[internalApi\]\[ONVIF\]/,             // ONVIF metadata per-packet debug logs — high-frequency
+  /tt:MetadataStream/,                    // raw ONVIF MetadataStream XML fragments
+  /App RTP #\d+:/,                        // ingest-daemon per-500-packet App RTP progress
 ];
 
 // ─── Level detection ──────────────────────────────────────────────────────────

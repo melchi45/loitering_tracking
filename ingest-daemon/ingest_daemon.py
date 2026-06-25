@@ -703,8 +703,8 @@ class CameraSession:
                 codec_name = ds.codec_context.name
             except Exception:
                 codec_name = "unknown"
-            log.info("[%s] App RTP stream: type=%s codec=%s",
-                     self.id[:8], ds.type, codec_name)
+            log.debug("[%s] App RTP stream: type=%s codec=%s",
+                      self.id[:8], ds.type, codec_name)
 
             ctx        = _SSL_CTX_NOVERIFY if self.app_rtp_callback_url.startswith("https://") else None
             seq        = 0
@@ -735,8 +735,8 @@ class CameraSession:
                     urlopen(req, timeout=1, context=ctx)
                     push_count += 1
                     if push_count == 1 or push_count % 500 == 0:
-                        log.info("[%s] App RTP #%d: %dB payload",
-                                 self.id[:8], push_count, len(payload_b64))
+                        log.debug("[%s] App RTP #%d: %dB payload",
+                                  self.id[:8], push_count, len(payload_b64))
                 except Exception as e:
                     log.debug("[%s] App RTP callback failed: %s", self.id[:8], e)
         finally:
