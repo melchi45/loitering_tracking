@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-MCP-001 |
-| **Version** | 1.1 |
-| **Status** | In Progress — M1–M4 Complete |
-| **Date** | May 21, 2026 |
+| **Version** | 1.2 |
+| **Status** | In Progress — M1–M4 Complete, M5 Extended Tools Added |
+| **Date** | 2026-06-25 |
 | **Author** | LTS-2026 Engineering |
 | **Related RFP** | LTS-2026-010 |
 
@@ -445,6 +445,191 @@ Output:
 
 ---
 
+## 7b. Tool API Reference — Extended Tools (v1.1)
+
+### `get_server_status`
+
+```
+Description: LTS 서버 상태 조회 (health + 선택적 admin 메트릭)
+
+Input:
+  includeMetrics? : boolean — CPU/Memory/GPU 포함 여부 (기본 false)
+
+Output:
+  "LTS-2026 Server Status
+   Status      : ok
+   Mode        : combined
+   Version     : N/A
+   Uptime      : 12345s
+   DB Type     : mongodb
+   Cameras     : 4
+   Active Pipes: 3"
+  (includeMetrics=true 시 System Metrics 섹션 추가)
+```
+
+### `add_camera`
+
+```
+Description: 신규 카메라 채널 등록 및 AI 파이프라인 시작
+
+Input:
+  name       : string — 표시명 (필수)
+  url        : string — RTSP/YouTube URL (필수)
+  type?      : 'rtsp' | 'youtube' | 'webrtc' (기본 rtsp)
+  aiEnabled? : boolean (기본 true)
+  username?  : string — RTSP 인증 사용자
+  password?  : string — RTSP 인증 패스워드 (응답에서 마스킹)
+  location?  : string — 물리적 위치
+
+Output:
+  "Camera added successfully.
+   ID       : <uuid>
+   Name     : Entry A
+   URL      : rtsp://***@192.168.1.100:554/stream
+   Type     : rtsp
+   AI       : enabled"
+```
+
+### `update_camera`
+
+```
+Description: 카메라 채널 설정 부분 업데이트
+
+Input:
+  cameraId  : string (필수)
+  name?     : string
+  url?      : string
+  aiEnabled?: boolean
+  location? : string
+
+Output:
+  "Camera <id> updated. Name: ..., AI: ..."
+```
+
+### `delete_camera`
+
+```
+Description: 카메라 채널 삭제 및 파이프라인 중지 (비가역)
+
+Input:
+  cameraId : string (필수)
+
+Output:
+  "Camera <id> deleted successfully."
+```
+
+### `toggle_camera_ai`
+
+```
+Description: AI 추론 활성화/비활성화 (스트림 중단 없이)
+
+Input:
+  cameraId : string (필수)
+  enabled  : boolean (필수)
+
+Output:
+  "Camera <id> AI inference enabled."
+```
+
+### `query_onvif_events`
+
+```
+Description: ONVIF 메타데이터 이벤트 조회 (움직임, 화재, 라인크로싱, 오디오 등)
+
+Input:
+  cameraId?  : string
+  type?      : string (예: motionAlarm, earlyFireDetection, lineCrossing)
+  severity?  : 'critical' | 'high' | 'medium' | 'low' | 'info'
+  from?      : ISO8601
+  to?        : ISO8601
+  limit?     : 1-200 (기본 50)
+  ruleName?  : string — RuleName 클라이언트측 필터
+
+Output:
+  "ONVIF Events: N results
+   [timestamp] earlyFireDetection — true
+     Camera   : cam-001
+     ..."
+```
+
+### `get_onvif_event_types`
+
+```
+Description: Ever-seen ONVIF topicType 레지스트리 전체 조회
+
+Input: (없음)
+
+Output:
+  "Registered ONVIF event types (5):
+   earlyFireDetection (EarlyFire) — count: 120, severity: critical
+   motionAlarm (Motion) — count: 340, severity: medium
+   ..."
+```
+
+### `query_analysis_events`
+
+```
+Description: AI 분석 이벤트(배회/화재/연기) 조회
+
+Input:
+  cameraId? : string
+  type?     : 'loitering' | 'fire' | 'smoke' | 'all' (기본 all)
+  from?     : ISO8601
+  to?       : ISO8601
+  limit?    : 1-500 (기본 50)
+
+Output:
+  "Analysis Events: 12 (loitering:8, fire:4)
+   [timestamp] LOITERING — camera: cam-001
+     Confidence: 85.3%
+     Object ID : 756b762b
+     Dwell Time: 120s"
+```
+
+### `get_detection_tracks`
+
+```
+Description: 객체 감지 트랙 이력 (연속 추적 세션)
+
+Input:
+  cameraId?      : string
+  objectClass?   : string (예: person, car)
+  from?, to?     : ISO8601
+  limit?         : 1-200 (기본 30)
+  inProgressOnly?: boolean
+
+Output:
+  "Detection Tracks: 5
+   Track abc123 — person [ACTIVE]
+     Camera : cam-001
+     First  : 2026-06-25T10:00:00.000Z
+     Last   : (ongoing)
+     Dwell  : 45.0s"
+```
+
+### `get_analysis_metrics`
+
+```
+Description: AI 파이프라인 대시보드 메트릭
+
+Input: (없음)
+
+Output:
+  "AI Analysis Metrics
+   Status        : ok
+   Mode          : combined
+   Throughput    : 25 FPS
+   GPU Util      : 42%
+   Model         : yolov8s.onnx
+   Total Detected: 15000
+   By Class:
+     person: 12000
+     car: 3000
+   Active Pipelines: 4/4"
+```
+
+---
+
 ## 8. Resource API Reference
 
 ### `lts://cameras`
@@ -663,3 +848,5 @@ If zone or event sub-calls fail, `explain_alert` degrades gracefully:
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for LLM MCP Server |
+| 1.1 | 2026-05-28 | LTS Engineering Team | 버전 헤더 갱신 |
+| 1.2 | 2026-06-25 | LTS Engineering Team | §7b 확장 도구 10종 추가 (get_server_status, 카메라 CRUD 4종, ONVIF 2종, AI Detection 3종); 버전 1.2로 갱신 |

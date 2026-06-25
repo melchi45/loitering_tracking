@@ -341,20 +341,58 @@ npm run mcp:restart  # MCP HTTP 서버 재시작
 
 ## MCP 도구 목록
 
-Claude에서 직접 사용 가능한 LTS-2026 MCP 도구:
+Claude에서 직접 사용 가능한 LTS-2026 MCP 도구 (v1.1 — 21종):
 
+### 시스템
+| 도구 | 설명 |
+|------|------|
+| `mcp_lts_get_server_status` | 서버 health, mode, uptime, DB 타입, 카메라 수 조회 |
+
+### 배회 & 추적
+| 도구 | 설명 |
+|------|------|
+| `mcp_lts_query_loitering_events` | 배회 이벤트 조회 |
+| `mcp_lts_get_tracking_history` | 인물 추적 이력 조회 |
+
+### 알림
+| 도구 | 설명 |
+|------|------|
+| `mcp_lts_get_active_alerts` | 활성 알림 목록 조회 |
+| `mcp_lts_acknowledge_alert` | 알림 확인 처리 |
+| `mcp_lts_explain_alert` | 알림 상세 설명 생성 |
+
+### 카메라 & 구역
 | 도구 | 설명 |
 |------|------|
 | `mcp_lts_get_camera_status` | 카메라 연결 상태 조회 |
-| `mcp_lts_get_active_alerts` | 활성 알림 목록 조회 |
-| `mcp_lts_acknowledge_alert` | 알림 확인 처리 |
 | `mcp_lts_get_zone_config` | 구역 설정 조회 |
+| `mcp_lts_add_camera` | 신규 카메라 채널 등록 |
+| `mcp_lts_update_camera` | 카메라 설정 업데이트 |
+| `mcp_lts_delete_camera` | 카메라 채널 삭제 (비가역) |
+| `mcp_lts_toggle_camera_ai` | AI 추론 ON/OFF 토글 |
 | `mcp_lts_update_zone_threshold` | 구역 임계값 수정 |
-| `mcp_lts_query_loitering_events` | 배회 이벤트 조회 |
-| `mcp_lts_get_tracking_history` | 인물 추적 이력 조회 |
+
+### ONVIF 이벤트
+| 도구 | 설명 |
+|------|------|
+| `mcp_lts_query_onvif_events` | ONVIF 이벤트 조회 (화재/움직임/라인크로싱 등) |
+| `mcp_lts_get_onvif_event_types` | 시스템 ever-seen ONVIF topicType 레지스트리 조회 |
+
+### AI 감지 분석
+| 도구 | 설명 |
+|------|------|
+| `mcp_lts_query_analysis_events` | AI 감지 이벤트 조회 (배회/화재/연기) |
+| `mcp_lts_get_detection_tracks` | 객체 감지 트랙 이력 조회 |
+| `mcp_lts_get_analysis_metrics` | AI 파이프라인 메트릭 (FPS/GPU/모델) |
+
+### 분석 & 리포트
+| 도구 | 설명 |
+|------|------|
 | `mcp_lts_get_analytics_summary` | 분석 요약 통계 조회 |
-| `mcp_lts_explain_alert` | 알림 상세 설명 생성 |
 | `mcp_lts_generate_security_report` | 보안 리포트 생성 |
+| `mcp_lts_get_stats_dashboard` | 시스템 전체 통계 대시보드 |
+| `mcp_lts_get_object_snapshots` | 추적 객체 JPEG 스냅샷 |
+| `mcp_lts_search_person` | 실종자 검색 (배회 이벤트 + 추적 이력 + 스냅샷) |
 
 ---
 
@@ -371,6 +409,7 @@ Claude에서 직접 사용 가능한 LTS-2026 MCP 도구:
 | `react-dashboard-dev` | React UI·Zustand·Tailwind·i18n |
 | `api-testing` | Jest 테스트·커버리지·CI 파이프라인 |
 | `docker-deploy` | Docker 배포·TLS·MongoDB·헬스체크 |
+| `llm-mcp-integration` | MCP 도구 개발·등록·테스트·서버 관리 |
 
 **서버 아키텍처 참조 문서:** `docs/design/Design_Server_Architecture.md`
 - combined / streaming / analysis 모드 설명

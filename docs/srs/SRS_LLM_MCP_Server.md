@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-MCP-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
-| **Date** | 2026-05-26 |
+| **Date** | 2026-06-25 |
 | **Parent PRD** | prd/PRD_LLM_MCP_Server.md |
 | **Parent RFP** | rfp/RFP_LLM_MCP_Integration.md |
 
@@ -381,6 +381,110 @@ Network failures shall produce: `"Error: LTS API <status>: <statusText>: <body>"
 
 ---
 
+## 10b. Functional Requirements — Extended Tools (v1.1)
+
+### FR-MCP-070 — `get_server_status`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | LTS 서버 상태 조회 (health check + 선택적 admin 메트릭) |
+| 입력 | `includeMetrics: boolean` (선택, 기본 false) |
+| 처리 | `GET /health` 호출; `includeMetrics=true` 시 `GET /admin/system` 추가 호출 |
+| 출력 | Status, Mode, Version, Uptime, DB Type, Camera Count, Active Pipelines; `includeMetrics=true` 시 CPU/Memory/GPU |
+| 오류 | LTS API 호출 실패 시 `isError: true` 반환 |
+
+### FR-MCP-080 — `add_camera`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | 신규 카메라 채널 등록 |
+| 입력 | `name`, `url`, `type` (rtsp/youtube/webrtc), `aiEnabled`, `username?`, `password?`, `location?` |
+| 처리 | `POST /api/cameras` 호출; RTSP 자격증명은 응답에서 마스킹 처리 |
+| 출력 | 생성된 카메라 ID, Name, URL (자격증명 마스킹), Type, AI 상태, Location |
+| 오류 | API 오류 시 `isError: true` + 에러 메시지 |
+
+### FR-MCP-081 — `update_camera`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | 기존 카메라 채널 설정 업데이트 |
+| 입력 | `cameraId` (필수), `name?`, `url?`, `aiEnabled?`, `location?` |
+| 처리 | 변경 필드만 body에 포함하여 `PUT /api/cameras/:id` 호출; 필드 없을 시 즉시 "No fields to update" 반환 |
+| 출력 | 업데이트 성공 메시지 + 카메라 Name, AI 상태 |
+| 오류 | 카메라 미존재 또는 API 오류 시 `isError: true` |
+
+### FR-MCP-082 — `delete_camera`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | 카메라 채널 삭제 및 AI 파이프라인 중지 |
+| 입력 | `cameraId` (필수) |
+| 처리 | `DELETE /api/cameras/:id` 호출; 비가역 작업 — LLM 호출 전 ID 확인 필요 |
+| 출력 | 삭제 성공 메시지 |
+| 오류 | 미존재 ID 또는 API 오류 시 `isError: true` |
+
+### FR-MCP-083 — `toggle_camera_ai`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | 카메라 AI 추론 파이프라인 활성화/비활성화 (스트림 중단 없이) |
+| 입력 | `cameraId` (필수), `enabled: boolean` (필수) |
+| 처리 | `POST /api/cameras/:id/ai/toggle` 호출 |
+| 출력 | AI enabled/disabled 상태 확인 메시지 |
+| 오류 | API 오류 시 `isError: true` |
+
+### FR-MCP-090 — `query_onvif_events`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | ONVIF 메타데이터 이벤트 조회 (움직임감지, 화재, 라인크로싱, 오디오 알람 등) |
+| 입력 | `cameraId?`, `type?`, `severity?`, `from?`, `to?`, `limit (1-200, 기본 50)?`, `ruleName?` |
+| 처리 | `GET /api/onvif-events` 호출; `ruleName` 지정 시 클라이언트측 필터 적용 |
+| 출력 | 이벤트 목록 (타임스탬프, topicType, cameraId, severity, sourceToken, ruleName, operation) |
+| 오류 | API 오류 시 `isError: true` |
+
+### FR-MCP-091 — `get_onvif_event_types`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | 시스템에서 ever-seen된 ONVIF topicType 레지스트리 전체 조회 |
+| 입력 | 없음 |
+| 처리 | `GET /api/onvif-event-types` 호출 |
+| 출력 | topicType 목록 (label, count, severity 포함) |
+| 오류 | API 오류 시 `isError: true` |
+
+### FR-MCP-100 — `query_analysis_events`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | AI 분석 이벤트(배회, 화재, 연기) 조회 |
+| 입력 | `cameraId?`, `type (loitering/fire/smoke/all, 기본 all)?`, `from?`, `to?`, `limit (1-500, 기본 50)?` |
+| 처리 | `GET /api/analysis/events` 호출 |
+| 출력 | 이벤트 목록 (타입별 요약 헤더 포함; type, cameraId, confidence, objectId, zoneId, dwellTime) |
+| 오류 | API 오류 시 `isError: true` |
+
+### FR-MCP-101 — `get_detection_tracks`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | 객체 감지 트랙 이력 조회 (연속 추적 세션별 체류 시간 포함) |
+| 입력 | `cameraId?`, `objectClass?`, `from?`, `to?`, `limit (1-200, 기본 30)?`, `inProgressOnly?` |
+| 처리 | `GET /api/analysis/detection-tracks` 호출; `inProgressOnly=true` 시 클라이언트측 필터 |
+| 출력 | 트랙 목록 (objectId, class, cameraId, firstSeen, lastSeen, dwellTime, inProgress 플래그) |
+| 오류 | API 오류 시 `isError: true` |
+
+### FR-MCP-102 — `get_analysis_metrics`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | AI 분석 서버 대시보드 메트릭 조회 |
+| 입력 | 없음 |
+| 처리 | `GET /api/analysis/metrics` 호출 |
+| 출력 | FPS, 모델명, 큐 깊이, GPU 사용률, 클래스별 감지 수, 파이프라인 상태 |
+| 오류 | analysis 모드 미활성 등 API 오류 시 `isError: true` |
+
+---
+
 ## 11. Non-Functional Requirements
 
 | ID | Category | Requirement |
@@ -419,6 +523,16 @@ Network failures shall produce: `"Error: LTS API <status>: <statusText>: <body>"
 | `lts://system/summary` | `GET /api/cameras`, `GET /api/alerts?limit=100`, `GET /api/events?limit=100` |
 | `get_stats_dashboard` | `GET /api/stats` |
 | `lts://stats/dashboard` | `GET /api/stats` |
+| `get_server_status` | `GET /health`, `GET /admin/system` (선택) |
+| `add_camera` | `POST /api/cameras` |
+| `update_camera` | `PUT /api/cameras/:id` |
+| `delete_camera` | `DELETE /api/cameras/:id` |
+| `toggle_camera_ai` | `POST /api/cameras/:id/ai/toggle` |
+| `query_onvif_events` | `GET /api/onvif-events` |
+| `get_onvif_event_types` | `GET /api/onvif-event-types` |
+| `query_analysis_events` | `GET /api/analysis/events` |
+| `get_detection_tracks` | `GET /api/analysis/detection-tracks` |
+| `get_analysis_metrics` | `GET /api/analysis/metrics` |
 
 ### 12.2 Claude Code Integration
 
@@ -473,3 +587,4 @@ Registered in `.vscode/mcp.json`.
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for LLM MCP Server |
+| 1.1 | 2026-06-25 | LTS Engineering Team | §10b 확장 도구 10종 추가 (FR-MCP-070~102): get_server_status, 카메라 CRUD, ONVIF 이벤트, AI 감지 분석 |

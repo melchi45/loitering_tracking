@@ -202,7 +202,7 @@ All modules defined below correspond to completed SDLC chains (RFP → PRD → S
 | User Authentication | AUTH-LTS2026-001 | ✅ Complete | JWT RS256; RBAC; bcrypt; Google OAuth 2.0; admin approval workflow |
 | Storage / MongoDB | STORE-LTS2026-001 | ✅ Complete | Dual-mode JSON + MongoDB 5.0; atomic write; debounced persistence |
 | HTTPS / TLS | TLS-LTS2026-001 | ✅ Complete | TLS on port 3443; self-signed / mkcert / Let's Encrypt / reverse proxy |
-| LLM / MCP Server | MCP-LTS2026-001 | ✅ Complete | stdio + HTTP/SSE MCP server; 15 tools; natural language dashboard query |
+| LLM / MCP Server | MCP-LTS2026-001 | ✅ Complete | stdio + HTTP/SSE MCP server; 21 tools; natural language dashboard query; 카메라 CRUD, ONVIF 이벤트, AI 감지 분석 (v1.1) |
 | WebRTC Media Gateway | WRTC-LTS2026-001 | ✅ Complete | mediasoup SFU; STUN/TURN ICE; browser live video |
 | STUN / TURN / ICE | ICE-LTS2026-001 | ✅ Complete | coturn; ICE candidate test suite; multi-subnet TURN |
 | YouTube / RTSP Ingest | YT-LTS2026-001 | ✅ Complete | yt-dlp RTSP/HLS ingest; stream monitoring; auto-restart |
@@ -460,3 +460,4 @@ The following table maps planned market releases to engineering phases and targe
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — MRD synthesized from all docs/rfp, docs/prd, and codebase status as of Phase 1–11 completion |
 | 1.1 | 2026-06-11 | LTS Engineering Team | §6.4 Phase 12b/12c/12d 추가 (M3 Qdrant, M4 RTCP, M5 Cluster); §13 RTSP/WebRTC Architecture 문서 6종 참조 추가 |
 | 1.2 | 2026-06-16 | LTS Engineering Team | §6.3 Fullscreen Camera View·Detections Timeline·ONVIF Custom Range 3개 모듈 신규 등재 (DetectionsTimelineInline + ByteTracker 생명주기 DB 저장 + detectionTracks API) |
+| 1.3 | 2026-06-25 | LTS Engineering Team | §6.1 LLM/MCP 도구 수 15→21 업데이트 (카메라 CRUD 4종 + ONVIF 2종 + AI Detection 3종 + server status 1종 추가, MCP-LTS2026-001 v1.1) |

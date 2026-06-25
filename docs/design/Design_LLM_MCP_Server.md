@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-MCP-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent SRS** | srs/SRS_LLM_MCP_Server.md |
@@ -312,6 +312,10 @@ riskLevel  = isNight && isRepeat → HIGH
 | `get_camera_status` | `GET /api/cameras` | Format per-camera status; filter if `cameraId` supplied |
 | `get_zone_config` | `GET /api/cameras/:id/zones` | Return zone list; empty → not-configured message |
 | `update_zone_threshold` | `PUT /api/cameras/:id/zones/:zoneId { dwellThreshold }` | Zod validates 5–3600; returns zone name from response |
+| `add_camera` | `POST /api/cameras` | RTSP 자격증명은 응답에서 `:***@` 패턴으로 마스킹 |
+| `update_camera` | `PUT /api/cameras/:id` | 변경 필드만 body에 포함; 빈 body 시 즉시 early return |
+| `delete_camera` | `DELETE /api/cameras/:id` | 비가역 — LLM은 호출 전 ID 확인 필요 |
+| `toggle_camera_ai` | `POST /api/cameras/:id/ai/toggle { enabled }` | 스트림 중단 없이 AI 파이프라인만 토글 |
 
 ### 6.9 Tool: `get_stats_dashboard` (stats.js)
 
@@ -364,6 +368,46 @@ const { data } = await client.get('/api/stats');
 ```
 
 **Relation to Stats Dashboard Panel**: The web UI's `StatsPanelModal` component calls the same `GET /api/stats` endpoint. `get_stats_dashboard` exposes identical data to LLM clients via MCP, enabling natural language queries such as "How many cameras are streaming?" or "What is the unacknowledged alert count?".
+
+### 6.10 Tool: `get_server_status` (system.js)
+
+**API calls**: `GET /health` + optional `GET /admin/system`
+
+```javascript
+// includeMetrics=false (기본)
+const health = await client.get('/health');
+// Format: Status, Mode, Version, Uptime, DB Type, Cameras, Active Pipelines
+
+// includeMetrics=true → 추가 호출
+try {
+  const metrics = await client.get('/admin/system');
+  // CPU usage%, Memory RSS/Heap, GPU info
+} catch {
+  // "/admin/system" 권한 없을 시 fallback 메시지 출력 (오류 아님)
+}
+```
+
+**Design note**: `includeMetrics` 기본값이 `false`인 이유 — `/admin/system`은 admin 권한 필요, `/health`는 누구나 접근 가능. 두 단계 설계로 비권한 LLM도 기본 상태 조회 가능.
+
+### 6.11 Tools: ONVIF Events (onvif.js)
+
+| Tool | API Call | Key Logic |
+|---|---|---|
+| `query_onvif_events` | `GET /api/onvif-events` | API-side 필터(cameraId/type/severity/from/to/limit) + 클라이언트측 `ruleName` 필터 |
+| `get_onvif_event_types` | `GET /api/onvif-event-types` | Ever-seen topicType 레지스트리 전체 반환 |
+
+**`query_onvif_events` `ruleName` 필터 설계**:
+- `/api/onvif-events` API는 `ruleName` 쿼리 파라미터 미지원
+- `ruleName` 지정 시 API 응답 전체를 fetch 후 클라이언트측에서 필터링
+- 단점: `limit` 제한이 ruleName 필터 전에 적용됨 → 필요 시 limit 증가 권고
+
+### 6.12 Tools: AI Detection (detections.js)
+
+| Tool | API Call | Key Logic |
+|---|---|---|
+| `query_analysis_events` | `GET /api/analysis/events` | type=all 시 파라미터 미전송; 타입별 count 헤더 생성 |
+| `get_detection_tracks` | `GET /api/analysis/detection-tracks` | `inProgressOnly` 클라이언트측 필터; API는 `class` 파라미터 사용 |
+| `get_analysis_metrics` | `GET /api/analysis/metrics` | analysis/combined 모드 전용; non-analysis 시 `isError: true` |
 
 ---
 
@@ -671,3 +715,4 @@ The `MCP_PUBLIC_URL` environment variable overrides the base URL in `/schema` re
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for LLM MCP Server |
+| 1.1 | 2026-06-25 | LTS Engineering Team | §6.10~6.12 확장 도구 3그룹 추가 (system.js, onvif.js, detections.js); §6.8 카메라 CRUD 4종 추가; 버전 1.1 |

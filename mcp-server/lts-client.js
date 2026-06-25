@@ -47,4 +47,31 @@ export class LTSClient {
     }
     return res.json();
   }
+
+  async patch(path, body = {}) {
+    const res = await fetch(this.baseUrl + path, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`LTS API ${res.status} ${res.statusText}: ${text}`);
+    }
+    return res.json();
+  }
+
+  async delete(path) {
+    const res = await fetch(this.baseUrl + path, {
+      method: 'DELETE',
+      signal: AbortSignal.timeout(8000),
+    });
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error(`LTS API ${res.status} ${res.statusText}: ${text}`);
+    }
+    const text = await res.text();
+    try { return text ? JSON.parse(text) : { ok: true }; } catch { return { ok: true }; }
+  }
 }

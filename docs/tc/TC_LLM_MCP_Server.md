@@ -4,11 +4,11 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-MCP-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
-| **Date** | 2026-05-27 |
+| **Date** | 2026-06-25 |
 | **Parent SRS** | srs/SRS_LLM_MCP_Server.md |
-| **Test Scripts** | test/api/mcp_server.test.js |
+| **Test Scripts** | test/api/mcp_server.test.js, test/api/mcp_server_extended.test.js |
 
 ---
 
@@ -70,6 +70,16 @@
 | FR-MCP-063 | TC-G-004 |
 | FR-MCP-064 | TC-H-002 |
 | FR-MCP-065 | TC-G-005 |
+| FR-MCP-070 | TC-J-001, TC-J-002, TC-J-003 |
+| FR-MCP-080 | TC-K-001 |
+| FR-MCP-081 | TC-K-002, TC-K-006 |
+| FR-MCP-082 | TC-K-004, TC-K-005 |
+| FR-MCP-083 | TC-K-003 |
+| FR-MCP-090 | TC-L-001, TC-L-002, TC-L-003, TC-L-005 |
+| FR-MCP-091 | TC-L-004 |
+| FR-MCP-100 | TC-M-001, TC-M-002, TC-M-003 |
+| FR-MCP-101 | TC-M-004, TC-M-005 |
+| FR-MCP-102 | TC-M-006 |
 
 ### 1.3 Test Data
 
@@ -277,25 +287,181 @@
 
 ---
 
-## 12. Test Execution Order
+## 12. Test Group J — System Tools (Extended v1.1)
+
+### TC-J-001 — get_server_status Basic
+
+- **SRS:** FR-MCP-070
+- **Steps:** Call `get_server_status({ includeMetrics: false })`
+- **Expected:** Content array returned; text contains "Status", "Mode", or "Uptime" keywords; `isError` not set
+
+### TC-J-002 — get_server_status with Metrics
+
+- **SRS:** FR-MCP-070
+- **Steps:** Call `get_server_status({ includeMetrics: true })`
+- **Expected:** Text contains metrics section or "(Metrics unavailable — admin access required)" fallback
+
+### TC-J-003 — get_server_status No Error on Success
+
+- **SRS:** FR-MCP-070
+- **Steps:** Call `get_server_status({})` with LTS server running
+- **Expected:** `isError` is `undefined` or `false`
+
+---
+
+## 13. Test Group K — Camera CRUD Tools (Extended v1.1)
+
+### TC-K-001 — add_camera Success
+
+- **SRS:** FR-MCP-080
+- **Steps:** Call `add_camera({ name: '[MCP-TEST] temp-cam-ext', url: 'rtsp://192.0.2.1:554/test', type: 'rtsp', aiEnabled: false })`
+- **Expected:** `isError` not set; response text contains camera ID (8+ hex chars after "ID:")
+
+### TC-K-002 — update_camera Name
+
+- **SRS:** FR-MCP-081
+- **Steps:** Call `update_camera({ cameraId: <id from K-001>, name: '[MCP-TEST] renamed-cam' })`
+- **Expected:** `isError` not set; success message returned
+
+### TC-K-003 — toggle_camera_ai Enable
+
+- **SRS:** FR-MCP-083
+- **Steps:** Call `toggle_camera_ai({ cameraId: <id from K-001>, enabled: true })`
+- **Expected:** Response text contains "enabled" or "disabled"
+
+### TC-K-004 — delete_camera Success
+
+- **SRS:** FR-MCP-082
+- **Steps:** Call `delete_camera({ cameraId: <id from K-001> })`
+- **Expected:** `isError` not set; deletion confirmed
+
+### TC-K-005 — delete_camera Nonexistent
+
+- **SRS:** FR-MCP-082
+- **Steps:** Call `delete_camera({ cameraId: 'nonexistent-cam-00000000' })`
+- **Expected:** `isError: true` OR response text contains "error" or "not found"
+
+### TC-K-006 — update_camera No Fields
+
+- **SRS:** FR-MCP-081
+- **Steps:** Call `update_camera({ cameraId: 'any-id' })` — no other fields
+- **Expected:** Response text contains "No fields to update"
+
+---
+
+## 14. Test Group L — ONVIF Event Tools (Extended v1.1)
+
+### TC-L-001 — query_onvif_events Basic
+
+- **SRS:** FR-MCP-090
+- **Steps:** Call `query_onvif_events({ limit: 10 })`
+- **Expected:** content is array; first element text is string; `isError` not set
+
+### TC-L-002 — query_onvif_events Type Filter
+
+- **SRS:** FR-MCP-090
+- **Steps:** Call `query_onvif_events({ type: 'motionAlarm', limit: 5 })`
+- **Expected:** `isError` not set; returns results or "No ONVIF events found" message
+
+### TC-L-003 — query_onvif_events Time Range
+
+- **SRS:** FR-MCP-090
+- **Steps:** Call with `from` = 24h ago ISO8601, `to` = now ISO8601
+- **Expected:** `isError` not set
+
+### TC-L-004 — get_onvif_event_types Registry
+
+- **SRS:** FR-MCP-091
+- **Steps:** Call `get_onvif_event_types({})`
+- **Expected:** content is array; text is string; `isError` not set
+
+### TC-L-005 — query_onvif_events RuleName Filter Miss
+
+- **SRS:** FR-MCP-090
+- **Steps:** Call `query_onvif_events({ ruleName: '__no_such_rule__', limit: 20 })`
+- **Expected:** `isError` not set; "No ONVIF events found" returned (not an error)
+
+---
+
+## 15. Test Group M — AI Detection Tools (Extended v1.1)
+
+### TC-M-001 — query_analysis_events Basic
+
+- **SRS:** FR-MCP-100
+- **Steps:** Call `query_analysis_events({ limit: 10 })`
+- **Expected:** content is array; text is string
+
+### TC-M-002 — query_analysis_events Loitering Filter
+
+- **SRS:** FR-MCP-100
+- **Steps:** Call `query_analysis_events({ type: 'loitering', limit: 10 })`
+- **Expected:** `isError` not set
+
+### TC-M-003 — query_analysis_events Fire Filter
+
+- **SRS:** FR-MCP-100
+- **Steps:** Call `query_analysis_events({ type: 'fire', limit: 10 })`
+- **Expected:** `isError` not set
+
+### TC-M-004 — get_detection_tracks Basic
+
+- **SRS:** FR-MCP-101
+- **Steps:** Call `get_detection_tracks({ limit: 10 })`
+- **Expected:** content is array; text is string
+
+### TC-M-005 — get_detection_tracks inProgressOnly
+
+- **SRS:** FR-MCP-101
+- **Steps:** Call `get_detection_tracks({ inProgressOnly: true, limit: 10 })`
+- **Expected:** `isError` not set; only tracks with `inProgress: true` returned (or empty message)
+
+### TC-M-006 — get_analysis_metrics
+
+- **SRS:** FR-MCP-102
+- **Steps:** Call `get_analysis_metrics({})`
+- **Expected:** content is array; text is string (may return error if not in analysis mode — acceptable)
+
+---
+
+## 16. Test Group N — TOOL_CATALOG Completeness
+
+### TC-N-catalog — All New Tools in Catalog
+
+- **SRS:** FR-MCP-070 ~ FR-MCP-102
+- **Steps:** Import `TOOL_CATALOG` from `create-server.js`; check for all 10 new tool names
+- **Expected:** `get_server_status`, `add_camera`, `update_camera`, `delete_camera`, `toggle_camera_ai`, `query_onvif_events`, `get_onvif_event_types`, `query_analysis_events`, `get_detection_tracks`, `get_analysis_metrics` — all present in catalog
+
+### TC-N-access-tags — Access Tags
+
+- **Steps:** Iterate TOOL_CATALOG; check each entry has `access === 'read'` or `access === 'write'`
+- **Expected:** All entries have a valid access tag
+
+---
+
+## 17. Test Execution Order (v1.1)
 
 ```
-Group A (startup) → Group B (loitering tools) → Group C (alert tools) → Group D (camera/zone) → Group E (analytics) → Group F (resources) → Group G (HTTP SSE) → Group H (security) → Group I (stats dashboard)
+[Suite 1 — mcp_server.test.js]
+Group A (startup) → Group B (loitering) → Group C (alerts) → Group D (camera/zone) → Group E (analytics) → Group F (resources) → Group G (HTTP SSE) → Group H (security) → Group I (stats dashboard)
+
+[Suite 2 — mcp_server_extended.test.js]
+Group J (system) → Group K (camera CRUD) → Group L (ONVIF events) → Group M (AI detections) → Group N (catalog)
 ```
 
 ---
 
-## 13. Pass/Fail Criteria
+## 18. Pass/Fail Criteria (v1.1)
 
 | Category | Pass Condition |
 |---|---|
-| Startup | 11 tools + 5 resources registered; transport selection correct |
-| Tools | All 11 tools return correct data structures |
-| Resources | All 5 resources return correct JSON |
-| HTTP SSE | /sse, /message, /schema, /health all work |
+| Startup | 21 tools + 5 resources registered; transport selection correct |
+| System Tool | `get_server_status` returns status text; `isError` not set on success |
+| Camera CRUD | add/update/delete/toggle all succeed on valid inputs; error returned for invalid IDs |
+| ONVIF Tools | `query_onvif_events` and `get_onvif_event_types` return text; no crash on empty results or bad filters |
+| Detection Tools | All three tools return text content; `get_analysis_metrics` gracefully handles non-analysis mode |
+| Catalog | All 21 tools present with valid access tags |
 | Error handling | `isError: true` on failures; no unhandled exceptions |
-| Security | Auth token enforced on HTTP transport |
-| Stats Dashboard | `get_stats_dashboard` returns Markdown with all 5 sections; `lts://stats/dashboard` returns full StatsData JSON |
+| Security | Auth token enforced on HTTP transport; RTSP credentials masked in `add_camera` response |
 
 ---
 
@@ -304,3 +470,4 @@ Group A (startup) → Group B (loitering tools) → Group C (alert tools) → Gr
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for LLM MCP Server |
+| 1.1 | 2026-06-25 | LTS Engineering Team | Groups J~N 추가 (확장 도구 v1.1): System, Camera CRUD, ONVIF, AI Detections, Catalog (FR-MCP-070~102 추적); TC-LTS-MCP-02 연계 |

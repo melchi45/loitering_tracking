@@ -507,16 +507,26 @@ All tool inputs validated via Zod schemas before reaching the LTS API. Invalid i
 
 | Tool | Read/Write | Primary Use Case |
 |---|---|---|
+| `get_server_status` | Read | 서버 상태 진단, 모드/업타임/DB 타입 확인 |
 | `query_loitering_events` | Read | Natural language event queries |
 | `get_active_alerts` | Read | Real-time alert monitoring |
 | `explain_alert` | Read | Alert triage and context |
 | `acknowledge_alert` | Write | Alert lifecycle management |
 | `get_camera_status` | Read | Infrastructure monitoring |
 | `get_zone_config` | Read | Zone rule inspection |
+| `add_camera` | Write | 신규 카메라 채널 등록 (LLM 지시로 카메라 추가) |
+| `update_camera` | Write | 카메라 설정 업데이트 (이름, URL, AI 활성화) |
+| `delete_camera` | Write | 카메라 채널 삭제 및 파이프라인 중지 |
+| `toggle_camera_ai` | Write | AI 추론 ON/OFF 토글 (스트림 유지) |
 | `update_zone_threshold` | Write | Sensitivity tuning |
 | `get_analytics_summary` | Read | KPI dashboards, trend analysis |
 | `generate_security_report` | Read | Shift reports, management review |
 | `get_tracking_history` | Read | Person-of-interest tracking |
+| `query_onvif_events` | Read | ONVIF 이벤트 조회 (화재/움직임/라인크로싱 등) |
+| `get_onvif_event_types` | Read | 시스템 ever-seen ONVIF topicType 레지스트리 조회 |
+| `query_analysis_events` | Read | AI 감지 이벤트 조회 (배회/화재/연기) |
+| `get_detection_tracks` | Read | 객체 감지 트랙 이력 (체류 시간/클래스별) |
+| `get_analysis_metrics` | Read | AI 파이프라인 메트릭 (FPS/GPU/모델 정보) |
 
 ### B. Example LLM Interaction Flows
 
@@ -565,6 +575,16 @@ User: "Zone B keeps triggering false alarms — why?"
 | `lts://alerts/active` | `GET /api/alerts?acknowledged=false&limit=50` |
 | `lts://zones/{cameraId}` | `GET /api/cameras/:cameraId/zones` |
 | `lts://system/summary` | Parallel: cameras + alerts + events |
+| `get_server_status` | `GET /health`, `GET /admin/system` (opt) |
+| `add_camera` | `POST /api/cameras` |
+| `update_camera` | `PUT /api/cameras/:id` |
+| `delete_camera` | `DELETE /api/cameras/:id` |
+| `toggle_camera_ai` | `POST /api/cameras/:id/ai/toggle` |
+| `query_onvif_events` | `GET /api/onvif-events` |
+| `get_onvif_event_types` | `GET /api/onvif-event-types` |
+| `query_analysis_events` | `GET /api/analysis/events` |
+| `get_detection_tracks` | `GET /api/analysis/detection-tracks` |
+| `get_analysis_metrics` | `GET /api/analysis/metrics` |
 
 ---
 
@@ -698,3 +718,4 @@ Can you summarize the camera events by time slot?
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for LLM MCP Integration |
+| 1.1 | 2026-06-25 | LTS Engineering Team | Appendix A 도구 목록 10종 추가 (서버 상태, 카메라 CRUD, ONVIF, AI Detection); Appendix C API 엔드포인트 매핑 업데이트 |
