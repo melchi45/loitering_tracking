@@ -288,7 +288,7 @@ async function main() {
   });
   app.get('/api/faces/trajectories', (req, res) => {
     try {
-      const maxAgeMs = parseInt(req.query.maxAgeMs) || 300_000;
+      const maxAgeMs = parseInt(req.query.maxAgeMs) || 86_400_000;
       res.json({ success: true, data: pipelineManager.getPersonTrajectories(maxAgeMs) });
     } catch (e) { res.status(500).json({ success: false, error: e.message }); }
   });
@@ -387,10 +387,10 @@ async function main() {
   });
 
   // ── Global Person Registry ────────────────────────────────────────────────────
-  // Returns PersonTrajectory records for persons active within maxAgeMs (default 5 min).
+  // Returns PersonTrajectory records for persons active within maxAgeMs (default 24 h).
   // Used by the client on page load to hydrate the personTrajectoryStore.
   app.get('/api/persons/active', (req, res) => {
-    const maxAgeMs = parseInt(req.query.maxAgeMs) || 300_000;
+    const maxAgeMs = parseInt(req.query.maxAgeMs) || 86_400_000; // 24 h default
     const persons  = pipelineManager.getPersonTrajectories(maxAgeMs);
     res.json({ total: persons.length, persons });
   });

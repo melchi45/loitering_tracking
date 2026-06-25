@@ -38,6 +38,7 @@ interface TcResult {
   suiteFile:  string;
   suiteLabel: string;
   srsRefs:    string;
+  suiteMode:  'all' | 'analysis' | 'streaming';
   tcId:       string;
   tcDesc:     string;
   status:     'pass' | 'fail' | 'skip';
@@ -239,7 +240,7 @@ export default function AdminUsersPage() {
           {section === 'users'     && <UsersSection apiFetch={apiFetch} />}
           {section === 'ai-models' && <AiModelsSection />}
           {section === 'onvif'     && <OnvifSection apiFetch={apiFetch} />}
-          {section === 'audit'     && <AuditSection apiFetch={apiFetch} isStreaming={isStreaming} />}
+          {section === 'audit'     && <AuditSection apiFetch={apiFetch} />}
           {section === 'system'    && <SystemSection apiFetch={apiFetch} />}
         </main>
       </div>
@@ -548,10 +549,8 @@ type AuditTab = 'tests' | 'activity';
 
 function AuditSection({
   apiFetch,
-  isStreaming = false,
 }: {
   apiFetch: (p: string, o?: RequestInit) => Promise<unknown>;
-  isStreaming?: boolean;
 }) {
   const [tab, setTab] = useState<AuditTab>('tests');
 
@@ -577,7 +576,7 @@ function AuditSection({
         ))}
       </div>
 
-      {tab === 'tests'    && <TcResultsPanel apiFetch={apiFetch} isStreaming={isStreaming} />}
+      {tab === 'tests'    && <TcResultsPanel apiFetch={apiFetch} />}
       {tab === 'activity' && <ActivityLogPanel apiFetch={apiFetch} />}
     </div>
   );
@@ -587,24 +586,10 @@ function AuditSection({
 
 type TcFilter = 'all' | 'pass' | 'fail' | 'skip';
 
-// Analysis-only suite files — hidden in streaming mode (no local AI pipeline)
-const ANALYSIS_ONLY_SUITES = [
-  'ai_detection_modules.test.js',
-  'analytics_config.test.js',
-  'model_catalog.test.js',
-];
-
-// Streaming-only suite files — shown only in streaming mode (camera capture + ONVIF pipeline)
-const STREAMING_ONLY_SUITES = [
-  'timeline_range.test.js',
-];
-
 function TcResultsPanel({
   apiFetch,
-  isStreaming = false,
 }: {
   apiFetch: (p: string, o?: RequestInit) => Promise<unknown>;
-  isStreaming?: boolean;
 }) {
   const [run,     setRun]     = useState<TcRun | null>(null);
   const [results, setResults] = useState<TcResult[]>([]);
@@ -683,16 +668,8 @@ function TcResultsPanel({
     return true;
   });
 
-  // Hide analysis-only suites in streaming mode (no local AI pipeline available)
-  // Hide streaming-only suites in non-streaming mode (no camera capture pipeline)
-  const visibleResults = filtered.filter(r => {
-    if (isStreaming  && ANALYSIS_ONLY_SUITES.some(s => r.suiteFile.includes(s)))  return false;
-    if (!isStreaming && STREAMING_ONLY_SUITES.some(s => r.suiteFile.includes(s))) return false;
-    return true;
-  });
-
-  // Group by suite
-  const suiteGroups = visibleResults.reduce<Record<string, TcResult[]>>((acc, r) => {
+  // Group by suite — all results shown (skipped suites included per server mode)
+  const suiteGroups = filtered.reduce<Record<string, TcResult[]>>((acc, r) => {
     if (!acc[r.suiteFile]) acc[r.suiteFile] = [];
     acc[r.suiteFile].push(r);
     return acc;
@@ -784,14 +761,6 @@ function TcResultsPanel({
 
       {error && <ErrorBar msg={error} />}
 
-      {isStreaming && (
-        <div className="mb-3 px-3 py-2 rounded-lg bg-yellow-900/20 border border-yellow-700/40 text-[11px] text-yellow-400">
-          Streaming Server mode — AI Detection Modules and Analytics Config Toggle suites are
-          hidden (Analysis Server only). Switch to <code className="font-mono">combined</code> or{' '}
-          <code className="font-mono">analysis</code> mode to see these results.
-        </div>
-      )}
-
       {loading ? (
         <EmptyState msg="Loading…" />
       ) : Object.keys(suiteGroups).length === 0 ? (
@@ -804,20 +773,37 @@ function TcResultsPanel({
           {Object.entries(suiteGroups).map(([suiteFile, rows]) => {
             const srsRefs    = rows[0].srsRefs;
             const suiteLabel = rows[0].suiteLabel;
+            const suiteMode  = rows[0].suiteMode ?? 'all';
             const suitePass  = rows.filter(r => r.status === 'pass').length;
             const suiteFail  = rows.filter(r => r.status === 'fail').length;
+            const suiteSkip  = rows.filter(r => r.status === 'skip').length;
+            const allSkipped = rows.length > 0 && rows.every(r => r.status === 'skip');
+            const dotColor   = suiteFail > 0 ? 'bg-red-500' : allSkipped ? 'bg-yellow-500' : 'bg-green-500';
             return (
               <div key={suiteFile} className="bg-gray-900 border border-gray-800 rounded-xl overflow-hidden">
                 {/* Suite header */}
                 <div className="px-4 py-2.5 border-b border-gray-800 flex items-center justify-between gap-3 bg-gray-900/80">
                   <div className="flex items-center gap-2 min-w-0">
-                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${suiteFail > 0 ? 'bg-red-500' : 'bg-green-500'}`} />
+                    <span className={`w-2 h-2 rounded-full flex-shrink-0 ${dotColor}`} />
                     <span className="text-xs font-semibold text-gray-200 truncate">{suiteLabel}</span>
+                    {suiteMode === 'analysis' && (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold flex-shrink-0
+                                       bg-purple-900/40 text-purple-400 border border-purple-800/40">
+                        Analysis
+                      </span>
+                    )}
+                    {suiteMode === 'streaming' && (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold flex-shrink-0
+                                       bg-cyan-900/40 text-cyan-400 border border-cyan-800/40">
+                        Streaming
+                      </span>
+                    )}
                     <span className="text-[10px] text-gray-500 font-mono truncate hidden sm:block">{srsRefs}</span>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0 text-[10px]">
                     {suitePass > 0 && <span className="text-green-400 font-medium">✓ {suitePass}</span>}
                     {suiteFail > 0 && <span className="text-red-400 font-medium">✗ {suiteFail}</span>}
+                    {suiteSkip > 0 && <span className="text-yellow-500 font-medium">⊘ {suiteSkip}</span>}
                   </div>
                 </div>
 

@@ -202,7 +202,7 @@ function faceGalleryRouter(db, pipelineManager, getFaceService) {
   // GET /api/faces/trajectories?maxAgeMs=300000
   router.get('/trajectories', (req, res) => {
     try {
-      const maxAgeMs = parseInt(req.query.maxAgeMs) || 300_000;
+      const maxAgeMs = parseInt(req.query.maxAgeMs) || 86_400_000;
       const data = pipelineManager ? pipelineManager.getPersonTrajectories(maxAgeMs) : [];
       res.json({ success: true, data });
     } catch (err) {

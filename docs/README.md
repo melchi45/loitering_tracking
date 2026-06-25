@@ -309,46 +309,51 @@ flowchart LR
 
 ### Phase-1 — REST API Tests (`test/api/`)
 
-| Script | Target TC Document(s) | Groups Covered | Run Command |
-|---|---|---|---|
-| ✅ `test/api/main_system.test.js` | [TC_LTS2026_Loitering_Tracking_System](tc/TC_LTS2026_Loitering_Tracking_System.md) | A–G (23 cases) | `node test/api/main_system.test.js` |
-| ✅ `test/api/analytics_config.test.js` | [TC_AI_Animal_Detection](tc/TC_AI_Animal_Detection.md) · [TC_AI_Hat_Detection](tc/TC_AI_Hat_Detection.md) · [TC_AI_Mask_Detection](tc/TC_AI_Mask_Detection.md) · [TC_AI_Human_Detection](tc/TC_AI_Human_Detection.md) — Group C | Config toggle (15 cases) | `node test/api/analytics_config.test.js` |
-| ✅ `test/api/ai_detection_modules.test.js` | [TC_AI_Accessories_Detection](tc/TC_AI_Accessories_Detection.md) · [TC_AI_Animal_Detection](tc/TC_AI_Animal_Detection.md) · [TC_AI_Cloth_Analysis](tc/TC_AI_Cloth_Analysis.md) · [TC_AI_Color_Analysis](tc/TC_AI_Color_Analysis.md) · [TC_AI_Fire_Smoke_Detection](tc/TC_AI_Fire_Smoke_Detection.md) · [TC_AI_Hat_Detection](tc/TC_AI_Hat_Detection.md) · [TC_AI_Mask_Detection](tc/TC_AI_Mask_Detection.md) · [TC_AI_Vehicle_Detection](tc/TC_AI_Vehicle_Detection.md) | Groups A, B, D, F (61 cases) | `node test/api/ai_detection_modules.test.js` |
-| ✅ `test/api/human_detection.test.js` | [TC_AI_Human_Detection](tc/TC_AI_Human_Detection.md) | A–D (graceful skip if model absent) | `node test/api/human_detection.test.js` |
-| ✅ `test/api/model_catalog.test.js` | [TC_AI_Model_Catalog](tc/TC_AI_Model_Catalog.md) | TC-MC-001,002,005,007,008 (download tests: `INTEGRATION_DOWNLOAD=1`) | `node test/api/model_catalog.test.js` |
-| ✅ `test/api/object_tracking.test.js` | [TC_Object_Tracking](tc/TC_Object_Tracking.md) | A (Zone CRUD), B (Tracker Config), G (22 cases) | `node test/api/object_tracking.test.js` |
-| ✅ `test/api/camera_discovery.test.js` | [TC_Camera_Discovery](tc/TC_Camera_Discovery.md) | A (Discovery), B (Registration), G (15 cases) | `node test/api/camera_discovery.test.js` |
-| ✅ `test/api/nvr_channel_discovery.test.js` | [TC_Camera_Discovery](tc/TC_Camera_Discovery.md) | Group H — NVR MaxChannel (TC-H-001~013) | `node test/api/nvr_channel_discovery.test.js` |
-| ✅ `test/api/capture-backend.test.js` | [TC_RTSP_Capture_Backend](tc/TC_RTSP_Capture_Backend.md) | CaptureFactory, RTSP/GStreamer/PyAV backend selection | `node test/api/capture-backend.test.js` |
-| ✅ `test/api/face_gallery.test.js` | [TC_AI_Face_Recognition](tc/TC_AI_Face_Recognition.md) · [TC_Dashboard_Sidebar_Face_ID](tc/TC_Dashboard_Sidebar_Face_ID.md) | Group A (Gallery CRUD), E (15 cases) | `node test/api/face_gallery.test.js` |
-| ✅ `test/api/face_enrollment.test.js` | [TC_AI_Face_Recognition](tc/TC_AI_Face_Recognition.md) · [TC_Dashboard_Sidebar_Face_ID](tc/TC_Dashboard_Sidebar_Face_ID.md) | Group B (Enrollment), G (8 cases) | `node test/api/face_enrollment.test.js` |
-| ✅ `test/api/missing_persons.test.js` | [TC_AI_Face_Recognition](tc/TC_AI_Face_Recognition.md) · [TC_Dashboard_Sidebar_Face_ID](tc/TC_Dashboard_Sidebar_Face_ID.md) | Groups C, D (2 pass + 4 skip) | `node test/api/missing_persons.test.js` |
-| ✅ `test/api/missing-person.test.js` | [TC_AI_Missing_Person_Detection](tc/TC_AI_Missing_Person_Detection.md) | TC-U001/U002/U005, TC-I001~I004, TC-R001 (register/search/update/status flow) | `node test/api/missing-person.test.js` |
-| ✅ `test/api/cross_camera_tracking.test.js` | [TC_CrossCamera_Face_Tracking](tc/TC_CrossCamera_Face_Tracking.md) | A (Trajectory), B (Stats), C (Persons), G (15 cases) | `node test/api/cross_camera_tracking.test.js` |
-| ✅ `test/api/youtube_streams.test.js` | [TC_YouTube_RTSP_Ingest](tc/TC_YouTube_RTSP_Ingest.md) | A–G (14 cases) | `node test/api/youtube_streams.test.js` |
-| ✅ `test/api/youtube_streams_lts2026.test.js` | [TC_LTS2026_YouTube_RTSP_Ingest](tc/TC_LTS2026_YouTube_RTSP_Ingest.md) | A–C (8 cases) | `node test/api/youtube_streams_lts2026.test.js` |
-| ✅ `test/api/stats_panel.test.js` | [TC_Stats_Panel](tc/TC_Stats_Panel.md) | A–K (aggregation accuracy, drill-down nav, hourly breakdown, items API) | `node test/api/stats_panel.test.js` |
-| ✅ `test/api/webrtc.test.js` | [TC_WebRTC_Media_Gateway](tc/TC_WebRTC_Media_Gateway.md) | A–C (7 cases) | `node test/api/webrtc.test.js` |
-| ✅ `test/api/webrtc_ice.test.js` | [TC_STUN_TURN_ICE](tc/TC_STUN_TURN_ICE.md) | A–B (7 cases) | `node test/api/webrtc_ice.test.js` |
-| ✅ `test/api/webrtc_stability.test.js` | [TC_WebRTC_Media_Gateway](tc/TC_WebRTC_Media_Gateway.md) | Group H — stability post-patch (TC-H-001~004) | `node test/api/webrtc_stability.test.js` |
-| ✅ `test/api/webrtc_telemetry.test.js` | [TC_WebRTC_Media_Gateway](tc/TC_WebRTC_Media_Gateway.md) | Group I — Client Telemetry relay (TC-I-001~004) | `node test/api/webrtc_telemetry.test.js` |
-| ✅ `test/api/https_tls.test.js` | [TC_HTTPS_TLS](tc/TC_HTTPS_TLS.md) | A, B, D, G (6 pass; HTTPS cases skip in HTTP-only mode) | `node test/api/https_tls.test.js` |
-| ✅ `test/api/mcp_server.test.js` | [TC_LLM_MCP_Server](tc/TC_LLM_MCP_Server.md) | A–E (29 cases) | `node test/api/mcp_server.test.js` |
-| ✅ `test/api/mcp_server_extended.test.js` | [TC_LLM_MCP_Server](tc/TC_LLM_MCP_Server.md) | Groups J–O (FR-MCP-070~110) | `node test/api/mcp_server_extended.test.js` |
-| ✅ `test/api/sidebar_cameras.test.js` | [TC_Dashboard_Sidebar_Cameras](tc/TC_Dashboard_Sidebar_Cameras.md) | B (Cameras REST), C (Add Camera), D (Search), G (13 pass + 4 skip) | `node test/api/sidebar_cameras.test.js` |
-| ✅ `test/api/sidebar_alerts_zones.test.js` | [TC_Dashboard_Sidebar_Alerts_Zones](tc/TC_Dashboard_Sidebar_Alerts_Zones.md) | B (Alert Ack REST), D (Zone REST) (11 pass + 8 skip) | `node test/api/sidebar_alerts_zones.test.js` |
-| ✅ `test/api/detection_snapshot_search.test.js` | [TC_Detection_Snapshot_Search](tc/TC_Detection_Snapshot_Search.md) | B, C, F, I (REST API + search + regression + filter chip tooltips, 26 cases) | `node test/api/detection_snapshot_search.test.js` |
-| ✅ `test/api/auth.test.js` | [TC_User_Authentication](tc/TC_User_Authentication.md) | A–G (registration, sign-in, JWT, logout, admin, RBAC, regression) | `node test/api/auth.test.js` |
-| ✅ `test/api/user_profile.test.js` | [TC_User_Profile](tc/TC_User_Profile.md) | Group A (Profile Read), Group B (Profile Update — PATCH /auth/me) | `node test/api/user_profile.test.js` |
-| ✅ `test/api/db_layer.test.js` | [TC_DB_Layer](tc/TC_DB_Layer.md) | Groups A+B+H+I+J (REST-testable CRUD, persistence, security, durability) | `node test/api/db_layer.test.js` |
-| ✅ `test/api/onvif_metadata_pipeline.test.js` | [TC_ONVIF_Metadata_Pipeline](tc/TC_ONVIF_Metadata_Pipeline.md) | Parser unit tests — TC-PARSER-001~003 (payload → array conversion, multi-message) | `node test/api/onvif_metadata_pipeline.test.js` |
-| ✅ `test/api/onvif_apprtp.test.js` | [TC_ONVIF_Metadata_Pipeline](tc/TC_ONVIF_Metadata_Pipeline.md) | TC-APPRTP-007~014 — Socket.IO broadcast, DB save, `onvif:event` event | `node test/api/onvif_apprtp.test.js` |
-| ✅ `test/api/timeline_range.test.js` | [TC_ONVIF_Metadata_Pipeline](tc/TC_ONVIF_Metadata_Pipeline.md) | TC-TIMELINE-RANGE-001~008 — ONVIF/Detection timeline 1H `from` parameter handling | `node test/api/timeline_range.test.js` |
-| ✅ `test/api/thermal_radiometry_overlay.test.js` | [TC_Thermal_Radiometry_Overlay](tc/TC_Thermal_Radiometry_Overlay.md) | Group A (parser unit, TC-A-001~008), Group B (Socket.IO/HTTP API, TC-B-001~003) | `node test/api/thermal_radiometry_overlay.test.js` |
-| ✅ `test/api/distributed_pipeline.test.js` | [TC_Distributed_AI_Pipeline](tc/TC_Distributed_AI_Pipeline.md) | Distributed AI pipeline endpoint and circuit-breaker tests | `node test/api/distributed_pipeline.test.js` |
-| ✅ `test/api/streaming_mode_model_skip.test.js` | [TC_Streaming_Model_Load_Policy](tc/TC_Streaming_Model_Load_Policy.md) | `SERVER_MODE=streaming` model-skip contract — unit tests | `node test/api/streaming_mode_model_skip.test.js` |
-| ✅ `test/api/streaming_without_analysis_url.test.js` | [TC_Distributed_AI_Pipeline](tc/TC_Distributed_AI_Pipeline.md) | Streaming mode fallback when `ANALYSIS_SERVER_URL` unset | `node test/api/streaming_without_analysis_url.test.js` |
-| 📋 `test/api/face_match_history.test.js` | [TC_Dashboard_Sidebar_Face_ID](tc/TC_Dashboard_Sidebar_Face_ID.md) | Group E (Match History CRUD) | `node test/api/face_match_history.test.js` |
+> **Server Mode** column — which `SERVER_MODE` modes run this suite:
+> - **All** — runs in `combined`, `streaming`, `analysis`
+> - **Analysis** — requires AI inference pipeline; **skipped** automatically in `streaming` mode
+> - **Streaming** — requires camera capture pipeline; **skipped** automatically in `analysis` mode
+
+| Script | Target TC Document(s) | Groups Covered | Server Mode | Run Command |
+|---|---|---|---|---|
+| ✅ `test/api/main_system.test.js` | [TC_LTS2026_Loitering_Tracking_System](tc/TC_LTS2026_Loitering_Tracking_System.md) | A–G (23 cases) | All | `node test/api/main_system.test.js` |
+| ✅ `test/api/analytics_config.test.js` | [TC_AI_Animal_Detection](tc/TC_AI_Animal_Detection.md) · [TC_AI_Hat_Detection](tc/TC_AI_Hat_Detection.md) · [TC_AI_Mask_Detection](tc/TC_AI_Mask_Detection.md) · [TC_AI_Human_Detection](tc/TC_AI_Human_Detection.md) — Group C | Config toggle (15 cases) | **Analysis** | `node test/api/analytics_config.test.js` |
+| ✅ `test/api/ai_detection_modules.test.js` | [TC_AI_Accessories_Detection](tc/TC_AI_Accessories_Detection.md) · [TC_AI_Animal_Detection](tc/TC_AI_Animal_Detection.md) · [TC_AI_Cloth_Analysis](tc/TC_AI_Cloth_Analysis.md) · [TC_AI_Color_Analysis](tc/TC_AI_Color_Analysis.md) · [TC_AI_Fire_Smoke_Detection](tc/TC_AI_Fire_Smoke_Detection.md) · [TC_AI_Hat_Detection](tc/TC_AI_Hat_Detection.md) · [TC_AI_Mask_Detection](tc/TC_AI_Mask_Detection.md) · [TC_AI_Vehicle_Detection](tc/TC_AI_Vehicle_Detection.md) | Groups A, B, D, F (61 cases) | **Analysis** | `node test/api/ai_detection_modules.test.js` |
+| ✅ `test/api/human_detection.test.js` | [TC_AI_Human_Detection](tc/TC_AI_Human_Detection.md) | A–D (graceful skip if model absent) | All | `node test/api/human_detection.test.js` |
+| ✅ `test/api/model_catalog.test.js` | [TC_AI_Model_Catalog](tc/TC_AI_Model_Catalog.md) | TC-MC-001,002,005,007,008 (download tests: `INTEGRATION_DOWNLOAD=1`) | **Analysis** | `node test/api/model_catalog.test.js` |
+| ✅ `test/api/object_tracking.test.js` | [TC_Object_Tracking](tc/TC_Object_Tracking.md) | A (Zone CRUD), B (Tracker Config), G (22 cases) | All | `node test/api/object_tracking.test.js` |
+| ✅ `test/api/camera_discovery.test.js` | [TC_Camera_Discovery](tc/TC_Camera_Discovery.md) | A (Discovery), B (Registration), G (15 cases) | All | `node test/api/camera_discovery.test.js` |
+| ✅ `test/api/nvr_channel_discovery.test.js` | [TC_Camera_Discovery](tc/TC_Camera_Discovery.md) | Group H — NVR MaxChannel (TC-H-001~013) | All | `node test/api/nvr_channel_discovery.test.js` |
+| ✅ `test/api/capture-backend.test.js` | [TC_RTSP_Capture_Backend](tc/TC_RTSP_Capture_Backend.md) | CaptureFactory, RTSP/GStreamer/PyAV backend selection | All | `node test/api/capture-backend.test.js` |
+| ✅ `test/api/face_gallery.test.js` | [TC_AI_Face_Recognition](tc/TC_AI_Face_Recognition.md) · [TC_Dashboard_Sidebar_Face_ID](tc/TC_Dashboard_Sidebar_Face_ID.md) | Group A (Gallery CRUD), E (15 cases) | All | `node test/api/face_gallery.test.js` |
+| ✅ `test/api/face_enrollment.test.js` | [TC_AI_Face_Recognition](tc/TC_AI_Face_Recognition.md) · [TC_Dashboard_Sidebar_Face_ID](tc/TC_Dashboard_Sidebar_Face_ID.md) | Group B (Enrollment), G (8 cases) | All | `node test/api/face_enrollment.test.js` |
+| ✅ `test/api/missing_persons.test.js` | [TC_AI_Face_Recognition](tc/TC_AI_Face_Recognition.md) · [TC_Dashboard_Sidebar_Face_ID](tc/TC_Dashboard_Sidebar_Face_ID.md) | Groups C, D (2 pass + 4 skip) | All | `node test/api/missing_persons.test.js` |
+| ✅ `test/api/missing-person.test.js` | [TC_AI_Missing_Person_Detection](tc/TC_AI_Missing_Person_Detection.md) | TC-U001/U002/U005, TC-I001~I004, TC-R001 (register/search/update/status flow) | All | `node test/api/missing-person.test.js` |
+| ✅ `test/api/cross_camera_tracking.test.js` | [TC_CrossCamera_Face_Tracking](tc/TC_CrossCamera_Face_Tracking.md) | A (Trajectory), B (Stats), C (Persons), G (15 cases) | All | `node test/api/cross_camera_tracking.test.js` |
+| ✅ `test/api/youtube_streams.test.js` | [TC_YouTube_RTSP_Ingest](tc/TC_YouTube_RTSP_Ingest.md) | A–G (14 cases) | All | `node test/api/youtube_streams.test.js` |
+| ✅ `test/api/youtube_streams_lts2026.test.js` | [TC_LTS2026_YouTube_RTSP_Ingest](tc/TC_LTS2026_YouTube_RTSP_Ingest.md) | A–C (8 cases) | All | `node test/api/youtube_streams_lts2026.test.js` |
+| ✅ `test/api/stats_panel.test.js` | [TC_Stats_Panel](tc/TC_Stats_Panel.md) | A–K (aggregation accuracy, drill-down nav, hourly breakdown, items API) | All | `node test/api/stats_panel.test.js` |
+| ✅ `test/api/webrtc.test.js` | [TC_WebRTC_Media_Gateway](tc/TC_WebRTC_Media_Gateway.md) | A–C (7 cases) | All | `node test/api/webrtc.test.js` |
+| ✅ `test/api/webrtc_ice.test.js` | [TC_STUN_TURN_ICE](tc/TC_STUN_TURN_ICE.md) | A–B (7 cases) | All | `node test/api/webrtc_ice.test.js` |
+| ✅ `test/api/webrtc_stability.test.js` | [TC_WebRTC_Media_Gateway](tc/TC_WebRTC_Media_Gateway.md) | Group H — stability post-patch (TC-H-001~004) | All | `node test/api/webrtc_stability.test.js` |
+| ✅ `test/api/webrtc_telemetry.test.js` | [TC_WebRTC_Media_Gateway](tc/TC_WebRTC_Media_Gateway.md) | Group I — Client Telemetry relay (TC-I-001~004) | All | `node test/api/webrtc_telemetry.test.js` |
+| ✅ `test/api/https_tls.test.js` | [TC_HTTPS_TLS](tc/TC_HTTPS_TLS.md) | A, B, D, G (6 pass; HTTPS cases skip in HTTP-only mode) | All | `node test/api/https_tls.test.js` |
+| ✅ `test/api/mcp_server.test.js` | [TC_LLM_MCP_Server](tc/TC_LLM_MCP_Server.md) | A–E (29 cases) | All | `node test/api/mcp_server.test.js` |
+| ✅ `test/api/mcp_server_extended.test.js` | [TC_LLM_MCP_Server](tc/TC_LLM_MCP_Server.md) | Groups J–O (FR-MCP-070~110) | All | `node test/api/mcp_server_extended.test.js` |
+| ✅ `test/api/sidebar_cameras.test.js` | [TC_Dashboard_Sidebar_Cameras](tc/TC_Dashboard_Sidebar_Cameras.md) | B (Cameras REST), C (Add Camera), D (Search), G (13 pass + 4 skip) | All | `node test/api/sidebar_cameras.test.js` |
+| ✅ `test/api/sidebar_alerts_zones.test.js` | [TC_Dashboard_Sidebar_Alerts_Zones](tc/TC_Dashboard_Sidebar_Alerts_Zones.md) | B (Alert Ack REST), D (Zone REST) (11 pass + 8 skip) | All | `node test/api/sidebar_alerts_zones.test.js` |
+| ✅ `test/api/detection_snapshot_search.test.js` | [TC_Detection_Snapshot_Search](tc/TC_Detection_Snapshot_Search.md) | B, C, F, I (REST API + search + regression + filter chip tooltips, 26 cases) | All | `node test/api/detection_snapshot_search.test.js` |
+| ✅ `test/api/auth.test.js` | [TC_User_Authentication](tc/TC_User_Authentication.md) | A–G (registration, sign-in, JWT, logout, admin, RBAC, regression) | All | `node test/api/auth.test.js` |
+| ✅ `test/api/user_profile.test.js` | [TC_User_Profile](tc/TC_User_Profile.md) | Group A (Profile Read), Group B (Profile Update — PATCH /auth/me) | All | `node test/api/user_profile.test.js` |
+| ✅ `test/api/db_layer.test.js` | [TC_DB_Layer](tc/TC_DB_Layer.md) | Groups A+B+H+I+J (REST-testable CRUD, persistence, security, durability) | All | `node test/api/db_layer.test.js` |
+| ✅ `test/api/onvif_metadata_pipeline.test.js` | [TC_ONVIF_Metadata_Pipeline](tc/TC_ONVIF_Metadata_Pipeline.md) | Parser unit tests — TC-PARSER-001~003 (payload → array conversion, multi-message) | All | `node test/api/onvif_metadata_pipeline.test.js` |
+| ✅ `test/api/onvif_apprtp.test.js` | [TC_ONVIF_Metadata_Pipeline](tc/TC_ONVIF_Metadata_Pipeline.md) | TC-APPRTP-007~014 — Socket.IO broadcast, DB save, `onvif:event` event | All | `node test/api/onvif_apprtp.test.js` |
+| ✅ `test/api/timeline_range.test.js` | [TC_ONVIF_Metadata_Pipeline](tc/TC_ONVIF_Metadata_Pipeline.md) | TC-TIMELINE-RANGE-001~008 — ONVIF/Detection timeline 1H `from` parameter handling | **Streaming** | `node test/api/timeline_range.test.js` |
+| ✅ `test/api/thermal_radiometry_overlay.test.js` | [TC_Thermal_Radiometry_Overlay](tc/TC_Thermal_Radiometry_Overlay.md) | Group A (parser unit, TC-A-001~008), Group B (Socket.IO/HTTP API, TC-B-001~003) | All | `node test/api/thermal_radiometry_overlay.test.js` |
+| ✅ `test/api/distributed_pipeline.test.js` | [TC_Distributed_AI_Pipeline](tc/TC_Distributed_AI_Pipeline.md) | Distributed AI pipeline endpoint and circuit-breaker tests | All | `node test/api/distributed_pipeline.test.js` |
+| ✅ `test/api/streaming_mode_model_skip.test.js` | [TC_Streaming_Model_Load_Policy](tc/TC_Streaming_Model_Load_Policy.md) | `SERVER_MODE=streaming` model-skip contract — unit tests | **Streaming** | `node test/api/streaming_mode_model_skip.test.js` |
+| ✅ `test/api/streaming_without_analysis_url.test.js` | [TC_Distributed_AI_Pipeline](tc/TC_Distributed_AI_Pipeline.md) | Streaming mode fallback when `ANALYSIS_SERVER_URL` unset | **Streaming** | `node test/api/streaming_without_analysis_url.test.js` |
+| 📋 `test/api/face_match_history.test.js` | [TC_Dashboard_Sidebar_Face_ID](tc/TC_Dashboard_Sidebar_Face_ID.md) | Group E (Match History CRUD) | All | `node test/api/face_match_history.test.js` |
 
 ### Phase-2 — Integration Tests (`test/integration/`)
 
@@ -437,6 +442,7 @@ node test/generate_report.js
 | 2026-06-05 | CUDA Acceleration SDLC v1.1 amendment — RFP/PRD/SRS/Design/TC updated with ONNX startup diagnostics; `docs/ops/ONNX_Runtime_Provider_Diagnostics.md` added |
 | 2026-06-05 | Video Capture Pipeline SDLC chain authored — 5-document chain; 40 test cases in Groups A–G; 4-phase improvement roadmap |
 | 2026-06-25 | **docs/README.md v2.0 — Comprehensive update**: (1) Added 7 fully documented modules missing from table (AI_Missing_Person_Detection, AI_Model_Catalog, Distributed_AI_Pipeline, Fullscreen_Camera_View, ONVIF_Metadata_Pipeline, RTSP_WebRTC_Architecture, User_Profile); (2) Added "Partially Documented Modules" section (Admin Dashboard, Dashboard Analysis Mode, ICE Test UI, Thermal Radiometry Overlay, RTSP Capture Backend, FFmpeg RTSP Capture, Streaming Model Load Policy); (3) Added "Design-Only / Architectural Reference Documents" section (9 docs: Server_Architecture, WebRTC_Engine_Modes, WebRTC_Client_Telemetry, ONVIF_Timeline, AI_AppearanceReID, AI_ReID, Client_Log_Backchannel, DataChannel_CameraEvents, FullscreenPanel_Splitbar); (4) Added "Operations Guides" section (11 docs with design cross-refs); (5) Added "Document Cross-Reference Map" section with layered Mermaid diagrams and inter-module dependency tables; (6) Updated Test Script Status — added 16 previously unlisted Phase-1 scripts; updated Phase Coverage Summary from 23→38 scripts |
+| 2026-06-25 | **Admin Dashboard TC mode classification**: Phase-1 table "Server Mode" column added — 3 suites marked Analysis (skipped in streaming), 3 suites marked Streaming (skipped in analysis); yellow warning banner removed; suite headers now show mode badges (purple=Analysis, cyan=Streaming) and skip count |
 
 ---
 

@@ -82,9 +82,9 @@ const SUITES = [
   { file: 'test/api/timeline_range.test.js', srs: 'FR-TIMELINE-RANGE-001~008', label: 'Timeline 1H Range  Streaming', streamingOnly: true },
   // Capture / Pipeline
   { file: 'test/api/capture-backend.test.js',               srs: 'FR-CAP-001~020', label: 'RTSP Capture Backend' },
-  { file: 'test/api/distributed_pipeline.test.js',          srs: 'FR-DIST-001~020', label: 'Distributed Pipeline  SERVER_MODE' },
-  { file: 'test/api/streaming_mode_model_skip.test.js',     srs: 'FR-STREAM-MODEL-001~005', label: 'Streaming Model-Load Guard' },
-  { file: 'test/api/streaming_without_analysis_url.test.js', srs: 'FR-STREAM-FALLBACK-001~005', label: 'Streaming Monitoring-Only Fallback' },
+  { file: 'test/api/distributed_pipeline.test.js',           srs: 'FR-DIST-001~020', label: 'Distributed Pipeline  SERVER_MODE' },
+  { file: 'test/api/streaming_mode_model_skip.test.js',      srs: 'FR-STREAM-MODEL-001~005',    label: 'Streaming Model-Load Guard',         streamingOnly: true },
+  { file: 'test/api/streaming_without_analysis_url.test.js', srs: 'FR-STREAM-FALLBACK-001~005', label: 'Streaming Monitoring-Only Fallback', streamingOnly: true },
   // YouTube
   { file: 'test/api/youtube_streams.test.js',               srs: 'FR-YT-001~020', label: 'YouTube RTSP Ingest  A+D' },
   { file: 'test/api/youtube_streams_lts2026.test.js',       srs: 'FR-YT-LTS-001~010', label: 'LTS2026 YouTube Schema  A+B+D' },
@@ -189,17 +189,17 @@ async function _run(port, proto = 'http') {
   console.log(`[TcRunner] Run ${runId.slice(0, 8)} started — ${SUITES.length} suites, SERVER_MODE=${serverMode}, LTS_URL=${ltsUrl}`);
 
   for (const suite of SUITES) {
-    // Analysis-only suites are skipped in streaming mode (no local AI pipeline)
-    if (isStreaming && suite.analysisOnly) {
+    // Analysis-only suites: skip in streaming mode (no local AI pipeline)
+    if (serverMode === 'streaming' && suite.analysisOnly) {
       _save(runId, runAt, suite, 'TC-SKIP',
-        `${suite.label} — skipped (SERVER_MODE=streaming, Analysis Server only)`, 'skip', null);
+        `${suite.label} — skipped (Streaming Server: Analysis Server test)`, 'skip', null);
       totalSkip++;
       continue;
     }
-    // Streaming-only suites are skipped in analysis/combined mode (need camera capture pipeline)
-    if (!isStreaming && suite.streamingOnly) {
+    // Streaming-only suites: skip in analysis mode (no camera capture pipeline)
+    if (serverMode === 'analysis' && suite.streamingOnly) {
       _save(runId, runAt, suite, 'TC-SKIP',
-        `${suite.label} — skipped (SERVER_MODE=${serverMode}, Streaming Server only)`, 'skip', null);
+        `${suite.label} — skipped (Analysis Server: Streaming Server test)`, 'skip', null);
       totalSkip++;
       continue;
     }
@@ -301,6 +301,12 @@ function _parseOutput(stdout, stderr) {
   return Object.values(results).sort((a, b) => a.tcId.localeCompare(b.tcId));
 }
 
+function _suiteMode(suite) {
+  if (suite.analysisOnly)  return 'analysis';
+  if (suite.streamingOnly) return 'streaming';
+  return 'all';
+}
+
 function _save(runId, runAt, suite, tcId, tcDesc, status, errorMsg) {
   try {
     getDB().insert('tc_results', {
@@ -310,6 +316,7 @@ function _save(runId, runAt, suite, tcId, tcDesc, status, errorMsg) {
       suiteFile:  suite.file,
       suiteLabel: suite.label,
       srsRefs:    suite.srs,
+      suiteMode:  _suiteMode(suite),
       tcId,
       tcDesc,
       status,
