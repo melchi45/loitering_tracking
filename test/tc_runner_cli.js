@@ -61,15 +61,16 @@ const serverModeArg = getArg('--server-mode') || null;
 const SUITE_TIMEOUT = parseInt(process.env.TC_SUITE_TIMEOUT_MS || '90000', 10);
 
 // ── Suite registry (mirrors TcRunnerService.js) ───────────────────────────────
-// analysisOnly: skip in SERVER_MODE=streaming
-// streamingOnly: skip in SERVER_MODE=combined|analysis
+// analysisOnly:  skip in SERVER_MODE=streaming           (requires local AI pipeline)
+// streamingOnly: skip in SERVER_MODE=combined|analysis   (streaming server specific)
+// captureOnly:   skip in SERVER_MODE=analysis            (requires RTSP capture backend)
 
 const SUITES = [
   // DB Layer
   { file: 'test/api/db_layer.test.js',                      srs: 'FR-STORAGE-001~074, NFR-STORAGE-001~017',   label: 'DB Layer  A+B+H+I+J' },
-  // Camera
-  { file: 'test/api/camera_discovery.test.js',              srs: 'FR-CAM-040~056',                            label: 'Camera Discovery  A+B+G' },
-  { file: 'test/api/nvr_channel_discovery.test.js',         srs: 'FR-CAM-060~067',                            label: 'NVR MaxChannel  H' },
+  // Camera (captureOnly: analysis server has no capture backend / discovery service)
+  { file: 'test/api/camera_discovery.test.js',              srs: 'FR-CAM-040~056',                            label: 'Camera Discovery  A+B+G',    captureOnly: true },
+  { file: 'test/api/nvr_channel_discovery.test.js',         srs: 'FR-CAM-060~067',                            label: 'NVR MaxChannel  H',           captureOnly: true },
   { file: 'test/api/sidebar_cameras.test.js',               srs: 'FR-CAM-001~020',                            label: 'Sidebar Cameras  B+C+D+G' },
   // Auth / User
   { file: 'test/api/auth.test.js',                          srs: 'FR-USR-AUTH-001~020',                       label: 'User Authentication' },
@@ -99,20 +100,20 @@ const SUITES = [
   { file: 'test/api/webrtc_telemetry.test.js',              srs: 'FR-WEBRTC-TEL-001~010',                   label: 'WebRTC Telemetry' },
   // TLS
   { file: 'test/api/https_tls.test.js',                     srs: 'FR-TLS-001~010',                          label: 'HTTPS TLS' },
-  // ONVIF
-  { file: 'test/api/onvif_metadata_pipeline.test.js',       srs: 'FR-ONVIF-PIPE-001~020',                   label: 'ONVIF Metadata Pipeline' },
-  { file: 'test/api/onvif_apprtp.test.js',                  srs: 'FR-ONVIF-RTP-001~010',                    label: 'ONVIF App-RTP' },
+  // ONVIF (captureOnly: ONVIF subscription and App-RTP require a capture pipeline)
+  { file: 'test/api/onvif_metadata_pipeline.test.js',       srs: 'FR-ONVIF-PIPE-001~020',                   label: 'ONVIF Metadata Pipeline',     captureOnly: true },
+  { file: 'test/api/onvif_apprtp.test.js',                  srs: 'FR-ONVIF-RTP-001~010',                    label: 'ONVIF App-RTP',               captureOnly: true },
   { file: 'test/api/thermal_radiometry_overlay.test.js',    srs: 'FR-THERMAL-001~010',                      label: 'Thermal Radiometry Overlay' },
   // Timeline (streamingOnly)
   { file: 'test/api/timeline_range.test.js',                srs: 'FR-TIMELINE-RANGE-001~008',               label: 'Timeline 1H Range  Streaming', streamingOnly: true },
-  // Capture / Pipeline
-  { file: 'test/api/capture-backend.test.js',               srs: 'FR-CAP-001~020',                          label: 'RTSP Capture Backend' },
+  // Capture / Pipeline (captureOnly: tests the RTSP capture backend which analysis server lacks)
+  { file: 'test/api/capture-backend.test.js',               srs: 'FR-CAP-001~020',                          label: 'RTSP Capture Backend',        captureOnly: true },
   { file: 'test/api/distributed_pipeline.test.js',          srs: 'FR-DIST-001~020',                         label: 'Distributed Pipeline  SERVER_MODE' },
   { file: 'test/api/streaming_mode_model_skip.test.js',     srs: 'FR-STREAM-MODEL-001~005',                 label: 'Streaming Model-Load Guard' },
   { file: 'test/api/streaming_without_analysis_url.test.js',srs: 'FR-STREAM-FALLBACK-001~005',              label: 'Streaming Monitoring-Only Fallback' },
-  // YouTube
-  { file: 'test/api/youtube_streams.test.js',               srs: 'FR-YT-001~020',                           label: 'YouTube RTSP Ingest  A+D' },
-  { file: 'test/api/youtube_streams_lts2026.test.js',       srs: 'FR-YT-LTS-001~010',                      label: 'LTS2026 YouTube Schema  A+B+D' },
+  // YouTube (captureOnly: YouTubeStreamService is disabled in analysis mode)
+  { file: 'test/api/youtube_streams.test.js',               srs: 'FR-YT-001~020',                           label: 'YouTube RTSP Ingest  A+D',    captureOnly: true },
+  { file: 'test/api/youtube_streams_lts2026.test.js',       srs: 'FR-YT-LTS-001~010',                      label: 'LTS2026 YouTube Schema  A+B+D', captureOnly: true },
   // MCP
   { file: 'test/api/mcp_server.test.js',                    srs: 'FR-MCP-001~020',                          label: 'MCP Server Tools  A-F' },
   { file: 'test/api/mcp_server_extended.test.js',           srs: 'FR-MCP-070~110',                          label: 'MCP Server Extended  J-O' },
@@ -336,8 +337,9 @@ async function main() {
 
     // Mode-based skip
     let skipReason = null;
-    if (isStreaming && suite.analysisOnly) skipReason = 'analysisOnly — SERVER_MODE=streaming';
-    if (!isStreaming && suite.streamingOnly) skipReason = `streamingOnly — SERVER_MODE=${serverMode}`;
+    if (isStreaming && suite.analysisOnly)           skipReason = 'analysisOnly — SERVER_MODE=streaming';
+    if (!isStreaming && suite.streamingOnly)         skipReason = `streamingOnly — SERVER_MODE=${serverMode}`;
+    if (serverMode === 'analysis' && suite.captureOnly) skipReason = 'captureOnly — SERVER_MODE=analysis has no capture backend';
     if (!fs.existsSync(absPath)) skipReason = 'file not found';
 
     if (skipReason) {

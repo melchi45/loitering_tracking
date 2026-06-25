@@ -43,8 +43,8 @@ const SUITES = [
   // DB Layer
   { file: 'test/api/db_layer.test.js',                      srs: 'FR-STORAGE-001~074, NFR-STORAGE-001~017', label: 'DB Layer  A+B+H+I+J' },
   // Camera
-  { file: 'test/api/camera_discovery.test.js',              srs: 'FR-CAM-040~056', label: 'Camera Discovery  A+B+G' },
-  { file: 'test/api/nvr_channel_discovery.test.js',         srs: 'FR-CAM-060~067', label: 'NVR MaxChannel  H' },
+  { file: 'test/api/camera_discovery.test.js',              srs: 'FR-CAM-040~056', label: 'Camera Discovery  A+B+G',    captureOnly: true },
+  { file: 'test/api/nvr_channel_discovery.test.js',         srs: 'FR-CAM-060~067', label: 'NVR MaxChannel  H',           captureOnly: true },
   { file: 'test/api/sidebar_cameras.test.js',               srs: 'FR-CAM-001~020', label: 'Sidebar Cameras  B+C+D+G' },
   // Auth / User
   { file: 'test/api/auth.test.js',                          srs: 'FR-USR-AUTH-001~020', label: 'User Authentication' },
@@ -75,19 +75,19 @@ const SUITES = [
   // TLS
   { file: 'test/api/https_tls.test.js',                     srs: 'FR-TLS-001~010', label: 'HTTPS TLS' },
   // ONVIF
-  { file: 'test/api/onvif_metadata_pipeline.test.js',       srs: 'FR-ONVIF-PIPE-001~020', label: 'ONVIF Metadata Pipeline' },
-  { file: 'test/api/onvif_apprtp.test.js',                  srs: 'FR-ONVIF-RTP-001~010', label: 'ONVIF App-RTP' },
+  { file: 'test/api/onvif_metadata_pipeline.test.js',       srs: 'FR-ONVIF-PIPE-001~020', label: 'ONVIF Metadata Pipeline',     captureOnly: true },
+  { file: 'test/api/onvif_apprtp.test.js',                  srs: 'FR-ONVIF-RTP-001~010', label: 'ONVIF App-RTP',               captureOnly: true },
   { file: 'test/api/thermal_radiometry_overlay.test.js',    srs: 'FR-THERMAL-001~010', label: 'Thermal Radiometry Overlay' },
   // Timeline range — streaming only (camera capture + ONVIF pipeline required)
   { file: 'test/api/timeline_range.test.js', srs: 'FR-TIMELINE-RANGE-001~008', label: 'Timeline 1H Range  Streaming', streamingOnly: true },
   // Capture / Pipeline
-  { file: 'test/api/capture-backend.test.js',               srs: 'FR-CAP-001~020', label: 'RTSP Capture Backend' },
+  { file: 'test/api/capture-backend.test.js',               srs: 'FR-CAP-001~020', label: 'RTSP Capture Backend',        captureOnly: true },
   { file: 'test/api/distributed_pipeline.test.js',           srs: 'FR-DIST-001~020', label: 'Distributed Pipeline  SERVER_MODE' },
   { file: 'test/api/streaming_mode_model_skip.test.js',      srs: 'FR-STREAM-MODEL-001~005',    label: 'Streaming Model-Load Guard',         streamingOnly: true },
   { file: 'test/api/streaming_without_analysis_url.test.js', srs: 'FR-STREAM-FALLBACK-001~005', label: 'Streaming Monitoring-Only Fallback', streamingOnly: true },
   // YouTube
-  { file: 'test/api/youtube_streams.test.js',               srs: 'FR-YT-001~020', label: 'YouTube RTSP Ingest  A+D' },
-  { file: 'test/api/youtube_streams_lts2026.test.js',       srs: 'FR-YT-LTS-001~010', label: 'LTS2026 YouTube Schema  A+B+D' },
+  { file: 'test/api/youtube_streams.test.js',               srs: 'FR-YT-001~020', label: 'YouTube RTSP Ingest  A+D',    captureOnly: true },
+  { file: 'test/api/youtube_streams_lts2026.test.js',       srs: 'FR-YT-LTS-001~010', label: 'LTS2026 YouTube Schema  A+B+D', captureOnly: true },
   // MCP
   { file: 'test/api/mcp_server.test.js',                    srs: 'FR-MCP-001~020', label: 'MCP Server Tools  A-F' },
   { file: 'test/api/mcp_server_extended.test.js',           srs: 'FR-MCP-070~110', label: 'MCP Server Extended  J-O' },
@@ -203,6 +203,13 @@ async function _run(port, proto = 'http') {
       totalSkip++;
       continue;
     }
+    // Capture-only suites: skip in analysis mode (no RTSP capture backend)
+    if (serverMode === 'analysis' && suite.captureOnly) {
+      _save(runId, runAt, suite, 'TC-SKIP',
+        `${suite.label} — skipped (Analysis Server: requires capture backend)`, 'skip', null);
+      totalSkip++;
+      continue;
+    }
 
     const absPath = path.resolve(ROOT, suite.file);
     if (!fs.existsSync(absPath)) {
@@ -304,6 +311,7 @@ function _parseOutput(stdout, stderr) {
 function _suiteMode(suite) {
   if (suite.analysisOnly)  return 'analysis';
   if (suite.streamingOnly) return 'streaming';
+  if (suite.captureOnly)   return 'streaming+combined';
   return 'all';
 }
 
