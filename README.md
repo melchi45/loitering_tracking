@@ -93,7 +93,21 @@ cd server && npm run restart
 #### MCP Server Start / Stop
 
 ```bash
-# stdio mode — Claude Code / Claude API (default)
+# ── npm 스크립트 (권장) — server/ 또는 루트 workspace에서 실행 가능 ──────────────
+# HTTP 백그라운드 서버 시작 (MCP_PORT, 기본 3002)
+npm run mcp:start
+# or: cd server && npm run mcp:start
+
+# HTTP 백그라운드 서버 종료
+npm run mcp:stop
+# or: cd server && npm run mcp:stop
+
+# HTTP 백그라운드 서버 재시작 (stop → start)
+npm run mcp:restart
+# or: cd server && npm run mcp:restart
+
+# ── 직접 실행 (stdio / 개발용) ────────────────────────────────────────────────
+# stdio mode — Claude Code / Claude API (기본)
 cd mcp-server && npm start
 # or: node mcp-server/index.js
 
@@ -107,7 +121,7 @@ cd mcp-server && npm run start:http
 # Custom port / auth token
 MCP_PORT=3002 MCP_AUTH_TOKEN=my-secret-token TRANSPORT=http node mcp-server/index.js
 
-# Background execution
+# Background execution (수동)
 cd mcp-server && nohup npm start > /tmp/lts-mcp.log 2>&1 &
 
 # Stop (stdio foreground): Ctrl+C
@@ -125,6 +139,41 @@ fuser -k 3002/tcp
 > | `TRANSPORT` | `stdio` | Transport mode: `stdio` or `http` |
 > | `MCP_PORT` | `3002` | HTTP/SSE listen port |
 > | `MCP_AUTH_TOKEN` | _(empty)_ | Bearer token for HTTP transport (optional) |
+
+#### Ingest Daemon Start / Stop
+
+ingest-daemon(Python PyAV)은 RTSP 수집의 유일한 공급자입니다. LTS 서버와 별도로 관리할 수 있습니다.
+
+```bash
+# ── npm 스크립트 — server/ 또는 루트 workspace에서 실행 가능 ──────────────────
+# daemon 시작 (이미 실행 중이면 no-op; 시작 후 카메라 자동 재등록)
+npm run ingest:start
+# or: cd server && npm run ingest:start
+
+# daemon 종료 (실행 중이 아니면 오류 없이 종료)
+npm run ingest:stop
+# or: cd server && npm run ingest:stop
+
+# daemon 재시작 (종료 → 시작 + 카메라 재등록)
+npm run ingest:restart
+# or: cd server && npm run ingest:restart
+```
+
+> **동작 설명:**
+> - `ingest:start`: `/health` 체크 → 이미 실행 중이면 no-op → Python PyAV 데몬 백그라운드 시작 → 최대 10초 대기 → 카메라 자동 재등록
+> - `ingest:stop`: `/health` 체크 → `fuser -k 7070/tcp` + `pkill -f ingest_daemon.py` → 포트 해제 확인 (3초)
+> - `ingest:restart`: `ingest:stop` → `ingest:start` 순서 실행
+>
+> **환경 변수 (`server/.env`):**
+> | Variable | Default | Description |
+> |---|---|---|
+> | `INGEST_DAEMON_ADDR` | `:7070` | daemon 수신 주소 |
+> | `INGEST_DAEMON_URL` | `http://127.0.0.1:7070` | daemon REST URL |
+> | `INGEST_DAEMON_BIN` | `../ingest-daemon/ingest_daemon.py` | daemon 스크립트 경로 |
+> | `INGEST_DAEMON_LOG` | `/tmp/ingest-daemon.log` | daemon 로그 파일 경로 |
+> | `PYAV_PYTHON_BIN` | `python3` | Python 실행 경로 |
+>
+> **로그 확인:** `tail -f /tmp/ingest-daemon.log`
 
 #### Web UI Start / Stop
 
