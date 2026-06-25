@@ -90,14 +90,15 @@ loitering_tracking/
 
 | 상황 | 수집 방식 | 비고 |
 |---|---|---|
-| RTSP/ONVIF IP 카메라 | **ingest-daemon 전용** | FFmpeg subprocess 금지 |
-| WEBRTC_ENGINE=mediamtx | ingest-daemon → JPEG → AI | RTP 경로 미사용 |
-| WEBRTC_ENGINE=mediasoup | ingest-daemon → JPEG(AI) + H.264 RTP(비디오) + Opus RTP(오디오) | 단일 RTSP 세션 3-way 팬아웃 |
+| RTSP/ONVIF IP 카메라 (mediasoup) | **ingest-daemon → 카메라 직접 연결** | FFmpeg subprocess 금지, MediaMTX 경유 없음 |
+| WEBRTC_ENGINE=mediamtx | ingest-daemon → MediaMTX RTSP loopback → JPEG+AI | MediaMTX WHEP WebRTC 전용 |
+| WEBRTC_ENGINE=mediasoup (현재 기본) | ingest-daemon → 카메라 직접 → JPEG(AI) + H.264 RTP + Opus RTP + App RTP | 단일 RTSP 세션 4-way 팬아웃 |
 | YouTube / RTMP / HLS | yt-dlp → ffmpeg → MediaMTX | FFmpeg 허용되는 유일한 구간 |
 
 - `ingest_daemon.py`(Python PyAV)는 RTSP 수집의 유일한 공급자입니다.
 - `rtspCapture.js`, `gstreamerCapture.js`, `pyavCapture.js`는 **레거시**입니다 — 신규 카메라에 사용 금지.
 - `mediasoupEngine.js`가 WebRTC 비디오·오디오 RTP를 필요로 할 때도 ingest-daemon API(`POST /cameras { mediasoupPort, mediasoupAudioPort }`)를 통해 요청합니다. FFmpeg subprocess를 직접 띄우지 않습니다.
+- **mediasoup 모드에서 MediaMTX는 IP 카메라에 사용하지 않습니다.** ingest-daemon이 카메라에 직접 단일 PyAV 세션을 열고 AI/WebRTC/ONVIF를 팬아웃합니다.
 
 ---
 

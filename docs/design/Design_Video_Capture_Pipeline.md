@@ -1,6 +1,6 @@
 # DESIGN DOCUMENT — Video Capture Pipeline Architecture
 **Document ID**: DESIGN-LTS-VCP-01  
-**Version**: 2.0  
+**Version**: 2.1  
 **Date**: 2026-06-11  
 **Project**: Loitering Detection & Tracking System (LTS-2026)  
 **Status**: Active  
@@ -12,11 +12,12 @@
 |---|---|---|
 | 1.0 | 2026-06-05 | Initial design — legacy FFmpeg+mediasoup architecture + Phase 0/1/2 design |
 | 2.0 | 2026-06-11 | §0 현재 구현 아키텍처 추가 (ingest-daemon + MediaMTX); Phase 1/2 레거시 표기; Phase 3 ingest-daemon 섹션 신규 추가; §5/§7 현행 파일·설정으로 갱신 |
+| 2.1 | 2026-06-25 | §0 mediasoup 직접 연결 아키텍처로 업데이트 — MediaMTX relay 제거, WEBRTC_ENGINE=mediasoup 시 카메라 직접 연결 반영; §0.5 FORCE_NO_WEBRTC 로직 정정 |
 
 ---
 
 > ⚠️ **문서 구조 안내**  
-> - **§0**: 현재 운영 아키텍처 (`CAPTURE_BACKEND=ingest-daemon`, `WEBRTC_ENGINE=mediamtx`)  
+> - **§0**: 현재 운영 아키텍처 (`CAPTURE_BACKEND=ingest-daemon`, `WEBRTC_ENGINE=mediasoup`)  
 > - **§1**: 레거시 아키텍처 (FFmpeg RtpIngestion + mediasoup) — 참조용 보존  
 > - **§2~§4**: Phase 0/1/2 설계 이력 — Phase 2(MediaMTX WebRTC)는 구현 완료  
 > - **§5**: 현행 파일 구조 요약  
@@ -40,42 +41,39 @@
 
 ---
 
-## 0. 현재 구현 아키텍처 — ingest-daemon + MediaMTX
+## 0. 현재 구현 아키텍처 — ingest-daemon + mediasoup
 
-> **현재 기본 설정**: `CAPTURE_BACKEND=ingest-daemon`, `WEBRTC_ENGINE=mediamtx`  
-> 서버 `.env`의 기본값이며, `captureFactory.js`의 코드 폴백은 `ffmpeg` (미설치 환경 대비).
+> **현재 기본 설정**: `CAPTURE_BACKEND=ingest-daemon`, `WEBRTC_ENGINE=mediasoup`  
+> 서버 `server/.env`의 실제 운영 설정. `captureFactory.js`의 코드 폴백은 `ffmpeg` (미설치 환경 대비).
 
 ### 0.1 전체 파이프라인 다이어그램
 
 ```
-┌────────────────────────────────────────────────────────────────────────────┐
-│             LTS-2026 Video Pipeline (현재 — ingest-daemon + MediaMTX)      │
-│                                                                             │
-│  [IP Camera]──RTSP──►[MediaMTX :8554 loopback]                             │
-│                              │                                              │
-│                    ┌─────────┴──────────┐                                   │
-│                    │                    │                                   │
-│              WebRTC out           RTSP loopback                             │
-│              :8889/{camId}/whep   rtsp://localhost:8554/{camId}             │
-│                    │                    │                                   │
-│                    │         [ingest_daemon.py :7070]                       │
-│                    │         (Python PyAV — RTSP→JPEG)                      │
-│                    │                    │ HTTP POST /frame/{camId}          │
-│                    │                    ▼                                   │
-│                    │         [ingestDaemonCapture.js]                       │
-│                    │         injectFrame(jpegBuf) → emit('frame')           │
-│                    │                    │                                   │
-│                    │         [pipelineManager.js]                           │
-│                    │         YOLOv8 → ByteTrack → BehaviorEngine            │
-│                    │                    │                                   │
-│                    │         [Socket.IO]                                    │
-│                    │         frameData│newAlert│objectTracked               │
-│                    │                    │                                   │
-│                    ▼                    ▼                                   │
-│             [Browser]         [React WebUI]                                 │
-│             <video WHEP>      <img> (Socket.IO frameData)                  │
-└────────────────────────────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────┐
+│         LTS-2026 Video Pipeline (현재 — ingest-daemon + mediasoup)             │
+│                                                                                 │
+│  [IP Camera]──RTSP(직접)──►[ingest_daemon.py :7070]  (PyAV 단일 세션)          │
+│                                      │                                          │
+│              ┌───────────────────────┼───────────────────────┐                 │
+│              │                       │                       │                 │
+│        ① JPEG (AI)           ② H.264 RTP              ③ App RTP (ONVIF)      │
+│   HTTP POST /frame/{id}     UDP:{mediasoupPort}    HTTP POST /apprtp/{id}      │
+│              │               ④ Opus RTP                      │                 │
+│              │              UDP:{mediasoupAudioPort}          │                 │
+│              ▼                       │                       ▼                 │
+│  [pipelineManager.js]       [mediasoup Worker]      [onvifParser.js]           │
+│  YOLOv8 → ByteTrack         PlainTransport           onvif_events DB           │
+│  BehaviorEngine             WebRtcTransport           Socket.IO onvif:event    │
+│              │              → SRTP → Browser                                   │
+│              ▼              <video>/<audio>                                    │
+│       [Socket.IO]                                                               │
+│  frameData/newAlert/objectTracked                                               │
+└────────────────────────────────────────────────────────────────────────────────┘
 ```
+
+> **MediaMTX는 mediasoup 모드에서 사용하지 않습니다.**  
+> ingest-daemon이 카메라에 직접 연결하여 AI JPEG, H.264/Opus RTP, App RTP를 단일 세션에서 팬아웃합니다.  
+> MediaMTX는 `WEBRTC_ENGINE=mediamtx` 또는 YouTube/RTMP 스트림에서만 사용됩니다.
 
 ### 0.2 주요 서비스 파일
 
@@ -90,14 +88,14 @@
 
 ### 0.3 환경변수
 
-| 변수 | 권장값 | 설명 |
+| 변수 | 현재값 | 설명 |
 |---|---|---|
 | `CAPTURE_BACKEND` | `ingest-daemon` | 캡처 백엔드 선택 (코드 폴백: `ffmpeg`) |
-| `WEBRTC_ENGINE` | `mediamtx` | WebRTC 엔진 선택 (`mediasoup` = 레거시) |
+| `WEBRTC_ENGINE` | `mediasoup` | WebRTC 엔진 선택 (`mediamtx` = WHEP 전용 레거시) |
 | `INGEST_DAEMON_BIN` | `../ingest-daemon/ingest_daemon.py` | 데몬 스크립트 경로 |
 | `INGEST_DAEMON_ADDR` | `:7070` | 데몬 수신 주소 |
-| `MEDIAMTX_BIN` | `mediamtx` | MediaMTX 바이너리 경로 |
-| `MEDIAMTX_API_URL` | `http://localhost:9997` | MediaMTX 관리 API |
+| `MEDIAMTX_BIN` | `mediamtx` | MediaMTX 바이너리 경로 (YouTube/RTMP 전용) |
+| `MEDIAMTX_API_URL` | `http://localhost:9997` | MediaMTX 관리 API (YouTube/RTMP 전용) |
 
 ### 0.4 ingest-daemon 흐름 상세
 
@@ -120,10 +118,22 @@ startServer.js
 ### 0.5 WebRTC 활성화 조건
 
 ```javascript
-// pipelineManager.js
-const FORCE_NO_WEBRTC = CAPTURE_BACKEND === 'ingest-daemon' && WEBRTC_ENGINE === 'mediasoup';
-// mediamtx 사용 시: FORCE_NO_WEBRTC = false → webrtcEnabled 유지
-// mediasoup 사용 시: FORCE_NO_WEBRTC = true → RTP 소스 없으므로 강제 OFF
+// pipelineManager.js (현재 구현)
+
+// MediaMTX 등록 조건: mediamtx 엔진 또는 mediamtx 캡처 백엔드일 때만
+const needsMediaMTX = !isYouTube && (
+  (requestedWebRTC && WEBRTC_ENGINE === 'mediamtx')
+  || CAPTURE_BACKEND === 'mediamtx'
+  // mediasoup 모드는 포함하지 않음 — ingest-daemon이 카메라에 직접 연결
+);
+
+// captureUrl: mediamtxReady=false → 카메라 RTSP URL 직접 사용
+const captureUrl = mediamtxReady
+  ? `rtsp://127.0.0.1:${mediamtxRtspPort}/${camera.id}`
+  : rtspUrl;  // mediasoup 모드에서는 항상 이 경로
+
+// App RTP: 엔진 무관하게 항상 카메라 직접 URL (MediaMTX는 App RTP 미중계)
+const daemonAppRtpRtspUrl = isYouTube ? null : rtspUrl;
 
 const useWebRTC = requestedWebRTC && (WEBRTC_ENGINE === 'mediamtx' ? mediamtxReady : altWebRTCReady);
 ```

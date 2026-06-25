@@ -1,6 +1,6 @@
 # RTSP → WebRTC 실시간 AI 스트리밍 아키텍처 설계서
 
-**Version:** 1.5  
+**Version:** 1.7  
 **대상:** 언어·런타임에 독립적인 구현 가이드 (Node.js / Go / Python / Rust / C++ / Java)
 
 ---
@@ -20,26 +20,42 @@
 
 ### 0.2 ingest-daemon 팬아웃 설계
 
-ingest-daemon은 MediaMTX RTSP loopback에 연결하여 아래 경로를 동시에 공급한다.  
+ingest-daemon은 **카메라 RTSP URL에 직접 단일 PyAV 세션을 열고** 아래 경로를 동시에 공급한다.  
 어느 WebRTC 엔진을 선택해도 수집 레이어는 ingest-daemon으로 고정된다.
 
+#### WEBRTC_ENGINE=mediasoup (현재 기본 설정)
+
 ```
-MediaMTX RTSP loopback (rtsp://127.0.0.1:8554/{id})
+IP 카메라 RTSP (직접 연결)
     │
-    └── ingest_daemon.py (PyAV 기반)
-            ├── ① JPEG        → HTTP POST → Node.js /api/internal/frame/:id  (항상 활성)
+    └── ingest_daemon.py (PyAV 단일 세션)
+            ├── ① JPEG        → HTTP POST → /api/internal/frame/:id      (항상 활성)
             │                   → AI pipeline (YOLO/ByteTrack)
             │
-            ├── ② H.264 RTP  → UDP:{mediasoupPort}          (WEBRTC_ENGINE=mediasoup 시 활성)
+            ├── ② H.264 RTP  → UDP:{mediasoupPort}
             │                   → mediasoup PlainTransport → 비디오 Producer → 브라우저 <video>
             │
-            ├── ③ Opus RTP   → UDP:{mediasoupAudioPort}     (WEBRTC_ENGINE=mediasoup 시 활성)
+            ├── ③ Opus RTP   → UDP:{mediasoupAudioPort}
             │                   → mediasoup PlainTransport → 오디오 Producer → 브라우저 <audio>
             │
-            └── ④ App RTP    → (소스 PT 96~127, 비 비디오/오디오 트랙)
-                    ├── WEBRTC_ENGINE=mediamtx: HTTP POST → /api/internal/apprtp/:id
-                    │   → Node.js → Socket.IO emit('appRtp', {cameraId, pt, payload})
-                    └── WEBRTC_ENGINE=mediasoup: 서버 DataProducer.send() → DataConsumer → 브라우저 DataChannel
+            └── ④ App RTP    → HTTP POST → /api/internal/apprtp/:id      (ONVIF 메타데이터)
+                                → Node.js → onvif_events DB + Socket.IO emit('onvif:event')
+```
+
+> **MediaMTX 불필요**: ingest-daemon이 단일 PyAV 세션에서 ①②③④를 모두 팬아웃하므로
+> 카메라 RTSP 연결은 1개(주 스트림) + 1개(App RTP 전용 세션)만 사용한다.
+> MediaMTX relay를 거치면 연결이 오히려 3개(MediaMTX→카메라, 데몬→MediaMTX, 데몬→카메라 AppRTP)로 늘어난다.
+
+#### WEBRTC_ENGINE=mediamtx
+
+```
+IP 카메라 RTSP
+    │
+    └── MediaMTX(:8554) ── WHEP → 브라우저 <video>/<audio>
+            │
+            └── ingest_daemon.py (MediaMTX RTSP loopback 읽기)
+                    ├── ① JPEG   → HTTP POST → /api/internal/frame/:id
+                    └── ④ App RTP (직접 카메라 URL) → /api/internal/apprtp/:id
 ```
 
 ### 0.3 WEBRTC_ENGINE별 데이터 전달 경로
@@ -1400,3 +1416,4 @@ GET http://localhost:9997/v3/whepsessions/list
 | 1.4 | 2026-06-11 | §3.7 Application RTP → WebRTC DataChannel 브리지 추가 — 프로토콜 비교, 변환 경로, DataChannel 신뢰성 설정, MediaMTX WHEP 한계 명시 |
 | 1.5 | 2026-06-11 | §0 수집 레이어 불변 원칙 추가 — ingest-daemon 우선 원칙, 팬아웃 설계, FFmpeg 금지 범위 명시 |
 | 1.6 | 2026-06-11 | §0.2/§0.3 이중 엔진 데이터 경로 상세화 — 비디오/오디오/App RTP 팬아웃 다이어그램, WEBRTC_ENGINE별 전달 경로 표 추가 |
+| 1.7 | 2026-06-25 | §0.2 mediasoup 모드 직접 연결 반영 — MediaMTX relay 제거, 카메라 직접 PyAV 단일 세션 팬아웃으로 변경; pipelineManager.js needsMediaMTX 조건 정렬 |

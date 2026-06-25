@@ -328,14 +328,13 @@ class PipelineManager {
 
     // Register with MediaMTX when:
     //   (a) WEBRTC_ENGINE=mediamtx and browser WebRTC delivery is requested, OR
-    //   (b) WEBRTC_ENGINE=mediasoup and not analysis mode — MediaMTX holds the single
-    //       upstream RTSP connection; ingest-daemon reads from MediaMTX loopback to
-    //       feed both AI JPEG and RTP paths without a second camera connection, OR
-    //   (c) the mediamtx capture backend is active.
+    //   (b) the mediamtx capture backend is active.
+    // WEBRTC_ENGINE=mediasoup does NOT need MediaMTX: ingest-daemon opens a single
+    // PyAV session directly to the camera and fans out AI JPEG, H.264/Opus RTP for
+    // mediasoup, and App RTP (ONVIF) from that one connection — no relay needed.
     // YouTube cameras are excluded: their RTSP URL IS already a MediaMTX path.
     const needsMediaMTX = !isYouTube && (
       (requestedWebRTC && WEBRTC_ENGINE === 'mediamtx')
-      || (WEBRTC_ENGINE === 'mediasoup' && SERVER_MODE !== 'analysis')
       || CAPTURE_BACKEND === 'mediamtx'
     );
     let mediamtxReady = false;
@@ -366,11 +365,12 @@ class PipelineManager {
       ? `rtsp://127.0.0.1:${mediamtxRtspPort}/${camera.id}`
       : rtspUrl;
 
-    // When MediaMTX is active the capture URL is the loopback re-publish URL, but
-    // ONVIF Application RTP data tracks are NOT re-published by MediaMTX.  The
-    // ingest-daemon App RTP thread must connect directly to the original camera URL.
-    // Computed here (before registerAltEngine) so it can be passed to addCameraStream.
-    let daemonAppRtpRtspUrl = mediamtxReady ? rtspUrl : null;
+    // App RTP (ONVIF metadata) always uses the original camera URL directly:
+    //   · MediaMTX does not re-publish Application RTP tracks, so the direct URL
+    //     is needed even when MediaMTX relays video/audio (mediamtx engine).
+    //   · In mediasoup mode (no MediaMTX relay) the direct URL is used for everything.
+    //   · YouTube sources have no App RTP; their RTSP is a MediaMTX re-publish.
+    const daemonAppRtpRtspUrl = isYouTube ? null : rtspUrl;
 
     // For non-mediamtx WebRTC engines (mediasoup), register the stream with the engine.
     // mediasoupEngine.addCameraStream() internally calls ingest-daemon with both the
@@ -1270,8 +1270,7 @@ class PipelineManager {
     ctx.behavior.reset();
     ctx.behavior.removeAllListeners();
     const needsMediaMTXCleanup = (ctx.useWebRTC && WEBRTC_ENGINE === 'mediamtx')
-      || CAPTURE_BACKEND === 'mediamtx'
-      || (WEBRTC_ENGINE === 'mediasoup' && SERVER_MODE !== 'analysis');
+      || CAPTURE_BACKEND === 'mediamtx';
     if (needsMediaMTXCleanup) mediamtxManager.removeCameraPath(cameraId).catch(() => {});
     if (WEBRTC_ENGINE !== 'mediamtx') getWebRTCEngine().removeCameraStream(cameraId).catch(() => {});
     if (CAPTURE_BACKEND === 'ingest-daemon') _ingestRemoveCamera(cameraId).catch(() => {});
