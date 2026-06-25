@@ -333,6 +333,27 @@ npm run mcp:restart  # MCP HTTP 서버 재시작
 npm run mcp:start    # → server/npm run mcp:start
 npm run mcp:stop     # → server/npm run mcp:stop
 npm run mcp:restart  # → server/npm run mcp:restart
+
+# ── TC 테스트 / 리포트 (서버 실행 중 필요) ───────────────────────────────────
+# Admin Dashboard → Audit 와 동일한 TC-ID 단위 테스트 실행
+# (LTS 서버가 먼저 실행 중이어야 합니다)
+npm run test:tc                    # TC-ID 단위 전체 실행 + JSON/MD 리포트 생성
+npm run test:tc -- --skip youtube  # 특정 스위트 제외
+npm run test:tc -- --only face     # 특정 스위트만 실행
+npm run test:all                   # 스위트 단위 전체 실행 (e2e 제외)
+npm run test:report                # 스위트 단위 + MD/JSON 리포트 생성 (e2e 제외)
+
+# 위 스크립트는 server/ 에서도 동일하게 사용 가능
+cd server
+npm run test:tc
+npm run test:all
+npm run test:report
+
+# TC 리포트 출력 경로
+# test/reports/tc-results-<runId>.json   — TC-ID 단위 JSON 결과
+# test/reports/tc-report-<runId>.md      — Admin Dashboard 스타일 MD 리포트
+# test/reports/ci-report.json            — generate_report.js 실행 결과 JSON
+# test/reports/ci-report.md              — generate_report.js 실행 결과 MD
 ```
 
 ---

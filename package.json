@@ -25,7 +25,10 @@
     "mcp:restart": "cd server && npm run mcp:restart",
     "dev:server": "cd server && npm run dev",
     "setup": "npm run install:all && npm run build:client",
-    "clean": "rm -rf server/node_modules client/node_modules client/dist"
+    "clean": "rm -rf server/node_modules client/node_modules client/dist",
+    "test:all": "node test/run_all.js --skip e2e",
+    "test:tc": "node test/tc_runner_cli.js",
+    "test:report": "node test/generate_report.js --skip e2e"
   },
   "devDependencies": {
     "concurrently": "^9.2.1",

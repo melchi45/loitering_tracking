@@ -33,6 +33,25 @@ const skipFilter = skipIdx !== -1 ? (args[skipIdx + 1] || '').toLowerCase() : nu
 // ── Test suites ──────────────────────────────────────────────────────────────
 
 const SUITES = [
+  // ── DB Layer ──────────────────────────────────────────────────────────────
+  {
+    file:  'test/api/db_layer.test.js',
+    label: 'TC_DB_Layer              — Groups A+B+H+I+J (CRUD · Persist · Security · Durability)',
+    tags:  ['db', 'storage', 'json', 'mongodb'],
+  },
+
+  // ── Auth / User ───────────────────────────────────────────────────────────
+  {
+    file:  'test/api/auth.test.js',
+    label: 'TC_User_Auth             — User Authentication',
+    tags:  ['auth', 'user'],
+  },
+  {
+    file:  'test/api/user_profile.test.js',
+    label: 'TC_User_Profile          — User Profile CRUD',
+    tags:  ['user', 'profile'],
+  },
+
   // ── Face Recognition ──────────────────────────────────────────────────────
   {
     file:  'test/api/face_gallery.test.js',
@@ -48,6 +67,16 @@ const SUITES = [
     file:  'test/api/missing_persons.test.js',
     label: 'TC_AI_Face_Recognition  — Group C (Missing Persons Detection)',
     tags:  ['face'],
+  },
+  {
+    file:  'test/api/missing-person.test.js',
+    label: 'TC_Missing_Person_API   — Missing Person API (FR-FACE-MISSING-011~020)',
+    tags:  ['face', 'missing'],
+  },
+  {
+    file:  'test/api/detection_snapshot_search.test.js',
+    label: 'TC_Detection_Snapshots  — Detection Snapshot Search',
+    tags:  ['detection', 'snapshots'],
   },
 
   // ── Human Detection ───────────────────────────────────────────────────────
@@ -69,6 +98,11 @@ const SUITES = [
     file:  'test/api/camera_discovery.test.js',
     label: 'TC_Camera_Discovery     — Groups A+B+G (Discovery & Camera Registration)',
     tags:  ['camera', 'discovery'],
+  },
+  {
+    file:  'test/api/nvr_channel_discovery.test.js',
+    label: 'TC_NVR_MaxChannel       — Group H (NVR Channel Discovery)',
+    tags:  ['camera', 'nvr'],
   },
 
   // ── Analytics Config (AI module toggles) ─────────────────────────────────
@@ -106,6 +140,18 @@ const SUITES = [
     label: 'TC_WebRTC_Media_Gateway — Group H (Post-Patch Stability Verification)',
     tags:  ['webrtc', 'stability'],
   },
+  {
+    file:  'test/api/webrtc_telemetry.test.js',
+    label: 'TC_WebRTC_Telemetry     — WebRTC Telemetry',
+    tags:  ['webrtc', 'telemetry'],
+  },
+
+  // ── Stats Panel ───────────────────────────────────────────────────────────
+  {
+    file:  'test/api/stats_panel.test.js',
+    label: 'TC_Stats_Panel          — Stats Panel Modal',
+    tags:  ['stats', 'panel'],
+  },
 
   // ── Main System ───────────────────────────────────────────────────────────
   {
@@ -119,6 +165,11 @@ const SUITES = [
     file:  'test/api/mcp_server.test.js',
     label: 'TC_LTS_MCP_Server       — Groups A+B+C+D+E+F (HTTP Transport & Tool Integration)',
     tags:  ['mcp', 'llm'],
+  },
+  {
+    file:  'test/api/mcp_server_extended.test.js',
+    label: 'TC_LTS_MCP_Extended     — Groups J-O (System·Camera·ONVIF·Detection·FaceTrajectory)',
+    tags:  ['mcp', 'llm', 'extended'],
   },
 
   // ── AI Detection Modules (Multi-module) ───────────────────────────────────
@@ -173,6 +224,13 @@ const SUITES = [
     tags:  ['capture', 'rtsp', 'gstreamer', 'pyav', 'ffmpeg'],
   },
 
+  // ── HTTPS / TLS ───────────────────────────────────────────────────────────
+  {
+    file:  'test/api/https_tls.test.js',
+    label: 'TC_HTTPS_TLS            — HTTPS TLS',
+    tags:  ['https', 'tls', 'security'],
+  },
+
   // ── ONVIF Metadata Pipeline ───────────────────────────────────────────────
   {
     file:  'test/api/onvif_apprtp.test.js',
@@ -183,6 +241,18 @@ const SUITES = [
     file:  'test/api/onvif_metadata_pipeline.test.js',
     label: 'TC_ONVIF_Metadata_Pipeline — parser unit + API integration (multi-notification)',
     tags:  ['onvif', 'parser', 'metadata', 'unit', 'regression'],
+  },
+  {
+    file:  'test/api/thermal_radiometry_overlay.test.js',
+    label: 'TC_Thermal_Radiometry   — Thermal Radiometry Overlay',
+    tags:  ['thermal', 'onvif', 'overlay'],
+  },
+
+  // ── Timeline ──────────────────────────────────────────────────────────────
+  {
+    file:  'test/api/timeline_range.test.js',
+    label: 'TC_Timeline_Range       — Timeline 1H Range (streaming mode only)',
+    tags:  ['timeline', 'streaming'],
   },
 
   // ── Dashboard & Mobile E2E (Phase-3 placeholder) ─────────────────────────

@@ -11,6 +11,14 @@ on:
         description: 'Skip filter (e.g. "e2e" or "youtube")'
         required: false
         default: 'e2e'
+      only_filter:
+        description: 'Only filter (e.g. "face" or "mcp")'
+        required: false
+        default: ''
+      server_mode:
+        description: 'SERVER_MODE override (combined|streaming|analysis)'
+        required: false
+        default: 'combined'
 
 env:
   LTS_URL: http://localhost:3080
@@ -18,8 +26,9 @@ env:
   NODE_ENV: test
 
 jobs:
+  # ── Phase 1: Unit / API integration tests ────────────────────────────────────
   test:
-    name: Run Test Suites
+    name: TC Test Suites — Admin Audit
     runs-on: ubuntu-latest
 
     steps:
@@ -52,6 +61,9 @@ jobs:
 
       # ── Start LTS server ─────────────────────────────────────────────────
       - name: Start LTS server (background)
+        env:
+          SERVER_MODE: ${{ github.event.inputs.server_mode || 'combined' }}
+          TC_STARTUP_RUN: 'false'
         run: |
           cd server
           node src/index.js &
@@ -63,6 +75,7 @@ jobs:
           for i in $(seq 1 30); do
             if curl -sf "$LTS_URL/health" > /dev/null 2>&1; then
               echo "Server is ready after $i seconds"
+              curl -s "$LTS_URL/health" | python3 -m json.tool || true
               exit 0
             fi
             sleep 1
@@ -70,28 +83,133 @@ jobs:
           echo "ERROR: Server did not start within 30 seconds"
           exit 1
 
-      # ── Run tests ─────────────────────────────────────────────────────────
-      - name: Run all test suites
-        id: run_tests
+      # ── TC Runner (Admin Dashboard Audit 수준) ────────────────────────────
+      - name: Run TC tests (Admin Dashboard Audit mode)
+        id: run_tc
+        env:
+          SERVER_MODE: ${{ github.event.inputs.server_mode || 'combined' }}
+        run: |
+          SKIP="${{ github.event.inputs.skip_filter || 'e2e' }}"
+          ONLY="${{ github.event.inputs.only_filter || '' }}"
+          ARGS="--url $LTS_URL --output-json test/reports/tc-results.json --output-md test/reports/tc-report.md --github-summary"
+          if [ -n "$SKIP" ]; then ARGS="$ARGS --skip $SKIP"; fi
+          if [ -n "$ONLY" ]; then ARGS="$ARGS --only $ONLY"; fi
+          node test/tc_runner_cli.js $ARGS
+        continue-on-error: true
+
+      # ── Full suite runner (suite-level summary) ───────────────────────────
+      - name: Run all test suites (suite-level)
+        id: run_suites
         run: |
           SKIP="${{ github.event.inputs.skip_filter || 'e2e' }}"
           node test/run_all.js --skip "$SKIP"
         continue-on-error: true
 
-      # ── Generate report ───────────────────────────────────────────────────
+      # ── Generate Markdown + JSON report ──────────────────────────────────
       - name: Generate test report
+        id: gen_report
         run: |
           SKIP="${{ github.event.inputs.skip_filter || 'e2e' }}"
-          node test/generate_report.js --skip "$SKIP" --output test/reports/ci-report.md
+          node test/generate_report.js \
+            --skip "$SKIP" \
+            --output test/reports/ci-report.md \
+            --output-json test/reports/ci-report.json \
+            --github-summary
         continue-on-error: true
 
-      # ── Upload report artifact ────────────────────────────────────────────
-      - name: Upload test report
+      # ── Write GitHub Step Summary ─────────────────────────────────────────
+      - name: Write Job Summary — TC Counts
+        if: always()
+        run: |
+          TC_JSON="test/reports/tc-results.json"
+          REPORT_JSON="test/reports/ci-report.json"
+
+          echo "## 🧪 LTS-2026 TC Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          # TC runner JSON (TC-ID level stats)
+          if [ -f "$TC_JSON" ]; then
+            PASS=$(python3 -c "import json,sys; d=json.load(open('$TC_JSON')); print(d['totalPass'])" 2>/dev/null || echo 0)
+            FAIL=$(python3 -c "import json,sys; d=json.load(open('$TC_JSON')); print(d['totalFail'])" 2>/dev/null || echo 0)
+            SKIP=$(python3 -c "import json,sys; d=json.load(open('$TC_JSON')); print(d['totalSkip'])" 2>/dev/null || echo 0)
+            RATE=$(python3 -c "import json,sys; d=json.load(open('$TC_JSON')); print(d['passRate'])" 2>/dev/null || echo 0)
+            RUN_ID=$(python3 -c "import json,sys; d=json.load(open('$TC_JSON')); print(d['runId'])" 2>/dev/null || echo 'N/A')
+            TOTAL=$((PASS + FAIL + SKIP))
+            if [ "$FAIL" -eq 0 ]; then
+              STATUS_ICON="✅"
+              STATUS_TEXT="ALL PASSED"
+            else
+              STATUS_ICON="❌"
+              STATUS_TEXT="${FAIL} FAILED"
+            fi
+            cat >> $GITHUB_STEP_SUMMARY <<EOF
+
+          ### TC-ID Level Results (Admin Audit Mode)
+
+          | Metric | Value |
+          |---|---|
+          | Run ID | \`$RUN_ID\` |
+          | Overall | $STATUS_ICON $STATUS_TEXT |
+          | Total TCs | $TOTAL |
+          | ✅ Passed | $PASS |
+          | ❌ Failed | $FAIL |
+          | ⊘ Skipped | $SKIP |
+          | Pass rate | **${RATE}%** |
+
+          EOF
+          fi
+
+          # Suite-level stats from generate_report JSON
+          if [ -f "$REPORT_JSON" ]; then
+            PASSED=$(python3 -c "import json,sys; d=json.load(open('$REPORT_JSON')); print(d['totalPassed'])" 2>/dev/null || echo 0)
+            FAILED=$(python3 -c "import json,sys; d=json.load(open('$REPORT_JSON')); print(d['totalFailed'])" 2>/dev/null || echo 0)
+            SKIPPED=$(python3 -c "import json,sys; d=json.load(open('$REPORT_JSON')); print(d['totalSkipped'])" 2>/dev/null || echo 0)
+            PRATE=$(python3 -c "import json,sys; d=json.load(open('$REPORT_JSON')); print(d['passRate'])" 2>/dev/null || echo 0)
+            TC_COV=$(python3 -c "import json,sys; d=json.load(open('$REPORT_JSON')); print(f\"{d['tcCovered']}/{d['tcTotal']}\")" 2>/dev/null || echo 'N/A')
+            cat >> $GITHUB_STEP_SUMMARY <<EOF
+
+          ### Suite-Level Results
+
+          | Metric | Value |
+          |---|---|
+          | Total assertions | $((PASSED + FAILED + SKIPPED)) |
+          | ✅ Passed | $PASSED |
+          | ❌ Failed | $FAILED |
+          | ⊘ Skipped | $SKIPPED |
+          | Pass rate | **${PRATE}%** |
+          | TC documents covered | $TC_COV |
+
+          EOF
+          fi
+
+          echo "_Run: [${{ github.run_number }}] · Branch: ${{ github.ref_name }} · Commit: \`${{ github.sha }}_\`" >> $GITHUB_STEP_SUMMARY
+
+      # ── Annotate failed TCs ───────────────────────────────────────────────
+      - name: Annotate failed TCs
+        if: always()
+        run: |
+          TC_JSON="test/reports/tc-results.json"
+          if [ ! -f "$TC_JSON" ]; then exit 0; fi
+          python3 - <<'PYEOF'
+          import json, os, sys
+          data = json.load(open("test/reports/tc-results.json"))
+          failed = [r for r in data.get("results", []) if r.get("status") == "fail"]
+          for r in failed[:10]:  # max 10 annotations to avoid spam
+              msg = r.get("errorMsg") or r.get("desc", "")
+              print(f"::error title={r['tcId']} FAILED,file={r['suiteFile']}::{r['tcId']}: {r.get('desc','')} — {msg}")
+          PYEOF
+
+      # ── Upload report artifacts ───────────────────────────────────────────
+      - name: Upload test reports
         uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: test-report-${{ github.run_number }}
-          path: test/reports/
+          name: test-reports-${{ github.run_number }}
+          path: |
+            test/reports/tc-results.json
+            test/reports/tc-report.md
+            test/reports/ci-report.md
+            test/reports/ci-report.json
           retention-days: 30
 
       # ── Stop server ───────────────────────────────────────────────────────
@@ -101,17 +219,85 @@ jobs:
           if [ -n "$SERVER_PID" ]; then
             kill "$SERVER_PID" 2>/dev/null || true
           fi
-          # Also kill by port as fallback
           fuser -k 3080/tcp 2>/dev/null || true
 
-      # ── Fail job if tests failed ──────────────────────────────────────────
-      - name: Check test results
-        if: steps.run_tests.outcome == 'failure'
+      # ── Fail job if TC tests failed ───────────────────────────────────────
+      - name: Check TC test results
         run: |
-          echo "One or more test suites failed. See uploaded report for details."
+          TC_JSON="test/reports/tc-results.json"
+          if [ -f "$TC_JSON" ]; then
+            FAIL=$(python3 -c "import json; d=json.load(open('$TC_JSON')); print(d['totalFail'])" 2>/dev/null || echo 0)
+            if [ "$FAIL" -gt 0 ]; then
+              echo "❌ $FAIL TC(s) failed — see Step Summary and uploaded reports for details"
+              exit 1
+            fi
+            echo "✅ All TC tests passed"
+          elif [ "${{ steps.run_suites.outcome }}" == "failure" ]; then
+            echo "❌ Suite runner reported failures"
+            exit 1
+          fi
+
+  # ── Phase-2: MCP Server extended (requires running server) ───────────────────
+  mcp-extended:
+    name: MCP Server Extended Tests
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm ci --prefer-offline || npm install
+          cd server && npm ci --prefer-offline || npm install
+          cd ../mcp-server && npm ci --prefer-offline || npm install
+
+      - name: Start LTS server
+        env:
+          TC_STARTUP_RUN: 'false'
+        run: |
+          cd server
+          node src/index.js &
+          echo "SERVER_PID=$!" >> $GITHUB_ENV
+
+      - name: Wait for server
+        run: |
+          for i in $(seq 1 30); do
+            curl -sf "$LTS_URL/health" > /dev/null 2>&1 && exit 0
+            sleep 1
+          done
           exit 1
 
-  # ── Optional: Phase-3 E2E tests (manual trigger only) ─────────────────────
+      - name: Run MCP server extended tests
+        id: mcp_ext
+        run: node test/api/mcp_server_extended.test.js
+        continue-on-error: true
+
+      - name: Write MCP result to summary
+        if: always()
+        run: |
+          if [ "${{ steps.mcp_ext.outcome }}" == "success" ]; then
+            echo "### ✅ MCP Server Extended Tests (Groups J–O) — PASSED" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "### ❌ MCP Server Extended Tests (Groups J–O) — FAILED" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Stop server
+        if: always()
+        run: |
+          [ -n "$SERVER_PID" ] && kill "$SERVER_PID" 2>/dev/null || true
+          fuser -k 3080/tcp 2>/dev/null || true
+
+      - name: Fail if MCP tests failed
+        if: steps.mcp_ext.outcome == 'failure'
+        run: exit 1
+
+  # ── Phase-3: E2E tests (manual trigger only) ─────────────────────────────────
   e2e:
     name: Phase-3 E2E Tests (Playwright)
     runs-on: ubuntu-latest
@@ -138,6 +324,8 @@ jobs:
         working-directory: client
 
       - name: Start LTS server
+        env:
+          TC_STARTUP_RUN: 'false'
         run: cd server && node src/index.js &
 
       - name: Wait for LTS server
@@ -160,8 +348,12 @@ jobs:
           npx playwright test test/e2e/
         continue-on-error: true
 
-      - name: Stop servers
+      - name: Write E2E result to summary
         if: always()
         run: |
-          fuser -k 3080/tcp 2>/dev/null || true
-          fuser -k 3080/tcp 2>/dev/null || true
+          echo "### E2E Tests (Playwright) — Phase-3" >> $GITHUB_STEP_SUMMARY
+          echo "Triggered manually via workflow_dispatch." >> $GITHUB_STEP_SUMMARY
+
+      - name: Stop servers
+        if: always()
+        run: fuser -k 3080/tcp 2>/dev/null || true

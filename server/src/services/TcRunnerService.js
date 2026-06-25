@@ -40,6 +40,8 @@ const SUITE_TIMEOUT_MS = parseInt(process.env.TC_SUITE_TIMEOUT_MS || '60000', 10
 // label = short human-readable name shown in the UI
 // srs   = comma-separated SRS FR identifiers covered by this suite
 const SUITES = [
+  // DB Layer
+  { file: 'test/api/db_layer.test.js',                      srs: 'FR-STORAGE-001~074, NFR-STORAGE-001~017', label: 'DB Layer  A+B+H+I+J' },
   // Camera
   { file: 'test/api/camera_discovery.test.js',              srs: 'FR-CAM-040~056', label: 'Camera Discovery  A+B+G' },
   { file: 'test/api/nvr_channel_discovery.test.js',         srs: 'FR-CAM-060~067', label: 'NVR MaxChannel  H' },
@@ -88,6 +90,7 @@ const SUITES = [
   { file: 'test/api/youtube_streams_lts2026.test.js',       srs: 'FR-YT-LTS-001~010', label: 'LTS2026 YouTube Schema  A+B+D' },
   // MCP
   { file: 'test/api/mcp_server.test.js',                    srs: 'FR-MCP-001~020', label: 'MCP Server Tools  A-F' },
+  { file: 'test/api/mcp_server_extended.test.js',           srs: 'FR-MCP-070~110', label: 'MCP Server Extended  J-O' },
 ];
 
 // ── State ─────────────────────────────────────────────────────────────────────

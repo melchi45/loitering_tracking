@@ -1,13 +1,15 @@
 'use strict';
 /**
  * Test Report Generator
- * Run all test suites and produce a Markdown report.
+ * Run all test suites and produce a Markdown + JSON report.
  *
  * Usage:
  *   node test/generate_report.js
  *   node test/generate_report.js --output test/reports/my-report.md
+ *   node test/generate_report.js --output-json test/reports/results.json
  *   node test/generate_report.js --skip e2e
  *   node test/generate_report.js --only face
+ *   node test/generate_report.js --github-summary   # write $GITHUB_STEP_SUMMARY
  *
  * Output: test/reports/report_YYYY-MM-DD_HH-MM.md  (or --output path)
  * Exits non-zero if any suite failed (mirrors run_all.js behaviour).
@@ -22,13 +24,16 @@ const REPORT_DIR = path.join(ROOT, 'test', 'reports');
 
 // ── Parse CLI flags ──────────────────────────────────────────────────────────
 
-const args       = process.argv.slice(2);
-const onlyIdx    = args.indexOf('--only');
-const skipIdx    = args.indexOf('--skip');
-const outputIdx  = args.indexOf('--output');
-const onlyFilter = onlyIdx   !== -1 ? (args[onlyIdx   + 1] || '').toLowerCase() : null;
-const skipFilter = skipIdx   !== -1 ? (args[skipIdx   + 1] || '').toLowerCase() : null;
-const outputPath = outputIdx !== -1 ? args[outputIdx  + 1] : null;
+const args          = process.argv.slice(2);
+const onlyIdx       = args.indexOf('--only');
+const skipIdx       = args.indexOf('--skip');
+const outputIdx     = args.indexOf('--output');
+const outputJsonIdx = args.indexOf('--output-json');
+const onlyFilter    = onlyIdx       !== -1 ? (args[onlyIdx       + 1] || '').toLowerCase() : null;
+const skipFilter    = skipIdx       !== -1 ? (args[skipIdx       + 1] || '').toLowerCase() : null;
+const outputPath    = outputIdx     !== -1 ? args[outputIdx      + 1] : null;
+const outputJsonPath = outputJsonIdx !== -1 ? args[outputJsonIdx + 1] : null;
+const githubSummary  = args.includes('--github-summary');
 
 // ── Suite definitions ────────────────────────────────────────────────────────
 
@@ -106,10 +111,76 @@ const SUITES = [
     tags:  ['main', 'zones', 'alerts', 'events'],
   },
   {
+    file:  'test/api/auth.test.js',
+    label: 'User Authentication (auth)',
+    tc:    ['TC_User_Authentication.md'],
+    tags:  ['auth', 'user'],
+  },
+  {
+    file:  'test/api/user_profile.test.js',
+    label: 'User Profile (user_profile)',
+    tc:    ['TC_User_Authentication.md'],
+    tags:  ['user', 'profile'],
+  },
+  {
+    file:  'test/api/nvr_channel_discovery.test.js',
+    label: 'NVR Channel Discovery (nvr_channel_discovery)',
+    tc:    ['TC_Camera_Discovery.md'],
+    tags:  ['camera', 'nvr'],
+  },
+  {
+    file:  'test/api/stats_panel.test.js',
+    label: 'Stats Panel (stats_panel)',
+    tc:    ['TC_LTS2026_Loitering_Tracking_System.md'],
+    tags:  ['stats'],
+  },
+  {
+    file:  'test/api/missing-person.test.js',
+    label: 'Missing Person API (missing-person)',
+    tc:    ['TC_AI_Face_Recognition.md'],
+    tags:  ['face', 'missing'],
+  },
+  {
+    file:  'test/api/detection_snapshot_search.test.js',
+    label: 'Detection Snapshot Search (detection_snapshot_search)',
+    tc:    ['TC_LTS2026_Loitering_Tracking_System.md'],
+    tags:  ['detection', 'snapshots'],
+  },
+  {
+    file:  'test/api/webrtc_telemetry.test.js',
+    label: 'WebRTC Telemetry (webrtc_telemetry)',
+    tc:    ['TC_WebRTC_Media_Gateway.md'],
+    tags:  ['webrtc', 'telemetry'],
+  },
+  {
+    file:  'test/api/https_tls.test.js',
+    label: 'HTTPS TLS (https_tls)',
+    tc:    ['TC_HTTPS_TLS.md'],
+    tags:  ['https', 'tls'],
+  },
+  {
+    file:  'test/api/thermal_radiometry_overlay.test.js',
+    label: 'Thermal Radiometry Overlay (thermal_radiometry_overlay)',
+    tc:    ['TC_CrossCamera_Face_Tracking.md'],
+    tags:  ['thermal', 'onvif'],
+  },
+  {
+    file:  'test/api/timeline_range.test.js',
+    label: 'Timeline Range (timeline_range)',
+    tc:    ['TC_LTS2026_Loitering_Tracking_System.md'],
+    tags:  ['timeline', 'streaming'],
+  },
+  {
     file:  'test/api/mcp_server.test.js',
     label: 'MCP Server (mcp_server)',
     tc:    ['TC_LLM_MCP_Server.md'],
     tags:  ['mcp', 'llm'],
+  },
+  {
+    file:  'test/api/mcp_server_extended.test.js',
+    label: 'MCP Server Extended (mcp_server_extended)',
+    tc:    ['TC_LLM_MCP_Server.md'],
+    tags:  ['mcp', 'llm', 'extended'],
   },
   {
     file:  'test/api/ai_detection_modules.test.js',
@@ -156,7 +227,7 @@ const SUITES = [
   },
 ];
 
-// TC → canonical label map (all 24 TC documents)
+// TC → canonical label map (all TC documents)
 const TC_LABELS = {
   'TC_AI_Accessories_Detection.md':           'AI Accessories Detection',
   'TC_AI_Animal_Detection.md':                'AI Animal Detection',
@@ -174,12 +245,14 @@ const TC_LABELS = {
   'TC_Dashboard_Layout.md':                   'Dashboard Layout',
   'TC_Dashboard_Sidebar_Alerts_Zones.md':     'Dashboard Sidebar: Alerts & Zones',
   'TC_Dashboard_Sidebar_Cameras.md':          'Dashboard Sidebar: Cameras',
+  'TC_HTTPS_TLS.md':                          'HTTPS TLS',
   'TC_LLM_MCP_Server.md':                     'LLM / MCP Server',
   'TC_LTS2026_Loitering_Tracking_System.md':  'LTS-2026 Main System',
   'TC_LTS2026_YouTube_RTSP_Ingest.md':        'LTS-2026 YouTube/RTSP Ingest',
   'TC_Mobile_Layout.md':                      'Mobile Layout',
   'TC_Object_Tracking.md':                    'Object Tracking',
   'TC_STUN_TURN_ICE.md':                      'STUN/TURN/ICE',
+  'TC_User_Authentication.md':                'User Authentication',
   'TC_WebRTC_Media_Gateway.md':               'WebRTC Media Gateway',
   'TC_YouTube_RTSP_Ingest.md':                'YouTube/RTSP Ingest',
 };
@@ -377,7 +450,7 @@ ${skipFilter ? `> Filter --skip: \`${skipFilter}\`` : ''}
 
 ## TC Coverage Matrix
 
-All 24 TC documents mapped to test scripts:
+All TC documents mapped to test scripts:
 
 | Status | TC Document | Test Script(s) |
 |---|---|---|
@@ -436,17 +509,60 @@ FRONTEND_URL=http://localhost:3080 npx playwright test test/e2e/
 _Report generated by \`node test/generate_report.js\`_
 `;
 
-// ── Write report ─────────────────────────────────────────────────────────────
+// ── Write Markdown report ─────────────────────────────────────────────────────
 
 const outFile = outputPath || path.join(REPORT_DIR, `report_${ts}.md`);
 fs.mkdirSync(path.dirname(outFile), { recursive: true });
 fs.writeFileSync(outFile, report, 'utf8');
 
+// ── Write JSON report ─────────────────────────────────────────────────────────
+
+const jsonReport = {
+  generatedAt:  now.toISOString(),
+  ltsUrl:       ltsUrl,
+  nodeVersion:  nodeVer,
+  platform,
+  filterOnly:   onlyFilter,
+  filterSkip:   skipFilter,
+  totalPassed,
+  totalFailed,
+  totalSkipped,
+  passRate,
+  tcCovered,
+  tcTotal,
+  suites: runResults.map(r => ({
+    file:    r.suite.file,
+    label:   r.suite.label,
+    tc:      r.suite.tc,
+    passed:  r.passed,
+    failed:  r.failed,
+    skipped: r.skipped,
+    status:  r.status,
+  })),
+  tcCoverage: Object.fromEntries(
+    Object.entries(TC_LABELS).map(([file, label]) => {
+      const cov = tcCoverage[file];
+      return [file, { label, status: cov?.status || 'no-test', scripts: cov?.suiteFiles || [] }];
+    })
+  ),
+};
+
+const jsonOutFile = outputJsonPath || path.join(REPORT_DIR, `report_${ts}.json`);
+fs.writeFileSync(jsonOutFile, JSON.stringify(jsonReport, null, 2), 'utf8');
+
+// ── GitHub Step Summary ───────────────────────────────────────────────────────
+
+if (githubSummary && process.env.GITHUB_STEP_SUMMARY) {
+  fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, report, 'utf8');
+  console.log(`  GitHub Step Summary: ${process.env.GITHUB_STEP_SUMMARY}`);
+}
+
 console.log('\n─────────────────────────────────────────────────────────────────');
 console.log(`  Total: ${totalPassed} passed, ${totalFailed} failed, ${totalSkipped} skipped`);
 console.log(`  Pass rate: ${passRate}%`);
 console.log(`  TC coverage: ${tcCovered}/${tcTotal} (${tcPassPct}%)`);
-console.log(`  Report written: ${outFile}`);
+console.log(`  MD report:   ${outFile}`);
+console.log(`  JSON report: ${jsonOutFile}`);
 console.log('─────────────────────────────────────────────────────────────────\n');
 
 if (totalFailed > 0) process.exit(1);
