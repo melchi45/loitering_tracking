@@ -487,25 +487,41 @@ class CameraSession:
                 retry_delay = min(retry_delay * 1.5, 5.0)
 
     def _audio_rtp_ingest_once(self):
-        wd = _Watchdog(RTSP_READ_TIMEOUT, f"[{self.id[:8]}] artp", self._stop)
-        inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS)
-        wd.arm(inp)
+        # Probe codec with a short-lived connection first, then reopen for the
+        # actual loop.  This avoids holding two simultaneous RTSP sessions.
+        probe = av.open(self.rtsp_url, options=_RTSP_OPTIONS)
         try:
-            as_ = next((s for s in inp.streams if s.type == "audio"), None)
-            if as_ is None:
+            as_probe = next((s for s in probe.streams if s.type == "audio"), None)
+            if as_probe is None:
                 raise RuntimeError("No audio stream")
+            codec_name = as_probe.codec_context.name
+        finally:
+            try:
+                probe.close()
+            except Exception:
+                pass
 
-            out    = av.open(
-                f"rtp://127.0.0.1:{self.mediasoup_audio_port}",
-                "w", format="rtp",
-                options={
-                    "ssrc":         str(_MEDIASOUP_AUDIO_SSRC),
-                    "payload_type": str(_MEDIASOUP_AUDIO_PT),
-                },
-            )
+        out = av.open(
+            f"rtp://127.0.0.1:{self.mediasoup_audio_port}",
+            "w", format="rtp",
+            options={
+                "ssrc":         str(_MEDIASOUP_AUDIO_SSRC),
+                "payload_type": str(_MEDIASOUP_AUDIO_PT),
+            },
+        )
 
-            # Pass through if already Opus; transcode everything else.
-            if as_.codec_context.name == "opus":
+        # Pass through if already Opus; transcode everything else.
+        if codec_name == "opus":
+            # Opus passthrough: only demux+mux, no decode — _Watchdog is safe here
+            # because container.close() from a background thread cannot race with
+            # any libav decode/resample operation.
+            wd  = _Watchdog(RTSP_READ_TIMEOUT, f"[{self.id[:8]}] artp", self._stop)
+            inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS)
+            wd.arm(inp)
+            try:
+                as_ = next((s for s in inp.streams if s.type == "audio"), None)
+                if as_ is None:
+                    raise RuntimeError("No audio stream")
                 out_as = out.add_stream(template=as_)
                 log.info("[%s] Audio RTP passthrough opus → rtp://127.0.0.1:%d",
                          self.id[:8], self.mediasoup_audio_port)
@@ -516,7 +532,7 @@ class CameraSession:
                             break
                         if pkt.size == 0:
                             continue
-                        wd.reset()  # RTP packet arrived → keep watchdog alive
+                        wd.reset()
                         if pkt.dts is not None:
                             if last_dts is not None and pkt.dts <= last_dts:
                                 pkt.dts = last_dts + 1
@@ -530,14 +546,32 @@ class CameraSession:
                             pass
                 finally:
                     out.close()
-            else:
-                out_as     = out.add_stream("libopus", rate=48000)
+            finally:
+                wd.disarm()
+                try:
+                    inp.close()
+                except Exception:
+                    pass
+        else:
+            # Transcoding path (e.g. pcm_mulaw → opus): pkt.decode() +
+            # resampler.resample() run while the container is open.  Calling
+            # container.close() from a _Watchdog background thread while those
+            # libav operations are in flight can segfault the process.  Use
+            # stimeout (libav socket-level I/O timeout) instead — it fires
+            # inside libav's own I/O layer so there is no cross-thread race.
+            _transcode_opts = {**_RTSP_OPTIONS,
+                               "stimeout": str(int(RTSP_READ_TIMEOUT * 1_000_000))}
+            inp = av.open(self.rtsp_url, options=_transcode_opts)
+            try:
+                as_ = next((s for s in inp.streams if s.type == "audio"), None)
+                if as_ is None:
+                    raise RuntimeError("No audio stream")
+                out_as    = out.add_stream("libopus", rate=48000)
                 out_as.codec_context.channels = 2
                 out_as.codec_context.layout   = "stereo"
-                # libopus on this system requires s16 (signed 16-bit integer), not fltp.
-                resampler  = av.AudioResampler(format="s16", layout="stereo", rate=48000)
+                resampler = av.AudioResampler(format="s16", layout="stereo", rate=48000)
                 log.info("[%s] Audio RTP transcode %s → opus → rtp://127.0.0.1:%d",
-                         self.id[:8], as_.codec_context.name, self.mediasoup_audio_port)
+                         self.id[:8], codec_name, self.mediasoup_audio_port)
                 try:
                     last_out_dts = None
 
@@ -559,7 +593,6 @@ class CameraSession:
                             break
                         if pkt.size == 0:
                             continue
-                        wd.reset()  # RTP packet arrived → keep watchdog alive
                         for frame in pkt.decode():
                             for resampled in resampler.resample(frame):
                                 for out_pkt in out_as.encode(resampled):
@@ -572,12 +605,11 @@ class CameraSession:
                         _mux_enc(out_pkt)
                 finally:
                     out.close()
-        finally:
-            wd.disarm()
-            try:
-                inp.close()
-            except Exception:
-                pass
+            finally:
+                try:
+                    inp.close()
+                except Exception:
+                    pass
 
     # ── App RTP path (RTSP data/subtitle track → server HTTP callback → DataChannel) ──
 
