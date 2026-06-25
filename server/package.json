@@ -7,6 +7,8 @@
     "start": "node src/scripts/startServer.js",
     "stop": "node src/scripts/stopServer.js",
     "restart": "npm run stop && npm run start",
+    "ingest:start": "node src/scripts/startIngestDaemon.js",
+    "ingest:stop": "node src/scripts/stopIngestDaemon.js",
     "ingest:restart": "node src/scripts/restartIngestDaemon.js",
     "mcp:start": "node src/scripts/startMcpServer.js",
     "mcp:stop": "node src/scripts/stopMcpServer.js",

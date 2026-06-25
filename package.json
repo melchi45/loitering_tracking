@@ -17,6 +17,8 @@
     "stop": "cd server && npm run stop",
     "start": "cd server && npm start",
     "restart": "npm run stop --if-present && npm run start",
+    "ingest:start": "cd server && npm run ingest:start",
+    "ingest:stop": "cd server && npm run ingest:stop",
     "ingest:restart": "cd server && npm run ingest:restart",
     "mcp:start": "cd server && npm run mcp:start",
     "mcp:stop": "cd server && npm run mcp:stop",

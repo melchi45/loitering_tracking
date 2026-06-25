@@ -299,7 +299,9 @@ node src/scripts/installDb.js --host HOST --port 27017 \
 
 # ── Ingest Daemon (CAPTURE_BACKEND=ingest-daemon) ──────────────────────────
 cd server
-npm run ingest:restart   # ingest-daemon만 핫 재시작 (전체 서버 재시작 불필요)
+npm run ingest:start     # ingest-daemon 시작 (이미 실행 중이면 no-op)
+npm run ingest:stop      # ingest-daemon 종료
+npm run ingest:restart   # ingest-daemon 재시작 (종료 후 시작 + 카메라 재등록)
 
 # ── 로그 설정 (프로덕션, npm run start 계열) ─────────────────────────────────
 # 1회성: /var/log/lts 디렉토리 권한 설정 (root 필요)
