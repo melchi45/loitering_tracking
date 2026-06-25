@@ -109,42 +109,54 @@ typesRouter.delete('/', (req, res) => {
 
 // ── GET /api/onvif-snapshots ──────────────────────────────────────────────────
 // Query: eventId (required or optional), cameraId, topicType, from, to, limit
+//
+// Uses db.queryAsync() instead of db.find() so that in MongoDB mode the query
+// goes directly to MongoDB — onvif_snapshots is intentionally excluded from
+// the startup in-memory hydration (each row carries a large frameData blob)
+// and would otherwise return empty results after a server restart.
 const snapshotsRouter = express.Router();
 
-snapshotsRouter.get('/', (req, res) => {
+snapshotsRouter.get('/', async (req, res) => {
   if (!_db) return res.status(503).json({ error: 'DB not ready' });
 
-  const { eventId, cameraId, topicType, from, to, limit } = req.query;
-  const maxRows = Math.min(parseInt(limit, 10) || 50, 200);
+  try {
+    const { eventId, cameraId, topicType, from, to, limit } = req.query;
+    const maxRows = Math.min(parseInt(limit, 10) || 50, 200);
 
-  // Filter by indexed fields first before loading the full table.
-  // onvif_snapshots rows contain large frameData blobs — filtering early
-  // avoids sorting and serializing thousands of rows on every request.
-  const exactWhere = {};
-  if (eventId)   exactWhere.eventId   = eventId;
-  if (cameraId)  exactWhere.cameraId  = cameraId;
-  if (topicType) exactWhere.topicType = topicType;
+    // Build exact-match filter for indexed fields to push the predicate down
+    // to MongoDB and avoid transferring thousands of large blob rows.
+    const exactWhere = {};
+    if (eventId)   exactWhere.eventId   = eventId;
+    if (cameraId)  exactWhere.cameraId  = cameraId;
+    if (topicType) exactWhere.topicType = topicType;
 
-  let rows = Object.keys(exactWhere).length > 0
-    ? _db.find('onvif_snapshots', exactWhere)
-    : _db.all('onvif_snapshots');
+    // queryAsync goes directly to MongoDB when available (bypasses in-memory
+    // store which is empty for onvif_snapshots after a restart).
+    let rows = await _db.queryAsync(
+      'onvif_snapshots',
+      exactWhere,
+      { timestamp: -1 },   // newest first
+      null,                 // fetch without limit so we can apply from/to filter
+    );
 
-  rows.sort((a, b) => (a.timestamp > b.timestamp ? -1 : 1)); // newest first
+    if (from) rows = rows.filter(r => r.timestamp >= from);
+    if (to)   rows = rows.filter(r => r.timestamp <= to);
 
-  if (from) rows = rows.filter(r => r.timestamp >= from);
-  if (to)   rows = rows.filter(r => r.timestamp <= to);
+    rows = rows.slice(0, maxRows);
 
-  rows = rows.slice(0, maxRows);
+    // Return frameData as data URL for direct use in <img>
+    const result = rows.map(r => ({
+      ...r,
+      frameData: r.frameData
+        ? `data:image/jpeg;base64,${r.frameData}`
+        : null,
+    }));
 
-  // Return frameData as data URL for direct use in <img>
-  const result = rows.map(r => ({
-    ...r,
-    frameData: r.frameData
-      ? `data:image/jpeg;base64,${r.frameData}`
-      : null,
-  }));
-
-  res.json({ total: result.length, snapshots: result });
+    res.json({ total: result.length, snapshots: result });
+  } catch (err) {
+    console.error('[onvifApi] snapshots query error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
 });
 
 module.exports = { router, typesRouter, snapshotsRouter, setDb };

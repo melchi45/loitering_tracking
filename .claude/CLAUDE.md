@@ -64,7 +64,7 @@ loitering_tracking/
 │   │   ├── UserService.js          # 사용자 CRUD
 │   │   ├── AuditService.js         # 감사 로그
 │   │   ├── MsalService.js          # Microsoft MSAL 인증
-│   │   ├── mongoDbService.js       # MongoDB 연결 · 5초 keep-alive 핑 · 재연결 Retry (선형 back-off)
+│   │   ├── mongoDbService.js       # MongoDB 연결 · 5초 keep-alive 핑 · 재연결 Retry (선형 back-off) · findDirect() 직접 쿼리 (onvif_snapshots 등 비hydration 테이블용)
 │   │   └── analyticsConfig.js      # 분석 설정
 │   ├── routes/
 │   │   ├── admin.js                # 관리자 라우터

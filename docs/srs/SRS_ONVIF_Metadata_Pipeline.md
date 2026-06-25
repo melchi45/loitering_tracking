@@ -361,3 +361,4 @@ App RTP 루프가 `OSError(errno=98)`(EADDRINUSE)를 3회 연속으로 만나면
 | 1.4 | 2026-06-24 | FR-ONVIF-APPRTP-004~005 추가 — MediaMTX 환경 App RTP URL 분리(appRtpRtspUrl), EADDRINUSE 3회 방어 종료 |
 | 1.5 | 2026-06-24 | §3-C FR-ONVIF-RANGE-001~005 추가 — ONVIF Timeline 1H/6H 범위 프리셋, 기본값 1H, Detection tracks 동일 범위 지원 |
 | 1.6 | 2026-06-24 | §3-D FR-ONVIF-RULENAME-001~005 추가 — RuleName 파싱·dedup·DB 저장·타임라인 행 분리·상세 패널 표시 |
+| 1.7 | 2026-06-25 | 버그 수정 반영 — `onvif_snapshots` MongoDB 재시작 후 사라짐: `DB_TYPE=mongodb` 환경에서 서버 재시작 시 스냅샷 이미지가 모두 사라지는 버그 수정. `snapshotsRouter.get()` async 전환 + `db.queryAsync()` 경유로 MongoDB 직접 조회 (인메모리 store 우회). `BaseDatabase.queryAsync()` / `MongoDatabase.queryAsync()` / `mongoDbService.findDirect()` 신규 추가. |

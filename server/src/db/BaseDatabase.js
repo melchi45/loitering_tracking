@@ -46,6 +46,37 @@ class BaseDatabase {
   /** Return a shallow copy of every row in `table`. */
   all(table)              { _abstract(this, 'all'); }
 
+  /**
+   * Async query that bypasses the in-memory store for backends where data may
+   * not be fully hydrated (e.g. large binary tables in MongoDB mode).
+   *
+   * @param {string} table
+   * @param {object} where        - Equality filters (same as find())
+   * @param {object} sort         - MongoDB-style sort spec e.g. { timestamp: -1 }
+   * @param {number|null} limit   - Max rows to return (null = no limit)
+   * @returns {Promise<object[]>}
+   *
+   * Default implementation falls back to the synchronous find() + in-memory
+   * sort/slice. MongoDatabase overrides this to query MongoDB directly,
+   * enabling large tables (e.g. onvif_snapshots with binary frame data) to be
+   * served without loading all rows into the startup heap.
+   */
+  async queryAsync(table, where = {}, sort = {}, limit = null) {
+    let rows = this.find(table, where);
+    const sortKeys = Object.entries(sort);
+    if (sortKeys.length > 0) {
+      rows = rows.slice().sort((a, b) => {
+        for (const [k, dir] of sortKeys) {
+          if (a[k] < b[k]) return dir > 0 ? -1 : 1;
+          if (a[k] > b[k]) return dir > 0 ? 1 : -1;
+        }
+        return 0;
+      });
+    }
+    if (limit != null) rows = rows.slice(0, limit);
+    return rows;
+  }
+
   // ── Abstract lifecycle ────────────────────────────────────────────────────
 
   /** Async setup — connect, load initial data, etc. */

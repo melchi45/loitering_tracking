@@ -39,7 +39,14 @@ const TABLES = [
   'client_webrtc_stats',
   'onvif_events',
   'onvif_event_types',
+  // onvif_snapshots intentionally EXCLUDED from startup hydration:
+  //   each row contains a base64 JPEG (~50-200 KB) and the table can hold
+  //   thousands of records. Loading all into the startup heap would exhaust
+  //   memory. The snapshots endpoint uses findDirect() to query MongoDB
+  //   directly at request time instead of reading from the in-memory store.
   'detectionTracks',
+  'faceTrajectories',
+  'tc_results',
   'users',
   'refresh_tokens',
   'audit_logs',
@@ -58,6 +65,8 @@ const LOAD_LIMITS = {
   client_webrtc_stats:        5000,
   onvif_events:              50000,
   detectionTracks:           10000,
+  faceTrajectories:           5000,
+  tc_results:                10000,
   refresh_tokens:            10000,
   audit_logs:                10000,
   analysisEvents:            10000,
@@ -312,6 +321,25 @@ function isConnected() {
   return _connected;
 }
 
+/**
+ * Direct MongoDB query — used by MongoDatabase.queryAsync() for tables that
+ * are NOT fully hydrated in the in-memory store at startup (e.g. onvif_snapshots
+ * whose large frameData blobs make loading everything into RAM impractical).
+ *
+ * @param {string} table           Collection name
+ * @param {object} where           Equality filter (field → value pairs)
+ * @param {object} sort            MongoDB sort spec, e.g. { timestamp: -1 }
+ * @param {number|null} limit      Max documents to return (null = no limit)
+ * @returns {Promise<object[]>}    Normalised plain objects (no _id / __v)
+ */
+async function findDirect(table, where = {}, sort = {}, limit = null) {
+  const query = model(table).find(where).lean();
+  if (Object.keys(sort).length > 0) query.sort(sort);
+  if (limit != null) query.limit(limit);
+  const docs = await query;
+  return docs.map(({ _id, __v, ...rest }) => normalizeDates(rest));
+}
+
 module.exports = {
   TABLES,
   connect,
@@ -320,5 +348,6 @@ module.exports = {
   upsert,
   remove,
   removeWhere,
+  findDirect,
   isConnected,
 };

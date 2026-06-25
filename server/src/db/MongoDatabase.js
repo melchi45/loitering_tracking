@@ -118,6 +118,26 @@ class MongoDatabase extends BaseDatabase {
     return [...this._store[table]];
   }
 
+  /**
+   * Override: query MongoDB directly for tables that are NOT fully hydrated
+   * in the in-memory store at startup (e.g. onvif_snapshots, whose frameData
+   * blobs make loading all rows into RAM impractical).
+   *
+   * Falls back to the synchronous in-memory find() when MongoDB is offline
+   * or for tables that ARE fully in-memory (works correctly either way).
+   */
+  async queryAsync(table, where = {}, sort = {}, limit = null) {
+    if (this.isConnected()) {
+      try {
+        return await this._mongo.findDirect(table, where, sort, limit);
+      } catch (e) {
+        console.error(`[DB:mongo] queryAsync ${table} failed, falling back to memory:`, e.message);
+      }
+    }
+    // Fallback: in-memory (may be empty for non-hydrated tables when offline)
+    return super.queryAsync(table, where, sort, limit);
+  }
+
   // ── Internal ──────────────────────────────────────────────────────────────
 
   _persist(op, table, id, row) {

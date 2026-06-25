@@ -588,3 +588,4 @@ User action:
 | 2.0 | 2026-06-23 | §7 데이터 플로우 업데이트 — parseOnvifPayload() 배열 반환 반영; 패킷 내 다중 NotificationMessage 각각 독립 dedup·저장·브로드캐스트 |
 | 2.1 | 2026-06-24 | 범위 프리셋 `1H` · `6H` 추가 — ONVIF 이벤트 기본 범위를 1D → 1H로 단축; §5.1 range state 타입 업데이트 |
 | 2.2 | 2026-06-24 | RuleName 기반 타임라인 행 분리 — buildIntervals/buildRows 키에 ruleName 포함; 행 레이블 `[RuleName]` 표시; detail panel RuleName 항목 추가; `OnvifEvent.ruleName` 필드 추가 |
+| 2.3 | 2026-06-25 | `onvif_snapshots` MongoDB 모드 서버 재시작 후 사라짐 버그 수정 — `snapshotsRouter.get()` 을 async 전환 후 `db.queryAsync('onvif_snapshots', …)` 사용. `onvif_snapshots` 는 frameData 블롭 때문에 시작 시 인메모리 hydration 제외 → `BaseDatabase.queryAsync()` / `MongoDatabase.queryAsync()` / `mongoDbService.findDirect()` 추가로 MongoDB 직접 조회 경로 구현. `mongoDbService.TABLES`에 누락됐던 `faceTrajectories`, `tc_results` 도 추가. |

@@ -156,6 +156,13 @@ class BaseDatabase {
   isConnected()              // true when ready to accept writes
   getStats()                 // { mode, connected, rates, cumulative }
 
+  // ── Async direct query (v1.9) ────────────────────────────────────────────
+  // Bypasses the in-memory store for tables excluded from startup hydration
+  // (e.g. onvif_snapshots with large binary blobs).
+  async queryAsync(table, where={}, sort={}, limit=null)
+    // Default: in-memory find() + sort + slice (JsonDatabase behaviour)
+    // MongoDatabase overrides to call mongoDbService.findDirect() directly.
+
   // ── Shared (inherited) ────────────────────────────────────────────────
   prepare(sql)               // backward-compat SQL shim (INSERT/DELETE/SELECT)
   pragma()                   // no-op shim
@@ -256,12 +263,18 @@ LEGACY_MIGRATIONS  // one-time import: users.json / tokens.json / audit.json
 let _connected = false;
 const _models = {};
 
-// ── Table list: must match ALL_TABLES in db.js (all 20 tables) ───────────
+// ── Table list: must match ALL_TABLES in db.js ──────────────────────────
+// onvif_snapshots is intentionally EXCLUDED — each row contains a large
+// base64 JPEG blob. Loading all rows at startup would exhaust RAM.
+// The snapshot endpoint uses queryAsync() / findDirect() to query MongoDB
+// directly at request time instead.
 const TABLES = [
   'cameras', 'zones', 'events', 'alerts', 'faceGalleries', 'faceGalleryFaces',
   'settings', 'detectionSnapshots', 'faceMatchHistory', 'missing_persons',
   'missing_person_detections', 'analysisEvents', 'client_logs', 'client_webrtc_stats',
-  'onvif_events', 'onvif_event_types', 'detectionTracks', 'users', 'refresh_tokens', 'audit_logs',
+  'onvif_events', 'onvif_event_types', 'detectionTracks',
+  'faceTrajectories', 'tc_results',
+  'users', 'refresh_tokens', 'audit_logs',
 ];
 
 // ── Row limits applied on startup to bound memory / startup time ──────────
@@ -269,7 +282,8 @@ const LOAD_LIMITS = {
   events: 20000, alerts: 10000, detectionSnapshots: 2000,
   faceMatchHistory: 5000, missing_person_detections: 5000,
   client_logs: 10000, client_webrtc_stats: 5000, onvif_events: 50000,
-  detectionTracks: 10000, refresh_tokens: 10000, audit_logs: 10000, analysisEvents: 10000,
+  detectionTracks: 10000, faceTrajectories: 5000, tc_results: 10000,
+  refresh_tokens: 10000, audit_logs: 10000, analysisEvents: 10000,
 };
 
 // ── Schema ───────────────────────────────────────────────────────────────
@@ -290,7 +304,7 @@ function model(table) {
 }
 
 // ── Public API ────────────────────────────────────────────────────────────
-module.exports = { TABLES, connect, disconnect, isConnected, loadAll, upsert, remove, removeWhere };
+module.exports = { TABLES, connect, disconnect, isConnected, loadAll, upsert, remove, removeWhere, findDirect };
 ```
 
 ### 4.2 `connect()` 및 Keep-Alive / Retry 설계 (v1.8)
@@ -1157,3 +1171,4 @@ DB_TYPE=sqlite
 | 1.6 | 2026-06-22 | LTS Engineering Team | DB_TYPE=mongodb 시 lts.json JSON fallback 완전 제거 — disconnect 시 in-memory only, flushNow/persistJson/afterWrite 전면 수정 |
 | 1.7 | 2026-06-23 | LTS Engineering Team | 플러그어블 DB 백엔드 아키텍처: BaseDatabase 추상 클래스, JsonDatabase/MongoDatabase 분리, db/index.js 팩토리, constants.js 공유, db.js shim |
 | 1.8 | 2026-06-23 | LTS Engineering Team | DB_TYPE=mongodb 시작 시 JSON fallback 완전 제거(서버 시작 거부) · mongoDbService 5초 keep-alive 핑 + 선형 back-off 재연결 Retry 추가 |
+| 1.9 | 2026-06-25 | LTS Engineering Team | `queryAsync()` 비동기 직접 조회 API 추가 — `BaseDatabase`: 기본 구현(in-memory sort/slice); `MongoDatabase`: MongoDB 직접 조회(연결 해제 시 in-memory fallback); `mongoDbService.findDirect()` 신규. `TABLES` 누락 보완 (`faceTrajectories`, `tc_results`); `onvif_snapshots` 는 frameData 블롭 크기로 in-memory hydration 영구 제외, `queryAsync()` 로 요청 시점 직접 조회. `LOAD_LIMITS`에 `faceTrajectories`(5000), `tc_results`(10000) 추가. |
