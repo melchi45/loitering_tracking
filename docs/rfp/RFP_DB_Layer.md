@@ -162,8 +162,9 @@ Application Layer (unchanged synchronous API)
 
 ### 4.5 Connection Lifecycle
 
-- **FR-STORAGE-040**: `mongoDbService.connect()` shall time out after 5 seconds if MongoDB is unreachable, and the system shall fall back to JSON-only mode automatically.
-- **FR-STORAGE-041**: On MongoDB disconnection after startup, the system shall continue operating in JSON mode; writes shall be queued or lost (documented behavior).
+- **FR-STORAGE-040**: When `DB_TYPE=mongodb`, the server SHALL verify MongoDB connectivity before accepting any API requests. `ensureMongoDB()` shall attempt TCP probe and automatic restart (local only). If MongoDB is unreachable after all attempts, the server SHALL exit immediately with exit code 1 and a diagnostic error banner. **Fallback to JSON mode is NOT permitted when `DB_TYPE=mongodb`.**
+- **FR-STORAGE-040a**: When `DB_TYPE=mongodb` and `MONGODB_URI` is not set in `server/.env`, the server SHALL exit immediately with exit code 1.
+- **FR-STORAGE-041**: On MongoDB disconnection *after* a successful startup, the server shall continue operating in in-memory-only mode; async MongoDB writes are silently dropped until reconnect.
 - **FR-STORAGE-042**: `mongoDbService.disconnect()` shall be called during graceful server shutdown.
 
 ---
@@ -174,7 +175,7 @@ Application Layer (unchanged synchronous API)
 |---|---|
 | **Write latency** | MongoDB upsert P99 ≤ 50 ms on the same LAN as the server |
 | **Startup load time** | Full MongoDB `loadAll()` for ≤ 100 K documents shall complete in ≤ 5 s |
-| **Availability** | MongoDB failure shall not prevent the server from starting or processing frames |
+| **Startup integrity** | When `DB_TYPE=mongodb`, server startup SHALL fail with exit code 1 if MongoDB is unreachable — no silent fallback to JSON |
 | **Security** | MongoDB URI (including credentials) shall be stored only in environment variables or `.env` files, never in source code |
 | **Scalability** | Schema shall support horizontal sharding on `cameraId` without structural changes |
 | **Observability** | Connection, disconnection, reconnection, and write-error events shall be logged at WARN/ERROR level |
@@ -321,3 +322,4 @@ Application Layer (unchanged synchronous API)
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for DB Layer (pluggable storage backends) |
+| 1.1 | 2026-06-26 | LTS Engineering Team | FR-STORAGE-040 개정: DB_TYPE=mongodb 시 MongoDB 미연결 → process.exit(1) (lts.json fallback 제거) |

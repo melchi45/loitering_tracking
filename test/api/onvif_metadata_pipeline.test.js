@@ -340,8 +340,8 @@ async function runIntegrationTests() {
 
   // TC-PARSER-008: 다중 이벤트 독립 Dedup (API 통합)
   await test('TC-PARSER-008', '3개 NotificationMessage 패킷 → DB에 3개 이벤트 저장', async () => {
-    // 초기화
-    await del('/api/onvif-events');
+    // 테스트 카메라 ID에 한정하여 초기화 (전체 삭제 금지 — 운영 이벤트 보호)
+    await del(`/api/onvif-events?cameraId=${CAM_ID}`);
 
     const xml = makeMetadataStream(
       makeNotification(
@@ -385,7 +385,8 @@ async function runIntegrationTests() {
     const DEDUP_CAM_ID   = `tc-onvif-dedup-${Date.now()}`;
     const DEDUP_RTP_PATH = `/api/internal/apprtp/${DEDUP_CAM_ID}`;
 
-    await del('/api/onvif-events');
+    // 테스트 카메라 ID에 한정하여 초기화 (전체 삭제 금지 — 운영 이벤트 보호)
+    await del(`/api/onvif-events?cameraId=${DEDUP_CAM_ID}`);
 
     const xml = makeMetadataStream(
       makeNotification(

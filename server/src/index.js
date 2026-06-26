@@ -18,6 +18,7 @@ const session      = require('express-session');
 const { Server: SocketIOServer } = require('socket.io');
 
 const { initDB, flushNow }    = require('./db');
+const { ensureMongoDB }       = require('./scripts/ensureMongodb');
 const PipelineManager     = require('./services/pipelineManager');
 const ZoneManager         = require('./services/zoneManager');
 const AlertService        = require('./services/alertService');
@@ -94,6 +95,9 @@ async function main() {
   }
 
   // ── Database ────────────────────────────────────────────────────────────
+  // DB_TYPE=mongodb: MongoDB가 도달 불가하면 즉시 process.exit(1).
+  // lts.json fallback 없음 — 운영자가 DB_TYPE=mongodb를 선택한 이상 MongoDB는 필수.
+  await ensureMongoDB();
   const db = await initDB();
   console.log('[Server] Database initialised (mode:', require('./db').getStorageMode(), ')');
 

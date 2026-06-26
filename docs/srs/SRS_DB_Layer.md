@@ -466,17 +466,32 @@ Documents migrated from JSON shall retain their original `createdAt` values. The
 
 ## 10. Functional Requirements — Connection Lifecycle
 
-### FR-STORAGE-070 — Startup Timeout
+### FR-STORAGE-070 — Startup MongoDB Availability Check
 
-`mongoDbService.connect()` shall use `serverSelectionTimeoutMS: 5000`. If MongoDB is not reachable within 5 seconds, `connect()` shall throw; `initDb()` shall catch and fall back to JSON mode.
+When `DB_TYPE=mongodb`, the server SHALL call `ensureMongoDB()` **before** `initDB()` during startup.
+
+`ensureMongoDB()` shall:
+1. If `MONGODB_URI` is not set → call `fatalExit()` → `process.exit(1)`.
+2. For remote URIs (Atlas / `mongodb+srv://` / non-localhost): skip TCP probe; proceed to `MongoDatabase.init()`.
+3. For local URIs: TCP-probe `host:port` with 1.5 s timeout.
+   - If reachable → log `[MongoDB] <host>:<port> — 실행 중` and return normally.
+   - If not reachable and `mongod` binary exists → attempt auto-restart (systemctl / brew / net start) with 20 s wait.
+     - Restart succeeded and port responds → return normally.
+     - Restart succeeded but port still unresponsive after 20 s → `fatalExit()` → `process.exit(1)`.
+     - Restart failed (no permissions) → print manual-start guide → `fatalExit()` → `process.exit(1)`.
+   - If `mongod` binary not found → print install guide → `fatalExit()` → `process.exit(1)`.
+
+`mongoDbService.connect()` shall use `serverSelectionTimeoutMS: 5000`. If MongoDB is not reachable within 5 seconds, `connect()` shall throw, which propagates to `main().catch()` → `process.exit(1)`.
+
+**lts.json fallback is strictly prohibited when `DB_TYPE=mongodb`.**
 
 ### FR-STORAGE-071 — `MONGODB_URI` Absent
 
-If `DB_TYPE=mongodb` and `MONGODB_URI` is not set, the system shall log:
-```
-[DB] MONGODB_URI not set — falling back to JSON mode
-```
-and continue in JSON mode.
+If `DB_TYPE=mongodb` and `MONGODB_URI` is not set in `server/.env`, the server SHALL:
+- Log the fatal error banner (`[FATAL] DB_TYPE=mongodb — MongoDB에 연결할 수 없어 서버를 시작할 수 없습니다.`)
+- Exit with code 1 immediately.
+
+Continuing in JSON mode is **not permitted**.
 
 ### FR-STORAGE-072 — Disconnection During Operation
 
@@ -505,7 +520,7 @@ On `SIGTERM` / `SIGINT`, the server shall call `mongoDbService.disconnect()` bef
 | NFR-STORAGE-001 | Performance — Write | MongoDB upsert P95 ≤ 30 ms, P99 ≤ 50 ms on same-LAN deployment |
 | NFR-STORAGE-002 | Performance — Startup | `loadAll()` for ≤ 100 K documents completes in ≤ 5 seconds |
 | NFR-STORAGE-003 | Performance — Read | In-memory `stmt.all()` for ≤ 10 K rows completes in ≤ 5 ms |
-| NFR-STORAGE-004 | Availability | MongoDB failure shall not degrade server uptime; JSON mode continues |
+| NFR-STORAGE-004 | Startup Integrity | When `DB_TYPE=mongodb`, server startup SHALL abort with exit code 1 if MongoDB is unreachable. No silent fallback to JSON mode. Runtime disconnection after startup is tolerated (in-memory only until reconnect). |
 | NFR-STORAGE-005 | Security | MongoDB credentials shall be stored only in `.env` / environment variables |
 | NFR-STORAGE-006 | Security | `_id` (ObjectId) shall never appear in any HTTP response body |
 | NFR-STORAGE-007 | Security | Password fields in `cameras` documents shall not be logged at any log level |
@@ -631,3 +646,4 @@ const ALL_TABLES = [
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for DB Layer (pluggable storage backends) |
+| 1.2 | 2026-06-26 | LTS Engineering Team | FR-STORAGE-070/071 개정: DB_TYPE=mongodb 시 MongoDB 미연결 → process.exit(1); NFR-STORAGE-004 개정: fallback 금지 |

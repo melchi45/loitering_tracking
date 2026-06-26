@@ -374,14 +374,64 @@ async function runGroupJ() {
   });
 }
 
+// ── Group C (subset) — MongoDB Startup Validation (subprocess-based) ──────────
+
+async function runGroupC_StartupValidation() {
+  console.log('\n[Group C subset] MongoDB Startup Validation\n');
+
+  const { spawn } = require('child_process');
+  const path = require('path');
+  const serverEntry = path.resolve(__dirname, '../../server/src/index.js');
+
+  function spawnServer(env, timeoutMs = 20_000) {
+    return new Promise((resolve) => {
+      const proc = spawn(process.execPath, [serverEntry], {
+        env: { ...process.env, ...env, PATH: process.env.PATH },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stderr = '';
+      let stdout = '';
+      proc.stderr.on('data', d => { stderr += d.toString(); });
+      proc.stdout.on('data', d => { stdout += d.toString(); });
+      const timer = setTimeout(() => { proc.kill(); resolve({ exitCode: null, stderr, stdout }); }, timeoutMs);
+      proc.on('close', (code) => { clearTimeout(timer); resolve({ exitCode: code, stderr, stdout }); });
+    });
+  }
+
+  await test('TC-C-004', 'DB_TYPE=mongodb + MongoDB 미연결(포트 19999) → exit code 1 + FATAL 배너', async () => {
+    const { exitCode, stderr, stdout } = await spawnServer({
+      DB_TYPE:      'mongodb',
+      MONGODB_URI:  'mongodb://127.0.0.1:19999/lts',
+      HTTP_PORT:    '13099',
+      SERVER_MODE:  'analysis',
+    }, 25_000);
+    assert(exitCode === 1, `exit code must be 1, got ${exitCode}\nstdout: ${stdout}\nstderr: ${stderr}`);
+    assert(stderr.includes('[FATAL]') || stdout.includes('[FATAL]'),
+      `[FATAL] 배너가 출력되지 않았습니다.\nstderr: ${stderr}\nstdout: ${stdout}`);
+  });
+
+  await test('TC-C-005', 'DB_TYPE=mongodb + MONGODB_URI 미설정 → exit code 1 + FATAL 배너', async () => {
+    const env = {
+      DB_TYPE:     'mongodb',
+      HTTP_PORT:   '13098',
+      SERVER_MODE: 'analysis',
+    };
+    delete env.MONGODB_URI;
+    const { exitCode, stderr, stdout } = await spawnServer(env, 15_000);
+    assert(exitCode === 1, `exit code must be 1, got ${exitCode}\nstdout: ${stdout}\nstderr: ${stderr}`);
+    assert(stderr.includes('[FATAL]') || stdout.includes('[FATAL]'),
+      `[FATAL] 배너가 출력되지 않았습니다.\nstderr: ${stderr}\nstdout: ${stdout}`);
+  });
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
   console.log('╔════════════════════════════════════════════════════════╗');
   console.log('║  TC-STORAGE-001 — Storage Layer Tests                  ║');
   console.log('╚════════════════════════════════════════════════════════╝');
-  console.log('  Groups: A (CRUD) · B (Persistence) · H (Error) · I (Security) · J (Durability)');
-  console.log('  MongoDB groups C/D/E/F/G → test/integration/storage_mongo.test.js\n');
+  console.log('  Groups: A (CRUD) · B (Persistence) · C-startup · H (Error) · I (Security) · J (Durability)');
+  console.log('  MongoDB groups C/D/E/F/G (full) → test/integration/storage_mongo.test.js\n');
 
   let adminAvailable = false;
   let dbMode = 'unknown';
@@ -398,6 +448,7 @@ async function main() {
   try {
     await runGroupA();
     await runGroupB();
+    await runGroupC_StartupValidation();
     await runGroupH(adminAvailable);
     await runGroupI();
     await runGroupJ();

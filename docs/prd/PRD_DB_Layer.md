@@ -37,10 +37,11 @@ Provide the LTS-2026 system with a **transparent, dual-mode persistence layer** 
 - **G1**: Implement a `DB_TYPE` environment variable switch (`json` | `mongodb`) that selects the storage mode at startup with no code changes above `db.js`.
 - **G2**: Maintain an in-memory store as the synchronous read source so all existing route handlers remain unchanged.
 - **G3**: Write every mutation to MongoDB asynchronously (fire-and-forget) when in MongoDB mode, logging errors without blocking the AI pipeline.
-- **G4**: Always write `lts.json` as a warm-standby backup regardless of `DB_TYPE`, enabling instant cold-start even when MongoDB is unavailable.
+- **G4**: In `DB_TYPE=json` mode, write `lts.json` on every mutation as the primary durable store. In `DB_TYPE=mongodb` mode, `lts.json` is **not** read or written — MongoDB is the sole durable store.
 - **G5**: On startup in MongoDB mode, hydrate the in-memory store from MongoDB (`loadAll`) before accepting API requests.
 - **G6**: Provide a migration script (`migrateToMongo.js`) to promote existing `lts.json` data into MongoDB with idempotency and summary logging.
 - **G7**: Create compound indexes on high-write collections (`events`, `alerts`) to support time-range queries within acceptable latency.
+- **G8**: When `DB_TYPE=mongodb`, verify MongoDB connectivity at startup (`ensureMongoDB()`). If unreachable after auto-restart attempt, exit immediately with exit code 1. No silent fallback to JSON mode.
 
 ### 2.2 Non-Goals
 
@@ -263,3 +264,4 @@ STORAGE_PATH=./storage
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for DB Layer (pluggable storage backends) |
+| 1.1 | 2026-06-26 | LTS Engineering Team | G4 개정 (mongodb 모드에서 lts.json 미사용 명시), G8 추가 (MongoDB 기동 전 필수 확인 + exit(1)) |

@@ -530,20 +530,31 @@ Server Process Start
               ▼
           MONGODB_URI present?
               │
-              ├── NO → WARN → JsonDatabase fallback ──────────────► server.listen(3080)
+              ├── NO → [FATAL] process.exit(1) ← MONGODB_URI 설정 필요
               │
               └── YES
                       │
                       ▼
-                  ensureMongoDB()  (ensureMongodb.js)
-                      │  TCP probe → if down: systemctl restart → wait 20 s
-                      │  if not installed: platform-specific install guide
+                  ensureMongoDB()  (ensureMongodb.js)  ← index.js에서 initDB() 전에 호출
+                      │
+                      ├─ 원격 URI (Atlas/SRV/non-localhost) → skip TCP probe (pass-through)
+                      │
+                      └─ 로컬 URI → TCP probe (1.5 s)
+                              │
+                              ├── 응답 있음 → 정상 진행
+                              │
+                              └── 응답 없음
+                                      │
+                                      ├─ mongod 설치됨 → systemctl/brew/net start → 20 s 대기
+                                      │       ├── 성공 → 정상 진행
+                                      │       └── 실패 → [FATAL] process.exit(1)
+                                      │
+                                      └─ mongod 미설치 → 설치 가이드 출력 → [FATAL] process.exit(1)
                       │
                       ▼
                   new MongoDatabase().init()
                       │
-                      ├── connect timeout (5 s)
-                      │    └─ WARN → JsonDatabase fallback ──────► server.listen(3080)
+                      ├── connect timeout (5 s) → throw → main().catch() → process.exit(1)
                       │
                       └── success
                               │
@@ -802,8 +813,9 @@ This is tracked as a security enhancement (NFR-STORAGE-007 compliance).
 |---|---|---|---|
 | `lts.json` parse error | `loadFromJson()` | Catch, log, reset `store` to empty | Server starts; data lost from corrupted file |
 | `lts.json` write error | `persistJson()` | Catch, log ERROR | Data not persisted; in-memory still correct |
-| MongoDB connection timeout (startup) | `mongoDbService.connect()` | Throw propagated to `initDB()` → server aborts startup | 서버 시작 거부 — JSON fallback 없음 (v1.8+) |
-| `MONGODB_URI` absent (DB_TYPE=mongodb) | `initDB()` | Throw with guidance message | 서버 시작 거부 — .env 수정 필요 |
+| MongoDB connection timeout (startup) | `mongoDbService.connect()` | Throw → `main().catch()` → `process.exit(1)` | 서버 시작 거부 — JSON fallback 없음 |
+| `MONGODB_URI` absent (DB_TYPE=mongodb) | `ensureMongoDB()` | `fatalExit()` → `process.exit(1)` | 서버 시작 거부 — server/.env에 MONGODB_URI 설정 필요 |
+| 로컬 MongoDB 미실행·재시작 실패 (DB_TYPE=mongodb) | `ensureMongoDB()` | 자동 재시작 시도 → 실패 시 `fatalExit()` → `process.exit(1)` | 서버 시작 거부 — `sudo systemctl start mongod` 필요 |
 | MongoDB upsert error | `mongoDbService.upsert()` | Caught inside upsert; logged | Write lost in MongoDB; no JSON fallback |
 | MongoDB remove error | `mongoDbService.remove()` | Same as upsert | |
 | MongoDB disconnection (runtime) | `mongoose.connection.on('disconnected')` | `_connected = false`; retry 스케줄링 시작 | writes held in-memory; keep-alive 5s 마다 상태 로깅; 자동 재연결 시도 |
@@ -1172,3 +1184,4 @@ DB_TYPE=sqlite
 | 1.7 | 2026-06-23 | LTS Engineering Team | 플러그어블 DB 백엔드 아키텍처: BaseDatabase 추상 클래스, JsonDatabase/MongoDatabase 분리, db/index.js 팩토리, constants.js 공유, db.js shim |
 | 1.8 | 2026-06-23 | LTS Engineering Team | DB_TYPE=mongodb 시작 시 JSON fallback 완전 제거(서버 시작 거부) · mongoDbService 5초 keep-alive 핑 + 선형 back-off 재연결 Retry 추가 |
 | 1.9 | 2026-06-25 | LTS Engineering Team | `queryAsync()` 비동기 직접 조회 API 추가 — `BaseDatabase`: 기본 구현(in-memory sort/slice); `MongoDatabase`: MongoDB 직접 조회(연결 해제 시 in-memory fallback); `mongoDbService.findDirect()` 신규. `TABLES` 누락 보완 (`faceTrajectories`, `tc_results`); `onvif_snapshots` 는 frameData 블롭 크기로 in-memory hydration 영구 제외, `queryAsync()` 로 요청 시점 직접 조회. `LOAD_LIMITS`에 `faceTrajectories`(5000), `tc_results`(10000) 추가. |
+| 2.0 | 2026-06-26 | LTS Engineering Team | §7 Startup Sequence 개정: DB_TYPE=mongodb 시 MongoDB 미연결 → process.exit(1) (lts.json fallback 완전 제거); §13 Error Handling 업데이트; ensureMongoDB() index.js에서 initDB() 전 호출 명시 |

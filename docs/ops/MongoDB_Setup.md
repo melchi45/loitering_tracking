@@ -173,20 +173,32 @@ npm start
 
 Confirm in logs (`/tmp/lts.log`):
 ```
+[MongoDB] 127.0.0.1:27017 — 실행 중
 [MongoDB] connected → mongodb://localhost:27017/lts
-[DB] Storage mode: MongoDB (writes MongoDB-only; JSON written only on disconnect)
-[Server] Starting 9 registered camera pipeline(s)
+[DB] Storage mode: MongoDB
 [Server] Loitering Tracking System backend listening on port 3080
 ```
 
-> **Auto-start check**: When `DB_TYPE=mongodb` is set, the server runs `ensureMongodb.js` on startup. It TCP-probes the configured host/port. If MongoDB is down, it attempts `sudo systemctl restart mongod` and waits up to 20 s. If MongoDB is not installed, it prints a platform-specific installation guide. See `server/src/scripts/ensureMongodb.js`.
+### MongoDB 가용성 확인 동작 (Startup Validation)
+
+`DB_TYPE=mongodb`이면 서버는 `initDB()` 호출 **전**에 반드시 `ensureMongoDB()`를 실행합니다.
+
+| 상황 | 동작 |
+|---|---|
+| `MONGODB_URI` 미설정 | `[FATAL]` 배너 출력 → `process.exit(1)` |
+| 원격 URI (Atlas / SRV / 외부 IP) | TCP probe 생략 → `MongoDatabase.init()`에서 5 s timeout 내 연결 시도; 실패 시 `process.exit(1)` |
+| 로컬 MongoDB 실행 중 | 정상 진행 |
+| 로컬 MongoDB 중지됨 (mongod 설치됨) | `systemctl start mongod` 자동 시도 → 20 s 대기 → 성공 시 정상 진행; 실패 시 `process.exit(1)` |
+| 로컬 MongoDB 미설치 | 플랫폼별 설치 가이드 출력 → `process.exit(1)` |
+
+> **중요**: `DB_TYPE=mongodb`에서는 어떤 경우에도 `lts.json` fallback으로 서버가 시작되지 않습니다. MongoDB는 필수 전제조건입니다.
 
 ## Storage Mode Comparison
 
-| Mode | `DB_TYPE` | Persistence | Best For |
-|---|:---:|---|---|
-| JSON (default) | `json` | `server/storage/lts.json` (always written) | Dev / single-node |
-| MongoDB | `mongodb` | MongoDB collections (primary); `lts.json` written only if MongoDB disconnects | Production / multi-node |
+| Mode | `DB_TYPE` | Persistence | Startup | Best For |
+|---|:---:|---|---|---|
+| JSON (default) | `json` | `server/storage/lts.json` (always written) | 항상 성공 | Dev / single-node / offline |
+| MongoDB | `mongodb` | MongoDB collections (primary); `lts.json` 미사용 | MongoDB 미연결 시 `process.exit(1)` | Production / multi-node |
 
 ## Troubleshooting
 
@@ -195,7 +207,7 @@ Confirm in logs (`/tmp/lts.log`):
 | `mongod: NOT FOUND` after install | PATH not refreshed | Run `hash -r` or open a new terminal |
 | `AVX` error on start | CPU lacks AVX support | Use MongoDB 4.4 instead (does not require AVX) |
 | Data lost after server restart | `STORAGE_PATH` resolves to wrong directory | Ensure `STORAGE_PATH=./storage` and server cwd = `server/`; verify with `grep STORAGE /tmp/lts.log` |
-| `[DB] MongoDB ... empty — seeding from JSON` | Collection empty on first start | Normal behaviour — JSON fallback seeds MongoDB automatically |
+| 서버 시작 직후 `[FATAL] DB_TYPE=mongodb — MongoDB에 연결할 수 없어 서버를 시작할 수 없습니다.` | MongoDB 미실행 또는 MONGODB_URI 미설정 | `sudo systemctl start mongod` 실행 후 재시작; 또는 `.env`에서 `DB_TYPE=json`으로 변경 |
 | `[DB] JSON persist error: Invalid string length` | In-memory store exceeded V8 JSON string limit | Switch to `DB_TYPE=mongodb` or check `TABLE_ROW_CAPS` in `db.js`; `faceMatchHistory` must not store base64 image data |
 | `install_db` fails with `Authentication failed` | Wrong admin credentials | Verify with `mongosh --host HOST -u ADMIN_USER -p` |
 | `install_db` fails with `Connection refused` | MongoDB not listening on host:port | Check `sudo systemctl status mongod` on the remote server; verify firewall allows port 27017 |
@@ -227,3 +239,4 @@ MongoDB 모드에서 MongoDB 연결이 끊긴 경우 `JSON_FALLBACK_SKIP` 집합
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — MongoDB 5.0 installation and migration guide for Ubuntu 18.04 |
 | 1.1 | 2026-06-09 | LTS Engineering Team | Add `npm run install_db` script documentation, TABLE_ROW_CAPS reference, extended troubleshooting |
 | 1.2 | 2026-06-18 | LTS Engineering Team | MongoDB-only 쓰기 모드 반영 (JSON은 disconnect 시만 쓰기), MONGO_ONLY_TABLES → JSON_FALLBACK_SKIP, ensureMongodb.js 자동 시작 설명 추가 |
+| 1.3 | 2026-06-26 | LTS Engineering Team | Step 5 개정: Startup Validation 표 추가 (DB_TYPE=mongodb → MongoDB 미연결 시 process.exit(1)); Storage Mode Comparison 표 개정; Troubleshooting 항목 추가 |

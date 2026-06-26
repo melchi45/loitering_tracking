@@ -7,8 +7,9 @@
  * 중지된 경우 자동으로 재시작을 시도합니다.
  * MongoDB가 설치되지 않은 경우 설치 가이드를 출력합니다.
  *
- * - 원격 URI(Atlas, SRV, 외부 IP): 관리 불가이므로 확인만 건너뜁니다.
- * - 자동 시작 실패 시 서버는 lts.json fallback으로 계속 시작됩니다.
+ * - 원격 URI(Atlas, SRV, 외부 IP): TCP 확인을 건너뜁니다 — MongoDatabase.init()이 처리합니다.
+ * - 로컬 MongoDB 재시작 실패 시 서버는 process.exit(1)로 즉시 종료됩니다.
+ *   DB_TYPE=mongodb에서 lts.json fallback은 허용되지 않습니다.
  */
 
 const net             = require('net');
@@ -132,6 +133,24 @@ function printInstallGuide(platform) {
   console.error('');
 }
 
+// ── 치명적 오류 배너 출력 후 종료 ────────────────────────────────────────────
+
+function fatalExit(reason) {
+  const line = '═'.repeat(62);
+  console.error('');
+  console.error(line);
+  console.error('  [FATAL] DB_TYPE=mongodb — MongoDB에 연결할 수 없어 서버를 시작할 수 없습니다.');
+  console.error('');
+  console.error(`  원인: ${reason}`);
+  console.error('');
+  console.error('  해결 방법:');
+  console.error('    1. MongoDB를 시작하세요:  sudo systemctl start mongod');
+  console.error('    2. 또는 .env에서  DB_TYPE=json  으로 변경하세요.');
+  console.error(line);
+  console.error('');
+  process.exit(1);
+}
+
 // ── systemctl 재시작 시도 ─────────────────────────────────────────────────────
 
 async function trySystemctlStart() {
@@ -161,20 +180,23 @@ async function tryBrewStart() {
 
 /**
  * DB_TYPE=mongodb 일 때 로컬 MongoDB 상태를 확인하고 필요 시 재시작합니다.
- * 실패해도 예외를 던지지 않습니다 — 서버는 lts.json fallback으로 계속 시작됩니다.
+ *
+ * 성공: 정상 반환 (서버 시작 계속)
+ * 실패: process.exit(1) — lts.json fallback 없음.
+ *        DB_TYPE=mongodb를 선택한 이상 MongoDB는 필수 전제조건입니다.
  */
 async function ensureMongoDB() {
   if (process.env.DB_TYPE !== 'mongodb') return;
 
   const uri = (process.env.MONGODB_URI || '').trim();
   if (!uri) {
-    console.warn('[MongoDB] DB_TYPE=mongodb 이지만 MONGODB_URI가 설정되지 않았습니다 — lts.json으로 fallback됩니다.');
-    return;
+    fatalExit('MONGODB_URI가 server/.env에 설정되어 있지 않습니다.');
   }
 
   const parsed = parseMongoHost(uri);
   if (!parsed || !isLocalHost(parsed.host)) {
-    // 원격 MongoDB(Atlas 등): 로컬 관리 불가 — 연결은 db.js에서 처리
+    // 원격 MongoDB(Atlas, SRV, 외부 IP): TCP 관리 불가 — MongoDatabase.init()이 연결 실패 시 throw
+    console.log('[MongoDB] 원격 URI 감지 — 연결 확인은 MongoDatabase.init()에서 수행합니다.');
     return;
   }
 
@@ -194,8 +216,7 @@ async function ensureMongoDB() {
   const mongodBin = mongodInstalledPath();
   if (!mongodBin) {
     printInstallGuide(platform);
-    console.warn('[MongoDB] 서버는 lts.json fallback으로 계속 시작됩니다.');
-    return;
+    fatalExit(`mongod 바이너리를 찾을 수 없습니다 (${host}:${port} 응답 없음).`);
   }
 
   // 3. 재시작 시도
@@ -223,29 +244,26 @@ async function ensureMongoDB() {
         return;
       }
     }
-    console.warn(`[MongoDB] 재시작 명령은 성공했지만 ${host}:${port} 응답 없음 — mongod 로그를 확인하세요.`);
-    console.warn('[MongoDB] 서버는 lts.json fallback으로 계속 시작됩니다.');
-    return;
+    fatalExit(`재시작 명령은 성공했지만 ${host}:${port}가 20초 내에 응답하지 않았습니다. mongod 로그를 확인하세요.`);
   }
 
-  // 4. 자동 시작 실패 — 수동 안내
+  // 4. 자동 시작 실패 — 수동 명령 안내 후 종료
   const line = '━'.repeat(60);
-  console.warn('');
-  console.warn(line);
-  console.warn('  [MongoDB] 자동 시작에 실패했습니다. 수동으로 시작해주세요:');
-  console.warn('');
+  console.error('');
+  console.error(line);
+  console.error('  [MongoDB] 자동 시작에 실패했습니다. 수동으로 시작해주세요:');
+  console.error('');
   if (platform === 'linux') {
-    console.warn('    sudo systemctl start mongod');
-    console.warn('    sudo systemctl enable mongod   # 부팅 시 자동 시작');
+    console.error('    sudo systemctl start mongod');
+    console.error('    sudo systemctl enable mongod   # 부팅 시 자동 시작');
   } else if (platform === 'darwin') {
-    console.warn('    brew services start mongodb-community');
+    console.error('    brew services start mongodb-community');
   } else {
-    console.warn('    net start MongoDB');
+    console.error('    net start MongoDB');
   }
-  console.warn('');
-  console.warn('  서버는 lts.json fallback으로 계속 시작됩니다.');
-  console.warn(line);
-  console.warn('');
+  console.error(line);
+  console.error('');
+  fatalExit(`자동 시작 실패 — ${host}:${port}에 연결할 수 없습니다.`);
 }
 
 module.exports = { ensureMongoDB };

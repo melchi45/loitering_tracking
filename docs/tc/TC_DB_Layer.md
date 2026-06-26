@@ -74,8 +74,8 @@
 | FR-STORAGE-061 | TC-G-002 |
 | FR-STORAGE-062 | TC-G-003 |
 | FR-STORAGE-063 | TC-G-004 |
-| FR-STORAGE-070 | TC-H-001 |
-| FR-STORAGE-071 | TC-H-002 |
+| FR-STORAGE-070 | TC-C-004 |
+| FR-STORAGE-071 | TC-C-005 |
 | FR-STORAGE-072 | TC-H-003 |
 | FR-STORAGE-073 | TC-H-004 |
 | FR-STORAGE-074 | TC-H-005 |
@@ -434,6 +434,51 @@ test/fixtures/
 1. Returns `false`.
 2. Returns `true`.
 3. Returns `false`.
+
+---
+
+### TC-C-004 — `DB_TYPE=mongodb` 시 MongoDB 미연결 → 서버 시작 거부
+
+| | |
+|---|---|
+| **ID** | TC-C-004 |
+| **SRS Ref** | FR-STORAGE-070 |
+| **Priority** | P1 |
+| **Type** | Integration (subprocess) |
+
+**Preconditions**: MongoDB가 실행되지 않은 상태. `MONGODB_URI=mongodb://127.0.0.1:19999/lts` (사용하지 않는 포트).
+
+**Steps**:
+1. `DB_TYPE=mongodb`, `MONGODB_URI=mongodb://127.0.0.1:19999/lts`로 서버 프로세스를 `child_process.spawn()`으로 시작.
+2. 프로세스가 종료될 때까지 대기 (최대 30 s).
+3. 종료 코드와 stderr를 수집.
+
+**Expected Results**:
+- 프로세스가 `exit code 1`로 종료된다.
+- stderr에 `[FATAL]` 및 `DB_TYPE=mongodb` 문자열이 포함된다.
+- stderr에 `process.exit(0)` 또는 `server.listen` 메시지가 **포함되지 않는다** (서버가 실제로 기동되지 않음).
+
+---
+
+### TC-C-005 — `DB_TYPE=mongodb` + `MONGODB_URI` 미설정 → 서버 시작 거부
+
+| | |
+|---|---|
+| **ID** | TC-C-005 |
+| **SRS Ref** | FR-STORAGE-071 |
+| **Priority** | P1 |
+| **Type** | Integration (subprocess) |
+
+**Preconditions**: `MONGODB_URI` 환경변수 미설정.
+
+**Steps**:
+1. `DB_TYPE=mongodb` + `MONGODB_URI` 없이 서버 프로세스 시작.
+2. 프로세스 종료 대기 (최대 10 s).
+3. 종료 코드와 stderr 수집.
+
+**Expected Results**:
+- 프로세스가 `exit code 1`로 종료된다.
+- stderr에 `[FATAL]` 및 `MONGODB_URI` 문자열이 포함된다.
 
 ---
 
@@ -1042,3 +1087,4 @@ Covers **NFR-STORE-015**, **NFR-STORE-016**, **NFR-STORE-017**.
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for DB Layer (JSON/MongoDB backends) |
+| 1.2 | 2026-06-26 | LTS Engineering Team | TC-C-004, TC-C-005 추가: DB_TYPE=mongodb 시 MongoDB 미연결/MONGODB_URI 미설정 → process.exit(1) 검증 |
