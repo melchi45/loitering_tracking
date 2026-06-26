@@ -88,6 +88,8 @@ async function detectCudaToolkit() {
     // 1) CUDA 설치 시 자동 설정되는 환경변수 우선 탐색
     const cudaEnvCandidates = [
       process.env.CUDA_PATH,
+      process.env.CUDA_PATH_V12_8,
+      process.env.CUDA_PATH_V12_7,
       process.env.CUDA_PATH_V12_6,
       process.env.CUDA_PATH_V12_4,
       process.env.CUDA_PATH_V12_3,
@@ -110,7 +112,7 @@ async function detectCudaToolkit() {
     }
 
     // 2) 기본 설치 경로 버전별 스캔
-    const CUDA_VERSIONS = ['12.6', '12.5', '12.4', '12.3', '12.2', '12.1', '12.0', '11.8', '11.7', '11.6'];
+    const CUDA_VERSIONS = ['12.8','12.7','12.6', '12.5', '12.4', '12.3', '12.2', '12.1', '12.0', '11.8', '11.7', '11.6'];
     const BASE_DIR = 'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA';
     for (const ver of CUDA_VERSIONS) {
       const nvccPath = path.join(BASE_DIR, `v${ver}`, 'bin', 'nvcc.exe');
@@ -182,6 +184,8 @@ async function detectCuDNN() {
     // 1) CUDA_PATH 환경변수 경로
     const cudaEnvCandidates = [
       process.env.CUDA_PATH,
+      process.env.CUDA_PATH_V12_8,
+      process.env.CUDA_PATH_V12_7,
       process.env.CUDA_PATH_V12_6,
       process.env.CUDA_PATH_V12_4,
       process.env.CUDA_PATH_V12_3,
@@ -200,7 +204,7 @@ async function detectCuDNN() {
     }
 
     // 2) 기본 설치 경로 버전별 스캔
-    const CUDA_VERSIONS = ['12.6', '12.5', '12.4', '12.3', '12.2', '12.1', '12.0', '11.8', '11.7', '11.6'];
+    const CUDA_VERSIONS = ['12.8','12.7','12.6', '12.5', '12.4', '12.3', '12.2', '12.1', '12.0', '11.8', '11.7', '11.6'];
     const BASE_DIR = 'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA';
     for (const ver of CUDA_VERSIONS) {
       for (const dll of CUDNN_DLLS) {
