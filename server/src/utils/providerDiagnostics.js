@@ -145,48 +145,157 @@ async function detectCudaToolkit() {
 
 // ── cuDNN ─────────────────────────────────────────────────────────────────────
 
+/**
+ * cuDNN 감지 전략
+ *
+ * cuDNN 8.x: 단일 라이브러리  (libcudnn.so.8  / cudnn64_8.dll)
+ * cuDNN 9.x: 분리 라이브러리  (libcudnn.so.9  / cudnn64_9.dll  또는
+ *            cudnn_ops.dll, cudnn_cnn.dll, cudnn_graph.dll — EXE 설치)
+ *
+ * 우선순위: 9.x → 8.x (최신 버전 우선 감지)
+ */
 async function detectCuDNN() {
   if (IS_LINUX) {
-    const searchPaths = [
-      '/usr/lib/x86_64-linux-gnu/libcudnn.so.8',
-      '/usr/lib/x86_64-linux-gnu/libcudnn.so',
-      '/usr/local/cuda/lib64/libcudnn.so.8',
-      '/usr/local/cuda/lib64/libcudnn.so',
-      '/usr/lib/libcudnn.so',
+    // ── Linux cuDNN 검색 경로 ──────────────────────────────────────────────
+    // 아키텍처별 lib 경로: x86_64, aarch64(Jetson/ARM)
+    const ARCH_DIRS = [
+      '/usr/lib/x86_64-linux-gnu',
+      '/usr/lib/aarch64-linux-gnu',
+      '/usr/lib/sbsa-linux-gnu',   // ARM Server Base System Architecture
+      '/usr/lib',
     ];
-    for (const p of searchPaths) {
-      if (fs.existsSync(p)) return { available: true, path: p };
+
+    // 버전별 CUDA prefix (nvcc 경로 패턴에 맞게 자동 확장)
+    const CUDA_PREFIXES = [
+      '/usr/local/cuda',
+      '/usr/local/cuda-12.8',
+      '/usr/local/cuda-12.7',
+      '/usr/local/cuda-12.6',
+      '/usr/local/cuda-12.5',
+      '/usr/local/cuda-12.4',
+      '/usr/local/cuda-12.3',
+      '/usr/local/cuda-12.2',
+      '/usr/local/cuda-12.1',
+      '/usr/local/cuda-12.0',
+      '/usr/local/cuda-11.8',
+      '/usr/local/cuda-11.7',
+    ];
+
+    // 9.x 먼저, 8.x 후순위
+    const SO_NAMES = [
+      'libcudnn.so.9',
+      'libcudnn_ops.so.9',       // cuDNN 9.x 분리 라이브러리
+      'libcudnn.so.8',
+      'libcudnn_ops_infer.so.8', // cuDNN 8.x 분리 빌드 일부
+      'libcudnn.so',             // 버전 symlink 없을 때 fallback
+    ];
+
+    // 1) 직접 경로 탐색 (arch dirs × cuda prefixes × so names)
+    for (const soName of SO_NAMES) {
+      for (const archDir of ARCH_DIRS) {
+        const p = `${archDir}/${soName}`;
+        if (fs.existsSync(p)) {
+          const version = _cudnnVersionFromSoName(soName);
+          return { available: true, path: p, version };
+        }
+      }
+      for (const prefix of CUDA_PREFIXES) {
+        const p = `${prefix}/lib64/${soName}`;
+        if (fs.existsSync(p)) {
+          const version = _cudnnVersionFromSoName(soName);
+          return { available: true, path: p, version };
+        }
+      }
     }
-    const ldout = _run('ldconfig -p 2>/dev/null | grep libcudnn');
+
+    // 2) ldconfig 캐시 탐색 (설치 경로가 비표준인 경우)
+    const ldout = _run('ldconfig -p 2>/dev/null | grep -E "libcudnn\\.so\\.(9|8)|libcudnn_ops\\.so\\.(9|8)"');
     if (ldout) {
-      const p = ldout.split('=>').pop()?.trim();
-      return { available: true, path: p || 'ldconfig entry' };
+      const firstLine = ldout.split('\n')[0];
+      const p = firstLine.split('=>').pop()?.trim();
+      const version = firstLine.includes('.so.9') ? '9.x' : '8.x';
+      return { available: true, path: p || 'ldconfig entry', version };
     }
+
+    // 3) find로 비표준 위치 탐색 (느리지만 마지막 수단)
+    const findOut = _run(
+      'find /usr /opt /home -maxdepth 8 -name "libcudnn.so.9" -o -name "libcudnn.so.8" 2>/dev/null | head -1',
+      8000
+    );
+    if (findOut) {
+      const version = findOut.includes('.so.9') ? '9.x' : '8.x';
+      return { available: true, path: findOut.trim(), version };
+    }
+
     return {
       available: false,
-      reason: 'libcudnn.so 미감지',
+      reason: 'libcudnn.so.9 / libcudnn.so.8 미감지 (cuDNN 9.x 또는 8.x 필요)',
       installCmds: [
-        '# Ubuntu/Debian cuDNN 설치:',
+        '# ── cuDNN 9.x 설치 (CUDA 12.x 권장) ──',
+        '# 방법 1: apt (Ubuntu 22.04/24.04 — CUDA 저장소 등록 후):',
+        'sudo apt-get install -y libcudnn9-cuda-12 libcudnn9-dev-cuda-12',
+        '',
+        '# 방법 2: tar.xz 수동 설치 (https://developer.nvidia.com/cudnn):',
+        'tar -xf cudnn-linux-x86_64-9.x.x_cuda12-archive.tar.xz',
+        'sudo cp cudnn-linux-x86_64-9.x.x_cuda12-archive/include/cudnn*.h /usr/local/cuda/include/',
+        'sudo cp cudnn-linux-x86_64-9.x.x_cuda12-archive/lib/libcudnn* /usr/local/cuda/lib64/',
+        'sudo ldconfig',
+        '',
+        '# 방법 3: cuDNN 8.x (구버전):',
         'sudo apt-get install -y libcudnn8 libcudnn8-dev',
-        '# 또는 https://developer.nvidia.com/cudnn 에서 수동 설치',
       ],
     };
   }
 
   if (IS_WIN) {
-    // cuDNN 8.x: cudnn64_8.dll / cuDNN 9.x: cudnn64_9.dll, cudnn_ops.dll(신규 명명)
-    const CUDNN_DLLS = [
-      'cudnn64_9.dll',
-      'cudnn_ops.dll',          // cuDNN 9.x 분리 DLL (ops 핵심 라이브러리)
-      'cudnn64_8.dll',
-    ];
+    // ── Windows cuDNN 검색 ─────────────────────────────────────────────────
+    //
+    // 설치 방식에 따라 DLL 위치가 다름:
+    //   [zip 방식]  CUDA bin에 복사 → C:\...\CUDA\v12.8\bin\cudnn64_9.dll
+    //   [EXE 방식]  별도 경로 설치  → C:\Program Files\NVIDIA\CUDNN\v9.x.x\bin\12.x\cudnn64_9.dll
+    //   [System32]  일부 설치 스크립트가 복사  → C:\Windows\System32\cudnn64_9.dll
+    //
+    // cuDNN 9.x DLL 목록 (모든 변형 포함):
+    //   cudnn64_9.dll          — 단일 통합 DLL (zip 설치, 일부 9.x)
+    //   cudnn_ops.dll          — 분리 ops 라이브러리 (EXE 설치 9.x)
+    //   cudnn_cnn.dll          — 분리 CNN 라이브러리 (EXE 설치 9.x)
+    //   cudnn_graph.dll        — 분리 그래프 라이브러리 (EXE 설치 9.x)
+    // cuDNN 8.x:
+    //   cudnn64_8.dll
 
-    // 1) CUDA_PATH 환경변수 경로
+    const CUDNN9_DLLS = ['cudnn64_9.dll', 'cudnn_ops.dll', 'cudnn_cnn.dll', 'cudnn_graph.dll'];
+    const CUDNN8_DLLS = ['cudnn64_8.dll'];
+    const ALL_DLLS    = [...CUDNN9_DLLS, ...CUDNN8_DLLS];
+
+    const CUDA_VERSIONS = [
+      '12.8','12.7','12.6','12.5','12.4','12.3','12.2','12.1','12.0',
+      '11.8','11.7','11.6',
+    ];
+    const CUDA_BASE = 'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA';
+
+    // cuDNN 9.x EXE 설치 경로 (독립 설치 관리자 방식)
+    // 패턴: C:\Program Files\NVIDIA\CUDNN\v{major}.{minor}.{patch}\bin\{cuda_ver}\
+    const CUDNN_EXE_BASE = 'C:\\Program Files\\NVIDIA\\CUDNN';
+    const CUDNN9_MAJOR_VERS = ['9.8','9.7','9.6','9.5','9.4','9.3','9.2','9.1','9.0'];
+    const CUDA_SHORT_VERS   = ['12.8','12.7','12.6','12.5','12.4','12.3','12.2','12.1'];
+
+    function _checkWinDll(basePath, dll) {
+      const p = path.join(basePath, dll);
+      if (fs.existsSync(p)) {
+        const version = dll.includes('9') || dll === 'cudnn_ops.dll'
+          || dll === 'cudnn_cnn.dll' || dll === 'cudnn_graph.dll' ? '9.x' : '8.x';
+        return { available: true, path: p, version };
+      }
+      return null;
+    }
+
+    // 1) CUDA_PATH 환경변수 → bin/ 탐색
     const cudaEnvCandidates = [
       process.env.CUDA_PATH,
       process.env.CUDA_PATH_V12_8,
       process.env.CUDA_PATH_V12_7,
       process.env.CUDA_PATH_V12_6,
+      process.env.CUDA_PATH_V12_5,
       process.env.CUDA_PATH_V12_4,
       process.env.CUDA_PATH_V12_3,
       process.env.CUDA_PATH_V12_2,
@@ -197,51 +306,114 @@ async function detectCuDNN() {
     ].filter(Boolean);
 
     for (const base of cudaEnvCandidates) {
-      for (const dll of CUDNN_DLLS) {
-        const dllPath = path.join(base, 'bin', dll);
-        if (fs.existsSync(dllPath)) return { available: true, path: dllPath };
+      for (const dll of ALL_DLLS) {
+        const r = _checkWinDll(path.join(base, 'bin'), dll);
+        if (r) return r;
       }
     }
 
-    // 2) 기본 설치 경로 버전별 스캔
-    const CUDA_VERSIONS = ['12.8','12.7','12.6', '12.5', '12.4', '12.3', '12.2', '12.1', '12.0', '11.8', '11.7', '11.6'];
-    const BASE_DIR = 'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA';
+    // 2) CUDA 기본 설치 경로 버전별 스캔 → bin/
     for (const ver of CUDA_VERSIONS) {
-      for (const dll of CUDNN_DLLS) {
-        const dllPath = path.join(BASE_DIR, `v${ver}`, 'bin', dll);
-        if (fs.existsSync(dllPath)) return { available: true, path: dllPath };
+      for (const dll of ALL_DLLS) {
+        const r = _checkWinDll(path.join(CUDA_BASE, `v${ver}`, 'bin'), dll);
+        if (r) return r;
       }
     }
 
-    // 3) System32 (일부 설치 방법에서 복사)
-    for (const dll of CUDNN_DLLS) {
-      const dllPath = path.join('C:\\Windows\\System32', dll);
-      if (fs.existsSync(dllPath)) return { available: true, path: dllPath };
+    // 3) cuDNN EXE 독립 설치 경로 스캔
+    //    C:\Program Files\NVIDIA\CUDNN\v9.x.x\bin\12.x\
+    for (const cudnnVer of CUDNN9_MAJOR_VERS) {
+      // EXE 설치 시 패치 버전이 다를 수 있으므로 폴더 목록 확인
+      const cudnnBase = path.join(CUDNN_EXE_BASE, `v${cudnnVer}`);
+      if (fs.existsSync(cudnnBase)) {
+        // 하위 bin\{cudaVer}\ 탐색
+        for (const cudaVer of CUDA_SHORT_VERS) {
+          const binDir = path.join(cudnnBase, 'bin', cudaVer);
+          for (const dll of CUDNN9_DLLS) {
+            const r = _checkWinDll(binDir, dll);
+            if (r) return r;
+          }
+        }
+        // bin\ 직접 (일부 설치)
+        for (const dll of CUDNN9_DLLS) {
+          const r = _checkWinDll(path.join(cudnnBase, 'bin'), dll);
+          if (r) return r;
+        }
+      }
+    }
+    // 패치 버전 포함 폴더 동적 스캔 (예: v9.8.0, v9.8.1 ...)
+    if (fs.existsSync(CUDNN_EXE_BASE)) {
+      try {
+        const entries = fs.readdirSync(CUDNN_EXE_BASE).filter(e => e.startsWith('v9.'));
+        for (const entry of entries) {
+          for (const cudaVer of CUDA_SHORT_VERS) {
+            const binDir = path.join(CUDNN_EXE_BASE, entry, 'bin', cudaVer);
+            for (const dll of CUDNN9_DLLS) {
+              const r = _checkWinDll(binDir, dll);
+              if (r) return r;
+            }
+          }
+          for (const dll of CUDNN9_DLLS) {
+            const r = _checkWinDll(path.join(CUDNN_EXE_BASE, entry, 'bin'), dll);
+            if (r) return r;
+          }
+        }
+      } catch {}
     }
 
-    // 4) where 명령어로 PATH 탐색 (nul로 stderr 억제)
-    const whereResult = _run('where cudnn64_9.dll 2>nul')
-      || _run('where cudnn_ops.dll 2>nul')
-      || _run('where cudnn64_8.dll 2>nul');
-    if (whereResult) {
-      return { available: true, path: whereResult.split('\n')[0].trim() };
+    // 4) System32 (PATH 복사 방식)
+    for (const dll of ALL_DLLS) {
+      const r = _checkWinDll('C:\\Windows\\System32', dll);
+      if (r) return r;
+    }
+
+    // 5) where 명령어 (PATH 전체 탐색)
+    for (const dll of ALL_DLLS) {
+      const whereOut = _run(`where ${dll} 2>nul`);
+      if (whereOut) {
+        const p = whereOut.split('\n')[0].trim();
+        const version = dll.includes('9') || dll === 'cudnn_ops.dll'
+          || dll === 'cudnn_cnn.dll' || dll === 'cudnn_graph.dll' ? '9.x' : '8.x';
+        return { available: true, path: p, version };
+      }
     }
 
     return {
       available: false,
-      reason: 'cudnn64_*.dll / cudnn_ops.dll 미감지 (cuDNN 8.x / 9.x)',
+      reason: 'cudnn64_9.dll / cudnn_ops.dll / cudnn64_8.dll 미감지 (cuDNN 9.x 또는 8.x)',
       installCmds: [
-        '# Windows cuDNN 설치:',
-        '# 1. https://developer.nvidia.com/cudnn 에서 cuDNN 다운로드 (NVIDIA 계정 필요)',
-        '# 2a. [zip 방식] 압축 파일을 CUDA 설치 경로에 덮어쓰기 압축 해제:',
-        '#     C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\vXX.X\\',
-        '# 2b. [exe 방식 — cuDNN 9.x] 설치 파일 실행 후 위저드 진행',
-        '# 3. 설치 디렉토리 bin 경로가 시스템 PATH에 포함되어 있는지 확인',
+        '# ── Windows cuDNN 설치 ──',
+        '# NVIDIA 계정 필요: https://developer.nvidia.com/cudnn',
+        '',
+        '# 방법 A: zip 파일 (수동 복사 — 전통적 방식):',
+        '#  1. "Local Installer for Windows (Zip)" 다운로드',
+        '#  2. 압축 해제 후 아래 경로로 파일 복사:',
+        '#     cudnn-windows-x86_64-9.x.x_cuda12-archive\\bin\\*',
+        '#       → C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.8\\bin\\',
+        '#     cudnn-windows-x86_64-9.x.x_cuda12-archive\\include\\*',
+        '#       → C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.8\\include\\',
+        '#     cudnn-windows-x86_64-9.x.x_cuda12-archive\\lib\\*',
+        '#       → C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.8\\lib\\',
+        '',
+        '# 방법 B: EXE 설치 관리자 (cuDNN 9.x 권장):',
+        '#  1. "Local Installer for Windows (Exe)" 다운로드',
+        '#  2. 설치 후 DLL 경로가 PATH에 포함되는지 확인:',
+        '#     C:\\Program Files\\NVIDIA\\CUDNN\\v9.x.x\\bin\\12.8\\',
+        '',
+        '# 설치 확인 (PowerShell):',
+        '#  where.exe cudnn64_9.dll',
+        '#  where.exe cudnn_ops.dll',
       ],
     };
   }
 
   return { available: false, reason: `cuDNN 감지 미지원 플랫폼: ${process.platform}` };
+}
+
+/** libcudnn.so.N 파일명에서 major 버전 추출 */
+function _cudnnVersionFromSoName(soName) {
+  const m = soName.match(/\.so\.(\d+)/);
+  return m ? `${m[1]}.x` : 'unknown';
 }
 
 // ── ORT Provider checks ───────────────────────────────────────────────────────

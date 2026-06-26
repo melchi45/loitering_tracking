@@ -56,7 +56,8 @@ async function main() {
 
   // ── cuDNN ─────────────────────────────────────────────────────────────────
   if (diag.cudnn.available) {
-    console.log(`${ICONS.ok} cuDNN:            ${diag.cudnn.path}`);
+    const ver = diag.cudnn.version ? `cuDNN ${diag.cudnn.version}  ` : '';
+    console.log(`${ICONS.ok} cuDNN:            ${ver}→ ${diag.cudnn.path}`);
   } else {
     console.log(`${ICONS.fail} cuDNN:            ${diag.cudnn.reason}`);
   }
