@@ -473,6 +473,7 @@ Claude에서 직접 사용 가능한 LTS-2026 MCP 도구 (v1.1 — 21종):
 | `SERVER_MODE` 동작 변경 | `docs/design/Design_Server_Architecture.md`, `CLAUDE.md` 개발 명령어 |
 | MediaMTX 설정 변경 (`mediamtx.yml`) | `docs/design/Design_Server_Architecture.md` 포트 요약 |
 | MCP 도구 추가/삭제 | `CLAUDE.md` MCP 도구 목록, `docs/design/Design_LLM_MCP_Server.md` |
+| TC 스위트 레지스트리 변경 (SUITES 추가/삭제/플래그 변경) | `test/tc_runner_cli.js`와 `server/src/services/TcRunnerService.js` **동시** 수정, `docs/design/Design_TC_Mode_Execution_Policy.md` §5 분류표 업데이트, `api-testing/SKILL.md` (.claude + .github 양쪽) 업데이트 |
 
 ### 문서 → 코드 방향 (문서/스킬 변경 시)
 
@@ -487,6 +488,7 @@ Claude에서 직접 사용 가능한 LTS-2026 MCP 도구 (v1.1 — 21종):
 1. `.claude/skills/`와 `.github/skills/`는 **항상 동일**해야 합니다 — 한쪽 수정 시 반대쪽도 동시 수정
 2. `CLAUDE.md`와 `.github/copilot-instructions.md`의 API 표·이벤트 표·명령어는 **코드 실제 상태와 항상 일치**
 3. `docs/ops/MongoDB_Setup.md`와 `docker-deploy/SKILL.md`의 MongoDB 섹션은 `server/src/db.js`, `installDb.js`와 동기화
+4. `test/tc_runner_cli.js`와 `server/src/services/TcRunnerService.js`의 `SUITES` 배열은 **항상 동일** — TC 실행 정책 변경 시 `docs/design/Design_TC_Mode_Execution_Policy.md`와 `api-testing/SKILL.md`도 동시 업데이트
 
 ### 문서 개정 이력 (Revision History) 규칙
 
