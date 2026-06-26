@@ -204,10 +204,30 @@ function Get-DepTagOrNull([string]$ortRepoDir, [string]$depName) {
     catch { return $null }
 }
 
+# deps.txt 에서 태그 또는 커밋 해시 반환 (refs/tags/ 패턴 + /archive/HASH 패턴 지원)
+function Get-DepRefFromDeps([string]$ortRepoDir, [string]$depName) {
+    $depsFile = Join-Path $ortRepoDir "cmake\deps.txt"
+    if (-not (Test-Path $depsFile -PathType Leaf)) { return $null }
+    $pattern = "^" + [regex]::Escape($depName) + ";"
+    $line = Get-Content $depsFile | Where-Object { $_ -match $pattern } | Select-Object -First 1
+    if (-not $line) { return $null }
+    $url = ($line.Split(';'))[1]
+    # refs/tags 패턴
+    $m = [regex]::Match($url, 'refs/tags/([^/]+)\.(zip|tar\.gz)$')
+    if ($m.Success) { return $m.Groups[1].Value }
+    # 커밋 해시 패턴 (/archive/40hexchars.zip)
+    $m = [regex]::Match($url, '/archive/([0-9a-f]{40})\.(zip|tar\.gz)$')
+    if ($m.Success) { return $m.Groups[1].Value }
+    return $null
+}
+
 # FetchContent 네트워크 다운로드를 로컬 git clone 으로 대체하는 범용 함수
+# $depTag 에 40자 커밋 해시가 오면 git clone + checkout 으로 처리
 function Ensure-DepGitSource([string]$ortRepoDir, [string]$depName, [string]$gitUrl, [string]$depTag) {
+    $isCommitHash = $depTag -match '^[0-9a-f]{40}$'
+    $dirSuffix    = if ($isCommitHash) { $depTag.Substring(0, 12) } else { $depTag }
     $cacheRoot = Join-Path $ortRepoDir "_source_cache"
-    $depDir    = Join-Path $cacheRoot "$depName-$depTag"
+    $depDir    = Join-Path $cacheRoot "$depName-$dirSuffix"
 
     if (-not (Test-Path $cacheRoot -PathType Container)) {
         New-Item -ItemType Directory -Path $cacheRoot -Force | Out-Null
@@ -215,13 +235,18 @@ function Ensure-DepGitSource([string]$ortRepoDir, [string]$depName, [string]$git
 
     if (-not (Test-Path (Join-Path $depDir ".git") -PathType Container)) {
         if (Test-Path $depDir) { Remove-Item -Recurse -Force $depDir }
-        Write-Host "  [$depName] git clone --branch $depTag $gitUrl"
-        git clone --depth 1 --branch $depTag $gitUrl $depDir
+        if ($isCommitHash) {
+            Write-Host "  [$depName] git clone + checkout $($depTag.Substring(0,12))"
+            git clone $gitUrl $depDir
+            Push-Location $depDir
+            try { git checkout $depTag }
+            finally { Pop-Location }
+        } else {
+            Write-Host "  [$depName] git clone --branch $depTag"
+            git clone --depth 1 --branch $depTag $gitUrl $depDir
+        }
     } else {
-        Write-Host "  [$depName] existing git cache — refreshing tag $depTag"
-        Push-Location $depDir
-        try { git fetch --tags --prune; git checkout $depTag }
-        finally { Pop-Location }
+        Write-Host "  [$depName] existing git cache found (tag/ref: $dirSuffix)"
     }
     return $depDir
 }
@@ -470,14 +495,41 @@ if (-not $SkipBuild) {
     }
 
     # gsl (Microsoft GSL) — Cygwin patch.exe 권한 오류 우회: git clone 으로 patch step 건너뜀
-    $gslTag = Get-DepTagOrNull $OrtRepoDir "gsl"
-    if ($gslTag) {
-        Write-Host "  [gsl] tag from deps.txt: $gslTag"
-        $gslSourceDir = Ensure-DepGitSource $OrtRepoDir "gsl" "https://github.com/microsoft/GSL.git" $gslTag
-        $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_GSL=$($gslSourceDir -replace '\\','/')"
-    } else {
-        Write-Host "  [gsl] tag not found in deps.txt — FetchContent will download"
-    }
+    # ORT v1.26.0 은 deps.txt 미등록 — 알려진 버전 v4.0.0 을 fallback 으로 사용
+    $gslTag = Get-DepRefFromDeps $OrtRepoDir "GSL"
+    if (-not $gslTag) { $gslTag = Get-DepRefFromDeps $OrtRepoDir "gsl" }
+    if (-not $gslTag) { $gslTag = "v4.0.0" }  # cmake output 에서 확인된 버전
+    Write-Host "  [gsl] ref: $gslTag"
+    $gslSourceDir = Ensure-DepGitSource $OrtRepoDir "gsl" "https://github.com/microsoft/GSL.git" $gslTag
+    $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_GSL=$($gslSourceDir -replace '\\','/')"
+
+    # re2 (Google RE2)
+    $re2Tag = Get-DepRefFromDeps $OrtRepoDir "re2"
+    if (-not $re2Tag) { $re2Tag = "2024-07-02" }
+    Write-Host "  [re2] ref: $re2Tag"
+    $re2SourceDir = Ensure-DepGitSource $OrtRepoDir "re2" "https://github.com/google/re2.git" $re2Tag
+    $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_RE2=$($re2SourceDir -replace '\\','/')"
+
+    # googletest
+    $gtestTag = Get-DepRefFromDeps $OrtRepoDir "googletest"
+    if (-not $gtestTag) { $gtestTag = "v1.17.0" }
+    Write-Host "  [googletest] ref: $gtestTag"
+    $gtestSourceDir = Ensure-DepGitSource $OrtRepoDir "googletest" "https://github.com/google/googletest.git" $gtestTag
+    $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_GOOGLETEST=$($gtestSourceDir -replace '\\','/')"
+
+    # mp11 (Boost.Mp11)
+    $mp11Tag = Get-DepRefFromDeps $OrtRepoDir "mp11"
+    if (-not $mp11Tag) { $mp11Tag = "boost-1.82.0" }
+    Write-Host "  [mp11] ref: $mp11Tag"
+    $mp11SourceDir = Ensure-DepGitSource $OrtRepoDir "mp11" "https://github.com/boostorg/mp11.git" $mp11Tag
+    $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_MP11=$($mp11SourceDir -replace '\\','/')"
+
+    # pytorch_cpuinfo (커밋 해시 — Ensure-DepGitSource 가 git clone+checkout 으로 처리)
+    $cpuinfoRef = Get-DepRefFromDeps $OrtRepoDir "pytorch_cpuinfo"
+    if (-not $cpuinfoRef) { $cpuinfoRef = "403d652dca4c1046e8145950b1c0997a9f748b57" }
+    Write-Host "  [pytorch_cpuinfo] ref: $cpuinfoRef"
+    $cpuinfoSourceDir = Ensure-DepGitSource $OrtRepoDir "pytorch_cpuinfo" "https://github.com/pytorch/cpuinfo.git" $cpuinfoRef
+    $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_PYTORCH_CPUINFO=$($cpuinfoSourceDir -replace '\\','/')"
 
     if ($CudaArch) {
         $cmakeDefines += "CMAKE_CUDA_ARCHITECTURES=$CudaArch"
