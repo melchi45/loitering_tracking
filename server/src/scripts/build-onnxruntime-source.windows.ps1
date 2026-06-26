@@ -538,6 +538,50 @@ if (-not $SkipBuild) {
     $fbsSourceDir = Ensure-DepGitSource $OrtRepoDir "flatbuffers" "https://github.com/google/flatbuffers.git" $fbsTag
     $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_FLATBUFFERS=$($fbsSourceDir -replace '\\','/')"
 
+    # onnx — ORT v1.26.0 은 git submodule 이지만 cmake 가 FetchContent 를 사용함.
+    # 서브모듈이 존재하면 해당 경로를 직접 지정하고, 없으면 deps.txt 버전으로 clone.
+    $onnxSubmoduleDir = Join-Path $OrtRepoDir "cmake\external\onnx"
+    if (Test-Path (Join-Path $onnxSubmoduleDir "CMakeLists.txt") -PathType Leaf) {
+        Write-Host "  [onnx] using existing submodule: $($onnxSubmoduleDir -replace '\\','/')"
+        $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_ONNX=$($onnxSubmoduleDir -replace '\\','/')"
+    } else {
+        $onnxRef = Get-DepRefFromDeps $OrtRepoDir "onnx"
+        if (-not $onnxRef) { $onnxRef = "v1.17.0" }
+        Write-Host "  [onnx] submodule missing — git clone ref: $onnxRef"
+        $onnxSourceDir = Ensure-DepGitSource $OrtRepoDir "onnx" "https://github.com/onnx/onnx.git" $onnxRef
+        $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_ONNX=$($onnxSourceDir -replace '\\','/')"
+    }
+
+    # safeint (Microsoft SafeInt)
+    $safeintRef = Get-DepRefFromDeps $OrtRepoDir "safeint"
+    if ($safeintRef) {
+        Write-Host "  [safeint] ref: $safeintRef"
+        $safeintSourceDir = Ensure-DepGitSource $OrtRepoDir "safeint" "https://github.com/dcleblanc/SafeInt.git" $safeintRef
+        $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_SAFEINT=$($safeintSourceDir -replace '\\','/')"
+    } else {
+        Write-Host "  [safeint] not in deps.txt — FetchContent will download"
+    }
+
+    # eigen
+    $eigenRef = Get-DepRefFromDeps $OrtRepoDir "eigen"
+    if ($eigenRef) {
+        Write-Host "  [eigen] ref: $eigenRef"
+        $eigenSourceDir = Ensure-DepGitSource $OrtRepoDir "eigen" "https://gitlab.com/libeigen/eigen.git" $eigenRef
+        $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_EIGEN=$($eigenSourceDir -replace '\\','/')"
+    } else {
+        Write-Host "  [eigen] not in deps.txt — FetchContent will download"
+    }
+
+    # wil (Windows Implementation Library)
+    $wilRef = Get-DepRefFromDeps $OrtRepoDir "wil"
+    if ($wilRef) {
+        Write-Host "  [wil] ref: $wilRef"
+        $wilSourceDir = Ensure-DepGitSource $OrtRepoDir "wil" "https://github.com/microsoft/wil.git" $wilRef
+        $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_WIL=$($wilSourceDir -replace '\\','/')"
+    } else {
+        Write-Host "  [wil] not in deps.txt — FetchContent will download"
+    }
+
     if ($CudaArch) {
         $cmakeDefines += "CMAKE_CUDA_ARCHITECTURES=$CudaArch"
     }
