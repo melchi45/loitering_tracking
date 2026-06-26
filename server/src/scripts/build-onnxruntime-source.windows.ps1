@@ -425,7 +425,13 @@ if (-not $SkipBuild) {
         throw "build.bat not found: $buildBat"
     }
 
-    $cmakeDefines = @("onnxruntime_USE_FLASH_ATTENTION=OFF")
+    # CMAKE_CXX_STANDARD=20 을 명시 — cmake 캐시에 이전 값(17 등)이 잔류하면
+    # ORT 의 if(NOT DEFINED ...) 조건부 set이 무시되어 C++20 필수 체크가 실패함.
+    # -D 플래그로 전달하면 캐시값을 항상 덮어씀.
+    $cmakeDefines = @(
+        "onnxruntime_USE_FLASH_ATTENTION=OFF",
+        "CMAKE_CXX_STANDARD=20"
+    )
 
     $abseilTag = Get-AbseilTagFromDeps $OrtRepoDir
     Write-Host "  [Abseil] tag from deps.txt: $abseilTag"
@@ -452,14 +458,25 @@ if (-not $SkipBuild) {
         Write-Host "  [date] tag not found in deps.txt — FetchContent will download"
     }
 
-    # nlohmann/json — FetchContent zip 다운로드를 git clone 으로 대체
-    $jsonTag = Get-DepTagOrNull $OrtRepoDir "json"
+    # nlohmann/json — ORT FetchContent 이름은 "nlohmann_json" → 변수명 FETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON
+    $jsonTag = Get-DepTagOrNull $OrtRepoDir "nlohmann_json"
+    if (-not $jsonTag) { $jsonTag = Get-DepTagOrNull $OrtRepoDir "json" }  # fallback
     if ($jsonTag) {
-        Write-Host "  [json] tag from deps.txt: $jsonTag"
-        $jsonSourceDir = Ensure-DepGitSource $OrtRepoDir "json" "https://github.com/nlohmann/json.git" $jsonTag
-        $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_JSON=$($jsonSourceDir -replace '\\','/')"
+        Write-Host "  [nlohmann_json] tag from deps.txt: $jsonTag"
+        $jsonSourceDir = Ensure-DepGitSource $OrtRepoDir "nlohmann_json" "https://github.com/nlohmann/json.git" $jsonTag
+        $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_NLOHMANN_JSON=$($jsonSourceDir -replace '\\','/')"
     } else {
-        Write-Host "  [json] tag not found in deps.txt — FetchContent will download"
+        Write-Host "  [nlohmann_json] tag not found in deps.txt — FetchContent will download"
+    }
+
+    # gsl (Microsoft GSL) — Cygwin patch.exe 권한 오류 우회: git clone 으로 patch step 건너뜀
+    $gslTag = Get-DepTagOrNull $OrtRepoDir "gsl"
+    if ($gslTag) {
+        Write-Host "  [gsl] tag from deps.txt: $gslTag"
+        $gslSourceDir = Ensure-DepGitSource $OrtRepoDir "gsl" "https://github.com/microsoft/GSL.git" $gslTag
+        $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_GSL=$($gslSourceDir -replace '\\','/')"
+    } else {
+        Write-Host "  [gsl] tag not found in deps.txt — FetchContent will download"
     }
 
     if ($CudaArch) {
