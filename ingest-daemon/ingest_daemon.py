@@ -311,10 +311,10 @@ class CameraSession:
                     else:
                         continue
 
-                # Decide whether to decode BEFORE doing the expensive H264 decode.
-                # RTSP packet reads (demux) are cheap; H264 decode is CPU-intensive.
-                # Skipping decode for frames we won't push keeps the RTSP reader fast
-                # and prevents MediaMTX "reader is too slow / discarding frames" warnings.
+                # H264 decoder state must advance through every packet — skipping
+                # decode() on P-frames causes the codec context to lose reference
+                # frames, producing corrupted output when the next decode() is called.
+                # We always decode but only push the resulting JPEG every N frames.
                 packet_counter += 1
                 if self._ai_push_interval > 0:
                     _now = time.monotonic()
@@ -322,15 +322,13 @@ class CameraSession:
                 else:
                     _should_push = (packet_counter % AI_FRAME_INTERVAL == 0)
 
-                if not _should_push:
-                    continue  # consume RTSP packet without decoding
-
                 try:
                     for frame in packet.decode():
-                        if self._ai_push_interval > 0:
-                            self._ai_last_push = time.monotonic()
-                        self._push_jpeg(frame)
-                        break
+                        if _should_push:
+                            if self._ai_push_interval > 0:
+                                self._ai_last_push = time.monotonic()
+                            self._push_jpeg(frame)
+                        break  # only first frame per packet needed
                 except Exception as dec_err:
                     log.debug("[%s] decode: %s", self.id[:8], dec_err)
         finally:
