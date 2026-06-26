@@ -143,19 +143,50 @@ function Resolve-CudnnHome([string]$requested) {
         return $envVal
     }
 
-    # cuDNN 9.x EXE 설치 경로 스캔 (C:\Program Files\NVIDIA\CUDNN\v9.x.x\)
+    # cuDNN 9.x EXE 설치 경로 스캔
+    # 구조: C:\Program Files\NVIDIA\CUDNN\v9.x\bin\{cudaVer}\{arch}\{dll}
+    # ORT build.bat은 --cudnn_home 에 v9.x 최상위 경로를 기대함
     $cudnnEXEBase = "C:\Program Files\NVIDIA\CUDNN"
     if (Test-Path $cudnnEXEBase -PathType Container) {
+        # 프로세서 아키텍처 결정 (cuDNN EXE 설치 시 bin\{cudaVer}\{arch}\ 구조)
+        $archSubDir = switch ($env:PROCESSOR_ARCHITECTURE) {
+            "AMD64"  { "x64" }
+            "ARM64"  { "arm64" }
+            default  { "x64" }   # 기본값
+        }
+
+        $cudaShortVers = @('12.9','12.8','12.7','12.6','12.5','12.4','12.3','12.2','12.1')
+        $cudnnDlls = @('cudnn64_9.dll','cudnn_ops.dll','cudnn_cnn.dll','cudnn_graph.dll')
+
         $cudnnDirs = Get-ChildItem $cudnnEXEBase -Directory |
             Where-Object { $_.Name -match '^v\d+\.' } |
             Sort-Object {
                 $m = [regex]::Match($_.Name, 'v(\d+)\.(\d+)')
                 [version]::new([int]$m.Groups[1].Value, [int]$m.Groups[2].Value, 0)
             } -Descending
-        if ($cudnnDirs) {
-            $found = $cudnnDirs[0].FullName
-            Write-Host "  [cuDNN] 자동 감지 (EXE 설치 경로): $found"
-            return $found
+
+        foreach ($dir in $cudnnDirs) {
+            # DLL 존재 여부로 유효성 확인:
+            # bin\{cudaVer}\{arch}\{dll}  (EXE 설치 — 아키텍처 서브디렉토리 포함)
+            # bin\{cudaVer}\{dll}         (zip 방식)
+            # bin\{dll}                   (직접 복사)
+            $verified = $false
+            foreach ($cudaVer in $cudaShortVers) {
+                foreach ($dll in $cudnnDlls) {
+                    $archPath  = Join-Path $dir.FullName "bin\$cudaVer\$archSubDir\$dll"
+                    $plainPath = Join-Path $dir.FullName "bin\$cudaVer\$dll"
+                    $directPath = Join-Path $dir.FullName "bin\$dll"
+                    if ((Test-Path $archPath) -or (Test-Path $plainPath) -or (Test-Path $directPath)) {
+                        $verified = $true
+                        break
+                    }
+                }
+                if ($verified) { break }
+            }
+            if ($verified) {
+                Write-Host "  [cuDNN] 자동 감지 (EXE 설치 경로, arch=$archSubDir): $($dir.FullName)"
+                return $dir.FullName
+            }
         }
     }
 

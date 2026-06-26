@@ -276,7 +276,7 @@ async function detectCuDNN() {
     const CUDA_BASE = 'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA';
 
     // cuDNN 9.x EXE 설치 경로 (독립 설치 관리자 방식)
-    // 패턴: C:\Program Files\NVIDIA\CUDNN\v{major}.{minor}.{patch}\bin\{cuda_ver}\
+    // 패턴: C:\Program Files\NVIDIA\CUDNN\v{major}.{minor}\bin\{cuda_ver}\{arch}\
     const CUDNN_EXE_BASE = 'C:\\Program Files\\NVIDIA\\CUDNN';
     const CUDNN9_MAJOR_VERS = [
       '9.23','9.22','9.21','9.20','9.19','9.18','9.17','9.16','9.15',
@@ -284,6 +284,15 @@ async function detectCuDNN() {
       '9.8','9.7','9.6','9.5','9.4','9.3','9.2','9.1','9.0',
     ];
     const CUDA_SHORT_VERS = ['12.9','12.8','12.7','12.6','12.5','12.4','12.3','12.2','12.1'];
+
+    // cuDNN EXE 설치 시 bin\{cudaVer}\{arch}\ 구조로 아키텍처 서브디렉토리가 추가됨
+    // process.arch: 'x64' → 'x64',  'arm64' → 'arm64'
+    // 실제 경로 우선, 이후 arch 없는 경로(zip 방식 호환) 순으로 탐색
+    const CUDNN_ARCH_SUBDIRS = (() => {
+      const archMap = { x64: 'x64', arm64: 'arm64' };
+      const arch = archMap[process.arch];
+      return arch ? [arch, ''] : [''];  // arch 서브디렉토리 먼저, fallback으로 없는 경우
+    })();
 
     function _checkWinDll(basePath, dll) {
       const p = path.join(basePath, dll);
@@ -328,42 +337,43 @@ async function detectCuDNN() {
     }
 
     // 3) cuDNN EXE 독립 설치 경로 스캔
-    //    C:\Program Files\NVIDIA\CUDNN\v9.x.x\bin\12.x\
-    for (const cudnnVer of CUDNN9_MAJOR_VERS) {
-      // EXE 설치 시 패치 버전이 다를 수 있으므로 폴더 목록 확인
-      const cudnnBase = path.join(CUDNN_EXE_BASE, `v${cudnnVer}`);
-      if (fs.existsSync(cudnnBase)) {
-        // 하위 bin\{cudaVer}\ 탐색
-        for (const cudaVer of CUDA_SHORT_VERS) {
-          const binDir = path.join(cudnnBase, 'bin', cudaVer);
+    //    C:\Program Files\NVIDIA\CUDNN\v9.x\bin\{cudaVer}\{arch}\  (EXE 설치 — arch 포함)
+    //    C:\Program Files\NVIDIA\CUDNN\v9.x\bin\{cudaVer}\         (zip 복사 방식 — arch 없음)
+    //    C:\Program Files\NVIDIA\CUDNN\v9.x\bin\                    (직접 복사 방식)
+    function _scanCudnnExeBase(basePath) {
+      for (const cudaVer of CUDA_SHORT_VERS) {
+        for (const archSub of CUDNN_ARCH_SUBDIRS) {
+          const binDir = archSub
+            ? path.join(basePath, 'bin', cudaVer, archSub)
+            : path.join(basePath, 'bin', cudaVer);
           for (const dll of CUDNN9_DLLS) {
             const r = _checkWinDll(binDir, dll);
             if (r) return r;
           }
         }
-        // bin\ 직접 (일부 설치)
-        for (const dll of CUDNN9_DLLS) {
-          const r = _checkWinDll(path.join(cudnnBase, 'bin'), dll);
-          if (r) return r;
-        }
+      }
+      // bin\ 직접 (일부 zip 설치)
+      for (const dll of CUDNN9_DLLS) {
+        const r = _checkWinDll(path.join(basePath, 'bin'), dll);
+        if (r) return r;
+      }
+      return null;
+    }
+
+    for (const cudnnVer of CUDNN9_MAJOR_VERS) {
+      const cudnnBase = path.join(CUDNN_EXE_BASE, `v${cudnnVer}`);
+      if (fs.existsSync(cudnnBase)) {
+        const r = _scanCudnnExeBase(cudnnBase);
+        if (r) return r;
       }
     }
-    // 패치 버전 포함 폴더 동적 스캔 (예: v9.8.0, v9.8.1 ...)
+    // 패치 버전 포함 폴더 동적 스캔 (예: v9.23.0, v9.23.1 ...)
     if (fs.existsSync(CUDNN_EXE_BASE)) {
       try {
         const entries = fs.readdirSync(CUDNN_EXE_BASE).filter(e => e.startsWith('v9.'));
         for (const entry of entries) {
-          for (const cudaVer of CUDA_SHORT_VERS) {
-            const binDir = path.join(CUDNN_EXE_BASE, entry, 'bin', cudaVer);
-            for (const dll of CUDNN9_DLLS) {
-              const r = _checkWinDll(binDir, dll);
-              if (r) return r;
-            }
-          }
-          for (const dll of CUDNN9_DLLS) {
-            const r = _checkWinDll(path.join(CUDNN_EXE_BASE, entry, 'bin'), dll);
-            if (r) return r;
-          }
+          const r = _scanCudnnExeBase(path.join(CUDNN_EXE_BASE, entry));
+          if (r) return r;
         }
       } catch {}
     }
