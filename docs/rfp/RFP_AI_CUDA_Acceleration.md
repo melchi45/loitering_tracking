@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | Document ID | RFP-LTS-AI-CUDA-01 |
-| Version | 1.1 |
+| Version | 1.2 |
 | Status | Approved |
-| Date | 2026-06-05 |
+| Date | 2026-06-26 |
 | Program | LTS-2026 |
 
 ---
@@ -48,6 +48,9 @@ Current deployments require lower end-to-end inference latency and higher concur
 - FR-04: Existing AI services shall remain API-compatible.
 - FR-05: System shall run ONNX provider startup diagnostics once at server boot.
 - FR-06: On Windows with ONNX_CUDA=0, system shall prefer DirectML provider before CPU.
+- FR-07: System shall provide a CLI script (`npm run check:gpu`) that diagnoses CUDA/DML/CPU provider availability and prints a structured report with a recommended provider.
+- FR-08: System shall support multi-camera batch inference by grouping concurrent JPEG frames into a single `detectBatch()` call, controlled by `BATCH_MAX_SIZE` and `BATCH_MAX_WAIT_MS` environment variables.
+- FR-09: If batch inference fails, system shall fall back to per-frame inference without service interruption.
 
 ---
 
@@ -76,6 +79,9 @@ Current deployments require lower end-to-end inference latency and higher concur
 - AC-02: ONNX_CUDA=1 with missing CUDA runtime falls back to CPU unless strict mode enabled.
 - AC-03: AI pipeline continues to load detection, face, PPE, fire/smoke, and cloth modules.
 - AC-04: Startup diagnostics log supported backends exactly once at boot and clearly indicate CUDA/DML availability.
+- AC-05: `npm run check:gpu` executes successfully (exit code 0) and outputs CUDA/DML/CPU provider status with a recommended provider string.
+- AC-06: With `BATCH_MAX_SIZE=4`, four concurrent camera frames are processed in a single `detectBatch()` call.
+- AC-07: `detectBatch()` failure triggers automatic per-frame fallback with no service downtime.
 
 ---
 
@@ -84,3 +90,19 @@ Current deployments require lower end-to-end inference latency and higher concur
 - Added startup diagnostics requirement for ONNX providers.
 - Added Windows DML auto-selection policy when CUDA is not requested.
 - Added operational requirement to suppress repeated provider failure loops through pre-disable logic.
+
+## SDLC Amendment (v1.2)
+
+- Added GPU provider diagnostics CLI requirement (FR-07, AC-05).
+- Added multi-camera batch inference requirement (FR-08, AC-06).
+- Added batch fallback requirement (FR-09, AC-07).
+
+---
+
+## Revision History
+
+| 버전 | 날짜 | 변경 내용 |
+|---|---|---|
+| 1.0 | 2026-06-05 | 초기 작성 |
+| 1.1 | 2026-06-05 | 시작 진단(FR-05), Windows DML 자동 선택(FR-06), provider 사전 비활성화(NFR-04) 추가 |
+| 1.2 | 2026-06-26 | Provider 진단 CLI(FR-07, AC-05), 멀티카메라 배치 추론(FR-08, AC-06), 배치 fallback(FR-09, AC-07) 추가 |

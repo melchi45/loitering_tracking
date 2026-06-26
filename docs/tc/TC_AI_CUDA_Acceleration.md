@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | Document ID | TC-LTS-AI-CUDA-01 |
-| Version | 1.1 |
+| Version | 1.2 |
 | Status | Active |
-| Date | 2026-06-05 |
+| Date | 2026-06-26 |
 | Parent SRS | srs/SRS_AI_CUDA_Acceleration.md |
 
 ---
@@ -57,22 +57,53 @@ Validate provider selection and fallback behavior with environment-driven startu
 
 ---
 
-## 7. Exit Criteria
+## 7. Test Group F - BatchDetectionQueue
 
-- All A/B/C/D/E groups pass in at least one Windows and one Linux validation environment.
-- No REST/Socket contract regressions in smoke tests.
+- TC-BATCH-001: BatchDetectionQueue — 단건 enqueue는 `detect()` 또는 `detectBatch(size=1)` 위임 후 정상 결과 반환.
+- TC-BATCH-002: BatchDetectionQueue — 복수 enqueue가 `detectBatch()` 단일 호출로 묶임 (batchSizes에 복수 입력 길이 기록).
+- TC-BATCH-003: BatchDetectionQueue — `BATCH_MAX_SIZE` 초과 시 즉시 플러시.
+- TC-BATCH-004: BatchDetectionQueue — `BATCH_MAX_WAIT_MS` 타임아웃 경과 후 플러시.
+- TC-BATCH-005: BatchDetectionQueue — `detectBatch()` 실패 시 단건 `detect()` fallback으로 결과 정상 반환.
+- TC-BATCH-006: DetectionService.detectBatch — 배치 텐서 shape `[B, 3, 640, 640]` 검증.
+- TC-BATCH-007: DetectionService.detectBatch — 결과 배열 길이 == 입력 배열 길이.
+- TC-BATCH-008: DetectionService.supportsBatch getter 초기값 `true` 확인.
 
 ---
 
-## 8. SDLC Amendment (v1.1)
+## 8. Test Group G - Provider Diagnostics CLI
+
+- TC-GPU-001: `providerDiagnostics.getProviderDiagnostics()` — 구조체에 `cuda`, `dml`, `cpu` 키 존재 확인.
+- TC-GPU-002: `providerDiagnostics.getProviderDiagnostics()` — CPU는 항상 `available: true`.
+- TC-GPU-003: `providerDiagnostics.getProviderDiagnostics()` — `recommended` 필드가 `'cuda'`, `'dml'`, `'cpu'` 중 하나.
+- TC-GPU-004: `providerDiagnostics.getBatchInferenceInfo()` — `BATCH_MAX_SIZE`, `BATCH_MAX_WAIT_MS` 환경변수 값이 반영된 설정 반환.
+- TC-GPU-005: `checkGpuProviders.js` CLI 스크립트 — `node checkGpuProviders.js` 실행 시 exit code 0으로 종료.
+
+---
+
+## 9. Exit Criteria
+
+- All A/B/C/D/E/F/G groups pass in at least one Windows and one Linux validation environment.
+- No REST/Socket contract regressions in smoke tests.
+- TC-BATCH 그룹은 `test/api/batch_inference.test.js`로 Jest 자동화 실행.
+
+---
+
+## 10. SDLC Amendment (v1.1)
 
 - Added startup diagnostics verification coverage (TC-CUDA-E-001/002).
 - Added Windows DML policy verification coverage (TC-CUDA-E-003/004).
 - Updated exit criteria to include new E group.
 
+## SDLC Amendment (v1.2)
+
+- Added TC-BATCH group (F) for BatchDetectionQueue and detectBatch() verification.
+- Added TC-GPU group (G) for providerDiagnostics and checkGpuProviders CLI verification.
+- Updated exit criteria to include F/G groups and Jest automation note.
+- Updated SRS-to-TC mapping for FR-CUDA-014..021.
+
 ---
 
-## 9. SRS-to-TC Mapping
+## 11. SRS-to-TC Mapping
 
 | SRS Requirement | Mapped TC(s) |
 |---|---|
@@ -89,3 +120,21 @@ Validate provider selection and fallback behavior with environment-driven startu
 | FR-CUDA-011 | TC-CUDA-E-001 |
 | FR-CUDA-012 | TC-CUDA-E-003 |
 | FR-CUDA-013 | TC-CUDA-E-004 |
+| FR-CUDA-014 | TC-GPU-001, TC-GPU-002, TC-GPU-003 |
+| FR-CUDA-015 | TC-GPU-004 |
+| FR-CUDA-016 | TC-GPU-005 |
+| FR-CUDA-017 | TC-BATCH-001, TC-BATCH-002, TC-BATCH-003 |
+| FR-CUDA-018 | TC-BATCH-004 |
+| FR-CUDA-019 | TC-BATCH-005 |
+| FR-CUDA-020 | TC-BATCH-006, TC-BATCH-007 |
+| FR-CUDA-021 | TC-BATCH-008 |
+
+---
+
+## Revision History
+
+| 버전 | 날짜 | 변경 내용 |
+|---|---|---|
+| 1.0 | 2026-06-05 | 초기 작성 |
+| 1.1 | 2026-06-05 | TC-CUDA-E 그룹(시작 진단, DML 정책) 추가, 종료 기준 업데이트 |
+| 1.2 | 2026-06-26 | TC-BATCH 그룹(F, TC-BATCH-001~008), TC-GPU 그룹(G, TC-GPU-001~005) 추가, SRS-to-TC 매핑 확장 (FR-CUDA-014~021) |
