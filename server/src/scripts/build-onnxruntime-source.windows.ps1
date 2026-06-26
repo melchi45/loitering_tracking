@@ -562,15 +562,14 @@ if (-not $SkipBuild) {
         Write-Host "  [safeint] not in deps.txt — FetchContent will download"
     }
 
-    # eigen
-    $eigenRef = Get-DepRefFromDeps $OrtRepoDir "eigen"
-    if ($eigenRef) {
-        Write-Host "  [eigen] ref: $eigenRef"
-        $eigenSourceDir = Ensure-DepGitSource $OrtRepoDir "eigen" "https://gitlab.com/libeigen/eigen.git" $eigenRef
-        $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_EIGEN=$($eigenSourceDir -replace '\\','/')"
-    } else {
-        Write-Host "  [eigen] not in deps.txt — FetchContent will download"
-    }
+    # eigen3 — cmake FetchContent 이름이 "eigen3" (not "eigen"), cmake/external/eigen.cmake 에 별도 선언
+    # deps.txt 에 없으므로 알려진 버전 3.4.0 을 fallback 으로 사용
+    $eigenRef = Get-DepRefFromDeps $OrtRepoDir "eigen3"
+    if (-not $eigenRef) { $eigenRef = Get-DepRefFromDeps $OrtRepoDir "eigen" }
+    if (-not $eigenRef) { $eigenRef = "3.4.0" }
+    Write-Host "  [eigen3] ref: $eigenRef"
+    $eigenSourceDir = Ensure-DepGitSource $OrtRepoDir "eigen3" "https://gitlab.com/libeigen/eigen.git" $eigenRef
+    $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_EIGEN3=$($eigenSourceDir -replace '\\','/')"
 
     # wil (Windows Implementation Library)
     $wilRef = Get-DepRefFromDeps $OrtRepoDir "wil"
