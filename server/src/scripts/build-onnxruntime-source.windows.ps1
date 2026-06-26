@@ -96,7 +96,10 @@ function Resolve-CudaHome([string]$requested) {
     foreach ($var in $cudaEnvVars) {
         $val = [System.Environment]::GetEnvironmentVariable($var, "Machine")
         if (-not $val) { $val = [System.Environment]::GetEnvironmentVariable($var, "User") }
-        if (-not $val) { $val = (Get-Item "Env:$var" -ErrorAction SilentlyContinue)?.Value }
+        if (-not $val) {
+            $envItem = Get-Item "Env:$var" -ErrorAction SilentlyContinue
+            if ($envItem) { $val = $envItem.Value }
+        }
         if ($val -and (Test-Path $val -PathType Container)) {
             Write-Host "  [CUDA] 자동 감지: $var → $val"
             return $val
