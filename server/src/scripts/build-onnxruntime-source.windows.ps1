@@ -88,9 +88,9 @@ function Resolve-CudaHome([string]$requested) {
     # 환경변수 우선 탐색 (CUDA 설치 시 자동 설정됨, 최신 버전 우선)
     $cudaEnvVars = @(
         "CUDA_PATH_V13_3", "CUDA_PATH_V13_2", "CUDA_PATH_V13_1", "CUDA_PATH_V13_0",
-        "CUDA_PATH_V12_8", "CUDA_PATH_V12_7", "CUDA_PATH_V12_6", "CUDA_PATH_V12_5",
-        "CUDA_PATH_V12_4", "CUDA_PATH_V12_3", "CUDA_PATH_V12_2", "CUDA_PATH_V12_1",
-        "CUDA_PATH_V12_0", "CUDA_PATH_V11_8", "CUDA_PATH_V11_7",
+        "CUDA_PATH_V12_9", "CUDA_PATH_V12_8", "CUDA_PATH_V12_7", "CUDA_PATH_V12_6",
+        "CUDA_PATH_V12_5", "CUDA_PATH_V12_4", "CUDA_PATH_V12_3", "CUDA_PATH_V12_2",
+        "CUDA_PATH_V12_1", "CUDA_PATH_V12_0", "CUDA_PATH_V11_8", "CUDA_PATH_V11_7",
         "CUDA_PATH"  # 버전 무관 최신 가리킴 — 마지막 순위
     )
     foreach ($var in $cudaEnvVars) {

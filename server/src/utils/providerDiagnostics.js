@@ -88,9 +88,11 @@ async function detectCudaToolkit() {
     // 1) CUDA 설치 시 자동 설정되는 환경변수 우선 탐색
     const cudaEnvCandidates = [
       process.env.CUDA_PATH,
+      process.env.CUDA_PATH_V12_9,
       process.env.CUDA_PATH_V12_8,
       process.env.CUDA_PATH_V12_7,
       process.env.CUDA_PATH_V12_6,
+      process.env.CUDA_PATH_V12_5,
       process.env.CUDA_PATH_V12_4,
       process.env.CUDA_PATH_V12_3,
       process.env.CUDA_PATH_V12_2,
@@ -112,7 +114,7 @@ async function detectCudaToolkit() {
     }
 
     // 2) 기본 설치 경로 버전별 스캔
-    const CUDA_VERSIONS = ['12.8','12.7','12.6', '12.5', '12.4', '12.3', '12.2', '12.1', '12.0', '11.8', '11.7', '11.6'];
+    const CUDA_VERSIONS = ['12.9','12.8','12.7','12.6','12.5','12.4','12.3','12.2','12.1','12.0','11.8','11.7','11.6'];
     const BASE_DIR = 'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA';
     for (const ver of CUDA_VERSIONS) {
       const nvccPath = path.join(BASE_DIR, `v${ver}`, 'bin', 'nvcc.exe');
@@ -268,7 +270,7 @@ async function detectCuDNN() {
     const ALL_DLLS    = [...CUDNN9_DLLS, ...CUDNN8_DLLS];
 
     const CUDA_VERSIONS = [
-      '12.8','12.7','12.6','12.5','12.4','12.3','12.2','12.1','12.0',
+      '12.9','12.8','12.7','12.6','12.5','12.4','12.3','12.2','12.1','12.0',
       '11.8','11.7','11.6',
     ];
     const CUDA_BASE = 'C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA';
@@ -276,8 +278,12 @@ async function detectCuDNN() {
     // cuDNN 9.x EXE 설치 경로 (독립 설치 관리자 방식)
     // 패턴: C:\Program Files\NVIDIA\CUDNN\v{major}.{minor}.{patch}\bin\{cuda_ver}\
     const CUDNN_EXE_BASE = 'C:\\Program Files\\NVIDIA\\CUDNN';
-    const CUDNN9_MAJOR_VERS = ['9.8','9.7','9.6','9.5','9.4','9.3','9.2','9.1','9.0'];
-    const CUDA_SHORT_VERS   = ['12.8','12.7','12.6','12.5','12.4','12.3','12.2','12.1'];
+    const CUDNN9_MAJOR_VERS = [
+      '9.23','9.22','9.21','9.20','9.19','9.18','9.17','9.16','9.15',
+      '9.14','9.13','9.12','9.11','9.10','9.9',
+      '9.8','9.7','9.6','9.5','9.4','9.3','9.2','9.1','9.0',
+    ];
+    const CUDA_SHORT_VERS = ['12.9','12.8','12.7','12.6','12.5','12.4','12.3','12.2','12.1'];
 
     function _checkWinDll(basePath, dll) {
       const p = path.join(basePath, dll);
@@ -292,6 +298,7 @@ async function detectCuDNN() {
     // 1) CUDA_PATH 환경변수 → bin/ 탐색
     const cudaEnvCandidates = [
       process.env.CUDA_PATH,
+      process.env.CUDA_PATH_V12_9,
       process.env.CUDA_PATH_V12_8,
       process.env.CUDA_PATH_V12_7,
       process.env.CUDA_PATH_V12_6,
