@@ -259,6 +259,107 @@ yt-dlp (pipe mode)
                                               → _setLive()        (AI + tracking + alerts)
 ```
 
+### 5.1 YouTube 이중 경로 파이프라인 다이어그램
+
+MediaMTX RTSP 변환 이후 `ingest-daemon`에서 **[A] 캡처 경로**와 **[B] 스트리밍 경로**로 분기하는 전체 흐름입니다.
+
+```
+YouTube CDN
+      │
+      │ HTTP(S)
+      ▼
+  yt-dlp  ──────────────────────────────── youtubeStreamService.js:544
+  (pipe mode, -o -)
+      │ stdout (muxed video+audio)
+      ▼
+  FFmpeg  ──────────────────────────────── youtubeStreamService.js:552
+  (-i pipe:0, -c:v copy)
+      │ RTSP/TCP push
+      ▼
+  MediaMTX  (:8554, /yt/<channelId>)
+      │ RTSP relay
+      ▼
+  ingest_daemon.py
+  av.open(rtsp://127.0.0.1:8554/yt/<id>)  ── ingest_daemon.py:277
+  PyAV decode → raw frames
+      │
+      ├─────────────────────────────┐
+      │                             │
+      │                             │
+🎯 [A] Capture Path          🎥 [B] Streaming Path
+  (영상 처리 / 분석)           (실시간 송출)
+      │                             │
+  JPEG encode                  H.264 RTP passthrough ── ingest_daemon.py:422
+  HTTP POST                    → UDP:mediasoupPort
+  /api/internal/frame/id       Opus RTP encode       ── ingest_daemon.py:546
+      │                        → UDP:mediasoupAudioPort
+      │                             │
+      ▼                             ▼
+  pipelineManager.js          WebRTC Gateway
+  YOLOv8 ONNX Detection       (mediasoup SFU / MediaMTX WHEP)
+  ByteTrack Tracking               │
+  BehaviorEngine               SRTP/WebRTC
+  → Socket.IO frameData            │
+  → Socket.IO newAlert             ▼
+  → AI Analysis Server       Browser Client (React)
+    (SERVER_MODE=streaming 시)
+```
+
+```mermaid
+flowchart TD
+    YT([YouTube CDN])
+
+    subgraph SVC ["youtubeStreamService.js"]
+        YTD["yt-dlp\n--format bestvideo+bestaudio\n-o - pipe mode\n:544"]
+        FF["FFmpeg\n-i pipe:0 -c:v copy\n→ rtsp://MediaMTX/yt/id\n:552"]
+        YTD -->|"stdout\nmuxed stream"| FF
+    end
+
+    MTX(["MediaMTX\n:8554/yt/id"])
+    FF -->|"RTSP/TCP push"| MTX
+
+    subgraph DAEMON ["ingest_daemon.py"]
+        DEC["av.open(rtsp_url)\nPyAV decode\n:277"]
+
+        subgraph A ["🎯 A  Capture Path"]
+            A1["JPEG encode\nHTTP POST /frame/id\n:257"]
+            A2["pipelineManager\nYOLOv8 → ByteTrack\nBehaviorEngine\n→ Alerts"]
+            A1 --> A2
+        end
+
+        subgraph B ["🎥 B  Streaming Path"]
+            B1["H.264 RTP\nUDP:mediasoupPort\n:422"]
+            B2["Opus RTP\nUDP:mediasoupAudioPort\n:546"]
+        end
+
+        DEC --> A1
+        DEC --> B1
+        DEC --> B2
+    end
+
+    GW["WebRTC Gateway\nmediasoup SFU\nor MediaMTX WHEP"]
+    BR([Browser Client])
+
+    YT --> YTD
+    MTX -->|"RTSP relay"| DEC
+    B1 --> GW
+    B2 --> GW
+    GW -->|"SRTP/WebRTC"| BR
+
+    style A fill:#dbeafe,stroke:#3b82f6
+    style B fill:#dcfce7,stroke:#22c55e
+    style SVC fill:#fefce8,stroke:#ca8a04
+    style DAEMON fill:#f5f3ff,stroke:#8b5cf6
+```
+
+> **코드 라인 참조** (`:NNN` = `youtubeStreamService.js` 또는 `ingest_daemon.py` 라인)  
+> - yt-dlp spawn: `youtubeStreamService.js:544`  
+> - FFmpeg spawn: `youtubeStreamService.js:552`  
+> - `av.open()` RTSP 수집 진입점: `ingest_daemon.py:277`  
+> - AI JPEG POST: `ingest_daemon.py:257` (AI loop)  
+> - H.264 RTP 팬아웃: `ingest_daemon.py:422` (vRTP)  
+> - Opus RTP 팬아웃: `ingest_daemon.py:546` (aRTP)
+
 ### yt-dlp Format String
 
 ```
@@ -595,3 +696,4 @@ ffmpeg.on('close', (code, signal) => {
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for YouTube RTSP Ingest |
 | 1.1 | 2026-06-17 | LTS Engineering Team | FFmpeg 파이프라인 최적화: libx264 → -c:v copy, HLS 폴백 포맷 셀렉터 추가, webrtcEnabled 기본값 추가 |
 | 1.2 | 2026-06-18 | LTS Engineering Team | YouTube 채널 UI에 WebRTC 토글 추가: Add/Edit 폼 모두 webrtcEnabled 필드 지원, API 명세 업데이트 |
+| 1.3 | 2026-06-26 | LTS Engineering Team | §5.1 YouTube 이중 경로 파이프라인 다이어그램 추가 (ASCII + Mermaid, 코드 라인 참조 포함) |

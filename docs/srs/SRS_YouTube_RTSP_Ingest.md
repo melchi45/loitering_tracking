@@ -85,6 +85,61 @@ PipelineManager
   └─ stopCamera(entry.id)       — called on _stopEntry()
 ```
 
+### 2.1-A YouTube 캡처 이중 경로 파이프라인
+
+YouTube 스트림의 전체 데이터 흐름은 다음과 같이 두 경로로 분기합니다.  
+`SERVER_MODE=analysis`에서는 이 파이프라인 전체가 비활성화됩니다 (`captureOnly`).
+
+```mermaid
+flowchart TD
+    YT([YouTube URL\nyoutube.com / youtu.be])
+
+    subgraph SVC ["youtubeStreamService.js — _startStream()"]
+        YTD["yt-dlp\n--format bestvideo+bestaudio\n--no-check-certificate -o -\nyoutubeStreamService.js:544"]
+        FF["FFmpeg\n-i pipe:0 -c:v copy\n-rtsp_transport tcp\nyoutubeStreamService.js:552"]
+        YTD -->|"stdout pipe\n(muxed video+audio)"| FF
+    end
+
+    MTX["MediaMTX RTSP Broker\nrtsp://127.0.0.1:8554/yt/&lt;id&gt;\n(MEDIAMTX_RTSP_PORT)"]
+    FF -->|"RTSP publish"| MTX
+
+    subgraph ING ["ingest_daemon.py — CameraSession"]
+        DEC["av.open(rtsp_url)\nPyAV decode\ningest_daemon.py:277"]
+        DEC --> A
+        DEC --> B
+
+        subgraph A ["🎯 A  Capture Path (영상 처리/분석)"]
+            A1["JPEG encode\n→ HTTP POST /api/internal/frame/id\n(AI loop, ingest_daemon.py:257)"]
+            A2["pipelineManager.js\nYOLOv8 ONNX Detection\nByteTrack Tracking\nBehaviorEngine (배회 점수)\n→ Socket.IO frameData / newAlert"]
+            A1 --> A2
+        end
+
+        subgraph B ["🎥 B  Streaming Path (실시간 송출)"]
+            B1["H.264 RTP passthrough\n→ UDP:mediasoupPort\n(vRTP, ingest_daemon.py:422)"]
+            B2["Opus RTP encode\n→ UDP:mediasoupAudioPort\n(aRTP, ingest_daemon.py:546)"]
+        end
+    end
+
+    GW["WebRTC Gateway\nmediasoup SFU\n(WEBRTC_ENGINE=mediasoup)\nor MediaMTX WHEP\n(WEBRTC_ENGINE=mediamtx)"]
+    BR([Browser Client\nReact WebUI])
+
+    YT --> YTD
+    MTX -->|"RTSP relay"| DEC
+    B1 --> GW
+    B2 --> GW
+    GW -->|"SRTP/WebRTC"| BR
+
+    style A fill:#dbeafe,stroke:#3b82f6
+    style B fill:#dcfce7,stroke:#22c55e
+    style SVC fill:#fefce8,stroke:#ca8a04
+    style ING fill:#f5f3ff,stroke:#8b5cf6
+```
+
+| 경로 | 데이터 | 목적지 | FR 참조 |
+|---|---|---|---|
+| A (Capture) | JPEG HTTP POST | pipelineManager → YOLOv8 → 알림 | FR-YT-010, FR-YT-020 |
+| B (Streaming) | H.264 + Opus RTP | mediasoup SFU → 브라우저 | FR-YT-030 |
+
 ### 2.2 Startup Sequence
 
 ```
@@ -465,3 +520,4 @@ interface StreamPublicRecord {
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for YouTube RTSP Ingest |
+| 1.1 | 2026-06-26 | LTS Engineering Team | §2.1-A YouTube 이중 경로 Mermaid 다이어그램 추가 (코드 라인 참조 포함) |

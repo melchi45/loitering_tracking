@@ -121,6 +121,39 @@ yt-dlp --no-playlist \
       │  Detections, zones, alerts behave identically to physical cameras
 ```
 
+### 3.1-B YouTube 캡처 파이프라인 — 이중 경로 구조
+
+YouTube 스트림은 수집 단계 이후 **[A] 영상 분석 경로**와 **[B] 실시간 송출 경로**로 분기합니다.
+
+```mermaid
+flowchart TD
+    YT([YouTube URL])
+    YTD["yt-dlp\n--format 'bestvideo+bestaudio'\n-o - pipe mode"]
+    FF["FFmpeg\n-i pipe:0 → RTSP push"]
+    MTX["MediaMTX\nRTSP Broker :8554/yt/id"]
+    ING["ingest-daemon\nPyAV av.open() decode"]
+
+    YT --> YTD
+    YTD -->|"stdout: muxed video+audio"| FF
+    FF -->|"RTSP/TCP push"| MTX
+    MTX -->|"RTSP relay"| ING
+
+    ING --> A["🎯 A  Capture Path\n영상 처리 / 분석"]
+    ING --> B["🎥 B  Streaming Path\n실시간 송출"]
+
+    A --> AI["YOLOv8 Detection\nByteTrack Tracking\nBehaviorEngine\n→ Alerts / Socket.IO"]
+    B --> ENC["H.264 RTP + Opus RTP\n→ WebRTC Gateway\nmediasoup / MediaMTX WHEP"]
+    ENC --> BR([Browser Client])
+
+    style A fill:#dbeafe,stroke:#3b82f6
+    style B fill:#dcfce7,stroke:#22c55e
+    style AI fill:#eff6ff,stroke:#93c5fd
+    style ENC fill:#f0fdf4,stroke:#86efac
+```
+
+> **핵심**: yt-dlp와 FFmpeg은 YouTube 스트림을 MediaMTX RTSP로 변환하는 전처리 단계입니다.  
+> 이후는 IP 카메라와 동일하게 ingest-daemon이 단일 RTSP 세션에서 AI 캡처(A)와 WebRTC 송출(B)을 동시에 처리합니다.
+
 ### 3.2 Component Responsibilities
 
 | Component | Responsibility |
@@ -831,3 +864,4 @@ const ytDlp = spawn('yt-dlp', [
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for YouTube RTSP Ingest |
+| 1.1 | 2026-06-26 | LTS Engineering Team | §3.1-B YouTube 이중 경로 Mermaid 다이어그램 추가 (Capture Path / Streaming Path) |

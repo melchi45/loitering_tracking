@@ -124,6 +124,53 @@ The service provides list, stop, update, and manual restart operations. Stopping
 | `yt-dlp` ≥ 2024.x | Extract YouTube stream; write muxed bytes to stdout (`-o -`) |
 | `FFmpeg` ≥ 5.0 + `libx264` | Read from stdin (`pipe:0`); transcode to H.264; publish RTSP |
 | `MediaMTX` (latest) | Local RTSP broker; receives FFmpeg publish; serves LTS pipeline |
+| `ingest-daemon` (PyAV) | RTSP 수신 후 [A] AI 캡처 / [B] WebRTC 송출 이중 경로 팬아웃 |
+
+### 5.1-A YouTube 파이프라인 이중 경로 구조
+
+YouTube 스트림은 MediaMTX RTSP 변환 이후 ingest-daemon에서 분기합니다:
+
+```mermaid
+flowchart TD
+    YT([YouTube URL])
+
+    subgraph INGEST ["전처리 파이프라인 (youtubeStreamService.js)"]
+        YTD["yt-dlp\n--format bestvideo+bestaudio\n-o - pipe mode"]
+        FF["FFmpeg\n-i pipe:0\n-c:v copy / libx264\nRTSP push"]
+        MTX["MediaMTX :8554\n/yt/&lt;channelId&gt;"]
+        YTD -->|"stdout muxed stream"| FF
+        FF -->|"RTSP/TCP"| MTX
+    end
+
+    subgraph DAEMON ["ingest-daemon (ingest_daemon.py)"]
+        DEC["PyAV av.open(rtsp://…/yt/id)\nDecode → raw frames"]
+        DEC --> A
+        DEC --> B
+
+        subgraph A ["🎯 A  Capture Path"]
+            A1["JPEG HTTP POST\n/api/internal/frame/id"]
+            A2["pipelineManager\nYOLOv8 → ByteTrack\nBehaviorEngine → Alerts"]
+            A1 --> A2
+        end
+
+        subgraph B ["🎥 B  Streaming Path"]
+            B1["H.264 RTP\n→ UDP:mediasoupPort"]
+            B2["Opus RTP\n→ UDP:mediasoupAudioPort"]
+        end
+    end
+
+    SFU["WebRTC Gateway\nmediasoup / MediaMTX WHEP"]
+    BR([Browser Client])
+
+    YT --> YTD
+    MTX -->|"RTSP relay"| DEC
+    B1 --> SFU
+    B2 --> SFU
+    SFU --> BR
+
+    style A fill:#dbeafe,stroke:#3b82f6
+    style B fill:#dcfce7,stroke:#22c55e
+```
 
 ### 5.2 yt-dlp Invocation (Pipe Mode — v1.1)
 
@@ -350,3 +397,4 @@ Errors: `404 NOT_FOUND`, `409 STREAM_STOPPED`.
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for YouTube RTSP Ingest |
+| 1.1 | 2026-06-26 | LTS Engineering Team | §5.1-A YouTube 파이프라인 이중 경로 Mermaid 다이어그램 추가 |
