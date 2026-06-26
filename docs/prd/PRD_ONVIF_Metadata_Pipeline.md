@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-ONVIF-01 |
-| **Version** | 1.4 |
+| **Version** | 1.5 |
 | **Status** | Active |
 | **Date** | 2026-06-24 |
 | **Related RFP** | [RFP_ONVIF_Metadata_Pipeline.md](../rfp/RFP_ONVIF_Metadata_Pipeline.md) |
@@ -100,6 +100,9 @@ Gantt 타임라인 UI에 표시하는 기능을 제공합니다.
 | PRD-ONVIF-051 | `server/src/routes/internalApi.js` | `closeOpenEventsForCamera(cameraId)` 함수 구현 및 내보내기 — 카메라별 미결(state='true') ONVIF 이벤트 탐색 → 합성 state='false' 이벤트 삽입 → Socket.IO 브로드캐스트 → `_lastStates` 초기화 | P0 |
 | PRD-ONVIF-052 | `server/src/services/pipelineManager.js` | `setOnCameraOfflineHook(fn)` 메서드 추가; `stopCamera()` 내에서 훅 실행 (카메라 오프라인 전 호출) | P0 |
 | PRD-ONVIF-053 | `server/src/index.js` | `closeOpenEventsForCamera`를 `internalApi`에서 가져와 `pipelineManager.setOnCameraOfflineHook()`으로 등록 — 순환 의존성 없이 연결 | P0 |
+| PRD-ONVIF-054 | `client/src/components/OnvifTimelineInline.tsx` | 3단 flex-col 레이아웃 구현: ① Overview strip(`OVERVIEW_H=50px`, `flex-shrink-0`) ② Detail rows(`flex-1 min-h-0 overflow-y-auto`, `showDetail` 조건) ③ Tick labels(`TICK_H=20px`, `flex-shrink-0`) | P0 |
+| PRD-ONVIF-055 | `client/src/components/OnvifTimelineInline.tsx` | Overview strip 미니 바: duration 이벤트=`MINI_BAR_H=8px` 수평 바, point 이벤트=`2px` 수직 바, severity 색상 기반; "All Events" + ▲/▼ 레이블; scroll=줌, click=`showDetail` 토글 | P0 |
+| PRD-ONVIF-056 | `client/src/components/OnvifTimelineInline.tsx` | scroll isolation: `onWheel` 핸들러는 Overview strip에만 등록; Detail rows는 기본 수직 스크롤(`overflow-y-auto`) 사용; Detail panel은 `showDetail && selected` 조건에서만 렌더링 | P0 |
 
 ---
 
@@ -178,3 +181,4 @@ Gantt 타임라인 UI에 표시하는 기능을 제공합니다.
 | 1.2 | 2026-06-24 | PRD-ONVIF-046 추가 — OnvifTimelineInline 범위 프리셋 1H/6H 추가, 기본값 1H |
 | 1.3 | 2026-06-24 | PRD-ONVIF-047~050 추가 — RuleName 기반 이벤트 분리: 파싱·dedup·DB 저장·타임라인 행 분리 |
 | 1.4 | 2026-06-26 | PRD-ONVIF-051~053 추가 — 카메라 연결 해제 시 미결 ONVIF 이벤트 자동 종료: closeOpenEventsForCamera() + setOnCameraOfflineHook() + index.js 훅 등록 |
+| 1.5 | 2026-06-26 | PRD-ONVIF-054~056 추가 — OnvifTimelineInline 2-panel 구조: 3단 flex-col (Overview 50px + Detail rows showDetail 토글 + Tick 항상 표시), 미니 바 렌더링, scroll isolation, Detail panel 조건 렌더링 |

@@ -1,6 +1,6 @@
 # SRS — ONVIF Metadata Pipeline (App RTP)
 **Document ID**: SRS-LTS-ONVIF-01  
-**Version**: 1.8  
+**Version**: 1.9  
 **Date**: 2026-06-23  
 **Project**: Loitering Detection & Tracking System (LTS-2026)  
 **Status**: Active  

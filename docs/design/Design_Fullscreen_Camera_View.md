@@ -1,6 +1,6 @@
 # Design: Fullscreen Camera View
 
-**Version:** 1.6
+**Version:** 1.7
 **Status:** Implemented
 **Related:** [Design_Dashboard_Layout.md](Design_Dashboard_Layout.md) · [Design_ONVIF_Timeline.md](Design_ONVIF_Timeline.md) · [Design_Dashboard_Detection_Display.md](Design_Dashboard_Detection_Display.md)
 **SDLC:** [RFP](../rfp/RFP_Fullscreen_Camera_View.md) · [PRD](../prd/PRD_Fullscreen_Camera_View.md) · [SRS](../srs/SRS_Fullscreen_Camera_View.md) · [TC](../tc/TC_Fullscreen_Camera_View.md)

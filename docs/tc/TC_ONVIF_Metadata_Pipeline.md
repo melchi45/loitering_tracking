@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-ONVIF-01 |
-| **Version** | 1.7 |
+| **Version** | 1.8 |
 | **Status** | Active |
 | **Date** | 2026-06-23 |
 | **Related SRS** | [SRS_ONVIF_Metadata_Pipeline.md](../srs/SRS_ONVIF_Metadata_Pipeline.md) |

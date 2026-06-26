@@ -1,6 +1,6 @@
 # SRS: Fullscreen Camera View — 탭 확장 & 이력 데이터 통합
 
-**Version:** 1.3
+**Version:** 1.4
 **Status:** Implemented
 **SDLC:** [RFP](../rfp/RFP_Fullscreen_Camera_View.md) · [PRD](../prd/PRD_Fullscreen_Camera_View.md) · [Design](../design/Design_Fullscreen_Camera_View.md) · [TC](../tc/TC_Fullscreen_Camera_View.md)
 

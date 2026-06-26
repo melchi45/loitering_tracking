@@ -1,6 +1,6 @@
 # TC: Fullscreen Camera View — 탭 확장 & Detections Timeline
 
-**Version:** 1.3
+**Version:** 1.4
 **Status:** Ready for Test
 **SDLC:** [RFP](../rfp/RFP_Fullscreen_Camera_View.md) · [PRD](../prd/PRD_Fullscreen_Camera_View.md) · [SRS](../srs/SRS_Fullscreen_Camera_View.md) · [Design](../design/Design_Fullscreen_Camera_View.md)
 

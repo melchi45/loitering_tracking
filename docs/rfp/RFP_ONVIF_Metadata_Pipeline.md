@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | RFP-LTS-ONVIF-01 |
-| **Version** | 1.4 |
+| **Version** | 1.5 |
 | **Status** | Active |
 | **Date** | 2026-06-24 |
 | **Issuer** | LTS-2026 프로젝트 팀 |
