@@ -306,6 +306,13 @@ All modules defined below correspond to completed SDLC chains (RFP → PRD → S
 | BR-019 | `DB_TYPE=mongodb`에서 MongoDB 연결 불가 시, 서버는 즉시 종료(exit code 1)하고 진단 메시지를 출력해야 합니다. lts.json으로의 무음 fallback은 허용되지 않습니다 |
 | BR-020 | `DB_TYPE=mongodb`에서 `MONGODB_URI`가 미설정된 경우, 서버 시작이 즉시 거부되어야 합니다 |
 
+### 7.6 Operator UI — Timeline Readability
+
+| Requirement | Detail |
+|---|---|
+| BR-021 | 전체화면 채널 뷰 하단의 ONVIF Timeline 및 Detections Timeline은 각 행 좌측에 고정 폭 **Name 컬럼**을 표시해야 합니다. Name 컬럼은 행의 이름(이벤트 유형 / 객체 클래스)과 식별자(sourceToken · objectId · identity)를 운영자가 빠르게 식별할 수 있도록 제공해야 합니다 |
+| BR-022 | ONVIF Timeline의 Name 컬럼 헤더는 "Name" 레이블로 표시되어야 하며, 헤더 카메라 ID 뱃지는 카메라 표시 이름(displayName)을 우선 표시해야 합니다 |
+
 ---
 
 ## 8. Market Use Cases
@@ -470,3 +477,4 @@ The following table maps planned market releases to engineering phases and targe
 | 1.2 | 2026-06-16 | LTS Engineering Team | §6.3 Fullscreen Camera View·Detections Timeline·ONVIF Custom Range 3개 모듈 신규 등재 (DetectionsTimelineInline + ByteTracker 생명주기 DB 저장 + detectionTracks API) |
 | 1.3 | 2026-06-25 | LTS Engineering Team | §6.1 LLM/MCP 도구 수 15→21 업데이트 (카메라 CRUD 4종 + ONVIF 2종 + AI Detection 3종 + server status 1종 추가, MCP-LTS2026-001 v1.1) |
 | 1.4 | 2026-06-26 | LTS Engineering Team | §7.5 Storage & Startup Integrity 추가: BR-018~020 — DB_TYPE=mongodb 시 MongoDB 필수 확인 + exit(1) |
+| 1.5 | 2026-06-26 | LTS Engineering Team | §7.6 Operator UI — Timeline Readability 추가: BR-021~022 — ONVIF·Detections Timeline 좌측 Name 컬럼 요구사항 |

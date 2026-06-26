@@ -14,6 +14,7 @@ import { useI18n } from '../i18n';
 import { useOnvifEventStore, type OnvifEvent, type OnvifEventType, type OnvifSeverity } from '../stores/onvifEventStore';
 import { parseOnvifXml } from '../utils/onvifParser';
 import { useSocket } from '../hooks/useSocket';
+import { useCameraStore } from '../stores/cameraStore';
 
 // ── Layout ────────────────────────────────────────────────────────────────────
 
@@ -148,6 +149,7 @@ function useOnvifEvents(cameraId: string | undefined, rangeMs: number) {
 
 export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
   const { t } = useI18n();
+  const cameraName = useCameraStore(s => s.cameras.find(c => c.id === cameraId)?.name);
 
   const [range, setRange]           = useState<RangeLabel>('1D');
   const [zoomLevel, setZoomLevel]   = useState(1);
@@ -260,8 +262,8 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
         <div className="flex items-center gap-3">
           <span className="text-sm font-bold text-white tracking-wide">{t.onvifTimelineTitle}</span>
           {cameraId && (
-            <span className="text-[10px] text-gray-400 bg-gray-800 px-2 py-0.5 rounded">
-              {cameraId.slice(0, 8)}
+            <span className="text-[10px] text-gray-300 bg-gray-800 px-2 py-0.5 rounded font-medium">
+              {cameraName ?? cameraId.slice(0, 8)}
             </span>
           )}
           {loading && <span className="text-[10px] text-blue-400 animate-pulse">Loading…</span>}
@@ -328,6 +330,17 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
         >
           {/* Scrollable rows */}
           <div className="flex-1 overflow-y-auto overflow-x-hidden">
+
+            {/* Column header */}
+            <div className="flex sticky top-0 z-10 border-b border-gray-700/50 bg-gray-900/95">
+              <div
+                className="flex-shrink-0 flex items-center px-3 border-r border-gray-700/60"
+                style={{ width: ROW_LABEL_W, height: 22 }}
+              >
+                <span className="text-[9px] font-semibold text-gray-500 uppercase tracking-wider">Name</span>
+              </div>
+              <div className="flex-1" style={{ height: 22 }} />
+            </div>
 
             {/* Empty state */}
             {!loading && rows.length === 0 && (

@@ -1,6 +1,6 @@
 # TC: Fullscreen Camera View — 탭 확장 & Detections Timeline
 
-**Version:** 1.1
+**Version:** 1.2
 **Status:** Ready for Test
 **SDLC:** [RFP](../rfp/RFP_Fullscreen_Camera_View.md) · [PRD](../prd/PRD_Fullscreen_Camera_View.md) · [SRS](../srs/SRS_Fullscreen_Camera_View.md) · [Design](../design/Design_Fullscreen_Camera_View.md)
 
@@ -149,6 +149,38 @@ curl -X DELETE "http://localhost:3080/api/analysis/detection-tracks"
 
 ---
 
+---
+
+## 6. Timeline Name 컬럼 TC
+
+### TC-19: ONVIF Timeline Name 컬럼 표시
+
+| 항목 | 내용 |
+|------|------|
+| **SRS** | SRS-06-1~4 |
+| **전제** | 카메라 전체화면 → ONVIF Timeline 탭 진입, 이벤트 1건 이상 존재 |
+| **절차** | 트랙 목록 최상단 확인 |
+| **기대** | "Name" sticky 헤더 행(22px)이 트랙 행들 위에 고정 표시됨 |
+| **기대** | 각 트랙 행 좌측 130px에 topicLabel(색상) / sourceToken(gray) / [ruleName](있을 때) 표시 |
+| **기대** | 헤더 카메라 뱃지에 cameraId 앞 8자 대신 카메라 표시 이름이 표시됨 (카메라 스토어에 이름 있는 경우) |
+
+### TC-20: Detections Timeline Name 컬럼 표시
+
+| 항목 | 내용 |
+|------|------|
+| **SRS** | SRS-06-5~10 |
+| **전제** | 카메라 전체화면 → Detections 탭 진입, 트랙 데이터 1건 이상 존재 |
+| **절차 1** | 컨트롤 행 아래 첫 번째 트랙 행 좌측 확인 |
+| **기대** | "Name" sticky 헤더 행(20px)이 트랙 행들 위에 표시됨 |
+| **기대** | 각 트랙 행 좌측 100px 컬럼에 className(색상, bold) · #objectId_last6(mono·gray) 표시 |
+| **기대** | identity가 있는 트랙은 세 번째 줄에 identity 텍스트(indigo) 표시 |
+| **절차 2** | 스크롤 휠로 줌인 → Gantt 영역 드래그 |
+| **기대** | 패닝 시 Name 컬럼이 고정(flex-shrink-0)되고 Gantt 영역만 이동 |
+| **절차 3** | tick 레이블(시간 눈금) 위치 확인 |
+| **기대** | tick strip이 Name 컬럼 우측에서 시작하여 Gantt 영역에만 표시됨 (Name 컬럼 아래 tick 없음) |
+
+---
+
 ## ONVIF Timeline 범위 프리셋 TC
 
 > 이 섹션의 TC는 `SERVER_MODE=streaming`에서만 실행됩니다 (`streamingOnly`).
@@ -188,3 +220,4 @@ curl -X DELETE "http://localhost:3080/api/analysis/detection-tracks"
 |---|---|---|
 | 1.0 | 2026-06-16 | 초기 작성 — Fullscreen Camera View 탭 확장 + Detections Timeline TC |
 | 1.1 | 2026-06-24 | TC-16~18 추가 — ONVIF Timeline 1H/6H 범위 프리셋 및 기본값 1H 검증 (streamingOnly) |
+| 1.2 | 2026-06-26 | TC-19~20 추가 — ONVIF·Detections Timeline Name 컬럼 표시 검증 |

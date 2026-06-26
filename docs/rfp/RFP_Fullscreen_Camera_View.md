@@ -1,6 +1,6 @@
 # RFP: Fullscreen Camera View — 탭 확장 & 이력 데이터 통합
 
-**Version:** 1.1
+**Version:** 1.2
 **Status:** Fulfilled
 **SDLC:** [PRD](../prd/PRD_Fullscreen_Camera_View.md) · [SRS](../srs/SRS_Fullscreen_Camera_View.md) · [Design](../design/Design_Fullscreen_Camera_View.md) · [TC](../tc/TC_Fullscreen_Camera_View.md)
 
@@ -32,6 +32,8 @@ LTS-2026의 메인 대시보드에서 카메라를 선택하면 전체화면 오
 | REQ-05 | 서버 데이터 조회 중 로딩 표시기(스피너) 표시 |
 | REQ-06 | `/api/analysis/events`에 `cameraId`, `from`, `to` 필터 파라미터 추가 |
 | REQ-07 | 분석 이벤트 조회 limit 상한 500으로 상향 |
+| REQ-08 | ONVIF Timeline 및 Detections Timeline 각 행 좌측에 고정 폭 Name 컬럼 표시 (이벤트 유형·객체 클래스·식별자·identity 포함) |
+| REQ-09 | ONVIF Timeline 헤더 카메라 ID 뱃지를 카메라 표시 이름(displayName)으로 우선 표시 |
 
 ### 2.2 제외 범위 (Out of Scope)
 
@@ -59,6 +61,8 @@ LTS-2026의 메인 대시보드에서 카메라를 선택하면 전체화면 오
 | 신규 컴포넌트 | `client/src/components/AnalysisHistoryTab.tsx` |
 | 기존 컴포넌트 수정 | `client/src/components/FullscreenCameraView.tsx` |
 | 기존 컴포넌트 수정 | `client/src/components/OnvifTimelineInline.tsx` |
+| 기존 컴포넌트 수정 | `client/src/components/OnvifTimelineOverlay.tsx` (Name 컬럼 헤더 + cameraName 표시) |
+| 기존 컴포넌트 수정 | `client/src/components/DetectionsTimelineInline.tsx` (Name 컬럼 추가) |
 | 클라이언트 빌드 | `client/dist/` |
 | SDLC 문서 | PRD · SRS · Design · TC |
 
@@ -70,3 +74,4 @@ LTS-2026의 메인 대시보드에서 카메라를 선택하면 전체화면 오
 |---|---|---|
 | 1.0 | 2026-06-16 | 초기 작성 — Fullscreen Camera View 탭 확장 및 이력 데이터 통합 RFP |
 | 1.1 | 2026-06-24 | 범위 프리셋 `1H`/`6H` 추가 반영 — 기본 범위 1D → 1H 업데이트; REQ 설명 수정 |
+| 1.2 | 2026-06-26 | REQ-08/09 추가 — ONVIF·Detections Timeline 좌측 Name 컬럼 및 cameraName 표시 요구사항 |

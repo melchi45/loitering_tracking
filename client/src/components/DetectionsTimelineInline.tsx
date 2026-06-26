@@ -82,6 +82,7 @@ function formatTick(ts: number, spanMs: number): string {
 }
 
 const DRAG_THRESHOLD_PX = 4;
+const LABEL_W   = 100;  // left Name column width
 const DETAIL_W  = 200;
 const ROW_H     = 56;   // bar (18px) + filmstrip (34px) + border (2px) + padding (2px)
 const BAR_H     = 16;   // height of the Gantt bar portion
@@ -280,7 +281,7 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
   const handleMouseMove = (e: React.MouseEvent) => {
     if (!dragRef.current || !containerRef.current) return;
     const dx    = e.clientX - dragRef.current.startX;
-    const width = containerRef.current.getBoundingClientRect().width;
+    const width = containerRef.current.getBoundingClientRect().width - LABEL_W;
     if (!hasDraggedRef.current && Math.abs(dx) < DRAG_THRESHOLD_PX) return;
     if (!hasDraggedRef.current) { hasDraggedRef.current = true; setIsDragging(true); }
     setPan(clampPan(dragRef.current.startPan - dx / width / zoom, zoom));
@@ -386,9 +387,9 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
           onMouseUp={stopDrag}
           onMouseLeave={stopDrag}
         >
-          {/* Tick labels */}
-          <div className="absolute bottom-0 left-0 right-0 pointer-events-none bg-gray-900/60"
-               style={{ height: TICK_H, borderTop: '1px solid rgba(55,65,81,0.4)' }}>
+          {/* Tick labels — offset by LABEL_W so ticks align with Gantt area */}
+          <div className="absolute bottom-0 right-0 pointer-events-none bg-gray-900/60"
+               style={{ left: LABEL_W, height: TICK_H, borderTop: '1px solid rgba(55,65,81,0.4)' }}>
             {ticks.map(({ x, label }) => (
               <div key={x} className="absolute flex flex-col items-center"
                    style={{ left: `${x * 100}%`, transform: 'translateX(-50%)', bottom: 2 }}>
@@ -401,6 +402,16 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
           {/* Track rows */}
           <div className="absolute top-0 left-0 right-0 overflow-y-auto"
                style={{ bottom: TICK_H }}>
+
+            {/* Column header */}
+            <div className="flex sticky top-0 z-10 border-b border-gray-700/50 bg-gray-900/95">
+              <div className="flex-shrink-0 flex items-center px-2 border-r border-gray-700/60"
+                   style={{ width: LABEL_W, height: 20 }}>
+                <span className="text-[8px] font-semibold text-gray-500 uppercase tracking-wider">Name</span>
+              </div>
+              <div className="flex-1" style={{ height: 20 }} />
+            </div>
+
             {loading && visibleTracks.length === 0 ? (
               <div className="flex items-center justify-center h-full text-gray-600 gap-2">
                 <Spinner /> <span className="text-xs">Loading tracks…</span>
@@ -419,101 +430,125 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
                 const isSel  = selected?.id === track.id;
                 const color  = classColor(track);
                 const snaps  = snapCache.get(track.objectId) ?? null; // null=not fetched, []=no snaps
+                const ganttW = (containerRef.current?.getBoundingClientRect().width ?? 800) - LABEL_W;
 
                 return (
                   <div key={track.id}
-                       className="relative overflow-hidden"
+                       className="flex"
                        style={{
                          height: ROW_H,
                          borderBottom: '1px solid rgba(55,65,81,0.4)',
                          backgroundColor: isSel ? 'rgba(255,255,255,0.03)' : undefined,
                        }}>
 
-                    {/* ── Gantt bar ── */}
+                    {/* ── Left Name label ── */}
                     <div
-                      className="absolute flex items-center overflow-hidden rounded-sm"
-                      style={{
-                        left:            `${xLeft * 100}%`,
-                        width:           `${barW * 100}%`,
-                        top:             BAR_TOP,
-                        height:          BAR_H,
-                        backgroundColor: color + (isSel ? 'ff' : track.inProgress ? '88' : 'cc'),
-                        border:          isSel ? `1px solid #fff` : track.inProgress ? `1px dashed ${color}` : `1px solid ${color}`,
-                        cursor:          'pointer',
-                        zIndex:          2,
-                      }}
+                      className="flex-shrink-0 flex flex-col justify-center px-2 border-r border-gray-700/50 overflow-hidden"
+                      style={{ width: LABEL_W }}
                       onMouseDown={e => e.stopPropagation()}
                       onClick={() => {
-                        if (hasDraggedRef.current) return;
                         setSelected(prev => prev?.id === track.id ? null : track);
                         setZoomedSnap(null);
                       }}
-                      title={`${track.className} — ${fmtDur(track.dwellTime)} — risk ${(track.maxRiskScore * 100).toFixed(0)}%`}
                     >
-                      <span className="px-1 text-[7px] font-bold text-white whitespace-nowrap overflow-hidden">
-                        {track.isLoitering ? '⚠ ' : ''}
-                        {track.className}
-                        {' '}
-                        <span className="opacity-70">#{String(track.objectId).slice(-6)}</span>
-                        {' '}
-                        {fmtDur(track.dwellTime)}
-                        {track.maxRiskScore > 0 && ` ${(track.maxRiskScore * 100).toFixed(0)}%`}
+                      <span className="text-[9px] font-bold truncate leading-tight"
+                            style={{ color }}>
+                        {track.isLoitering ? '⚠ ' : ''}{track.className}
                       </span>
+                      <span className="text-[8px] text-gray-600 font-mono truncate leading-tight">
+                        #{String(track.objectId).slice(-6)}
+                      </span>
+                      {track.identity && (
+                        <span className="text-[8px] text-indigo-400/80 truncate leading-tight">
+                          {track.identity}
+                        </span>
+                      )}
                     </div>
 
-                    {/* ── Row index ── */}
-                    <span className="absolute left-0.5 text-[7px] text-gray-700 pointer-events-none"
-                          style={{ top: BAR_TOP + 2, zIndex: 1 }}>
-                      {idx + 1}
-                    </span>
+                    {/* ── Gantt area ── */}
+                    <div className="flex-1 relative overflow-hidden" style={{ height: ROW_H }}>
 
-                    {/* ── Crop filmstrip — each snapshot at its timestamp position ── */}
-                    {snaps && snaps.length > 0 && snaps.map((snap, si) => {
-                      const snapTs = new Date(snap.timestamp).getTime();
-                      const xSnap = (snapTs - viewStart) / viewSpan; // 0..1 position
-                      if (xSnap < 0 || xSnap > 1) return null; // outside view
-
-                      // Center the thumbnail on xSnap, but clamp so it doesn't bleed outside row
-                      const pct = Math.max(0, Math.min(100 - (SNAP_W / (containerRef.current?.getBoundingClientRect().width ?? 800)) * 100, xSnap * 100));
-
-                      return (
-                        <div
-                          key={snap.id}
-                          className="absolute overflow-hidden rounded border border-gray-600/80 cursor-pointer
-                                     hover:border-white/60 hover:z-20 transition-all"
-                          style={{
-                            left:    `${pct}%`,
-                            top:     SNAP_TOP,
-                            width:   SNAP_W,
-                            height:  SNAP_H,
-                            zIndex:  si + 3,
-                            outline: snap.isLoitering ? '1px solid #ef4444' : undefined,
-                          }}
-                          onMouseDown={e => e.stopPropagation()}
-                          onClick={e => {
-                            e.stopPropagation();
-                            if (hasDraggedRef.current) return;
-                            setSelected(prev => prev?.id === track.id ? track : track);
-                            setZoomedSnap(prev => prev?.id === snap.id ? null : snap);
-                          }}
-                          title={new Date(snap.timestamp).toLocaleTimeString('en', { hour12: false })}
-                        >
-                          <img src={snap.cropData} alt={snap.className}
-                               className="w-full h-full object-cover" />
-                          {snap.isLoitering && (
-                            <span className="absolute top-0 right-0 bg-red-600/90 text-white text-[5px] px-px leading-tight">⚠</span>
-                          )}
-                        </div>
-                      );
-                    })}
-
-                    {/* Loading indicator for this track's snaps */}
-                    {snaps === null && (
-                      <div className="absolute flex items-center justify-center"
-                           style={{ left: `${xLeft * 100}%`, top: SNAP_TOP + 6, height: 20, width: 20 }}>
-                        <span className="text-[8px] text-gray-700 animate-pulse">·</span>
+                      {/* ── Gantt bar ── */}
+                      <div
+                        className="absolute flex items-center overflow-hidden rounded-sm"
+                        style={{
+                          left:            `${xLeft * 100}%`,
+                          width:           `${barW * 100}%`,
+                          top:             BAR_TOP,
+                          height:          BAR_H,
+                          backgroundColor: color + (isSel ? 'ff' : track.inProgress ? '88' : 'cc'),
+                          border:          isSel ? `1px solid #fff` : track.inProgress ? `1px dashed ${color}` : `1px solid ${color}`,
+                          cursor:          'pointer',
+                          zIndex:          2,
+                        }}
+                        onMouseDown={e => e.stopPropagation()}
+                        onClick={() => {
+                          if (hasDraggedRef.current) return;
+                          setSelected(prev => prev?.id === track.id ? null : track);
+                          setZoomedSnap(null);
+                        }}
+                        title={`${track.className} — ${fmtDur(track.dwellTime)} — risk ${(track.maxRiskScore * 100).toFixed(0)}%`}
+                      >
+                        <span className="px-1 text-[7px] font-bold text-white whitespace-nowrap overflow-hidden">
+                          {fmtDur(track.dwellTime)}
+                          {track.maxRiskScore > 0 && ` ${(track.maxRiskScore * 100).toFixed(0)}%`}
+                        </span>
                       </div>
-                    )}
+
+                      {/* ── Row index ── */}
+                      <span className="absolute left-0.5 text-[7px] text-gray-700 pointer-events-none"
+                            style={{ top: BAR_TOP + 2, zIndex: 1 }}>
+                        {idx + 1}
+                      </span>
+
+                      {/* ── Crop filmstrip — each snapshot at its timestamp position ── */}
+                      {snaps && snaps.length > 0 && snaps.map((snap, si) => {
+                        const snapTs = new Date(snap.timestamp).getTime();
+                        const xSnap = (snapTs - viewStart) / viewSpan; // 0..1 position
+                        if (xSnap < 0 || xSnap > 1) return null; // outside view
+
+                        // Center the thumbnail on xSnap, but clamp within Gantt area
+                        const pct = Math.max(0, Math.min(100 - (SNAP_W / ganttW) * 100, xSnap * 100));
+
+                        return (
+                          <div
+                            key={snap.id}
+                            className="absolute overflow-hidden rounded border border-gray-600/80 cursor-pointer
+                                       hover:border-white/60 hover:z-20 transition-all"
+                            style={{
+                              left:    `${pct}%`,
+                              top:     SNAP_TOP,
+                              width:   SNAP_W,
+                              height:  SNAP_H,
+                              zIndex:  si + 3,
+                              outline: snap.isLoitering ? '1px solid #ef4444' : undefined,
+                            }}
+                            onMouseDown={e => e.stopPropagation()}
+                            onClick={e => {
+                              e.stopPropagation();
+                              if (hasDraggedRef.current) return;
+                              setSelected(prev => prev?.id === track.id ? track : track);
+                              setZoomedSnap(prev => prev?.id === snap.id ? null : snap);
+                            }}
+                            title={new Date(snap.timestamp).toLocaleTimeString('en', { hour12: false })}
+                          >
+                            <img src={snap.cropData} alt={snap.className}
+                                 className="w-full h-full object-cover" />
+                            {snap.isLoitering && (
+                              <span className="absolute top-0 right-0 bg-red-600/90 text-white text-[5px] px-px leading-tight">⚠</span>
+                            )}
+                          </div>
+                        );
+                      })}
+
+                      {/* Loading indicator for this track's snaps */}
+                      {snaps === null && (
+                        <div className="absolute flex items-center justify-center"
+                             style={{ left: `${xLeft * 100}%`, top: SNAP_TOP + 6, height: 20, width: 20 }}>
+                          <span className="text-[8px] text-gray-700 animate-pulse">·</span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 );
               })

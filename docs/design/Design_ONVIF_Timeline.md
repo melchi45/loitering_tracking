@@ -1,6 +1,6 @@
 # Design: ONVIF Event Timeline
 
-**Version:** 2.1
+**Version:** 2.4
 **Status:** Implemented
 **Related:** [Design_ONVIF_Metadata_Pipeline.md](Design_ONVIF_Metadata_Pipeline.md) · [Design_DataChannel_CameraEvents.md](Design_DataChannel_CameraEvents.md)
 
@@ -481,6 +481,27 @@ DB 이벤트:  true(t1) → true(t2) → true(t3) → false(t4)
 - 각 `topicType:sourceToken:ruleName` 3-튜플 → 별도 행 (RuleName이 다르면 무조건 분리)
 - 행 레이블 = `topicLabel (sourceToken) [ruleName]` (있는 것만 조합)
 
+#### Name 컬럼 (OnvifTimelineOverlay — v2.4 신규)
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  [Name]      │ ← sticky 헤더 행 (22px, z-10)            │
+│──────────────┼──────────────────────────────────────────│
+│  Motion Alarm│ ████████████████████ [bar]  [bar]        │ ROW_H=68px
+│  VS-1        │                                          │
+│──────────────┼──────────────────────────────────────────│
+│  DigitalInput│ ████████ [bar]                           │
+│  Index:0     │                                          │
+└──────────────┴──────────────────────────────────────────┘
+     ↑ ROW_LABEL_W=130px        ↑ flex-1 (Gantt 영역)
+```
+
+| 요소 | 위치 | 내용 |
+|------|------|------|
+| "Name" 헤더 | sticky top-0, z-10, height 22px | 회색 uppercase "Name" 레이블 |
+| 행 레이블 열 | `ROW_LABEL_W=130px`, flex-shrink-0 | topicLabel (severity 색상) + sourceToken (gray) + [ruleName] (indigo) |
+| 헤더 카메라 뱃지 | 상단 헤더 바 | `cameraName` (useCameraStore 조회) 우선; 없으면 `cameraId.slice(0,8)` |
+
 #### 바 렌더링
 
 ```
@@ -589,3 +610,4 @@ User action:
 | 2.1 | 2026-06-24 | 범위 프리셋 `1H` · `6H` 추가 — ONVIF 이벤트 기본 범위를 1D → 1H로 단축; §5.1 range state 타입 업데이트 |
 | 2.2 | 2026-06-24 | RuleName 기반 타임라인 행 분리 — buildIntervals/buildRows 키에 ruleName 포함; 행 레이블 `[RuleName]` 표시; detail panel RuleName 항목 추가; `OnvifEvent.ruleName` 필드 추가 |
 | 2.3 | 2026-06-25 | `onvif_snapshots` MongoDB 모드 서버 재시작 후 사라짐 버그 수정 — `snapshotsRouter.get()` 을 async 전환 후 `db.queryAsync('onvif_snapshots', …)` 사용. `onvif_snapshots` 는 frameData 블롭 때문에 시작 시 인메모리 hydration 제외 → `BaseDatabase.queryAsync()` / `MongoDatabase.queryAsync()` / `mongoDbService.findDirect()` 추가로 MongoDB 직접 조회 경로 구현. `mongoDbService.TABLES`에 누락됐던 `faceTrajectories`, `tc_results` 도 추가. |
+| 2.4 | 2026-06-26 | §5.9 Name 컬럼 추가 — `OnvifTimelineOverlay`에 sticky "Name" 헤더 행(22px) 및 행 레이블 열 문서화; 헤더 카메라 뱃지 `cameraName` 우선 표시 (`useCameraStore`); `DetectionsTimelineInline` `LABEL_W=100px` Name 컬럼 신규 추가 문서화 |

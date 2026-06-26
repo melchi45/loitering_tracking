@@ -1,6 +1,6 @@
 # PRD: Fullscreen Camera View — 탭 확장 & 이력 데이터 통합
 
-**Version:** 1.1
+**Version:** 1.2
 **Status:** Implemented
 **SDLC:** [RFP](../rfp/RFP_Fullscreen_Camera_View.md) · [SRS](../srs/SRS_Fullscreen_Camera_View.md) · [Design](../design/Design_Fullscreen_Camera_View.md) · [TC](../tc/TC_Fullscreen_Camera_View.md)
 
@@ -25,6 +25,8 @@
 | US-03 | 운영자 | ONVIF 이벤트를 특정 날짜 구간으로 검색하고 싶다 | Custom 버튼 → datetime 입력 → Apply → 해당 범위 데이터 로드 |
 | US-04 | 운영자 | 데이터 로딩 중임을 알고 싶다 | SVG 스피너가 서버 응답 전까지 표시 |
 | US-05 | 운영자 | Detections 탭에서 화재/연기/배회 이력을 타입별로 필터링하고 싶다 | All/Loitering/Fire/Smoke 드롭다운 필터 작동 |
+| US-06 | 운영자 | ONVIF 타임라인에서 어떤 이벤트 유형인지 스크롤 없이 좌측에서 바로 확인하고 싶다 | Name 컬럼이 행 좌측에 항상 표시됨 |
+| US-07 | 운영자 | Detections 타임라인에서 각 트랙이 어떤 클래스·ID·인물인지 Gantt 바 없이도 파악하고 싶다 | 좌측 Name 컬럼에 className·objectId·identity 표시 |
 
 ---
 
@@ -60,7 +62,21 @@ From [datetime-local]  To [datetime-local]  [Apply]  [✕]
 
 Apply 클릭 전까지 fetch 없음. Apply 클릭 시 지정 범위로 `GET /api/onvif-events?from=…&to=…&limit=1000` 실행.
 
-### 3.4 API 확장 (`/api/analysis/events`)
+### 3.4 Timeline Name 컬럼
+
+양쪽 타임라인(ONVIF / Detections) 모두 각 Gantt 행 **좌측에 고정 폭 Name 컬럼**이 추가됩니다.
+
+| 컴포넌트 | Name 컬럼 너비 | 표시 내용 |
+|---------|:---:|---|
+| `OnvifTimelineOverlay` | 130px (기존 `ROW_LABEL_W`) | 상단: topicLabel (색상 강조) / 중간: sourceToken / 하단: [ruleName] |
+| `DetectionsTimelineInline` | 100px (`LABEL_W`) | 상단: className (classColor 색상) / 중간: #objectId_last6 / 하단: identity (있을 때) |
+
+**추가 변경사항:**
+- ONVIF Timeline 헤더 카메라 ID 뱃지 → `cameraName`(useCameraStore) 우선 표시 (없으면 cameraId 앞 8자)
+- 양쪽 타임라인에 "Name" 레이블 sticky 헤더 행 추가
+- Detections Timeline: 드래그 너비 계산을 `containerWidth - LABEL_W`로 보정, tick strip을 `left: LABEL_W`로 오프셋
+
+### 3.5 API 확장 (`/api/analysis/events`)
 
 추가된 쿼리 파라미터:
 
@@ -90,3 +106,4 @@ Apply 클릭 전까지 fetch 없음. Apply 클릭 시 지정 범위로 `GET /api
 |---|---|---|
 | 1.0 | 2026-06-16 | 초기 작성 — Fullscreen Camera View 탭 확장 PRD |
 | 1.1 | 2026-06-24 | OnvifTimelineInline 범위 프리셋 `[1H][6H][1D][1W][1M][1Y][Custom]`으로 업데이트, 기본값 1H |
+| 1.2 | 2026-06-26 | US-06/07 추가, §3.4 Timeline Name 컬럼 추가 — ONVIF·Detections 좌측 Name 컬럼 + cameraName 표시 |
