@@ -193,6 +193,9 @@ class PipelineManager {
     this._fireSmokeService = null; // Shared fire/smoke detector
     this._analysisClient   = null; // Remote analysis client (streaming mode only)
     this._fireAlertCooldown = new Map(); // `${cameraId}:${zoneName}:${cls}` → lastAlertTs
+    // Hook called just before a camera is marked offline (stopCamera).
+    // Registered externally (index.js) to avoid circular dependency with internalApi.
+    this._onCameraOfflineHook = null;
     // Shared face gallery across all cameras — enables cross-camera Re-ID.
     // Each entry: { faceId, embedding, lastSeenAt, lastCameraId }
     // When a face matches an entry whose lastCameraId differs from the current
@@ -1252,9 +1255,23 @@ class PipelineManager {
    * @param {string} cameraId
    * @returns {Promise<void>}
    */
+  /**
+   * Register a callback invoked just before a camera is marked offline.
+   * Used by index.js to wire ONVIF event auto-close without a circular import.
+   * @param {(cameraId: string) => void} fn
+   */
+  setOnCameraOfflineHook(fn) {
+    this._onCameraOfflineHook = fn;
+  }
+
   async stopCamera(cameraId) {
     const ctx = this._pipelines.get(cameraId);
     if (!ctx) return;
+
+    // Close any open (state='true') ONVIF events before taking the camera offline.
+    if (typeof this._onCameraOfflineHook === 'function') {
+      try { this._onCameraOfflineHook(cameraId); } catch (_) {}
+    }
 
     ctx.running       = false;
     ctx._pendingFrame = null; // discard any pending frame so _runPendingAnalysis exits cleanly

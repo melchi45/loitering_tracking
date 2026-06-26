@@ -1,6 +1,6 @@
 # TC: Fullscreen Camera View — 탭 확장 & Detections Timeline
 
-**Version:** 1.2
+**Version:** 1.3
 **Status:** Ready for Test
 **SDLC:** [RFP](../rfp/RFP_Fullscreen_Camera_View.md) · [PRD](../prd/PRD_Fullscreen_Camera_View.md) · [SRS](../srs/SRS_Fullscreen_Camera_View.md) · [Design](../design/Design_Fullscreen_Camera_View.md)
 
@@ -153,16 +153,32 @@ curl -X DELETE "http://localhost:3080/api/analysis/detection-tracks"
 
 ## 6. Timeline Name 컬럼 TC
 
-### TC-19: ONVIF Timeline Name 컬럼 표시
+### TC-19: ONVIF Timeline Overlay Name 컬럼 표시 (`OnvifTimelineOverlay` — SearchFullscreen)
 
 | 항목 | 내용 |
 |------|------|
 | **SRS** | SRS-06-1~4 |
-| **전제** | 카메라 전체화면 → ONVIF Timeline 탭 진입, 이벤트 1건 이상 존재 |
+| **전제** | SearchFullscreen 전체화면 ONVIF 오버레이 진입, 이벤트 1건 이상 존재 |
 | **절차** | 트랙 목록 최상단 확인 |
 | **기대** | "Name" sticky 헤더 행(22px)이 트랙 행들 위에 고정 표시됨 |
 | **기대** | 각 트랙 행 좌측 130px에 topicLabel(색상) / sourceToken(gray) / [ruleName](있을 때) 표시 |
 | **기대** | 헤더 카메라 뱃지에 cameraId 앞 8자 대신 카메라 표시 이름이 표시됨 (카메라 스토어에 이름 있는 경우) |
+
+### TC-21: ONVIF Timeline Inline Name 컬럼 표시 (`OnvifTimelineInline` — FullscreenCameraView 하단 탭)
+
+| 항목 | 내용 |
+|------|------|
+| **SRS** | SRS-06-11~16 |
+| **전제** | 카메라 전체화면 → 하단 ONVIF Timeline 탭 클릭 → 이벤트 1건 이상 존재 |
+| **절차 1** | 트랙 목록 최상단 확인 |
+| **기대** | "Name" sticky 헤더 행(22px)이 트랙 행들 위에 고정 표시됨 |
+| **기대** | 각 트랙 행 좌측 `LABEL_W=130px`에 topicLabel(severity 색상, bold) 표시 |
+| **기대** | sourceToken이 있으면 두 번째 줄에 gray 색상으로 표시됨 |
+| **기대** | ruleName이 있으면 세 번째 줄에 `[ruleName]` indigo 색상으로 표시됨 |
+| **절차 2** | 스크롤 휠로 줌인 → Gantt 영역 드래그 패닝 |
+| **기대** | Name 컬럼(130px)은 고정(flex-shrink-0), Gantt 영역만 좌우 이동됨 |
+| **절차 3** | tick 레이블(시간 눈금) 위치 확인 |
+| **기대** | tick strip이 Name 컬럼 우측(`left: LABEL_W`)에서 시작하여 Gantt 영역에만 표시됨 |
 
 ### TC-20: Detections Timeline Name 컬럼 표시
 
@@ -221,3 +237,4 @@ curl -X DELETE "http://localhost:3080/api/analysis/detection-tracks"
 | 1.0 | 2026-06-16 | 초기 작성 — Fullscreen Camera View 탭 확장 + Detections Timeline TC |
 | 1.1 | 2026-06-24 | TC-16~18 추가 — ONVIF Timeline 1H/6H 범위 프리셋 및 기본값 1H 검증 (streamingOnly) |
 | 1.2 | 2026-06-26 | TC-19~20 추가 — ONVIF·Detections Timeline Name 컬럼 표시 검증 |
+| 1.3 | 2026-06-26 | TC-19 제목 수정(Overlay 명시), TC-21 추가 — `OnvifTimelineInline`(FullscreenCameraView 하단 탭) Name 컬럼 세부 검증 (SRS-06-11~16) |

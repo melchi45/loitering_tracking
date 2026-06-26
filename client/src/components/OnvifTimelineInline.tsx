@@ -32,6 +32,7 @@ const SNAP_TOP   = BAR_TOP + BAR_H + 2;
 const TICK_H     = 20;
 const DETAIL_W   = 220;
 const DRAG_THRESH = 4;
+const LABEL_W     = 130; // left Name column width (px)
 
 // ── Range options ─────────────────────────────────────────────────────────────
 
@@ -80,6 +81,8 @@ interface OnvifInterval {
 interface OnvifRow {
   key: string;
   topicLabel: string;
+  sourceToken: string | null;
+  ruleName: string | null;
   severity: OnvifSeverity;
   intervals: OnvifInterval[];
 }
@@ -298,7 +301,7 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     if (!dragRef.current || !containerRef.current) return;
     const dx = e.clientX - dragRef.current.startX;
-    const trackW = containerRef.current.getBoundingClientRect().width;
+    const trackW = containerRef.current.getBoundingClientRect().width - LABEL_W;
     if (!hasDraggedRef.current && Math.abs(dx) < DRAG_THRESH) return;
     if (!hasDraggedRef.current) { hasDraggedRef.current = true; setIsDragging(true); }
     setPan(clampPan(dragRef.current.startPan - dx / trackW / zoom, zoom));
@@ -398,9 +401,9 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
           onMouseUp={stopDrag}
           onMouseLeave={stopDrag}
         >
-          {/* Tick labels at absolute bottom */}
-          <div className="absolute bottom-0 left-0 right-0 pointer-events-none bg-gray-900/60"
-               style={{ height: TICK_H, borderTop: '1px solid rgba(55,65,81,0.4)' }}>
+          {/* Tick labels at absolute bottom — offset by LABEL_W to align with Gantt area */}
+          <div className="absolute bottom-0 right-0 pointer-events-none bg-gray-900/60"
+               style={{ left: LABEL_W, height: TICK_H, borderTop: '1px solid rgba(55,65,81,0.4)' }}>
             {ticks.map(({ x, label }) => (
               <div key={x} className="absolute flex flex-col items-center"
                    style={{ left: `${x * 100}%`, transform: 'translateX(-50%)', bottom: 2 }}>
@@ -414,6 +417,15 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
           <div className="absolute top-0 left-0 right-0 overflow-y-auto"
                style={{ bottom: TICK_H }}>
 
+            {/* Sticky "Name" column header */}
+            <div className="flex sticky top-0 z-10 border-b border-gray-700/50 bg-gray-900/95">
+              <div className="flex-shrink-0 flex items-center px-3 border-r border-gray-700/60"
+                   style={{ width: LABEL_W, height: 22 }}>
+                <span className="text-[9px] font-semibold text-gray-500 uppercase tracking-wider">Name</span>
+              </div>
+              <div className="flex-1" style={{ height: 22 }} />
+            </div>
+
             {!loading && rows.length === 0 && (
               <div className="flex items-center justify-center h-full text-gray-600 text-xs">
                 {t.onvifTimelineEmpty}
@@ -422,12 +434,33 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
 
             {visibleRows.map((row, rowIdx) => (
               <div key={row.key}
-                   className="relative overflow-hidden"
+                   className="flex"
                    style={{
                      height: ROW_H,
                      borderBottom: '1px solid rgba(55,65,81,0.4)',
                      backgroundColor: rowIdx % 2 === 1 ? 'rgba(255,255,255,0.015)' : undefined,
                    }}>
+
+                {/* ── Left Name label ── */}
+                <div className="flex-shrink-0 flex items-center px-3 border-r border-gray-700/60 overflow-hidden"
+                     style={{ width: LABEL_W }}
+                     onMouseDown={e => e.stopPropagation()}>
+                  <div className="flex flex-col min-w-0">
+                    <span className={`text-[11px] font-semibold truncate ${SEV_TEXT[row.severity]}`}
+                          title={row.topicLabel}>
+                      {row.topicLabel}
+                    </span>
+                    {row.sourceToken && (
+                      <span className="text-[9px] text-gray-500 truncate">{row.sourceToken}</span>
+                    )}
+                    {row.ruleName && (
+                      <span className="text-[9px] text-indigo-400/70 truncate">[{row.ruleName}]</span>
+                    )}
+                  </div>
+                </div>
+
+                {/* ── Gantt area ── */}
+                <div className="flex-1 relative overflow-hidden" style={{ height: ROW_H }}>
 
                 {/* Row index */}
                 <span className="absolute left-0.5 text-[7px] text-gray-700 pointer-events-none"
@@ -587,6 +620,7 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                     );
                   })
                 }
+                </div> {/* end Gantt area */}
               </div>
             ))}
           </div>
@@ -836,10 +870,14 @@ function buildRows(intervals: OnvifInterval[]): OnvifRow[] {
     // Each unique (topicType, sourceToken, ruleName) triple gets its own timeline row.
     const key = `${iv.topicType}:${iv.sourceToken ?? ''}:${iv.ruleName ?? ''}`;
     if (!rowMap.has(key)) {
-      let label = iv.topicLabel;
-      if (iv.sourceToken) label += ` (${iv.sourceToken})`;
-      if (iv.ruleName)    label += ` [${iv.ruleName}]`;
-      rowMap.set(key, { key, topicLabel: label, severity: iv.severity, intervals: [] });
+      rowMap.set(key, {
+        key,
+        topicLabel:  iv.topicLabel,
+        sourceToken: iv.sourceToken,
+        ruleName:    iv.ruleName,
+        severity:    iv.severity,
+        intervals:   [],
+      });
     }
     rowMap.get(key)!.intervals.push(iv);
   }

@@ -481,26 +481,46 @@ DB 이벤트:  true(t1) → true(t2) → true(t3) → false(t4)
 - 각 `topicType:sourceToken:ruleName` 3-튜플 → 별도 행 (RuleName이 다르면 무조건 분리)
 - 행 레이블 = `topicLabel (sourceToken) [ruleName]` (있는 것만 조합)
 
-#### Name 컬럼 (OnvifTimelineOverlay — v2.4 신규)
+#### Name 컬럼 — `OnvifTimelineInline` (인라인 탭, v2.6 신규) 및 `OnvifTimelineOverlay` (v2.4 신규)
+
+두 컴포넌트 모두 동일한 `LABEL_W = 130px` Name 컬럼을 사용합니다.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
 │  [Name]      │ ← sticky 헤더 행 (22px, z-10)            │
 │──────────────┼──────────────────────────────────────────│
-│  Motion Alarm│ ████████████████████ [bar]  [bar]        │ ROW_H=68px
+│  Motion Alarm│ ████████████████████ [bar]  [bar]        │ ROW_H
 │  VS-1        │                                          │
+│  [Zone1]     │                                          │
 │──────────────┼──────────────────────────────────────────│
 │  DigitalInput│ ████████ [bar]                           │
 │  Index:0     │                                          │
 └──────────────┴──────────────────────────────────────────┘
-     ↑ ROW_LABEL_W=130px        ↑ flex-1 (Gantt 영역)
+     ↑ LABEL_W=130px             ↑ flex-1 (Gantt 영역)
 ```
 
 | 요소 | 위치 | 내용 |
 |------|------|------|
 | "Name" 헤더 | sticky top-0, z-10, height 22px | 회색 uppercase "Name" 레이블 |
-| 행 레이블 열 | `ROW_LABEL_W=130px`, flex-shrink-0 | topicLabel (severity 색상) + sourceToken (gray) + [ruleName] (indigo) |
-| 헤더 카메라 뱃지 | 상단 헤더 바 | `cameraName` (useCameraStore 조회) 우선; 없으면 `cameraId.slice(0,8)` |
+| 행 레이블 열 | `LABEL_W=130px`, flex-shrink-0 | topicLabel (severity 색상, bold) + sourceToken (gray, 있을 때) + [ruleName] (indigo, 있을 때) |
+| 헤더 카메라 뱃지 | 상단 헤더 바 (`OnvifTimelineOverlay` 전용) | `cameraName` (useCameraStore 조회) 우선; 없으면 `cameraId.slice(0,8)` |
+
+**`OnvifRow` 인터페이스 변경 (`OnvifTimelineInline`):**
+```typescript
+interface OnvifRow {
+  key:         string;
+  topicLabel:  string;
+  sourceToken: string | null;  // v2.6 신규 — 별도 저장
+  ruleName:    string | null;  // v2.6 신규 — 별도 저장
+  severity:    OnvifSeverity;
+  intervals:   OnvifInterval[];
+}
+```
+이전에는 `topicLabel`에 `topicLabel (sourceToken) [ruleName]` 형태로 합산 저장하였으나, Name 컬럼 분리 표시를 위해 각 필드를 독립 저장하도록 변경.
+
+**드래그 패닝·틱 오프셋 보정 (`OnvifTimelineInline`):**
+- 드래그 너비: `containerRef.getBoundingClientRect().width - LABEL_W`
+- tick strip: `style={{ left: LABEL_W, right: 0, height: TICK_H }}`
 
 #### 바 렌더링
 
@@ -592,6 +612,74 @@ User action:
 
 ---
 
+## 8. 카메라 연결 해제 시 미결 이벤트 자동 종료
+
+### 8.1 문제 상황
+
+카메라가 비정상 종료되거나 명시적으로 제거될 때, 해당 카메라에서 `state=true` ONVIF 이벤트가 열린 채로 남아 있는 경우가 발생합니다. 클라이언트 측 `buildIntervals()`는 대응하는 `state=false` 이벤트가 없으면 `inProgress=true`(점선 막대)로 표시하므로, 이 이벤트는 영구적으로 "진행 중"으로 표시됩니다.
+
+### 8.2 처리 흐름
+
+```
+pipelineManager.stopCamera(cameraId)
+  │
+  ├─ _onCameraOfflineHook(cameraId)          ← index.js에서 등록
+  │    │
+  │    └─ closeOpenEventsForCamera(cameraId)  ← internalApi.js 내부 함수
+  │         │
+  │         ├─ db.all('onvif_events')         ← 해당 카메라 전체 이벤트
+  │         │    └─ group by (topicType, sourceToken, ruleName)
+  │         │         └─ 그룹별 최신 이벤트 중 state='true'인 것만
+  │         │
+  │         ├─ for each open event:
+  │         │    ├─ db.insert('onvif_events', { ...closeEvent, state:'false', disconnectClose:true })
+  │         │    └─ io.emit('onvif:event', closeEvent)
+  │         │
+  │         └─ _lastStates 초기화 (해당 cameraId 키 전체 삭제)
+  │
+  ├─ ctx.running = false
+  ├─ capture.stop()
+  └─ _updateCameraStatus(cameraId, 'offline')
+```
+
+### 8.3 합성 종료 이벤트 스키마
+
+| 필드 | 값 | 설명 |
+|---|---|---|
+| `id` | UUID v4 | 새로 생성 |
+| `state` | `'false'` | 종료 상태 |
+| `operation` | `'Changed'` | ONVIF 표준 값 |
+| `utcTime` / `serverTs` | `new Date().toISOString()` | 카메라 중지 시각 |
+| `disconnectClose` | `true` | 합성 이벤트 식별자 (실제 카메라 전송과 구별) |
+| `items` / `rawPayload` | `null` | 합성이므로 원본 없음 |
+| 나머지 필드 | 원본 미결 이벤트에서 복사 | `topic`, `topicType`, `topicLabel`, `severity`, `sourceToken`, `ruleName` |
+
+### 8.4 클라이언트 영향
+
+클라이언트의 `buildIntervals()`는 변경 없이 동작합니다.
+- 실시간: `onvif:event` 소켓 이벤트 수신 → `pushEvent()` → `buildIntervals()` 재실행 → 막대 종료
+- 페이지 새로고침: `GET /api/onvif-events`에서 합성 종료 이벤트 포함 반환 → 정상 Gantt 막대 표시
+
+### 8.5 dedup 상태 초기화 목적
+
+`_lastStates`에서 해당 카메라 항목을 삭제하면 재연결 시 첫 수신 이벤트부터 저장됩니다.
+삭제하지 않을 경우, 재연결 후 카메라가 동일 `state`를 재전송하면 dedup에 의해 무시됩니다.
+
+### 8.6 훅 등록 위치 (순환 의존성 회피)
+
+`pipelineManager.js`는 `internalApi.js`를 직접 `require()`하면 순환 의존이 발생합니다.
+(`internalApi.js` → `pipelineManager` 참조, `pipelineManager.js` → `internalApi` 참조)
+
+해결책: `index.js`가 양쪽 모듈을 모두 알고 있으므로, 훅 등록을 `index.js`에서 수행합니다:
+
+```javascript
+// server/src/index.js
+const { closeOpenEventsForCamera } = require('./routes/internalApi');
+pipelineManager.setOnCameraOfflineHook(closeOpenEventsForCamera);
+```
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
@@ -611,3 +699,5 @@ User action:
 | 2.2 | 2026-06-24 | RuleName 기반 타임라인 행 분리 — buildIntervals/buildRows 키에 ruleName 포함; 행 레이블 `[RuleName]` 표시; detail panel RuleName 항목 추가; `OnvifEvent.ruleName` 필드 추가 |
 | 2.3 | 2026-06-25 | `onvif_snapshots` MongoDB 모드 서버 재시작 후 사라짐 버그 수정 — `snapshotsRouter.get()` 을 async 전환 후 `db.queryAsync('onvif_snapshots', …)` 사용. `onvif_snapshots` 는 frameData 블롭 때문에 시작 시 인메모리 hydration 제외 → `BaseDatabase.queryAsync()` / `MongoDatabase.queryAsync()` / `mongoDbService.findDirect()` 추가로 MongoDB 직접 조회 경로 구현. `mongoDbService.TABLES`에 누락됐던 `faceTrajectories`, `tc_results` 도 추가. |
 | 2.4 | 2026-06-26 | §5.9 Name 컬럼 추가 — `OnvifTimelineOverlay`에 sticky "Name" 헤더 행(22px) 및 행 레이블 열 문서화; 헤더 카메라 뱃지 `cameraName` 우선 표시 (`useCameraStore`); `DetectionsTimelineInline` `LABEL_W=100px` Name 컬럼 신규 추가 문서화 |
+| 2.5 | 2026-06-26 | §8 카메라 연결 해제 시 미결 이벤트 자동 종료 설계 추가 — `closeOpenEventsForCamera()` 처리 흐름·합성 이벤트 스키마·dedup 초기화·훅 등록 패턴(순환 의존 회피) 문서화 |
+| 2.6 | 2026-06-26 | §5.9 Name 컬럼 `OnvifTimelineInline` 누락 보완 — `LABEL_W=130px`, `OnvifRow.sourceToken/ruleName` 독립 저장, sticky 헤더, 드래그 너비 보정, tick 오프셋; `OnvifTimelineOverlay`와 동일 레이아웃 |

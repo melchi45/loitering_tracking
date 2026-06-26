@@ -310,8 +310,14 @@ All modules defined below correspond to completed SDLC chains (RFP → PRD → S
 
 | Requirement | Detail |
 |---|---|
-| BR-021 | 전체화면 채널 뷰 하단의 ONVIF Timeline 및 Detections Timeline은 각 행 좌측에 고정 폭 **Name 컬럼**을 표시해야 합니다. Name 컬럼은 행의 이름(이벤트 유형 / 객체 클래스)과 식별자(sourceToken · objectId · identity)를 운영자가 빠르게 식별할 수 있도록 제공해야 합니다 |
-| BR-022 | ONVIF Timeline의 Name 컬럼 헤더는 "Name" 레이블로 표시되어야 하며, 헤더 카메라 ID 뱃지는 카메라 표시 이름(displayName)을 우선 표시해야 합니다 |
+| BR-021 | 전체화면 채널 뷰 하단의 **ONVIF Timeline 인라인 탭(`OnvifTimelineInline`)**, **ONVIF Timeline 오버레이(`OnvifTimelineOverlay`)**, **Detections Timeline(`DetectionsTimelineInline`)** 모두 각 행 좌측에 고정 폭 **Name 컬럼**을 표시해야 합니다. Name 컬럼은 행의 이름(이벤트 유형 / 객체 클래스)과 식별자(sourceToken · objectId · identity)를 운영자가 빠르게 식별할 수 있도록 제공해야 합니다 |
+| BR-022 | 모든 ONVIF Timeline(인라인·오버레이) Name 컬럼 헤더는 "Name" sticky 레이블 행(22px)으로 표시되어야 하며, ONVIF Overlay 헤더 카메라 ID 뱃지는 카메라 표시 이름(displayName)을 우선 표시해야 합니다 |
+
+### 7.7 ONVIF Event Lifecycle — Camera Disconnect
+
+| Requirement | Detail |
+|---|---|
+| BR-023 | 카메라가 명시적으로 중지(stopCamera)될 때, 해당 카메라의 미결(state=true) ONVIF 이벤트는 자동으로 종료 처리되어야 합니다. 서버는 각 미결 이벤트에 대해 합성(synthetic) `state=false` 종료 이벤트를 DB에 삽입하고 Socket.IO로 브로드캐스트해야 합니다. 이를 통해 운영자는 카메라 연결 해제 후에도 ONVIF Timeline에서 이벤트가 무기한 "진행 중"으로 표시되는 현상을 방지할 수 있습니다 |
 
 ---
 
@@ -478,3 +484,5 @@ The following table maps planned market releases to engineering phases and targe
 | 1.3 | 2026-06-25 | LTS Engineering Team | §6.1 LLM/MCP 도구 수 15→21 업데이트 (카메라 CRUD 4종 + ONVIF 2종 + AI Detection 3종 + server status 1종 추가, MCP-LTS2026-001 v1.1) |
 | 1.4 | 2026-06-26 | LTS Engineering Team | §7.5 Storage & Startup Integrity 추가: BR-018~020 — DB_TYPE=mongodb 시 MongoDB 필수 확인 + exit(1) |
 | 1.5 | 2026-06-26 | LTS Engineering Team | §7.6 Operator UI — Timeline Readability 추가: BR-021~022 — ONVIF·Detections Timeline 좌측 Name 컬럼 요구사항 |
+| 1.6 | 2026-06-26 | LTS Engineering Team | §7.7 ONVIF Event Lifecycle 추가: BR-023 — 카메라 연결 해제 시 미결 ONVIF 이벤트 자동 종료 요구사항 |
+| 1.7 | 2026-06-26 | LTS Engineering Team | §7.6 BR-021~022 명세 보완 — `OnvifTimelineInline`(인라인 탭) 및 `OnvifTimelineOverlay` 모두 Name 컬럼 적용 대상 명시 |

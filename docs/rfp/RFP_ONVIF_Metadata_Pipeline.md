@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | RFP-LTS-ONVIF-01 |
-| **Version** | 1.2 |
+| **Version** | 1.4 |
 | **Status** | Active |
 | **Date** | 2026-06-24 |
 | **Issuer** | LTS-2026 프로젝트 팀 |
@@ -149,6 +149,19 @@ Application RTP로 식별하고, 해당 트랙의 RTP 패킷을 수집해야 합
 - DB에 `ruleName` 필드 저장; REST API 응답에 포함
 - 타임라인에서 RuleName별 독립 행 표시
 
+### RF-ONVIF-009: 카메라 연결 해제 시 미결 이벤트 자동 종료
+
+카메라가 명시적으로 중지될 때, 해당 카메라의 미결(state='true') ONVIF 이벤트를 자동으로 종료합니다.
+
+**배경:** 카메라 연결이 끊길 경우 카메라 측에서 `state=false` 이벤트를 전송하지 않으면 해당 이벤트는 클라이언트 타임라인에서 "진행 중"(inProgress) 상태로 무기한 표시됩니다.
+
+**인수 기준:**
+- `pipelineManager.stopCamera(cameraId)` 호출 시 해당 카메라의 미결 ONVIF 이벤트를 탐색
+- 각 미결 이벤트에 대해 `state='false'`, `disconnectClose=true`인 합성 종료 이벤트를 DB에 삽입
+- 삽입된 합성 이벤트를 `onvif:event` Socket.IO 이벤트로 즉시 브로드캐스트
+- `_lastStates` dedup 맵의 해당 카메라 항목 초기화 (재연결 시 새 세션으로 시작)
+- 종료 이벤트 삽입 후 `offline` 상태 업데이트 순으로 처리
+
 ---
 
 ## 4. 비기능 요구사항
@@ -248,3 +261,4 @@ ONVIF 이벤트가 카메라에서 발생한 후 브라우저에 표시되기까
 | 1.1 | 2026-06-24 | NF-ONVIF-005 추가 — MediaMTX 환경에서 ONVIF 이벤트·열상 온도 정상 수신 요구사항 |
 | 1.2 | 2026-06-24 | RF-ONVIF-007 인수 기준 업데이트 — 범위 프리셋 1H/6H 추가, 기본값 1H 명시 |
 | 1.3 | 2026-06-24 | RF-ONVIF-005 dedup 기준 RuleName 추가; RF-ONVIF-007 타임라인 RuleName 행 분리 명시; RF-ONVIF-008 신규 — RuleName 기반 이벤트 분리 요구사항 |
+| 1.4 | 2026-06-26 | RF-ONVIF-009 신규 — 카메라 연결 해제 시 미결 ONVIF 이벤트 자동 종료; 합성 state=false 이벤트 삽입 + Socket.IO 브로드캐스트 + _lastStates 초기화 인수 기준 |

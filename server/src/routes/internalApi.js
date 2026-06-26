@@ -193,4 +193,80 @@ router.post(
   }
 );
 
-module.exports = { router, setPipelineManager, setSocketIO, setDb };
+/**
+ * Close all in-progress ONVIF events for a camera that is going offline.
+ *
+ * When a camera disconnects without sending state=false for open events, those
+ * events remain "in progress" indefinitely in the timeline.  This function:
+ *   1. Scans onvif_events in the DB to find the most recent event per
+ *      (topicType, sourceToken, ruleName) group for the camera.
+ *   2. For each group whose latest event has state='true', inserts a synthetic
+ *      state='false' closing event timestamped "now".
+ *   3. Emits onvif:event via Socket.IO so live timeline UIs update immediately.
+ *   4. Clears _lastStates entries for the camera so the next reconnect starts clean.
+ *
+ * Called by pipelineManager.stopCamera() via the onCameraOfflineHook.
+ *
+ * @param {string} cameraId
+ */
+function closeOpenEventsForCamera(cameraId) {
+  if (!_db) return;
+  const now = new Date().toISOString();
+
+  // Find the most-recent event per (topicType, sourceToken, ruleName) for this camera.
+  const events = _db.all('onvif_events').filter(e => e.cameraId === cameraId);
+
+  if (events.length > 0) {
+    // Sort ascending so the last entry in each group is the most recent.
+    events.sort((a, b) => (a.serverTs < b.serverTs ? -1 : 1));
+
+    const lastByGroup = new Map();
+    for (const evt of events) {
+      // Use '::' separator to avoid ambiguity with ':' inside topic strings.
+      const groupKey = `${evt.topicType ?? evt.topic}::${evt.sourceToken ?? ''}::${evt.ruleName ?? ''}`;
+      lastByGroup.set(groupKey, evt);
+    }
+
+    let closedCount = 0;
+    for (const [, lastEvt] of lastByGroup) {
+      if (lastEvt.state !== 'true') continue;
+
+      const closeEvent = {
+        id:             uuidv4(),
+        cameraId,
+        topic:          lastEvt.topic,
+        topicType:      lastEvt.topicType,
+        topicLabel:     lastEvt.topicLabel,
+        severity:       lastEvt.severity,
+        utcTime:        now,
+        operation:      'Changed',
+        sourceToken:    lastEvt.sourceToken ?? null,
+        ruleName:       lastEvt.ruleName ?? null,
+        state:          'false',
+        items:          null,
+        rawPayload:     null,
+        serverTs:       now,
+        disconnectClose: true,   // synthetic — generated on camera disconnect
+      };
+
+      _db.insert('onvif_events', closeEvent);
+      if (_io) _io.emit('onvif:event', closeEvent);
+      closedCount++;
+    }
+
+    if (closedCount > 0) {
+      console.log(
+        `[internalApi][ONVIF] cam=${cameraId} offline: ` +
+        `auto-closed ${closedCount} in-progress event(s)`
+      );
+    }
+  }
+
+  // Clear dedup state for this camera so the next reconnect starts fresh.
+  const prefix = `${cameraId}:`;
+  for (const key of [..._lastStates.keys()]) {
+    if (key.startsWith(prefix)) _lastStates.delete(key);
+  }
+}
+
+module.exports = { router, setPipelineManager, setSocketIO, setDb, closeOpenEventsForCamera };

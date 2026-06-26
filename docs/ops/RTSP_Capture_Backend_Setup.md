@@ -624,6 +624,36 @@ c.close()
 - [FFmpeg_Installation_Compatibility.md](../ops/FFmpeg_Installation_Compatibility.md) — FFmpeg 호환성 (레거시)
 - [Design_LTS2026_YouTube_RTSP_Ingest.md](../design/Design_LTS2026_YouTube_RTSP_Ingest.md) — YouTube 스트림 설계
 - [Process_Management.md](../ops/Process_Management.md) — 프로세스 종료·재시작·수동 정리
+- [Design_ONVIF_Timeline.md](../design/Design_ONVIF_Timeline.md) — ONVIF 이벤트 타임라인 설계 (Name 컬럼·Gantt 바·카메라 연결 해제 자동 종료)
+
+---
+
+## ONVIF 이벤트 타임라인 운영 안내
+
+> **v1.2 신규** — 서버 설정 변경 없음; 클라이언트 UI 기능 운영 안내
+
+### 전체화면 ONVIF Timeline (하단 탭)
+
+카메라 전체화면 뷰 하단의 **ONVIF Timeline 탭**(`OnvifTimelineInline`)에서 수신된 ONVIF 이벤트를 Gantt 타임라인으로 시각화합니다.
+
+| 요소 | 설명 |
+|------|------|
+| **Name 컬럼 (130px)** | 각 트랙 행 좌측에 이벤트 유형(`topicLabel`) · 소스 토큰(`sourceToken`) · 규칙명(`[ruleName]`)을 표시. 운영자가 스크롤 없이 행 유형을 즉시 식별 |
+| **sticky 헤더** | "Name" 레이블 행(22px)이 스크롤 시 상단에 고정 |
+| **범위 프리셋** | 1H · 6H · 1D · 1W · 1M · 1Y · Custom (기본: 1H) |
+| **상세 패널** | 이벤트 클릭 시 우측 패널에 Parsed 정보 및 Raw XML 표시 |
+| **자동 종료** | 카메라 연결 해제(`stopCamera`) 시 미결 이벤트(state=true)가 자동 닫힘(disconnectClose=true 표시) |
+
+### 트러블슈팅
+
+```bash
+# ONVIF 이벤트가 타임라인에 표시되지 않을 때
+curl http://localhost:3080/api/onvif-events?cameraId=<CAM_ID>&limit=10
+
+# sourceToken / ruleName 필드 확인
+curl http://localhost:3080/api/onvif-events?cameraId=<CAM_ID>&limit=1 | python3 -m json.tool
+# → sourceToken, ruleName 필드가 null 또는 문자열로 반환되어야 정상
+```
 
 ---
 
@@ -633,3 +663,4 @@ c.close()
 |---|---|---|
 | 1.0 | 2026-06-04 | 초기 작성 |
 | 1.1 | 2026-06-19 | Ingest-Daemon Watchdog 및 자동 복구 섹션 추가 (RTSP_READ_TIMEOUT, 계층 3 프로세스 재시작, 수동 진단 절차)
+| 1.2 | 2026-06-26 | ONVIF 이벤트 타임라인 운영 안내 섹션 추가 — 전체화면 하단 탭 Name 컬럼 설명·트러블슈팅 curl 예시 |

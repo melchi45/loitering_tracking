@@ -1,6 +1,6 @@
 # PRD: Fullscreen Camera View — 탭 확장 & 이력 데이터 통합
 
-**Version:** 1.2
+**Version:** 1.3
 **Status:** Implemented
 **SDLC:** [RFP](../rfp/RFP_Fullscreen_Camera_View.md) · [SRS](../srs/SRS_Fullscreen_Camera_View.md) · [Design](../design/Design_Fullscreen_Camera_View.md) · [TC](../tc/TC_Fullscreen_Camera_View.md)
 
@@ -68,13 +68,15 @@ Apply 클릭 전까지 fetch 없음. Apply 클릭 시 지정 범위로 `GET /api
 
 | 컴포넌트 | Name 컬럼 너비 | 표시 내용 |
 |---------|:---:|---|
+| `OnvifTimelineInline` | 130px (`LABEL_W`) | 상단: topicLabel (severity 색상, bold) / 중간: sourceToken (gray, 있을 때) / 하단: [ruleName] (indigo, 있을 때) |
 | `OnvifTimelineOverlay` | 130px (기존 `ROW_LABEL_W`) | 상단: topicLabel (색상 강조) / 중간: sourceToken / 하단: [ruleName] |
 | `DetectionsTimelineInline` | 100px (`LABEL_W`) | 상단: className (classColor 색상) / 중간: #objectId_last6 / 하단: identity (있을 때) |
 
 **추가 변경사항:**
-- ONVIF Timeline 헤더 카메라 ID 뱃지 → `cameraName`(useCameraStore) 우선 표시 (없으면 cameraId 앞 8자)
-- 양쪽 타임라인에 "Name" 레이블 sticky 헤더 행 추가
-- Detections Timeline: 드래그 너비 계산을 `containerWidth - LABEL_W`로 보정, tick strip을 `left: LABEL_W`로 오프셋
+- ONVIF Timeline Overlay 헤더 카메라 ID 뱃지 → `cameraName`(useCameraStore) 우선 표시 (없으면 cameraId 앞 8자)
+- 모든 타임라인에 "Name" 레이블 sticky 헤더 행(22px) 추가
+- `OnvifTimelineInline.OnvifRow` 인터페이스에 `sourceToken`, `ruleName` 필드 독립 추가
+- `OnvifTimelineInline` · Detections Timeline: 드래그 너비 계산을 `containerWidth - LABEL_W`로 보정, tick strip을 `left: LABEL_W`로 오프셋
 
 ### 3.5 API 확장 (`/api/analysis/events`)
 
@@ -106,4 +108,5 @@ Apply 클릭 전까지 fetch 없음. Apply 클릭 시 지정 범위로 `GET /api
 |---|---|---|
 | 1.0 | 2026-06-16 | 초기 작성 — Fullscreen Camera View 탭 확장 PRD |
 | 1.1 | 2026-06-24 | OnvifTimelineInline 범위 프리셋 `[1H][6H][1D][1W][1M][1Y][Custom]`으로 업데이트, 기본값 1H |
-| 1.2 | 2026-06-26 | US-06/07 추가, §3.4 Timeline Name 컬럼 추가 — ONVIF·Detections 좌측 Name 컬럼 + cameraName 표시 |
+| 1.2 | 2026-06-26 | US-06/07 추가, §3.4 Timeline Name 컬럼 추가 — ONVIF Overlay·Detections 좌측 Name 컬럼 + cameraName 표시 |
+| 1.3 | 2026-06-26 | §3.4 `OnvifTimelineInline` Name 컬럼 누락 보완 — 인라인 탭(FullscreenCameraView 하단)에도 동일 Name 컬럼 구현; OnvifRow.sourceToken/ruleName 독립 저장 명세 추가 |

@@ -101,7 +101,7 @@ const SUITES = [
   // TLS
   { file: 'test/api/https_tls.test.js',                     srs: 'FR-TLS-001~010',                          label: 'HTTPS TLS' },
   // ONVIF (captureOnly: ONVIF subscription and App-RTP require a capture pipeline)
-  { file: 'test/api/onvif_metadata_pipeline.test.js',       srs: 'FR-ONVIF-PIPE-001~020',                   label: 'ONVIF Metadata Pipeline',     captureOnly: true },
+  { file: 'test/api/onvif_metadata_pipeline.test.js',       srs: 'FR-ONVIF-PIPE-001~020,FR-ONVIF-DISCONNECT-001~006', label: 'ONVIF Metadata Pipeline',     captureOnly: true },
   { file: 'test/api/onvif_apprtp.test.js',                  srs: 'FR-ONVIF-RTP-001~010',                    label: 'ONVIF App-RTP',               captureOnly: true },
   { file: 'test/api/thermal_radiometry_overlay.test.js',    srs: 'FR-THERMAL-001~010',                      label: 'Thermal Radiometry Overlay' },
   // Timeline (streamingOnly)

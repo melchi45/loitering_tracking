@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-ONVIF-01 |
-| **Version** | 1.5 |
+| **Version** | 1.7 |
 | **Status** | Active |
 | **Date** | 2026-06-23 |
 | **Related SRS** | [SRS_ONVIF_Metadata_Pipeline.md](../srs/SRS_ONVIF_Metadata_Pipeline.md) |
@@ -695,6 +695,44 @@ Admin Dashboard → Audit → Startup Tests 탭에서 스위트별 TC 결과를 
 
 ---
 
+## TC-DISCONNECT-001 — 미결 ONVIF 이벤트 자동 종료 (단위)
+
+| 항목 | 내용 |
+|---|---|
+| **SRS** | FR-ONVIF-DISCONNECT-001~004 |
+| **자동화** | `test/api/onvif_metadata_pipeline.test.js` (서버 필요 없는 단위 테스트) |
+| **전제** | `internalApi.js`의 `closeOpenEventsForCamera` 함수 직접 호출 |
+| **절차** | 1. DB Mock에 cameraId=`test-cam` state='true' 이벤트 1건 삽입  2. `closeOpenEventsForCamera('test-cam')` 호출  3. DB insert 호출 여부 확인  4. Socket.IO emit 호출 여부 확인 |
+| **기대** | `state='false'`, `disconnectClose=true`인 이벤트 1건 삽입; `onvif:event` emit 1회 |
+
+## TC-DISCONNECT-002 — 카메라 중지 시 종료 이벤트 삽입 (API 통합)
+
+| 항목 | 내용 |
+|---|---|
+| **SRS** | FR-ONVIF-DISCONNECT-001~005 |
+| **자동화** | `test/api/onvif_metadata_pipeline.test.js` (서버 실행 필요) |
+| **전제** | LTS 서버 실행 중; 테스트 카메라 등록 |
+| **절차** | 1. `POST /api/internal/apprtp/:cameraId` 로 state='true' 이벤트 전송  2. `DELETE /api/cameras/:id` 또는 `stopCamera` 트리거  3. `GET /api/onvif-events?cameraId=…` 조회 |
+| **기대** | 응답에 `state='false'` + `disconnectClose=true` 이벤트 1건 추가 확인 |
+
+## TC-DISCONNECT-003 — 미결 없는 경우 DB insert 없음 (단위)
+
+| 항목 | 내용 |
+|---|---|
+| **SRS** | FR-ONVIF-DISCONNECT-001 |
+| **절차** | 1. DB에 state='false' 이벤트만 있는 카메라에 대해 `closeOpenEventsForCamera` 호출  2. DB insert 호출 수 확인 |
+| **기대** | insert 호출 0회 (미결 이벤트 없으므로 아무것도 삽입하지 않음) |
+
+## TC-DISCONNECT-004 — dedup 상태 초기화 (단위)
+
+| 항목 | 내용 |
+|---|---|
+| **SRS** | FR-ONVIF-DISCONNECT-004 |
+| **절차** | 1. `_lastStates`에 `test-cam:topic:src:` 키 설정  2. `closeOpenEventsForCamera('test-cam')` 호출  3. `_lastStates`에 해당 키 존재 여부 확인 |
+| **기대** | 호출 후 `test-cam:` 으로 시작하는 모든 키 삭제됨 |
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
@@ -706,3 +744,4 @@ Admin Dashboard → Audit → Startup Tests 탭에서 스위트별 TC 결과를 
 | 1.4 | 2026-06-24 | TC-APPRTP-013~014 추가 — MediaMTX App RTP URL 분리 검증 + EADDRINUSE 3회 종료 방어 처리 |
 | 1.5 | 2026-06-24 | TC-TIMELINE-RANGE-001~008 추가 — ONVIF 이벤트·Detection tracks API 1H/6H 범위 파라미터 검증 (streamingOnly); Admin Audit 스위트 표에 timeline_range 추가 |
 | 1.6 | 2026-06-24 | TC-PARSER-007b (유닛) + TC-PARSER-011 (통합) 추가 — RuleName 기반 이벤트 분리 검증; Traceability Matrix에 두 TC 추가 |
+| 1.7 | 2026-06-26 | TC-DISCONNECT-001~004 추가 — 카메라 연결 해제 시 미결 ONVIF 이벤트 자동 종료 검증 |

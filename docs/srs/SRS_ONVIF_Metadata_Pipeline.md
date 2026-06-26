@@ -1,6 +1,6 @@
 # SRS — ONVIF Metadata Pipeline (App RTP)
 **Document ID**: SRS-LTS-ONVIF-01  
-**Version**: 1.5  
+**Version**: 1.8  
 **Date**: 2026-06-23  
 **Project**: Loitering Detection & Tracking System (LTS-2026)  
 **Status**: Active  
@@ -329,6 +329,43 @@ App RTP 루프가 `OSError(errno=98)`(EADDRINUSE)를 3회 연속으로 만나면
 
 ---
 
+## 3-E. 카메라 연결 해제 시 미결 이벤트 종료 (`FR-ONVIF-DISCONNECT`)
+
+### FR-ONVIF-DISCONNECT-001: 미결 이벤트 탐색
+
+`closeOpenEventsForCamera(cameraId)` 호출 시, `onvif_events` DB에서 해당 `cameraId`의 모든 이벤트를 가져와 `(topicType, sourceToken, ruleName)` 그룹별 최신 이벤트를 추출해야 한다.
+그룹별 최신 이벤트의 `state`가 `'true'`인 경우 해당 이벤트를 미결(in-progress)로 판단한다.
+
+### FR-ONVIF-DISCONNECT-002: 합성 종료 이벤트 삽입
+
+각 미결 이벤트에 대해 다음 필드로 구성된 합성 종료 이벤트를 `onvif_events`에 삽입해야 한다:
+- `state`: `'false'`
+- `operation`: `'Changed'`
+- `utcTime` / `serverTs`: 현재 시각 (`new Date().toISOString()`)
+- `disconnectClose`: `true` (합성 이벤트 식별자)
+- `topic`, `topicType`, `topicLabel`, `severity`, `sourceToken`, `ruleName`: 원본 미결 이벤트에서 복사
+- `items`, `rawPayload`: `null`
+
+### FR-ONVIF-DISCONNECT-003: Socket.IO 즉시 브로드캐스트
+
+삽입된 각 합성 종료 이벤트는 `_io.emit('onvif:event', closeEvent)`로 즉시 브로드캐스트해야 한다. 이를 통해 연결된 클라이언트의 ONVIF Timeline이 실시간으로 이벤트를 종료 처리한다.
+
+### FR-ONVIF-DISCONNECT-004: dedup 상태 초기화
+
+`closeOpenEventsForCamera(cameraId)` 실행 후 `_lastStates` Map에서 해당 `cameraId`로 시작하는 모든 키를 삭제해야 한다. 이를 통해 카메라 재연결 시 새 세션으로 시작한다.
+
+### FR-ONVIF-DISCONNECT-005: stopCamera 훅 연동
+
+`pipelineManager.stopCamera(cameraId)`는 `_updateCameraStatus(cameraId, 'offline')` 이전에 `_onCameraOfflineHook(cameraId)`를 호출해야 한다.
+훅 실행 중 예외가 발생하더라도 `stopCamera` 나머지 로직이 중단되지 않아야 한다 (try-catch 보호).
+
+### FR-ONVIF-DISCONNECT-006: 훅 등록 방식 (순환 의존성 회피)
+
+`pipelineManager.js`는 `internalApi.js`를 직접 `require()`하지 않는다.
+대신 `index.js`가 `pipelineManager.setOnCameraOfflineHook(closeOpenEventsForCamera)`를 호출하여 훅을 등록한다.
+
+---
+
 ## 4. 환경변수
 
 | 변수 | 기본값 | 설명 |
@@ -362,3 +399,4 @@ App RTP 루프가 `OSError(errno=98)`(EADDRINUSE)를 3회 연속으로 만나면
 | 1.5 | 2026-06-24 | §3-C FR-ONVIF-RANGE-001~005 추가 — ONVIF Timeline 1H/6H 범위 프리셋, 기본값 1H, Detection tracks 동일 범위 지원 |
 | 1.6 | 2026-06-24 | §3-D FR-ONVIF-RULENAME-001~005 추가 — RuleName 파싱·dedup·DB 저장·타임라인 행 분리·상세 패널 표시 |
 | 1.7 | 2026-06-25 | 버그 수정 반영 — `onvif_snapshots` MongoDB 재시작 후 사라짐: `DB_TYPE=mongodb` 환경에서 서버 재시작 시 스냅샷 이미지가 모두 사라지는 버그 수정. `snapshotsRouter.get()` async 전환 + `db.queryAsync()` 경유로 MongoDB 직접 조회 (인메모리 store 우회). `BaseDatabase.queryAsync()` / `MongoDatabase.queryAsync()` / `mongoDbService.findDirect()` 신규 추가. |
+| 1.8 | 2026-06-26 | §3-E FR-ONVIF-DISCONNECT-001~006 추가 — 카메라 연결 해제 시 미결 ONVIF 이벤트 자동 종료: `closeOpenEventsForCamera()` + `setOnCameraOfflineHook()` + `stopCamera()` 훅 연동 |

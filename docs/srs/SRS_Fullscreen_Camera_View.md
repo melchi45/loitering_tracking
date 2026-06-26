@@ -1,6 +1,6 @@
 # SRS: Fullscreen Camera View — 탭 확장 & 이력 데이터 통합
 
-**Version:** 1.2
+**Version:** 1.3
 **Status:** Implemented
 **SDLC:** [RFP](../rfp/RFP_Fullscreen_Camera_View.md) · [PRD](../prd/PRD_Fullscreen_Camera_View.md) · [Design](../design/Design_Fullscreen_Camera_View.md) · [TC](../tc/TC_Fullscreen_Camera_View.md)
 
@@ -53,7 +53,16 @@
 
 ### FR-06: Timeline Name 컬럼
 
-#### ONVIF Timeline (`OnvifTimelineOverlay`)
+#### ONVIF Timeline 인라인 뷰 (`OnvifTimelineInline`)
+
+- **SRS-06-11**: `OnvifTimelineInline`은 스크롤 가능한 트랙 행 영역 상단에 sticky "Name" 컬럼 헤더 행(높이 22px)을 표시한다
+- **SRS-06-12**: 헤더 행의 좌측 구획(width = `LABEL_W` = 130px)에 "Name" 텍스트를 표시한다
+- **SRS-06-13**: 각 트랙 행의 좌측 `LABEL_W=130px` 고정 폭에 `topicLabel`(severity 색상, bold) / `sourceToken`(gray, 있을 때) / `[ruleName]`(indigo, 있을 때)을 3줄로 표시한다
+- **SRS-06-14**: `OnvifRow` 인터페이스에 `sourceToken: string | null`, `ruleName: string | null` 필드를 추가하고 `buildRows()`에서 개별 저장한다
+- **SRS-06-15**: 드래그 패닝 너비 계산은 `containerRef.getBoundingClientRect().width - LABEL_W`를 사용한다
+- **SRS-06-16**: tick 레이블 strip은 `left: LABEL_W`에서 시작하여 Gantt 영역에만 렌더링된다
+
+#### ONVIF Timeline 전체화면 오버레이 (`OnvifTimelineOverlay`)
 
 - **SRS-06-1**: `OnvifTimelineOverlay`는 스크롤 가능한 트랙 행 영역 상단에 sticky "Name" 컬럼 헤더 행(높이 22px)을 표시한다
 - **SRS-06-2**: 헤더 행의 좌측 구획(width = `ROW_LABEL_W` = 130px)에 "Name" 텍스트를 표시한다
@@ -100,8 +109,9 @@
 | SRS-03-1~9 | `AnalysisHistoryTab.tsx` | 전체 |
 | SRS-04-1~8 | `OnvifTimelineInline.tsx` | 상태, fetch effect, 컨트롤 행 |
 | SRS-05-1~5 | `server/src/routes/analysisApi.js` | `GET /api/analysis/events` 핸들러 |
+| SRS-06-11~16 | `OnvifTimelineInline.tsx` | LABEL_W=130 상수, OnvifRow sourceToken/ruleName 필드, sticky Name 헤더, Name 컬럼 렌더링, 드래그 너비 보정, tick 오프셋 |
 | SRS-06-1~4 | `OnvifTimelineOverlay.tsx` | useCameraStore import, cameraName 조회, Name 헤더 행 |
-| SRS-06-5~10 | `DetectionsTimelineInline.tsx` | LABEL_W 상수, Name 컬럼 렌더링, 너비 계산 보정 |
+| SRS-06-5~10 | `DetectionsTimelineInline.tsx` | LABEL_W=100 상수, Name 컬럼 렌더링, 너비 계산 보정 |
 
 ---
 
@@ -112,3 +122,4 @@
 | 1.0 | 2026-06-16 | 초기 작성 — Fullscreen Camera View 탭 확장 SRS |
 | 1.1 | 2026-06-24 | SRS-04-1 업데이트 — OnvifTimelineInline 범위 버튼 1H/6H 추가, 기본값 1D → 1H |
 | 1.2 | 2026-06-26 | FR-06 추가 — ONVIF·Detections Timeline Name 컬럼 SRS (SRS-06-1~10); 추적 매트릭스 업데이트 |
+| 1.3 | 2026-06-26 | FR-06 SRS-06-11~16 추가 — `OnvifTimelineInline` Name 컬럼 누락 보완: LABEL_W=130, OnvifRow.sourceToken/ruleName, sticky 헤더, 드래그 너비 보정, tick 오프셋 |

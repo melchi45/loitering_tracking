@@ -32,7 +32,7 @@ const settingsRouter         = require('./api/settings');
 const missingPersonsRouter   = require('./api/missingPersons');
 const youtubeStreamsRouter    = require('./api/youtubeStreams');
 const internalRouter         = require('./api/internal');
-const { router: ingestFrameRouter, setPipelineManager: setIngestPM, setSocketIO: setIngestIO, setDb: setIngestDb } = require('./routes/internalApi');
+const { router: ingestFrameRouter, setPipelineManager: setIngestPM, setSocketIO: setIngestIO, setDb: setIngestDb, closeOpenEventsForCamera } = require('./routes/internalApi');
 const { router: onvifEventsRouter, typesRouter: onvifTypesRouter, snapshotsRouter: onvifSnapshotsRouter, setDb: setOnvifDb } = require('./routes/onvifApi');
 const faceGalleryRouter      = require('./api/faceGallery');
 const { buildRouter: buildSnapshotsRouter } = require('./api/snapshots');
@@ -227,6 +227,9 @@ async function main() {
   setIngestIO(io);
   setIngestDb(db);
   app.use('/api/internal',        ingestFrameRouter);
+  // Wire ONVIF event auto-close on camera offline (avoids circular import between
+  // pipelineManager and internalApi by registering the hook here in index.js).
+  pipelineManager.setOnCameraOfflineHook(closeOpenEventsForCamera);
 
   // ONVIF events REST API (all server modes)
   setOnvifDb(db);

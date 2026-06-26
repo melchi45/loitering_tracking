@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-ONVIF-01 |
-| **Version** | 1.2 |
+| **Version** | 1.4 |
 | **Status** | Active |
 | **Date** | 2026-06-24 |
 | **Related RFP** | [RFP_ONVIF_Metadata_Pipeline.md](../rfp/RFP_ONVIF_Metadata_Pipeline.md) |
@@ -97,6 +97,9 @@ Gantt 타임라인 UI에 표시하는 기능을 제공합니다.
 | PRD-ONVIF-048 | `internalApi.js` | dedup 키에 `ruleName` 포함 — 동일 topic/source라도 RuleName이 다르면 별도 스트림 | P0 |
 | PRD-ONVIF-049 | `onvif_events` DB | `ruleName` 필드 저장, GET 응답에 포함 | P0 |
 | PRD-ONVIF-050 | `OnvifTimelineInline.tsx` `OnvifTimelineOverlay.tsx` | `(topicType, sourceToken, ruleName)` 3-튜플로 행 분리 — RuleName별 독립 타임라인 행 렌더링 | P0 |
+| PRD-ONVIF-051 | `server/src/routes/internalApi.js` | `closeOpenEventsForCamera(cameraId)` 함수 구현 및 내보내기 — 카메라별 미결(state='true') ONVIF 이벤트 탐색 → 합성 state='false' 이벤트 삽입 → Socket.IO 브로드캐스트 → `_lastStates` 초기화 | P0 |
+| PRD-ONVIF-052 | `server/src/services/pipelineManager.js` | `setOnCameraOfflineHook(fn)` 메서드 추가; `stopCamera()` 내에서 훅 실행 (카메라 오프라인 전 호출) | P0 |
+| PRD-ONVIF-053 | `server/src/index.js` | `closeOpenEventsForCamera`를 `internalApi`에서 가져와 `pipelineManager.setOnCameraOfflineHook()`으로 등록 — 순환 의존성 없이 연결 | P0 |
 
 ---
 
@@ -174,3 +177,4 @@ Gantt 타임라인 UI에 표시하는 기능을 제공합니다.
 | 1.1 | 2026-06-24 | PRD-ONVIF-008~009 추가 — MediaMTX 환경 App RTP URL 분리 및 EADDRINUSE 방어 처리 |
 | 1.2 | 2026-06-24 | PRD-ONVIF-046 추가 — OnvifTimelineInline 범위 프리셋 1H/6H 추가, 기본값 1H |
 | 1.3 | 2026-06-24 | PRD-ONVIF-047~050 추가 — RuleName 기반 이벤트 분리: 파싱·dedup·DB 저장·타임라인 행 분리 |
+| 1.4 | 2026-06-26 | PRD-ONVIF-051~053 추가 — 카메라 연결 해제 시 미결 ONVIF 이벤트 자동 종료: closeOpenEventsForCamera() + setOnCameraOfflineHook() + index.js 훅 등록 |
