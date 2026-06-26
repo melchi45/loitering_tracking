@@ -58,7 +58,10 @@ async function detectCudaToolkit() {
   const out = _run('nvcc --version');
   if (out) {
     const match = out.match(/release (\d+\.\d+)/);
-    return { available: true, version: match?.[1] ?? 'unknown' };
+    // nvcc 가 시스템 PATH 에 있을 때 전체 경로를 함께 반환 (CUDA_HOME 유도에 필요)
+    const locateCmd = IS_WIN ? 'where nvcc 2>nul' : 'which nvcc 2>/dev/null';
+    const nvccPath = _run(locateCmd)?.split(/\r?\n/)[0]?.trim() || null;
+    return { available: true, version: match?.[1] ?? 'unknown', path: nvccPath };
   }
 
   if (IS_LINUX) {

@@ -61,10 +61,41 @@ function parseCli() {
  * nvcc 경로 → CUDA_HOME
  *   Linux:   /usr/local/cuda-12.9/bin/nvcc → /usr/local/cuda-12.9
  *   Windows: C:\...\CUDA\v12.9\bin\nvcc.exe → C:\...\CUDA\v12.9
+ *
+ * nvccPath 가 없거나 유도된 경로가 존재하지 않으면 환경변수 / 기본 설치 경로로 fallback
  */
-function deriveCudaHome(nvccPath) {
-  if (!nvccPath) return '';
-  return path.dirname(path.dirname(nvccPath));  // strip /bin/nvcc
+function deriveCudaHome(nvccPath, cudaVersion) {
+  const fs = require('fs');
+
+  // 1) nvcc 경로에서 2단계 상위 디렉토리 유도
+  if (nvccPath) {
+    const derived = path.dirname(path.dirname(nvccPath));
+    if (fs.existsSync(derived)) return derived;
+  }
+
+  // 2) CUDA_PATH_Vxx 환경변수 탐색 (버전 순)
+  const envVars = [
+    'CUDA_PATH_V12_9', 'CUDA_PATH_V12_8', 'CUDA_PATH_V12_7',
+    'CUDA_PATH_V12_6', 'CUDA_PATH_V12_5', 'CUDA_PATH_V12_4',
+    'CUDA_PATH_V12_3', 'CUDA_PATH_V12_2', 'CUDA_PATH_V12_1',
+    'CUDA_PATH_V12_0', 'CUDA_PATH_V11_8', 'CUDA_PATH_V11_7',
+    'CUDA_PATH',
+  ];
+  for (const v of envVars) {
+    const val = process.env[v];
+    if (val && fs.existsSync(val)) return val;
+  }
+
+  // 3) 감지된 버전 문자열로 기본 설치 경로 구성 (Windows)
+  if (cudaVersion && IS_WIN) {
+    const winPath = `C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v${cudaVersion}`;
+    if (fs.existsSync(winPath)) return winPath;
+  }
+
+  // 4) /usr/local/cuda symlink (Linux)
+  if (!IS_WIN && require('fs').existsSync('/usr/local/cuda')) return '/usr/local/cuda';
+
+  return '';
 }
 
 /**
@@ -144,7 +175,7 @@ async function main() {
   }
 
   // ── 경로 유도 ─────────────────────────────────────────────────────────────
-  const cudaHome  = deriveCudaHome(diag.cudaToolkit.path);
+  const cudaHome  = deriveCudaHome(diag.cudaToolkit.path, diag.cudaToolkit.version);
   const cudnnHome = deriveCudnnHome(diag.cudnn.path || '');
   const cudaArch  = detectCudaArch();
 
