@@ -64,9 +64,10 @@ IP 카메라 (RTSP/554)
 │  captureFactory.js                                           │
 │                                                              │
 │  CAPTURE_BACKEND env var                                     │
-│    'ffmpeg'     → RTSPCapture      (rtspCapture.js)         │
-│    'gstreamer'  → GStreamerCapture (gstreamerCapture.js)    │
-│    'pyav'       → PyAVCapture      (pyavCapture.js)         │
+│    'ingest-daemon' → IngestDaemonCapture (★현재 기본값★)   │
+│    'ffmpeg'        → RTSPCapture      (레거시)              │
+│    'gstreamer'     → GStreamerCapture (레거시)              │
+│    'pyav'          → PyAVCapture      (레거시)              │
 └──────────────────────┬───────────────────────────────────────┘
                        │ 동일 EventEmitter 인터페이스
                        │ events: frame / started / reconnecting
@@ -763,3 +764,4 @@ inp.read_timeout = int(APP_RTP_READ_TIMEOUT * 1_000_000)  # μs 단위
 | 1.2 | 2026-06-19 | §6.7 Watchdog 및 자동 복구 추가 — PyAV 내부 watchdog, Node.js 프레임 watchdog, startServer.js 자동 재시작, reregisterAllWithIngestDaemon() |
 | 1.3 | 2026-06-23 | §11 ingest-daemon 정상 종료 추가 — 2-phase stop (pre-signal all → join all), KeyboardInterrupt 보호, Connection refused 스팸 제거 |
 | 1.4 | 2026-06-23 | §12 App RTP watchdog segfault 수정 — _Watchdog→read_timeout(AVFormatContext.io_timeout) 교체, codec=unknown cross-thread close 금지, APP_RTP_READ_TIMEOUT=60s |
+| 1.5 | 2026-06-26 | §2 아키텍처 다이어그램에 ingest-daemon 항목 추가 및 현재 기본값 표기 |

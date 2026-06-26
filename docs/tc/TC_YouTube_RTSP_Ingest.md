@@ -4,11 +4,12 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-YT-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-05-27 |
 | **Parent SRS** | srs/SRS_YouTube_RTSP_Ingest.md |
 | **Test Scripts** | test/api/youtube_streams.test.js |
+| **TC Mode** | `captureOnly: true` — **`SERVER_MODE=analysis`에서 스킵** (YouTubeStreamService 비활성) |
 
 ---
 
@@ -353,3 +354,4 @@ Group A (validation/limits) → Group D (REST API) → Group B (processes) → G
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for YouTube RTSP Ingest |
+| 1.1 | 2026-06-26 | LTS Engineering Team | captureOnly 모드 표기 추가 (SERVER_MODE=analysis 스킵); _startStream() spawn 위치 명시 |

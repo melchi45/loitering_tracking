@@ -4,11 +4,12 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-CAPTURE-002 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-06-04 |
-| **Related Design** | [Design_FFmpeg_RTSP_Capture.md](../design/Design_FFmpeg_RTSP_Capture.md) |
-| **Test Target** | `server/src/services/captureFactory.js`, `server/src/services/gstreamerCapture.js`, `server/src/services/pyavCapture.js` |
+| **Related Design** | [Design_RTSP_Capture_Backend.md](../design/Design_RTSP_Capture_Backend.md) · [Design_FFmpeg_RTSP_Capture.md](../design/Design_FFmpeg_RTSP_Capture.md) |
+| **Test Target** | `server/src/services/captureFactory.js`, `server/src/services/ingestDaemonCapture.js`, `ingest-daemon/ingest_daemon.py`, `server/src/services/gstreamerCapture.js`, `server/src/services/pyavCapture.js` |
+| **TC Mode** | `captureOnly: true` — **`SERVER_MODE=analysis`에서 스킵** (RTSP 캡처 백엔드 없음) |
 
 ---
 
@@ -516,3 +517,76 @@ setTimeout(() => {
 | TC-CAPTURE-010 | 잘못된 값 → RTSPCapture + warn 1회 | 방어 코드 |
 | TC-CAPTURE-011 | 백엔드 전환 후 파이프라인 정상 가동 | 운영 전환 |
 | TC-CAPTURE-012 | subprocess 종료 후 자동 재연결 | 안정성 |
+| TC-CAPTURE-013 | `CAPTURE_BACKEND=ingest-daemon` → `IngestDaemonCapture` 인스턴스 반환 | ingest-daemon 기본 경로 |
+| TC-CAPTURE-014 | ingest-daemon `av.open(rtsp_url)` → JPEG HTTP POST → `injectFrame()` → `frame` 이벤트 | 실제 RTSP 수집 진입점 |
+| TC-CAPTURE-015 | `SERVER_MODE=analysis` 시 이 스위트 전체 스킵 (captureOnly) | 모드 격리 |
+
+---
+
+## TC-CAPTURE-013 — ingest-daemon 백엔드 선택
+
+| 항목 | 내용 |
+|---|---|
+| **ID** | TC-CAPTURE-013 |
+| **SRS** | FR-VCP-CUR-001, FR-CAP-001 |
+| **우선순위** | P0 |
+| **자동화** | ✓ (`test/api/capture-backend.test.js`) |
+
+**전제 조건**: `CAPTURE_BACKEND=ingest-daemon` 설정
+
+**테스트 절차**
+
+| 단계 | 입력 | 기대 결과 |
+|---|---|---|
+| 1 | `process.env.CAPTURE_BACKEND = 'ingest-daemon'` 후 `captureFactory.createCapture(id, rtspUrl)` 호출 | `IngestDaemonCapture` 인스턴스 반환 |
+| 2 | 반환 객체에 `.injectFrame(buf)` 메서드 존재 확인 | `typeof instance.injectFrame === 'function'` |
+| 3 | `captureFactory.CAPTURE_BACKEND` 값 확인 | `'ingest-daemon'` |
+
+---
+
+## TC-CAPTURE-014 — ingest-daemon RTSP 수집 진입점 검증
+
+| 항목 | 내용 |
+|---|---|
+| **ID** | TC-CAPTURE-014 |
+| **SRS** | FR-CAP-005, FR-VCP-CUR-003 |
+| **우선순위** | P1 |
+| **자동화** | 수동 (실제 카메라 또는 MediaMTX 로컬 스트림 필요) |
+
+**핵심 코드 위치**: `ingest-daemon/ingest_daemon.py:277` `av.open(self.rtsp_url, options=_RTSP_OPTIONS)`
+
+**테스트 절차**
+
+| 단계 | 입력 | 기대 결과 |
+|---|---|---|
+| 1 | RTSP 카메라(또는 `rtsp://127.0.0.1:8554/<id>`) 등록 | `POST /api/cameras` 200 |
+| 2 | ingest-daemon 로그 확인 | `[<id>] AI loop starting → rtsp://...` 출력 |
+| 3 | `ingest_daemon.py:277` `av.open()` 실행 후 프레임 수신 | Node.js `POST /api/internal/frame/<id>` 수신 |
+| 4 | `injectFrame(buf)` 호출 → pipelineManager `frame` 이벤트 수신 | AI 파이프라인 동작 시작 확인 |
+
+---
+
+## TC-CAPTURE-015 — analysis 모드 스킵 검증 (captureOnly)
+
+| 항목 | 내용 |
+|---|---|
+| **ID** | TC-CAPTURE-015 |
+| **SRS** | FR-DAP-029 |
+| **우선순위** | P1 |
+| **자동화** | ✓ (`tc_runner_cli.js --server-mode analysis`) |
+
+**테스트 절차**
+
+| 단계 | 기대 결과 |
+|---|---|
+| `SERVER_MODE=analysis npm run test:tc` 실행 | capture-backend.test.js 스위트 전체 `⊘ SKIP` 출력 |
+| Admin Dashboard Audit 패널 확인 | RTSP Capture Backend 행에 `streaming+combined` 모드 태그 표시 |
+
+---
+
+## Revision History
+
+| 버전 | 날짜 | 변경 내용 |
+|---|---|---|
+| 1.0 | 2026-06-04 | 초기 작성 — captureFactory / GStreamer / PyAV 검증 TC-CAPTURE-001~012 |
+| 1.1 | 2026-06-26 | TC-CAPTURE-013~015 추가: ingest-daemon 기본 경로 검증, RTSP av.open() 진입점, analysis 모드 captureOnly 스킵 |

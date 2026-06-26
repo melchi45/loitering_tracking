@@ -1,16 +1,18 @@
 # TEST CASES — Video Capture Pipeline Architecture
 **Document ID**: TC-LTS-VCP-01  
-**Version**: 1.0  
+**Version**: 1.1  
 **Date**: 2026-06-05  
 **Project**: Loitering Detection & Tracking System (LTS-2026)  
 **Status**: Active  
 **Parent SRS**: [srs/SRS_Video_Capture_Pipeline.md](../srs/SRS_Video_Capture_Pipeline.md)  
 **Parent Design**: [design/Design_Video_Capture_Pipeline.md](../design/Design_Video_Capture_Pipeline.md)
+**TC Mode**: `captureOnly: true` — **`SERVER_MODE=analysis`에서 스킵** (RTSP 캡처 백엔드 없음)
 
 ### Change Log
 | Ver | Date | Summary |
 |---|---|---|
 | 1.0 | 2026-06-05 | Initial test cases — Groups A–G covering Phase 0/1/2 |
+| 1.1 | 2026-06-26 | Group H 추가: ingest-daemon 현재 아키텍처 TC; captureOnly 모드 표기 |
 
 ---
 
@@ -25,6 +27,7 @@
 | E | GStreamerRtpIngestion (Phase 1) | 7 |
 | F | MediaMTX Direct WebRTC (Phase 2) | 5 |
 | G | 회귀 및 통합 테스트 | 6 |
+| H | **ingest-daemon 현재 아키텍처** (현재 기본값) | 5 |
 
 ---
 
@@ -480,3 +483,69 @@
 | **테스트 단계** | 1. Settings → ICE Connectivity Test 실행 2. 전체 로그 다운로드 3. 로그 분석 |
 | **기대 결과** | Phase 1 gather < 3 s, Phase 2 server candidates에 LAN IP 포함, 오류 코드 701 없음, `=== ICE Test Complete ===` 정상 완료 |
 | **판정 기준** | PASS: 모든 항목 충족 FAIL: 하나라도 미충족 |
+
+---
+
+## Group H — ingest-daemon 현재 아키텍처 (현재 기본값)
+
+> **현재 운영 설정**: `CAPTURE_BACKEND=ingest-daemon`, `WEBRTC_ENGINE=mediasoup`  
+> 참조 설계: [Design_Video_Capture_Pipeline.md §0](../design/Design_Video_Capture_Pipeline.md)  
+> 실제 RTSP 수집 진입점: `ingest-daemon/ingest_daemon.py:277` `av.open()`
+
+### TC-VCP-H-001: ingest-daemon captureFactory 라우팅
+
+| 항목 | 내용 |
+|---|---|
+| **ID** | TC-VCP-H-001 |
+| **SRS 참조** | FR-VCP-CUR-001 |
+| **선행 조건** | `CAPTURE_BACKEND=ingest-daemon` |
+| **테스트 단계** | 1. `captureFactory.createCapture(id, rtspUrl)` 호출 2. 반환 객체 타입 확인 3. `.injectFrame(buf)` 메서드 존재 확인 |
+| **기대 결과** | `IngestDaemonCapture` 인스턴스 반환, `injectFrame` 메서드 존재 |
+| **판정 기준** | PASS: 위 조건 모두 충족 |
+
+### TC-VCP-H-002: ingest-daemon RTSP 수집 → JPEG → frame 이벤트
+
+| 항목 | 내용 |
+|---|---|
+| **ID** | TC-VCP-H-002 |
+| **SRS 참조** | FR-VCP-CUR-003 |
+| **핵심 코드** | `ingest_daemon.py:277` `av.open(self.rtsp_url)` → `POST /api/internal/frame/<id>` → `injectFrame()` → `emit('frame')` |
+| **선행 조건** | ingest-daemon 기동, RTSP 카메라(또는 loopback) 등록 |
+| **테스트 단계** | 1. 카메라 등록 (`POST /api/cameras`) 2. ingest-daemon 로그에서 `AI loop starting` 확인 3. Node.js에서 `frame` 이벤트 수신 확인 |
+| **기대 결과** | 1초 이내 첫 `frame` 이벤트 수신 |
+| **판정 기준** | PASS: 1초 이내 첫 프레임 수신 FAIL: 5초 초과 또는 에러 |
+
+### TC-VCP-H-003: ingest-daemon 4-way 팬아웃 검증
+
+| 항목 | 내용 |
+|---|---|
+| **ID** | TC-VCP-H-003 |
+| **SRS 참조** | FR-VCP-CUR-005 |
+| **핵심 코드** | `ingest_daemon.py` — ① AI JPEG (line 277) ② vRTP (line 422) ③ aRTP (line 546) ④ AppRTP (line 692) |
+| **선행 조건** | `WEBRTC_ENGINE=mediasoup`, 카메라 1대 등록 |
+| **테스트 단계** | 1. 카메라 등록 2. AI 프레임 수신 확인 (`GET /api/analysis/metrics`) 3. WebRTC 비디오 재생 확인 (브라우저) 4. ONVIF 메타데이터 수신 확인 (`GET /api/onvif-events`) |
+| **기대 결과** | ①~④ 4개 채널 모두 동작 |
+| **판정 기준** | PASS: AI 프레임 + WebRTC 재생 + ONVIF 이벤트 모두 확인됨 |
+
+### TC-VCP-H-004: analysis 모드에서 캡처 미기동
+
+| 항목 | 내용 |
+|---|---|
+| **ID** | TC-VCP-H-004 |
+| **SRS 참조** | FR-DAP-029 |
+| **핵심 코드** | `pipelineManager.js _doStartCamera()` — `SERVER_MODE=analysis` 시 즉시 return |
+| **선행 조건** | `SERVER_MODE=analysis` |
+| **테스트 단계** | 1. `POST /api/cameras` 카메라 등록 시도 2. 서버 로그 확인 |
+| **기대 결과** | `[PipelineManager] startCamera called in analysis mode — skipping` 로그 출력, ingest-daemon 연결 시도 없음 |
+| **판정 기준** | PASS: 위 로그 확인, MediaMTX/ingest-daemon ECONNREFUSED 로그 없음 |
+
+### TC-VCP-H-005: ingest-daemon 재시작 후 카메라 재등록
+
+| 항목 | 내용 |
+|---|---|
+| **ID** | TC-VCP-H-005 |
+| **SRS 참조** | FR-VCP-CUR-007 |
+| **선행 조건** | 카메라 1대 이상 등록, ingest-daemon 실행 중 |
+| **테스트 단계** | 1. `npm run ingest:restart` 실행 2. ingest-daemon 재시작 후 로그 확인 |
+| **기대 결과** | `ingest-daemon restarted — re-registering cameras` 로그, 카메라 자동 재등록, AI 프레임 재개 |
+| **판정 기준** | PASS: 30초 이내 카메라 재등록 완료 및 프레임 수신 재개 |
