@@ -18,7 +18,9 @@
 param(
     [string]$OrtRepoDir = "$env:USERPROFILE\source\onnxruntime",
     [string]$OrtRef = "v1.26.0",
-    [string]$CudaHome = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.3",
+    # CudaHome: 생략 시 설치된 CUDA 버전 중 최신을 자동 감지합니다.
+    # 예) -CudaHome "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8"
+    [string]$CudaHome = "",
     [string]$CudnnHome = "",
     [string]$CmakePath = "",
     [string]$CudaArch = "",
@@ -72,6 +74,94 @@ function Assert-MinimumCmakeVersion([string]$cmakeExe, [version]$minimumVersion)
         throw "CMake $minimumVersion or higher is required (detected: $actual at $cmakeExe). Re-run with -CmakePath <new cmake.exe> after upgrading CMake."
     }
     return $actual
+}
+
+function Resolve-CudaHome([string]$requested) {
+    # 명시적으로 지정된 경우 존재 여부 검증 후 반환
+    if ($requested) {
+        if (Test-Path $requested -PathType Container) {
+            return $requested
+        }
+        throw "지정한 CUDA 경로가 존재하지 않습니다: $requested`n설치된 CUDA 버전을 확인하거나 -CudaHome 파라미터를 올바른 경로로 수정하세요."
+    }
+
+    # 환경변수 우선 탐색 (CUDA 설치 시 자동 설정됨, 최신 버전 우선)
+    $cudaEnvVars = @(
+        "CUDA_PATH_V13_3", "CUDA_PATH_V13_2", "CUDA_PATH_V13_1", "CUDA_PATH_V13_0",
+        "CUDA_PATH_V12_8", "CUDA_PATH_V12_7", "CUDA_PATH_V12_6", "CUDA_PATH_V12_5",
+        "CUDA_PATH_V12_4", "CUDA_PATH_V12_3", "CUDA_PATH_V12_2", "CUDA_PATH_V12_1",
+        "CUDA_PATH_V12_0", "CUDA_PATH_V11_8", "CUDA_PATH_V11_7",
+        "CUDA_PATH"  # 버전 무관 최신 가리킴 — 마지막 순위
+    )
+    foreach ($var in $cudaEnvVars) {
+        $val = [System.Environment]::GetEnvironmentVariable($var, "Machine")
+        if (-not $val) { $val = [System.Environment]::GetEnvironmentVariable($var, "User") }
+        if (-not $val) { $val = (Get-Item "Env:$var" -ErrorAction SilentlyContinue)?.Value }
+        if ($val -and (Test-Path $val -PathType Container)) {
+            Write-Host "  [CUDA] 자동 감지: $var → $val"
+            return $val
+        }
+    }
+
+    # 환경변수 없으면 기본 설치 디렉토리에서 최신 버전 스캔
+    $cudaBase = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
+    if (Test-Path $cudaBase -PathType Container) {
+        $versions = Get-ChildItem $cudaBase -Directory |
+            Where-Object { $_.Name -match '^v(\d+)\.(\d+)$' } |
+            Sort-Object {
+                $m = [regex]::Match($_.Name, 'v(\d+)\.(\d+)')
+                [version]::new([int]$m.Groups[1].Value, [int]$m.Groups[2].Value, 0)
+            } -Descending
+        if ($versions) {
+            $found = $versions[0].FullName
+            Write-Host "  [CUDA] 자동 감지 (디렉토리 스캔): $found"
+            return $found
+        }
+    }
+
+    throw @"
+CUDA Toolkit을 찾을 수 없습니다.
+설치 확인: https://developer.nvidia.com/cuda-downloads
+또는 -CudaHome 파라미터로 경로를 직접 지정하세요.
+예) -CudaHome "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8"
+"@
+}
+
+function Resolve-CudnnHome([string]$requested) {
+    # 명시적으로 지정된 경우 그대로 반환
+    if ($requested) {
+        if (Test-Path $requested -PathType Container) {
+            return $requested
+        }
+        throw "지정한 cuDNN 경로가 존재하지 않습니다: $requested"
+    }
+
+    # CUDNN_HOME 환경변수
+    $envVal = $env:CUDNN_HOME
+    if ($envVal -and (Test-Path $envVal -PathType Container)) {
+        Write-Host "  [cuDNN] CUDNN_HOME 환경변수 사용: $envVal"
+        return $envVal
+    }
+
+    # cuDNN 9.x EXE 설치 경로 스캔 (C:\Program Files\NVIDIA\CUDNN\v9.x.x\)
+    $cudnnEXEBase = "C:\Program Files\NVIDIA\CUDNN"
+    if (Test-Path $cudnnEXEBase -PathType Container) {
+        $cudnnDirs = Get-ChildItem $cudnnEXEBase -Directory |
+            Where-Object { $_.Name -match '^v\d+\.' } |
+            Sort-Object {
+                $m = [regex]::Match($_.Name, 'v(\d+)\.(\d+)')
+                [version]::new([int]$m.Groups[1].Value, [int]$m.Groups[2].Value, 0)
+            } -Descending
+        if ($cudnnDirs) {
+            $found = $cudnnDirs[0].FullName
+            Write-Host "  [cuDNN] 자동 감지 (EXE 설치 경로): $found"
+            return $found
+        }
+    }
+
+    # cuDNN을 CUDA 경로에 복사(zip 방식)한 경우 → cudnn_home 불필요 (build.bat이 CUDA 경로에서 찾음)
+    Write-Host "  [cuDNN] cuDNN 경로 미지정 — CUDA Toolkit 경로에서 탐색됩니다 (zip 설치 방식)."
+    return ""
 }
 
 function Resolve-VSWherePath() {
@@ -213,6 +303,15 @@ function Ensure-ProtobufGitSource([string]$ortRepoDir, [string]$protobufTag) {
     return $protobufDir
 }
 
+Require-Command git
+Require-Command python
+Require-Command node
+Require-Command npm
+
+# CUDA / cuDNN 경로 해석 (자동 감지 포함) — 헤더 출력 전에 실행
+$CudaHome  = Resolve-CudaHome  $CudaHome
+$CudnnHome = Resolve-CudnnHome $CudnnHome
+
 Write-Host ""
 Write-Host "================================================================"
 Write-Host "   ONNX Runtime Source Build + Local onnxruntime-node Link"
@@ -221,15 +320,10 @@ Write-Host "  ServerDir : $ServerDir"
 Write-Host "  OrtRepo   : $OrtRepoDir"
 Write-Host "  OrtRef    : $OrtRef"
 Write-Host "  CudaHome  : $CudaHome"
-Write-Host "  CudnnHome : $CudnnHome"
+Write-Host "  CudnnHome : $(if ($CudnnHome) { $CudnnHome } else { '(CUDA 경로에서 탐색)' })"
 Write-Host "  CmakePath : $CmakePath"
 Write-Host "  InsecureTLSForFetch : $AllowInsecureTlsForFetch"
 Write-Host ""
-
-Require-Command git
-Require-Command python
-Require-Command node
-Require-Command npm
 
 $cmakeExe = Resolve-CmakeExecutable $CmakePath
 $cmakeVersion = Assert-MinimumCmakeVersion $cmakeExe ([version]::new(3,28,0))
@@ -238,18 +332,6 @@ Write-Host "  CMake     : $cmakeExe ($cmakeVersion)"
 if (-not $SkipBuild) {
     $vsPath = Assert-VisualStudioCppToolchain
     Write-Host "  VS C++    : $vsPath"
-}
-
-if (-not (Test-Path $CudaHome -PathType Container)) {
-    throw "CUDA home does not exist: $CudaHome"
-}
-
-if (-not $CudnnHome -and $env:CUDNN_HOME) {
-    $CudnnHome = $env:CUDNN_HOME
-}
-
-if ($CudnnHome -and -not (Test-Path $CudnnHome -PathType Container)) {
-    throw "cuDNN home does not exist: $CudnnHome"
 }
 
 if (-not $SkipClone) {
