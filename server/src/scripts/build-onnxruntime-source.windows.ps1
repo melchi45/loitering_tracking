@@ -198,6 +198,34 @@ function Resolve-CudnnHome([string]$requested) {
     return ""
 }
 
+# deps.txt 에서 태그를 읽으려다 실패하면 $null 반환 (안전 래퍼)
+function Get-DepTagOrNull([string]$ortRepoDir, [string]$depName) {
+    try { return Get-DepTagFromDeps $ortRepoDir $depName }
+    catch { return $null }
+}
+
+# FetchContent 네트워크 다운로드를 로컬 git clone 으로 대체하는 범용 함수
+function Ensure-DepGitSource([string]$ortRepoDir, [string]$depName, [string]$gitUrl, [string]$depTag) {
+    $cacheRoot = Join-Path $ortRepoDir "_source_cache"
+    $depDir    = Join-Path $cacheRoot "$depName-$depTag"
+
+    if (-not (Test-Path $cacheRoot -PathType Container)) {
+        New-Item -ItemType Directory -Path $cacheRoot -Force | Out-Null
+    }
+
+    if (-not (Test-Path (Join-Path $depDir ".git") -PathType Container)) {
+        if (Test-Path $depDir) { Remove-Item -Recurse -Force $depDir }
+        Write-Host "  [$depName] git clone --branch $depTag $gitUrl"
+        git clone --depth 1 --branch $depTag $gitUrl $depDir
+    } else {
+        Write-Host "  [$depName] existing git cache — refreshing tag $depTag"
+        Push-Location $depDir
+        try { git fetch --tags --prune; git checkout $depTag }
+        finally { Pop-Location }
+    }
+    return $depDir
+}
+
 function Resolve-VSWherePath() {
     $default = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
     if (Test-Path $default -PathType Leaf) {
@@ -412,8 +440,27 @@ if (-not $SkipBuild) {
     $protobufSourceDir = Ensure-ProtobufGitSource $OrtRepoDir $protobufTag
     $protobufSourceDirCmake = $protobufSourceDir -replace '\\','/'
     Write-Host "  [Protobuf] using local source dir: $protobufSourceDirCmake"
-    # Avoid protobuf FetchContent download/patch path on Windows by using local git source.
     $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_PROTOBUF=$protobufSourceDirCmake"
+
+    # date (Howard Hinnant's date library) — FetchContent zip 다운로드를 git clone 으로 대체
+    $dateTag = Get-DepTagOrNull $OrtRepoDir "date"
+    if ($dateTag) {
+        Write-Host "  [date] tag from deps.txt: $dateTag"
+        $dateSourceDir = Ensure-DepGitSource $OrtRepoDir "date" "https://github.com/HowardHinnant/date.git" $dateTag
+        $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_DATE=$($dateSourceDir -replace '\\','/')"
+    } else {
+        Write-Host "  [date] tag not found in deps.txt — FetchContent will download"
+    }
+
+    # nlohmann/json — FetchContent zip 다운로드를 git clone 으로 대체
+    $jsonTag = Get-DepTagOrNull $OrtRepoDir "json"
+    if ($jsonTag) {
+        Write-Host "  [json] tag from deps.txt: $jsonTag"
+        $jsonSourceDir = Ensure-DepGitSource $OrtRepoDir "json" "https://github.com/nlohmann/json.git" $jsonTag
+        $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_JSON=$($jsonSourceDir -replace '\\','/')"
+    } else {
+        Write-Host "  [json] tag not found in deps.txt — FetchContent will download"
+    }
 
     if ($CudaArch) {
         $cmakeDefines += "CMAKE_CUDA_ARCHITECTURES=$CudaArch"
