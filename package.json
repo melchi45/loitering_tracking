@@ -27,6 +27,8 @@
     "setup": "npm run install:all && npm run build:client",
     "clean": "rm -rf server/node_modules client/node_modules client/dist",
     "check:gpu": "cd server && npm run check:gpu",
+    "build-ort:auto": "cd server && npm run build-ort:auto",
+    "build-ort:auto:dry": "cd server && npm run build-ort:auto:dry",
     "test:all": "node test/run_all.js --skip e2e",
     "test:tc": "node test/tc_runner_cli.js",
     "test:report": "node test/generate_report.js --skip e2e"

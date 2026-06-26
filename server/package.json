@@ -36,6 +36,8 @@
     "build-ort-source:windows": "powershell -ExecutionPolicy Bypass -File src/scripts/build-onnxruntime-source.windows.ps1",
     "build-ort-source:windows:insecure": "powershell -ExecutionPolicy Bypass -File src/scripts/build-onnxruntime-source.windows.ps1 -AllowInsecureTlsForFetch",
     "build-ort-source:linux": "bash src/scripts/build-onnxruntime-source.linux.sh",
+    "build-ort:auto": "node src/scripts/buildOrtWithCuda.js",
+    "build-ort:auto:dry": "node src/scripts/buildOrtWithCuda.js --dry-run",
     "health": "node src/scripts/healthCheck.js",
     "ice-test": "node src/scripts/iceTest.js",
     "ice-test:headless": "node src/scripts/iceTest.js --headless",
