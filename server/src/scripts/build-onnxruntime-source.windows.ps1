@@ -531,6 +531,13 @@ if (-not $SkipBuild) {
     $cpuinfoSourceDir = Ensure-DepGitSource $OrtRepoDir "pytorch_cpuinfo" "https://github.com/pytorch/cpuinfo.git" $cpuinfoRef
     $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_PYTORCH_CPUINFO=$($cpuinfoSourceDir -replace '\\','/')"
 
+    # flatbuffers — Cygwin patch.exe 권한 오류 우회 (flatbuffers-populate-patch.rule 실패)
+    $fbsTag = Get-DepRefFromDeps $OrtRepoDir "flatbuffers"
+    if (-not $fbsTag) { $fbsTag = "v24.3.25" }  # ORT v1.26.0 에서 확인된 버전
+    Write-Host "  [flatbuffers] ref: $fbsTag"
+    $fbsSourceDir = Ensure-DepGitSource $OrtRepoDir "flatbuffers" "https://github.com/google/flatbuffers.git" $fbsTag
+    $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_FLATBUFFERS=$($fbsSourceDir -replace '\\','/')"
+
     if ($CudaArch) {
         $cmakeDefines += "CMAKE_CUDA_ARCHITECTURES=$CudaArch"
     }
@@ -549,6 +556,21 @@ if (-not $SkipBuild) {
 
     $buildArgs += @("--cmake_extra_defines")
     $buildArgs += $cmakeDefines
+
+    # 이전 cmake 실패로 남은 stale *-subbuild 디렉토리 정리
+    # FETCHCONTENT_SOURCE_DIR_* 변수는 subbuild CMakeLists.txt 가 새로 생성될 때만 반영됩니다.
+    # 기존 subbuild 가 남아있으면 이전 실패 설정(다운로드+패치)으로 재실행됩니다.
+    $buildDepsDir = Join-Path $OrtRepoDir "build\Windows\Release\_deps"
+    if (Test-Path $buildDepsDir) {
+        $staleDirs = Get-ChildItem $buildDepsDir -Directory -Filter "*-subbuild" -ErrorAction SilentlyContinue
+        if ($staleDirs) {
+            Write-Host "  [cleanup] stale FetchContent subbuild 정리..."
+            foreach ($d in $staleDirs) {
+                Write-Host "    - $($d.Name)"
+                Remove-Item -Recurse -Force $d.FullName
+            }
+        }
+    }
 
     Write-Host "[2/4] Building native ONNX Runtime (this can take a long time)..."
     Push-Location $OrtRepoDir
