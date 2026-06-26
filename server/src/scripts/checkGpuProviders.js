@@ -15,6 +15,7 @@
  *   - 현재 권장 provider (cuda | dml | cpu)
  *   - 누락 항목별 설치 안내
  *   - 배치 추론 설정 현황 (BATCH_MAX_SIZE, BATCH_MAX_WAIT_MS)
+ *   - ORT CUDA 미포함 시: npm run build-ort:auto 빌드 실행 안내
  */
 
 require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
@@ -116,6 +117,44 @@ async function main() {
     console.log('');
     console.log('══════ 설치 안내 ══════════════════════════════════════');
     console.log(guide);
+  }
+
+  // ── ORT CUDA 빌드 안내 ────────────────────────────────────────────────────
+  // GPU + CUDA Toolkit 이 있으나 ORT CUDA provider 가 미포함인 경우,
+  // 자동 빌드 스크립트 실행 방법을 명확하게 안내합니다.
+  if (diag.gpu.available && diag.cudaToolkit.available && !diag.ort.cuda.available) {
+    const isWin = diag.platform === 'win32';
+    console.log('');
+    console.log('══════ ORT CUDA 소스 빌드 ════════════════════════════');
+    console.log(`  GPU(${diag.gpu.gpus?.[0]?.name ?? 'N/A'}) + CUDA v${diag.cudaToolkit.version} 감지`);
+    console.log('  onnxruntime-node 를 CUDA 지원 버전으로 소스 빌드해야 합니다.');
+    console.log('');
+    console.log('  ① 사전 확인 (감지 결과만 출력, 빌드 없음):');
+    console.log('       npm run build-ort:auto:dry');
+    console.log('');
+    console.log('  ② 자동 빌드 실행 (CUDA / cuDNN / GPU Arch 자동 감지):');
+    if (isWin) {
+      console.log('       # x64 Native Tools Command Prompt for VS 2022 에서 실행');
+    }
+    console.log('       npm run build-ort:auto');
+    console.log('');
+    console.log('  ③ 빌드 완료 후 server/.env 에 추가:');
+    console.log('       ONNX_CUDA=1');
+    console.log('       BATCH_MAX_SIZE=4');
+    console.log('');
+    if (!diag.cudnn.available) {
+      console.log(`  ${ICONS.warn} cuDNN 미감지 — 빌드 전 cuDNN 설치를 권장합니다.`);
+      console.log('       https://developer.nvidia.com/cudnn');
+      console.log('');
+    }
+    if (isWin) {
+      console.log('  수동 실행 (경로 직접 지정):');
+      console.log(`       npm run build-ort-source:windows -- -CudaHome "C:\\...\\CUDA\\v${diag.cudaToolkit.version}"`);
+    } else {
+      console.log('  수동 실행 (환경변수 직접 지정):');
+      console.log(`       CUDA_HOME=/usr/local/cuda-${diag.cudaToolkit.version} npm run build-ort-source:linux`);
+    }
+    console.log('══════════════════════════════════════════════════════');
   }
 
   // ── DML GPU monitoring note ───────────────────────────────────────────────
