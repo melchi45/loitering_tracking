@@ -41,7 +41,8 @@
     "ice-test:headless": "node src/scripts/iceTest.js --headless",
     "turn-test": "node src/scripts/turnTest.js",
     "turn-test:headless": "node src/scripts/turnTest.js --headless",
-    "install_db": "node src/scripts/installDb.js"
+    "install_db": "node src/scripts/installDb.js",
+    "check:gpu": "node src/scripts/checkGpuProviders.js"
   },
   "dependencies": {
     "@azure/msal-node": "^5.2.2",

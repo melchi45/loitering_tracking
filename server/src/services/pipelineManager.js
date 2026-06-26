@@ -42,7 +42,8 @@ function _pointInPolygon(pt, poly) {
 const { createCapture, CAPTURE_BACKEND } = require('./captureFactory');
 const mediamtxManager  = require('./mediamtxManager');
 const { getEngine: getWebRTCEngine, WEBRTC_ENGINE } = require('./webrtcEngineFactory');
-const DetectionService = require('./detection');
+const DetectionService    = require('./detection');
+const BatchDetectionQueue = require('./batchDetectionQueue');
 const { ByteTracker }  = require('./tracking');
 const BehaviorEngine   = require('./behaviorEngine');
 const ZoneManager      = require('./zoneManager');
@@ -189,6 +190,7 @@ class PipelineManager {
     this._zoneManager     = zoneManager || new ZoneManager(db);
     this._alertService    = new AlertService(db);
     this._detector        = null;  // Shared YOLOv8n instance
+    this._batchQueue      = null;  // BatchDetectionQueue wrapping _detector
     this._attrPipeline    = null;  // Shared attribute pipeline
     this._fireSmokeService = null; // Shared fire/smoke detector
     this._analysisClient   = null; // Remote analysis client (streaming mode only)
@@ -300,6 +302,14 @@ class PipelineManager {
           console.warn('[PipelineManager] ONNX model not loaded — detection disabled:', err.message);
           this._detector = null;
         });
+        // Wrap detector with batch queue — collects frames from multiple cameras
+        // and runs a single session.run([B,3,640,640]) per flush cycle.
+        if (this._detector) {
+          this._batchQueue = new BatchDetectionQueue(this._detector);
+          const bMax = parseInt(process.env.BATCH_MAX_SIZE, 10) || 4;
+          const bWait = parseInt(process.env.BATCH_MAX_WAIT_MS, 10) || 33;
+          console.log(`[PipelineManager] BatchDetectionQueue ready — maxBatch=${bMax} maxWait=${bWait}ms`);
+        }
       }
 
       // Lazy-load attribute pipeline (face / PPE / color)
@@ -577,11 +587,13 @@ class PipelineManager {
 
       try {
 
-        // 2. Run detection — skipped entirely if no detection module is enabled
+        // 2. Run detection via batch queue — frames from multiple cameras are
+        //    collected and inferred together as a single [B,3,640,640] tensor,
+        //    maximising GPU SM utilisation (CUDA) or reducing DML command-queue overhead.
         let detections = [];
-        if (this._detector && analyticsConfig.anyDetectionEnabled()) {
+        if (this._batchQueue && analyticsConfig.anyDetectionEnabled()) {
           try {
-            const result = await this._detector.detect(jpegBuffer);
+            const result = await this._batchQueue.enqueue(jpegBuffer);
             detections  = result.detections.filter(d => analyticsConfig.isClassEnabled(d.className));
             frameWidth  = result.frameWidth;
             frameHeight = result.frameHeight;

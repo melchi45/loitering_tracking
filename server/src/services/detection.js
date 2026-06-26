@@ -123,9 +123,10 @@ class DetectionService {
       || parseFloat(process.env.CONFIDENCE_THRESHOLD || '0.30');
     this.iouThreshold = options.iouThreshold
       || parseFloat(process.env.NMS_IOU_THRESHOLD || '0.5');
-    this._session     = null;
-    this._loading     = null;
-    this._numClasses  = null; // inferred from first inference output dims
+    this._session      = null;
+    this._loading      = null;
+    this._numClasses   = null; // inferred from first inference output dims
+    this._supportsBatch = true; // set to false if dynamic batch fails at runtime
   }
 
   /**
@@ -157,10 +158,16 @@ class DetectionService {
   }
 
   /**
+   * Whether the loaded model supports dynamic batch size.
+   * Set to false if the first detectBatch() call fails with a shape mismatch.
+   */
+  get supportsBatch() { return this._supportsBatch; }
+
+  /**
    * Run detection on a JPEG frame buffer.
    * @param {Buffer} jpegBuffer  Raw JPEG bytes
    * @param {object} [originalSize]  { width, height } of original frame; defaults to INPUT_SIZE
-   * @returns {Promise<Array<{bbox:{x,y,width,height}, confidence:number, classId:number, className:string}>>}
+   * @returns {Promise<{detections: Array, frameWidth: number, frameHeight: number}>}
    */
   async detect(jpegBuffer, originalSize = null) {
     if (!this._session) await this.load();
@@ -184,6 +191,63 @@ class DetectionService {
     );
 
     return { detections, frameWidth: origW, frameHeight: origH };
+  }
+
+  /**
+   * Run batch detection on multiple JPEG frame buffers in a single session.run().
+   *
+   * Builds a [B, 3, 640, 640] batch tensor, runs inference once, then slices
+   * the [B, C, 8400] output tensor per frame and runs NMS per item.
+   *
+   * Falls back to sequential detect() if the model does not support dynamic batch.
+   *
+   * @param {Buffer[]} jpegBuffers
+   * @returns {Promise<Array<{detections: Array, frameWidth: number, frameHeight: number}>>}
+   */
+  async detectBatch(jpegBuffers) {
+    if (!this._session) await this.load();
+    if (jpegBuffers.length === 0) return [];
+    if (jpegBuffers.length === 1) return [await this.detect(jpegBuffers[0])];
+
+    // Preprocess all frames in parallel (CPU-bound sharp, each independent)
+    const preprocessed = await Promise.all(jpegBuffers.map(b => this._preprocess(b)));
+
+    // Build batch tensor [B, 3, 640, 640]
+    const B         = jpegBuffers.length;
+    const frameSize = 3 * INPUT_SIZE * INPUT_SIZE;
+    const batchData = new Float32Array(B * frameSize);
+    preprocessed.forEach((p, i) => {
+      batchData.set(p.tensor.data, i * frameSize);
+    });
+    const batchTensor = new ort.Tensor('float32', batchData, [B, 3, INPUT_SIZE, INPUT_SIZE]);
+
+    let out;
+    try {
+      const feeds   = { [this._session.inputNames[0]]: batchTensor };
+      const results = await this._session.run(feeds);
+      out = results[this._session.outputNames[0]];
+    } catch (err) {
+      // Model likely exported with fixed batch=1 — disable batch and fallback
+      if (this._supportsBatch) {
+        this._supportsBatch = false;
+        console.warn('[Detection] detectBatch() failed — model may not support dynamic batch. Falling back to sequential.', err.message);
+      }
+      return Promise.all(preprocessed.map((p, i) => this.detect(jpegBuffers[i])));
+    }
+
+    // out.dims = [B, C, 8400] — slice per frame and postprocess
+    const [, C, N] = out.dims;
+    return preprocessed.map((p, i) => {
+      // SubArray view (no copy) for batch item i
+      const offset   = i * C * N;
+      const itemData = out.data.subarray(offset, offset + C * N);
+      const detections = this._postprocess(
+        itemData, [1, C, N],
+        p.scaledW, p.scaledH, p.padLeft, p.padTop,
+        p.srcW, p.srcH
+      );
+      return { detections, frameWidth: p.srcW, frameHeight: p.srcH };
+    });
   }
 
   // ─── Private ──────────────────────────────────────────────────────────────
