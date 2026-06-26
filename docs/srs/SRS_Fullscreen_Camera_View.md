@@ -78,6 +78,19 @@
 - **SRS-06-9**: tick 레이블 strip은 `left: LABEL_W`에서 시작하여 Gantt 영역에만 렌더링된다
 - **SRS-06-10**: 스냅샷 필름스트립 `pct` 계산은 `(containerWidth - LABEL_W)`를 기준으로 한다
 
+### FR-07: Timeline 2-Panel Layout (Overview strip + Detail rows + Tick labels)
+
+- **SRS-07-1**: `DetectionsTimelineInline` 및 `OnvifTimelineInline` 모두 3단 `flex-col` 구조(Overview strip → Detail rows → Tick labels)로 렌더링한다
+- **SRS-07-2**: Overview strip 높이는 `OVERVIEW_H=50px`이며, 현재 뷰포트 내 가시 트랙/이벤트를 `MINI_BAR_H=8px` 미니 바로 오버레이 표시한다
+- **SRS-07-3**: Overview strip에서 스크롤 휠은 줌 인/아웃을 제어한다 (Detail rows 스크롤과 독립)
+- **SRS-07-4**: Overview strip 클릭(드래그 없음, `hasDraggedRef.current === false`) 시 `showDetail` 상태를 토글한다
+- **SRS-07-5**: `showDetail=false` 시 Detail rows 및 Detail panel이 DOM에서 제거(unmount)되며, Overview strip과 Tick labels는 계속 표시된다
+- **SRS-07-6**: `containerW` 상태는 `ResizeObserver`로 추적하며, `ganttW = containerW - LABEL_W`로 계산한다 (레이아웃 변경 시 스냅샷 위치 계산에 사용)
+- **SRS-07-7**: Detections Overview 미니 바는 `classColor(track)` 색상, `opacity: 0.65` (inProgress=`0.45`), `borderRadius: 2`로 렌더링한다
+- **SRS-07-8**: ONVIF Overview는 point 이벤트를 2px 너비 수직 바, duration 이벤트를 `MINI_BAR_H=8px` 미니 바로 렌더링하며, 좌측 레이블은 "All Events"로 표시한다
+- **SRS-07-9**: Detail panel(`showDetail && selected` 조건)은 행이 접혀 있을 때 자동으로 닫히며, showDetail=true 상태에서 트랙/이벤트 선택 시에만 열린다
+- **SRS-07-10**: Tick labels 영역은 `flex-shrink-0`으로 레이아웃에 항상 포함되며, Overview 높이 50px + Tick 높이 20px 합산이 최소 표시 높이를 보장한다
+
 ### FR-05: API 확장 (`GET /api/analysis/events`)
 
 - **SRS-05-1**: `cameraId` 쿼리 파라미터로 특정 카메라 이벤트만 필터링한다
@@ -112,6 +125,7 @@
 | SRS-06-11~16 | `OnvifTimelineInline.tsx` | LABEL_W=130 상수, OnvifRow sourceToken/ruleName 필드, sticky Name 헤더, Name 컬럼 렌더링, 드래그 너비 보정, tick 오프셋 |
 | SRS-06-1~4 | `OnvifTimelineOverlay.tsx` | useCameraStore import, cameraName 조회, Name 헤더 행 |
 | SRS-06-5~10 | `DetectionsTimelineInline.tsx` | LABEL_W=100 상수, Name 컬럼 렌더링, 너비 계산 보정 |
+| SRS-07-1~10 | `DetectionsTimelineInline.tsx`, `OnvifTimelineInline.tsx` | OVERVIEW_H=50 상수, showDetail 상태, ResizeObserver containerW, ganttW 계산, Overview 미니 바 렌더링, Overview 클릭 토글, Tick labels flex-shrink-0, Detail panel 조건 렌더링 |
 
 ---
 
@@ -123,3 +137,4 @@
 | 1.1 | 2026-06-24 | SRS-04-1 업데이트 — OnvifTimelineInline 범위 버튼 1H/6H 추가, 기본값 1D → 1H |
 | 1.2 | 2026-06-26 | FR-06 추가 — ONVIF·Detections Timeline Name 컬럼 SRS (SRS-06-1~10); 추적 매트릭스 업데이트 |
 | 1.3 | 2026-06-26 | FR-06 SRS-06-11~16 추가 — `OnvifTimelineInline` Name 컬럼 누락 보완: LABEL_W=130, OnvifRow.sourceToken/ruleName, sticky 헤더, 드래그 너비 보정, tick 오프셋 |
+| 1.4 | 2026-06-26 | FR-07 신규 (SRS-07-1~10) — 2-panel 레이아웃: Overview strip 50px + Detail rows + Tick labels 항상 표시; showDetail 토글; ResizeObserver containerW; ganttW 계산; Detections·ONVIF 미니 바 렌더링 명세; Detail panel 조건 렌더링 |

@@ -162,6 +162,21 @@ Application RTP로 식별하고, 해당 트랙의 RTP 패킷을 수집해야 합
 - `_lastStates` dedup 맵의 해당 카메라 항목 초기화 (재연결 시 새 세션으로 시작)
 - 종료 이벤트 삽입 후 `offline` 상태 업데이트 순으로 처리
 
+### RF-ONVIF-010: OnvifTimelineInline 2-Panel Overview strip
+
+`OnvifTimelineInline` 컴포넌트는 단일 스크롤 캔버스 대신 3단 레이아웃을 제공해야 합니다.
+
+**배경:** 이벤트 수가 많을 때 전체 패턴을 한눈에 파악하기 어렵고, 스크롤 휠 인터랙션이 수직 스크롤과 충돌합니다.
+
+**인수 기준:**
+- 상단 Overview strip(50px): 뷰포트 내 모든 이벤트 타입을 severity 색상 미니 바로 오버레이 표시
+  - duration 이벤트: 8px 높이 수평 바
+  - point 이벤트: 2px 너비 수직 바
+- Overview 스크롤 휠: 줌 인/아웃 (Detail rows 스크롤과 독립)
+- Overview 클릭: 개별 이벤트 행(Detail rows) 접기/펼치기 토글 (`showDetail` 상태)
+- Tick 레이블(시간 눈금): 항상 표시 (행 접혀도 유지)
+- Detail panel(스냅샷 뷰어): `showDetail=true && 이벤트 선택` 조건에서만 표시
+
 ---
 
 ## 4. 비기능 요구사항
@@ -262,3 +277,4 @@ ONVIF 이벤트가 카메라에서 발생한 후 브라우저에 표시되기까
 | 1.2 | 2026-06-24 | RF-ONVIF-007 인수 기준 업데이트 — 범위 프리셋 1H/6H 추가, 기본값 1H 명시 |
 | 1.3 | 2026-06-24 | RF-ONVIF-005 dedup 기준 RuleName 추가; RF-ONVIF-007 타임라인 RuleName 행 분리 명시; RF-ONVIF-008 신규 — RuleName 기반 이벤트 분리 요구사항 |
 | 1.4 | 2026-06-26 | RF-ONVIF-009 신규 — 카메라 연결 해제 시 미결 ONVIF 이벤트 자동 종료; 합성 state=false 이벤트 삽입 + Socket.IO 브로드캐스트 + _lastStates 초기화 인수 기준 |
+| 1.5 | 2026-06-26 | RF-ONVIF-010 신규 — OnvifTimelineInline 2-panel Overview strip 요구사항: 3단 레이아웃 (Overview 50px + Detail rows showDetail 토글 + Tick 항상 표시), scroll isolation, point/duration 미니 바 구분 |

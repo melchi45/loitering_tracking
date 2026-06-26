@@ -195,6 +195,37 @@ curl -X DELETE "http://localhost:3080/api/analysis/detection-tracks"
 | **절차 3** | tick 레이블(시간 눈금) 위치 확인 |
 | **기대** | tick strip이 Name 컬럼 우측에서 시작하여 Gantt 영역에만 표시됨 (Name 컬럼 아래 tick 없음) |
 
+### TC-22: Detections Timeline Overview strip 접기/펼치기 토글
+
+| 항목 | 내용 |
+|------|------|
+| **SRS** | SRS-07-3~5 |
+| **전제** | 카메라 전체화면 → Detections 탭 진입, 트랙 데이터 1건 이상 존재 |
+| **절차 1** | Overview strip(상단 50px 영역) 확인 |
+| **기대** | 클래스별 색상 미니 바(8px)가 표시됨; 우측 "All Tracks ▲" 레이블 표시 |
+| **절차 2** | Overview strip 클릭 |
+| **기대** | 개별 트랙 행(Detail rows)이 사라짐; "All Tracks ▼" 표시; Tick 레이블은 그대로 표시됨 |
+| **기대** | Detail panel(우측 스냅샷 뷰어)도 함께 닫힘 |
+| **절차 3** | Overview strip 재클릭 |
+| **기대** | 트랙 행 복원; "All Tracks ▲" 복귀 |
+| **절차 4** | Overview strip에서 스크롤 휠 동작 |
+| **기대** | 줌 인/아웃 동작; Detail rows 영역 스크롤 휠은 수직 스크롤만 작동 |
+
+### TC-23: ONVIF Timeline Inline Overview strip 접기/펼치기 토글
+
+| 항목 | 내용 |
+|------|------|
+| **SRS** | SRS-07-7~9 |
+| **전제** | 카메라 전체화면 → ONVIF Timeline 탭 진입, ONVIF 이벤트 1건 이상 존재 |
+| **절차 1** | Overview strip(상단 50px) 확인 |
+| **기대** | 모든 이벤트 타입 오버레이 표시 — duration 이벤트는 8px 미니 바, point 이벤트는 2px 수직 바로 표시됨; "All Events ▲" 레이블 |
+| **절차 2** | Overview strip 클릭 |
+| **기대** | 개별 이벤트 행 사라짐; Tick 레이블 유지; "All Events ▼" 표시 |
+| **절차 3** | 재클릭 |
+| **기대** | 이벤트 행 복원 |
+| **절차 4** | Overview 스크롤 휠 |
+| **기대** | 타임라인 줌 인/아웃; Detail rows 스크롤은 수직 전용 |
+
 ---
 
 ## ONVIF Timeline 범위 프리셋 TC
@@ -238,3 +269,4 @@ curl -X DELETE "http://localhost:3080/api/analysis/detection-tracks"
 | 1.1 | 2026-06-24 | TC-16~18 추가 — ONVIF Timeline 1H/6H 범위 프리셋 및 기본값 1H 검증 (streamingOnly) |
 | 1.2 | 2026-06-26 | TC-19~20 추가 — ONVIF·Detections Timeline Name 컬럼 표시 검증 |
 | 1.3 | 2026-06-26 | TC-19 제목 수정(Overlay 명시), TC-21 추가 — `OnvifTimelineInline`(FullscreenCameraView 하단 탭) Name 컬럼 세부 검증 (SRS-06-11~16) |
+| 1.4 | 2026-06-26 | TC-22~23 추가 — Detections/ONVIF Timeline Overview strip 접기/펼치기 토글 + scroll isolation 검증 (SRS-07-3~5, SRS-07-7~9) |

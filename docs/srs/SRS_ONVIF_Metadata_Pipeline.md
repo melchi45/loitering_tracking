@@ -366,6 +366,48 @@ App RTP 루프가 `OSError(errno=98)`(EADDRINUSE)를 3회 연속으로 만나면
 
 ---
 
+## 3-F. OnvifTimelineInline 2-Panel Layout (`FR-ONVIF-INLINE-OVERVIEW`)
+
+> **적용 대상**: `client/src/components/OnvifTimelineInline.tsx`  
+> 이 섹션은 서버 API 변경 없음 — 클라이언트 UI 구조 요구사항
+
+### FR-ONVIF-INLINE-OVERVIEW-001: 3단 flex-col 구조
+
+`OnvifTimelineInline` 컴포넌트는 3단 `flex-col` 레이아웃으로 렌더링되어야 한다:
+
+1. **Overview strip** (`OVERVIEW_H=50px`, `flex-shrink-0`): 전체 뷰포트 내 이벤트 미니 바 오버레이
+2. **Detail rows** (`flex-1 min-h-0`, `showDetail=true`일 때만 표시): 개별 이벤트 행 수직 스크롤
+3. **Tick labels** (`TICK_H=20px`, `flex-shrink-0`): 항상 표시
+
+**수용 기준:** 컴포넌트 마운트 시 3단 영역이 각각 독립적인 DOM 블록으로 렌더링됨.
+
+### FR-ONVIF-INLINE-OVERVIEW-002: Overview 미니 바 렌더링
+
+Overview strip 내에서:
+- **duration 이벤트** (isPoint=false): `MINI_BAR_H=8px` 수평 미니 바, severity 색상, `opacity=0.65` (inProgress=`0.45`)
+- **point 이벤트** (isPoint=true): 너비 2px, 높이 `MINI_BAR_H * 1.5 = 12px`, `opacity=0.75`
+- 모든 이벤트 타입이 단일 Overview 영역에 오버레이 표시
+
+**수용 기준:** duration 이벤트와 point 이벤트가 다른 크기로 각각 구분되어 렌더링됨.
+
+### FR-ONVIF-INLINE-OVERVIEW-003: showDetail 토글 인터랙션
+
+Overview strip 클릭(`hasDraggedRef.current === false` 조건) 시 `showDetail` 상태를 토글해야 한다:
+- `showDetail=false` 전환 시: `selected`와 `zoomedSnap` 상태 초기화
+- `showDetail=false` 상태: Detail rows DOM 블록 제거(`showDetail && ...` 조건 렌더링)
+- Overview strip 우측에 현재 상태 표시: 펼침=`▲`, 접힘=`▼`
+
+**수용 기준:** Overview 클릭 1회 → 행 숨김 + ▼; 재클릭 → 행 복원 + ▲.
+
+### FR-ONVIF-INLINE-OVERVIEW-004: Scroll isolation
+
+- **Overview strip**: `onWheel` 핸들러 등록 → 스크롤 휠 = 줌 인/아웃 (applyZoom)
+- **Detail rows**: 기본 수직 스크롤 사용 (`overflow-y-auto`) — `onWheel` 핸들러 없음
+
+**수용 기준:** Overview에서 스크롤 시 줌 변경됨; Detail rows에서 스크롤 시 줌 변경 없이 수직 스크롤만 동작.
+
+---
+
 ## 4. 환경변수
 
 | 변수 | 기본값 | 설명 |
@@ -400,3 +442,4 @@ App RTP 루프가 `OSError(errno=98)`(EADDRINUSE)를 3회 연속으로 만나면
 | 1.6 | 2026-06-24 | §3-D FR-ONVIF-RULENAME-001~005 추가 — RuleName 파싱·dedup·DB 저장·타임라인 행 분리·상세 패널 표시 |
 | 1.7 | 2026-06-25 | 버그 수정 반영 — `onvif_snapshots` MongoDB 재시작 후 사라짐: `DB_TYPE=mongodb` 환경에서 서버 재시작 시 스냅샷 이미지가 모두 사라지는 버그 수정. `snapshotsRouter.get()` async 전환 + `db.queryAsync()` 경유로 MongoDB 직접 조회 (인메모리 store 우회). `BaseDatabase.queryAsync()` / `MongoDatabase.queryAsync()` / `mongoDbService.findDirect()` 신규 추가. |
 | 1.8 | 2026-06-26 | §3-E FR-ONVIF-DISCONNECT-001~006 추가 — 카메라 연결 해제 시 미결 ONVIF 이벤트 자동 종료: `closeOpenEventsForCamera()` + `setOnCameraOfflineHook()` + `stopCamera()` 훅 연동 |
+| 1.9 | 2026-06-26 | §3-F FR-ONVIF-INLINE-OVERVIEW-001~004 추가 — OnvifTimelineInline 2-panel 3단 flex-col 구조: Overview strip 50px + Detail rows showDetail 토글 + Tick labels 항상 표시; 미니 바 렌더링 기준; scroll isolation |

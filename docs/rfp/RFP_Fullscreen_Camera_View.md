@@ -34,6 +34,8 @@ LTS-2026의 메인 대시보드에서 카메라를 선택하면 전체화면 오
 | REQ-07 | 분석 이벤트 조회 limit 상한 500으로 상향 |
 | REQ-08 | ONVIF Timeline 및 Detections Timeline 각 행 좌측에 고정 폭 Name 컬럼 표시 (이벤트 유형·객체 클래스·식별자·identity 포함) |
 | REQ-09 | ONVIF Timeline 헤더 카메라 ID 뱃지를 카메라 표시 이름(displayName)으로 우선 표시 |
+| REQ-10 | `DetectionsTimelineInline` 상단에 Overview strip(50px) 추가 — 뷰포트 내 전체 트랙을 클래스별 미니 바(8px)로 오버레이 표시, 스크롤=줌 인터랙션, 클릭=Detail rows 접기/펼치기 토글 |
+| REQ-11 | `OnvifTimelineInline` 도 동일한 2-panel 구조 적용 — Overview strip에 모든 이벤트 타입 오버레이 (point 이벤트=2px 수직 바, duration=8px 미니 바), Tick 레이블 항상 표시 |
 
 ### 2.2 제외 범위 (Out of Scope)
 
@@ -62,7 +64,8 @@ LTS-2026의 메인 대시보드에서 카메라를 선택하면 전체화면 오
 | 기존 컴포넌트 수정 | `client/src/components/FullscreenCameraView.tsx` |
 | 기존 컴포넌트 수정 | `client/src/components/OnvifTimelineInline.tsx` (Name 컬럼 + OnvifRow.sourceToken/ruleName 독립 저장) |
 | 기존 컴포넌트 수정 | `client/src/components/OnvifTimelineOverlay.tsx` (Name 컬럼 헤더 + cameraName 표시) |
-| 기존 컴포넌트 수정 | `client/src/components/DetectionsTimelineInline.tsx` (Name 컬럼 추가) |
+| 기존 컴포넌트 수정 | `client/src/components/DetectionsTimelineInline.tsx` (Name 컬럼 + 2-panel Overview strip + showDetail 토글 + ResizeObserver) |
+| 기존 컴포넌트 수정 | `client/src/components/OnvifTimelineInline.tsx` (2-panel Overview strip + showDetail 토글) |
 | 클라이언트 빌드 | `client/dist/` |
 | SDLC 문서 | PRD · SRS · Design · TC |
 
@@ -76,3 +79,4 @@ LTS-2026의 메인 대시보드에서 카메라를 선택하면 전체화면 오
 | 1.1 | 2026-06-24 | 범위 프리셋 `1H`/`6H` 추가 반영 — 기본 범위 1D → 1H 업데이트; REQ 설명 수정 |
 | 1.2 | 2026-06-26 | REQ-08/09 추가 — ONVIF·Detections Timeline 좌측 Name 컬럼 및 cameraName 표시 요구사항 |
 | 1.3 | 2026-06-26 | §4 납품물 `OnvifTimelineInline.tsx` 설명에 Name 컬럼 + OnvifRow 독립 저장 명시 — 누락 보완 |
+| 1.4 | 2026-06-26 | REQ-10~11 추가 — Detections·ONVIF Timeline 2-panel Overview strip + Detail rows 접기/펼치기 토글 요구사항; §4 납품물 업데이트 |

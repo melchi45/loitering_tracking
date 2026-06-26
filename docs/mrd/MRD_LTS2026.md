@@ -319,6 +319,14 @@ All modules defined below correspond to completed SDLC chains (RFP → PRD → S
 |---|---|
 | BR-023 | 카메라가 명시적으로 중지(stopCamera)될 때, 해당 카메라의 미결(state=true) ONVIF 이벤트는 자동으로 종료 처리되어야 합니다. 서버는 각 미결 이벤트에 대해 합성(synthetic) `state=false` 종료 이벤트를 DB에 삽입하고 Socket.IO로 브로드캐스트해야 합니다. 이를 통해 운영자는 카메라 연결 해제 후에도 ONVIF Timeline에서 이벤트가 무기한 "진행 중"으로 표시되는 현상을 방지할 수 있습니다 |
 
+### 7.8 Timeline 2-Panel Overview & Collapse
+
+| Requirement | Detail |
+|---|---|
+| BR-024 | **Detections Timeline(`DetectionsTimelineInline`)** 상단에 Overview strip(높이 50px)을 제공해야 합니다. Overview strip은 현재 뷰포트 내 모든 감지 트랙을 클래스별 색상 미니 바(높이 8px)로 오버레이 표시하며, 스크롤 휠로 줌 인/아웃을 제어합니다 |
+| BR-025 | Overview strip 클릭(드래그 없음) 시 개별 트랙 행(Detail rows)을 접기/펼치기 토글할 수 있어야 합니다. 행이 접혀 있어도 Overview strip과 Tick 레이블(시간 눈금)은 항상 표시됩니다. 상세 패널(스냅샷 뷰어)은 행이 펼쳐져 있고 트랙이 선택된 경우에만 표시됩니다 |
+| BR-026 | **ONVIF Timeline Inline(`OnvifTimelineInline`)** 도 동일한 2-panel 구조(Overview strip + Detail rows + 항상 표시 Tick labels)를 갖춰야 합니다. ONVIF Overview는 모든 이벤트 타입을 오버레이 표시하며, point 이벤트는 2px 수직 바, duration 이벤트는 8px 높이 미니 바로 렌더링합니다 |
+
 ---
 
 ## 8. Market Use Cases
@@ -486,3 +494,4 @@ The following table maps planned market releases to engineering phases and targe
 | 1.5 | 2026-06-26 | LTS Engineering Team | §7.6 Operator UI — Timeline Readability 추가: BR-021~022 — ONVIF·Detections Timeline 좌측 Name 컬럼 요구사항 |
 | 1.6 | 2026-06-26 | LTS Engineering Team | §7.7 ONVIF Event Lifecycle 추가: BR-023 — 카메라 연결 해제 시 미결 ONVIF 이벤트 자동 종료 요구사항 |
 | 1.7 | 2026-06-26 | LTS Engineering Team | §7.6 BR-021~022 명세 보완 — `OnvifTimelineInline`(인라인 탭) 및 `OnvifTimelineOverlay` 모두 Name 컬럼 적용 대상 명시 |
+| 1.8 | 2026-06-26 | LTS Engineering Team | §7.8 Timeline 2-Panel Overview & Collapse 추가: BR-024~026 — Detections·ONVIF Timeline Inline 2-panel 구조(Overview strip + Detail rows + 항상 표시 Tick labels) 및 접기/펼치기 요구사항 |

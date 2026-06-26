@@ -1,14 +1,22 @@
 /**
- * DetectionsTimelineInline — Gantt-style detection track timeline with inline crop filmstrip.
+ * DetectionsTimelineInline — 2-panel detection track timeline.
  *
- * Layout per track row (ROW_H = 56px):
+ * Layout:
  *   ┌────────────────────────────────────────────────────────────┐
- *   │  [████████ person #a3f2  2m30s  85% ████████]  ← Gantt bar (top 18px)
- *   │       [img1]     [img2]              [img3]     ← crops at timestamps (bottom 34px)
- *   └────────────────────────────────────────────────────────────┘
+ *   │ Controls (range/filter/refresh)                            │
+ *   ├──────────┬─────────────────────────────────────────────────┤
+ *   │All Tracks│ [mini colored bars, all classes overlaid]       │  ← OVERVIEW (scroll=zoom, click=toggle)
+ *   ├──────────┼─────────────────────────────────────────────────┤
+ *   │ Name     │                                                 │  ← sticky header (shown when expanded)
+ *   │ person   │ ████████████████                                │  ← detail rows (scroll=vertical)
+ *   │ car      │       ██████                                    │
+ *   ├──────────┴─────────────────────────────────────────────────┤
+ *   │          │ 08:00   09:00   10:00   11:00                  │  ← tick labels (always visible)
+ *   └──────────┴─────────────────────────────────────────────────┘
  *
- * Each crop thumbnail is positioned at its exact capture timestamp within the bar's span.
- * Clicking a thumbnail or bar selects the track → right detail panel with all snapshots.
+ * Scroll isolation:
+ *   - Overview strip  → wheel = zoom in/out
+ *   - Detail rows     → wheel = vertical scroll (no zoom)
  *
  * Data sources:
  *   GET /api/analysis/detection-tracks?cameraId=&from=&to=&class=&limit=
@@ -62,6 +70,21 @@ const RANGE_MS: Record<string, number> = {
   '1W':  7 * 24 * 60 * 60 * 1000,
 };
 
+// ── Layout constants ──────────────────────────────────────────────────────────
+
+const OVERVIEW_H     = 50;   // overview strip height
+const MINI_BAR_H     = 8;    // mini bar height in overview
+const LABEL_W        = 100;  // left Name column width (px)
+const DETAIL_W       = 200;  // right detail panel width (px)
+const ROW_H          = 56;   // track row height (bar 18px + filmstrip 34px + 4px)
+const BAR_H          = 16;
+const BAR_TOP        = 4;
+const SNAP_H         = 34;
+const SNAP_TOP       = BAR_TOP + BAR_H + 2;
+const SNAP_W         = 28;
+const TICK_H         = 20;
+const DRAG_THRESHOLD = 4;
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function fmtDur(ms: number) {
@@ -80,17 +103,6 @@ function formatTick(ts: number, spanMs: number): string {
            d.toLocaleTimeString('en', { hour: '2-digit', minute: '2-digit', hour12: false });
   return d.toLocaleDateString('en', { month: 'short', day: 'numeric' });
 }
-
-const DRAG_THRESHOLD_PX = 4;
-const LABEL_W   = 100;  // left Name column width
-const DETAIL_W  = 200;
-const ROW_H     = 56;   // bar (18px) + filmstrip (34px) + border (2px) + padding (2px)
-const BAR_H     = 16;   // height of the Gantt bar portion
-const BAR_TOP   = 4;    // top offset of bar within row
-const SNAP_H    = 34;   // filmstrip height
-const SNAP_TOP  = BAR_TOP + BAR_H + 2; // where filmstrip starts
-const SNAP_W    = 28;   // thumbnail width
-const TICK_H    = 20;   // tick label row height at bottom
 
 function classColor(track: DetectionTrack): string {
   if (track.isLoitering) return '#ef4444';
@@ -131,19 +143,32 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
   const [customStart,   setCustomStart]   = useState('');
   const [customEnd,     setCustomEnd]     = useState('');
   const [customApplied, setCustomApplied] = useState<{ from: string; to: string } | null>(null);
-  // Per-track snapshot cache: objectId → snapshot array (sorted by timestamp asc)
-  const [snapCache, setSnapCache] = useState<Map<string, DetectionSnapshot[]>>(new Map());
-  // All snapshots for selected track (full detail panel)
+  const [showDetail,    setShowDetail]    = useState(true);  // toggle individual rows
+  const [containerW,    setContainerW]    = useState(800);   // tracked via ResizeObserver
+
+  // Per-track snapshot cache: objectId → snapshot array
+  const [snapCache,      setSnapCache]      = useState<Map<string, DetectionSnapshot[]>>(new Map());
+  // All snapshots for selected track (detail panel)
   const [detailSnaps,    setDetailSnaps]    = useState<DetectionSnapshot[]>([]);
   const [detailLoading,  setDetailLoading]  = useState(false);
-  // Selected snapshot for zoomed view
-  const [zoomedSnap, setZoomedSnap] = useState<DetectionSnapshot | null>(null);
+  const [zoomedSnap,     setZoomedSnap]     = useState<DetectionSnapshot | null>(null);
 
   const containerRef  = useRef<HTMLDivElement>(null);
   const dragRef       = useRef<{ startX: number; startPan: number } | null>(null);
   const hasDraggedRef = useRef(false);
 
-  // Compute time range
+  // Track container width so crop positions always use the current layout width
+  useEffect(() => {
+    const ro = new ResizeObserver(entries => {
+      const w = entries[0]?.contentRect.width ?? 800;
+      setContainerW(w);
+    });
+    if (containerRef.current) ro.observe(containerRef.current);
+    return () => ro.disconnect();
+  }, []);
+
+  // ── Viewport ──────────────────────────────────────────────────────────────────
+
   const rangeMs = range === 'custom' && customApplied
     ? Math.max(1, new Date(customApplied.to).getTime() - new Date(customApplied.from).getTime())
     : (RANGE_MS[range] ?? RANGE_MS['1H']);
@@ -152,7 +177,14 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
     ? new Date(customApplied.to).getTime()
     : Date.now();
 
-  // ── Fetch tracks ──────────────────────────────────────────────────────────
+  const viewSpan  = rangeMs / zoom;
+  const viewEnd   = viewRangeEnd - pan * rangeMs;
+  const viewStart = viewEnd - viewSpan;
+
+  // Gantt area width (container minus Name column)
+  const ganttW = containerW - LABEL_W;
+
+  // ── Fetch tracks ──────────────────────────────────────────────────────────────
 
   useEffect(() => {
     if (range === 'custom' && !customApplied) return;
@@ -167,7 +199,6 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
       params.set('to',   new Date(now).toISOString());
     }
     if (classFilter) params.set('class', classFilter);
-
     fetch(`/api/analysis/detection-tracks?${params}`)
       .then(r => r.json())
       .then(d => {
@@ -178,67 +209,50 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
       .finally(() => setLoading(false));
   }, [fetchKey, range, customApplied, classFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Batch-fetch snapshots for visible tracks (up to 8 per track, 10 concurrent) ──
+  // ── Visible tracks ────────────────────────────────────────────────────────────
 
   const visibleTracks = useMemo(() => {
-    const viewSpan  = rangeMs / zoom;
-    const viewEnd   = viewRangeEnd - pan * rangeMs;
-    const viewStart = viewEnd - viewSpan;
     return tracks.filter(t => {
       const fs = new Date(t.firstSeenAt).getTime();
       const ls = new Date(t.lastSeenAt).getTime();
       return ls >= viewStart && fs <= viewEnd;
     });
-  }, [tracks, rangeMs, zoom, pan, viewRangeEnd]);
+  }, [tracks, viewStart, viewEnd]);
+
+  // ── Batch-fetch snapshots for visible tracks ──────────────────────────────────
 
   useEffect(() => {
     const toFetch = visibleTracks.filter(t => !snapCache.has(t.objectId));
     if (toFetch.length === 0) return;
-
     const results = new Map<string, DetectionSnapshot[]>();
-
     const fetchOne = async (track: DetectionTrack) => {
       try {
-        const params = new URLSearchParams({
-          objectId: track.objectId,
-          cameraId: track.cameraId,
-          limit: '8',
-        });
+        const params = new URLSearchParams({ objectId: track.objectId, cameraId: track.cameraId, limit: '8' });
         const r = await fetch(`/api/analysis/detection-snapshots?${params}`);
         const d = await r.json();
         const snaps: DetectionSnapshot[] = Array.isArray(d.snapshots) ? d.snapshots : [];
-        // Sort ascending by timestamp for left-to-right filmstrip
         snaps.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
         results.set(track.objectId, snaps);
       } catch {
         results.set(track.objectId, []);
       }
     };
-
     const BATCH = 10;
     const run = async () => {
       for (let i = 0; i < toFetch.length; i += BATCH) {
         await Promise.all(toFetch.slice(i, i + BATCH).map(fetchOne));
       }
-      setSnapCache(prev => {
-        const next = new Map(prev);
-        results.forEach((v, k) => next.set(k, v));
-        return next;
-      });
+      setSnapCache(prev => { const m = new Map(prev); results.forEach((v, k) => m.set(k, v)); return m; });
     };
     run();
   }, [visibleTracks]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── Fetch ALL snapshots for selected track (detail panel) ──────────────────
+  // ── Fetch all snapshots for selected track (detail panel) ─────────────────────
 
   useEffect(() => {
     if (!selected) { setDetailSnaps([]); setZoomedSnap(null); return; }
     setDetailLoading(true);
-    const params = new URLSearchParams({
-      objectId: selected.objectId,
-      cameraId: selected.cameraId,
-      limit: '50',
-    });
+    const params = new URLSearchParams({ objectId: selected.objectId, cameraId: selected.cameraId, limit: '50' });
     fetch(`/api/analysis/detection-snapshots?${params}`)
       .then(r => r.json())
       .then(d => {
@@ -250,27 +264,35 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
       .finally(() => setDetailLoading(false));
   }, [selected]);
 
-  // ── Viewport ────────────────────────────────────────────────────────────────
+  // ── Ticks ─────────────────────────────────────────────────────────────────────
 
-  const viewSpan  = rangeMs / zoom;
-  const viewEnd   = viewRangeEnd - pan * rangeMs;
-  const viewStart = viewEnd - viewSpan;
+  const ticks = useMemo(() =>
+    [0, 0.25, 0.5, 0.75, 1].map(f => ({
+      x: f,
+      label: formatTick(viewStart + f * viewSpan, viewSpan),
+    })),
+  [viewStart, viewSpan]);
 
-  const applyZoom = useCallback((factor: number) => {
-    setZoom(z => Math.max(1, Math.min(z * factor, 500)));
-  }, []);
+  // ── Zoom / pan ────────────────────────────────────────────────────────────────
+
   const clampPan = useCallback((p: number, z: number) =>
     Math.max(0, Math.min(Math.max(0, 1 - 1 / z), p)), []);
-  const shiftPan = useCallback((delta: number) => {
-    setPan(p => clampPan(p + delta, zoom));
-  }, [zoom, clampPan]);
+
+  const applyZoom = useCallback((factor: number) =>
+    setZoom(z => Math.max(1, Math.min(z * factor, 500))), []);
+
+  const shiftPan = useCallback((delta: number) =>
+    setPan(p => clampPan(p + delta, zoom)), [zoom, clampPan]);
 
   useEffect(() => { if (zoom === 1) setPan(0); }, [zoom]);
 
+  // onWheel only on overview strip — detail rows use native vertical scroll
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
     if (e.deltaY < 0) applyZoom(1.4); else applyZoom(1 / 1.4);
   };
+
+  // ── Drag to pan ───────────────────────────────────────────────────────────────
 
   const handleMouseDown = (e: React.MouseEvent) => {
     if (e.button !== 0) return;
@@ -279,22 +301,21 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
     setIsDragging(false);
   };
   const handleMouseMove = (e: React.MouseEvent) => {
-    if (!dragRef.current || !containerRef.current) return;
-    const dx    = e.clientX - dragRef.current.startX;
-    const width = containerRef.current.getBoundingClientRect().width - LABEL_W;
-    if (!hasDraggedRef.current && Math.abs(dx) < DRAG_THRESHOLD_PX) return;
+    if (!dragRef.current) return;
+    const dx = e.clientX - dragRef.current.startX;
+    if (!hasDraggedRef.current && Math.abs(dx) < DRAG_THRESHOLD) return;
     if (!hasDraggedRef.current) { hasDraggedRef.current = true; setIsDragging(true); }
-    setPan(clampPan(dragRef.current.startPan - dx / width / zoom, zoom));
+    setPan(clampPan(dragRef.current.startPan - dx / ganttW / zoom, zoom));
   };
   const stopDrag = () => { dragRef.current = null; setIsDragging(false); };
 
-  const ticks = useMemo(() =>
-    [0, 0.25, 0.5, 0.75, 1].map(f => ({
-      x:     f,
-      label: formatTick(viewStart + f * viewSpan, viewSpan),
-    })), [viewStart, viewSpan]);
+  // ── Overview click: toggle detail rows ───────────────────────────────────────
 
-  const cursorClass = isDragging ? 'cursor-grabbing' : zoom > 1 ? 'cursor-grab' : 'cursor-default';
+  const handleOverviewClick = () => {
+    if (hasDraggedRef.current) return;
+    if (showDetail) { setSelected(null); setZoomedSnap(null); }
+    setShowDetail(s => !s);
+  };
 
   function applyCustomRange() {
     if (!customStart || !customEnd) return;
@@ -302,13 +323,16 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
     setZoom(1); setPan(0);
   }
 
+  const cursorClass = isDragging ? 'cursor-grabbing' : zoom > 1 ? 'cursor-grab' : 'cursor-default';
+
+  // ── Render ────────────────────────────────────────────────────────────────────
+
   return (
     <div className="flex flex-col h-full text-[10px] select-none">
 
-      {/* ── Controls ────────────────────────────────────────────────────────── */}
+      {/* ── Controls ──────────────────────────────────────────────────────────── */}
       <div className="flex items-center gap-1 px-2 py-1 border-b border-gray-700/60
                       flex-shrink-0 bg-gray-900/60 flex-wrap">
-
         <div className="flex items-center gap-0.5">
           {(['1H','6H','1D','1W','custom'] as RangeLabel[]).map(r => (
             <button key={r}
@@ -324,12 +348,10 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
           ))}
         </div>
 
-        <select
-          value={classFilter}
+        <select value={classFilter}
           onChange={e => { setClassFilter(e.target.value); setFetchKey(k => k + 1); }}
           className="bg-gray-800 border border-gray-600 rounded px-1 py-0.5 text-[9px]
-                     text-gray-300 focus:outline-none focus:border-emerald-500 cursor-pointer"
-        >
+                     text-gray-300 focus:outline-none focus:border-emerald-500 cursor-pointer">
           <option value="">All Classes</option>
           <option value="person">Person</option>
           <option value="car">Car</option>
@@ -339,7 +361,6 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
         </select>
 
         <div className="flex-1" />
-
         {zoom > 1 && (
           <span className="text-[9px] text-emerald-400 bg-emerald-900/30 px-1.5 py-0.5 rounded">
             ×{zoom.toFixed(1)}
@@ -352,7 +373,7 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
         <span className="text-gray-600">{visibleTracks.length}/{tracks.length}</span>
       </div>
 
-      {/* ── Custom date row ──────────────────────────────────────────────────── */}
+      {/* ── Custom date row ────────────────────────────────────────────────────── */}
       {range === 'custom' && (
         <div className="flex items-center gap-1 px-2 py-1 border-b border-gray-700/40
                         flex-shrink-0 bg-gray-900/40 flex-wrap">
@@ -374,54 +395,103 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
         </div>
       )}
 
-      {/* ── Main area ────────────────────────────────────────────────────────── */}
+      {/* ── Main area ─────────────────────────────────────────────────────────── */}
       <div className="flex flex-1 min-h-0 overflow-hidden">
 
-        {/* ── Gantt canvas ────────────────────────────────────────────────── */}
+        {/* ── Timeline column ───────────────────────────────────────────────── */}
         <div
           ref={containerRef}
-          className={`flex-1 relative overflow-hidden ${cursorClass}`}
-          onWheel={handleWheel}
-          onMouseDown={handleMouseDown}
+          className={`flex-1 min-h-0 flex flex-col overflow-hidden ${cursorClass}`}
           onMouseMove={handleMouseMove}
           onMouseUp={stopDrag}
           onMouseLeave={stopDrag}
         >
-          {/* Tick labels — offset by LABEL_W so ticks align with Gantt area */}
-          <div className="absolute bottom-0 right-0 pointer-events-none bg-gray-900/60"
-               style={{ left: LABEL_W, height: TICK_H, borderTop: '1px solid rgba(55,65,81,0.4)' }}>
-            {ticks.map(({ x, label }) => (
-              <div key={x} className="absolute flex flex-col items-center"
-                   style={{ left: `${x * 100}%`, transform: 'translateX(-50%)', bottom: 2 }}>
-                <div className="w-px h-2 bg-gray-600 mb-0.5" />
-                <span className="text-[7px] text-gray-600 whitespace-nowrap">{label}</span>
-              </div>
-            ))}
-          </div>
 
-          {/* Track rows */}
-          <div className="absolute top-0 left-0 right-0 overflow-y-auto"
-               style={{ bottom: TICK_H }}>
-
-            {/* Column header */}
-            <div className="flex sticky top-0 z-10 border-b border-gray-700/50 bg-gray-900/95">
-              <div className="flex-shrink-0 flex items-center px-2 border-r border-gray-700/60"
-                   style={{ width: LABEL_W, height: 20 }}>
-                <span className="text-[8px] font-semibold text-gray-500 uppercase tracking-wider">Name</span>
-              </div>
-              <div className="flex-1" style={{ height: 20 }} />
+          {/* ── Overview strip (zoom on scroll, toggle rows on click) ─────────── */}
+          <div
+            className="flex-shrink-0 relative overflow-hidden border-b border-emerald-900/40 bg-gray-950/50"
+            style={{ height: OVERVIEW_H }}
+            onWheel={handleWheel}
+            onMouseDown={handleMouseDown}
+            onClick={handleOverviewClick}
+            title={showDetail ? 'Click to collapse track rows' : 'Click to expand track rows'}
+          >
+            {/* Left label */}
+            <div className="absolute left-0 top-0 bottom-0 flex items-center justify-between px-2
+                            border-r border-gray-700/60 bg-gray-900/80 z-10 pointer-events-none"
+                 style={{ width: LABEL_W }}>
+              <span className="text-[9px] text-gray-500 font-semibold uppercase tracking-wider leading-none">
+                All Tracks
+              </span>
+              <span className="text-[9px] text-gray-600 font-bold">{showDetail ? '▲' : '▼'}</span>
             </div>
 
-            {loading && visibleTracks.length === 0 ? (
-              <div className="flex items-center justify-center h-full text-gray-600 gap-2">
-                <Spinner /> <span className="text-xs">Loading tracks…</span>
+            {/* Mini bars Gantt area */}
+            <div className="absolute pointer-events-none"
+                 style={{ left: LABEL_W, right: 0, top: 0, bottom: 0 }}>
+              {[0.25, 0.5, 0.75].map(f => (
+                <div key={f} className="absolute top-0 bottom-0 w-px bg-gray-700/30"
+                     style={{ left: `${f * 100}%` }} />
+              ))}
+
+              {visibleTracks.map(track => {
+                const fs   = new Date(track.firstSeenAt).getTime();
+                const ls   = new Date(track.lastSeenAt).getTime();
+                const barL = Math.max(0, (fs - viewStart) / viewSpan);
+                const barR = Math.min(1, (ls - viewStart) / viewSpan);
+                const barW = Math.max(0.003, barR - barL);
+                const color = classColor(track);
+                return (
+                  <div key={track.id}
+                       className="absolute"
+                       style={{
+                         left:            `${barL * 100}%`,
+                         width:           `${barW * 100}%`,
+                         top:             (OVERVIEW_H - MINI_BAR_H) / 2,
+                         height:          MINI_BAR_H,
+                         backgroundColor: color,
+                         opacity:         track.inProgress ? 0.45 : 0.65,
+                         borderRadius:    2,
+                       }} />
+                );
+              })}
+
+              {!loading && visibleTracks.length === 0 && (
+                <div className="flex items-center justify-center h-full">
+                  <span className="text-[9px] text-gray-700">No detection tracks in range</span>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* ── Individual track rows (scroll=vertical, no zoom) ─────────────── */}
+          {showDetail && (
+            <div
+              className="flex-1 min-h-0 overflow-y-auto"
+              onMouseDown={handleMouseDown}
+              onClick={() => { if (!hasDraggedRef.current) { setSelected(null); setZoomedSnap(null); } }}
+            >
+              {/* Sticky Name header */}
+              <div className="flex sticky top-0 z-10 border-b border-gray-700/50 bg-gray-900/95">
+                <div className="flex-shrink-0 flex items-center px-2 border-r border-gray-700/60"
+                     style={{ width: LABEL_W, height: 20 }}>
+                  <span className="text-[8px] font-semibold text-gray-500 uppercase tracking-wider">Name</span>
+                </div>
+                <div className="flex-1" style={{ height: 20 }} />
               </div>
-            ) : visibleTracks.length === 0 ? (
-              <div className="flex items-center justify-center h-full text-gray-600 text-xs">
-                No detection tracks in this range.
-              </div>
-            ) : (
-              visibleTracks.map((track, idx) => {
+
+              {loading && visibleTracks.length === 0 && (
+                <div className="flex items-center justify-center py-8 gap-2 text-gray-600">
+                  <Spinner /> <span className="text-xs">Loading tracks…</span>
+                </div>
+              )}
+              {!loading && visibleTracks.length === 0 && (
+                <div className="flex items-center justify-center py-8 text-gray-600 text-xs">
+                  No detection tracks in this range.
+                </div>
+              )}
+
+              {visibleTracks.map((track, idx) => {
                 const fs    = new Date(track.firstSeenAt).getTime();
                 const ls    = new Date(track.lastSeenAt).getTime();
                 const xLeft  = Math.max(0, (fs - viewStart) / viewSpan);
@@ -429,8 +499,7 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
                 const barW   = Math.max(0.003, xRight - xLeft);
                 const isSel  = selected?.id === track.id;
                 const color  = classColor(track);
-                const snaps  = snapCache.get(track.objectId) ?? null; // null=not fetched, []=no snaps
-                const ganttW = (containerRef.current?.getBoundingClientRect().width ?? 800) - LABEL_W;
+                const snaps  = snapCache.get(track.objectId) ?? null;
 
                 return (
                   <div key={track.id}
@@ -443,7 +512,8 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
 
                     {/* ── Left Name label ── */}
                     <div
-                      className="flex-shrink-0 flex flex-col justify-center px-2 border-r border-gray-700/50 overflow-hidden"
+                      className="flex-shrink-0 flex flex-col justify-center px-2 border-r
+                                 border-gray-700/50 overflow-hidden cursor-pointer"
                       style={{ width: LABEL_W }}
                       onMouseDown={e => e.stopPropagation()}
                       onClick={() => {
@@ -468,6 +538,18 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
                     {/* ── Gantt area ── */}
                     <div className="flex-1 relative overflow-hidden" style={{ height: ROW_H }}>
 
+                      {/* Row index */}
+                      <span className="absolute left-0.5 text-[7px] text-gray-700 pointer-events-none"
+                            style={{ top: BAR_TOP + 2, zIndex: 1 }}>
+                        {idx + 1}
+                      </span>
+
+                      {/* Grid lines */}
+                      {[0.25, 0.5, 0.75].map(f => (
+                        <div key={f} className="absolute top-0 bottom-0 w-px bg-gray-700/30 pointer-events-none"
+                             style={{ left: `${f * 100}%` }} />
+                      ))}
+
                       {/* ── Gantt bar ── */}
                       <div
                         className="absolute flex items-center overflow-hidden rounded-sm"
@@ -477,12 +559,13 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
                           top:             BAR_TOP,
                           height:          BAR_H,
                           backgroundColor: color + (isSel ? 'ff' : track.inProgress ? '88' : 'cc'),
-                          border:          isSel ? `1px solid #fff` : track.inProgress ? `1px dashed ${color}` : `1px solid ${color}`,
+                          border:          isSel ? '1px solid #fff' : track.inProgress ? `1px dashed ${color}` : `1px solid ${color}`,
                           cursor:          'pointer',
                           zIndex:          2,
                         }}
                         onMouseDown={e => e.stopPropagation()}
-                        onClick={() => {
+                        onClick={e => {
+                          e.stopPropagation();
                           if (hasDraggedRef.current) return;
                           setSelected(prev => prev?.id === track.id ? null : track);
                           setZoomedSnap(null);
@@ -495,43 +578,36 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
                         </span>
                       </div>
 
-                      {/* ── Row index ── */}
-                      <span className="absolute left-0.5 text-[7px] text-gray-700 pointer-events-none"
-                            style={{ top: BAR_TOP + 2, zIndex: 1 }}>
-                        {idx + 1}
-                      </span>
-
-                      {/* ── Crop filmstrip — each snapshot at its timestamp position ── */}
+                      {/* ── Crop filmstrip: each snap at its timestamp position ── */}
                       {snaps && snaps.length > 0 && snaps.map((snap, si) => {
                         const snapTs = new Date(snap.timestamp).getTime();
-                        const xSnap = (snapTs - viewStart) / viewSpan; // 0..1 position
-                        if (xSnap < 0 || xSnap > 1) return null; // outside view
-
-                        // Center the thumbnail on xSnap, but clamp within Gantt area
-                        const pct = Math.max(0, Math.min(100 - (SNAP_W / ganttW) * 100, xSnap * 100));
-
+                        const xSnap  = (snapTs - viewStart) / viewSpan;
+                        if (xSnap < 0 || xSnap > 1) return null;
+                        // Clamp so thumbnail right edge doesn't overflow the Gantt area
+                        const pct = Math.max(0, Math.min(
+                          ganttW > SNAP_W ? 100 - (SNAP_W / ganttW) * 100 : 0,
+                          xSnap * 100,
+                        ));
                         return (
-                          <div
-                            key={snap.id}
-                            className="absolute overflow-hidden rounded border border-gray-600/80 cursor-pointer
-                                       hover:border-white/60 hover:z-20 transition-all"
-                            style={{
-                              left:    `${pct}%`,
-                              top:     SNAP_TOP,
-                              width:   SNAP_W,
-                              height:  SNAP_H,
-                              zIndex:  si + 3,
-                              outline: snap.isLoitering ? '1px solid #ef4444' : undefined,
-                            }}
-                            onMouseDown={e => e.stopPropagation()}
-                            onClick={e => {
-                              e.stopPropagation();
-                              if (hasDraggedRef.current) return;
-                              setSelected(prev => prev?.id === track.id ? track : track);
-                              setZoomedSnap(prev => prev?.id === snap.id ? null : snap);
-                            }}
-                            title={new Date(snap.timestamp).toLocaleTimeString('en', { hour12: false })}
-                          >
+                          <div key={snap.id}
+                               className="absolute overflow-hidden rounded border border-gray-600/80
+                                          cursor-pointer hover:border-white/60 hover:z-20 transition-all"
+                               style={{
+                                 left:    `${pct}%`,
+                                 top:     SNAP_TOP,
+                                 width:   SNAP_W,
+                                 height:  SNAP_H,
+                                 zIndex:  si + 3,
+                                 outline: snap.isLoitering ? '1px solid #ef4444' : undefined,
+                               }}
+                               onMouseDown={e => e.stopPropagation()}
+                               onClick={e => {
+                                 e.stopPropagation();
+                                 if (hasDraggedRef.current) return;
+                                 setSelected(track);
+                                 setZoomedSnap(prev => prev?.id === snap.id ? null : snap);
+                               }}
+                               title={new Date(snap.timestamp).toLocaleTimeString('en', { hour12: false })}>
                             <img src={snap.cropData} alt={snap.className}
                                  className="w-full h-full object-cover" />
                             {snap.isLoitering && (
@@ -541,7 +617,7 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
                         );
                       })}
 
-                      {/* Loading indicator for this track's snaps */}
+                      {/* Loading dot for pending snap fetch */}
                       {snaps === null && (
                         <div className="absolute flex items-center justify-center"
                              style={{ left: `${xLeft * 100}%`, top: SNAP_TOP + 6, height: 20, width: 20 }}>
@@ -551,17 +627,27 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
                     </div>
                   </div>
                 );
-              })
-            )}
-          </div>
+              })}
+            </div>
+          )}
 
-          {/* Background click = deselect */}
-          <div className="absolute inset-0 -z-10"
-               onClick={() => { if (!hasDraggedRef.current) { setSelected(null); setZoomedSnap(null); } }} />
+          {/* ── Tick labels (always visible) ──────────────────────────────────── */}
+          <div className="flex-shrink-0 relative bg-gray-900/60"
+               style={{ height: TICK_H, borderTop: '1px solid rgba(55,65,81,0.4)' }}>
+            <div className="absolute" style={{ left: LABEL_W, right: 0, top: 0, bottom: 0 }}>
+              {ticks.map(({ x, label }) => (
+                <div key={x} className="absolute flex flex-col items-center"
+                     style={{ left: `${x * 100}%`, transform: 'translateX(-50%)', bottom: 2 }}>
+                  <div className="w-px h-2 bg-gray-600 mb-0.5" />
+                  <span className="text-[7px] text-gray-600 whitespace-nowrap">{label}</span>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
 
-        {/* ── Detail panel ─────────────────────────────────────────────────── */}
-        {selected && (
+        {/* ── Detail panel (only when rows are expanded) ───────────────────── */}
+        {selected && showDetail && (
           <div className="flex flex-col flex-shrink-0 border-l border-gray-700 bg-gray-900/90 overflow-hidden"
                style={{ width: DETAIL_W }}>
 
@@ -582,7 +668,7 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
                       className="text-gray-500 hover:text-white flex-shrink-0 ml-1 text-[11px]">✕</button>
             </div>
 
-            {/* Zoomed snapshot view */}
+            {/* Zoomed snapshot */}
             {zoomedSnap && (
               <div className="flex-shrink-0 px-1 pt-1 pb-0.5 border-b border-gray-700/50 bg-black/40">
                 <div className="relative overflow-hidden rounded border border-white/20">
@@ -607,7 +693,7 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
               {detailLoading ? (
                 <div className="flex justify-center py-3"><Spinner /></div>
               ) : detailSnaps.length > 0 ? (
-                <div className="grid gap-1 p-1" style={{ gridTemplateColumns: `repeat(3, 1fr)` }}>
+                <div className="grid gap-1 p-1" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
                   {detailSnaps.map(s => (
                     <div key={s.id}
                          className={`relative overflow-hidden rounded border cursor-pointer transition-all
@@ -666,7 +752,7 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
         )}
       </div>
 
-      {/* ── Pan bar (zoom > 1) ────────────────────────────────────────────── */}
+      {/* ── Pan bar (zoom > 1) ─────────────────────────────────────────────────── */}
       {zoom > 1 && (
         <div className="flex items-center gap-1 px-2 py-0.5 border-t border-gray-700/40
                         bg-gray-900/40 flex-shrink-0">

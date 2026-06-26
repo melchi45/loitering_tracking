@@ -731,6 +731,27 @@ Admin Dashboard → Audit → Startup Tests 탭에서 스위트별 TC 결과를 
 | **절차** | 1. `_lastStates`에 `test-cam:topic:src:` 키 설정  2. `closeOpenEventsForCamera('test-cam')` 호출  3. `_lastStates`에 해당 키 존재 여부 확인 |
 | **기대** | 호출 후 `test-cam:` 으로 시작하는 모든 키 삭제됨 |
 
+## TC-INLINE-OVERVIEW-001 — OnvifTimelineInline Overview strip 렌더링 확인
+
+| 항목 | 내용 |
+|---|---|
+| **SRS** | FR-ONVIF-INLINE-OVERVIEW-001~002 |
+| **전제** | 카메라 전체화면 → ONVIF Timeline 탭; ONVIF 이벤트 1건 이상 존재 |
+| **절차** | 1. 컨트롤 행 아래 Overview 영역(50px) 확인  2. duration 이벤트 및 point 이벤트 존재 여부 확인 |
+| **기대** | Overview strip 높이 50px 표시됨; "All Events" 레이블 표시 |
+| **기대** | duration 이벤트 → 8px 미니 바; point 이벤트 → 2px 수직 바로 각각 렌더링됨 |
+| **기대** | Tick 레이블(시간 눈금) Overview 아래 항상 표시됨 (행 접혀도 유지) |
+
+## TC-INLINE-OVERVIEW-002 — showDetail 토글 시 행·Detail panel 상태 변화
+
+| 항목 | 내용 |
+|---|---|
+| **SRS** | FR-ONVIF-INLINE-OVERVIEW-003~004 |
+| **전제** | TC-INLINE-OVERVIEW-001 통과 후; 이벤트 1건 클릭해 Detail panel 열린 상태 |
+| **절차** | 1. Overview strip 클릭  2. 개별 이벤트 행 및 Detail panel 상태 확인  3. 재클릭 |
+| **기대** | 1차 클릭: 이벤트 행 숨김; Detail panel 닫힘; Tick 레이블 유지; "All Events ▼" 표시 |
+| **기대** | 재클릭: 이벤트 행 복원; "All Events ▲" 복귀 |
+
 ---
 
 ## Revision History
@@ -745,3 +766,4 @@ Admin Dashboard → Audit → Startup Tests 탭에서 스위트별 TC 결과를 
 | 1.5 | 2026-06-24 | TC-TIMELINE-RANGE-001~008 추가 — ONVIF 이벤트·Detection tracks API 1H/6H 범위 파라미터 검증 (streamingOnly); Admin Audit 스위트 표에 timeline_range 추가 |
 | 1.6 | 2026-06-24 | TC-PARSER-007b (유닛) + TC-PARSER-011 (통합) 추가 — RuleName 기반 이벤트 분리 검증; Traceability Matrix에 두 TC 추가 |
 | 1.7 | 2026-06-26 | TC-DISCONNECT-001~004 추가 — 카메라 연결 해제 시 미결 ONVIF 이벤트 자동 종료 검증 |
+| 1.8 | 2026-06-26 | TC-INLINE-OVERVIEW-001~002 추가 — OnvifTimelineInline 2-panel Overview strip 렌더링 및 showDetail 토글 검증 |

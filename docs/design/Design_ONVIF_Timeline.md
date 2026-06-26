@@ -1,6 +1,6 @@
 # Design: ONVIF Event Timeline
 
-**Version:** 2.4
+**Version:** 2.7
 **Status:** Implemented
 **Related:** [Design_ONVIF_Metadata_Pipeline.md](Design_ONVIF_Metadata_Pipeline.md) · [Design_DataChannel_CameraEvents.md](Design_DataChannel_CameraEvents.md)
 
@@ -481,6 +481,39 @@ DB 이벤트:  true(t1) → true(t2) → true(t3) → false(t4)
 - 각 `topicType:sourceToken:ruleName` 3-튜플 → 별도 행 (RuleName이 다르면 무조건 분리)
 - 행 레이블 = `topicLabel (sourceToken) [ruleName]` (있는 것만 조합)
 
+#### 2-Panel Layout — `OnvifTimelineInline` (v2.7 신규)
+
+`OnvifTimelineInline`은 단일 absolute-positioned 캔버스에서 3단 `flex-col` 구조로 전환됩니다:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Controls (range / event type filter / refresh)                  │
+├──────────┬───────────────────────────────────────────────────────┤
+│ All      │ [mini bars: all event types overlaid]    scroll=zoom  │ ← OVERVIEW (50px)
+│ Events ▲ │ point event: 2px bar / duration: 8px bar             │   click=showDetail toggle
+├──────────┼───────────────────────────────────────────────────────┤
+│ Name     │                               (sticky header, 22px)  │ ← when expanded
+│ Motion   │ ████████████████████                                  │ ← detail rows
+│ DigInput │ ██████                                                │   scroll=vertical only
+├──────────┴───────────────────────────────────────────────────────┤
+│          │ 08:00    09:00    10:00    11:00                       │ ← tick labels (항상 표시)
+└──────────┴───────────────────────────────────────────────────────┘
+```
+
+| 영역 | 높이 | 인터랙션 |
+|------|------|---------|
+| Overview strip | `OVERVIEW_H=50px` | 스크롤 휠 = 줌; 마우스 다운 = 드래그 패닝; 클릭 = `showDetail` 토글 |
+| Detail rows | `flex-1 min-h-0 overflow-y-auto` (`showDetail=true`일 때만) | 수직 스크롤 (줌 없음) |
+| Tick labels | `TICK_H=20px`, `flex-shrink-0` | 항상 표시 (행 접혀도 유지) |
+
+Overview 미니 바:
+- **duration 이벤트**: `MINI_BAR_H=8px`, severity 색상, `opacity: 0.65` (inProgress=`0.45`), `borderRadius: 2`
+- **point 이벤트**: 너비 2px, 높이 `MINI_BAR_H * 1.5 = 12px`, `opacity: 0.75`, `borderRadius: 1`
+
+`showDetail` 토글 동작:
+- `showDetail=false` 시: Detail rows(`flex-1` 블록) 및 Detail panel(`selected && showDetail`) DOM에서 제거
+- `showDetail=true`로 전환 시: Detail rows 복원, 이전 `selected` 상태는 초기화
+
 #### Name 컬럼 — `OnvifTimelineInline` (인라인 탭, v2.6 신규) 및 `OnvifTimelineOverlay` (v2.4 신규)
 
 두 컴포넌트 모두 동일한 `LABEL_W = 130px` Name 컬럼을 사용합니다.
@@ -701,3 +734,4 @@ pipelineManager.setOnCameraOfflineHook(closeOpenEventsForCamera);
 | 2.4 | 2026-06-26 | §5.9 Name 컬럼 추가 — `OnvifTimelineOverlay`에 sticky "Name" 헤더 행(22px) 및 행 레이블 열 문서화; 헤더 카메라 뱃지 `cameraName` 우선 표시 (`useCameraStore`); `DetectionsTimelineInline` `LABEL_W=100px` Name 컬럼 신규 추가 문서화 |
 | 2.5 | 2026-06-26 | §8 카메라 연결 해제 시 미결 이벤트 자동 종료 설계 추가 — `closeOpenEventsForCamera()` 처리 흐름·합성 이벤트 스키마·dedup 초기화·훅 등록 패턴(순환 의존 회피) 문서화 |
 | 2.6 | 2026-06-26 | §5.9 Name 컬럼 `OnvifTimelineInline` 누락 보완 — `LABEL_W=130px`, `OnvifRow.sourceToken/ruleName` 독립 저장, sticky 헤더, 드래그 너비 보정, tick 오프셋; `OnvifTimelineOverlay`와 동일 레이아웃 |
+| 2.7 | 2026-06-26 | §5.9 `OnvifTimelineInline` 2-Panel Layout 추가 — 3단 flex-col 구조(Overview strip 50px + Detail rows + Tick labels 항상 표시); `showDetail` 상태; Overview 미니 바(point 2px/duration 8px); scroll isolation; Detail panel `showDetail && selected` 조건 |

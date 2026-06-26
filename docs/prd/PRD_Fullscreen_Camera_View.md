@@ -27,6 +27,8 @@
 | US-05 | 운영자 | Detections 탭에서 화재/연기/배회 이력을 타입별로 필터링하고 싶다 | All/Loitering/Fire/Smoke 드롭다운 필터 작동 |
 | US-06 | 운영자 | ONVIF 타임라인에서 어떤 이벤트 유형인지 스크롤 없이 좌측에서 바로 확인하고 싶다 | Name 컬럼이 행 좌측에 항상 표시됨 |
 | US-07 | 운영자 | Detections 타임라인에서 각 트랙이 어떤 클래스·ID·인물인지 Gantt 바 없이도 파악하고 싶다 | 좌측 Name 컬럼에 className·objectId·identity 표시 |
+| US-08 | 운영자 | Detections Timeline에서 전체 트랙 밀도를 한눈에 파악하고, 필요한 시간대만 클릭해 세부 행을 열고 싶다 | Overview strip에 전체 트랙 미니 바 표시; 클릭 시 세부 행 접기/펼치기 |
+| US-09 | 운영자 | ONVIF Timeline(인라인 탭)에서 이벤트 전체 패턴을 빠르게 조망한 후 세부 행을 선택적으로 확인하고 싶다 | ONVIF Inline Overview strip에 전체 이벤트 미니 바 표시; 클릭 시 행 토글 |
 
 ---
 
@@ -78,6 +80,40 @@ Apply 클릭 전까지 fetch 없음. Apply 클릭 시 지정 범위로 `GET /api
 - `OnvifTimelineInline.OnvifRow` 인터페이스에 `sourceToken`, `ruleName` 필드 독립 추가
 - `OnvifTimelineInline` · Detections Timeline: 드래그 너비 계산을 `containerWidth - LABEL_W`로 보정, tick strip을 `left: LABEL_W`로 오프셋
 
+### 3.6 Timeline 2-Panel Overview & Collapse
+
+`DetectionsTimelineInline` 및 `OnvifTimelineInline` 모두 아래 **3단 flex-col 구조**로 변경됩니다:
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│  Controls (range / filter / refresh)                             │
+├──────────┬───────────────────────────────────────────────────────┤
+│ All      │ [mini colored bars, all tracks/events overlaid]       │ ← OVERVIEW (50px)
+│ Tracks   │                                        scroll=zoom   │   click=toggle ▲/▼
+│          │                               ▲ or ▼ indicator       │
+├──────────┼───────────────────────────────────────────────────────┤
+│ Name     │                               (sticky header, 22px)  │ ← shown when expanded
+│ person   │ ████████████████████                                  │ ← detail rows
+│ car      │        ██████                                         │   scroll=vertical
+├──────────┴───────────────────────────────────────────────────────┤
+│          │ 08:00    09:00    10:00    11:00                       │ ← tick labels (항상 표시)
+└──────────┴───────────────────────────────────────────────────────┘
+```
+
+| 영역 | 높이 | 인터랙션 |
+|------|------|---------|
+| Overview strip | 50px (`OVERVIEW_H`) | 스크롤 휠 = 줌; 클릭 = `showDetail` 토글 |
+| Detail rows | `flex-1 min-h-0` (접기 시 숨김) | 수직 스크롤만 (줌 없음) |
+| Tick labels | 20px (`TICK_H`), `flex-shrink-0` | 항상 표시 |
+
+**Detections Overview 미니 바**: 클래스별 `classColor`로 색상 구분, `MINI_BAR_H=8px`, `opacity=0.65` (inProgress=0.45)
+
+**ONVIF Overview 미니 바**: severity 색상 (`info=indigo / warning=amber / critical=red`), point event=2px 수직 바, duration=8px 미니 바, "All Events" 레이블
+
+**containerW 추적**: `ResizeObserver` → `ganttW = containerW - LABEL_W` 로 계산 (getBoundingClientRect 호출 제거)
+
+**Detail panel** (`showDetail && selected` 조건): 행이 접혀있으면 detail 패널도 자동으로 닫힘
+
 ### 3.5 API 확장 (`/api/analysis/events`)
 
 추가된 쿼리 파라미터:
@@ -110,3 +146,4 @@ Apply 클릭 전까지 fetch 없음. Apply 클릭 시 지정 범위로 `GET /api
 | 1.1 | 2026-06-24 | OnvifTimelineInline 범위 프리셋 `[1H][6H][1D][1W][1M][1Y][Custom]`으로 업데이트, 기본값 1H |
 | 1.2 | 2026-06-26 | US-06/07 추가, §3.4 Timeline Name 컬럼 추가 — ONVIF Overlay·Detections 좌측 Name 컬럼 + cameraName 표시 |
 | 1.3 | 2026-06-26 | §3.4 `OnvifTimelineInline` Name 컬럼 누락 보완 — 인라인 탭(FullscreenCameraView 하단)에도 동일 Name 컬럼 구현; OnvifRow.sourceToken/ruleName 독립 저장 명세 추가 |
+| 1.4 | 2026-06-26 | US-08~09 추가; §3.6 Timeline 2-Panel Overview & Collapse 신규 — Detections·ONVIF Inline 3단 flex-col 구조 (Overview strip 50px + Detail rows + Tick labels 항상 표시), showDetail 토글, containerW ResizeObserver, ganttW 계산 명세 |
