@@ -581,9 +581,16 @@ if (-not $SkipBuild) {
         Write-Host "  [wil] not in deps.txt — FetchContent will download"
     }
 
-    # cuDNN 9.x EXE 설치: include 경로가 include\{cudaVer}\cudnn.h (버전 서브디렉토리 구조)
-    # ORT cmake/external/cuDNN.cmake 는 ${CUDNN_HOME}/include/cudnn.h 만 탐색하므로
-    # 버전 서브디렉토리에 cudnn.h 가 있으면 CUDNN_INCLUDE_DIR / CUDNN_LIBRARY 명시
+    # cuDNN 9.x EXE 설치: include/lib 경로가 버전 서브디렉토리 구조
+    #   include\{cudaVer}\cudnn.h
+    #   lib\{cudaVer}\{arch}\cudnn.lib
+    # ORT cmake/external/cuDNN.cmake 탐색 변수:
+    #   CUDNN_INCLUDE_DIR  → find_path(CUDNN_INCLUDE_DIR cudnn.h ...)  [대문자]
+    #   cudnn_LIBRARY      → find_library(cudnn_LIBRARY NAMES cudnn ...)  [소문자c]
+    #   cudnn_adv_LIBRARY  → find_library(cudnn_adv_LIBRARY NAMES cudnn_adv ...)  [9.x 이전]
+    #   cudnn_cnn_LIBRARY  → find_library(cudnn_cnn_LIBRARY NAMES cudnn_cnn ...)  [9.x 이전]
+    #   cudnn_ops_LIBRARY  → find_library(cudnn_ops_LIBRARY NAMES cudnn_ops ...)  [9.x 이전]
+    # cmake 는 대소문자를 구분: CUDNN_LIBRARY ≠ cudnn_LIBRARY
     if ($CudnnHome) {
         $cudnnHFlat = Join-Path $CudnnHome "include\cudnn.h"
         if (-not (Test-Path $cudnnHFlat -PathType Leaf)) {
@@ -594,22 +601,32 @@ if (-not $SkipBuild) {
                     $cudnnIncDir = (Join-Path $CudnnHome "include\$cv") -replace '\\','/'
                     Write-Host "  [cuDNN] versioned include 감지 (CUDA $cv): $cudnnIncDir"
                     $cmakeDefines += "CUDNN_INCLUDE_DIR=$cudnnIncDir"
-                    # lib 탐색: lib\{cudaVer}\{arch}\cudnn.lib 또는 lib\{cudaVer}\cudnn.lib
-                    foreach ($arch in @('x64','x86')) {
-                        $lPath = Join-Path $CudnnHome "lib\$cv\$arch\cudnn.lib"
-                        if (Test-Path $lPath -PathType Leaf) {
-                            $cudnnLib = $lPath -replace '\\','/'
-                            Write-Host "  [cuDNN] versioned lib 감지 (CUDA $cv/$arch): $cudnnLib"
-                            $cmakeDefines += "CUDNN_LIBRARY=$cudnnLib"
-                            break
+
+                    # lib 탐색: lib\{cudaVer}\{arch}\{name}.lib 또는 lib\{cudaVer}\{name}.lib
+                    # ORT 가 찾는 lib 이름 목록 (cudnn_LIBRARY, cudnn_adv_LIBRARY 등)
+                    $cudnnLibNames = @('cudnn','cudnn_adv','cudnn_cnn','cudnn_ops','cudnn_graph')
+                    foreach ($libName in $cudnnLibNames) {
+                        $libFound = $false
+                        foreach ($arch in @('x64','x86')) {
+                            $lPath = Join-Path $CudnnHome "lib\$cv\$arch\$libName.lib"
+                            if (Test-Path $lPath -PathType Leaf) {
+                                $cudnnLibVal = $lPath -replace '\\','/'
+                                Write-Host "  [cuDNN] lib 감지 ($libName, CUDA $cv/$arch): $cudnnLibVal"
+                                # cmake 변수명: cudnn_LIBRARY, cudnn_adv_LIBRARY, ...
+                                $cmakeVarName = $libName + "_LIBRARY"
+                                $cmakeDefines += "$cmakeVarName=$cudnnLibVal"
+                                $libFound = $true
+                                break
+                            }
                         }
-                    }
-                    if (-not ($cmakeDefines -match 'CUDNN_LIBRARY=')) {
-                        $lPath2 = Join-Path $CudnnHome "lib\$cv\cudnn.lib"
-                        if (Test-Path $lPath2 -PathType Leaf) {
-                            $cudnnLib2 = $lPath2 -replace '\\','/'
-                            Write-Host "  [cuDNN] versioned lib 감지 (CUDA $cv): $cudnnLib2"
-                            $cmakeDefines += "CUDNN_LIBRARY=$cudnnLib2"
+                        if (-not $libFound) {
+                            $lPath2 = Join-Path $CudnnHome "lib\$cv\$libName.lib"
+                            if (Test-Path $lPath2 -PathType Leaf) {
+                                $cudnnLibVal2 = $lPath2 -replace '\\','/'
+                                Write-Host "  [cuDNN] lib 감지 ($libName, CUDA $cv): $cudnnLibVal2"
+                                $cmakeVarName = $libName + "_LIBRARY"
+                                $cmakeDefines += "$cmakeVarName=$cudnnLibVal2"
+                            }
                         }
                     }
                     break
