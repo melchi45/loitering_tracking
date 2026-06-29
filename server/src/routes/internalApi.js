@@ -16,7 +16,7 @@
 
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const { parseOnvifPayload } = require('../services/onvifParser');
+const { parseOnvifPayload, parseLogstringPayload } = require('../services/onvifParser');
 
 const router  = express.Router();
 
@@ -83,13 +83,17 @@ router.post(
     // 3. Parse ONVIF metadata and store state-change events
     if (_db && data.payload) {
       try {
-        const parsedList = parseOnvifPayload(data.payload);
-        // Log unparseable payloads (non-MetadataStream) at debug level so the raw XML
-        // can be inspected when investigating missing ONVIF event types (e.g. EarlyFireDetection).
+        // Primary: ONVIF MetadataStream XML.
+        // Fallback: Samsung proprietary "---logstring" text events on the App-RTP data track.
+        let parsedList = parseOnvifPayload(data.payload);
         if (parsedList === null) {
-          const xml = (() => { try { return Buffer.from(data.payload, 'base64').toString('utf-8'); } catch { return null; } })();
-          if (xml && xml.length > 64) {
-            console.debug(`[internalApi][ONVIF] cam=${cameraId} payload not MetadataStream (${xml.length}B): ${xml.slice(0, 200)}`);
+          parsedList = parseLogstringPayload(data.payload);
+          if (parsedList === null) {
+            // Still unparseable — log at debug for investigation.
+            const xml = (() => { try { return Buffer.from(data.payload, 'base64').toString('utf-8'); } catch { return null; } })();
+            if (xml && xml.length > 64) {
+              console.debug(`[internalApi][ONVIF] cam=${cameraId} payload not MetadataStream/logstring (${xml.length}B): ${xml.slice(0, 200)}`);
+            }
           }
         }
         if (Array.isArray(parsedList)) {

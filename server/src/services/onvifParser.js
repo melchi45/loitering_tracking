@@ -258,4 +258,92 @@ function parseOnvifPayload(base64Payload) {
   }
 }
 
-module.exports = { parseOnvifPayload, parseRadiometryReadings, TOPIC_MAP };
+// ── Samsung logstring format ──────────────────────────────────────────────────
+// Samsung WiseNet cameras send proprietary text events on the App-RTP data
+// track alongside (or instead of) ONVIF MetadataStream XML:
+//   ---logstring : Early Fire Event Detected Start
+//   ---logstring : Early Fire Event Detected End
+// parseOnvifPayload() returns null for these because they contain no
+// MetadataStream XML. parseLogstringPayload() handles them as a fallback.
+
+const LOGSTRING_TOPIC_MAP = [
+  // More-specific patterns first so they win over generic ones.
+  { re: /early.?fire/i,  info: { type: 'earlyFireDetection', label: 'Early Fire Detection', severity: 'critical', topic: 'tnssamsung:IVA/EarlyFireDetection' } },
+  { re: /\bfire\b/i,     info: { type: 'fire',               label: 'Fire Detected',         severity: 'critical', topic: 'tnssamsung:IVA/Fire'               } },
+  { re: /\bsmoke\b/i,    info: { type: 'smoke',              label: 'Smoke Detected',        severity: 'critical', topic: 'tnssamsung:IVA/Smoke'              } },
+  { re: /loiter/i,       info: { type: 'loiteringDetection', label: 'Loitering Detection',   severity: 'warning',  topic: 'tnssamsung:IVA/LoiteringDetection' } },
+  { re: /motion/i,       info: { type: 'motionAlarm',        label: 'Motion Alarm',          severity: 'warning',  topic: 'tns1:VideoSource/tns1:MotionAlarm' } },
+  { re: /tamper/i,       info: { type: 'tamper',             label: 'Tamper Alarm',          severity: 'warning',  topic: 'tnssamsung:Tamper'                 } },
+  { re: /fog/i,          info: { type: 'fogDetection',       label: 'Fog Detection',         severity: 'warning',  topic: 'tnssamsung:IVA/FogDetection'       } },
+  { re: /shock/i,        info: { type: 'shockDetection',     label: 'Shock Detection',       severity: 'warning',  topic: 'tnssamsung:IVA/ShockDetection'     } },
+  { re: /audio/i,        info: { type: 'audioAlarm',         label: 'Audio Alarm',           severity: 'warning',  topic: 'tnssamsung:AudioDetection'         } },
+];
+
+/**
+ * Parse Samsung proprietary logstring payload from App-RTP data track.
+ * Returns ParsedOnvifEvent[] or null if not a logstring packet.
+ *
+ * Samsung format (one or more lines per packet):
+ *   ---logstring : <Event Description> Start
+ *   ---logstring : <Event Description> End
+ */
+function parseLogstringPayload(base64Payload) {
+  try {
+    const raw = Buffer.from(base64Payload, 'base64').toString('utf-8');
+    if (!raw.includes('logstring')) return null;
+
+    const results = [];
+    // Match every "---logstring : <desc>" occurrence in the packet.
+    const re = /---logstring\s*:\s*(.+)/g;
+    let m;
+    while ((m = re.exec(raw)) !== null) {
+      const desc = m[1].trim();
+
+      // Determine boolean state from trailing Start / End / Stop keyword.
+      let state       = null;
+      let eventDesc   = desc;
+      if (/\bStart\b/i.test(desc)) {
+        state     = 'true';
+        eventDesc = desc.replace(/\s*\bStart\b\s*$/i, '').trim();
+      } else if (/\b(End|Stop)\b/i.test(desc)) {
+        state     = 'false';
+        eventDesc = desc.replace(/\s*\b(End|Stop)\b\s*$/i, '').trim();
+      }
+
+      // Map to known event type; fall back to synthetic slug for unknowns.
+      let info = null;
+      for (const entry of LOGSTRING_TOPIC_MAP) {
+        if (entry.re.test(eventDesc)) { info = entry.info; break; }
+      }
+      if (!info) {
+        const slug = eventDesc.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '');
+        info = {
+          type:     'logstring_' + slug,
+          label:    eventDesc,
+          severity: 'info',
+          topic:    'logstring:' + slug,
+        };
+      }
+
+      results.push({
+        topic:       info.topic,
+        topicType:   info.type,
+        topicLabel:  info.label,
+        severity:    info.severity,
+        utcTime:     new Date().toISOString(),
+        operation:   'Changed',
+        sourceToken: null,
+        ruleName:    null,
+        state,
+        items:       { logstring: desc },
+        radiometry:  null,
+      });
+    }
+
+    return results.length > 0 ? results : null;
+  } catch {
+    return null;
+  }
+}
+
+module.exports = { parseOnvifPayload, parseLogstringPayload, parseRadiometryReadings, TOPIC_MAP };
