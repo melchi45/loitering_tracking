@@ -85,15 +85,31 @@ router.post(
       try {
         // Primary: ONVIF MetadataStream XML.
         // Fallback: Samsung proprietary "---logstring" text events on the App-RTP data track.
+        const rawText = (() => { try { return Buffer.from(data.payload, 'base64').toString('utf-8'); } catch { return null; } })();
         let parsedList = parseOnvifPayload(data.payload);
+        let parsedViaLogstring = false;
         if (parsedList === null) {
           parsedList = parseLogstringPayload(data.payload);
-          if (parsedList === null) {
+          if (parsedList !== null) {
+            parsedViaLogstring = true;
+          } else {
             // Still unparseable — log at debug for investigation.
-            const xml = (() => { try { return Buffer.from(data.payload, 'base64').toString('utf-8'); } catch { return null; } })();
-            if (xml && xml.length > 64) {
-              console.debug(`[internalApi][ONVIF] cam=${cameraId} payload not MetadataStream/logstring (${xml.length}B): ${xml.slice(0, 200)}`);
+            if (rawText && rawText.length > 64) {
+              console.debug(`[internalApi][ONVIF] cam=${cameraId} payload not MetadataStream/logstring (${rawText.length}B): ${rawText.slice(0, 200)}`);
             }
+          }
+        }
+        // INFO 로그: earlyFireDetection / fire / smoke 이벤트 수신 시 실제 수신 내용 전체 출력
+        if (Array.isArray(parsedList)) {
+          const FIRE_TYPES = new Set(['earlyFireDetection', 'fire', 'smoke']);
+          const fireEvents = parsedList.filter(e => FIRE_TYPES.has(e.topicType));
+          if (fireEvents.length > 0) {
+            const src = parsedViaLogstring ? 'logstring' : 'ONVIF/XML';
+            const summary = fireEvents.map(e => `${e.topicType}(state=${e.state})`).join(',');
+            console.info(
+              `[internalApi][${src}][FIRE] cam=${cameraId} ${summary}\n` +
+              `  raw(${rawText ? rawText.length : 0}B): ${rawText ?? '(decode error)'}`
+            );
           }
         }
         if (Array.isArray(parsedList)) {
