@@ -581,6 +581,46 @@ if (-not $SkipBuild) {
         Write-Host "  [wil] not in deps.txt — FetchContent will download"
     }
 
+    # cuDNN 9.x EXE 설치: include 경로가 include\{cudaVer}\cudnn.h (버전 서브디렉토리 구조)
+    # ORT cmake/external/cuDNN.cmake 는 ${CUDNN_HOME}/include/cudnn.h 만 탐색하므로
+    # 버전 서브디렉토리에 cudnn.h 가 있으면 CUDNN_INCLUDE_DIR / CUDNN_LIBRARY 명시
+    if ($CudnnHome) {
+        $cudnnHFlat = Join-Path $CudnnHome "include\cudnn.h"
+        if (-not (Test-Path $cudnnHFlat -PathType Leaf)) {
+            $cudaVerDirs = @('12.9','12.8','12.7','12.6','12.5','12.4','12.3','12.2','12.1','12.0','11.8','11.7')
+            foreach ($cv in $cudaVerDirs) {
+                $hPath = Join-Path $CudnnHome "include\$cv\cudnn.h"
+                if (Test-Path $hPath -PathType Leaf) {
+                    $cudnnIncDir = (Join-Path $CudnnHome "include\$cv") -replace '\\','/'
+                    Write-Host "  [cuDNN] versioned include 감지 (CUDA $cv): $cudnnIncDir"
+                    $cmakeDefines += "CUDNN_INCLUDE_DIR=$cudnnIncDir"
+                    # lib 탐색: lib\{cudaVer}\{arch}\cudnn.lib 또는 lib\{cudaVer}\cudnn.lib
+                    foreach ($arch in @('x64','x86')) {
+                        $lPath = Join-Path $CudnnHome "lib\$cv\$arch\cudnn.lib"
+                        if (Test-Path $lPath -PathType Leaf) {
+                            $cudnnLib = $lPath -replace '\\','/'
+                            Write-Host "  [cuDNN] versioned lib 감지 (CUDA $cv/$arch): $cudnnLib"
+                            $cmakeDefines += "CUDNN_LIBRARY=$cudnnLib"
+                            break
+                        }
+                    }
+                    if (-not ($cmakeDefines -match 'CUDNN_LIBRARY=')) {
+                        $lPath2 = Join-Path $CudnnHome "lib\$cv\cudnn.lib"
+                        if (Test-Path $lPath2 -PathType Leaf) {
+                            $cudnnLib2 = $lPath2 -replace '\\','/'
+                            Write-Host "  [cuDNN] versioned lib 감지 (CUDA $cv): $cudnnLib2"
+                            $cmakeDefines += "CUDNN_LIBRARY=$cudnnLib2"
+                        }
+                    }
+                    break
+                }
+            }
+            if (-not ($cmakeDefines -match 'CUDNN_INCLUDE_DIR=')) {
+                Write-Warning "  [cuDNN] cudnn.h 를 CUDNN_HOME=$CudnnHome 에서 찾지 못했습니다. cmake 가 직접 탐색합니다."
+            }
+        }
+    }
+
     if ($CudaArch) {
         $cmakeDefines += "CMAKE_CUDA_ARCHITECTURES=$CudaArch"
     }
