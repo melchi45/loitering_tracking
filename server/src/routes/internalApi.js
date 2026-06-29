@@ -99,16 +99,16 @@ router.post(
             }
           }
         }
-        // INFO 로그: earlyFireDetection / fire / smoke 이벤트 수신 시 실제 수신 내용 전체 출력
+        // INFO 로그: 수신된 모든 ONVIF MetadataStream/logstring 이벤트를 raw 내용과 함께 출력
+        // boxTemperatureReading 은 초당 수십회 발생하므로 제외 (debug 레벨 유지)
         if (Array.isArray(parsedList)) {
-          const FIRE_TYPES = new Set(['earlyFireDetection', 'fire', 'smoke']);
-          const fireEvents = parsedList.filter(e => FIRE_TYPES.has(e.topicType));
-          if (fireEvents.length > 0) {
+          const NON_SPAMMY = parsedList.filter(e => e.topicType !== 'boxTemperatureReading');
+          if (NON_SPAMMY.length > 0) {
             const src = parsedViaLogstring ? 'logstring' : 'ONVIF/XML';
-            const summary = fireEvents.map(e => `${e.topicType}(state=${e.state})`).join(',');
+            const summary = NON_SPAMMY.map(e => `${e.topicType}(state=${e.state})`).join(', ');
             console.info(
-              `[internalApi][${src}][FIRE] cam=${cameraId} ${summary}\n` +
-              `  raw(${rawText ? rawText.length : 0}B): ${rawText ?? '(decode error)'}`
+              `[internalApi][${src}] cam=${cameraId} events=[${summary}]\n` +
+              `  raw(${rawText ? rawText.length : 0}B):\n${rawText ?? '(decode error)'}`
             );
           }
         }
