@@ -581,6 +581,22 @@ if (-not $SkipBuild) {
         Write-Host "  [wil] not in deps.txt — FetchContent will download"
     }
 
+    # cutlass — CUDA EP 전용 dep, deps.txt 미등록, cmake/external/cutlass.cmake 에서 직접 선언
+    # Cygwin patch.exe 가 include/cute/layout.hpp 패치 실패 → 로컬 clone 으로 우회
+    $cutlassRef = Get-DepRefFromDeps $OrtRepoDir "cutlass"
+    if (-not $cutlassRef) { $cutlassRef = "v4.4.2" }
+    Write-Host "  [cutlass] ref: $cutlassRef"
+    $cutlassSourceDir = Ensure-DepGitSource $OrtRepoDir "cutlass" "https://github.com/NVIDIA/cutlass.git" $cutlassRef
+    $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_CUTLASS=$($cutlassSourceDir -replace '\\','/')"
+
+    # cudnn_frontend — CUDA EP 전용 dep, deps.txt 미등록, cmake/external/cudnn_frontend.cmake 에서 직접 선언
+    # zip 다운로드 방식이지만 사전 캐시로 네트워크 의존성 제거
+    $cudnnFERef = Get-DepRefFromDeps $OrtRepoDir "cudnn_frontend"
+    if (-not $cudnnFERef) { $cudnnFERef = "v1.12.0" }
+    Write-Host "  [cudnn_frontend] ref: $cudnnFERef"
+    $cudnnFESourceDir = Ensure-DepGitSource $OrtRepoDir "cudnn_frontend" "https://github.com/NVIDIA/cudnn-frontend.git" $cudnnFERef
+    $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_CUDNN_FRONTEND=$($cudnnFESourceDir -replace '\\','/')"
+
     # cuDNN 9.x EXE 설치: include/lib 경로가 버전 서브디렉토리 구조
     #   include\{cudaVer}\cudnn.h
     #   lib\{cudaVer}\{arch}\cudnn.lib
