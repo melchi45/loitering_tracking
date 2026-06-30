@@ -603,7 +603,7 @@ class YouTubeStreamService {
           if (/^ERROR:/i.test(msg) || /\b(error|failed|failure)\b/i.test(msg)) {
             console.error(`[YouTubeStream] yt-dlp[${entry.id}]: ${msg.slice(0, 300)}`);
           } else {
-            console.log(`[YouTubeStream] yt-dlp[${entry.id}]: ${msg.slice(0, 300)}`);
+            console.debug(`[YouTubeStream] yt-dlp[${entry.id}]: ${msg.slice(0, 300)}`);
           }
         }
       });

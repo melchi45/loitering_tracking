@@ -106,7 +106,7 @@ router.post(
           if (NON_SPAMMY.length > 0) {
             const src = parsedViaLogstring ? 'logstring' : 'ONVIF/XML';
             const summary = NON_SPAMMY.map(e => `${e.topicType}(state=${e.state})`).join(', ');
-            console.info(
+            console.debug(
               `[internalApi][${src}] cam=${cameraId} events=[${summary}]\n` +
               `  raw(${rawText ? rawText.length : 0}B):\n${rawText ?? '(decode error)'}`
             );
