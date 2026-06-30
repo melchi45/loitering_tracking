@@ -160,6 +160,8 @@ router.post(
                 serverTs:    now,
               };
               _db.insert('onvif_events', event);
+              // Flush immediately so the event survives a crash/reboot within the 2-second debounce window
+              if (typeof _db.flushNow === 'function') _db.flushNow();
 
               // On state=true (event START) or point events (no state), capture snapshot
               if ((parsed.state === 'true' || parsed.state == null) && _pipelineManager) {

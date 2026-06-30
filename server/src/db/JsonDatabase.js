@@ -47,15 +47,18 @@ class JsonDatabase extends BaseDatabase {
       clearTimeout(this._persistTimer);
       this._persistTimer = null;
     }
-    if (!this._persistPending) return;
+    // Also flush when async write is in progress (_writing) because that write
+    // began before the latest inserts and may not include them.  We use a
+    // separate .sync.tmp path to avoid colliding with the in-flight async write.
+    if (!this._persistPending && !this._writing) return;
     this._persistPending = false;
-    if (this._writing) return; // async write in flight — let it finish
+    const syncTmp = this._tmpPath + '.sync';
     try {
-      fs.writeFileSync(this._tmpPath, JSON.stringify(this._store, null, 2));
-      fs.renameSync(this._tmpPath, this._path);
+      fs.writeFileSync(syncTmp, JSON.stringify(this._store, null, 2));
+      fs.renameSync(syncTmp, this._path);
     } catch (err) {
       console.error('[DB:json] flushNow error:', err.message);
-      try { if (fs.existsSync(this._tmpPath)) fs.unlinkSync(this._tmpPath); } catch (_) {}
+      try { if (fs.existsSync(syncTmp)) fs.unlinkSync(syncTmp); } catch (_) {}
     }
   }
 
@@ -152,8 +155,10 @@ class JsonDatabase extends BaseDatabase {
     this._persistPending = true;
     if (this._persistTimer) return;
     this._persistTimer = setTimeout(() => {
-      this._persistTimer   = null;
-      this._persistPending = false;
+      this._persistTimer = null;
+      // Do NOT clear _persistPending here — clear it only inside _flushAsync so
+      // that a concurrent flushNow() call cannot see false and skip the write
+      // while an async write is still in progress.
       this._flushAsync().catch(e => console.error('[DB:json] persist error:', e.message));
     }, PERSIST_DEBOUNCE_MS);
   }
@@ -161,6 +166,7 @@ class JsonDatabase extends BaseDatabase {
   async _flushAsync() {
     if (this._writing) return;
     this._writing = true;
+    this._persistPending = false; // cleared here, after acquiring the write lock
     try {
       await fs.promises.writeFile(this._tmpPath, JSON.stringify(this._store, null, 2));
       await fs.promises.rename(this._tmpPath, this._path);
