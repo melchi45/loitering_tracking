@@ -390,6 +390,58 @@ function Ensure-ProtobufGitSource([string]$ortRepoDir, [string]$protobufTag) {
     return $protobufDir
 }
 
+# GSL v4.0.0 / abseil-cpp NVCC 진단 에러 억제 패치
+# [[gsl::suppress(...)]] 속성을 NVCC 가 인식하지 못해 -Werror all-warnings 에 의해 빌드 실패하는 문제 수정.
+# cmake/CMakeLists.txt 의 onnxruntime_NVCC_FLAGS 목록에 --diag-suppress 플래그를 추가합니다.
+function Patch-OrtCmakeNvccFlags([string]$ortRepoDir) {
+    $cmakeFile = Join-Path $ortRepoDir "cmake\CMakeLists.txt"
+    if (-not (Test-Path $cmakeFile)) {
+        Write-Warning "  [patch] cmake\CMakeLists.txt 없음 — 패치 건너뜀: $cmakeFile"
+        return
+    }
+
+    $content = Get-Content $cmakeFile -Raw
+    if ($content -match 'diag-suppress=2803') {
+        Write-Host "  [patch] NVCC 진단 억제 패치 이미 적용됨 — 건너뜀"
+        return
+    }
+
+    # 기존 억제 플래그 바로 뒤에 삽입할 앵커 탐색 (우선순위 순)
+    $anchors = @(
+        'list\(APPEND onnxruntime_NVCC_FLAGS --diag-suppress=221\)',
+        'list\(APPEND onnxruntime_NVCC_FLAGS --diag-suppress=177\)',
+        'list\(APPEND onnxruntime_NVCC_FLAGS -Werror all-warnings\)'
+    )
+
+    $insertBlock = @"
+list(APPEND onnxruntime_NVCC_FLAGS --diag-suppress=2803)  # GSL v4.0.0 [[gsl::suppress]] unrecognized by nvcc
+list(APPEND onnxruntime_NVCC_FLAGS --diag-suppress=68)    # abseil: sign change
+list(APPEND onnxruntime_NVCC_FLAGS --diag-suppress=549)   # abseil: variable used before set
+list(APPEND onnxruntime_NVCC_FLAGS --diag-suppress=69)    # abseil: integer truncation
+"@
+
+    $patched = $false
+    foreach ($anchor in $anchors) {
+        if ($content -match $anchor) {
+            $content = $content -replace "($anchor)", "`$1`n$insertBlock"
+            $patched = $true
+            Write-Host "  [patch] NVCC 진단 억제 플래그 삽입 완료 (anchor: $anchor)"
+            break
+        }
+    }
+
+    if (-not $patched) {
+        Write-Warning "  [patch] 앵커를 찾지 못했습니다 — cmake\CMakeLists.txt 를 직접 확인하세요."
+        return
+    }
+
+    # 백업 후 저장
+    $backup = "$cmakeFile.nvcc-patch.bak"
+    Copy-Item $cmakeFile $backup -Force
+    Set-Content $cmakeFile $content -NoNewline
+    Write-Host "  [patch] 원본 백업: $backup"
+}
+
 Require-Command git
 Require-Command python
 Require-Command node
@@ -687,6 +739,9 @@ if (-not $SkipBuild) {
             }
         }
     }
+
+    # GSL v4.0.0 / abseil-cpp NVCC 진단 에러 억제 패치 적용
+    Patch-OrtCmakeNvccFlags $OrtRepoDir
 
     Write-Host "[2/4] Building native ONNX Runtime (this can take a long time)..."
     Push-Location $OrtRepoDir
