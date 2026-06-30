@@ -103,7 +103,8 @@ loitering_tracking/
 │   │   ├── OnvifTimelineOverlay.tsx # ONVIF 이벤트 타임라인 오버레이 (줌/팬/상세/Raw XML)
 │   │   ├── DetectionsTimelineInline.tsx # 감지 트랙 Gantt 타임라인 (FullscreenCameraView Detections 탭)
 │   │   ├── AnalysisHistoryTab.tsx  # 분석 이벤트 이력 탭 (저장된 fire/smoke/loitering)
-│   │   └── ThermalOverlay.tsx      # 열상 카메라 온도 오버레이 (onvif:temperature, FullArea 배너 + 좌표 crosshair)
+│   │   ├── ThermalOverlay.tsx      # 열상 카메라 온도 오버레이 (onvif:temperature, FullArea 배너 + 좌표 crosshair)
+│   │   └── AdminLogPanel.tsx       # 실시간 서버 로그 뷰어 (Socket.IO server:log + 파일 폴링, Admin Dashboard 전용)
 │   ├── stores/                     # Zustand 상태 스토어
 │   ├── hooks/                      # 커스텀 React 훅
 │   ├── i18n/                       # 다국어(ko/en) 리소스
@@ -234,6 +235,8 @@ loitering_tracking/
 | GET | `/admin/tc-results` | 최신 서버 시작 시 TC 테스트 실행 결과 (TC번호·SRS·Pass/Fail, admin 전용) |
 | DELETE | `/admin/tc-results` | TC 테스트 결과 전체 삭제 (admin 전용) |
 | POST | `/admin/tc-results/run` | TC 테스트 수동 재실행 트리거 (admin 전용, body: { port? }) |
+| GET | `/admin/logs/recent` | 최근 서버 로그 조회 (query: source=server\|ingest\|mediamtx, limit — admin 전용) |
+| PATCH | `/admin/logs/level` | Socket.IO 릴레이 로그 레벨 런타임 변경 (body: { level } — admin 전용, 파일 로깅 불변) |
 
 ---
 
@@ -256,6 +259,8 @@ loitering_tracking/
 | `onvif:event` | Server → Client | ONVIF 상태 변화 이벤트 (DB 저장 후 브로드캐스트) |
 | `onvif:type-registered` | Server → Client | 신규 ONVIF topicType 최초 감지 시 브로드캐스트 (타입 레지스트리 실시간 동기화) |
 | `onvif:temperature` | Server → Client | 열상 카메라 BoxTemperatureReading 실시간 스트림 (DB 미저장, ThermalOverlay 전용) |
+| `server:log` | Server → Client | 실시간 서버 로그 항목 — `{ ts, level, msg, t }` (Admin Log Viewer, 브로드캐스트) |
+| `admin:subscribe-logs` | Client → Server | Admin Log Viewer 구독 요청 — 서버가 최근 500개 버퍼 엔트리를 즉시 flush |
 
 ---
 

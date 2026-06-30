@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuthStore } from '../../stores/authStore';
 import { useOnvifEventStore, type OnvifEventType } from '../../stores/onvifEventStore';
 import { useSocket } from '../../hooks/useSocket';
+import AdminLogPanel from '../../components/AdminLogPanel';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -55,7 +56,7 @@ interface TcRun {
 }
 
 type StatusFilter = 'all' | 'pending' | 'active' | 'rejected' | 'revoked';
-type AdminSection = 'users' | 'onvif' | 'audit' | 'ai-models' | 'system';
+type AdminSection = 'users' | 'onvif' | 'audit' | 'ai-models' | 'system' | 'logs';
 
 // ── AI Models types ───────────────────────────────────────────────────────────
 
@@ -139,6 +140,7 @@ const NAV: { id: AdminSection; label: string; icon: string; desc: string }[] = [
   { id: 'onvif',     label: 'ONVIF',      icon: '📡', desc: 'Event type registry' },
   { id: 'audit',     label: 'Audit Log',  icon: '📋', desc: 'Activity history' },
   { id: 'system',    label: 'System',     icon: '📊', desc: 'CPU · Memory · Disk · DB metrics' },
+  { id: 'logs',      label: 'Server Logs', icon: '🖥️', desc: 'Real-time log viewer' },
 ];
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -235,13 +237,16 @@ export default function AdminUsersPage() {
           ))}
         </nav>
 
-        {/* Content */}
-        <main className="flex-1 overflow-y-auto bg-gray-950">
+        {/* Content — logs section uses inner scroll; all other sections scroll the main area */}
+        <main className={`flex-1 bg-gray-950 ${section === 'logs' ? 'overflow-hidden flex flex-col' : 'overflow-y-auto'}`}>
           {section === 'users'     && <UsersSection apiFetch={apiFetch} />}
           {section === 'ai-models' && <AiModelsSection />}
           {section === 'onvif'     && <OnvifSection apiFetch={apiFetch} />}
           {section === 'audit'     && <AuditSection apiFetch={apiFetch} />}
           {section === 'system'    && <SystemSection apiFetch={apiFetch} />}
+          {section === 'logs'      && (
+            <AdminLogPanel apiFetch={apiFetch} serverMode={serverMode} />
+          )}
         </main>
       </div>
     </div>

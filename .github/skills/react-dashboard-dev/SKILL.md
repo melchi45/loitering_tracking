@@ -156,6 +156,8 @@ npm run preview      # 빌드 결과 미리보기
 | `pages/admin/AdminUsersPage.tsx` (AI Models 섹션) | `docs/design/Design_Admin_Dashboard.md` §4.2 · `docs/design/Design_AI_Model_Catalog.md` · `docs/srs/SRS_Admin_Dashboard.md` §4 |
 | `pages/admin/AdminUsersPage.tsx` (ONVIF 섹션) | `docs/design/Design_Admin_Dashboard.md` §4.4 · `docs/design/Design_ONVIF_Timeline.md` §3.4 |
 | `pages/admin/AdminUsersPage.tsx` (Audit 섹션) | `docs/design/Design_Admin_Dashboard.md` §4.5 |
+| `pages/admin/AdminUsersPage.tsx` (Server Logs 섹션) | `docs/design/Design_Admin_Log_Viewer.md` · `docs/srs/SRS_Admin_Log_Viewer.md` · `docs/tc/TC_Admin_Log_Viewer.md` |
+| `components/AdminLogPanel.tsx` | `docs/design/Design_Admin_Log_Viewer.md` — Socket.IO relay, level control, source selector 변경 시 |
 | 새 컴포넌트 추가 | PRD + SRS + Design + TC 문서 신규 작성 또는 관련 문서에 섹션 추가 |
 
 **공통 규칙**
@@ -185,6 +187,8 @@ npm run preview      # 빌드 결과 미리보기
 │  🤖 AI Models    │                                              │
 │  📡 ONVIF        │                                              │
 │  📋 Audit Log    │                                              │
+│  📊 System       │                                              │
+│  🖥️ Server Logs  │                                              │
 └──────────────────┴──────────────────────────────────────────────┘
   w-52 sidebar
 ```
@@ -192,7 +196,7 @@ npm run preview      # 빌드 결과 미리보기
 ### 섹션 구조
 
 ```typescript
-type AdminSection = 'users' | 'ai-models' | 'onvif' | 'audit';
+type AdminSection = 'users' | 'ai-models' | 'onvif' | 'audit' | 'system' | 'logs';
 // useState<AdminSection>('users') — 사이드바 탭 전환
 ```
 
@@ -202,6 +206,13 @@ type AdminSection = 'users' | 'ai-models' | 'onvif' | 'audit';
 | 🤖 AI Models | `AiModelsSection` | GET/POST `/api/analysis/models`, GET/PUT `/api/analytics/config`, GET `/api/capabilities` |
 | 📡 ONVIF | `OnvifSection` | GET/DELETE `/api/onvif-event-types` |
 | 📋 Audit Log | `AuditSection` | GET `/admin/audit?limit=200` |
+| 📊 System | `SystemSection` | GET `/admin/system` |
+| 🖥️ Server Logs | `AdminLogPanel` (별도 컴포넌트) | GET `/admin/logs/recent`, PATCH `/admin/logs/level`, Socket.IO `server:log` |
+
+**Server Logs 섹션 레이아웃 특이점:**
+- `<main>` 요소에 `overflow-hidden flex flex-col` 클래스 적용 (다른 섹션은 `overflow-y-auto`)
+- `AdminLogPanel` 내부의 `flex-1 min-h-0` 로그 영역이 높이를 채워야 하기 때문
+- `AdminLogPanel.tsx` 를 별도 파일로 import (`import AdminLogPanel from '../../components/AdminLogPanel'`)
 
 ### AiModelsSection 구현 포인트
 

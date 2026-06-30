@@ -175,6 +175,12 @@ async function main() {
   // Expose io to route handlers via app.set
   app.set('io', io);
 
+  // Wire Socket.IO log relay so admin log viewer receives real-time server logs
+  try {
+    const { installSocketRelay } = require('./utils/logger');
+    installSocketRelay(io);
+  } catch (_) { /* logger not available in all environments */ }
+
   // ── Services ─────────────────────────────────────────────────────────────
   const zoneManager         = new ZoneManager(db);
   const alertService        = new AlertService(db);

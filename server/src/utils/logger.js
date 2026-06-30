@@ -10,6 +10,8 @@
  * • Auto-downgrades verbose ffmpeg / yt-dlp output to DEBUG level.
  * • User-configurable suppression patterns via LOG_FILTER_PATTERNS.
  * • Daily log file rotation in LOG_DIR (falls back to <server>/logs/).
+ * • Socket.IO real-time relay via installSocketRelay(io) — admin log viewer.
+ * • Runtime log level control via setLogLevel(level) / getLogLevel().
  *
  * Only loaded by startServer.js (production). devServer.js / direct node runs
  * do NOT load this module so development output is unaffected.
@@ -35,6 +37,9 @@ const LEVELS = { DEBUG: 10, INFO: 20, WARNING: 30, ERROR: 40, CRITICAL: 50, NONE
 // Resolve configured minimum level (default INFO)
 const _levelStr = (process.env.LOG_LEVEL || 'INFO').toUpperCase().trim();
 const MIN_LEVEL = LEVELS[_levelStr] ?? LEVELS.INFO;
+
+// Runtime-adjustable level (starts at the configured value; changed via setLogLevel()).
+let _runtimeMinLevel = MIN_LEVEL;
 
 // ─── Configuration ────────────────────────────────────────────────────────────
 
@@ -156,6 +161,115 @@ function _writeToFile(line) {
   if (_logStream) _logStream.write(line + '\n');
 }
 
+// ─── Socket.IO real-time relay ────────────────────────────────────────────────
+
+const LOG_BUFFER_MAX = 500;
+const _recentLogs    = [];   // circular buffer for GET /admin/logs/recent
+
+function _bufferLog(entry) {
+  _recentLogs.push(entry);
+  if (_recentLogs.length > LOG_BUFFER_MAX) _recentLogs.shift();
+}
+
+/** Returns a snapshot of the in-memory log ring buffer (up to 500 entries). */
+function getRecentLogs() {
+  return [..._recentLogs];
+}
+
+/** Changes the minimum log level for Socket.IO relay at runtime. Returns false if level is invalid. */
+function setLogLevel(level) {
+  const num = LEVELS[(level || '').toUpperCase()];
+  if (num == null) return false;
+  _runtimeMinLevel = num;
+  return true;
+}
+
+/** Returns the current effective log level string (DEBUG/INFO/WARNING/ERROR/CRITICAL/NONE). */
+function getLogLevel() {
+  return Object.keys(LEVELS).find(k => LEVELS[k] === _runtimeMinLevel) || 'INFO';
+}
+
+/**
+ * Installs a thin Socket.IO relay layer on top of the current console methods.
+ * Called from index.js after `io` is created.
+ *
+ * Works in both dev mode (unpatched console) and prod mode (patchConsole already
+ * applied in the startServer.js parent process).
+ *
+ * Each console call produces a { ts, level, msg, t } entry that is:
+ *  1. Added to the in-memory ring buffer (getRecentLogs).
+ *  2. Broadcast via Socket.IO `server:log` event to all connected sockets.
+ *
+ * Also handles the `admin:subscribe-logs` socket event to flush buffered entries
+ * to a newly connected admin client.
+ */
+function installSocketRelay(io) {
+  const origLog   = console.log;
+  const origInfo  = console.info;
+  const origWarn  = console.warn;
+  const origError = console.error;
+  const origDebug = console.debug;
+
+  function _relay(level, args) {
+    if (LEVELS[level] < _runtimeMinLevel) return;
+    const ts  = formatTs();
+    const msg = util.formatWithOptions({ colors: false }, ...args);
+    if (_isSuppressed(msg)) return;
+    const entry = { ts, level, msg, t: Date.now() };
+    _bufferLog(entry);
+    io.emit('server:log', entry);
+  }
+
+  console.log   = (...a) => { origLog(...a);   _relay('INFO',     a); };
+  console.info  = (...a) => { origInfo(...a);  _relay('INFO',     a); };
+  console.warn  = (...a) => { origWarn(...a);  _relay('WARNING',  a); };
+  console.error = (...a) => { origError(...a); _relay('ERROR',    a); };
+  console.debug = (...a) => { origDebug(...a); _relay('DEBUG',    a); };
+
+  // Flush buffered logs to a newly connected admin client on explicit subscribe request
+  io.on('connection', (socket) => {
+    socket.on('admin:subscribe-logs', () => {
+      _recentLogs.forEach(e => socket.emit('server:log', e));
+    });
+  });
+}
+
+// ─── Log-file tail utility ────────────────────────────────────────────────────
+
+/**
+ * Reads the current daily log file and returns the last `limit` lines
+ * optionally filtered by a source prefix (e.g. '[Ingest]', '[MediaMTX]').
+ *
+ * Used by GET /admin/logs/recent?source=ingest for ingest-daemon log polling.
+ *
+ * @param {Object} opts
+ * @param {string|null} opts.prefix  — filter lines containing this string, or null for all
+ * @param {number}      opts.limit   — max lines to return (default 200)
+ * @returns {{ ts: string, level: string, msg: string, t: number }[]}
+ */
+function tailLogFile({ prefix = null, limit = 200 } = {}) {
+  const dirs = [LOG_DIR, FALLBACK_DIR];
+  const date = _dateStr();
+  for (const dir of dirs) {
+    const p = path.join(dir, `lts-${date}.log`);
+    try {
+      if (!fs.existsSync(p)) continue;
+      const content = fs.readFileSync(p, 'utf8');
+      let lines = content.split('\n').filter(Boolean);
+      if (prefix) lines = lines.filter(l => l.includes(prefix));
+      if (lines.length > limit) lines = lines.slice(-limit);
+      // Parse formatted log lines: [YY-MM-DD HH:mm:ss.sss] [LEVEL] rest…
+      const RE = /^(\[\d{2}-\d{2}-\d{2}\s[\d:.]+\])\s+\[(DEBUG|INFO|WARNING|ERROR|CRITICAL)\]\s+(.*)$/s;
+      return lines.map(l => {
+        const m = l.match(RE);
+        if (m) return { ts: m[1], level: m[2], msg: m[3], t: 0 };
+        return { ts: '', level: 'INFO', msg: l, t: 0 };
+      });
+    } catch (_) { /* try next dir */ }
+  }
+  return [];
+}
+
 // ─── Console patch ────────────────────────────────────────────────────────────
 
 /**
@@ -214,4 +328,14 @@ function makeLineRelay(prefix, outStream) {
   };
 }
 
-module.exports = { formatTs, openLogFile, patchConsole, makeLineRelay };
+module.exports = {
+  formatTs,
+  openLogFile,
+  patchConsole,
+  makeLineRelay,
+  installSocketRelay,
+  setLogLevel,
+  getLogLevel,
+  getRecentLogs,
+  tailLogFile,
+};

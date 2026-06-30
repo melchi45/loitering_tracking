@@ -11,6 +11,7 @@ const { verifyAccessToken } = require('../middleware/auth');
 const { requireRole }       = require('../middleware/role');
 const { getSystemMetrics }  = require('../services/systemMetrics');
 const { getDbStats }        = require('../db');
+const { getRecentLogs, setLogLevel, getLogLevel, tailLogFile } = require('../utils/logger');
 
 // All admin routes require authentication + admin role
 router.use(verifyAccessToken);
@@ -137,6 +138,48 @@ router.post('/tc-results/run', (req, res) => {
   const started = TcRunnerService.runNow(port, proto);
   if (!started) return res.status(409).json({ error: 'A test run is already in progress' });
   res.json({ success: true, message: `Test run started on ${proto}://localhost:${port}` });
+});
+
+// ── GET /admin/logs/recent ────────────────────────────────────────────────────
+// Query: ?source=server|ingest|mediamtx  &limit=<n>
+// Returns recent log entries from in-memory buffer (source=server, default)
+// or from the daily log file filtered by prefix (source=ingest|mediamtx).
+router.get('/logs/recent', (req, res) => {
+  const source = (req.query.source || 'server').toLowerCase();
+  const limit  = Math.min(parseInt(req.query.limit || '200', 10), 500);
+
+  if (source === 'server') {
+    const logs = getRecentLogs().slice(-limit);
+    return res.json({ logs, level: getLogLevel(), total: logs.length });
+  }
+
+  const prefixMap = { ingest: '[Ingest]', mediamtx: '[MediaMTX]' };
+  const prefix = prefixMap[source];
+  if (!prefix) return res.status(400).json({ error: `Unknown source: ${source}. Use server|ingest|mediamtx` });
+
+  const logs = tailLogFile({ prefix, limit });
+  res.json({ logs, level: getLogLevel(), total: logs.length });
+});
+
+// ── PATCH /admin/logs/level ───────────────────────────────────────────────────
+// Body: { level: 'DEBUG'|'INFO'|'WARNING'|'ERROR'|'CRITICAL'|'NONE' }
+// Changes the Socket.IO relay min-level at runtime (does not affect file logging).
+router.patch('/logs/level', (req, res) => {
+  const { level } = req.body ?? {};
+  if (!level || typeof level !== 'string')
+    return res.status(400).json({ error: 'Body must include { level: string }' });
+
+  const ok = setLogLevel(level.toUpperCase());
+  if (!ok)
+    return res.status(400).json({ error: `Invalid level "${level}". Use DEBUG|INFO|WARNING|ERROR|CRITICAL|NONE` });
+
+  AuditService.log({
+    event:   'log_level_changed',
+    actorId: req.user.sub,
+    detail:  { level: level.toUpperCase() },
+  });
+
+  res.json({ ok: true, level: getLogLevel() });
 });
 
 module.exports = router;
