@@ -401,7 +401,7 @@ function Patch-OrtCmakeNvccFlags([string]$ortRepoDir) {
     }
 
     $content = Get-Content $cmakeFile -Raw
-    if ($content -match 'diag-suppress=2803') {
+    if ($content -match 'diag-suppress=2803' -and $content -match 'diag-suppress=20011') {
         Write-Host "  [patch] NVCC 진단 억제 패치 이미 적용됨 — 건너뜀"
         return
     }
@@ -418,6 +418,7 @@ list(APPEND onnxruntime_NVCC_FLAGS --diag-suppress=2803)  # GSL v4.0.0 [[gsl::su
 list(APPEND onnxruntime_NVCC_FLAGS --diag-suppress=68)    # abseil: sign change
 list(APPEND onnxruntime_NVCC_FLAGS --diag-suppress=549)   # abseil: variable used before set
 list(APPEND onnxruntime_NVCC_FLAGS --diag-suppress=69)    # abseil: integer truncation
+list(APPEND onnxruntime_NVCC_FLAGS --diag-suppress=20011) # cutlass v4.4.2: __host__ called from __host__ __device__
 "@
 
     $patched = $false
