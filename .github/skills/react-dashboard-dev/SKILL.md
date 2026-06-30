@@ -574,9 +574,9 @@ ONVIF 메타데이터 이벤트를 DB에 저장(`onvif_events` 테이블)하고,
 각 `(topicType, sourceToken, ruleName)` 3-튜플이 별도의 행(row)으로 표시됩니다. `RuleName`이 다른 이벤트는 동일 topic/source라도 독립 행으로 분리됩니다.
 
 ```
-┌──────────────────────────────────────────────────────────────────┐
-│ [1H][6H][1D][1W][1M][1Y][Custom]  [Event Type ▾]   ×2.0   5/12  │ ← control
-├──────────────────────────────────────────────────────────────────┤
+┌────────────────────────────────────────────────────────────────────────────┐
+│ [1H][6H][1D][1W][1M][1Y][Custom]  [Event Type ▾]  ←spacer→  ×2.0  [+][−] [↺]  5/12 │ ← control
+├────────────────────────────────────────────────────────────────────────────┤
 │ callRequest (Tok1) │ [███ motionAlarm 15s ██████]    │ detail     │ BAR (16px)
 │                    │     [📷]                        │ 220px      │ SNAP (30px)
 │ motionAlarm        │ [████ 3s ████]                  │            │
@@ -609,6 +609,30 @@ ONVIF 메타데이터 이벤트를 DB에 저장(`onvif_events` 테이블)하고,
 - 상세 패널: `snapCache.get(selected.id)` 로 표시 (별도 fetch 불필요)
 
 구현: `{selected && <div style={{ width: DETAIL_W }}>…</div>}` — `selected` null 시 DOM에서 완전히 제거됩니다.
+
+### 줌 버튼 컨트롤 (OnvifTimelineInline — v2.8+)
+
+컨트롤 바에 **[+]** / **[−]** 줌 버튼을 Refresh(↺) 버튼 왼쪽에 배치합니다.
+
+```tsx
+<button onClick={() => applyZoom(1.4)}
+        className="text-gray-500 hover:text-gray-300 transition-colors text-[11px] leading-none px-0.5"
+        title="Zoom in">+</button>
+<button onClick={() => applyZoom(1 / 1.4)}
+        disabled={zoom <= 1}
+        className="text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-[11px] leading-none px-0.5"
+        title="Zoom out">−</button>
+```
+
+| 속성 | + 버튼 | − 버튼 |
+|------|--------|--------|
+| 동작 | `applyZoom(1.4)` | `applyZoom(1/1.4)` |
+| disabled 조건 | 없음 | `zoom <= 1` |
+| disabled 스타일 | — | `opacity-30 cursor-not-allowed` |
+| zoom step | ×1.4 (= 휠 1틱과 동일) | ÷1.4 (= 휠 1틱과 동일) |
+| 최대/최소 | 500× (applyZoom 내 clamp) | 1× (applyZoom 내 clamp → pan=0 자동) |
+
+**설계 문서**: [Design_ONVIF_Timeline.md §5.3](../../../docs/design/Design_ONVIF_Timeline.md), [SRS_ONVIF_Timeline_Zoom.md](../../../docs/srs/SRS_ONVIF_Timeline_Zoom.md)
 
 ### 드래그 패닝 (OnvifTimelineInline)
 

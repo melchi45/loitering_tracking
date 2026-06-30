@@ -351,6 +351,13 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
             ×{zoom.toFixed(1)}
           </span>
         )}
+        <button onClick={() => applyZoom(1.4)}
+                className="text-gray-500 hover:text-gray-300 transition-colors text-[11px] leading-none px-0.5"
+                title="Zoom in">+</button>
+        <button onClick={() => applyZoom(1 / 1.4)}
+                disabled={zoom <= 1}
+                className="text-gray-500 hover:text-gray-300 disabled:opacity-30 disabled:cursor-not-allowed transition-colors text-[11px] leading-none px-0.5"
+                title="Zoom out">−</button>
         {loading ? <Spinner /> : (
           <button onClick={() => setFetchKey(k => k + 1)}
                   className="text-gray-500 hover:text-gray-300 transition-colors" title="Refresh">↺</button>
