@@ -442,6 +442,53 @@ list(APPEND onnxruntime_NVCC_FLAGS --diag-suppress=69)    # abseil: integer trun
     Write-Host "  [patch] 원본 백업: $backup"
 }
 
+# Eigen 3.4.0 + MSVC 2022 C++20: element_wise_ops.cc ArrayBase::min/max 스칼라 오버로드 패치
+# MSVC 2022 C++20 모드에서 Eigen ArrayBase::min(Scalar) / max(Scalar) 의
+# 템플릿 인수 추론이 실패 (C2672) 하는 문제를 cwiseMin / cwiseMax 로 교체하여 수정합니다.
+# 영향 파일: onnxruntime/core/providers/cpu/math/element_wise_ops.cc
+function Patch-OrtElementWiseOps([string]$ortRepoDir) {
+    $srcFile = Join-Path $ortRepoDir "onnxruntime\core\providers\cpu\math\element_wise_ops.cc"
+    if (-not (Test-Path $srcFile)) {
+        Write-Warning "  [patch] element_wise_ops.cc 없음 — 패치 건너뜀: $srcFile"
+        return
+    }
+
+    $content = Get-Content $srcFile -Raw
+    if ($content -match '__ort_patched_eigen_minmax__') {
+        Write-Host "  [patch] element_wise_ops Eigen min/max 패치 이미 적용됨 — 건너뜀"
+        return
+    }
+
+    $changed = $false
+
+    # .array().min(expr) → .array().cwiseMin(expr)
+    # .array().max(expr) → .array().cwiseMax(expr)
+    # cwiseMin/cwiseMax 는 scalar 와 array 모두 지원하므로 안전하게 교체 가능합니다.
+    if ($content -match '\.array\(\)\.min\(') {
+        $content = $content -replace '(\.array\(\))\.min\(', '$1.cwiseMin('
+        $changed = $true
+        Write-Host "  [patch] .array().min( → .array().cwiseMin( 치환 완료"
+    }
+    if ($content -match '\.array\(\)\.max\(') {
+        $content = $content -replace '(\.array\(\))\.max\(', '$1.cwiseMax('
+        $changed = $true
+        Write-Host "  [patch] .array().max( → .array().cwiseMax( 치환 완료"
+    }
+
+    if (-not $changed) {
+        Write-Warning "  [patch] element_wise_ops.cc 에서 .array().min/.max 패턴을 찾지 못했습니다 — 건너뜀"
+        return
+    }
+
+    # 중복 적용 방지 마커 삽입 (파일 맨 앞에 주석으로 추가)
+    $content = "// __ort_patched_eigen_minmax__ (auto-patched by build script)`n" + $content
+
+    $backup = "$srcFile.minmax-patch.bak"
+    Copy-Item $srcFile $backup -Force
+    Set-Content $srcFile $content -NoNewline
+    Write-Host "  [patch] element_wise_ops.cc 패치 완료, 백업: $backup"
+}
+
 Require-Command git
 Require-Command python
 Require-Command node
@@ -742,6 +789,8 @@ if (-not $SkipBuild) {
 
     # GSL v4.0.0 / abseil-cpp NVCC 진단 에러 억제 패치 적용
     Patch-OrtCmakeNvccFlags $OrtRepoDir
+    # Eigen 3.4.0 + MSVC 2022 C++20: ArrayBase::min/max scalar 오버로드 패치
+    Patch-OrtElementWiseOps $OrtRepoDir
 
     Write-Host "[2/4] Building native ONNX Runtime (this can take a long time)..."
     Push-Location $OrtRepoDir
