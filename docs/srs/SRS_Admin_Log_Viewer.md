@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Real-Time Server Log Viewer  
-**Version:** 1.0  
+**Version:** 1.1  
 **Date:** 2026-06-29
 
 ---
@@ -15,8 +15,8 @@ This Software Requirements Specification defines the functional and non-function
 
 ## 2. Scope
 
-- **Included**: Server log relay, log level runtime control, log source selection, admin UI
-- **Excluded**: Log file management, log search/indexing, remote server log aggregation
+- **Included**: Server log relay, log level runtime control, log source selection, admin UI, fixed toolbar layout, in-browser text search with highlight
+- **Excluded**: Log file management, server-side log indexing, remote server log aggregation
 
 ---
 
@@ -86,7 +86,9 @@ The UI SHALL provide per-level visibility toggles for `ERROR`, `WARNING`, `INFO`
 
 ### FR-LOG-010 — Auto-Scroll Behaviour
 
-Auto-scroll SHALL be enabled by default. When the user scrolls up more than 50 px from the bottom of the log area, auto-scroll SHALL automatically disable. Clicking the "↓ Auto-scroll" button SHALL re-enable it and scroll to the bottom.
+Auto-scroll SHALL be enabled by default. Implementation SHALL use `element.scrollTop = element.scrollHeight` on the log area container (NOT `Element.scrollIntoView()`) to prevent document-level scrolling that would push the toolbar off-screen.
+
+When the user scrolls up more than 50 px from the bottom of the log area, auto-scroll SHALL automatically disable. When the user manually scrolls back to within 50 px of the bottom, auto-scroll SHALL automatically re-enable. Clicking the "↓ Auto-scroll" button SHALL also re-enable it and scroll to the bottom immediately.
 
 ### FR-LOG-011 — Pause / Resume
 
@@ -104,6 +106,28 @@ The Download button SHALL export all currently visible (filtered) log entries as
 ### FR-LOG-014 — Source Visibility by Server Mode
 
 The `Ingest Daemon` source option SHALL be hidden when the server reports `SERVER_MODE=analysis`.
+
+### FR-LOG-015 — Fixed Control Area
+
+The toolbar (source selector, level controls, action buttons), search bar, and stats row SHALL be rendered in a `flex-shrink-0` container that never scrolls. Only the log area div (below the fixed area) SHALL have `overflow-y-auto`. This ensures controls remain visible regardless of the number of log entries displayed.
+
+**Acceptance**: While auto-scroll is active and entries are arriving, the toolbar and search bar SHALL remain fully visible without any user scroll interaction.
+
+### FR-LOG-016 — In-Browser Text Search
+
+The UI SHALL provide a persistent search bar between the toolbar and the stats row.
+
+- Typing in the search bar SHALL filter the displayed log list in real-time (no submit required)
+- Filter SHALL be case-insensitive
+- Filter SHALL match against both the `msg` field and the `ts` timestamp string
+- Matching substring in the `msg` field SHALL be visually highlighted (yellow background mark)
+- Highlighting SHALL be recursive — multiple occurrences per line SHALL all be highlighted
+- A match count indicator SHALL be shown within the search bar while a query is active
+- A clear button (✕) within the search bar SHALL reset the query to empty
+- The stats row SHALL display a `🔍 filtered` tag when a search query is active
+- The Download action SHALL export only entries that pass both the level filter AND the search filter
+
+**Acceptance**: Typing `camera` in the search bar while 200 entries are displayed SHALL immediately update the list to show only entries whose message or timestamp contains `camera` (case-insensitive); all remaining visible entries SHALL have `camera` highlighted.
 
 ---
 
@@ -166,3 +190,4 @@ interface LogEntry {
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-29 | 초기 작성 |
+| 1.1 | 2026-06-30 | FR-LOG-010 scrollTop 방식 명시, FR-LOG-015 고정 Control Area, FR-LOG-016 텍스트 검색 추가; searchQuery 상태 추가 |

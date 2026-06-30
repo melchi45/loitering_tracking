@@ -256,6 +256,32 @@ async function runTests() {
     await adminFetch('/admin/logs/level', { method: 'PATCH', body: JSON.stringify({ level: 'INFO' }) });
   });
 
+  // ── Group D: UI behaviour notes (frontend-only, verified manually) ───────
+  //
+  // TC-LOG-021: Toolbar visible during auto-scroll — FR-LOG-015
+  //   Manual: confirm toolbar/search bar do not scroll out of view while entries arrive.
+  //
+  // TC-LOG-022: Auto-scroll re-enables on scroll-to-bottom — FR-LOG-010
+  //   Manual: scroll up → auto-scroll off; scroll back to bottom → auto-scroll on.
+  //
+  // TC-LOG-023: Search bar always visible — FR-LOG-015/016
+  //   Manual: search bar between toolbar and stats row; stays visible while log area scrolls.
+  //
+  // TC-LOG-024: Search filters log list — FR-LOG-016
+  //   Manual: type keyword → list filters case-insensitively; matches highlighted in yellow.
+  //
+  // TC-LOG-025: No-match empty state — FR-LOG-016
+  //   Manual: type non-existent string → shows 'No matches for "..."'.
+  //
+  // TC-LOG-026: Search clear button — FR-LOG-016
+  //   Manual: ✕ clears query; full level-filtered list reappears.
+  //
+  // TC-LOG-027: Multiple highlight occurrences per line — FR-LOG-016
+  //   Manual: short query → all occurrences in a single row highlighted.
+  //
+  // TC-LOG-028: Download respects search filter — FR-LOG-016
+  //   Manual: search active → download exports only matching lines.
+
   // ── Summary ──────────────────────────────────────────────────────────────
 
   console.log('\n══════════════════════════════════════════════════════════════');

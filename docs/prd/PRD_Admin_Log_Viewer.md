@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Real-Time Server Log Viewer  
-**Version:** 1.0  
+**Version:** 1.1  
 **Date:** 2026-06-29
 
 ---
@@ -24,6 +24,8 @@ The Admin Log Viewer adds a **Server Logs** section to the existing Administrato
 | US-05 | Admin | Pause the log stream | I can read an entry without it scrolling away |
 | US-06 | Admin | Download the current log view | I can attach logs to a support ticket |
 | US-07 | Admin | See color-coded severity | I can immediately spot errors at a glance |
+| US-08 | Admin | Keep the toolbar visible while log entries scroll | I can change filters without scrolling back to the top |
+| US-09 | Admin | Search log messages by keyword | I can find specific events instantly without reading every line |
 
 ---
 
@@ -63,19 +65,27 @@ Dropdown: `DEBUG` | `INFO` | `WARNING` | `ERROR` | `CRITICAL` | `NONE`
 
 ### 3.4 Log Display Area
 
+Layout (fixed-header pattern — only the log area scrolls):
+
 ```
-┌────────────────────────────────────────────────────────────────────────────┐
-│ [26-06-29 14:30:00.123] [ERROR]  [pipelineManager] Camera disconnected    │  ← red row
-│ [26-06-29 14:30:01.456] [WARNING] [internalApi] ONVIF parse timeout       │  ← yellow row
-│ [26-06-29 14:30:02.789] [INFO]  [captureFactory] Camera cam-001 started   │  ← blue
-│ [26-06-29 14:30:03.012] [DEBUG]  [tracking] ByteTrack frame 2045          │  ← gray
-└────────────────────────────────────────────────────────────────────────────┘
+┌─ Fixed control area (flex-shrink-0, never scrolls) ──────────────────────┐
+│ Header · connection indicator                                             │
+│ Toolbar: [Source] [Level▾] [Show:ERROR|WARNING|INFO|DEBUG] [Actions]     │
+│ Search: 🔍 [___search text______________________________] 12 matches  ✕  │
+│ Stats: 12 / 200 lines · 🔍 filtered · ERROR:2 WARNING:5                  │
+├─ Scrollable log area (flex-1 min-h-0 overflow-y-auto) ───────────────────┤
+│ [26-06-29 14:30:00.123] [ERROR]  [pipelineManager] Camera disconnected   │
+│ [26-06-29 14:30:01.456] [WARNING] [internalApi] ONVIF parse timeout      │
+│ [26-06-29 14:30:02.789] [INFO]  [captureFactory] Camera cam-001 started  │
+│ [26-06-29 14:30:03.012] [DEBUG]  [tracking] ByteTrack frame 2045         │
+└───────────────────────────────────────────────────────────────────────────┘
 ```
 
 - Monospace font, dark background, 11 px text
 - Max 500 lines in display; FIFO purge on overflow
-- Auto-scroll enabled by default
-- Auto-scroll pauses when user scrolls up (resumes via "↓ Auto-scroll" button or manual scroll to bottom)
+- Auto-scroll enabled by default; uses `scrollTop = scrollHeight` (not `scrollIntoView`) to prevent document-level scroll
+- Auto-scroll pauses when user scrolls up; automatically re-enables when user scrolls back to bottom
+- The toolbar, search bar, and stats row are wrapped in `flex-shrink-0` so they are never pushed off-screen by incoming log entries
 
 ### 3.5 Status Bar
 
@@ -90,8 +100,18 @@ Dropdown: `DEBUG` | `INFO` | `WARNING` | `ERROR` | `CRITICAL` | `NONE`
 | Show Levels | Toggle per-level display filter |
 | ↓ Auto-scroll | Re-enable auto-scroll to bottom |
 | ⏸ Pause / ▶ Resume | Halt / resume ingestion of new entries |
-| ↓ Download | Export filtered logs as plain text |
+| ↓ Download | Export filtered + searched logs as plain text |
 | Clear | Clear in-browser display |
+
+### 3.7 Log Search
+
+- A search bar sits between the toolbar and the stats row, visible at all times
+- Typing filters the displayed logs in real-time (case-insensitive)
+- Matches against message text AND timestamp string
+- Matching substring is highlighted in yellow within each log row
+- Match count shown in search bar; cleared with ✕ button
+- Stats row shows `🔍 filtered` tag when search is active
+- Download respects active search filter
 
 ---
 
@@ -120,3 +140,4 @@ Dropdown: `DEBUG` | `INFO` | `WARNING` | `ERROR` | `CRITICAL` | `NONE`
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-29 | 초기 작성 |
+| 1.1 | 2026-06-30 | US-08/09 추가, 3.4 레이아웃 고정 설계, 3.7 텍스트 검색 명세 추가 |

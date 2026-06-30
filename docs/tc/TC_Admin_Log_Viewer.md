@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Real-Time Server Log Viewer  
-**Version:** 1.0  
+**Version:** 1.1  
 **Date:** 2026-06-29  
 **SRS Reference:** SRS_Admin_Log_Viewer.md
 
@@ -234,8 +234,100 @@
 
 ---
 
+### TC-LOG-021: Toolbar remains visible during active auto-scroll
+
+**SRS:** FR-LOG-015  
+**Precondition:** Admin on Server Logs panel, auto-scroll enabled, server generating logs continuously  
+**Steps:**
+1. Observe the panel while log entries appear automatically
+2. Do NOT interact with the panel
+
+**Expected:** Toolbar (source selector, level controls, action buttons), search bar, and stats row remain fully visible at all times — they do NOT scroll out of view as new entries arrive
+
+---
+
+### TC-LOG-022: Auto-scroll re-enables on scroll-to-bottom
+
+**SRS:** FR-LOG-010  
+**Steps:**
+1. Scroll up in the log area (auto-scroll should disable)
+2. Manually scroll all the way back to the bottom
+
+**Expected:** Auto-scroll automatically re-enables (↓ Auto-scroll button turns blue); no button click required
+
+---
+
+### TC-LOG-023: Search bar is always visible
+
+**SRS:** FR-LOG-015, FR-LOG-016  
+**Steps:**
+1. Open Server Logs panel
+2. Verify search bar is visible between the toolbar and stats row
+3. Scroll up and down in the log area
+
+**Expected:** Search bar remains fixed and visible; only log rows scroll
+
+---
+
+### TC-LOG-024: Search filters by keyword (case-insensitive)
+
+**SRS:** FR-LOG-016  
+**Precondition:** Log panel has ≥ 10 entries  
+**Steps:**
+1. Type a keyword that appears in some (but not all) log messages (e.g., `camera`)
+2. Observe the log list and match count
+
+**Expected:** Log list immediately shows only entries whose message or timestamp contains the keyword (case-insensitive); match count updates; all visible entries have the keyword highlighted in yellow
+
+---
+
+### TC-LOG-025: Search — no matches shows empty state
+
+**SRS:** FR-LOG-016  
+**Steps:**
+1. Type a string guaranteed not to appear in any log (e.g., `xyzzy9999`)
+
+**Expected:** Log area shows empty state message `No matches for "xyzzy9999"` (not the generic "No log entries" message)
+
+---
+
+### TC-LOG-026: Search clear button resets filter
+
+**SRS:** FR-LOG-016  
+**Precondition:** A search query is active and filtering the log list  
+**Steps:**
+1. Click the ✕ button inside the search bar
+
+**Expected:** Search query clears; all level-filtered entries reappear; match count and `🔍 filtered` tag disappear
+
+---
+
+### TC-LOG-027: Search highlight — multiple occurrences per line
+
+**SRS:** FR-LOG-016  
+**Steps:**
+1. Search for a very short common substring (e.g., `a`) that appears multiple times in a single log message
+2. Observe a log row that contains multiple occurrences
+
+**Expected:** All occurrences of the substring within that row's message are highlighted (recursive highlight)
+
+---
+
+### TC-LOG-028: Download respects active search filter
+
+**SRS:** FR-LOG-016  
+**Steps:**
+1. Enter a search query that reduces visible logs (e.g., `error`)
+2. Click **↓ Download**
+3. Open the downloaded file
+
+**Expected:** Downloaded file contains only entries that matched the search query — not the full log buffer
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-29 | 초기 작성 |
+| 1.1 | 2026-06-30 | TC-LOG-021~028 추가 (고정 툴바 + 텍스트 검색) |

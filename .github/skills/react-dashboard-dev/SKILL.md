@@ -209,9 +209,16 @@ type AdminSection = 'users' | 'ai-models' | 'onvif' | 'audit' | 'system' | 'logs
 | 📊 System | `SystemSection` | GET `/admin/system` |
 | 🖥️ Server Logs | `AdminLogPanel` (별도 컴포넌트) | GET `/admin/logs/recent`, PATCH `/admin/logs/level`, Socket.IO `server:log` |
 
-**Server Logs 섹션 레이아웃 특이점:**
+**Server Logs 섹션 레이아웃 규칙 (중요):**
 - `<main>` 요소에 `overflow-hidden flex flex-col` 클래스 적용 (다른 섹션은 `overflow-y-auto`)
-- `AdminLogPanel` 내부의 `flex-1 min-h-0` 로그 영역이 높이를 채워야 하기 때문
+- `AdminLogPanel` 루트 div: `flex flex-col h-full overflow-hidden` — 내부에서만 스크롤
+- **고정 Control Area**: 툴바 + 검색바 + 통계줄을 `flex-shrink-0` 컨테이너로 묶어 항상 표시
+- **로그 영역만 스크롤**: `flex-1 min-h-0 overflow-y-auto` — 이 div만 스크롤됨
+- **Auto-scroll 구현**: `scrollIntoView()` 사용 금지 → `logAreaRef.current.scrollTop = logAreaRef.current.scrollHeight` 사용 (문서 레벨 스크롤 방지)
+- Auto-scroll 자동 재활성화: `handleScroll()` 에서 하단 50px 이내면 `setAutoScroll(true)` 처리
+- **검색 기능**: `searchQuery` 상태 + `useMemo` filteredLogs (level filter → search filter 순 파이프라인)
+- 검색 하이라이트: `highlightText(text, lowerQuery)` 재귀 함수 → `<mark>` 태그 반환
+- `LogRow`에 `highlight: string` prop 추가; 검색 쿼리가 있을 때만 `highlightText()` 호출
 - `AdminLogPanel.tsx` 를 별도 파일로 import (`import AdminLogPanel from '../../components/AdminLogPanel'`)
 
 ### AiModelsSection 구현 포인트

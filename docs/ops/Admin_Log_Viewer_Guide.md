@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Real-Time Server Log Viewer  
-**Version:** 1.0  
+**Version:** 1.1  
 **Date:** 2026-06-29
 
 ---
@@ -92,7 +92,33 @@ Fallback path: `server/logs/lts-YYYY-MM-DD.log`
 
 ---
 
-## 9. Troubleshooting
+## 9. Searching Logs
+
+A search bar is displayed between the toolbar and the stats row at all times.
+
+### How to search
+
+1. Click inside the search bar (or just start typing after clicking on the log panel)
+2. Type a keyword — the log list filters in real-time as you type
+3. Matching text is highlighted in yellow in each visible row
+4. The match count shown in the search bar updates as you type
+5. Click **✕** inside the search bar, or clear the field, to remove the filter
+
+### Search behaviour
+
+| Behaviour | Detail |
+|---|---|
+| Case sensitivity | Case-insensitive |
+| Search scope | `msg` field and timestamp string |
+| Scope | Current in-browser buffer only (up to 500 lines) — does not search log files on disk |
+| Download | Respects active search — exports only matched lines |
+| Stats row | Shows `🔍 filtered` tag while a query is active |
+
+> **Tip:** To find a specific camera disconnect event, type part of the camera ID or `disconnected`. To find all errors within a time window, first set Show Levels to ERROR only, then search for the time prefix (e.g., `14:30`).
+
+---
+
+## 10. Troubleshooting
 
 ### Log viewer shows no entries
 
@@ -114,7 +140,7 @@ Expected — the runtime level change via `PATCH /admin/logs/level` is in-memory
 
 ---
 
-## 10. API Reference
+## 11. API Reference
 
 | Endpoint | Description |
 |---|---|
@@ -132,3 +158,4 @@ All endpoints require JWT + `admin` role.
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-29 | 초기 작성 |
+| 1.1 | 2026-06-30 | §9 로그 검색 사용 가이드 추가, §10 번호 조정 |

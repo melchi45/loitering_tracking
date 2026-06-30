@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Real-Time Server Log Viewer in Administrator Dashboard  
-**Version:** 1.0  
+**Version:** 1.1  
 **Date:** 2026-06-29  
 **Author:** LTS Engineering Team
 
@@ -47,6 +47,8 @@ Operations and development teams currently have no in-browser way to inspect liv
 | BR-05 | Log content must be downloadable as a text file for offline analysis |
 | BR-06 | The viewer must update in real time (< 1 s latency for server logs) |
 | BR-07 | Log access must be restricted to users with `admin` role |
+| BR-08 | The toolbar and controls must remain visible at all times — only the log area scrolls |
+| BR-09 | Admins must be able to search log messages by keyword within the current view |
 
 ---
 
@@ -73,3 +75,4 @@ Operations and development teams currently have no in-browser way to inspect liv
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-29 | 초기 작성 |
+| 1.1 | 2026-06-30 | BR-08 툴바 고정, BR-09 텍스트 검색 요구사항 추가 |

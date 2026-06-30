@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Real-Time Server Log Viewer  
-**Version:** 1.0  
+**Version:** 1.1  
 **Date:** 2026-06-29
 
 ---
@@ -47,10 +47,11 @@ The viewer must support three log sources selectable at runtime:
 
 - Monospace font, dark background
 - Color-coded rows by level: ERROR red / WARNING yellow / INFO blue / DEBUG gray
-- Auto-scroll to bottom (toggleable); automatically pauses when user scrolls up
+- Auto-scroll to bottom (toggleable); automatically pauses when user scrolls up; re-enables when user scrolls back to bottom
 - Pause / Resume toggle to stop accepting new entries without disconnecting
 - Maximum 500 lines displayed; oldest entries purged on overflow
 - Display columns: timestamp | level badge | message
+- **Fixed control area**: toolbar, search bar, and stats row MUST remain visible at all times; only the log area scrolls internally
 
 ### 3.5 Actions
 
@@ -60,6 +61,17 @@ The viewer must support three log sources selectable at runtime:
 | Download | Exports current filtered view as `.txt` file |
 | Auto-scroll toggle | Stays at bottom vs. free scroll |
 | Pause / Resume | Halt real-time updates vs. resume |
+
+### 3.6 Log Search
+
+- A persistent search bar SHALL be displayed between the toolbar and the stats row
+- Search SHALL filter the current in-browser log list in real time (case-insensitive)
+- Search SHALL match against message text AND timestamp string
+- Matching substring SHALL be highlighted in each log row (yellow highlight)
+- A match count indicator (`N matches`) SHALL be shown within the search bar
+- A clear button (✕) SHALL reset the search query
+- The stats row SHALL show a `🔍 filtered` indicator when a search is active
+- Download SHALL export only the currently matched (filtered) entries
 
 ---
 
@@ -132,3 +144,4 @@ Admin Dashboard (`AdminUsersPage.tsx`) sidebar:
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-29 | 초기 작성 |
+| 1.1 | 2026-06-30 | 3.4 툴바 고정 명시, 3.6 로그 텍스트 검색 요구사항 추가 |
