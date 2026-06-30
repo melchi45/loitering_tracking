@@ -325,9 +325,67 @@
 
 ---
 
+### TC-LOG-029: Max Lines dropdown is present in toolbar
+
+**SRS:** FR-LOG-017  
+**Precondition:** Admin Dashboard → Server Logs section open  
+**Steps:**
+1. Observe the toolbar
+
+**Expected:** A "Max Lines" dropdown is visible in the toolbar; available options are 100, 200, 500, 1000, 2000; default value is 500
+
+---
+
+### TC-LOG-030: Changing Max Lines immediately trims display
+
+**SRS:** FR-LOG-017  
+**Precondition:** 300 log entries visible; Max Lines = 500  
+**Steps:**
+1. Change Max Lines dropdown to 100
+
+**Expected:** Display immediately shows only the newest 100 entries; entry count in stats row shows 100 / 100 (or fewer if less than 100 were visible)
+
+---
+
+### TC-LOG-031: Incoming entries respect new Max Lines cap
+
+**SRS:** FR-LOG-017  
+**Precondition:** Max Lines = 100; source = server; real-time updates active  
+**Steps:**
+1. Let 120 entries accumulate via real-time stream
+
+**Expected:** Display never exceeds 100 entries; oldest entries are dropped as new ones arrive
+
+---
+
+### TC-LOG-032: Max Lines persisted in localStorage
+
+**SRS:** FR-LOG-017  
+**Steps:**
+1. Change Max Lines to 200
+2. Reload the page
+3. Navigate back to Admin Dashboard → Server Logs
+
+**Expected:** Max Lines dropdown shows 200 (restored from localStorage)
+
+---
+
+### TC-LOG-033: Max Lines reset to 500 for unknown saved value
+
+**SRS:** FR-LOG-017  
+**Steps:**
+1. Manually set `localStorage.setItem('lts_admin_log_maxLines', '999')` in browser console
+2. Reload the page
+3. Navigate to Server Logs
+
+**Expected:** Max Lines dropdown shows 500 (fallback to default — 999 is not a valid option)
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-29 | 초기 작성 |
 | 1.1 | 2026-06-30 | TC-LOG-021~028 추가 (고정 툴바 + 텍스트 검색) |
+| 1.2 | 2026-06-30 | TC-LOG-029~033 추가 (Max Lines 설정) |

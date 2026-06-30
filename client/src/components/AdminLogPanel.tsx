@@ -22,7 +22,9 @@ interface AdminLogPanelProps {
 
 const LEVEL_ORDER: LogLevel[] = ['ERROR', 'WARNING', 'INFO', 'DEBUG'];
 const RUNTIME_LEVELS = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL', 'NONE'];
-const MAX_DISPLAY_LINES = 500;
+const MAX_LINES_OPTIONS = [100, 200, 500, 1000, 2000] as const;
+type MaxLines = typeof MAX_LINES_OPTIONS[number];
+const LS_MAX_LINES_KEY = 'lts_admin_log_maxLines';
 
 const LEVEL_COLORS: Record<LogLevel, string> = {
   CRITICAL: 'text-red-200 bg-red-950/60',
@@ -56,6 +58,11 @@ export default function AdminLogPanel({ apiFetch, serverMode }: AdminLogPanelPro
   const [levelChanging, setLevelChanging] = useState(false);
   const [lastUpdate, setLastUpdate]       = useState<Date | null>(null);
   const [searchQuery, setSearchQuery]     = useState('');
+  const [maxLines, setMaxLines]           = useState<MaxLines>(() => {
+    const saved = localStorage.getItem(LS_MAX_LINES_KEY);
+    const n = saved ? parseInt(saved, 10) : 500;
+    return (MAX_LINES_OPTIONS as readonly number[]).includes(n) ? n as MaxLines : 500;
+  });
 
   const logAreaRef  = useRef<HTMLDivElement>(null);
   const pausedRef   = useRef(paused);
@@ -65,6 +72,18 @@ export default function AdminLogPanel({ apiFetch, serverMode }: AdminLogPanelPro
   sourceRef.current = source;
 
   const isStreaming = serverMode === 'streaming' || serverMode === 'combined';
+
+  // ── Persist maxLines to localStorage ─────────────────────────────────────
+
+  useEffect(() => {
+    localStorage.setItem(LS_MAX_LINES_KEY, String(maxLines));
+  }, [maxLines]);
+
+  // ── Trim existing logs when maxLines decreases ────────────────────────────
+
+  useEffect(() => {
+    setLogs(prev => prev.length > maxLines ? prev.slice(-maxLines) : prev);
+  }, [maxLines]);
 
   // ── Initial load on source change ─────────────────────────────────────────
 
@@ -77,7 +96,7 @@ export default function AdminLogPanel({ apiFetch, serverMode }: AdminLogPanelPro
           logs?: LogEntry[];
           level?: string;
         };
-        setLogs((data.logs || []).slice(-MAX_DISPLAY_LINES));
+        setLogs((data.logs || []).slice(-maxLines));
         if (data.level) setRuntimeLevel(data.level);
         setLastUpdate(new Date());
       } catch (e: unknown) {
@@ -103,7 +122,7 @@ export default function AdminLogPanel({ apiFetch, serverMode }: AdminLogPanelPro
       if (pausedRef.current || sourceRef.current !== 'server') return;
       setLogs(prev => {
         const next = [...prev, entry];
-        return next.length > MAX_DISPLAY_LINES ? next.slice(-MAX_DISPLAY_LINES) : next;
+        return next.length > maxLines ? next.slice(-maxLines) : next;
       });
       setLastUpdate(new Date());
     };
@@ -123,7 +142,7 @@ export default function AdminLogPanel({ apiFetch, serverMode }: AdminLogPanelPro
         const data = await apiFetch(`/admin/logs/recent?source=${source}&limit=200`) as {
           logs?: LogEntry[];
         };
-        setLogs((data.logs || []).slice(-MAX_DISPLAY_LINES));
+        setLogs((data.logs || []).slice(-maxLines));
         setLastUpdate(new Date());
       } catch (_) { /* silently ignore poll errors */ }
     }, 2000);
@@ -230,7 +249,7 @@ export default function AdminLogPanel({ apiFetch, serverMode }: AdminLogPanelPro
         <div className="flex items-start justify-between">
           <div>
             <h2 className="text-base font-semibold text-white">Server Logs</h2>
-            <p className="text-xs text-gray-500 mt-0.5">Real-time log viewer · last {MAX_DISPLAY_LINES} lines per source</p>
+            <p className="text-xs text-gray-500 mt-0.5">Real-time log viewer · last <span className="text-gray-400">{maxLines.toLocaleString()}</span> lines per source</p>
           </div>
 
           {/* Connection indicator */}
@@ -319,6 +338,22 @@ export default function AdminLogPanel({ apiFetch, serverMode }: AdminLogPanelPro
                 </button>
               ))}
             </div>
+          </div>
+
+          <div className="w-px bg-gray-700 self-stretch" />
+
+          {/* Max Lines selector */}
+          <div className="flex flex-col gap-1">
+            <span className="text-[10px] text-gray-500 font-medium uppercase tracking-wider">Max Lines</span>
+            <select
+              value={maxLines}
+              onChange={e => setMaxLines(Number(e.target.value) as MaxLines)}
+              className="bg-gray-800 text-gray-300 text-xs rounded-md px-2 py-1 border border-gray-700 cursor-pointer"
+            >
+              {MAX_LINES_OPTIONS.map(n => (
+                <option key={n} value={n}>{n.toLocaleString()}</option>
+              ))}
+            </select>
           </div>
 
           {/* Spacer */}

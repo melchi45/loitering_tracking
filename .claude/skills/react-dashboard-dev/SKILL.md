@@ -219,6 +219,22 @@ type AdminSection = 'users' | 'ai-models' | 'onvif' | 'audit' | 'system' | 'logs
 - **검색 기능**: `searchQuery` 상태 + `useMemo` filteredLogs (level filter → search filter 순 파이프라인)
 - 검색 하이라이트: `highlightText(text, lowerQuery)` 재귀 함수 → `<mark>` 태그 반환
 - `LogRow`에 `highlight: string` prop 추가; 검색 쿼리가 있을 때만 `highlightText()` 호출
+- **Max Lines 설정**: `maxLines` 상태 (localStorage `lts_admin_log_maxLines` 영속, 기본 500)
+  ```typescript
+  const MAX_LINES_OPTIONS = [100, 200, 500, 1000, 2000] as const;
+  type MaxLines = typeof MAX_LINES_OPTIONS[number];
+  const [maxLines, setMaxLines] = useState<MaxLines>(() => {
+    const n = parseInt(localStorage.getItem('lts_admin_log_maxLines') || '500', 10);
+    return (MAX_LINES_OPTIONS as readonly number[]).includes(n) ? n as MaxLines : 500;
+  });
+  // localStorage 영속
+  useEffect(() => { localStorage.setItem('lts_admin_log_maxLines', String(maxLines)); }, [maxLines]);
+  // maxLines 감소 시 즉시 트림
+  useEffect(() => { setLogs(prev => prev.length > maxLines ? prev.slice(-maxLines) : prev); }, [maxLines]);
+  ```
+  - 모든 `setLogs` 호출 시 `.slice(-maxLines)` 적용 (initial load, polling, real-time handler)
+  - 툴바에 `<select>` 드롭다운 추가 — Max Lines 옵션 열거
+  - 서버 ring buffer(`LOG_BUFFER_MAX=500`)는 변경 없음 — 클라이언트 display buffer만 제어
 - `AdminLogPanel.tsx` 를 별도 파일로 import (`import AdminLogPanel from '../../components/AdminLogPanel'`)
 
 ### AiModelsSection 구현 포인트

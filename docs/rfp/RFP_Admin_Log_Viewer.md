@@ -49,9 +49,10 @@ The viewer must support three log sources selectable at runtime:
 - Color-coded rows by level: ERROR red / WARNING yellow / INFO blue / DEBUG gray
 - Auto-scroll to bottom (toggleable); automatically pauses when user scrolls up; re-enables when user scrolls back to bottom
 - Pause / Resume toggle to stop accepting new entries without disconnecting
-- Maximum 500 lines displayed; oldest entries purged on overflow
+- Maximum displayed lines is user-configurable (options: 100 / 200 / 500 / 1000 / 2000; default 500); oldest entries purged on overflow
 - Display columns: timestamp | level badge | message
 - **Fixed control area**: toolbar, search bar, and stats row MUST remain visible at all times; only the log area scrolls internally
+- Max Lines preference is persisted in browser `localStorage` and restored on next visit
 
 ### 3.5 Actions
 
@@ -61,6 +62,7 @@ The viewer must support three log sources selectable at runtime:
 | Download | Exports current filtered view as `.txt` file |
 | Auto-scroll toggle | Stays at bottom vs. free scroll |
 | Pause / Resume | Halt real-time updates vs. resume |
+| Max Lines | Dropdown (100/200/500/1000/2000, default 500) — controls display buffer size; persisted in `localStorage` |
 
 ### 3.6 Log Search
 
@@ -145,3 +147,4 @@ Admin Dashboard (`AdminUsersPage.tsx`) sidebar:
 |---|---|---|
 | 1.0 | 2026-06-29 | 초기 작성 |
 | 1.1 | 2026-06-30 | 3.4 툴바 고정 명시, 3.6 로그 텍스트 검색 요구사항 추가 |
+| 1.2 | 2026-06-30 | 3.4 Max Lines 설정 가능 기술, 3.5 Actions 표에 Max Lines 항목 추가 |

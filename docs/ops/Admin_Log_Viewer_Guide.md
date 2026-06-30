@@ -70,13 +70,31 @@ On reconnect, the client requests the last 500 buffered entries via `admin:subsc
 
 ---
 
-## 7. Pause / Resume
+## 7. Max Lines Setting
+
+The **Max Lines** dropdown in the toolbar controls how many log entries the browser keeps in memory.
+
+| Option | When to use |
+|---|---|
+| 100 | Low-memory devices or when only the most recent entries matter |
+| 200 | Light monitoring |
+| **500** | **Default** — suitable for most workstations |
+| 1000 | Deep debugging — keeps a longer history visible |
+| 2000 | High-traffic troubleshooting — use with Pause to read without scroll |
+
+- The selected value is **saved in your browser** (`localStorage`) and restored on your next visit
+- Changing to a smaller value **immediately trims** the display to the newest N lines
+- The server's own ring buffer is fixed at 500 entries; setting Max Lines above 500 only affects the real-time stream accumulation (not the initial load)
+
+---
+
+## 8. Pause / Resume
 
 Click **⏸ Pause** to freeze the display without disconnecting. New logs accumulate server-side. Click **▶ Resume** to resume — you will not receive the logs that arrived while paused (they will appear in `GET /admin/logs/recent` on next source switch).
 
 ---
 
-## 8. Log File Configuration
+## 9. Log File Configuration
 
 Server-side log file settings in `server/.env`:
 
@@ -92,7 +110,7 @@ Fallback path: `server/logs/lts-YYYY-MM-DD.log`
 
 ---
 
-## 9. Searching Logs
+## 10. Searching Logs
 
 A search bar is displayed between the toolbar and the stats row at all times.
 
@@ -110,7 +128,7 @@ A search bar is displayed between the toolbar and the stats row at all times.
 |---|---|
 | Case sensitivity | Case-insensitive |
 | Search scope | `msg` field and timestamp string |
-| Scope | Current in-browser buffer only (up to 500 lines) — does not search log files on disk |
+| Scope | Current in-browser buffer only (up to configured Max Lines) — does not search log files on disk |
 | Download | Respects active search — exports only matched lines |
 | Stats row | Shows `🔍 filtered` tag while a query is active |
 
@@ -118,7 +136,7 @@ A search bar is displayed between the toolbar and the stats row at all times.
 
 ---
 
-## 10. Troubleshooting
+## 11. Troubleshooting
 
 ### Log viewer shows no entries
 
@@ -140,7 +158,7 @@ Expected — the runtime level change via `PATCH /admin/logs/level` is in-memory
 
 ---
 
-## 11. API Reference
+## 12. API Reference
 
 | Endpoint | Description |
 |---|---|
@@ -159,3 +177,4 @@ All endpoints require JWT + `admin` role.
 |---|---|---|
 | 1.0 | 2026-06-29 | 초기 작성 |
 | 1.1 | 2026-06-30 | §9 로그 검색 사용 가이드 추가, §10 번호 조정 |
+| 1.2 | 2026-06-30 | §7 Max Lines 설정 가이드 추가, 섹션 번호 재조정 (§8~§12) |

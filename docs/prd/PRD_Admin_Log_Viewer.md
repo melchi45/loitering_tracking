@@ -26,6 +26,7 @@ The Admin Log Viewer adds a **Server Logs** section to the existing Administrato
 | US-07 | Admin | See color-coded severity | I can immediately spot errors at a glance |
 | US-08 | Admin | Keep the toolbar visible while log entries scroll | I can change filters without scrolling back to the top |
 | US-09 | Admin | Search log messages by keyword | I can find specific events instantly without reading every line |
+| US-10 | Admin | Set the maximum number of log lines shown | I can balance detail vs. performance for my workstation |
 
 ---
 
@@ -82,7 +83,7 @@ Layout (fixed-header pattern — only the log area scrolls):
 ```
 
 - Monospace font, dark background, 11 px text
-- Max 500 lines in display; FIFO purge on overflow
+- Max display lines is user-configurable: 100 / 200 / 500 / 1000 / 2000 (default 500); FIFO purge on overflow; setting persisted in `localStorage`
 - Auto-scroll enabled by default; uses `scrollTop = scrollHeight` (not `scrollIntoView`) to prevent document-level scroll
 - Auto-scroll pauses when user scrolls up; automatically re-enables when user scrolls back to bottom
 - The toolbar, search bar, and stats row are wrapped in `flex-shrink-0` so they are never pushed off-screen by incoming log entries
@@ -98,6 +99,7 @@ Layout (fixed-header pattern — only the log area scrolls):
 | Source selector | Switch between Server / Ingest Daemon / MediaMTX |
 | Server Log Level | Change runtime relay level (server source only) |
 | Show Levels | Toggle per-level display filter |
+| Max Lines | Dropdown: 100 / 200 / 500 / 1000 / 2000 — controls display buffer cap; persisted in localStorage |
 | ↓ Auto-scroll | Re-enable auto-scroll to bottom |
 | ⏸ Pause / ▶ Resume | Halt / resume ingestion of new entries |
 | ↓ Download | Export filtered + searched logs as plain text |
@@ -122,7 +124,8 @@ Layout (fixed-header pattern — only the log area scrolls):
 | Socket disconnects | Connection indicator turns red; existing logs remain; auto-reconnects |
 | Log file not found | Ingest/MediaMTX source shows "No log entries" message |
 | No log entries | Empty state with contextual message |
-| 500+ lines arrive quickly | Oldest lines dropped; scroll position maintained |
+| Max lines exceeded | Oldest lines dropped from the head of the display buffer; scroll position maintained |
+| User changes Max Lines to lower value | Existing display buffer is immediately trimmed to the new limit |
 | Admin leaves logs section | Socket event listener is cleaned up on unmount |
 
 ---
@@ -141,3 +144,4 @@ Layout (fixed-header pattern — only the log area scrolls):
 |---|---|---|
 | 1.0 | 2026-06-29 | 초기 작성 |
 | 1.1 | 2026-06-30 | US-08/09 추가, 3.4 레이아웃 고정 설계, 3.7 텍스트 검색 명세 추가 |
+| 1.2 | 2026-06-30 | US-10 추가, 3.4 Max Lines 설정 가능 기술, 3.6 Max Lines 컨트롤 추가, Edge Cases 업데이트 |

@@ -152,6 +152,28 @@ All state is local to `AdminLogPanel.tsx` — no Zustand store needed.
 | `paused` | `boolean` | `false` |
 | `loading` | `boolean` | `false` |
 | `searchQuery` | `string` | `''` |
+| `maxLines` | `100 \| 200 \| 500 \| 1000 \| 2000` | `500` (from localStorage `lts_admin_log_maxLines`) |
+
+**maxLines 초기화 패턴:**
+```typescript
+const MAX_LINES_OPTIONS = [100, 200, 500, 1000, 2000] as const;
+type MaxLines = typeof MAX_LINES_OPTIONS[number];
+
+const [maxLines, setMaxLines] = useState<MaxLines>(() => {
+  const saved = localStorage.getItem('lts_admin_log_maxLines');
+  const n = saved ? parseInt(saved, 10) : 500;
+  return (MAX_LINES_OPTIONS as readonly number[]).includes(n) ? n as MaxLines : 500;
+});
+
+useEffect(() => {
+  localStorage.setItem('lts_admin_log_maxLines', String(maxLines));
+}, [maxLines]);
+
+// maxLines 변경 시 즉시 트림
+useEffect(() => {
+  setLogs(prev => prev.length > maxLines ? prev.slice(-maxLines) : prev);
+}, [maxLines]);
+```
 
 ### 4.3 Data Flow
 
@@ -173,7 +195,7 @@ On unmount:
   clearInterval(pollInterval)
 
 filteredLogs derivation (useMemo):
-  logs
+  logs                          ← already trimmed to maxLines by setLogs
     .filter(l => visibleLevels.has(l.level))
     .filter(l => !searchQuery || l.msg.toLowerCase().includes(lowerQuery)
                                || l.ts.includes(searchQuery))
@@ -265,7 +287,8 @@ No payload. Triggers flush of `_recentLogs` ring buffer to the requesting socket
 | Ingest Daemon logs not real-time (2 s poll) | Ingest runs in a different process; log file is the shared channel |
 | Socket relay only covers `index.js`-process logs | startServer.js child-process relay re-logs these; they appear in both server socket and log file |
 | Ring buffer reset on server restart | In-memory only; logs before restart accessed via log file API |
-| Search is client-side only | Searches the currently loaded 500-line buffer; does not search the full log file on disk |
+| Search is client-side only | Searches the currently loaded buffer (up to maxLines); does not search the full log file on disk |
+| Max Lines > server buffer | Server ring buffer fixed at 500 — initial load capped at 500; real-time stream can grow to user-set limit |
 
 ---
 
@@ -275,3 +298,4 @@ No payload. Triggers flush of `_recentLogs` ring buffer to the requesting socket
 |---|---|---|
 | 1.0 | 2026-06-29 | 초기 작성 |
 | 1.1 | 2026-06-30 | 4.1 고정 레이아웃 구조, 4.3 filteredLogs 파이프라인, 4.4 검색 하이라이트 구현, 7 제한사항 업데이트 |
+| 1.2 | 2026-06-30 | 4.2 maxLines 상태 추가 (localStorage 영속·즉시 트림 패턴), 4.3 filteredLogs 주석 추가, 7 Max Lines 제한사항 추가 |

@@ -129,6 +129,23 @@ The UI SHALL provide a persistent search bar between the toolbar and the stats r
 
 **Acceptance**: Typing `camera` in the search bar while 200 entries are displayed SHALL immediately update the list to show only entries whose message or timestamp contains `camera` (case-insensitive); all remaining visible entries SHALL have `camera` highlighted.
 
+### FR-LOG-017 — Max Lines Setting
+
+The UI SHALL provide a **Max Lines** dropdown selector in the toolbar.
+
+- Options SHALL be: `100`, `200`, `500`, `1000`, `2000`
+- Default value SHALL be `500`
+- The selected value SHALL be persisted in `localStorage` under the key `lts_admin_log_maxLines`
+- On mount, the component SHALL restore the saved value; if no saved value exists or the saved value is not in the valid option set, the default `500` SHALL be used
+- When the `maxLines` value changes, the display buffer SHALL be **immediately trimmed** to `maxLines` entries (oldest removed)
+- On each new log entry: `setLogs(prev => { const next = [...prev, entry]; return next.length > maxLines ? next.slice(-maxLines) : next; })`
+- On initial load and polling: `setLogs((data.logs || []).slice(-maxLines))`
+- The header subtitle SHALL reflect the current value: `Real-time log viewer · last {maxLines} lines per source`
+
+**Acceptance**: Changing Max Lines from 500 to 100 while 400 lines are displayed SHALL immediately reduce the display to the newest 100 lines.
+
+**Note on server ring buffer**: The server-side ring buffer (`LOG_BUFFER_MAX = 500`) is a separate constant and is NOT changed by the client-side Max Lines setting. When Max Lines is set above 500, the initial load is limited to 500 entries; the real-time stream can subsequently accumulate up to the selected limit.
+
 ---
 
 ## 4. Non-Functional Requirements
@@ -191,3 +208,4 @@ interface LogEntry {
 |---|---|---|
 | 1.0 | 2026-06-29 | 초기 작성 |
 | 1.1 | 2026-06-30 | FR-LOG-010 scrollTop 방식 명시, FR-LOG-015 고정 Control Area, FR-LOG-016 텍스트 검색 추가; searchQuery 상태 추가 |
+| 1.2 | 2026-06-30 | FR-LOG-017 Max Lines 설정 추가 — localStorage 영속, 즉시 트림, 서버 ring buffer와의 차이 명시 |

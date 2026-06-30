@@ -281,6 +281,23 @@ async function runTests() {
   //
   // TC-LOG-028: Download respects search filter — FR-LOG-016
   //   Manual: search active → download exports only matching lines.
+  //
+  // ── Group E: Max Lines setting (TC-LOG-029~033) ─────────────────────────
+  //
+  // TC-LOG-029: Max Lines dropdown present — FR-LOG-017
+  //   Manual: toolbar shows "Max Lines" dropdown; options 100/200/500/1000/2000; default 500.
+  //
+  // TC-LOG-030: Changing Max Lines trims display immediately — FR-LOG-017
+  //   Manual: with 300 entries, change to 100 → display shows newest 100; stats row = 100/100.
+  //
+  // TC-LOG-031: Incoming entries respect new Max Lines cap — FR-LOG-017
+  //   Manual: set Max Lines=100, watch real-time stream → display never exceeds 100.
+  //
+  // TC-LOG-032: Max Lines persisted in localStorage — FR-LOG-017
+  //   Manual: set 200 → reload → Server Logs shows 200 in dropdown.
+  //
+  // TC-LOG-033: Unknown saved value falls back to 500 — FR-LOG-017
+  //   Manual: localStorage.setItem('lts_admin_log_maxLines','999') → reload → shows 500.
 
   // ── Summary ──────────────────────────────────────────────────────────────
 

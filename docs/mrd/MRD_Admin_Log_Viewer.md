@@ -49,6 +49,7 @@ Operations and development teams currently have no in-browser way to inspect liv
 | BR-07 | Log access must be restricted to users with `admin` role |
 | BR-08 | The toolbar and controls must remain visible at all times — only the log area scrolls |
 | BR-09 | Admins must be able to search log messages by keyword within the current view |
+| BR-10 | Admins must be able to configure the maximum number of log lines kept in the display buffer |
 
 ---
 
@@ -76,3 +77,4 @@ Operations and development teams currently have no in-browser way to inspect liv
 |---|---|---|
 | 1.0 | 2026-06-29 | 초기 작성 |
 | 1.1 | 2026-06-30 | BR-08 툴바 고정, BR-09 텍스트 검색 요구사항 추가 |
+| 1.2 | 2026-06-30 | BR-10 Max Lines 설정 추가 |
