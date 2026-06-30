@@ -184,7 +184,7 @@ export default function AdminUsersPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-950 text-white flex flex-col">
+    <div className="h-screen overflow-hidden bg-gray-950 text-white flex flex-col">
 
       {/* ── Header ────────────────────────────────────────────────────────── */}
       <header className="bg-gray-900 border-b border-gray-800 px-5 py-3.5 flex items-center justify-between flex-shrink-0">
