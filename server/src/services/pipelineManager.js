@@ -84,14 +84,29 @@ async function _ingestRegisterCamera(cameraId, rtspUrl, callbackUrl, appRtpCallb
   }
 }
 
-async function _ingestRemoveCamera(cameraId) {
+// Deleting a camera MUST actually stop ingest-daemon's reconnect loop for it —
+// previously this fired the DELETE once and silently swallowed any failure
+// (network hiccup, ingest-daemon momentarily busy), leaving the daemon with an
+// orphaned session that keeps retrying the camera connection forever with no
+// trace in the log. One retry + logging on final failure closes that gap.
+async function _ingestRemoveCamera(cameraId, attempt = 1) {
   try {
-    await fetch(`${_INGEST_DAEMON_URL}/cameras/${encodeURIComponent(cameraId)}`, {
+    const resp = await fetch(`${_INGEST_DAEMON_URL}/cameras/${encodeURIComponent(cameraId)}`, {
       method: 'DELETE',
       signal: AbortSignal.timeout(5000),
     });
-  } catch {
-    // ignore cleanup errors
+    if (!resp.ok) throw new Error(`ingest-daemon responded ${resp.status}`);
+    return true;
+  } catch (err) {
+    if (attempt < 2) {
+      await new Promise(r => setTimeout(r, 500));
+      return _ingestRemoveCamera(cameraId, attempt + 1);
+    }
+    console.warn(
+      `[PipelineManager][${cameraId.slice(0, 8)}] ingest-daemon DELETE /cameras/${cameraId} failed after ${attempt} attempts: ${err.message} — ` +
+      `the daemon may still hold this camera and keep retrying its RTSP connection`
+    );
+    return false;
   }
 }
 
@@ -1300,9 +1315,15 @@ class PipelineManager {
     ctx.behavior.removeAllListeners();
     const needsMediaMTXCleanup = (ctx.useWebRTC && WEBRTC_ENGINE === 'mediamtx')
       || CAPTURE_BACKEND === 'mediamtx';
-    if (needsMediaMTXCleanup) mediamtxManager.removeCameraPath(cameraId).catch(() => {});
-    if (WEBRTC_ENGINE !== 'mediamtx') getWebRTCEngine().removeCameraStream(cameraId).catch(() => {});
-    if (CAPTURE_BACKEND === 'ingest-daemon') _ingestRemoveCamera(cameraId).catch(() => {});
+    // Awaited (not fire-and-forget) so the caller — DELETE /api/cameras/:id — only
+    // responds "removed" once ingest-daemon has actually been told to stop, with
+    // its own retry (see _ingestRemoveCamera). Each cleanup logs its own failure
+    // internally, so one failing independently of the others doesn't hide it.
+    await Promise.allSettled([
+      needsMediaMTXCleanup ? mediamtxManager.removeCameraPath(cameraId) : Promise.resolve(),
+      WEBRTC_ENGINE !== 'mediamtx' ? getWebRTCEngine().removeCameraStream(cameraId) : Promise.resolve(),
+      CAPTURE_BACKEND === 'ingest-daemon' ? _ingestRemoveCamera(cameraId) : Promise.resolve(),
+    ]);
     this._pipelines.delete(cameraId);
     this._updateCameraStatus(cameraId, 'offline');
   }

@@ -144,9 +144,11 @@ router.post('/tc-results/run', (req, res) => {
 // Query: ?source=server|ingest|mediamtx  &limit=<n>
 // Returns recent log entries from in-memory buffer (source=server, default)
 // or from the daily log file filtered by prefix (source=ingest|mediamtx).
+// Cap (2000) must match LOG_BUFFER_MAX in utils/logger.js — see AdminLogPanel.tsx
+// MAX_LINES_OPTIONS, whose largest value this endpoint must be able to satisfy.
 router.get('/logs/recent', (req, res) => {
   const source = (req.query.source || 'server').toLowerCase();
-  const limit  = Math.min(parseInt(req.query.limit || '200', 10), 500);
+  const limit  = Math.min(parseInt(req.query.limit || '200', 10), 2000);
 
   if (source === 'server') {
     const logs = getRecentLogs().slice(-limit);

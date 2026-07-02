@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Real-Time Server Log Viewer in Administrator Dashboard  
-**Version:** 1.1  
+**Version:** 1.3  
 **Date:** 2026-06-29  
 **Author:** LTS Engineering Team
 
@@ -49,7 +49,7 @@ Operations and development teams currently have no in-browser way to inspect liv
 | BR-07 | Log access must be restricted to users with `admin` role |
 | BR-08 | The toolbar and controls must remain visible at all times — only the log area scrolls |
 | BR-09 | Admins must be able to search log messages by keyword within the current view |
-| BR-10 | Admins must be able to configure the maximum number of log lines kept in the display buffer |
+| BR-10 | Admins must be able to configure the maximum number of log lines kept in the display buffer, and the number of lines actually shown must reliably reach that configured maximum (see 2026-07-02 defect note below) |
 
 ---
 
@@ -62,7 +62,15 @@ Operations and development teams currently have no in-browser way to inspect liv
 
 ---
 
-## 6. Out of Scope
+## 6. Known Issues — Resolved
+
+| Date | Issue | Resolution |
+|---|---|---|
+| 2026-07-02 | Displayed log line count did not match the admin-configured Max Lines value (BR-10) — three compounding causes: fetch calls used a hardcoded 200-line request regardless of the setting, the real-time stream kept using a stale copy of the setting captured at page load, and the server's in-memory buffer topped out at 500 even though the UI offered up to 2000. | All three fixed together — fetch requests now use the current setting, live-stream/poll handlers re-read the current setting on every change, and the server buffer was raised to 2000 to match the largest UI option. See `docs/design/Design_Admin_Log_Viewer.md` §4.2 for the technical write-up. |
+
+---
+
+## 7. Out of Scope
 
 - Historical log file browser (multi-day search)
 - Log aggregation from remote analysis servers
@@ -78,3 +86,4 @@ Operations and development teams currently have no in-browser way to inspect liv
 | 1.0 | 2026-06-29 | 초기 작성 |
 | 1.1 | 2026-06-30 | BR-08 툴바 고정, BR-09 텍스트 검색 요구사항 추가 |
 | 1.2 | 2026-06-30 | BR-10 Max Lines 설정 추가 |
+| 1.3 | 2026-07-02 | BR-10 문구 보강, §6 Known Issues — Resolved 섹션 신설 (표시 lines ≠ Max Lines 결함 및 해결 기록), §7로 Out of Scope 재번호 |

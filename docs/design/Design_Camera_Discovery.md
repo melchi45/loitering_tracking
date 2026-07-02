@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAM-01 |
-| **Version** | 1.2 |
+| **Version** | 1.6 |
 | **Status** | Active |
 | **Date** | 2026-06-23 |
 | **Parent SRS** | srs/SRS_Camera_Discovery.md |
@@ -48,7 +48,7 @@
 │   │   ├─ emit basic DeviceInfo immediately                        │
 │   │   └─ enrichDevice() async:                                    │
 │   │       GetDeviceInformation → GetCapabilities →                │
-│   │       GetProfiles → GetStreamUri (up to 4 profiles)          │
+│   │       GetVideoSources → GetProfiles → GetStreamUri (up to 16) │
 │   │                                                                │
 │   ├─ _known: Map<deviceKey, DeviceInfo>   (registry)             │
 │   ├─ _ipIndex: Map<IP, deviceKey>         (cross-protocol dedup)  │
@@ -216,11 +216,12 @@ merged.MaxChannel = Math.max(existing.MaxChannel || 1, incoming.MaxChannel || 1)
 
 **MaxChannel enrichment flow:**
 
-1. **ONVIF NVR**: `enrichDevice()` sets `MaxChannel = profiles.length` after `GetStreamUri`. An NVR with 4 connected cameras → `MaxChannel = 4`.
-2. **WiseNet UDP NVR**: After `mapUDPDevice()` (MaxChannel=1 default), `querySunapiMaxChannel()` is called asynchronously (no-auth, 2 s timeout):
-   - Queries `GET /stw-cgi/media.cgi?msubmenu=channellist&action=view` → parses `MaxChannel` or `ChannelIDList.length`
-   - Falls back to `GET /stw-cgi/system.cgi?msubmenu=systeminfo&action=view`
-   - Returns 1 on any failure (auth required, timeout, network error)
+1. **ONVIF NVR**: `enrichDevice()` derives `MaxChannel` from `GetVideoSources` (2026-07-02, FR-CAM-075 — see §3.2's "GetVideoSources" note below), falling back to the distinct-`SourceToken` count from `GetProfiles` (FR-CAM-060) when `GetVideoSources` is unavailable. `profiles.length` alone is never used (would over-count single-channel cameras exposing separate main/sub profiles).
+2. **WiseNet UDP NVR**: After `mapUDPDevice()` (MaxChannel=1 default), `querySunapiMaxChannel()` is called asynchronously (2 s timeout):
+   - Queries `GET /stw-cgi/attributes.cgi/attributes` (2026-07-02: corrected — `media.cgi?msubmenu=channellist` and `system.cgi?msubmenu=systeminfo` are not real SUNAPI CGI paths and never returned data) → response is XML; parses the `value` attribute at `<group name="System"><category name="Limit"><attribute name="MaxChannel" .../>` (matches the vendor SUNAPI IP Installer's own `System/Limit/MaxChannel` query path — see `submodules/WiseNetChromeIPInstaller/media/ump/Network/http/attributes.js`)
+   - **SUNAPI Digest auth** (2026-07-02, FR-CAM-072): the initial request always tries HTTP Basic first (or no `Authorization` header at all, if no credentials are configured). Some SUNAPI firmware (an nginx-fronted iPolis build was the concrete case: `WWW-Authenticate: Digest qop="auth", realm="iPolis_..."`) rejects Basic outright and 401s regardless of whether the password is correct — this is a scheme mismatch, not a bad credential. When the `401`/`403` response's `WWW-Authenticate` header advertises `Digest` and credentials are available, `querySunapiMaxChannel()` computes an RFC 7616 Digest response (MD5, `qop=auth` when offered) and retries exactly once with it before giving up. A `Basic`-only challenge, or a Digest retry that still 401s (i.e. a genuinely wrong password), falls through to the existing "resolves 1" behavior unchanged.
+   - **SUNAPI HTTPS self-signed certificate** (2026-07-02, FR-CAM-073): when the SUNAPI web UI is HTTPS-only, the query used Node's default TLS validation and failed with `self-signed certificate` before ever reaching the auth layer above — on-prem cameras/NVRs almost universally ship self-signed certs, and `onvifDiscovery.js`'s own HTTPS SOAP client already sets `rejectUnauthorized: false` for this exact reason. `querySunapiMaxChannel()` was simply missing the equivalent option; now sets it too. This only affects certificate trust, not authentication — FR-CAM-068/072's credential checks are unchanged.
+   - Returns 1 on any failure (auth required — Basic-challenged or Digest-retry-failed —, timeout, network error, attribute not found)
    - If `> 1`, device is re-upserted and re-emitted via `discovery:result`
 3. **mergeDevices**: When UDP and ONVIF discover the same NVR, `MaxChannel = max(udp, onvif)` — the richer value wins.
 
@@ -253,18 +254,27 @@ Initial
 ```
 1. GetDeviceInformation → Manufacturer, Model, FirmwareVersion, SerialNumber
 2. GetCapabilities(Category: Media) → media service XAddr
-3. GetProfiles at mediaUrl → parse <Profiles> blocks
-   → per profile: token, name, encoding, width, height, fps
-4. GetStreamUri for each profile (max 4)
-   → rtspUrl per profile; first non-empty = device rtspUrl
-5. Fallback: rtspUrl = "rtsp://<ip>:554/"
+3. GetVideoSources at mediaUrl (2026-07-02, FR-CAM-075) → VideoSources[].token list
+   → authoritative physical-channel enumeration (VideoSource_0, VideoSource_1, ...),
+     independent of whether GetProfiles exposes a profile for every channel
+4. GetProfiles at mediaUrl → parse <Profiles> blocks
+   → per profile: token, name, encoding, width, height, fps, sourceToken
+   → channelIndex = sourceToken's position in step 3's token list (falls back to
+     insertion-order-within-GetProfiles when step 3 returned nothing)
+5. GetStreamUri for each profile (max 16)
+   → rtspUrl per profile; first non-empty (channel 1) = device rtspUrl
+6. Fallback: rtspUrl = "rtsp://<ip>:554/"
+7. MaxChannel = step 3's token count, or step 4's distinct-sourceToken count as fallback, or 1
 ```
 
-**SOAP helper `soapPost(xaddr, body)`:**
+`enrichDeviceAutoScheme(ip, { onvifPort, onvifHttpsPort })` (2026-07-02, FR-CAM-074) — a second export, used only by `POST /api/cameras/probe-channels` (Channel Slot feature; `Design_Channel_Slot.md` §4.6), which has no device-asserted XAddr and must guess the scheme. Runs `enrichDevice()` on both `http://ip:onvifPort` (default 80) and `https://ip:onvifHttpsPort` (default 443) in parallel and returns whichever produced a non-empty result (Manufacturer/Model/profiles/MaxChannel>1), falling back to the HTTP result unchanged if neither did. `ONVIFDiscovery`'s own WS-Discovery scan below does **not** use this — its XAddr comes straight from the device's ProbeMatch response, so the scheme is already known.
+
+**SOAP helper `soapPost(xaddr, body, redirectsLeft = 1)`:**
 - Uses `http` or `https` module based on URL scheme.
 - 4-second timeout (`HTTP_TIMEOUT`).
 - Returns 401 as `AUTH_REQUIRED` error.
 - `rejectUnauthorized: false` (self-signed certificates supported).
+- **Same-host redirect following** (2026-07-02, FR-CAM-076): a `301`/`302`/`307`/`308` response whose `Location` header resolves to the *same* hostname as the request is followed, bounded to one hop — observed live: 192.168.214.37 force-redirects every ONVIF SOAP call on port 80 to HTTPS via nginx, and without this, every call there failed with a bare `HTTP 301`. A `Location` pointing at a **different** hostname is never followed (SSRF hardening — an ONVIF device's own redirect is trusted only to change its own scheme/port, not to redirect the request to an arbitrary third host).
 
 ### 3.3 camerasRouter (`server/src/api/cameras.js`)
 
@@ -592,7 +602,12 @@ url           = {http|https}://{chIP}:{nHttpPort|nHttpsPort}
 | Device with empty IP | `mapUDPDevice()` | Return `null`; skipped in `_runScan()` |
 | ONVIF SOAP auth required | `soapPost()` | Rejects with `AUTH_REQUIRED`; caught in `enrichDevice()` silently |
 | ONVIF SOAP timeout | `soapPost()` | Rejects with `Timeout`; caught in `enrichDevice()` silently |
-| SUNAPI MaxChannel auth required (401/403) | `querySunapiMaxChannel()` | Resolves 0; default MaxChannel=1 retained |
+| ONVIF SOAP 301/302/307/308 redirect, same host | `soapPost()` | Follows once (2026-07-02, FR-CAM-076); a second redirect or a cross-host redirect is not followed |
+| ONVIF GetVideoSources failure (any reason) | `enrichDevice()` | Caught silently; `videoSourceTokens=[]`, MaxChannel falls back to GetProfiles' SourceToken count (2026-07-02, FR-CAM-075) |
+| On-demand probe: ONVIF answers on only one of HTTP/HTTPS | `enrichDeviceAutoScheme()` | Uses whichever scheme's result is non-empty (2026-07-02, FR-CAM-074); falls back to the HTTP result if neither is |
+| SUNAPI MaxChannel auth required (401/403), `Basic` challenge or Digest retry also fails | `querySunapiMaxChannel()` | Resolves 0; default MaxChannel=1 retained |
+| SUNAPI MaxChannel auth required (401/403), `Digest` challenge, credentials available | `querySunapiMaxChannel()` | One authenticated retry with a computed RFC 7616 Digest response (2026-07-02, FR-CAM-072) — see §"SUNAPI Digest auth" below |
+| SUNAPI MaxChannel HTTPS self-signed certificate | `querySunapiMaxChannel()` | Connects anyway (`rejectUnauthorized: false`, 2026-07-02, FR-CAM-073) — auth (Basic/Digest) still applies on top |
 | SUNAPI MaxChannel timeout / network error | `querySunapiMaxChannel()` | Resolves 0 within 2 s; default MaxChannel=1 retained |
 | stray `_onProtocolDone()` after `stop()` | Check `!this._scanning` | Return immediately; prevents timer re-arm |
 | `_pendingDone` underflow | Guard `_pendingDone <= 0` | Reset to 0; prevents negative count |
@@ -609,3 +624,7 @@ url           = {http|https}://{chIP}:{nHttpPort|nHttpsPort}
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Camera Discovery |
 | 1.1 | 2026-06-23 | LTS Engineering Team | §7.3 WiseNet UDP 패킷 바이너리 레이아웃 상세화 — SUNAPI IP Installer 원본과 1:1 비교, 서브모듈 vs 인라인 폴백 차이점, 서브모듈 초기화 주의사항 추가 |
 | 1.2 | 2026-06-23 | LTS Engineering Team | MaxChannel 지원 추가 — ONVIF NVR profiles.length 기반 MaxChannel 도출, SUNAPI best-effort 쿼리, mergeDevices max 병합, DiscoveredCameraPanel 채널 선택 UI |
+| 1.3 | 2026-07-02 | LTS Engineering Team | §3.1 SUNAPI MaxChannel 쿼리 엔드포인트 정정 — 존재하지 않는 CGI 경로(`media.cgi?msubmenu=channellist`, `system.cgi?msubmenu=systeminfo`) 대신 실제 엔드포인트 `GET /stw-cgi/attributes.cgi/attributes` (XML, group=System/category=Limit/attribute=MaxChannel) 사용하도록 수정 |
+| 1.4 | 2026-07-02 | LTS Engineering Team | §3.1 "SUNAPI Digest auth" 추가, §8 오류 처리표 갱신 — `querySunapiMaxChannel()`가 Basic만 지원해 Digest를 요구하는 SUNAPI 펌웨어에서 정상 자격증명도 401로 거부되던 문제 수정 (FR-CAM-072), RFC 7616 Digest 재시도 추가 |
+| 1.5 | 2026-07-02 | LTS Engineering Team | §3.1 "SUNAPI HTTPS self-signed certificate" 추가, §8 오류 처리표 갱신 — `querySunapiMaxChannel()`가 HTTPS 접속 시 자체 서명 인증서를 거부하던 문제 수정 (FR-CAM-073, `onvifDiscovery.js`는 이미 동일 처리 중이었음) |
+| 1.6 | 2026-07-02 | LTS Engineering Team | §3.1/§3.2/§8 갱신 — MaxChannel/channelIndex를 GetProfiles 대신 GetVideoSources 기반으로 우선 도출(FR-CAM-075), 온디맨드 probe가 ONVIF HTTP/HTTPS 양쪽을 병렬 시도(`enrichDeviceAutoScheme()`, FR-CAM-074), ONVIF SOAP 클라이언트가 동일 호스트 리다이렉트 1회 추적(FR-CAM-076); §"MaxChannel enrichment flow" §1의 오래된 `profiles.length` 서술 정정 |

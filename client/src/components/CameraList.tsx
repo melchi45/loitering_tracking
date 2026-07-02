@@ -1,9 +1,11 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useSocket } from '../hooks/useSocket';
 import { useCameraStore } from '../stores/cameraStore';
 import { useDiscoveryStore } from '../stores/discoveryStore';
+import { useChannelConfigStore } from '../stores/channelConfigStore';
+import { ChannelSlotPicker } from './ChannelSlotPicker';
 import CameraEditModal from './CameraEditModal';
-import type { Camera, DiscoveredCamera } from '../types';
+import type { Camera, DiscoveredCamera, ProbeChannelsResult } from '../types';
 
 interface AddCameraForm {
   name: string;
@@ -117,6 +119,72 @@ export default function CameraList() {
   const [reconnecting, setReconnecting] = useState<string | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [addSourceType, setAddSourceType] = useState<AddSourceType>('rtsp');
+  const maxChannelNum = useChannelConfigStore((s) => s.maxChannelNum);
+  const [pickedChannelSlot, setPickedChannelSlot] = useState<number | null>(null);
+
+  // ── SUNAPI/ONVIF on-demand channel detection (manual RTSP Add form) ─────────
+  const [detecting, setDetecting]           = useState(false);
+  const [detectError, setDetectError]       = useState('');
+  const [detected, setDetected]             = useState<ProbeChannelsResult | null>(null);
+  const [detectedChannel, setDetectedChannel] = useState<number | null>(null);
+
+  const handleDetectChannels = async () => {
+    setDetectError('');
+    setDetected(null);
+    setDetectedChannel(null);
+    let ip: string;
+    try {
+      ip = new URL(form.rtspUrl).hostname;
+      if (!ip) throw new Error();
+    } catch {
+      setDetectError('Enter a valid RTSP URL first (e.g. rtsp://192.168.1.10:554/...).');
+      return;
+    }
+    // Reuse the HTTP port/scheme already learned from a prior UDP SUNAPI Discovery
+    // scan for this IP, if any — otherwise probe-channels blindly assumes port 80/HTTP,
+    // which silently fails (maxChannel=1) against cameras with a non-default web port.
+    const known = discovered.find((d) => d.IPAddress === ip);
+    const knownHttpPort = known ? (known.HttpType ? known.HttpsPort : known.HttpPort) : undefined;
+    setDetecting(true);
+    try {
+      const res = await fetch('/api/cameras/probe-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ip,
+          httpPort: knownHttpPort || undefined,
+          httpType: known?.HttpType || undefined,
+          username: form.username || known?.Username || undefined,
+          password: form.password || known?.Password || undefined,
+          baseRtspUrl: form.rtspUrl,
+        }),
+      });
+      const result: ProbeChannelsResult = await res.json();
+      if (!res.ok || !result.success) throw new Error(result?.error || 'Detection failed');
+      setDetected(result);
+      if (result.maxChannel > 1) setDetectedChannel(1);
+    } catch (err) {
+      setDetectError(err instanceof Error ? err.message : 'Detection failed');
+    } finally {
+      setDetecting(false);
+    }
+  };
+
+  // channelSlot → occupying camera name, for ChannelSlotPicker's taken-slot display (FR-CH-033)
+  const takenChannelSlots = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const c of cameras) if (c.channelSlot != null) m.set(c.channelSlot, c.name);
+    return m;
+  }, [cameras]);
+
+  // Default the Add modal's Channel Slot to the lowest free slot on open (FR-CH-032)
+  useEffect(() => {
+    if (!showAddModal) return;
+    for (let slot = 1; slot <= maxChannelNum; slot++) {
+      if (!takenChannelSlots.has(slot)) { setPickedChannelSlot(slot); break; }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showAddModal]);
 
   // double-click guard: single click selects, double-click reconnects
   const clickTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -285,6 +353,10 @@ export default function CameraList() {
     setFormError('');
     setAddSourceType('rtsp');
     setYtStarting(false);
+    setPickedChannelSlot(null);
+    setDetected(null);
+    setDetectedChannel(null);
+    setDetectError('');
   };
 
   const handleYtFormSubmit = async (e: React.FormEvent) => {
@@ -304,16 +376,19 @@ export default function CameraList() {
           bitrate:        ytForm.bitrate,
           repeatPlayback: ytForm.repeatPlayback,
           webrtcEnabled:  ytForm.webrtcEnabled,
+          channelSlot:    pickedChannelSlot ?? undefined,
         }),
       });
       const result = await res.json();
       if (!res.ok) {
         setYtStarting(false);
         const msg =
-          result.code === 'INVALID_YOUTUBE_URL' ? 'Invalid YouTube URL.' :
-          result.code === 'YT_DLP_FAILED'       ? 'Cannot retrieve video. It may be private or deleted.' :
-          result.code === 'MAX_STREAMS_REACHED'  ? 'Maximum number of YouTube streams reached.' :
-          result.code === 'STREAM_TIMEOUT'       ? 'Stream start timed out. Please try again.' :
+          result.code === 'INVALID_YOUTUBE_URL'   ? 'Invalid YouTube URL.' :
+          result.code === 'YT_DLP_FAILED'         ? 'Cannot retrieve video. It may be private or deleted.' :
+          result.code === 'MAX_STREAMS_REACHED'   ? 'Maximum number of YouTube streams reached.' :
+          result.code === 'STREAM_TIMEOUT'        ? 'Stream start timed out. Please try again.' :
+          result.code === 'CHANNEL_SLOT_CONFLICT' ? result.error :
+          result.code === 'CHANNEL_SLOT_INVALID'  ? result.error :
           result.error || 'Unknown error';
         setFormError(msg);
         return;
@@ -334,6 +409,7 @@ export default function CameraList() {
     setFormError('');
     setSubmitting(true);
     try {
+      const hasDetectedChannels = !!detected && detected.maxChannel > 1;
       const res = await fetch('/api/cameras', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -343,10 +419,15 @@ export default function CameraList() {
           username:      form.username || undefined,
           password:      form.password || undefined,
           webrtcEnabled: form.webrtcEnabled,
+          channelSlot:   pickedChannelSlot ?? undefined,
+          channelIndex:  hasDetectedChannels ? (detectedChannel ?? undefined) : undefined,
+          maxChannel:    hasDetectedChannels ? detected!.maxChannel : undefined,
+          supportSunapi: detected?.supportSunapi,
+          nvrProfiles:   hasDetectedChannels ? detected!.profiles : undefined,
         }),
       });
-      if (!res.ok) throw new Error(await res.text() || 'Failed');
       const result = await res.json();
+      if (!res.ok) throw new Error(result?.error || 'Failed to add camera');
       if (result.success && result.data) addCamera(result.data);
       closeAddModal();
       setTab('added');
@@ -741,6 +822,68 @@ export default function CameraList() {
                     Leave Username/Password blank if no credentials required.
                   </p>
 
+                  {/* SUNAPI/ONVIF NVR channel detection (on-demand, no prior discovery scan needed) */}
+                  <div className="py-2 border-t border-gray-700 mt-1">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <p className="text-xs text-gray-200 font-medium">NVR Channel Detection</p>
+                      <button
+                        type="button"
+                        onClick={handleDetectChannels}
+                        disabled={detecting || !form.rtspUrl.trim()}
+                        className="px-2 py-1 text-[10px] rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-gray-200 transition-colors"
+                      >
+                        {detecting ? 'Detecting…' : '🔍 Detect Channels'}
+                      </button>
+                    </div>
+                    {detectError && <p className="text-[10px] text-red-400">{detectError}</p>}
+                    {detected && (
+                      detected.maxChannel > 1 ? (
+                        <div>
+                          <p className="text-[10px] text-gray-400 mb-1">
+                            {detected.protocol.toUpperCase()} — {detected.maxChannel}CH NVR detected
+                          </p>
+                          <div className="flex flex-wrap gap-1">
+                            {Array.from({ length: detected.maxChannel }, (_, i) => i + 1).map((ch) => {
+                              const profile = detected.profiles.find((p) => p.channelIndex === ch);
+                              const isSelected = ch === detectedChannel;
+                              return (
+                                <button
+                                  key={ch}
+                                  type="button"
+                                  onClick={() => {
+                                    setDetectedChannel(ch);
+                                    if (profile?.rtspUrl) setForm((p) => ({ ...p, rtspUrl: profile.rtspUrl }));
+                                  }}
+                                  title={profile?.rtspUrl}
+                                  className={`px-2 py-1 rounded border text-[11px] font-semibold transition-all ${
+                                    isSelected
+                                      ? 'border-amber-500 bg-amber-900/50 text-amber-200'
+                                      : 'border-gray-700 bg-gray-900 text-gray-400 hover:border-gray-500 hover:text-gray-200'
+                                  }`}
+                                >
+                                  CH {ch}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      ) : (
+                        <p className="text-[10px] text-gray-500">No multi-channel NVR detected — single-channel camera.</p>
+                      )
+                    )}
+                  </div>
+
+                  {/* Channel Slot — dashboard grid position (FR-CH-030) */}
+                  <div className="py-2 border-t border-gray-700 mt-1">
+                    <p className="text-xs text-gray-200 font-medium mb-1.5">Channel</p>
+                    <ChannelSlotPicker
+                      value={pickedChannelSlot}
+                      onChange={setPickedChannelSlot}
+                      maxChannelNum={maxChannelNum}
+                      takenSlots={takenChannelSlots}
+                    />
+                  </div>
+
                   {/* WebRTC toggle */}
                   <div className="flex items-center justify-between py-2 border-t border-gray-700 mt-1">
                     <div>
@@ -884,6 +1027,17 @@ export default function CameraList() {
                       />
                       <span>Repeat Playback — auto-restart when video ends</span>
                     </label>
+
+                    {/* Channel Slot — dashboard grid position (FR-CH-030) */}
+                    <div className="py-2 border-t border-gray-700 mt-1">
+                      <p className="text-xs text-gray-200 font-medium mb-1.5">Channel</p>
+                      <ChannelSlotPicker
+                        value={pickedChannelSlot}
+                        onChange={setPickedChannelSlot}
+                        maxChannelNum={maxChannelNum}
+                        takenSlots={takenChannelSlots}
+                      />
+                    </div>
 
                     {/* WebRTC toggle */}
                     <div className="flex items-center justify-between py-2 border-t border-gray-700 mt-1">

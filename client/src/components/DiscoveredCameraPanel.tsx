@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useCameraStore } from '../stores/cameraStore';
-import type { DiscoveredCamera, OnvifProfile } from '../types';
+import type { DiscoveredCamera, OnvifProfile, ProbeChannelsResult } from '../types';
+import { channelRtspUrl } from '../utils/channelRtsp';
 
 function Row({ label, value }: { label: string; value?: string | number | boolean | null }) {
   if (value === undefined || value === null || value === '') return null;
@@ -41,14 +42,6 @@ interface Props {
   onClose: () => void;
 }
 
-/** Generate RTSP URL for a specific channel number by replacing the profile index. */
-function channelRtspUrl(baseUrl: string, channel: number): string {
-  if (!baseUrl) return baseUrl;
-  if (/\/profile\d+\//i.test(baseUrl)) return baseUrl.replace(/\/profile\d+\//i, `/profile${channel}/`);
-  if (/\/profile\d+$/i.test(baseUrl))  return baseUrl.replace(/\/profile\d+$/i,  `/profile${channel}`);
-  return baseUrl;
-}
-
 export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
   const addCamera = useCameraStore((s) => s.addCamera);
   const [adding, setAdding]     = useState(false);
@@ -58,9 +51,30 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
     camera.profiles?.find((p) => p.rtspUrl) ?? null
   );
 
+  // ── On-demand re-detection ────────────────────────────────────────────────
+  // The Found-tab discovery scan already resolved channel info once — this is
+  // NOT a duplicate of the manual Add form's "Detect Channels" (which has no
+  // discovery data to draw on at all). It exists for the case where the initial
+  // scan's result may be stale or incomplete (e.g. the camera's channel count
+  // changed since the scan, or the scan's best-effort SUNAPI/ONVIF query timed
+  // out) — the operator can force a fresh probe before adding, without leaving
+  // this panel or re-running a full network scan. See Design_Channel_Slot.md §5.2a.
+  const [redetecting, setRedetecting]     = useState(false);
+  const [redetectError, setRedetectError] = useState('');
+  const [redetected, setRedetected]       = useState<ProbeChannelsResult | null>(null);
+
+  const effectiveMaxChannel    = redetected?.maxChannel ?? camera.MaxChannel ?? 1;
+  const effectiveSupportSunapi = redetected?.supportSunapi ?? camera.SupportSunapi ?? false;
+  // Per-protocol counts (FR-CH-066) — shown separately from the merged
+  // effectiveMaxChannel above so an operator can see what each protocol
+  // actually reported, not just whichever one "won". undefined/null means
+  // that protocol was never queried/never responded, not "single-channel".
+  const effectiveSunapiMaxChannel = redetected?.sunapiMaxChannel ?? camera.SunapiMaxChannel;
+  const effectiveOnvifMaxChannel  = redetected?.onvifMaxChannel  ?? camera.OnvifMaxChannel;
+
   // SUNAPI MaxChannel is authoritative when available — use it as the upper bound
-  const channelCountMax = camera.SupportSunapi && (camera.MaxChannel ?? 1) > 1
-    ? (camera.MaxChannel as number)
+  const channelCountMax = effectiveSupportSunapi && effectiveMaxChannel > 1
+    ? effectiveMaxChannel
     : 64;
   const [channelCount, setChannelCount] = useState<number>(camera.MaxChannel ?? 1);
   const hasChannels = channelCount > 1;
@@ -69,10 +83,44 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
   const scheme  = camera.HttpType ? 'https' : 'http';
   const webPort = camera.HttpType ? camera.HttpsPort : camera.HttpPort;
 
+  const handleRedetectChannels = async () => {
+    setRedetectError('');
+    setRedetecting(true);
+    try {
+      const res = await fetch('/api/cameras/probe-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ip:          camera.IPAddress,
+          httpPort:    camera.HttpType ? camera.HttpsPort : camera.HttpPort,
+          httpType:    camera.HttpType,
+          username:    camera.Username,
+          password:    camera.Password,
+          baseRtspUrl: camera.rtspUrl,
+        }),
+      });
+      const result: ProbeChannelsResult = await res.json();
+      if (!res.ok || !result.success) throw new Error(result?.error || 'Detection failed');
+      setRedetected(result);
+      if (result.maxChannel > 1) {
+        setChannelCount(result.maxChannel);
+        setSelectedChannel(1);
+      }
+    } catch (err) {
+      setRedetectError(err instanceof Error ? err.message : 'Detection failed');
+    } finally {
+      setRedetecting(false);
+    }
+  };
+
   // Channel-aware RTSP URL:
-  //   1) ONVIF: first profile whose channelIndex matches the selected channel
-  //   2) Fallback: derive from base RTSP URL by replacing profile number
+  //   1) A fresh Re-detect result (if the operator ran one) — freshest data available
+  //   2) ONVIF: first profile whose channelIndex matches the selected channel
+  //   3) Fallback: derive from base RTSP URL by replacing profile number
   const resolveRtspUrl = (channel: number): string => {
+    const fromRedetect = redetected?.profiles.find((p) => p.channelIndex === channel && p.rtspUrl);
+    if (fromRedetect) return fromRedetect.rtspUrl;
+
     const profiles = camera.profiles ?? [];
     // Prefer profile with matching channelIndex (set by server SourceToken dedup)
     const byChannel = profiles.find((p) => p.channelIndex === channel && p.rtspUrl);
@@ -97,16 +145,28 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
       const port       = camera.HttpType ? camera.HttpsPort : camera.HttpPort;
       const baseName   = camera.Model || camera.IPAddress;
       const cameraName = hasChannels ? `${baseName} Ch${selectedChannel}` : baseName;
+
+      // Persist per-channel RTSP URLs so CameraEditModal can switch NVR channel
+      // later without a live re-query (no ONVIF auth wired — see Design_Channel_Slot.md §7).
+      const nvrProfiles = hasChannels
+        ? Array.from({ length: channelCount }, (_, i) => i + 1)
+            .map((ch) => ({ channelIndex: ch, rtspUrl: resolveRtspUrl(ch) }))
+            .filter((p) => !!p.rtspUrl)
+        : undefined;
+
       const res = await fetch('/api/cameras', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          name:         cameraName,
+          name:          cameraName,
           rtspUrl,
-          ip:           camera.IPAddress,
-          mac:          camera.MACAddress,
-          httpPort:     port,
-          channelIndex: hasChannels ? selectedChannel : undefined,
+          ip:            camera.IPAddress,
+          mac:           camera.MACAddress,
+          httpPort:      port,
+          channelIndex:  hasChannels ? selectedChannel : undefined,
+          maxChannel:    hasChannels ? channelCount : undefined,
+          supportSunapi: effectiveSupportSunapi,
+          nvrProfiles,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -160,30 +220,60 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
             <Badge ok={!!camera.SupportSunapi} label="Yes" />
           </div>
           <div className="flex items-start gap-2 py-1 border-b border-gray-700/50">
+            <span className="text-[11px] text-gray-500 w-24 flex-shrink-0">SUNAPI MaxCh</span>
+            <span className="text-[11px] text-gray-200">
+              {effectiveSunapiMaxChannel != null ? `${effectiveSunapiMaxChannel} CH` : 'not detected'}
+            </span>
+          </div>
+          <div className="flex items-start gap-2 py-1 border-b border-gray-700/50">
             <span className="text-[11px] text-gray-500 w-24 flex-shrink-0">ONVIF</span>
             <Badge ok={!!camera.SupportOnvif} label="Yes" />
           </div>
           <div className="flex items-start gap-2 py-1 border-b border-gray-700/50">
-            <span className="text-[11px] text-gray-500 w-24 flex-shrink-0">Channels</span>
-            <div className="flex items-center gap-1.5">
-              {(camera.MaxChannel ?? 1) > 1 && (
-                <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-800 text-amber-300">
-                  {camera.MaxChannel} CH
-                </span>
+            <span className="text-[11px] text-gray-500 w-24 flex-shrink-0">ONVIF MaxCh</span>
+            <span className="text-[11px] text-gray-200">
+              {effectiveOnvifMaxChannel != null ? `${effectiveOnvifMaxChannel} CH` : 'not detected'}
+            </span>
+          </div>
+          <div className="flex items-start gap-2 py-1 border-b border-gray-700/50">
+            <span className="text-[11px] text-gray-500 w-24 flex-shrink-0 pt-0.5">Channels</span>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-1.5 flex-wrap">
+                {effectiveMaxChannel > 1 && (
+                  <span className="px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-800 text-amber-300">
+                    {effectiveMaxChannel} CH
+                  </span>
+                )}
+                <input
+                  type="number"
+                  min={1}
+                  max={channelCountMax}
+                  value={channelCount}
+                  onChange={(e) => {
+                    const v = Math.min(parseInt(e.target.value, 10) || 1, channelCountMax);
+                    if (v >= 1) { setChannelCount(v); setSelectedChannel(1); }
+                  }}
+                  className="w-14 bg-gray-900 border border-gray-600 rounded px-1.5 py-0.5 text-[11px] text-white text-center focus:outline-none focus:border-blue-500"
+                  title={`Override channel count${effectiveSupportSunapi && channelCountMax < 64 ? ` (max ${channelCountMax} from SUNAPI)` : ''}`}
+                />
+                <span className="text-[10px] text-gray-500">manual</span>
+                <button
+                  type="button"
+                  onClick={handleRedetectChannels}
+                  disabled={redetecting}
+                  title="Re-query this IP for SUNAPI/ONVIF channels — use if the scan result looks stale or incomplete"
+                  className="px-1.5 py-0.5 text-[10px] rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-gray-200 transition-colors"
+                >
+                  {redetecting ? 'Detecting…' : '🔍 Re-detect'}
+                </button>
+              </div>
+              {redetectError && <p className="text-[9px] text-red-400 mt-0.5">{redetectError}</p>}
+              {!redetectError && redetected && (
+                <p className="text-[9px] text-gray-500 mt-0.5">
+                  Re-detect ({redetected.protocol === 'none' ? 'no response' : redetected.protocol.toUpperCase()}) —{' '}
+                  {redetected.maxChannel > 1 ? `${redetected.maxChannel}CH confirmed` : 'no multi-channel NVR found, scan result unchanged'}
+                </p>
               )}
-              <input
-                type="number"
-                min={1}
-                max={channelCountMax}
-                value={channelCount}
-                onChange={(e) => {
-                  const v = Math.min(parseInt(e.target.value, 10) || 1, channelCountMax);
-                  if (v >= 1) { setChannelCount(v); setSelectedChannel(1); }
-                }}
-                className="w-14 bg-gray-900 border border-gray-600 rounded px-1.5 py-0.5 text-[11px] text-white text-center focus:outline-none focus:border-blue-500"
-                title={`Override channel count${camera.SupportSunapi && channelCountMax < 64 ? ` (max ${channelCountMax} from SUNAPI)` : ''}`}
-              />
-              <span className="text-[10px] text-gray-500">manual</span>
             </div>
           </div>
         </div>

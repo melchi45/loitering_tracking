@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Real-Time Server Log Viewer  
-**Version:** 1.1  
+**Version:** 1.3  
 **Date:** 2026-06-29
 
 ---
@@ -137,14 +137,18 @@ The UI SHALL provide a **Max Lines** dropdown selector in the toolbar.
 - Default value SHALL be `500`
 - The selected value SHALL be persisted in `localStorage` under the key `lts_admin_log_maxLines`
 - On mount, the component SHALL restore the saved value; if no saved value exists or the saved value is not in the valid option set, the default `500` SHALL be used
-- When the `maxLines` value changes, the display buffer SHALL be **immediately trimmed** to `maxLines` entries (oldest removed)
-- On each new log entry: `setLogs(prev => { const next = [...prev, entry]; return next.length > maxLines ? next.slice(-maxLines) : next; })`
-- On initial load and polling: `setLogs((data.logs || []).slice(-maxLines))`
+- The number of lines actually rendered on screen SHALL always be able to reach exactly `maxLines` (once that many entries exist for the selected source) — no other cap in the pipeline (fetch limit, server buffer size) SHALL be smaller than the largest available `maxLines` option
+- **On `maxLines` change (either direction)**: the display buffer SHALL be immediately trimmed client-side to `maxLines` entries if it currently exceeds that count (`prev.slice(-maxLines)`), AND the panel SHALL re-fetch `GET /admin/logs/recent?source=<source>&limit=<maxLines>` to backfill additional buffered history when `maxLines` increases — relying on live-only accumulation to eventually "grow into" a larger setting is NOT sufficient
+- On each new log entry (real-time `server:log` handler): `setLogs(prev => { const next = [...prev, entry]; return next.length > maxLines ? next.slice(-maxLines) : next; })` — this handler SHALL always read the **current** `maxLines` value; because the underlying Socket.IO client is a module-level singleton whose `useEffect(..., [socket])` only runs once for the component's lifetime, `maxLines` MUST be included in that effect's dependency array (or read via a ref updated on every render) so the handler is not permanently bound to the value captured at mount
+- On initial load and polling (`source=ingest|mediamtx`): the fetch request SHALL pass `limit=<maxLines>` (the user's current setting), never a fixed value independent of `maxLines`; the polling `setInterval` closure is subject to the same stale-value risk as the socket handler and SHALL likewise depend on the current `maxLines`
 - The header subtitle SHALL reflect the current value: `Real-time log viewer · last {maxLines} lines per source`
 
-**Acceptance**: Changing Max Lines from 500 to 100 while 400 lines are displayed SHALL immediately reduce the display to the newest 100 lines.
+**Acceptance**:
+- Changing Max Lines from 500 to 100 while 400 lines are displayed SHALL immediately reduce the display to the newest 100 lines.
+- Changing Max Lines from 100 to 1000 while connected to a source with ≥1000 buffered/logged entries SHALL, within one fetch round-trip, grow the display to 1000 lines — not remain capped near 100 or 200 until enough new live events happen to arrive.
+- Changing Max Lines while the real-time stream (`source=server`) is actively receiving entries SHALL apply the new cap to the very next entry, not to entries received after some unrelated state change (e.g. switching `source` and back).
 
-**Note on server ring buffer**: The server-side ring buffer (`LOG_BUFFER_MAX = 500`) is a separate constant and is NOT changed by the client-side Max Lines setting. When Max Lines is set above 500, the initial load is limited to 500 entries; the real-time stream can subsequently accumulate up to the selected limit.
+**Server ring buffer sizing**: The server-side ring buffer (`LOG_BUFFER_MAX` in `server/src/utils/logger.js`) and the `GET /admin/logs/recent` `limit` clamp (`server/src/routes/admin.js`) SHALL both be **≥ the largest value in the Max Lines option set** (currently `2000`). If either constant and the option set diverge, they MUST be updated together — a smaller server-side cap makes the corresponding Max Lines UI option structurally unsatisfiable regardless of client-side correctness, which is what caused the 2026-07-02 defect (buffer was fixed at 500 while the UI already offered 1000/2000).
 
 ---
 
@@ -209,3 +213,4 @@ interface LogEntry {
 | 1.0 | 2026-06-29 | 초기 작성 |
 | 1.1 | 2026-06-30 | FR-LOG-010 scrollTop 방식 명시, FR-LOG-015 고정 Control Area, FR-LOG-016 텍스트 검색 추가; searchQuery 상태 추가 |
 | 1.2 | 2026-06-30 | FR-LOG-017 Max Lines 설정 추가 — localStorage 영속, 즉시 트림, 서버 ring buffer와의 차이 명시 |
+| 1.3 | 2026-07-02 | FR-LOG-017 버그 수정 반영 — "표시 lines가 Max Lines와 항상 일치해야 함" 요구사항 명문화, stale closure 방지 규칙(maxLines를 effect 의존성에 포함) 추가, 서버 ring buffer는 Max Lines 최대 옵션 이상이어야 함을 SHALL로 규정 (기존 500 고정값 노트 삭제 — 그 자체가 결함의 원인이었음) |

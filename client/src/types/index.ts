@@ -1,3 +1,23 @@
+/** Per-channel RTSP URL entry — see Camera.nvrProfiles and POST /api/cameras/probe-channels */
+export interface NvrProfile {
+  channelIndex: number;
+  rtspUrl:      string;
+}
+
+/** Response shape of POST /api/cameras/probe-channels (on-demand SUNAPI/ONVIF re-detection) */
+export interface ProbeChannelsResult {
+  success:       boolean;
+  maxChannel:    number;
+  supportSunapi: boolean;
+  protocol:      'sunapi' | 'onvif' | 'none';
+  profiles:      NvrProfile[];
+  error?:        string;
+  /** SUNAPI's own reported channel count, independent of which protocol "won" as maxChannel/protocol above (FR-CH-066). Always a number — 1 when not attempted/not detected. */
+  sunapiMaxChannel?: number;
+  /** ONVIF's own reported channel count (FR-CH-066). null (not 1) when ONVIF never responded, vs. a number when it did. */
+  onvifMaxChannel?: number | null;
+}
+
 export interface Camera {
   id: string;
   name: string;
@@ -18,6 +38,18 @@ export interface Camera {
   repeatPlayback?: boolean;
   /** When false, AI inference (detection/tracking/behavior) is skipped for this camera. Default true. */
   aiEnabled?: boolean;
+  /** Device HTTP/CGI port (SUNAPI), used to re-probe channels without a fresh discovery scan */
+  httpPort?: number | null;
+  /** NVR physical sub-channel (1-based), set via SUNAPI/ONVIF discovery — distinct from channelSlot below */
+  channelIndex?: number | null;
+  /** Global Dashboard Channel Slot (1..MAX_CHANNEL_NUM), unique across all cameras/streams — determines grid position */
+  channelSlot?: number | null;
+  /** Total physical channels on the source NVR (from SUNAPI/ONVIF discovery); >1 enables the NVR Channel switcher */
+  maxChannel?: number | null;
+  /** True if this camera was added from a SUNAPI (Wisenet) discovery */
+  supportSunapi?: boolean;
+  /** Per-channel RTSP URLs resolved at discovery/add-time, used to switch NVR channel later without a live re-query */
+  nvrProfiles?: NvrProfile[] | null;
 }
 
 export interface BBox {
@@ -218,6 +250,10 @@ export interface DiscoveredCamera {
   Port?: number;
   Channel?: number;
   MaxChannel?: number;
+  /** SUNAPI's own reported channel count (FR-CH-066) — only meaningful when SupportSunapi is true; undefined when never determined via SUNAPI. Distinct from the merged MaxChannel above. */
+  SunapiMaxChannel?: number;
+  /** ONVIF's own reported channel count (FR-CH-066) — undefined when never determined via ONVIF. Distinct from the merged MaxChannel above. */
+  OnvifMaxChannel?: number;
   HttpType?: boolean;  // false=http, true=https
   HttpPort?: number;
   HttpsPort?: number;

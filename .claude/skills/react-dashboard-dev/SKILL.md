@@ -101,6 +101,25 @@ export function useAlertSocket(socket: Socket) {
 2. 그리드 열 수 변경: `grid-cols-2`, `grid-cols-3`, `grid-cols-4`
 3. 반응형: `sm:grid-cols-1 md:grid-cols-2 lg:grid-cols-4`
 
+### 카메라 그리드 렌더링 — Channel Slot 기준 (2026-07-02 변경)
+
+> **`CameraGrid.tsx`는 더 이상 배열 순서(`cameras[idx]`)로 셀을 채우지 않습니다.** 각 카메라의 `channelSlot` 필드(1..`MAX_CHANNEL_NUM`)로 셀을 결정합니다.
+
+- `Props.startIndex`(구) → `Props.groupStart`(신)로 이름 변경 — 의미가 "배열 오프셋"에서 "채널 슬롯 공간의 0-based 오프셋"으로 바뀜
+- 셀 조회: `camerasBySlot.get(groupStart + idx + 1)` — `camerasBySlot`은 `useMemo`로 `cameras` 배열에서 1회 빌드하는 `Map<channelSlot, Camera>` (매 셀마다 선형 탐색 금지)
+- 동일 로직이 균등 그리드(1곳) + Featured 레이아웃(main 셀·sub 셀 2곳) 총 3곳에 적용됨 — 하나만 고치면 레이아웃 종류별로 동작이 어긋남
+- 매칭되는 카메라가 없으면 `CameraCell`이 점선 테두리 + "Unassigned" placeholder 렌더 (오프라인 카메라와는 시각적으로 구분됨)
+- `App.tsx`의 `channelOffset` 상태는 이제 "카메라 개수 기준 페이지"가 아니라 "`1..MAX_CHANNEL_NUM` 채널 그룹 기준 페이지" — `totalPages = Math.ceil(maxChannelNum / pageSize)`이며 카메라 수와 무관
+- 모바일 페이지 인디케이터 점(dot)은 `totalPages ≤ 12`일 때만 표시 (512/9 채널처럼 페이지가 많으면 점 대신 "CH a–b" 텍스트 배지만 표시)
+- 신규 공용 컴포넌트 `ChannelSlotPicker.tsx` (stepper + Group 페이징 브라우저) — `CameraList.tsx`(Add) / `CameraEditModal.tsx`(Edit)에서 카메라의 `channelSlot`을 선택할 때 사용
+- 상세: `docs/design/Design_Channel_Slot.md` §5.5~5.8, `docs/srs/SRS_Channel_Slot.md` FR-CH-050~053
+
+**공통 패턴 — 비동기 액션 버튼은 3-way 상태로 관리 (2026-07-02, `CameraEditModal.tsx` Re-detect 버그에서 발견):**
+> 결과가 정상적으로 "빈 값"일 수 있는 비동기 버튼(탐지·검색·조회 등)을 `boolean`/`data != null` 같은 2-way 게이트로만 렌더링하면 안 됨. "아직 시도 안 함"과 "시도했지만 빈 결과"가 똑같이 렌더링되어, 사용자 눈에는 버튼이 안 먹는 것처럼 보임.
+> - ❌ `{!hasResult && <p>Click to try…</p>} {hasResult && <ResultView/>}`
+> - ✅ `{!hasResult && !attempted && <p>Click to try…</p>} {!hasResult && attempted && <p>Tried — nothing found.</p>} {hasResult && <ResultView/>}`
+> `attempted`(또는 `redetected`처럼 시도 자체를 나타내는 별도 state)를 결과 데이터와 분리해서 보관해야 이 세 상태를 구분할 수 있음. 상세 사례: `docs/design/Design_Channel_Slot.md` §5.4a.
+
 ### 개발 서버 실행
 ```bash
 cd client
@@ -128,6 +147,7 @@ npm run preview      # 빌드 결과 미리보기
 | Design | [Design_Dashboard_Sidebar_Alerts_Zones](../../../docs/design/Design_Dashboard_Sidebar_Alerts_Zones.md) · [Design_Dashboard_Sidebar_Face_ID](../../../docs/design/Design_Dashboard_Sidebar_Face_ID.md) · [Design_Dashboard_Search_Fullscreen](../../../docs/design/Design_Dashboard_Search_Fullscreen.md) · [Design_Mobile_Layout](../../../docs/design/Design_Mobile_Layout.md) · [Design_Stats_Panel](../../../docs/design/Design_Stats_Panel.md) |
 | TC | [TC_Dashboard_Layout](../../../docs/tc/TC_Dashboard_Layout.md) · [TC_Dashboard_Detection_Display](../../../docs/tc/TC_Dashboard_Detection_Display.md) · [TC_Dashboard_Sidebar_Cameras](../../../docs/tc/TC_Dashboard_Sidebar_Cameras.md) · [TC_Dashboard_Sidebar_Alerts_Zones](../../../docs/tc/TC_Dashboard_Sidebar_Alerts_Zones.md) · [TC_Mobile_Layout](../../../docs/tc/TC_Mobile_Layout.md) |
 | TC | [TC_Dashboard_Sidebar_Face_ID](../../../docs/tc/TC_Dashboard_Sidebar_Face_ID.md) · [TC_Detection_Snapshot_Search](../../../docs/tc/TC_Detection_Snapshot_Search.md) |
+| RFP/PRD/SRS/Design/Ops/TC | [RFP_Channel_Slot](../../../docs/rfp/RFP_Channel_Slot.md) · [PRD_Channel_Slot](../../../docs/prd/PRD_Channel_Slot.md) · [SRS_Channel_Slot](../../../docs/srs/SRS_Channel_Slot.md) · [Design_Channel_Slot](../../../docs/design/Design_Channel_Slot.md) · [Channel_Slot_Guide](../../../docs/ops/Channel_Slot_Guide.md) · [TC_Channel_Slot](../../../docs/tc/TC_Channel_Slot.md) — `CameraGrid.tsx` channelSlot 렌더링·`ChannelSlotPicker.tsx` |
 
 ## 코드 수정 시 문서 동기화 의무
 
@@ -136,6 +156,7 @@ npm run preview      # 빌드 결과 미리보기
 | `CameraList.tsx` (탭 자동전환·로컬 상태) | `docs/design/Design_Dashboard_Sidebar_Cameras.md` §4.3, §9 시퀀스 다이어그램 · `docs/srs/SRS_Dashboard_Sidebar_Cameras.md` FR-UI-CAM-003/004 · `docs/tc/TC_Dashboard_Sidebar_Cameras.md` TC-A-003/004 |
 | `CameraList.tsx`, `DiscoveredCameraPanel.tsx` | `docs/design/Design_Dashboard_Sidebar_Cameras.md`, `docs/tc/TC_Dashboard_Sidebar_Cameras.md`, `docs/rfp/RFP_Dashboard_Sidebar_Cameras.md`, `docs/prd/PRD_Dashboard_Sidebar_Cameras.md` |
 | `CameraGrid.tsx`, `CameraView.tsx` | `docs/design/Design_Dashboard_Layout.md`, `docs/design/Design_Dashboard_Sidebar_Cameras.md`, `docs/tc/TC_Dashboard_Layout.md` |
+| `CameraGrid.tsx`(groupStart/channelSlot 렌더링), `ChannelSlotPicker.tsx`, `CameraList.tsx`/`CameraEditModal.tsx`(Channel 섹션), `channelConfigStore.ts` | `docs/design/Design_Channel_Slot.md` §5, `docs/srs/SRS_Channel_Slot.md`, `docs/tc/TC_Channel_Slot.md` |
 | `AlertPanel.tsx` | `docs/design/Design_Dashboard_Sidebar_Alerts_Zones.md`, `docs/tc/TC_Dashboard_Sidebar_Alerts_Zones.md` |
 | `ZonesPanel.tsx`, `ZoneEditor.tsx` | `docs/design/Design_Dashboard_Sidebar_Alerts_Zones.md`, `docs/srs/SRS_Dashboard_Sidebar_Alerts_Zones.md` |
 | `FaceGalleryTab.tsx` | `docs/design/Design_Dashboard_Sidebar_Face_ID.md`, `docs/tc/TC_Dashboard_Sidebar_Face_ID.md` |
@@ -229,13 +250,17 @@ type AdminSection = 'users' | 'ai-models' | 'onvif' | 'audit' | 'system' | 'logs
   });
   // localStorage 영속
   useEffect(() => { localStorage.setItem('lts_admin_log_maxLines', String(maxLines)); }, [maxLines]);
-  // maxLines 감소 시 즉시 트림
+  // maxLines 감소 시 즉시(동기) 트림 — 네트워크 왕복 없이 체감 반응성 확보
   useEffect(() => { setLogs(prev => prev.length > maxLines ? prev.slice(-maxLines) : prev); }, [maxLines]);
   ```
+  - **모든 fetch 호출은 `limit=${maxLines}`를 실제로 전달**해야 함 (initial load, ingest/mediamtx polling) — 고정값(예: `limit=200`)을 하드코딩하면 `maxLines`가 그 값보다 커도 절대 그 이상을 받아오지 못해 "표시 lines ≠ Max Lines" 버그가 됨 (2026-07-02 실제 발생·수정)
   - 모든 `setLogs` 호출 시 `.slice(-maxLines)` 적용 (initial load, polling, real-time handler)
+  - **initial-load fetch effect는 `[source, maxLines]`에 의존**해야 함 — `maxLines` 증가 시 재조회(backfill)로 서버가 이미 갖고 있는 과거 이력을 즉시 반영. `[source]`만 의존하면 증가는 절대 반영되지 않음
+  - **실시간 소켓 핸들러(`socket.on('server:log', handler)`)와 polling `setInterval` 모두 `maxLines`를 의존성 배열에 포함**해야 함. `useSocket()`의 `socket`은 모듈 싱글톤이라 `[socket]`만 의존하면 effect가 마운트 시 단 한 번만 실행되어 `handler`가 그 시점의 `maxLines`를 영구히 클로저로 캡처함(stale closure) — 이후 드롭다운 변경이 실시간 스트림에 전혀 반영되지 않는 버그가 됨
   - 툴바에 `<select>` 드롭다운 추가 — Max Lines 옵션 열거
-  - 서버 ring buffer(`LOG_BUFFER_MAX=500`)는 변경 없음 — 클라이언트 display buffer만 제어
+  - **서버 ring buffer(`LOG_BUFFER_MAX`, `server/src/utils/logger.js`)와 `/admin/logs/recent`의 `limit` clamp(`server/src/routes/admin.js`)는 항상 `MAX_LINES_OPTIONS` 최댓값(현재 2000) 이상으로 유지**해야 함. 이 값들이 UI 옵션보다 작으면 클라이언트를 아무리 고쳐도 해당 옵션은 구조적으로 충족 불가능함 — 실제로 `LOG_BUFFER_MAX=500`이던 상태에서 UI가 1000/2000 옵션을 제공해 발생한 버그였음
 - `AdminLogPanel.tsx` 를 별도 파일로 import (`import AdminLogPanel from '../../components/AdminLogPanel'`)
+- 상세 원인·수정 내역: `docs/design/Design_Admin_Log_Viewer.md` §4.2, `docs/srs/SRS_Admin_Log_Viewer.md` FR-LOG-017
 
 ### AiModelsSection 구현 포인트
 

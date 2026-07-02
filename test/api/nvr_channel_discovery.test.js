@@ -2,8 +2,8 @@
 /**
  * NVR Multi-Channel Discovery Tests
  *
- * TC: TC-LTS-CAM-01 — Test Group H (TC-H-001 ~ TC-H-013)
- * SRS: FR-CAM-060 ~ FR-CAM-067
+ * TC: TC-LTS-CAM-01 — Test Group H (TC-H-001 ~ TC-H-019)
+ * SRS: FR-CAM-060 ~ FR-CAM-076
  *
  * Tests for NVR MaxChannel detection, channel selection UI logic,
  * RTSP URL generation, and camera name formatting.
@@ -350,14 +350,166 @@ async function runChannelCountMaxTests() {
   });
 }
 
+// ── TC-H-018 ~ TC-H-019: enrichDevice/enrichDeviceAutoScheme (FR-CAM-074/075) ──
+//    Mock ONVIF SOAP server + direct require of onvifDiscovery.js — no live
+//    server/network camera needed, same approach as the discoveryService.js
+//    direct-requires in channel_slot.test.js's Group G.
+
+/** Mock ONVIF SOAP server. `handlers` maps a substring found in the request
+ *  body (e.g. 'GetVideoSources') to a function returning the XML response body.
+ *  Any request not matching a handler gets an empty SOAP envelope (200). */
+function startMockOnvifServer(handlers) {
+  return new Promise((resolve) => {
+    const server = http.createServer((req, res) => {
+      let body = '';
+      req.on('data', (c) => { body += c; });
+      req.on('end', () => {
+        res.writeHead(200, { 'Content-Type': 'text/xml' });
+        const entry = Object.entries(handlers).find(([key]) => body.includes(key));
+        res.end(entry ? entry[1](body) : '<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body/></s:Envelope>');
+      });
+    });
+    server.listen(0, '127.0.0.1', () => resolve(server));
+  });
+}
+
+function mediaServiceCapabilities(port) {
+  return `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>
+    <GetCapabilitiesResponse><Capabilities><Media><XAddr>http://127.0.0.1:${port}/onvif/media_service</XAddr></Media></Capabilities></GetCapabilitiesResponse>
+  </s:Body></s:Envelope>`;
+}
+
+async function runOnvifEnrichmentTests() {
+  console.log('\n── ONVIF enrichDevice()/enrichDeviceAutoScheme() — GetVideoSources + dual scheme ──\n');
+
+  let enrichDevice, enrichDeviceAutoScheme;
+  try {
+    ({ enrichDevice, enrichDeviceAutoScheme } = require('../../server/src/services/onvifDiscovery'));
+  } catch (err) {
+    console.log(`      (could not require onvifDiscovery.js from this working directory — skipping: ${err.message})`);
+    return;
+  }
+
+  await test('TC-H-018', 'MaxChannel/channelIndex derived from GetVideoSources order, not GetProfiles order (FR-CAM-075)', async () => {
+    // GetProfiles deliberately lists VideoSource_2 first, VideoSource_0 last —
+    // channelIndex must follow GetVideoSources' order (0,1,2), not this order.
+    const server = await startMockOnvifServer({
+      GetCapabilities: (body) => mediaServiceCapabilities(server.address().port),
+      GetVideoSources: () => `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>
+        <GetVideoSourcesResponse>
+          <VideoSources token="VideoSource_0"/><VideoSources token="VideoSource_1"/><VideoSources token="VideoSource_2"/>
+        </GetVideoSourcesResponse></s:Body></s:Envelope>`,
+      GetProfiles: () => `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>
+        <GetProfilesResponse>
+          <Profiles token="P_VS2"><Name>VS2</Name><VideoSourceConfiguration><SourceToken>VideoSource_2</SourceToken></VideoSourceConfiguration></Profiles>
+          <Profiles token="P_VS0"><Name>VS0</Name><VideoSourceConfiguration><SourceToken>VideoSource_0</SourceToken></VideoSourceConfiguration></Profiles>
+          <Profiles token="P_VS1"><Name>VS1</Name><VideoSourceConfiguration><SourceToken>VideoSource_1</SourceToken></VideoSourceConfiguration></Profiles>
+        </GetProfilesResponse></s:Body></s:Envelope>`,
+      GetStreamUri: (body) => {
+        const m = body.match(/<ProfileToken>([^<]+)<\/ProfileToken>/);
+        return `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><GetStreamUriResponse><MediaUri><Uri>rtsp://127.0.0.1:554/${m ? m[1] : 'x'}</Uri></MediaUri></GetStreamUriResponse></s:Body></s:Envelope>`;
+      },
+    });
+    try {
+      const port = server.address().port;
+      const result = await enrichDevice('127.0.0.1', `http://127.0.0.1:${port}/onvif/device_service`);
+      assertEq(result.MaxChannel, 3, 'MaxChannel = GetVideoSources token count, not GetProfiles order/count');
+      const byToken = Object.fromEntries(result.profiles.map((p) => [p.sourceToken, p.channelIndex]));
+      assertEq(byToken.VideoSource_0, 1, 'VideoSource_0 → channelIndex 1');
+      assertEq(byToken.VideoSource_1, 2, 'VideoSource_1 → channelIndex 2');
+      assertEq(byToken.VideoSource_2, 3, 'VideoSource_2 → channelIndex 3');
+    } finally {
+      server.close();
+    }
+  });
+
+  await test('TC-H-018b', 'MaxChannel falls back to GetProfiles SourceToken count when GetVideoSources fails (FR-CAM-075)', async () => {
+    const server = await startMockOnvifServer({
+      GetCapabilities: () => mediaServiceCapabilities(server.address().port),
+      // No GetVideoSources handler — falls through to the empty-envelope default (0 tokens parsed)
+      GetProfiles: () => `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>
+        <GetProfilesResponse>
+          <Profiles token="P1"><Name>P1</Name><VideoSourceConfiguration><SourceToken>VS_A</SourceToken></VideoSourceConfiguration></Profiles>
+          <Profiles token="P2"><Name>P2</Name><VideoSourceConfiguration><SourceToken>VS_B</SourceToken></VideoSourceConfiguration></Profiles>
+        </GetProfilesResponse></s:Body></s:Envelope>`,
+    });
+    try {
+      const port = server.address().port;
+      const result = await enrichDevice('127.0.0.1', `http://127.0.0.1:${port}/onvif/device_service`);
+      assertEq(result.MaxChannel, 2, 'falls back to distinct-SourceToken count from GetProfiles');
+    } finally {
+      server.close();
+    }
+  });
+
+  await test('TC-H-019', 'enrichDeviceAutoScheme uses whichever of HTTP/HTTPS produced a usable result (FR-CAM-074)', async () => {
+    // Only the HTTP mock answers meaningfully; the HTTPS attempt targets a port
+    // nothing listens on, so it fails outright — result must still come through.
+    const httpServer = await startMockOnvifServer({
+      GetDeviceInformation: () => `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><GetDeviceInformationResponse><Manufacturer>MockCo</Manufacturer><Model>MockCam</Model></GetDeviceInformationResponse></s:Body></s:Envelope>`,
+    });
+    try {
+      const httpPort = httpServer.address().port;
+      // Port 1 is reserved/unlikely-bound — the HTTPS attempt should fail fast.
+      const result = await enrichDeviceAutoScheme('127.0.0.1', { onvifPort: httpPort, onvifHttpsPort: 1 });
+      assertEq(result.Manufacturer, 'MockCo', 'HTTP result used since HTTPS attempt failed');
+    } finally {
+      httpServer.close();
+    }
+  });
+
+  await test('TC-H-020', 'ONVIF SOAP client follows one same-host redirect, but not a cross-host one (FR-CAM-076)', async () => {
+    let onvifDiscovery;
+    try {
+      onvifDiscovery = require('../../server/src/services/onvifDiscovery');
+    } catch (err) {
+      console.log(`      (could not require onvifDiscovery.js — skipping: ${err.message})`);
+      return;
+    }
+    // Same-host redirect: server A 301s every request to itself at a second
+    // path/port combo that actually answers — must be followed and succeed.
+    const target = await startMockOnvifServer({
+      GetDeviceInformation: () => `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><GetDeviceInformationResponse><Manufacturer>RedirectedOK</Manufacturer></GetDeviceInformationResponse></s:Body></s:Envelope>`,
+    });
+    const targetPort = target.address().port;
+    const redirector = http.createServer((req, res) => {
+      res.writeHead(301, { Location: `http://127.0.0.1:${targetPort}/onvif/device_service` });
+      res.end();
+    });
+    await new Promise((resolve) => redirector.listen(0, '127.0.0.1', resolve));
+    try {
+      const result = await onvifDiscovery.enrichDevice('127.0.0.1', `http://127.0.0.1:${redirector.address().port}/onvif/device_service`);
+      assertEq(result.Manufacturer, 'RedirectedOK', 'same-host redirect followed to a working result');
+    } finally {
+      redirector.close();
+      target.close();
+    }
+
+    // Cross-host redirect must NOT be followed (SSRF hardening) — GetDeviceInformation
+    // fails and is caught silently by enrichDevice(), so Manufacturer stays empty.
+    const crossHostRedirector = http.createServer((req, res) => {
+      res.writeHead(301, { Location: 'http://198.51.100.1/onvif/device_service' }); // TEST-NET-2, never followed
+      res.end();
+    });
+    await new Promise((resolve) => crossHostRedirector.listen(0, '127.0.0.1', resolve));
+    try {
+      const result = await onvifDiscovery.enrichDevice('127.0.0.1', `http://127.0.0.1:${crossHostRedirector.address().port}/onvif/device_service`);
+      assertEq(result.Manufacturer, '', 'cross-host redirect target must NOT be contacted');
+    } finally {
+      crossHostRedirector.close();
+    }
+  });
+}
+
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 (async () => {
-  console.log('=== NVR Channel Discovery Tests (TC-H-001 ~ TC-H-017) ===');
+  console.log('=== NVR Channel Discovery Tests (TC-H-001 ~ TC-H-020) ===');
 
   await runUnitTests();
   await runResolveUrlTests();
   await runChannelCountMaxTests();
+  await runOnvifEnrichmentTests();
   await runApiTests();
 
   console.log(`\n══════════════════════════════════════════════════════`);

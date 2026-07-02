@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Real-Time Server Log Viewer  
-**Version:** 1.1  
+**Version:** 1.3  
 **Date:** 2026-06-29
 
 ---
@@ -66,7 +66,7 @@ The green/gray dot in the top-right of the log panel indicates Socket.IO connect
 - **Green** — connected; real-time updates active
 - **Gray** — disconnected; attempting to reconnect
 
-On reconnect, the client requests the last 500 buffered entries via `admin:subscribe-logs`.
+On reconnect, the client requests the buffered entries (up to 2000) via `admin:subscribe-logs`.
 
 ---
 
@@ -84,7 +84,10 @@ The **Max Lines** dropdown in the toolbar controls how many log entries the brow
 
 - The selected value is **saved in your browser** (`localStorage`) and restored on your next visit
 - Changing to a smaller value **immediately trims** the display to the newest N lines
-- The server's own ring buffer is fixed at 500 entries; setting Max Lines above 500 only affects the real-time stream accumulation (not the initial load)
+- Changing to a larger value **immediately re-fetches** from the server to backfill older entries — you don't have to wait for new log activity to "grow into" the new setting
+- The server's own ring buffer holds up to 2000 entries, matching the largest Max Lines option, so every option in the dropdown is fully satisfiable
+
+> **Fixed 2026-07-02:** previously the displayed line count could silently fall short of the configured Max Lines — the initial/poll fetch always requested a fixed 200 entries regardless of this setting, the real-time stream kept using whatever Max Lines was set when the page first loaded (changes via the dropdown had no effect on already-open live streams), and the server buffer topped out at 500 even though the dropdown offered 1000/2000. All three are fixed; see `docs/design/Design_Admin_Log_Viewer.md` §4.2 for details.
 
 ---
 
@@ -162,9 +165,9 @@ Expected — the runtime level change via `PATCH /admin/logs/level` is in-memory
 
 | Endpoint | Description |
 |---|---|
-| `GET /admin/logs/recent?source=server&limit=200` | Recent server logs from in-memory buffer |
-| `GET /admin/logs/recent?source=ingest&limit=200` | Recent ingest-daemon logs from log file |
-| `GET /admin/logs/recent?source=mediamtx&limit=200` | Recent MediaMTX logs from log file |
+| `GET /admin/logs/recent?source=server&limit=200` | Recent server logs from in-memory buffer (`limit` accepts 1–2000) |
+| `GET /admin/logs/recent?source=ingest&limit=200` | Recent ingest-daemon logs from log file (`limit` accepts 1–2000) |
+| `GET /admin/logs/recent?source=mediamtx&limit=200` | Recent MediaMTX logs from log file (`limit` accepts 1–2000) |
 | `PATCH /admin/logs/level { level: 'INFO' }` | Change runtime relay log level |
 
 All endpoints require JWT + `admin` role.
@@ -178,3 +181,4 @@ All endpoints require JWT + `admin` role.
 | 1.0 | 2026-06-29 | 초기 작성 |
 | 1.1 | 2026-06-30 | §9 로그 검색 사용 가이드 추가, §10 번호 조정 |
 | 1.2 | 2026-06-30 | §7 Max Lines 설정 가이드 추가, 섹션 번호 재조정 (§8~§12) |
+| 1.3 | 2026-07-02 | §6/§7/§12 버그 수정 반영 — ring buffer 500→2000, Max Lines 증가 시 즉시 backfill 동작 설명 추가 |

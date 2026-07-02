@@ -92,7 +92,7 @@ export default function AdminLogPanel({ apiFetch, serverMode }: AdminLogPanelPro
       setLoading(true);
       setError('');
       try {
-        const data = await apiFetch(`/admin/logs/recent?source=${source}&limit=200`) as {
+        const data = await apiFetch(`/admin/logs/recent?source=${source}&limit=${maxLines}`) as {
           logs?: LogEntry[];
           level?: string;
         };
@@ -106,7 +106,10 @@ export default function AdminLogPanel({ apiFetch, serverMode }: AdminLogPanelPro
       }
     }
     load();
-  }, [source]); // eslint-disable-line react-hooks/exhaustive-deps
+    // Re-fetch (not just re-slice) when maxLines grows, so the panel can
+    // backfill older buffered entries instead of staying capped at whatever
+    // the fetch limit happened to be when the component last loaded.
+  }, [source, maxLines]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Socket.IO real-time (server source only) ──────────────────────────────
 
@@ -129,7 +132,11 @@ export default function AdminLogPanel({ apiFetch, serverMode }: AdminLogPanelPro
 
     socket.on('server:log', handler);
     return () => { socket.off('server:log', handler); };
-  }, [socket]);
+    // `socket` is a stable module-level singleton (see useSocket.ts), so this
+    // effect would otherwise only ever run once — `maxLines` MUST stay in the
+    // deps or the handler permanently closes over its value at mount time and
+    // stops honoring later changes to the Max Lines dropdown.
+  }, [socket, maxLines]);
 
   // ── Poll ingest / mediamtx from log file ─────────────────────────────────
 
@@ -139,7 +146,7 @@ export default function AdminLogPanel({ apiFetch, serverMode }: AdminLogPanelPro
     const id = setInterval(async () => {
       if (pausedRef.current) return;
       try {
-        const data = await apiFetch(`/admin/logs/recent?source=${source}&limit=200`) as {
+        const data = await apiFetch(`/admin/logs/recent?source=${source}&limit=${maxLines}`) as {
           logs?: LogEntry[];
         };
         setLogs((data.logs || []).slice(-maxLines));
@@ -148,7 +155,10 @@ export default function AdminLogPanel({ apiFetch, serverMode }: AdminLogPanelPro
     }, 2000);
 
     return () => clearInterval(id);
-  }, [source]); // eslint-disable-line react-hooks/exhaustive-deps
+    // `maxLines` must stay in deps: it's read inside the closure captured by
+    // setInterval, so an interval started before a Max Lines change would
+    // otherwise keep polling with the old (stale) limit until source changes.
+  }, [source, maxLines]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Auto-scroll: use scrollTop assignment to avoid document-level scroll ──
 

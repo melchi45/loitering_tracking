@@ -14,10 +14,12 @@
       "Edit(/.claude/skills/react-dashboard-dev/**)",
       "Edit(/.claude/skills/ai-detection-pipeline/**)",
       "Bash(cp /data6/youngho/workspace/loitering_tracking/.claude/skills/react-dashboard-dev/SKILL.md /data6/youngho/workspace/loitering_tracking/.github/skills/react-dashboard-dev/SKILL.md)",
-      "Bash(cp /data6/youngho/workspace/loitering_tracking/.claude/skills/ai-detection-pipeline/SKILL.md /data6/youngho/workspace/loitering_tracking/.github/skills/ai-detection-pipeline/SKILL.md)"
+      "Bash(cp /data6/youngho/workspace/loitering_tracking/.claude/skills/ai-detection-pipeline/SKILL.md /data6/youngho/workspace/loitering_tracking/.github/skills/ai-detection-pipeline/SKILL.md)",
+      "Bash(cp /data6/youngho/workspace/loitering_tracking/.claude/skills/react-dashboard-dev/SKILL.md /data6/youngho/workspace/loitering_tracking/.github/skills/react-dashboard-dev/SKILL.md && diff /data6/youngho/workspace/loitering_tracking/.claude/skills/react-dashboard-dev/SKILL.md /data6/youngho/workspace/loitering_tracking/.github/skills/react-dashboard-dev/SKILL.md)"
     ],
     "additionalDirectories": [
-      "/home/melchi45"
+      "/home/melchi45",
+      "/data6/youngho/workspace/loitering_tracking/.claude/skills/react-dashboard-dev"
     ]
   },
   "hooks": {

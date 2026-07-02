@@ -8,6 +8,7 @@ import { usePersonTrajectoryStore } from './stores/personTrajectoryStore';
 import { useClothingReIdStore } from './stores/clothingReIdStore';
 import { useI18n, LANGUAGES, type LangCode } from './i18n';
 import { useWebRTCConfigStore, type WebRTCConfig, type TurnServer } from './stores/webrtcConfigStore';
+import { useChannelConfigStore } from './stores/channelConfigStore';
 import CameraGrid, { LayoutId, LAYOUT_DEFS, LAYOUT_GROUPS, LayoutIcon } from './components/CameraGrid';
 import CameraList from './components/CameraList';
 import AlertPanel from './components/AlertPanel';
@@ -622,6 +623,8 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
   const { t } = useI18n();
   const setWebRTCConfig = useWebRTCConfigStore((s) => s.setConfig);
   const webrtcEnabled   = useWebRTCConfigStore((s) => s.enabled);
+  const maxChannelNum    = useChannelConfigStore((s) => s.maxChannelNum);
+  const setMaxChannelNum = useChannelConfigStore((s) => s.setMaxChannelNum);
 
   // Fetch existing cameras from backend on mount
   useEffect(() => {
@@ -633,16 +636,17 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
       .catch(() => {});
   }, [setCameras]);
 
-  // Fetch server mode from health endpoint on mount
+  // Fetch server mode + Channel Slot config from health endpoint on mount
   useEffect(() => {
     fetch('/health')
       .then((r) => r.json())
-      .then((data: { serverMode?: string }) => {
+      .then((data: { serverMode?: string; maxChannelNum?: number }) => {
         if (data.serverMode) {
           const normalizedMode = data.serverMode.trim().toLowerCase();
           setServerMode(normalizedMode);
           if (normalizedMode === 'analysis') setSidebarTab('analytics');
         }
+        if (typeof data.maxChannelNum === 'number') setMaxChannelNum(data.maxChannelNum);
       })
       .catch(() => {});
   }, []);
@@ -1083,9 +1087,12 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
             (() => {
               const def = LAYOUT_DEFS.find((d) => d.id === layout)!;
               const pageSize    = def.channels;
-              const totalPages  = cameras.length > 0 ? Math.ceil(cameras.length / pageSize) : 1;
-              const currentPage = cameras.length > 0 ? Math.floor(channelOffset / pageSize) : 0;
-              const clampedOffset = Math.min(channelOffset, Math.max(0, cameras.length - pageSize));
+              // Channel-group paging: pages over 1..maxChannelNum (the configured
+              // Channel Slot space), not over how many cameras actually exist —
+              // see FR-CH-052 / Design_Channel_Slot.md §5.7.
+              const totalPages  = Math.max(1, Math.ceil(maxChannelNum / pageSize));
+              const currentPage = Math.floor(channelOffset / pageSize);
+              const clampedOffset = Math.min(channelOffset, Math.max(0, (totalPages - 1) * pageSize));
 
               const onTouchStart = (e: React.TouchEvent) => {
                 swipeTouchStartX.current = e.touches[0].clientX;
@@ -1095,7 +1102,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
                 const dx = e.changedTouches[0].clientX - swipeTouchStartX.current;
                 swipeTouchStartX.current = null;
                 if (Math.abs(dx) < 40) return;
-                const maxOffset = Math.max(0, cameras.length - pageSize);
+                const maxOffset = Math.max(0, (totalPages - 1) * pageSize);
                 if (dx < 0) {
                   setChannelOffset((o) => Math.min(maxOffset, o + pageSize));
                 } else {
@@ -1114,7 +1121,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
                     <CameraGrid
                       layoutId={layout}
                       onCameraDoubleClick={setFullscreenCameraId}
-                      startIndex={clampedOffset}
+                      groupStart={clampedOffset}
                     />
                     {selectedDiscovered && (
                       <DiscoveredCameraPanel camera={selectedDiscovered} onClose={() => selectDiscovered(null)} />
@@ -1126,8 +1133,10 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
                       fetch('/api/settings/layout', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ value: id }) }).catch(() => {});
                     }} />
                     </div>
-                    {/* Page indicator dots */}
-                    {totalPages > 1 && (
+                    {/* Page indicator dots — only when the channel-group space is small
+                        enough to render legibly; large MAX_CHANNEL_NUM ranges (e.g. 512/16
+                        = 32 groups) rely on the CH counter badge below instead */}
+                    {totalPages > 1 && totalPages <= 12 && (
                       <div className="absolute bottom-2 left-0 right-0 flex justify-center gap-1.5 pointer-events-none">
                         {Array.from({ length: totalPages }).map((_, i) => (
                           <span
@@ -1139,10 +1148,12 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
                         ))}
                       </div>
                     )}
-                    {/* Page counter badge */}
-                    {totalPages > 1 && cameras.length > 0 && (
+                    {/* Channel Group counter badge */}
+                    {totalPages > 1 && (
                       <div className="absolute top-2 left-2 bg-black/50 rounded px-1.5 py-0.5 pointer-events-none">
-                        <span className="text-[9px] text-gray-300">{currentPage + 1}/{totalPages}</span>
+                        <span className="text-[9px] text-gray-300">
+                          CH {clampedOffset + 1}–{Math.min(clampedOffset + pageSize, maxChannelNum)} ({currentPage + 1}/{totalPages})
+                        </span>
                       </div>
                     )}
                   </div>
@@ -1294,20 +1305,30 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
           {isAnalysis ? AnalysisServerPanel : (() => {
             const def      = LAYOUT_DEFS.find((d) => d.id === layout)!;
             const pageSize = def.channels;
+            // Channel-group paging over 1..maxChannelNum — see FR-CH-052.
+            const totalGroups = Math.max(1, Math.ceil(maxChannelNum / pageSize));
+            const currentGroup = Math.floor(channelOffset / pageSize);
             const canPrev  = channelOffset > 0;
-            const canNext  = cameras.length > pageSize && channelOffset + pageSize < cameras.length;
+            const canNext  = currentGroup < totalGroups - 1;
             return (
               <>
                 <CameraGrid
                   layoutId={layout}
                   onCameraDoubleClick={setFullscreenCameraId}
-                  startIndex={channelOffset}
+                  groupStart={channelOffset}
                 />
+                {totalGroups > 1 && (
+                  <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-black/60 rounded px-2 py-0.5 pointer-events-none">
+                    <span className="text-[10px] text-gray-300">
+                      Channel Group {currentGroup + 1} of {totalGroups} (CH {channelOffset + 1}–{Math.min(channelOffset + pageSize, maxChannelNum)})
+                    </span>
+                  </div>
+                )}
                 {canPrev && (
                   <button
                     className="absolute left-3 top-1/2 -translate-y-1/2 z-20 bg-black/60 hover:bg-black/80 text-white w-8 h-14 flex items-center justify-center rounded-r-lg transition-colors shadow-lg"
                     onClick={() => setChannelOffset((o) => Math.max(0, o - pageSize))}
-                    title="Previous channel page"
+                    title="Previous channel group"
                   >
                     <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
                       <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
@@ -1317,8 +1338,8 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
                 {canNext && (
                   <button
                     className="absolute right-3 top-1/2 -translate-y-1/2 z-20 bg-black/60 hover:bg-black/80 text-white w-8 h-14 flex items-center justify-center rounded-l-lg transition-colors shadow-lg"
-                    onClick={() => setChannelOffset((o) => Math.min(cameras.length - pageSize, o + pageSize))}
-                    title="Next channel page"
+                    onClick={() => setChannelOffset((o) => Math.min((totalGroups - 1) * pageSize, o + pageSize))}
+                    title="Next channel group"
                   >
                     <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
                       <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />

@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Real-Time Server Log Viewer  
-**Version:** 1.1  
+**Version:** 1.3  
 **Date:** 2026-06-29
 
 ---
@@ -39,9 +39,9 @@ The viewer must support three log sources selectable at runtime:
 ### 3.3 Real-Time Streaming
 
 - Server source: Socket.IO event `server:log` with payload `{ ts, level, msg, t }`
-- On connect: client emits `admin:subscribe-logs` to receive the last 500 buffered entries
-- Ring buffer: last 500 entries retained in memory for late-joining clients
-- Ingest / MediaMTX: `GET /admin/logs/recent?source=<source>&limit=200` polled every 2 s
+- On connect: client emits `admin:subscribe-logs` to receive the buffered entries
+- Ring buffer: last 2000 entries retained in memory for late-joining clients (sized to satisfy the largest Max Lines option, §3.4)
+- Ingest / MediaMTX: `GET /admin/logs/recent?source=<source>&limit=<maxLines>` polled every 2 s — request limit MUST track the user's current Max Lines setting, not a fixed value
 
 ### 3.4 Log Display
 
@@ -95,7 +95,7 @@ The viewer must support three log sources selectable at runtime:
 ```
 Query params:
   source   = server | ingest | mediamtx    (default: server)
-  limit    = 1–500                          (default: 200)
+  limit    = 1–2000                         (default: 200)
 
 Response 200:
 {
@@ -148,3 +148,4 @@ Admin Dashboard (`AdminUsersPage.tsx`) sidebar:
 | 1.0 | 2026-06-29 | 초기 작성 |
 | 1.1 | 2026-06-30 | 3.4 툴바 고정 명시, 3.6 로그 텍스트 검색 요구사항 추가 |
 | 1.2 | 2026-06-30 | 3.4 Max Lines 설정 가능 기술, 3.5 Actions 표에 Max Lines 항목 추가 |
+| 1.3 | 2026-07-02 | 버그 수정 반영: 3.3 ring buffer 500→2000 (Max Lines 최대 옵션과 일치), Ingest/MediaMTX 폴링 요청이 고정 `limit=200`이 아닌 현재 Max Lines 값을 사용하도록 명시, 5. API Contracts `limit` 상한 500→2000 |

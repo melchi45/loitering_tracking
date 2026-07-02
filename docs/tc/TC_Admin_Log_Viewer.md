@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Real-Time Server Log Viewer  
-**Version:** 1.1  
+**Version:** 1.3  
 **Date:** 2026-06-29  
 **SRS Reference:** SRS_Admin_Log_Viewer.md
 
@@ -53,7 +53,7 @@
 1. Generate 50+ log entries while NOT on the logs panel
 2. Navigate to Server Logs panel
 
-**Expected:** Panel loads with the last 500 (or fewer) entries immediately on open
+**Expected:** Panel loads with the last 2000 (or fewer) entries immediately on open (buffer capacity raised from 500 to 2000 on 2026-07-02 to match the largest Max Lines option — see TC-LOG-034~036)
 
 ---
 
@@ -382,6 +382,44 @@
 
 ---
 
+### TC-LOG-034: Increasing Max Lines backfills history immediately (not just via live stream)
+
+**SRS:** FR-LOG-017  
+**Precondition:** Source = Server; ≥1000 entries exist in the server ring buffer (generate via repeated API calls if needed); Max Lines = 100  
+**Steps:**
+1. Confirm the panel shows 100 lines
+2. Change Max Lines to 1000
+3. Observe the panel within ~1 s (one fetch round-trip), without waiting for any new log activity
+
+**Expected:** The panel backfills to show 1000 lines (via a `GET /admin/logs/recent?limit=1000` re-fetch), not just whatever accumulates from new live entries. Regression case for the 2026-07-02 defect where the fetch always requested a fixed 200 entries regardless of Max Lines.
+
+---
+
+### TC-LOG-035: Real-time stream honors a Max Lines change made while streaming (no reload required)
+
+**SRS:** FR-LOG-017  
+**Precondition:** Source = Server; real-time updates active; Max Lines = 100  
+**Steps:**
+1. Let the display reach 100 lines via live streaming
+2. Change Max Lines to 2000 **without switching source and without reloading the page**
+3. Trigger enough server activity to produce >100 new log lines while watching the panel
+
+**Expected:** The display grows past 100 toward 2000 as new entries arrive (i.e. the new cap of 2000 is honored on the very next incoming entry). Regression case for the stale-closure bug where `useEffect(..., [socket])` captured `maxLines` only once at mount, so changing the dropdown had no effect on an already-active real-time stream until an unrelated `source` change or full page reload.
+
+---
+
+### TC-LOG-036: `GET /admin/logs/recent` honors `limit` values above the old 500 ceiling
+
+**SRS:** FR-LOG-017  
+**Steps:**
+1. `GET /admin/logs/recent?source=server&limit=1500`
+2. `GET /admin/logs/recent?source=server&limit=2000`
+3. `GET /admin/logs/recent?source=server&limit=999999`
+
+**Expected:** Requests 1–2 are honored up to the requested `limit` (bounded only by how many entries actually exist in the buffer, capacity 2000) — response is no longer silently truncated to 500. Request 3 is clamped to 2000 (upper bound), not passed through unbounded and not clamped to the old 500 value. Automated coverage: `TC-LOG-A-009`/`TC-LOG-A-010` in `test/api/admin_log_viewer.test.js`.
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
@@ -389,3 +427,4 @@
 | 1.0 | 2026-06-29 | 초기 작성 |
 | 1.1 | 2026-06-30 | TC-LOG-021~028 추가 (고정 툴바 + 텍스트 검색) |
 | 1.2 | 2026-06-30 | TC-LOG-029~033 추가 (Max Lines 설정) |
+| 1.3 | 2026-07-02 | TC-LOG-004 buffer 500→2000 갱신, TC-LOG-034~036 추가 (Max Lines 증가 시 backfill, 실시간 스트림 stale closure 회귀 테스트, 서버 limit 상한 회귀 테스트) — "표시 lines ≠ Max Lines" 버그 수정 검증 |

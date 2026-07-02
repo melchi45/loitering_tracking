@@ -65,7 +65,13 @@ const DEBUG_DOWNGRADE_PATTERNS = [
   /\[[a-z0-9_-]+\s*@\s*0x[0-9a-f]+\]/i,  // ffmpeg component: [hls @ 0x...], [mp4 @ 0x...]
   /^(?:EXT-X-|#EXT-X-)/,                  // raw HLS playlist tags
   /BoxTemperatureReading/,                 // thermal radiometry readings — high-frequency, debug only
-  /\[internalApi\]\[ONVIF\]/,             // ONVIF metadata per-packet debug logs — high-frequency
+  /\[internalApi\]\[(ONVIF(\/XML)?|logstring)\]/, // ONVIF metadata per-packet debug logs — high-frequency
+                                            // (matches [ONVIF], [ONVIF/XML], and [logstring] — the three
+                                            // `src`/tag variants internalApi.js actually emits; the old
+                                            // /\[ONVIF\]/-only pattern missed [ONVIF/XML] and [logstring])
+  /^<\?xml version=/,                     // raw ONVIF MetadataStream XML declaration line (first line
+                                            // of the multi-line console.debug() dump above)
+  /^\s*raw\(\d+B\):/,                     // "  raw(806B):" prefix line from the same dump
   /tt:MetadataStream/,                    // raw ONVIF MetadataStream XML fragments
   /App RTP #\d+:/,                        // ingest-daemon per-500-packet App RTP progress
 ];
@@ -163,7 +169,10 @@ function _writeToFile(line) {
 
 // ─── Socket.IO real-time relay ────────────────────────────────────────────────
 
-const LOG_BUFFER_MAX = 500;
+// Must be >= the largest option in client/src/components/AdminLogPanel.tsx
+// MAX_LINES_OPTIONS, or the admin UI's "Max Lines" setting becomes
+// unsatisfiable for source=server (buffer runs out before the UI cap does).
+const LOG_BUFFER_MAX = 2000;
 const _recentLogs    = [];   // circular buffer for GET /admin/logs/recent
 
 function _bufferLog(entry) {
@@ -171,7 +180,7 @@ function _bufferLog(entry) {
   if (_recentLogs.length > LOG_BUFFER_MAX) _recentLogs.shift();
 }
 
-/** Returns a snapshot of the in-memory log ring buffer (up to 500 entries). */
+/** Returns a snapshot of the in-memory log ring buffer (up to LOG_BUFFER_MAX entries). */
 function getRecentLogs() {
   return [..._recentLogs];
 }

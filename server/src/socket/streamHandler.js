@@ -2,7 +2,7 @@
 
 const { v4: uuidv4 }         = require('uuid');
 const { getUDPDiscovery }    = require('../utils/udpDiscovery');
-const { getDiscoveryService, mapUDPDevice, querySunapiMaxChannel } = require('../services/discoveryService');
+const { getDiscoveryService, mapUDPDevice, querySunapiMaxChannel, hasConfiguredSunapiCredentials } = require('../services/discoveryService');
 
 /**
  * Register Socket.IO event handlers for streaming and discovery.
@@ -77,12 +77,15 @@ function registerStreamHandlers(io, socket, db, options = {}) {
       // Emit immediately with MaxChannel=1
       socket.emit('discovery:result', { device });
 
-      // Best-effort SUNAPI channel count (no auth, 2 s timeout)
-      if (device.SupportSunapi) {
+      // Secondary/fallback only, same gate as discoveryService.js _runScan() (FR-CH-064a):
+      // skip the CGI round-trip unless real credentials are configured — an
+      // unauthenticated request to an auth-required device is a guaranteed 401/refusal.
+      if (device.SupportSunapi && device.MaxChannel <= 1 && hasConfiguredSunapiCredentials()) {
         try {
           const maxCh = await querySunapiMaxChannel(device.IPAddress, device.HttpPort, device.HttpType);
           if (maxCh > 1) {
             device.MaxChannel = maxCh;
+            device.SunapiMaxChannel = maxCh;
             socket.emit('discovery:result', { device });
           }
         } catch (_) {}

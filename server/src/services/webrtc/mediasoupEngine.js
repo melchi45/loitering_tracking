@@ -95,9 +95,22 @@ function _ingestDelete(cameraId) {
     const url = new URL(`${INGEST_DAEMON_URL}/cameras/${encodeURIComponent(cameraId)}`);
     const req = http.request(
       { hostname: url.hostname, port: url.port, path: url.pathname, method: 'DELETE' },
-      res => { res.resume(); resolve(res.statusCode); }
+      res => {
+        res.resume();
+        // pipelineManager.stopCamera() also sends its own DELETE for the same
+        // cameraId as a redundant safety net, so a non-2xx here isn't fatal on
+        // its own — but it was previously silent, giving no signal at all when
+        // *both* attempts failed and ingest-daemon kept reconnecting a deleted camera.
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          console.warn(`[WebRTC][mediasoup] ingest-daemon DELETE /cameras/${cameraId} → HTTP ${res.statusCode}`);
+        }
+        resolve(res.statusCode);
+      }
     );
-    req.on('error', () => resolve(0));
+    req.on('error', (err) => {
+      console.warn(`[WebRTC][mediasoup] ingest-daemon DELETE /cameras/${cameraId} failed: ${err.message}`);
+      resolve(0);
+    });
     req.end();
   });
 }

@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAPTURE-002 |
-| **Version** | 1.2 |
+| **Version** | 1.6 |
 | **Status** | Active |
 | **Date** | 2026-06-11 |
 | **Ops Guide** | [RTSP_Capture_Backend_Setup.md](../ops/RTSP_Capture_Backend_Setup.md) |
@@ -653,6 +653,20 @@ if (!PYAV_AVAILABLE) {
 }
 ```
 
+### 10.4 카메라 삭제 시 ingest-daemon 연결 해제 신뢰성 (2026-07-02)
+
+`DELETE /api/cameras/:id` → `pipelineManager.stopCamera()`는 `CAPTURE_BACKEND=ingest-daemon`일 때 ingest-daemon에 `DELETE /cameras/:id`를 보내 해당 카메라 세션(재연결 루프 포함)을 중지시킵니다. 이 호출이 실패하면 ingest-daemon은 삭제된 카메라를 계속 재연결 시도합니다 — 운영자가 보기엔 "카메라를 삭제했는데 Ingest가 계속 연결을 시도"하는 것으로 나타납니다.
+
+**이전 결함**: `_ingestRemoveCamera()`(`pipelineManager.js`)와 `_ingestDelete()`(`webrtc/mediasoupEngine.js`, mediasoup 모드에서 `removeCameraStream()`이 호출) 둘 다 실패를 완전히 삼켰습니다(`catch(() => {})`/`req.on('error', () => resolve(0))`) — 재시도도 없고 로그도 없어서, 네트워크 순간 장애나 ingest-daemon이 일시적으로 바쁜 경우 등 어떤 이유로든 DELETE가 실패하면 아무 흔적도 남기지 않고 ingest-daemon에는 "좀비" 세션이 남아 무한히 재연결을 시도했습니다. `stopCamera()`도 이 호출들을 fire-and-forget으로 던지고 기다리지 않았습니다.
+
+**수정**:
+- `_ingestRemoveCamera()`가 실패 시 500ms 후 1회 재시도하고, 최종 실패 시 `console.warn`으로 로그를 남김 (`[PipelineManager][<id>] ingest-daemon DELETE ... failed after N attempts`)
+- `mediasoupEngine.js`의 `_ingestDelete()`도 비-2xx 응답/에러를 `console.warn`으로 로그
+- `stopCamera()`가 `mediamtxManager.removeCameraPath()` / `getWebRTCEngine().removeCameraStream()` / `_ingestRemoveCamera()`를 `Promise.allSettled()`로 **await** — `DELETE /api/cameras/:id`의 API 응답이 실제로 ingest-daemon 정리 시도(재시도 포함)가 끝난 뒤에 반환됨. 각 정리 작업은 내부에서 개별적으로 실패를 로그하므로, 하나가 실패해도 다른 정리 작업이나 로그를 가리지 않음
+- WEBRTC_ENGINE=mediasoup + CAPTURE_BACKEND=ingest-daemon 조합에서는 `removeCameraStream()`(mediasoupEngine 경유)과 `_ingestRemoveCamera()`(pipelineManager 직접) 양쪽에서 같은 cameraId로 중복 DELETE가 나가는 것은 의도된 이중 안전장치 — 한쪽이 실패해도 다른 쪽이 정리를 시도함 (두 번째 시도는 `found: false`로 조용히 성공 처리됨)
+
+**진단**: 여전히 재연결이 관찰되면 ingest-daemon 자체 로그(`GET /admin/logs/recent?source=ingest`)에서 `"Camera removed: <id> (found=<bool>)"` 라인을 확인 — `found=false`면 DELETE 요청 자체는 도달했지만 해당 id로 등록된 세션이 없었다는 뜻(등록 시점의 id 불일치 가능성), 라인 자체가 없으면 요청이 ingest-daemon에 전혀 도달하지 못한 것(네트워크/포트 문제).
+
 ---
 
 ## 11. ingest-daemon 정상 종료 (Graceful Shutdown)
@@ -765,3 +779,4 @@ inp.read_timeout = int(APP_RTP_READ_TIMEOUT * 1_000_000)  # μs 단위
 | 1.3 | 2026-06-23 | §11 ingest-daemon 정상 종료 추가 — 2-phase stop (pre-signal all → join all), KeyboardInterrupt 보호, Connection refused 스팸 제거 |
 | 1.4 | 2026-06-23 | §12 App RTP watchdog segfault 수정 — _Watchdog→read_timeout(AVFormatContext.io_timeout) 교체, codec=unknown cross-thread close 금지, APP_RTP_READ_TIMEOUT=60s |
 | 1.5 | 2026-06-26 | §2 아키텍처 다이어그램에 ingest-daemon 항목 추가 및 현재 기본값 표기 |
+| 1.6 | 2026-07-02 | §10.4 추가 — 카메라 삭제 시 ingest-daemon DELETE가 무재시도·무로그로 실패해 삭제된 카메라를 계속 재연결 시도하던 결함 수정 (재시도 1회 + 로그 + stopCamera()가 정리 작업을 await) |

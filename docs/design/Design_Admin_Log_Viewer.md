@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Real-Time Server Log Viewer  
-**Version:** 1.1  
+**Version:** 1.3  
 **Date:** 2026-06-29
 
 ---
@@ -27,7 +27,7 @@ The Admin Log Viewer streams Node.js server logs directly to the Administrator D
 │       ├── original console method (stdout → startServer relay)  │
 │       └── _relay(level, args)                                   │
 │               │                                                 │
-│               ├── _bufferLog(entry)  →  _recentLogs[500]        │
+│               ├── _bufferLog(entry)  →  _recentLogs[2000]       │
 │               └── io.emit('server:log', entry)                  │
 │                                                                 │
 │  GET /admin/logs/recent?source=server   →  getRecentLogs()      │
@@ -59,7 +59,8 @@ The Admin Log Viewer streams Node.js server logs directly to the Administrator D
 
 ```javascript
 // Ring buffer
-const _recentLogs = [];  // max 500 LogEntry objects
+const _recentLogs = [];  // max LOG_BUFFER_MAX (2000) LogEntry objects — must stay
+                          // >= the largest AdminLogPanel.tsx MAX_LINES_OPTIONS value
 let _runtimeMinLevel = MIN_LEVEL;  // mutable runtime threshold
 
 function installSocketRelay(io) {
@@ -169,26 +170,42 @@ useEffect(() => {
   localStorage.setItem('lts_admin_log_maxLines', String(maxLines));
 }, [maxLines]);
 
-// maxLines 변경 시 즉시 트림
+// maxLines 감소 시 즉시(동기) 트림 — 네트워크 왕복을 기다리지 않고 체감 반응성 확보
 useEffect(() => {
   setLogs(prev => prev.length > maxLines ? prev.slice(-maxLines) : prev);
 }, [maxLines]);
 ```
 
+**2026-07-02 버그 수정 — "표시 lines가 Max Lines와 일치하지 않음" (3개 원인 복합):**
+
+1. **초기 로드 / polling fetch가 `limit=200` 고정값 사용** — `maxLines`가 500/1000/2000이어도 서버에서 최대 200개만 가져온 뒤 클라이언트에서 `.slice(-maxLines)`를 적용했기 때문에, 애초에 fetch가 200개 이상을 절대 가져오지 않아 `maxLines`가 상한으로 작동한 적이 없었음. → `limit=${maxLines}`로 수정 (Data Flow §4.3 참조)
+2. **실시간 소켓 핸들러의 stale closure** — `useSocket()`이 반환하는 `socket`은 모듈 레벨 싱글톤이라 `useEffect(..., [socket])`은 컴포넌트 생애주기 동안 단 한 번만 실행됨. 그 안의 `handler`가 마운트 시점의 `maxLines` 값을 영구히 클로저로 캡처해서, 이후 드롭다운으로 `maxLines`를 바꿔도 실시간 스트림은 계속 예전 값으로 자름. Ingest/MediaMTX 폴링의 `setInterval` 클로저도 `[source]`만 의존해 동일한 문제가 있었음. → 두 effect 모두 `maxLines`를 의존성 배열에 포함 (스트림 재구독 없이 핸들러/인터벌만 재생성되므로 부작용 없음)
+3. **서버 ring buffer(`LOG_BUFFER_MAX=500`)가 클라이언트 옵션 최댓값(2000)보다 작음** — `Max Lines`를 1000/2000으로 설정해도 서버가 애초에 500개 이상을 보관/응답하지 않아 구조적으로 충족 불가능했음. → `LOG_BUFFER_MAX`를 2000으로, `admin.js`의 `limit` clamp도 2000으로 상향
+
+세 가지가 개별적으로도, 함께도 "표시 lines ≠ Max Lines" 증상을 만들었음. 상세: `docs/srs/SRS_Admin_Log_Viewer.md` FR-LOG-017 §Server ring buffer sizing 참조.
+
 ### 4.3 Data Flow
 
 ```
-On mount / source change:
-  GET /admin/logs/recent?source=<source>&limit=200
-    → setLogs(data.logs)
+On mount / source change / maxLines change:
+  GET /admin/logs/recent?source=<source>&limit=<maxLines>
+    → setLogs(data.logs.slice(-maxLines))
     → setRuntimeLevel(data.level)
+  // Re-running on maxLines change (not just source) is required so that
+  // INCREASING Max Lines backfills older buffered history immediately,
+  // instead of only growing as new live entries happen to arrive.
 
 source === 'server':
-  socket.emit('admin:subscribe-logs')  → receives buffered entries
-  socket.on('server:log', handler)     → appends to logs (if !paused)
+  socket.emit('admin:subscribe-logs')  → receives buffered entries   [effect deps: socket, source]
+  socket.on('server:log', handler)     → appends to logs (if !paused) [effect deps: socket, maxLines]
+  // `handler` must be re-created whenever maxLines changes — see the
+  // stale-closure note above. It is NOT re-created on `source` change
+  // (sourceRef is read instead), since `socket` never changes and
+  // re-subscribing per source switch is unnecessary churn.
 
 source === 'ingest' | 'mediamtx':
-  setInterval(2000) → GET /admin/logs/recent?source=<source> → setLogs(data.logs)
+  setInterval(2000) → GET /admin/logs/recent?source=<source>&limit=<maxLines> → setLogs(data.logs.slice(-maxLines))
+  // [effect deps: source, maxLines] — interval is restarted on either change.
 
 On unmount:
   socket.off('server:log', handler)
@@ -288,7 +305,7 @@ No payload. Triggers flush of `_recentLogs` ring buffer to the requesting socket
 | Socket relay only covers `index.js`-process logs | startServer.js child-process relay re-logs these; they appear in both server socket and log file |
 | Ring buffer reset on server restart | In-memory only; logs before restart accessed via log file API |
 | Search is client-side only | Searches the currently loaded buffer (up to maxLines); does not search the full log file on disk |
-| Max Lines > server buffer | Server ring buffer fixed at 500 — initial load capped at 500; real-time stream can grow to user-set limit |
+| Server ring buffer must track UI options | `LOG_BUFFER_MAX` (logger.js) and the `/admin/logs/recent` limit clamp (admin.js) must both stay ≥ the largest `MAX_LINES_OPTIONS` value (currently 2000) — if a larger Max Lines option is ever added to the UI without raising these, that option becomes unsatisfiable again (this is exactly what caused the 2026-07-02 defect) |
 
 ---
 
@@ -299,3 +316,4 @@ No payload. Triggers flush of `_recentLogs` ring buffer to the requesting socket
 | 1.0 | 2026-06-29 | 초기 작성 |
 | 1.1 | 2026-06-30 | 4.1 고정 레이아웃 구조, 4.3 filteredLogs 파이프라인, 4.4 검색 하이라이트 구현, 7 제한사항 업데이트 |
 | 1.2 | 2026-06-30 | 4.2 maxLines 상태 추가 (localStorage 영속·즉시 트림 패턴), 4.3 filteredLogs 주석 추가, 7 Max Lines 제한사항 추가 |
+| 1.3 | 2026-07-02 | "표시 lines ≠ Max Lines" 버그 수정 반영: 2. Architecture/3.1 ring buffer 500→2000, 4.2 원인 3가지 기록, 4.3 Data Flow를 fetch limit=maxLines + effect 의존성(maxLines 포함)으로 수정, 7 제한사항 갱신 |

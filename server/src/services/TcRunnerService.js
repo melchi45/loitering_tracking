@@ -45,6 +45,7 @@ const SUITES = [
   // Camera
   { file: 'test/api/camera_discovery.test.js',              srs: 'FR-CAM-040~056', label: 'Camera Discovery  A+B+G',    captureOnly: true },
   { file: 'test/api/nvr_channel_discovery.test.js',         srs: 'FR-CAM-060~067', label: 'NVR MaxChannel  H',           captureOnly: true },
+  { file: 'test/api/channel_slot.test.js',                  srs: 'FR-CH-001~062',  label: 'Dashboard Channel Slot  A',   captureOnly: true },
   { file: 'test/api/sidebar_cameras.test.js',               srs: 'FR-CAM-001~020', label: 'Sidebar Cameras  B+C+D+G' },
   // Auth / User
   { file: 'test/api/auth.test.js',                          srs: 'FR-USR-AUTH-001~020', label: 'User Authentication' },

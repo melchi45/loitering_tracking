@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Real-Time Server Log Viewer  
-**Version:** 1.1  
+**Version:** 1.3  
 **Date:** 2026-06-29
 
 ---
@@ -125,7 +125,8 @@ Layout (fixed-header pattern — only the log area scrolls):
 | Log file not found | Ingest/MediaMTX source shows "No log entries" message |
 | No log entries | Empty state with contextual message |
 | Max lines exceeded | Oldest lines dropped from the head of the display buffer; scroll position maintained |
-| User changes Max Lines to lower value | Existing display buffer is immediately trimmed to the new limit |
+| User changes Max Lines to lower value | Existing display buffer is immediately trimmed to the new limit (client-side), then reconciled by a re-fetch |
+| User changes Max Lines to higher value | Panel re-fetches from `GET /admin/logs/recent?limit=<newMaxLines>` to backfill additional history immediately, rather than only growing as new entries arrive live |
 | Admin leaves logs section | Socket event listener is cleaned up on unmount |
 
 ---
@@ -145,3 +146,4 @@ Layout (fixed-header pattern — only the log area scrolls):
 | 1.0 | 2026-06-29 | 초기 작성 |
 | 1.1 | 2026-06-30 | US-08/09 추가, 3.4 레이아웃 고정 설계, 3.7 텍스트 검색 명세 추가 |
 | 1.2 | 2026-06-30 | US-10 추가, 3.4 Max Lines 설정 가능 기술, 3.6 Max Lines 컨트롤 추가, Edge Cases 업데이트 |
+| 1.3 | 2026-07-02 | 버그 수정 반영: Edge Cases에 "Max Lines 증가 시 즉시 backfill" 행 추가 (기존에는 실시간 이벤트로만 채워져 사실상 증가가 반영되지 않았음) |

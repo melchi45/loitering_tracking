@@ -1,3 +1,4 @@
+import { useMemo } from 'react';
 import { useCameraStore } from '../stores/cameraStore';
 import CameraView from './CameraView';
 import type { Camera } from '../types';
@@ -152,9 +153,12 @@ interface CellProps {
 
 function CameraCell({ camera, idx, compact, isSelected, onDoubleClick, onSelect }: CellProps) {
   if (!camera) {
+    // Unassigned channel slot — distinct (dashed border) from an assigned-but-offline
+    // camera, which still renders its name/status via CameraView below. See FR-CH-051.
     return (
-      <div className="relative bg-gray-800/50 rounded overflow-hidden flex items-center justify-center min-h-0 min-w-0 select-none">
-        {!compact && <span className="text-[10px] text-gray-700">{idx + 1}</span>}
+      <div className="relative bg-gray-800/30 border border-dashed border-gray-700 rounded overflow-hidden flex flex-col items-center justify-center min-h-0 min-w-0 select-none gap-0.5">
+        <span className="text-[10px] text-gray-600 font-mono">{idx + 1}</span>
+        {!compact && <span className="text-[8px] text-gray-700 uppercase tracking-wide">Unassigned</span>}
       </div>
     );
   }
@@ -216,13 +220,27 @@ function CameraCell({ camera, idx, compact, isSelected, onDoubleClick, onSelect 
 interface Props {
   layoutId:             LayoutId;
   onCameraDoubleClick?: (cameraId: string) => void;
-  startIndex?:          number;  // first camera index to display (mobile swipe offset)
+  /**
+   * 0-based offset into the 1..MAX_CHANNEL_NUM channel-slot space (NOT an array
+   * index into `cameras`). Cell N shows whichever camera has
+   * `channelSlot === groupStart + N + 1`, or an empty placeholder if none.
+   * See docs/design/Design_Channel_Slot.md §5.5/§5.7.
+   */
+  groupStart?: number;
 }
 
-export default function CameraGrid({ layoutId, onCameraDoubleClick, startIndex = 0 }: Props) {
+export default function CameraGrid({ layoutId, onCameraDoubleClick, groupStart = 0 }: Props) {
   const cameras      = useCameraStore((s) => s.cameras);
   const selectedId   = useCameraStore((s) => s.selectedId);
   const selectCamera = useCameraStore((s) => s.selectCamera);
+
+  // O(1) channelSlot → camera lookup, rebuilt only when the camera list changes
+  // (NFR-CH-53).
+  const camerasBySlot = useMemo(() => {
+    const m = new Map<number, Camera>();
+    for (const c of cameras) if (c.channelSlot != null) m.set(c.channelSlot, c);
+    return m;
+  }, [cameras]);
 
   const def     = LAYOUT_DEFS.find((d) => d.id === layoutId) ?? LAYOUT_DEFS[2]; // fallback: 4
   const compact = def.channels >= 16;
@@ -242,12 +260,12 @@ export default function CameraGrid({ layoutId, onCameraDoubleClick, startIndex =
         }}
       >
         {Array.from({ length: slots! }).map((_, idx) => {
-          const cam = cameras[startIndex + idx];
+          const cam = camerasBySlot.get(groupStart + idx + 1);
           return (
             <CameraCell
-              key={cam?.id ?? `e-${startIndex + idx}`}
+              key={cam?.id ?? `e-${groupStart + idx}`}
               camera={cam}
-              idx={startIndex + idx}
+              idx={groupStart + idx}
               compact={compact}
               isSelected={cam?.id === selectedId}
               onDoubleClick={handleDbl}
@@ -277,12 +295,12 @@ export default function CameraGrid({ layoutId, onCameraDoubleClick, startIndex =
         }}
       >
         {Array.from({ length: mainCount }).map((_, mi) => {
-          const cam = cameras[startIndex + mi];
+          const cam = camerasBySlot.get(groupStart + mi + 1);
           return (
             <CameraCell
-              key={cam?.id ?? `em-${startIndex + mi}`}
+              key={cam?.id ?? `em-${groupStart + mi}`}
               camera={cam}
-              idx={startIndex + mi}
+              idx={groupStart + mi}
               compact={false}
               isSelected={cam?.id === selectedId}
               onDoubleClick={handleDbl}
@@ -303,12 +321,12 @@ export default function CameraGrid({ layoutId, onCameraDoubleClick, startIndex =
         }}
       >
         {Array.from({ length: subCount }).map((_, i) => {
-          const cam = cameras[startIndex + mainCount + i];
+          const cam = camerasBySlot.get(groupStart + mainCount + i + 1);
           return (
             <CameraCell
-              key={cam?.id ?? `es-${startIndex + mainCount + i}`}
+              key={cam?.id ?? `es-${groupStart + mainCount + i}`}
               camera={cam}
-              idx={startIndex + mainCount + i}
+              idx={groupStart + mainCount + i}
               compact={subCount > 7}
               isSelected={cam?.id === selectedId}
               onDoubleClick={handleDbl}

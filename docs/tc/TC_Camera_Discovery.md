@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-CAM-01 |
-| **Version** | 1.0 |
+| **Version** | 1.5 |
 | **Status** | Active |
 | **Date** | 2026-05-27 |
 | **Parent SRS** | srs/SRS_Camera_Discovery.md |
@@ -81,6 +81,11 @@
 | FR-CAM-069 | TC-H-015 |
 | FR-CAM-070 | TC-H-016 |
 | FR-CAM-071 | TC-H-014, TC-H-015 |
+| FR-CAM-072 | TC-CH-F-012, TC-CH-F-012b (`test/api/channel_slot.test.js` — `querySunapiMaxChannel()` is shared with the Channel Slot feature; see `docs/tc/TC_Channel_Slot.md`) |
+| FR-CAM-073 | Manual — verified live against 192.168.214.37 (HTTPS-only SUNAPI, self-signed cert); no automated mock-TLS harness in this repo, see §9 Test Group G note |
+| FR-CAM-074 | TC-H-019 |
+| FR-CAM-075 | TC-H-018, TC-H-018b |
+| FR-CAM-076 | TC-H-020 (also verified live against 192.168.214.37 — ONVIF 301 redirect to HTTPS) |
 
 ### 1.3 Test Data
 
@@ -317,6 +322,12 @@
 - **Expected:** Both complete within same scan cycle; `_pendingDone` counter works correctly
 - **Acceptance:** Single `discovery:scanning { scanning: false }` emitted after both complete
 
+### TC-G-007 — SUNAPI MaxChannel query over HTTPS with a self-signed certificate (FR-CAM-073, manual)
+- **Precondition:** Real camera whose SUNAPI web UI is HTTPS-only (HTTP:80 redirects to HTTPS:443), presenting a self-signed certificate — observed with 192.168.214.37
+- **Input:** `node test/api/probe_camera_maxchannel.js --ip <ip> --username <user> --password <pass> --https`
+- **Expected:** `querySunapiMaxChannel()` connects and completes Basic/Digest auth (per FR-CAM-072) without a `self-signed certificate` TLS error
+- **Acceptance:** Verified live against 192.168.214.37 — `HTTP 200` with the device's actual reported `MaxChannel` after the fix (previously `connection error: self-signed certificate`, failing before the value could even be read). No automated mock-TLS harness exists in this repo for this case (would require generating a throwaway self-signed cert at test time — out of proportion to a one-line `rejectUnauthorized: false` fix that already mirrors existing, working code in `onvifDiscovery.js`); revisit if a cert-generation utility (e.g. `selfsigned`) is added to `server/package.json` for other purposes.
+
 ---
 
 ## 10. Test Group H — NVR MaxChannel & Channel Selection
@@ -392,7 +403,7 @@
 | **Priority** | P2 |
 | **Type** | Unit |
 
-**Precondition**: Mock HTTP server at `GET /stw-cgi/media.cgi?msubmenu=channellist&action=view` returns `{ "MaxChannel": 8 }`.
+**Precondition**: Mock HTTP server at `GET /stw-cgi/attributes.cgi/attributes` returns XML: `<attributes><group name="System"><category name="Limit"><attribute name="MaxChannel" type="int" value="8"/></category></group></attributes>` (2026-07-02: corrected from the non-existent `media.cgi?msubmenu=channellist` JSON path — see FR-CAM-062a).
 
 **Steps**:
 1. Call `querySunapiMaxChannel(ip, httpPort, false)`.
@@ -656,7 +667,7 @@
 | **Priority** | P2 |
 | **Type** | Unit |
 
-**Precondition**: Mock HTTP server at `/stw-cgi/media.cgi?msubmenu=channellist&action=view` checks for `Authorization` header; returns `{ "MaxChannel": 4 }` only when auth header is present and valid.
+**Precondition**: Mock HTTP server at `/stw-cgi/attributes.cgi/attributes` checks for `Authorization` header; returns the `System/Limit/MaxChannel=4` XML (see TC-H-004) only when auth header is present and valid (2026-07-02: corrected endpoint — see FR-CAM-062a).
 
 **Steps**:
 1. Set `RTSP_DEFAULT_USERNAME = "admin"`, `RTSP_DEFAULT_PASSWORD = "password"`.
@@ -668,6 +679,83 @@
 - HTTP request includes `Authorization: Basic YWRtaW46cGFzc3dvcmQ=` (base64 of `admin:password`).
 
 **Negative**: When `RTSP_DEFAULT_PASSWORD` is empty, no `Authorization` header is sent.
+
+---
+
+### TC-H-018 — MaxChannel/channelIndex derived from GetVideoSources order, not GetProfiles order
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-018 |
+| **SRS** | FR-CAM-075 |
+| **Priority** | P1 |
+| **Type** | Unit (mock ONVIF SOAP server) |
+
+**Precondition**: Mock ONVIF server whose `GetVideoSources` response lists 3 tokens in order `VideoSource_0, VideoSource_1, VideoSource_2`, but whose `GetProfiles` response deliberately lists the corresponding profiles in the scrambled order `VideoSource_2, VideoSource_0, VideoSource_1`.
+
+**Steps**: Call `enrichDevice(ip, xaddr)` against the mock server.
+
+**Expected**: `result.MaxChannel === 3` (from `GetVideoSources`' token count, not `GetProfiles`' scrambled order/count); each profile's `channelIndex` matches its `SourceToken`'s position in the `GetVideoSources` list (`VideoSource_0→1, VideoSource_1→2, VideoSource_2→3`), not its position in the `GetProfiles` response.
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-018b — MaxChannel falls back to GetProfiles' SourceToken count when GetVideoSources fails
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-018b |
+| **SRS** | FR-CAM-075 |
+| **Priority** | P2 |
+| **Type** | Unit (mock ONVIF SOAP server) |
+
+**Precondition**: Mock ONVIF server with no `GetVideoSources` handler (empty SOAP envelope response — 0 tokens parsed); `GetProfiles` returns 2 profiles with 2 distinct `SourceToken` values.
+
+**Steps**: Call `enrichDevice(ip, xaddr)`.
+
+**Expected**: `result.MaxChannel === 2` — falls back to the `GetProfiles`-derived distinct-`SourceToken` count (FR-CAM-060) rather than defaulting straight to `1`.
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-019 — enrichDeviceAutoScheme uses whichever of HTTP/HTTPS produced a usable result
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-019 |
+| **SRS** | FR-CAM-074 |
+| **Priority** | P1 |
+| **Type** | Unit (mock ONVIF SOAP server) |
+
+**Precondition**: A mock ONVIF server answering meaningfully on one port (returns `Manufacturer`/`Model`); the HTTPS attempt is pointed at a port nothing listens on (fails outright, e.g. `ECONNREFUSED`).
+
+**Steps**: Call `enrichDeviceAutoScheme(ip, { onvifPort: <mock port>, onvifHttpsPort: <dead port> })`.
+
+**Expected**: The returned result carries the mock server's `Manufacturer`/`Model` — the failed HTTPS attempt does not clobber or null out the working HTTP result. (Live equivalent: 192.168.214.37's SUNAPI is HTTPS-only while its ONVIF service answers on HTTP — see FR-CAM-074's rationale.)
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-020 — ONVIF SOAP client follows one same-host redirect, but not a cross-host one
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-020 |
+| **SRS** | FR-CAM-076 |
+| **Priority** | P1 |
+| **Type** | Unit (mock HTTP servers) |
+
+**Precondition (same-host case)**: Mock server A returns `301` with `Location` pointing at mock server B (different port, same `127.0.0.1` host), which answers `GetDeviceInformation` normally.
+**Precondition (cross-host case)**: A separate mock server returns `301` with `Location` pointing at a different hostname (`198.51.100.1`, TEST-NET-2 — never actually contacted).
+
+**Steps**: Call `enrichDevice(ip, xaddr)` against each mock in turn.
+
+**Expected**: Same-host case — the redirect is followed and `Manufacturer` comes back populated from server B. Cross-host case — the redirect is **not** followed; `Manufacturer` stays empty (the original `301` is treated as a failure, caught silently by `enrichDevice()`), and the cross-host target is never contacted.
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
 
 ---
 
@@ -702,3 +790,6 @@ Group B camera records created during tests must be cleaned up after each group.
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for Camera Discovery |
 | 1.1 | 2026-06-23 | LTS Engineering Team | §10 Test Group H 추가 — NVR MaxChannel TC-H-001~TC-H-013 (SourceToken, channelIndex, SUNAPI, mergeDevices, UI badge, channel panel, RTSP URL) |
 | 1.2 | 2026-06-24 | LTS Engineering Team | TC-H-014~017 추가 — SUNAPI MaxChannel 상한, 비-SUNAPI 상한, channelIndex API 저장, SUNAPI Basic 인증 헤더 |
+| 1.3 | 2026-07-02 | LTS Engineering Team | TC-H-004/TC-H-017 목 서버 엔드포인트 정정 — 존재하지 않는 `media.cgi?msubmenu=channellist` JSON 응답 대신 실제 엔드포인트 `GET /stw-cgi/attributes.cgi/attributes`의 XML 응답으로 수정 (FR-CAM-062a) |
+| 1.4 | 2026-07-02 | LTS Engineering Team | Traceability에 FR-CAM-072(TC-CH-F-012/F-012b, Channel Slot 스위트로 자동화)·FR-CAM-073(TC-G-007, 수동) 추가; §9에 TC-G-007 신규 추가 — SUNAPI HTTPS 자체 서명 인증서 수정을 실 카메라(192.168.214.37)로 검증 |
+| 1.5 | 2026-07-02 | LTS Engineering Team | §10에 TC-H-018/H-018b/H-019/H-020 신규 추가 — ONVIF GetVideoSources 기반 MaxChannel/channelIndex(FR-CAM-075), 온디맨드 probe HTTP/HTTPS 동시 시도(FR-CAM-074), ONVIF SOAP 동일 호스트 리다이렉트 추적(FR-CAM-076) 모두 mock 서버로 자동화(`test/api/nvr_channel_discovery.test.js`); TC-G-007의 오래된 "MaxChannel=1" 서술 정정(실 카메라 상태가 이후 4채널로 변경됨을 확인) |

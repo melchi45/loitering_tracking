@@ -61,6 +61,14 @@ function buildGetProfiles() {
 </s:Envelope>`;
 }
 
+function buildGetVideoSources() {
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
+            xmlns:trt="http://www.onvif.org/ver10/media/wsdl">
+  <s:Header/><s:Body><trt:GetVideoSources/></s:Body>
+</s:Envelope>`;
+}
+
 function buildGetStreamUri(profileToken) {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"
@@ -111,7 +119,13 @@ function splitProfileBlocks(xml) {
 
 // ─── HTTP SOAP client ─────────────────────────────────────────────────────────
 
-function soapPost(xaddr, body) {
+// redirectsLeft bounds a same-host 301/302/307/308 follow to one hop — the
+// guessed XAddr (http://{ip}/onvif/device_service, see enrichDevice()) hits
+// devices that force HTTP→HTTPS on the plain port (observed: 192.168.214.37),
+// and every SOAP call fails with a raw "HTTP 301" otherwise. Only
+// same-hostname redirects are followed (no cross-host hop) to avoid an SSRF
+// pivot via an unexpected Location header.
+function soapPost(xaddr, body, redirectsLeft = 1) {
   return new Promise((resolve, reject) => {
     let url;
     try { url = new URL(xaddr); } catch { return reject(new Error('Invalid XAddr')); }
@@ -134,6 +148,16 @@ function soapPost(xaddr, body) {
     };
 
     const req = lib.request(options, (res) => {
+      if ([301, 302, 307, 308].includes(res.statusCode) && redirectsLeft > 0 && res.headers.location) {
+        res.resume(); // discard body — we're not using this response
+        let loc = null;
+        try { loc = new URL(res.headers.location, xaddr); } catch { /* ignore */ }
+        if (loc && loc.hostname.toLowerCase() === url.hostname.toLowerCase()) {
+          console.debug(`[ONVIFDiscovery] ${url.hostname} ${options.path} → HTTP ${res.statusCode} redirect to ${loc.toString()} — following`);
+          resolve(soapPost(loc.toString(), body, redirectsLeft - 1));
+          return;
+        }
+      }
       const chunks = [];
       res.on('data', (c) => chunks.push(c));
       res.on('end',  () => {
@@ -168,6 +192,8 @@ async function enrichDevice(ip, xaddr) {
     rtspUrl:      null,
   };
 
+  console.debug(`[ONVIFDiscovery][enrichDevice] ${ip} — starting probe at ${xaddr}`);
+
   // 1. GetDeviceInformation (best-effort, no auth)
   try {
     const xml = await soapPost(xaddr, buildGetDeviceInformation());
@@ -175,18 +201,41 @@ async function enrichDevice(ip, xaddr) {
     result.Model           = extractTag(xml, 'Model')        || '';
     result.FirmwareVersion = extractTag(xml, 'FirmwareVersion') || '';
     result.SerialNumber    = extractTag(xml, 'SerialNumber')    || '';
-  } catch (_) {}
+    console.debug(`[ONVIFDiscovery][enrichDevice] ${ip} GetDeviceInformation → ${result.Manufacturer || '(unknown)'} ${result.Model || ''}`.trim());
+  } catch (err) {
+    console.debug(`[ONVIFDiscovery][enrichDevice] ${ip} GetDeviceInformation failed: ${err.message}`);
+  }
 
   // 2. GetCapabilities → find media service URL
   try {
     const xml = await soapPost(xaddr, buildGetCapabilities());
     const mediaXAddr = extractTag(xml, 'XAddr');
     if (mediaXAddr) result.mediaUrl = mediaXAddr;
-  } catch (_) {}
+    console.debug(`[ONVIFDiscovery][enrichDevice] ${ip} GetCapabilities → mediaUrl=${result.mediaUrl}`);
+  } catch (err) {
+    console.debug(`[ONVIFDiscovery][enrichDevice] ${ip} GetCapabilities failed (using device_service as media URL): ${err.message}`);
+  }
 
-  // 3. GetProfiles at media URL
+  // 3. GetVideoSources at media URL — authoritative physical-channel enumeration
+  // (VideoSource_0, VideoSource_1, ... — one per physical video input on the
+  // device), independent of whether GetProfiles happens to expose a profile
+  // for every channel. Some NVRs only auto-create profiles for channels an
+  // operator has actually opened in the vendor UI, which would undercount
+  // MaxChannel if derived from GetProfiles' SourceToken set alone (below).
+  let videoSourceTokens = [];
+  try {
+    const xml = await soapPost(result.mediaUrl, buildGetVideoSources());
+    videoSourceTokens = extractAllAttrs(xml, 'VideoSources', 'token');
+    console.debug(`[ONVIFDiscovery][enrichDevice] ${ip} GetVideoSources → ${videoSourceTokens.length} VideoSource(s)${videoSourceTokens.length ? ': ' + videoSourceTokens.join(', ') : ''}`);
+  } catch (err) {
+    console.debug(`[ONVIFDiscovery][enrichDevice] ${ip} GetVideoSources failed: ${err.message}`);
+  }
+
+  // 4. GetProfiles at media URL
   let profileTokens = [];
-  // sourceTokenOrder maps SourceToken string → 1-based channel index (insertion order)
+  // sourceTokenOrder maps SourceToken string → 1-based channel index (insertion order) —
+  // fallback ordering used only when GetVideoSources above returned nothing (older/
+  // non-compliant firmware); videoSourceTokens' order is authoritative when present.
   const sourceTokenOrder = new Map();
   try {
     const xml    = await soapPost(result.mediaUrl, buildGetProfiles());
@@ -201,32 +250,45 @@ async function enrichDevice(ip, xaddr) {
       const fps      = parseInt(extractTag(block, 'FrameRateLimit') || '0', 10);
       // SourceToken identifies the physical video input:
       //   single-channel cameras share one SourceToken across all profiles (main/sub);
-      //   NVR channels each have a distinct SourceToken (one per physical input).
+      //   NVR channels each have a distinct SourceToken (one per physical input) —
+      //   the same token GetVideoSources reports for that channel.
       const srcToken = extractTag(block, 'SourceToken') || '';
       if (srcToken && !sourceTokenOrder.has(srcToken)) {
         sourceTokenOrder.set(srcToken, sourceTokenOrder.size + 1);
       }
       if (token) {
         profileTokens.push(token);
-        // channelIndex: 1-based channel this profile belongs to (same for main+sub of same channel)
-        const channelIndex = srcToken ? (sourceTokenOrder.get(srcToken) || 1) : 1;
+        // channelIndex: prefer this profile's position within GetVideoSources'
+        // authoritative, physically-ordered token list; fall back to
+        // insertion-order-within-GetProfiles when GetVideoSources is unavailable.
+        const vsIndex = srcToken ? videoSourceTokens.indexOf(srcToken) : -1;
+        const channelIndex = vsIndex >= 0
+          ? vsIndex + 1
+          : (srcToken ? (sourceTokenOrder.get(srcToken) || 1) : 1);
         result.profiles.push({ token, name, encoding, width, height, fps, rtspUrl: '',
                                 sourceToken: srcToken, channelIndex });
       }
     }
-  } catch (_) {}
+    console.debug(`[ONVIFDiscovery][enrichDevice] ${ip} GetProfiles → ${profileTokens.length} profile(s), ${sourceTokenOrder.size} distinct SourceToken(s)`);
+  } catch (err) {
+    console.debug(`[ONVIFDiscovery][enrichDevice] ${ip} GetProfiles failed: ${err.message}`);
+  }
 
-  // 4. GetStreamUri for each profile (up to 16 — cover large NVRs)
+  // 5. GetStreamUri for each profile (up to 16 — cover large NVRs)
+  let resolvedUriCount = 0;
   for (let i = 0; i < Math.min(profileTokens.length, 16); i++) {
     try {
       const xml = await soapPost(result.mediaUrl, buildGetStreamUri(profileTokens[i]));
       const uri = extractTag(xml, 'Uri');
       if (uri) {
         result.profiles[i].rtspUrl = uri;
+        resolvedUriCount++;
         // Use first profile of channel 1 as the device-level rtspUrl
         if (!result.rtspUrl && result.profiles[i].channelIndex === 1) result.rtspUrl = uri;
       }
-    } catch (_) {}
+    } catch (err) {
+      console.debug(`[ONVIFDiscovery][enrichDevice] ${ip} GetStreamUri(${profileTokens[i]}) failed: ${err.message}`);
+    }
   }
 
   // Fallback RTSP URL
@@ -234,14 +296,62 @@ async function enrichDevice(ip, xaddr) {
     result.rtspUrl = `rtsp://${ip}:554/`;
   }
 
-  // MaxChannel = number of distinct physical video inputs (SourceToken).
-  // Using sourceTokenOrder.size instead of profiles.length prevents counting
-  // multi-stream profiles (main/sub) of a single-channel camera as multiple channels.
-  // Falls back to 1 when SourceToken is absent from the ONVIF response.
-  result.MaxChannel = sourceTokenOrder.size > 0 ? sourceTokenOrder.size : 1;
+  // MaxChannel: prefer GetVideoSources' direct physical-channel enumeration
+  // (VideoSource_0, VideoSource_1, ... — authoritative, and doesn't depend on
+  // GetProfiles exposing a profile for every channel). Falls back to the
+  // GetProfiles-derived distinct-SourceToken count when GetVideoSources is
+  // unavailable/empty (older/non-compliant firmware), then to 1.
+  result.videoSourceTokens = videoSourceTokens;
+  result.MaxChannel = videoSourceTokens.length > 0
+    ? videoSourceTokens.length
+    : (sourceTokenOrder.size > 0 ? sourceTokenOrder.size : 1);
+  // Protocol-specific alias so callers/UI can show ONVIF's own reported count
+  // distinctly from SUNAPI's (see discoveryService.js's SunapiMaxChannel) —
+  // MaxChannel itself stays the historical merged/generic field.
+  result.OnvifMaxChannel = result.MaxChannel;
   result.Channel    = 1;
 
+  console.debug(`[ONVIFDiscovery][enrichDevice] ${ip} result → MaxChannel=${result.MaxChannel}, profiles=${result.profiles.length} (${resolvedUriCount} with resolved RTSP URI)`);
+
   return result;
+}
+
+/**
+ * Like `enrichDevice()`, but for callers that only have an IP + guessed port
+ * (no device-asserted XAddr to work from — currently `POST /api/cameras/probe-channels`,
+ * §4.6/FR-CH-045) and so cannot know in advance whether the device's ONVIF
+ * service answers on plain HTTP or HTTPS. Tries both schemes in parallel
+ * (bounded by the caller's existing overall timeout wrapper, same latency
+ * budget as trying one) and returns whichever produced a usable result —
+ * mirroring §4.6's own "both protocols tried independently" rationale, just
+ * one layer down (both schemes of the same protocol). ONVIFDiscovery's own
+ * WS-Discovery path (below) does NOT need this — the XAddr there comes
+ * straight from the device's own ProbeMatch response, so the scheme is
+ * already known, not guessed.
+ */
+async function enrichDeviceAutoScheme(ip, { onvifPort, onvifHttpsPort } = {}) {
+  const httpXAddr  = `http://${ip}:${onvifPort || 80}/onvif/device_service`;
+  const httpsXAddr = `https://${ip}:${onvifHttpsPort || 443}/onvif/device_service`;
+
+  const [httpResult, httpsResult] = await Promise.all([
+    enrichDevice(ip, httpXAddr).catch(() => null),
+    enrichDevice(ip, httpsXAddr).catch(() => null),
+  ]);
+
+  const isUseful = (r) => !!r && (r.Manufacturer || r.Model || r.profiles.length > 0 || r.MaxChannel > 1);
+
+  if (isUseful(httpResult)) {
+    console.debug(`[ONVIFDiscovery][enrichDeviceAutoScheme] ${ip} → HTTP result used (maxChannel=${httpResult.MaxChannel})`);
+    return httpResult;
+  }
+  if (isUseful(httpsResult)) {
+    console.debug(`[ONVIFDiscovery][enrichDeviceAutoScheme] ${ip} → HTTPS result used (maxChannel=${httpsResult.MaxChannel}) — HTTP attempt was empty`);
+    return httpsResult;
+  }
+  // Neither scheme produced anything (both likely auth-rejected/timed out) —
+  // return the HTTP result to preserve the historical default shape/behavior.
+  console.debug(`[ONVIFDiscovery][enrichDeviceAutoScheme] ${ip} → neither HTTP nor HTTPS produced usable data`);
+  return httpResult || httpsResult || null;
 }
 
 // ─── ONVIFDiscovery class ─────────────────────────────────────────────────────
@@ -366,4 +476,4 @@ class ONVIFDiscovery extends EventEmitter {
   }
 }
 
-module.exports = { ONVIFDiscovery };
+module.exports = { ONVIFDiscovery, enrichDevice, enrichDeviceAutoScheme };

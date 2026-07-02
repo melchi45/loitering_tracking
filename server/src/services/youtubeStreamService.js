@@ -16,6 +16,7 @@
 
 const { spawn }  = require('child_process');
 const { v4: uuidv4 } = require('uuid');
+const { validateChannelSlot, nextFreeChannelSlot } = require('./channelSlotService');
 
 // ── YouTube URL validation regex ─────────────────────────────────────────────
 const YOUTUBE_URL_REGEX =
@@ -180,11 +181,27 @@ class YouTubeStreamService {
    * @param {{ youtubeUrl: string, name: string, resolution?: string, bitrate?: number }} opts
    * @returns {Promise<object>} camera record
    */
-  async createStream({ youtubeUrl, name, resolution = '1080p', bitrate = 2000, repeatPlayback = false, webrtcEnabled = true }) {
+  async createStream({ youtubeUrl, name, resolution = '1080p', bitrate = 2000, repeatPlayback = false, webrtcEnabled = true, channelSlot }) {
     // Validate URL
     if (!YOUTUBE_URL_REGEX.test(youtubeUrl)) {
       const err = new Error('INVALID_YOUTUBE_URL');
       err.code  = 'INVALID_YOUTUBE_URL';
+      throw err;
+    }
+
+    // channelSlot: global dashboard grid position (1..MAX_CHANNEL_NUM), shares the
+    // same numbering space as RTSP cameras. Auto-assigned when omitted — see
+    // docs/design/Design_Channel_Slot.md.
+    let resolvedChannelSlot = channelSlot;
+    if (resolvedChannelSlot === undefined || resolvedChannelSlot === null || resolvedChannelSlot === '') {
+      resolvedChannelSlot = nextFreeChannelSlot(this.db);
+    } else {
+      resolvedChannelSlot = parseInt(resolvedChannelSlot, 10);
+    }
+    const slotCheck = validateChannelSlot(this.db, resolvedChannelSlot);
+    if (!slotCheck.ok) {
+      const err = new Error(slotCheck.error);
+      err.code  = slotCheck.status === 409 ? 'CHANNEL_SLOT_CONFLICT' : 'CHANNEL_SLOT_INVALID';
       throw err;
     }
 
@@ -211,6 +228,7 @@ class YouTubeStreamService {
       bitrate,
       maxHeight,
       webrtcEnabled:  !!webrtcEnabled,
+      channelSlot:    resolvedChannelSlot,
       status:         'starting',
       restartCount:   0,
       repeatPlayback: !!repeatPlayback,
@@ -235,6 +253,7 @@ class YouTubeStreamService {
       bitrate:        bitrate * 1000, // store as bps
       repeatPlayback: !!repeatPlayback,
       webrtcEnabled:  !!webrtcEnabled,
+      channelSlot:    resolvedChannelSlot,
       status:         'offline',
     });
 
@@ -315,6 +334,20 @@ class YouTubeStreamService {
     if (updates.name) {
       entry.name = updates.name;
       this.db.update('cameras', id, { name: updates.name });
+    }
+
+    // channelSlot: global Dashboard Channel Slot (1..MAX_CHANNEL_NUM) — a pure
+    // grid-position change, never restarts the stream. See Design_Channel_Slot.md.
+    if (updates.channelSlot !== undefined) {
+      const slot = parseInt(updates.channelSlot, 10);
+      const slotCheck = validateChannelSlot(this.db, slot, id);
+      if (!slotCheck.ok) {
+        const err = new Error(slotCheck.error);
+        err.code  = slotCheck.status === 409 ? 'CHANNEL_SLOT_CONFLICT' : 'CHANNEL_SLOT_INVALID';
+        throw err;
+      }
+      entry.channelSlot = slot;
+      this.db.update('cameras', id, { channelSlot: slot });
     }
 
     let needRestart = false;
@@ -844,6 +877,7 @@ class YouTubeStreamService {
       bitrate:        entry.bitrate,
       repeatPlayback: entry.repeatPlayback || false,
       webrtcEnabled:  entry.webrtcEnabled !== false,
+      channelSlot:    entry.channelSlot ?? null,
       status:         entry.status,
       restartCount:   entry.restartCount,
       uptimeSeconds:  uptime,

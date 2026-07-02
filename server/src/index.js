@@ -23,6 +23,7 @@ const PipelineManager     = require('./services/pipelineManager');
 const ZoneManager         = require('./services/zoneManager');
 const AlertService        = require('./services/alertService');
 const { getDiscoveryService } = require('./services/discoveryService');
+const { getMaxChannelNum }    = require('./services/channelSlotService');
 const camerasRouter          = require('./api/cameras');
 const zonesRouter            = require('./api/zones');
 const buildEventsRouters     = require('./api/events');
@@ -529,11 +530,12 @@ async function main() {
   // Health check
   app.get('/health', (req, res) => {
     res.json({
-      status:     'ok',
-      uptime:     process.uptime(),
-      timestamp:  new Date().toISOString(),
-      db:         'connected',
-      serverMode: SERVER_MODE,
+      status:       'ok',
+      uptime:       process.uptime(),
+      timestamp:    new Date().toISOString(),
+      db:           'connected',
+      serverMode:   SERVER_MODE,
+      maxChannelNum: getMaxChannelNum(),
     });
   });
 

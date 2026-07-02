@@ -22,7 +22,7 @@ function youtubeStreamsRouter(youtubeStreamService) {
   // ── POST /api/youtube-streams ─────────────────────────────────────────────
   // Create a new virtual camera from a YouTube URL.
   router.post('/', async (req, res) => {
-    const { youtubeUrl, name, resolution, bitrate, repeatPlayback, webrtcEnabled } = req.body;
+    const { youtubeUrl, name, resolution, bitrate, repeatPlayback, webrtcEnabled, channelSlot } = req.body;
 
     if (!youtubeUrl || typeof youtubeUrl !== 'string') {
       return res.status(422).json({ success: false, code: 'INVALID_YOUTUBE_URL', error: 'youtubeUrl is required' });
@@ -50,16 +50,19 @@ function youtubeStreamsRouter(youtubeStreamService) {
         bitrate:        parsedBitrate || 2000,
         repeatPlayback: !!repeatPlayback,
         webrtcEnabled:  webrtcEnabled !== undefined ? !!webrtcEnabled : false,
+        channelSlot,
       });
       return res.status(201).json({ success: true, camera });
     } catch (err) {
       const code   = err.code || 'INTERNAL_ERROR';
       const status =
-        code === 'INVALID_YOUTUBE_URL'  ? 422 :
-        code === 'YT_DLP_FAILED'        ? 422 :
-        code === 'FFMPEG_NOT_FOUND'     ? 503 :
-        code === 'MAX_STREAMS_REACHED'  ? 429 :
-        code === 'STREAM_TIMEOUT'       ? 504 : 500;
+        code === 'INVALID_YOUTUBE_URL'     ? 422 :
+        code === 'YT_DLP_FAILED'           ? 422 :
+        code === 'FFMPEG_NOT_FOUND'        ? 503 :
+        code === 'MAX_STREAMS_REACHED'     ? 429 :
+        code === 'STREAM_TIMEOUT'          ? 504 :
+        code === 'CHANNEL_SLOT_CONFLICT'   ? 409 :
+        code === 'CHANNEL_SLOT_INVALID'    ? 400 : 500;
       return res.status(status).json({ success: false, code, error: err.message });
     }
   });
@@ -89,7 +92,7 @@ function youtubeStreamsRouter(youtubeStreamService) {
   // ── PATCH /api/youtube-streams/:id ───────────────────────────────────────
   // Update stream name, YouTube URL, resolution, or bitrate (triggers restart).
   router.patch('/:id', async (req, res) => {
-    const { youtubeUrl, name, resolution, bitrate, repeatPlayback, webrtcEnabled } = req.body;
+    const { youtubeUrl, name, resolution, bitrate, repeatPlayback, webrtcEnabled, channelSlot } = req.body;
 
     if (youtubeUrl !== undefined && typeof youtubeUrl !== 'string') {
       return res.status(422).json({ success: false, code: 'INVALID_YOUTUBE_URL', error: 'youtubeUrl must be a string' });
@@ -113,11 +116,16 @@ function youtubeStreamsRouter(youtubeStreamService) {
         bitrate:        parsedBitrate,
         repeatPlayback: repeatPlayback !== undefined ? !!repeatPlayback : undefined,
         webrtcEnabled:  webrtcEnabled !== undefined ? !!webrtcEnabled : undefined,
+        channelSlot,
       });
       res.json({ success: true, camera: updated });
     } catch (err) {
       const code   = err.code || 'INTERNAL_ERROR';
-      const status = code === 'NOT_FOUND' ? 404 : code === 'INVALID_YOUTUBE_URL' ? 422 : 500;
+      const status =
+        code === 'NOT_FOUND'              ? 404 :
+        code === 'INVALID_YOUTUBE_URL'    ? 422 :
+        code === 'CHANNEL_SLOT_CONFLICT'  ? 409 :
+        code === 'CHANNEL_SLOT_INVALID'   ? 400 : 500;
       res.status(status).json({ success: false, code, error: err.message });
     }
   });

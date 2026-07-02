@@ -160,6 +160,26 @@ async function runTests() {
     assert(body.logs.length <= 10, `Got ${body.logs.length} entries, expected ≤ 10`);
   });
 
+  // Regression tests for the 2026-07-02 "displayed lines != Max Lines" defect:
+  // the /admin/logs/recent limit clamp was hardcoded to 500, which made the
+  // AdminLogPanel Max Lines UI options 1000/2000 structurally unsatisfiable
+  // regardless of client-side fixes. See docs/tc/TC_Admin_Log_Viewer.md TC-LOG-036.
+
+  await test('TC-LOG-A-009', 'Limit values above the old 500 ceiling are honored up to 2000', async () => {
+    const res = await adminFetch('/admin/logs/recent?source=server&limit=2000');
+    assert(res.ok, `Expected 200, got ${res.status}`);
+    const body = await res.json();
+    assert(Array.isArray(body.logs), 'logs must be array');
+    assert(body.total <= 2000, `total (${body.total}) should be ≤ 2000`);
+  });
+
+  await test('TC-LOG-A-010', 'Limit above 2000 is clamped to 2000, not the old 500 value', async () => {
+    const res = await adminFetch('/admin/logs/recent?source=server&limit=999999');
+    assert(res.ok, `Expected 200, got ${res.status}`);
+    const body = await res.json();
+    assert(body.total <= 2000, `total (${body.total}) should be clamped to ≤ 2000`);
+  });
+
   // ── Group B: PATCH /admin/logs/level ─────────────────────────────────────
 
   console.log('\n── PATCH /admin/logs/level ─────────────────────────────────────');
@@ -298,6 +318,18 @@ async function runTests() {
   //
   // TC-LOG-033: Unknown saved value falls back to 500 — FR-LOG-017
   //   Manual: localStorage.setItem('lts_admin_log_maxLines','999') → reload → shows 500.
+  //
+  // TC-LOG-034: Increasing Max Lines backfills history immediately — FR-LOG-017
+  //   Manual: with Max Lines=100 and ≥1000 buffered entries, switch to 1000 → display
+  //   grows to 1000 within one fetch round-trip, without waiting for new live entries.
+  //
+  // TC-LOG-035: Real-time stream honors a Max Lines change made while streaming — FR-LOG-017
+  //   Manual: while live-streaming with Max Lines=100, change to 2000 without switching
+  //   source/reloading → subsequent live entries grow the display past 100 toward 2000.
+  //   (Regression test for the stale-closure bug fixed 2026-07-02.)
+  //
+  // TC-LOG-036: GET /admin/logs/recent honors limit above the old 500 ceiling — FR-LOG-017
+  //   Automated: see TC-LOG-A-009 / TC-LOG-A-010 above.
 
   // ── Summary ──────────────────────────────────────────────────────────────
 

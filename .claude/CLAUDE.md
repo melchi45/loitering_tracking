@@ -65,7 +65,8 @@ loitering_tracking/
 │   │   ├── AuditService.js         # 감사 로그
 │   │   ├── MsalService.js          # Microsoft MSAL 인증
 │   │   ├── mongoDbService.js       # MongoDB 연결 · 5초 keep-alive 핑 · 재연결 Retry (선형 back-off) · findDirect() 직접 쿼리 (onvif_snapshots 등 비hydration 테이블용)
-│   │   └── analyticsConfig.js      # 분석 설정
+│   │   ├── analyticsConfig.js      # 분석 설정
+│   │   └── channelSlotService.js   # Dashboard Channel Slot 검증·자동배정·시작 시 backfill 마이그레이션 (MAX_CHANNEL_NUM)
 │   ├── routes/
 │   │   ├── admin.js                # 관리자 라우터
 │   │   ├── auth.js                 # 인증 라우터
@@ -87,7 +88,8 @@ loitering_tracking/
 ├── client/src/
 │   ├── App.tsx
 │   ├── components/
-│   │   ├── CameraGrid.tsx          # 멀티 카메라 그리드
+│   │   ├── CameraGrid.tsx          # 멀티 카메라 그리드 — channelSlot 기준 렌더링 (groupStart 0-based 오프셋, 빈 슬롯 placeholder)
+│   │   ├── ChannelSlotPicker.tsx   # Channel Slot 선택 UI (stepper + Group 페이징 브라우저) — Add/Edit 카메라 모달 공용
 │   │   ├── CameraView.tsx          # 단일 카메라 WebRTC 뷰
 │   │   ├── AlertPanel.tsx          # 실시간 알림 목록
 │   │   ├── ZonesPanel.tsx          # 구역 목록 사이드바
@@ -195,7 +197,8 @@ loitering_tracking/
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
 | GET | `/api/cameras` | 카메라 목록 조회 |
-| POST | `/api/cameras` | 카메라 추가 |
+| POST | `/api/cameras` | 카메라 추가 (body: channelSlot — Dashboard Channel Slot 1..MAX_CHANNEL_NUM, 생략 시 최저 빈 슬롯 자동 배정; maxChannel/supportSunapi/nvrProfiles — SUNAPI/ONVIF NVR 채널 정보, 편집 화면 채널 전환용) |
+| PUT | `/api/cameras/:id` | 카메라 설정 수정 (body: channelSlot?, channelIndex? 포함 — 409: 이미 사용 중인 channelSlot) |
 | POST | `/api/cameras/discover` | ONVIF 자동 탐색 |
 | GET | `/api/alerts` | 알림 목록 조회 |
 | PATCH | `/api/alerts/:id/acknowledge` | 알림 확인 처리 |
@@ -219,8 +222,9 @@ loitering_tracking/
 | POST | `/api/analysis/models/download` | YOLO 모델 다운로드 시작 (body: modelId) |
 | POST | `/api/faces/register` | 얼굴 등록 |
 | POST | `/api/faces/search` | 얼굴 검색 |
-| POST | `/api/streams/youtube` | YouTube 스트림 수집 |
-| GET | `/health` | 서버 상태 확인 |
+| POST | `/api/youtube-streams` | YouTube 스트림 수집 (body: channelSlot — Dashboard Channel Slot, 생략 시 최저 빈 슬롯 자동 배정) *(구 표기 `/api/streams/youtube`는 오기 — 실제 마운트 경로로 정정, Channel Slot 기능 추가 시 확인됨)* |
+| PATCH | `/api/youtube-streams/:id` | YouTube 스트림 설정 수정 (body: channelSlot? 포함 — 409: 이미 사용 중인 channelSlot) |
+| GET | `/health` | 서버 상태 확인 (maxChannelNum — 현재 유효 MAX_CHANNEL_NUM 포함) |
 | GET | `/api/client-logs` | 브라우저 콘솔 로그 조회 (query: level, sessionId, from, to, limit) |
 | POST | `/api/client-logs` | 브라우저 콘솔 로그 수신 (HTTP 직접 전송 경로) |
 | DELETE | `/api/client-logs` | 콘솔 로그 전체 삭제 |

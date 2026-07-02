@@ -70,6 +70,7 @@ test/
 |---|---|---|
 | `camera_discovery.test.js` | ONVIF 카메라 탐색 | capture 백엔드 없음 |
 | `nvr_channel_discovery.test.js` | NVR MaxChannel 탐색 | capture 백엔드 없음 |
+| `channel_slot.test.js` | Dashboard Channel Slot 매핑 (FR-CH-001~062) | capture 백엔드 없음 |
 | `capture-backend.test.js` | RTSP Capture Backend | 캡처 클래스 테스트 |
 | `onvif_metadata_pipeline.test.js` | ONVIF 메타데이터 파이프라인 | ONVIF 구독 없음 |
 | `onvif_apprtp.test.js` | ONVIF App-RTP | capture 파이프라인 없음 |
@@ -272,6 +273,7 @@ npm test -- --testNamePattern="WebRTC ICE"
 | `face_enrollment.test.js`, `face_gallery.test.js` | `docs/tc/TC_AI_Face_Recognition.md` |
 | `cross_camera_tracking.test.js` | `docs/tc/TC_CrossCamera_Face_Tracking.md` |
 | `camera_discovery.test.js` | `docs/tc/TC_Camera_Discovery.md` |
+| `channel_slot.test.js` | `docs/tc/TC_Channel_Slot.md` |
 | `webrtc.test.js`, `webrtc_ice.test.js`, `webrtc_stability.test.js` | `docs/tc/TC_WebRTC_Media_Gateway.md`, `docs/tc/TC_STUN_TURN_ICE.md` |
 | `auth.test.js` | `docs/tc/TC_User_Authentication.md` |
 | `sidebar_alerts_zones.test.js` | `docs/tc/TC_Dashboard_Sidebar_Alerts_Zones.md` |

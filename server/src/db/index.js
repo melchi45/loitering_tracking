@@ -22,6 +22,7 @@
 
 const JsonDatabase  = require('./JsonDatabase');
 const MongoDatabase = require('./MongoDatabase');
+const { backfillChannelSlots } = require('../services/channelSlotService');
 
 let _db = null;
 
@@ -57,6 +58,11 @@ async function initDB() {
     _db = _createBackend(type);
     await _db.init();
   }
+
+  // Channel Slot backfill migration — runs once per startup, before any
+  // camera-management API request can be accepted (NFR-CH-03). Idempotent.
+  // See docs/design/Design_Channel_Slot.md §4.4.
+  backfillChannelSlots(_db);
 
   return _db;
 }

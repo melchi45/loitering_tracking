@@ -1,15 +1,117 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useCameraStore } from '../stores/cameraStore';
-import type { Camera } from '../types';
+import { useChannelConfigStore } from '../stores/channelConfigStore';
+import { ChannelSlotPicker } from './ChannelSlotPicker';
+import { channelRtspUrl } from '../utils/channelRtsp';
+import type { Camera, NvrProfile, ProbeChannelsResult } from '../types';
 
 interface Props {
   camera: Camera;
   onClose: () => void;
 }
 
+/**
+ * Resolves the RTSP URL for a different NVR channel without any live device
+ * query — uses the per-channel URLs already known (persisted nvrProfiles, or
+ * a fresh probe-channels result), falling back to SUNAPI path-substitution.
+ * Returns null when neither source can resolve it (FR-CH-042/043).
+ */
+function resolveNvrChannelRtsp(
+  profiles: NvrProfile[] | null | undefined,
+  supportSunapi: boolean,
+  baseRtspUrl: string,
+  targetChannel: number,
+): string | null {
+  const fromProfile = profiles?.find((p) => p.channelIndex === targetChannel);
+  if (fromProfile) return fromProfile.rtspUrl;
+  if (supportSunapi && baseRtspUrl) {
+    const substituted = channelRtspUrl(baseRtspUrl, targetChannel);
+    return substituted !== baseRtspUrl ? substituted : null;
+  }
+  return null;
+}
+
 export default function CameraEditModal({ camera, onClose }: Props) {
   const updateCamera = useCameraStore((s) => s.updateCamera);
+  const cameras       = useCameraStore((s) => s.cameras);
+  const maxChannelNum = useChannelConfigStore((s) => s.maxChannelNum);
   const isYoutube = camera.type === 'youtube';
+
+  // channelSlot → occupying camera name, excluding this camera itself (FR-CH-034)
+  const takenChannelSlots = useMemo(() => {
+    const m = new Map<number, string>();
+    for (const c of cameras) if (c.channelSlot != null && c.id !== camera.id) m.set(c.channelSlot, c.name);
+    return m;
+  }, [cameras, camera.id]);
+
+  const [channelSlot, setChannelSlot] = useState<number | null>(camera.channelSlot ?? null);
+
+  // ── NVR sub-channel state (SUNAPI/ONVIF multi-channel sources only) ──────────
+  // `redetected` overrides the camera's persisted maxChannel/nvrProfiles/supportSunapi
+  // when the operator clicks "Re-detect" — lets cameras added before this feature
+  // (no persisted NVR metadata) discover their channels without deleting/re-adding.
+  const [redetecting, setRedetecting]     = useState(false);
+  const [redetectError, setRedetectError] = useState('');
+  const [redetected, setRedetected]       = useState<ProbeChannelsResult | null>(null);
+
+  const effectiveMaxChannel    = redetected?.maxChannel ?? camera.maxChannel ?? 1;
+  const effectiveProfiles      = redetected?.profiles ?? camera.nvrProfiles ?? null;
+  const effectiveSupportSunapi = redetected?.supportSunapi ?? camera.supportSunapi ?? false;
+  const hasNvrChannels = !isYoutube && effectiveMaxChannel > 1;
+
+  const [nvrChannel, setNvrChannel] = useState<number | null>(camera.channelIndex ?? null);
+  const [nvrRtspPreview, setNvrRtspPreview] = useState<string | null>(null);
+
+  const handleRedetectChannels = async () => {
+    setRedetectError('');
+    // Prefer whatever RTSP URL is currently typed into the form (unsaved edits)
+    // over the camera's persisted value — Re-detect should probe the address the
+    // operator is about to save, not the one already on disk.
+    const currentRtspUrl = rtspForm.rtspUrl.trim() || camera.rtspUrl;
+    if (!camera.ip && !currentRtspUrl) {
+      setRedetectError('No IP or RTSP URL known for this camera.');
+      return;
+    }
+    let ip = '';
+    try { ip = new URL(currentRtspUrl).hostname; } catch { /* fall through to camera.ip below */ }
+    if (!ip) ip = camera.ip || '';
+    if (!ip) {
+      setRedetectError('Could not determine camera IP.');
+      return;
+    }
+    setRedetecting(true);
+    try {
+      const res = await fetch('/api/cameras/probe-channels', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ip,
+          httpPort:    camera.httpPort || undefined,
+          baseRtspUrl: currentRtspUrl,
+          // Forward whatever the operator has typed into the form this session —
+          // covers editing credentials and clicking Re-detect before Save, when the
+          // camera's own DB record (looked up server-side via cameraId below) still
+          // has the old/blank value. Falsy (unedited '') falls back to the DB record
+          // server-side, so this is safe to send unconditionally.
+          username:    rtspForm.username || undefined,
+          password:    rtspForm.password || undefined,
+          // Passing cameraId lets the server look up the camera's own stored
+          // credentials for the SUNAPI probe when the form fields above are blank —
+          // this client never has the persisted password value (GET /api/cameras
+          // strips it), so it can't pre-fill the form with it.
+          cameraId:    camera.id,
+        }),
+      });
+      const result: ProbeChannelsResult = await res.json();
+      if (!res.ok || !result.success) throw new Error(result?.error || 'Detection failed');
+      setRedetected(result);
+      if (result.maxChannel > 1 && nvrChannel == null) setNvrChannel(camera.channelIndex ?? 1);
+    } catch (err) {
+      setRedetectError(err instanceof Error ? err.message : 'Detection failed');
+    } finally {
+      setRedetecting(false);
+    }
+  };
 
   // ── RTSP form state ────────────────────────────────────────────────────────
   const [rtspForm, setRtspForm] = useState({
@@ -46,19 +148,28 @@ export default function CameraEditModal({ camera, onClose }: Props) {
     setError('');
     setSaving(true);
     try {
+      // A resolved NVR channel switch (nvrRtspPreview) takes priority over the
+      // manually-edited rtspUrl field — see FR-CH-042.
+      const finalRtspUrl = nvrRtspPreview ?? rtspForm.rtspUrl;
       const res = await fetch(`/api/cameras/${camera.id}`, {
         method:  'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name:          rtspForm.name,
-          rtspUrl:       rtspForm.rtspUrl,
+          rtspUrl:       finalRtspUrl,
           username:      rtspForm.username || undefined,
           password:      rtspForm.password || undefined,
           webrtcEnabled: rtspForm.webrtcEnabled,
+          channelSlot:   channelSlot ?? undefined,
+          channelIndex:  hasNvrChannels ? (nvrChannel ?? undefined) : undefined,
+          // Only overwrite persisted NVR metadata when a fresh "Re-detect" ran this session.
+          maxChannel:    redetected ? redetected.maxChannel : undefined,
+          supportSunapi: redetected ? redetected.supportSunapi : undefined,
+          nvrProfiles:   redetected ? redetected.profiles : undefined,
         }),
       });
-      if (!res.ok) throw new Error(await res.text() || 'Save failed');
       const result = await res.json();
+      if (!res.ok) throw new Error(result?.error || 'Save failed');
       if (result.success && result.data) updateCamera(camera.id, result.data);
 
       if (andReconnect && !result.restarted) {
@@ -96,13 +207,16 @@ export default function CameraEditModal({ camera, onClose }: Props) {
           bitrate:        ytForm.bitrate,
           repeatPlayback: ytForm.repeatPlayback,
           webrtcEnabled:  ytForm.webrtcEnabled,
+          channelSlot:    channelSlot ?? undefined,
         }),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         const msg =
-          body.code === 'INVALID_YOUTUBE_URL' ? 'Invalid YouTube URL.' :
-          body.code === 'NOT_FOUND'            ? 'Stream not found.' :
+          body.code === 'INVALID_YOUTUBE_URL'   ? 'Invalid YouTube URL.' :
+          body.code === 'NOT_FOUND'              ? 'Stream not found.' :
+          body.code === 'CHANNEL_SLOT_CONFLICT'  ? body.error :
+          body.code === 'CHANNEL_SLOT_INVALID'   ? body.error :
           body.error || 'Save failed';
         throw new Error(msg);
       }
@@ -115,6 +229,7 @@ export default function CameraEditModal({ camera, onClose }: Props) {
           bitrate:        result.camera.bitrate,
           repeatPlayback: result.camera.repeatPlayback,
           webrtcEnabled:  result.camera.webrtcEnabled,
+          channelSlot:    result.camera.channelSlot,
         });
       }
       setSuccess('Saved. The stream will restart if URL or resolution is changed.');
@@ -218,6 +333,17 @@ export default function CameraEditModal({ camera, onClose }: Props) {
                 />
                 <span>Repeat Playback — auto-restart when video ends</span>
               </label>
+
+              {/* Channel Slot — dashboard grid position (FR-CH-034) */}
+              <div className="py-2 border-t border-gray-700 mt-1">
+                <p className="text-xs text-gray-200 font-medium mb-1.5">Channel</p>
+                <ChannelSlotPicker
+                  value={channelSlot}
+                  onChange={setChannelSlot}
+                  maxChannelNum={maxChannelNum}
+                  takenSlots={takenChannelSlots}
+                />
+              </div>
 
               {/* WebRTC toggle */}
               <div className="flex items-center justify-between py-2 border-t border-gray-700 mt-1">
@@ -330,6 +456,83 @@ export default function CameraEditModal({ camera, onClose }: Props) {
               <p className="text-[10px] text-gray-500">
                 Leave Username/Password blank to keep existing credentials.
               </p>
+
+              {/* Channel Slot — dashboard grid position (FR-CH-034) */}
+              <div className="py-2 border-t border-gray-700 mt-1">
+                <p className="text-xs text-gray-200 font-medium mb-1.5">Channel</p>
+                <ChannelSlotPicker
+                  value={channelSlot}
+                  onChange={setChannelSlot}
+                  maxChannelNum={maxChannelNum}
+                  takenSlots={takenChannelSlots}
+                />
+              </div>
+
+              {/* NVR Channel — SUNAPI/ONVIF multi-channel sources (FR-CH-041~044) */}
+              <div className="py-2 border-t border-gray-700 mt-1">
+                <div className="flex items-center justify-between mb-1.5">
+                  <p className="text-xs text-gray-200 font-medium">
+                    NVR Channel
+                    {hasNvrChannels && <span className="text-gray-500 font-normal"> (max {effectiveMaxChannel})</span>}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={handleRedetectChannels}
+                    disabled={redetecting}
+                    className="px-2 py-1 text-[10px] rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-gray-200 transition-colors"
+                  >
+                    {redetecting ? 'Detecting…' : '🔍 Re-detect'}
+                  </button>
+                </div>
+                {redetectError && <p className="text-[10px] text-red-400 mb-1">{redetectError}</p>}
+                {!hasNvrChannels && !redetectError && !redetected && (
+                  <p className="text-[10px] text-gray-500">
+                    No NVR channel data yet — click Re-detect to query SUNAPI/ONVIF for this camera's IP.
+                  </p>
+                )}
+                {!hasNvrChannels && !redetectError && redetected && (
+                  <p className="text-[10px] text-gray-500">
+                    Re-detect ran ({redetected.protocol === 'none' ? 'no SUNAPI/ONVIF response' : redetected.protocol.toUpperCase()}) —
+                    single-channel or no multi-channel NVR found at this camera's IP.
+                  </p>
+                )}
+                {hasNvrChannels && (
+                  <>
+                    <div className="flex flex-wrap gap-1">
+                      {Array.from({ length: effectiveMaxChannel }, (_, i) => i + 1).map((ch) => {
+                        const resolved = resolveNvrChannelRtsp(effectiveProfiles, effectiveSupportSunapi, camera.rtspUrl, ch);
+                        const isSelected = ch === nvrChannel;
+                        return (
+                          <button
+                            key={ch}
+                            type="button"
+                            disabled={resolved === null}
+                            title={resolved === null ? 'RTSP could not be resolved for this channel' : resolved}
+                            onClick={() => {
+                              setNvrChannel(ch);
+                              setNvrRtspPreview(resolved);
+                            }}
+                            className={`px-2 py-1 rounded border text-[11px] font-semibold transition-all ${
+                              isSelected
+                                ? 'border-amber-500 bg-amber-900/50 text-amber-200'
+                                : resolved === null
+                                ? 'border-gray-800 bg-gray-900 text-gray-700 cursor-not-allowed'
+                                : 'border-gray-700 bg-gray-900 text-gray-400 hover:border-gray-500 hover:text-gray-200'
+                            }`}
+                          >
+                            CH {ch}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    {nvrRtspPreview && (
+                      <p className="text-[10px] text-gray-500 mt-1.5 font-mono truncate" title={nvrRtspPreview}>
+                        → {nvrRtspPreview}
+                      </p>
+                    )}
+                  </>
+                )}
+              </div>
 
               {/* WebRTC toggle */}
               <div className="flex items-center justify-between py-2 border-t border-gray-700 mt-1">
