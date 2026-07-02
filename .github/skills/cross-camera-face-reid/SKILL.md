@@ -74,6 +74,28 @@ Content-Type: multipart/form-data
 2. `blurFaces: true` 설정 시 미등록 인물 얼굴 블러 처리
 3. GDPR 감사 로그: `server/src/services/AuditService.js` 로그 출력 확인
 
+### Cross-Camera Re-ID 피드 영속성 (v1.2 버그 수정, 2026-07-02)
+
+> Streaming Dashboard DETECTIONS 패널의 "Cross-Camera Re-ID" 이력이 사라지는 버그가
+> 있었습니다 (`client/src/stores/crossCameraStore.ts`). 원인과 재발 방지 규칙:
+
+1. **시간 기반 만료(prune) 절대 사용 금지** — `crossCameraStore.ts`/`clothingReIdStore.ts`는
+   과거 `EXPIRY_MS = 60_000`으로 60초 지난 항목을 매 `addEvent()` 호출마다 필터링했습니다.
+   AI 분석 서버가 60초 이상 응답이 없으면(회로차단기 open 등) 다음 이벤트 수신 시
+   기존 이력이 전부 사라지는 것이 실제 원인이었습니다. **"history/log/feed" 성격의 패널은
+   반드시 개수(`MAX_EVENTS`) 기반으로만 캡핑하고, 시간 기반 만료를 두지 않습니다.**
+2. **마운트 시 DB hydration 필수** — `useCrossCameraStore`는 `usePersonTrajectoryStore`와
+   달리 마운트 시 서버에서 이력을 가져오지 않아 새로고침마다 빈 목록으로 시작했습니다.
+   `App.tsx`에서 `GET /api/analysis/face-trajectories?limit=100` 호출 후 트랜지션
+   (`segments[i-1] → segments[i]`)을 `CrossCameraReIdEvent[]`로 재구성해 `hydrate()`에
+   전달하도록 수정했습니다. 신규 "이력형" Zustand 스토어를 추가할 때는 이 패턴
+   (`hydrate` 액션 + `App.tsx` `useEffect` fetch)을 반드시 함께 구현하세요.
+3. **`PersonSegment.similarity` 필드** — 위 hydration이 신뢰도(%)까지 재구성할 수 있도록
+   `pipelineManager.js`가 세그먼트 생성/추가 시 `similarity: ev.similarity`를 함께 저장하고
+   `_upsertTrajectoryToDb()`/`_saveFaceTracking()`이 이를 DB/JSON 백업에 영속화합니다.
+
+> 상세 설계: `docs/design/Design_CrossCamera_Face_Tracking.md` §4.6 참조.
+
 ## 임베딩 데이터 구조
 
 ```js
@@ -117,6 +139,7 @@ Content-Type: multipart/form-data
 | `snapshotService.js` | `docs/design/Design_Detection_Snapshot_Search.md`, `docs/tc/TC_Detection_Snapshot_Search.md` |
 | `FaceGalleryTab.tsx` | `docs/design/Design_Dashboard_Sidebar_Face_ID.md`, `docs/tc/TC_Dashboard_Sidebar_Face_ID.md` |
 | 개인정보 마스킹 정책 변경 | `docs/srs/SRS_AI_Face_Recognition.md` GDPR 섹션 + `docs/design/Design_AI_Face_Recognition.md` |
+| `crossCameraStore.ts` / `clothingReIdStore.ts` (만료·hydration 로직) | `docs/design/Design_CrossCamera_Face_Tracking.md` §4.6 — 시간 기반 만료 재도입 금지, hydrate() 패턴 유지 확인 |
 
 **공통 규칙**
 - **새 기능 추가** → PRD + SRS + Design + TC 문서 모두 추가

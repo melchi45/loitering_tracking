@@ -1,13 +1,17 @@
 import { create } from 'zustand';
 import type { CrossCameraReIdEvent } from '../types';
 
-const MAX_EVENTS  = 20;
-const EXPIRY_MS   = 60_000; // prune events older than 60 s
+// History list, not a live-only toast feed — entries must persist until capped
+// by count, never by age. A previous time-based expiry (60s) silently wiped
+// the whole list whenever the AI pipeline went quiet for a minute, which is
+// what caused the Cross-Camera Re-ID feed to "disappear". Do not reintroduce
+// time-based pruning here; see docs/design/Design_CrossCamera_Face_Tracking.md §4.6.
+const MAX_EVENTS = 50;
 
 interface CrossCameraStore {
   events: CrossCameraReIdEvent[];
   addEvent: (event: CrossCameraReIdEvent) => void;
-  pruneExpired: () => void;
+  hydrate: (events: CrossCameraReIdEvent[]) => void;
   clearEvents: () => void;
 }
 
@@ -15,18 +19,22 @@ export const useCrossCameraStore = create<CrossCameraStore>((set) => ({
   events: [],
 
   addEvent: (event) =>
-    set((state) => {
-      const now    = Date.now();
-      // Prune expired entries and keep newest first, capped at MAX_EVENTS
-      const fresh  = state.events.filter((e) => now - e.timestamp < EXPIRY_MS);
-      const next   = [event, ...fresh].slice(0, MAX_EVENTS);
-      return { events: next };
-    }),
+    set((state) => ({ events: [event, ...state.events].slice(0, MAX_EVENTS) })),
 
-  pruneExpired: () =>
+  // Bulk-load persisted history (e.g. from GET /api/analysis/face-trajectories on
+  // mount/reconnect). Merges with any events already received live this session,
+  // de-duplicated by faceId+timestamp, newest first.
+  hydrate: (events) =>
     set((state) => {
-      const now = Date.now();
-      return { events: state.events.filter((e) => now - e.timestamp < EXPIRY_MS) };
+      const seen = new Set<string>();
+      const merged: CrossCameraReIdEvent[] = [];
+      for (const e of [...state.events, ...events].sort((a, b) => b.timestamp - a.timestamp)) {
+        const key = `${e.faceId}:${e.timestamp}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        merged.push(e);
+      }
+      return { events: merged.slice(0, MAX_EVENTS) };
     }),
 
   clearEvents: () => set({ events: [] }),

@@ -732,13 +732,13 @@ class PipelineManager {
                     faceId: ev.faceId, alias,
                     firstSeenAt: timestamp, lastSeenAt: timestamp,
                     currentCameraId: ev.newCameraId,
-                    segments: [{ cameraId: ev.newCameraId, objectId: newObjectId, entryTime: timestamp, exitTime: timestamp }],
+                    segments: [{ cameraId: ev.newCameraId, objectId: newObjectId, entryTime: timestamp, exitTime: timestamp, similarity: ev.similarity }],
                   };
                   this._personTrajectory.set(ev.faceId, traj);
                 } else {
                   const lastSeg = traj.segments[traj.segments.length - 1];
                   lastSeg.exitTime = ev.timestamp;
-                  traj.segments.push({ cameraId: ev.newCameraId, objectId: newObjectId, entryTime: ev.timestamp, exitTime: ev.timestamp });
+                  traj.segments.push({ cameraId: ev.newCameraId, objectId: newObjectId, entryTime: ev.timestamp, exitTime: ev.timestamp, similarity: ev.similarity });
                   traj.currentCameraId = ev.newCameraId;
                   traj.lastSeenAt      = ev.timestamp;
                 }
@@ -1723,13 +1723,13 @@ class PipelineManager {
             faceId: ev.faceId, alias,
             firstSeenAt: ev.timestamp, lastSeenAt: ev.timestamp,
             currentCameraId: ev.newCameraId,
-            segments: [{ cameraId: ev.newCameraId, objectId: newObjectId, entryTime: ev.timestamp, exitTime: ev.timestamp }],
+            segments: [{ cameraId: ev.newCameraId, objectId: newObjectId, entryTime: ev.timestamp, exitTime: ev.timestamp, similarity: ev.similarity }],
           };
           this._personTrajectory.set(ev.faceId, traj);
         } else {
           const lastSeg = traj.segments[traj.segments.length - 1];
           lastSeg.exitTime = ev.timestamp;
-          traj.segments.push({ cameraId: ev.newCameraId, objectId: newObjectId, entryTime: ev.timestamp, exitTime: ev.timestamp });
+          traj.segments.push({ cameraId: ev.newCameraId, objectId: newObjectId, entryTime: ev.timestamp, exitTime: ev.timestamp, similarity: ev.similarity });
           traj.currentCameraId = ev.newCameraId;
           traj.lastSeenAt      = ev.timestamp;
         }
@@ -2243,6 +2243,7 @@ class PipelineManager {
           objectId: s.objectId ?? null,
           entryTime: s.entryTime,
           exitTime: s.exitTime ?? null,
+          similarity: s.similarity ?? null,
         })),
       }));
 
@@ -2275,6 +2276,7 @@ class PipelineManager {
           objectId: s.objectId ?? null,
           entryTime: s.entryTime,
           exitTime: s.exitTime ?? null,
+          similarity: s.similarity ?? null,
         })),
       };
       if (this._db.findOne('faceTrajectories', { id: traj.faceId })) {

@@ -615,6 +615,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
   const selectedDiscovered = useDiscoveryStore((s) => s.selected);
   const selectDiscovered   = useDiscoveryStore((s) => s.select);
   const addCrossCameraEvent  = useCrossCameraStore((s) => s.addEvent);
+  const hydrateCrossCameraEvents = useCrossCameraStore((s) => s.hydrate);
   const addClothingReIdEvent = useClothingReIdStore((s) => s.addEvent);
   const updatePerson         = usePersonTrajectoryStore((s) => s.updatePerson);
   const hydratePerson        = usePersonTrajectoryStore((s) => s.hydrate);
@@ -663,6 +664,38 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
       })
       .catch(() => {});
   }, [hydratePerson]);
+
+  // Hydrate Cross-Camera Re-ID feed from persisted DB history on mount.
+  // Without this, the DETECTIONS panel's Re-ID list only reflects events
+  // received live over the socket since page load — a refresh (or simply
+  // no cross-camera transitions occurring in the current session) makes it
+  // look like the history "disappeared", even though it is in the DB.
+  useEffect(() => {
+    fetch('/api/analysis/face-trajectories?limit=100')
+      .then((r) => r.json())
+      .then((res: { trajectories?: PersonTrajectory[] }) => {
+        if (!Array.isArray(res.trajectories)) return;
+        const events: CrossCameraReIdEvent[] = [];
+        for (const traj of res.trajectories) {
+          const segs = traj.segments || [];
+          for (let i = 1; i < segs.length; i++) {
+            const prev = segs[i - 1];
+            const cur  = segs[i];
+            events.push({
+              faceId:       traj.faceId,
+              alias:        traj.alias,
+              prevCameraId: prev.cameraId,
+              newCameraId:  cur.cameraId,
+              newObjectId:  cur.objectId,
+              similarity:   cur.similarity ?? 0,
+              timestamp:    cur.entryTime,
+            });
+          }
+        }
+        hydrateCrossCameraEvents(events);
+      })
+      .catch(() => {});
+  }, [hydrateCrossCameraEvents]);
 
   // Sync layout with server on mount.
   // • Server has value → apply it (source of truth across sessions).

@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CCFR-01 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent SRS** | srs/SRS_CrossCamera_Face_Tracking.md |
@@ -339,10 +339,12 @@ getCrossCameraStats() {
 
 ```typescript
 export interface PersonSegment {
-  cameraId:  string;
-  objectId:  number | null;
-  entryTime: number;  // Unix ms
-  exitTime:  number;  // Unix ms
+  cameraId:    string;
+  objectId:    number | null;
+  entryTime:   number;  // Unix ms
+  exitTime:    number;  // Unix ms
+  similarity?: number | null;  // face-match cosine similarity that produced this segment
+                                // (absent on legacy data written before v1.2)
 }
 
 export interface PersonTrajectory {
@@ -440,6 +442,38 @@ For face detection objects carrying a non-null `alias` field, a teal chip is ren
 // Renders as: [P3]  next to  [F7]
 ```
 
+### 4.6 Cross-Camera Re-ID Event Feed — Persistence & Hydration (v1.2)
+
+The **DETECTIONS panel** on the Streaming Dashboard (`DashboardDetectionPanel.tsx`, "Cross-Camera Re-ID" section) and the equivalent sections in `FullscreenCameraView.tsx` / `SearchFullscreen.tsx` read from `useCrossCameraStore` (`client/src/stores/crossCameraStore.ts`), **not** `usePersonTrajectoryStore`. This is a distinct, flat list of `CrossCameraReIdEvent` (one entry per transition), populated by the `face:reidentified` socket event.
+
+**Incident (2026-07-02):** the feed appeared empty ("Re-ID 내역이 사라짐"). Two causes, both fixed in v1.2:
+
+1. **Time-based expiry (root cause).** `crossCameraStore.ts` used to prune any event older than `EXPIRY_MS = 60_000` on every `addEvent()` call. Once the remote analysis server stalled and no new `face:reidentified` events arrived for 60s, the *next* live event would filter out everything older — the whole "history" list is not actually history, it disappears on any gap longer than a minute. **Fixed:** `addEvent`/`hydrate` now cap the list by count only (`MAX_EVENTS = 50`), never by age. The identical bug existed in the sibling `clothingReIdStore.ts` (Appearance Re-ID) and was fixed the same way.
+2. **No DB hydration on mount.** Unlike `usePersonTrajectoryStore` (hydrated from `GET /api/persons/active`, §4.3/§7.3), `useCrossCameraStore` had no bootstrap fetch — a page refresh always started the feed empty, even though the transitions are durably recorded in the `faceTrajectories` DB table (§5.1) via `_upsertTrajectoryToDb()`. **Fixed:** `App.tsx` now fetches `GET /api/analysis/face-trajectories?limit=100` on mount and calls `useCrossCameraStore().hydrate()`.
+
+**Reconstructing `CrossCameraReIdEvent[]` from `PersonTrajectory[]`** (client-side, in `App.tsx`): the face-trajectories endpoint returns trajectory documents, not flat events — each transition is implied by consecutive `segments[i-1] → segments[i]`:
+
+```typescript
+for (const traj of trajectories) {
+  for (let i = 1; i < traj.segments.length; i++) {
+    events.push({
+      faceId: traj.faceId, alias: traj.alias,
+      prevCameraId: traj.segments[i - 1].cameraId,
+      newCameraId:  traj.segments[i].cameraId,
+      newObjectId:  traj.segments[i].objectId,
+      similarity:   traj.segments[i].similarity ?? 0,  // 0 for legacy segments predating v1.2
+      timestamp:    traj.segments[i].entryTime,
+    });
+  }
+}
+```
+
+This requires `similarity` to be persisted on each `PersonSegment`, not just transiently in the socket payload — `pipelineManager.js` now writes `similarity: ev.similarity` into the segment object at creation time (both the `combined` mode path in `_updatePersonRegistry`-equivalent inline code and the `streaming` mode `_processRemoteResult` Step B), and `_upsertTrajectoryToDb()` / `_saveFaceTracking()` carry it through to the DB/JSON backup.
+
+**Durability rule — do not regress this again:**
+- Any Zustand store backing a panel labelled "history", "log", "feed", or "trail" (as opposed to a transient toast/alert) must cap by **count**, not by **age**. Time-based expiry silently deletes data the user expects to still be there.
+- Any such store must have a `hydrate()` action wired to a `useEffect` fetch on mount in `App.tsx`, mirroring `usePersonTrajectoryStore`/`useCrossCameraStore` — in-memory-only state that resets on every page refresh is not "history".
+
 ---
 
 ## 5. Data Model
@@ -466,10 +500,12 @@ segments        PersonSegment[]  Ordered list of camera visits
 
 **PersonSegment:**
 ```
-cameraId   string        UUID of the camera visited
-objectId   number|null   ByteTracker numeric ID in that camera
-entryTime  number        Unix ms — first seen in this camera visit
-exitTime   number        Unix ms — last seen (updated each frame)
+cameraId    string          UUID of the camera visited
+objectId    number|null     ByteTracker numeric ID in that camera
+entryTime   number          Unix ms — first seen in this camera visit
+exitTime    number          Unix ms — last seen (updated each frame)
+similarity  number|null     Face-match cosine sim that produced this segment (v1.2+;
+                             null on legacy segments written before this field existed)
 ```
 
 **`_crossCameraStats` entry:**
@@ -742,3 +778,4 @@ analysis 서버 단독 운영 시에는 streaming 서버의 `_processRemoteResul
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for CrossCamera Face Tracking |
 | 1.1 | 2026-06-10 | Youngho Kim | Section 9 추가: SERVER_MODE별 궤적 관리 적용 범위 — streaming 모드 `_processRemoteResult` Step A/B 인라인 궤적 갱신 설계 반영 |
+| 1.2 | 2026-07-02 | Youngho Kim | Section 4.6 추가: Cross-Camera Re-ID 피드가 사라지던 버그 수정 — `crossCameraStore`/`clothingReIdStore`의 시간 기반(60s) 만료 제거(개수 기반으로 전환) + `App.tsx`에 `GET /api/analysis/face-trajectories` 마운트 시 hydration 추가. `PersonSegment.similarity` 필드 신규 영속화(§4.1, §5.1). 재발 방지 규칙 명시 |

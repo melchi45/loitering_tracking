@@ -129,10 +129,12 @@ export interface ClothingReIdEvent {
 }
 
 export interface PersonSegment {
-  cameraId:  string;
-  objectId:  string | number | null;
-  entryTime: number;
-  exitTime:  number;
+  cameraId:    string;
+  objectId:    string | number | null;
+  entryTime:   number;
+  exitTime:    number;
+  /** Face-match cosine similarity that produced this segment (absent on legacy data predating this field). */
+  similarity?: number | null;
 }
 
 export interface PersonTrajectory {
