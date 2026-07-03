@@ -1,6 +1,6 @@
 # RFP — Camera Discovery & Network Search Subsystem
 **Document ID**: LTS-2026-002  
-**Version**: 1.6  
+**Version**: 1.7  
 **Date**: 2026-07-03  
 **Project**: Loitering Detection & Tracking System (LTS-2026)  
 **Status**: Draft
@@ -545,9 +545,10 @@ Continued Annex A cross-checking (RFP-CH-020~022) surfaced a further struct-layo
 |---|---|
 | RFP-CH-023 | The shared request/response struct **shall** include Annex A's `reserved2`/`reserved3` fields (334 bytes total, not 332) — the vendor's own §3.2/§3.3 summary tables omit both |
 | RFP-CH-024 | The discovery request opcode **shall** default to the vendor-documented `nMode=6` (`DEF_REQ_SCAN_EXT`); the previously-used undocumented `nMode=1` **shall** remain available as an immediate, one-line rollback |
-| RFP-CH-025 | `server/src/utils/udpDiscovery.js` **shall NOT** maintain an independent socket/parsing implementation; it **shall** be installable via `npm install` (in addition to the existing git submodule path) without that installation failing to abort the rest of the server's dependency install |
+| RFP-CH-025 | `server/src/utils/udpDiscovery.js` **shall NOT** maintain an independent socket/parsing implementation, and **shall NOT** read the git submodule path directly; it **shall** depend exclusively on the `wisenet-chrome-ip-installer` npm package, installable via ordinary `npm install`, without that package's install failure aborting the rest of the server's dependency install |
 | RFP-CH-026 | Synthesized RTSP URLs **shall NOT** use `nTcpPort` or `nPort` as the RTSP port (neither field is documented or observed to carry it) — both **shall** default to SUNAPI's standard port 554 |
 | RFP-CH-027 | SUNAPI CGI Digest-authentication challenge detection **shall** recognize a `Digest` scheme offer regardless of its position within a `WWW-Authenticate` header that advertises multiple schemes |
+| RFP-CH-028 | Requiring `server/src/utils/udpDiscovery.js` **shall NOT** itself attempt to resolve the npm package or fail if it is unavailable — resolution **shall** be deferred to first actual use, so `SERVER_MODE=analysis` (never uses camera discovery) can start without the package installed |
 
 ---
 
@@ -562,3 +563,4 @@ Continued Annex A cross-checking (RFP-CH-020~022) surfaced a further struct-layo
 | 1.4 | 2026-07-02 | LTS Engineering Team | §10.5 신규 추가 — RFP-CH-018~019, UDP Discovery 인라인 폴백이 실제로는 WiseNet 바이너리 프로토콜이 아닌 ONVIF XML을 파싱하고 있어 서브모듈 미초기화 시 SUNAPI 카메라를 전혀 탐색 못 하던 결함 발견, 서브모듈과의 프로토콜/파싱 결과 동등성 요구사항 추가 |
 | 1.5 | 2026-07-03 | LTS Engineering Team | §10.6 신규 추가 — RFP-CH-020~022, 고객이 Annex A 구조체와 대조해 발견한 `supported_protocol`/`no_password` 오프셋 버그, 그리고 확장 필드 블록 존재 여부가 패킷 길이가 아니라 응답의 `nMode`(Table 1/2 enum)로 결정되어야 한다는 요구사항 추가 |
 | 1.6 | 2026-07-03 | LTS Engineering Team | §10.7 신규 추가 — RFP-CH-023~027: `reserved2`/`reserved3` 구조체 반영(334바이트), 요청 옵코드 `nMode=6` 기본 전환, 인라인 폴백 제거 및 npm 설치 경로 요구사항으로 대체(RFP-CH-018~019 상위 대체), RTSP URL이 `nTcpPort`/`nPort`를 쓰지 않아야 함, Digest 인증 감지가 콤바인드 헤더를 인식해야 함 |
+| 1.7 | 2026-07-03 | LTS Engineering Team | RFP-CH-025 정정 — 서브모듈 경로+npm 설치를 병행 지원한다는 서술을 npm 패키지 단일 의존으로 정정(사용자 명시 지시); RFP-CH-028 신규 추가 — require 시점이 아닌 최초 실제 사용 시점까지 npm 패키지 해석을 지연해야 함(`SERVER_MODE=analysis` 기동 실패 회귀 수정) |

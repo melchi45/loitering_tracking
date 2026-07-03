@@ -358,20 +358,18 @@ python3 -c "import av, PIL; print(av.__version__)"
 
 > **RTSP 포트는 이 응답 어디에도 없습니다.** `nPort`(HTTP/HTTPS 웹 포트)와 `nTcpPort`(VNP 전용)를 RTSP 포트로 오인해 쓰던 버그가 2026-07-03에 발견·수정됐습니다 — 아래 "RTSP URL 생성" 참고.
 
-**구현 아키텍처 (2026-07-03 개편 — 서브모듈+npm 패키지, 인라인 폴백 없음):**
+**구현 아키텍처 (2026-07-03 개편, 2026-07-03 재정정 — npm 패키지 단일 경로, 인라인 폴백 없음):**
 
-| 우선순위 | 구현 | 파일 | 설치 방법 |
-|------|------|------|------|
-| 1 | Git 서브모듈 | `submodules/WiseNetChromeIPInstaller/nodejs/udpDiscovery.js` | `git submodule update --init` |
-| 2 | npm `optionalDependencies` | `wisenet-chrome-ip-installer` (`server/package.json`) — 서브모듈과 동일 저장소/브랜치를 `npm install`로 획득 | `npm install` (서브모듈 init 없이도 동작) |
-
-`server/src/utils/udpDiscovery.js`는 위 두 경로를 재노출하는 20줄짜리 얇은 파일입니다 — **더 이상 자체 소켓/파싱 구현(`UDPDiscoveryFallback`)을 갖지 않습니다.** 과거엔 이 파일이 서브모듈 미초기화 시를 대비해 WiseNet 바이너리 프로토콜을 통째로 중복 구현하고 있었지만(§"UDP Discovery 인라인 폴백" 이력 참고), 그 중복 유지 비용(엔디언 버그 등 실제 drift 사례 있었음)보다 npm 패키지 경로 하나 추가가 더 안전하다고 판단해 제거했습니다. 두 경로 모두 실패하면(서브모듈도 npm 패키지도 없음) `require()` 자체가 실패합니다 — 더 이상 "조용히 폴백"하지 않고 명시적으로 에러가 납니다.
+`submodules/WiseNetChromeIPInstaller/nodejs/`(git 서브모듈)가 프로토콜 구현의 원본이지만, `server/src/utils/udpDiscovery.js`는 **그 파일시스템 경로를 직접 읽지 않습니다** — 오직 `wisenet-chrome-ip-installer` npm `optionalDependencies`(`server/package.json`, 서브모듈과 동일 저장소/브랜치를 `npm install`로 획득)만을 통해 접근합니다:
 
 ```bash
-git submodule update --init submodules/WiseNetChromeIPInstaller   # 방법 1
-# 또는
-cd server && npm install                                          # 방법 2 (wisenet-chrome-ip-installer optionalDependency)
+cd server && npm install   # wisenet-chrome-ip-installer optionalDependency
 ```
+
+`server/src/utils/udpDiscovery.js`는 npm 패키지를 재노출하는 60줄짜리 얇은 파일입니다 — **더 이상 자체 소켓/파싱 구현(`UDPDiscoveryFallback`)도, 서브모듈 경로 직접 탐지 로직도 갖지 않습니다.** 과거엔 이 파일이 서브모듈 미초기화 시를 대비해 WiseNet 바이너리 프로토콜을 통째로 중복 구현하고 있었지만(§"UDP Discovery 인라인 폴백" 이력 참고), 그 중복 유지 비용(엔디언 버그 등 실제 drift 사례 있었음)보다 npm 패키지 경로 하나로 단순화하는 게 더 안전하다고 판단해 제거했습니다.
+
+- **지연 로딩(2026-07-03 재정정)**: `require('wisenet-chrome-ip-installer/...')`는 `getUDPDiscovery()` 실제 호출(또는 export 프로퍼티 접근) 시점까지 지연됩니다 — `discoveryService.js`가 `SERVER_MODE`와 무관하게 이 파일을 무조건 require하는데, 파일 최상단에서 즉시 require하면 `SERVER_MODE=analysis`(카메라 자체가 없어 discovery를 아예 안 쓰는 모드)에서도 패키지 미설치 시 서버가 기동 실패하는 회귀가 실측으로 발생했습니다(2026-07-03). `require('./udpDiscovery')` 자체는 패키지가 없어도 절대 실패하지 않고, 실제로 discovery를 쓰려고 할 때만(`getUDPDiscovery()` 호출) 명확한 에러로 실패합니다.
+- 패키지가 없으면(`npm install`을 안 돌렸거나 실패) `getUDPDiscovery()` 호출 시점에 `require()`가 실패합니다 — 더 이상 "조용히 폴백"하지 않고 명시적으로 에러가 납니다.
 
 **Request/Response/protocol.js 클래스:** `submodules/WiseNetChromeIPInstaller/nodejs/` 하위 3개 파일이 프로토콜 구현을 담당합니다.
 
