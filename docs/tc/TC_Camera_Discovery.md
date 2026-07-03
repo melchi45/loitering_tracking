@@ -4,11 +4,11 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-CAM-01 |
-| **Version** | 1.5 |
+| **Version** | 1.12 |
 | **Status** | Active |
-| **Date** | 2026-05-27 |
+| **Date** | 2026-07-03 |
 | **Parent SRS** | srs/SRS_Camera_Discovery.md |
-| **Test Scripts** | test/api/camera_discovery.test.js |
+| **Test Scripts** | test/api/camera_discovery.test.js, test/api/nvr_channel_discovery.test.js |
 
 ---
 
@@ -86,6 +86,21 @@
 | FR-CAM-074 | TC-H-019 |
 | FR-CAM-075 | TC-H-018, TC-H-018b |
 | FR-CAM-076 | TC-H-020 (also verified live against 192.168.214.37 — ONVIF 301 redirect to HTTPS) |
+| FR-CAM-077 | TC-H-025 (also verified live against 192.168.214.37 — SUNAPI 301 redirect to HTTPS) |
+| FR-CAM-078 | TC-H-021a, TC-H-021b, TC-H-021c |
+| FR-CAM-079 | TC-H-022, TC-H-023, TC-H-024 (also verified live against 192.168.214.32, 192.168.214.37 via `curl --digest`) |
+| FR-CAM-080 | Manual — verified live via `POST /api/cameras/probe-channels` against 192.168.214.37/192.168.214.40; see §9 Test Group G note |
+| FR-CAM-081 | TC-H-026, TC-H-027 |
+| FR-CAM-082 | TC-H-028, TC-H-029 (superseded by FR-CAM-087 — `UDPDiscoveryFallback` was removed; these TCs were renamed to test the npm-package-backed copy instead, see their "Note (2026-07-03)") |
+| FR-CAM-083 | TC-H-030 |
+| FR-CAM-084 | TC-H-031, TC-H-032, TC-H-033, TC-H-034 |
+| FR-CAM-085 | TC-H-028, TC-H-029, TC-H-032 (same TCs as FR-CAM-082/084 — `reserved2`/`reserved3` correctness is exactly what the parity comparison in these TCs verifies) |
+| FR-CAM-086 | Manual — verified live against 100+ real devices on this network (`nMode=6` request → `nMode=12` responses, `'scanExtConfirmed'` event); no automated mock-network harness in this repo for UDP broadcast round-trips, see §9 Test Group G note |
+| FR-CAM-087 | TC-H-028, TC-H-029, TC-H-032, TC-H-034 (parity between npm-package-backed and submodule-loaded copies); manual live verification of `npm install` fetching `wisenet-chrome-ip-installer` and `getUDPDiscovery()` resolving through `discoveryService.js` |
+| FR-CAM-088 | TC-H-035 |
+| FR-CAM-089 | TC-H-036 |
+| FR-CAM-090 | TC-H-037, TC-H-038, TC-H-039, TC-H-039b |
+| FR-CAM-091 | TC-H-040 |
 
 ### 1.3 Test Data
 
@@ -759,6 +774,385 @@ Automated in `test/api/nvr_channel_discovery.test.js`.
 
 ---
 
+### TC-H-021 — channelRtspUrl() recognizes both /profileN/ and /N/H.264/ conventions
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-021a / TC-H-021b / TC-H-021c |
+| **SRS** | FR-CAM-078 |
+| **Priority** | P1 |
+| **Type** | Unit (direct require, real module — not the inline copy used by TC-H-007) |
+
+**Steps / Expected**:
+- **021a** — `channelRtspUrl('rtsp://192.168.214.32:10030/profile1/media.smp', 3)` → `.../profile3/media.smp` (legacy convention unaffected).
+- **021b** — `channelRtspUrl('rtsp://192.168.214.40/0/H.264/media.smp', 2)` → `.../1/H.264/media.smp`; and the channel-1 round trip, `channelRtspUrl('rtsp://192.168.214.40/1/H.264/media.smp', 1)` → `.../0/H.264/media.smp`.
+- **021c** — `channelRtspUrl('rtsp://foo/bar/baz', 2)` → unchanged (no-op contract preserved).
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-022 — defaultSunapiRtspUrl() synthesizes a 0-based channel URL with port fallback
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-022 |
+| **SRS** | FR-CAM-079 |
+| **Priority** | P1 |
+| **Type** | Unit |
+
+**Steps / Expected**: `defaultSunapiRtspUrl('192.168.214.37', null, 1)` → `rtsp://192.168.214.37:554/0/H.264/media.smp` (null port falls back to 554). `defaultSunapiRtspUrl('192.168.214.37', 554, 4)` → `.../3/H.264/media.smp` (confirmed port used directly, channel 4 → segment 3).
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-023 — querySunapiRtspPort() parses RTSPPort from the plain-text portconf response
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-023 |
+| **SRS** | FR-CAM-079 |
+| **Priority** | P1 |
+| **Type** | Unit (mock HTTP server) |
+
+**Precondition**: Mock server answers `GET /stw-cgi/network.cgi?msubmenu=portconf&action=view` with plain text: `FixedPorts=3702,49152\nUsedPorts=\nHTTPPort=80\nHTTPSPort=443\nWebSessionTimeout=10\nRTSPPort=8554\nRTSPTimeout=60s\n`.
+
+**Steps**: Call `querySunapiRtspPort('127.0.0.1', mockPort, false, 3000, 'admin', 'pass')`.
+
+**Expected**: Returns `8554` (parsed from the `RTSPPort=` line, not XML-parsed).
+
+Automated in `test/api/nvr_channel_discovery.test.js`. Also verified live via `curl --digest` against 192.168.214.32 and 192.168.214.37 before implementation — both returned `RTSPPort=554` in this exact plain-text shape.
+
+---
+
+### TC-H-024 — querySunapiRtspPort() short-circuits to null with no credentials
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-024 |
+| **SRS** | FR-CAM-079 |
+| **Priority** | P1 |
+| **Type** | Unit |
+
+**Steps**: Call `querySunapiRtspPort('127.0.0.1', 1, false, 1000, '', '')` — port `1` is reserved/unlikely-bound, so any actual network attempt would fail/hang rather than return quickly.
+
+**Expected**: Returns `null` immediately (no request attempted) — proves the credential gate runs before any I/O, not just that a request eventually fails.
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-025 — SUNAPI CGI client follows one same-host redirect, but not a cross-host one
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-025 |
+| **SRS** | FR-CAM-077 |
+| **Priority** | P1 |
+| **Type** | Unit (mock HTTP servers) |
+
+**Precondition (same-host case)**: Mock server A returns `301` with `Location` pointing at mock server B (different port, same `127.0.0.1` host), which answers `attributes.cgi/attributes` with `MaxChannel=4`.
+**Precondition (cross-host case)**: A separate mock server returns `301` with `Location` pointing at a different hostname (`198.51.100.1`, TEST-NET-2 — never actually contacted).
+
+**Steps**: Call `querySunapiMaxChannel('127.0.0.1', mockPort, false, 3000, '', '')` against each mock in turn.
+
+**Expected**: Same-host case — the redirect is followed and `MaxChannel` comes back as `4`. Cross-host case — the redirect is **not** followed; `MaxChannel` falls back to `1` (the original `301` is treated as a failure), and the cross-host target is never contacted.
+
+Automated in `test/api/nvr_channel_discovery.test.js`. Companion to TC-H-020 (identical redirect-following requirement, applied to the SUNAPI CGI client instead of the ONVIF SOAP client) — also verified live against 192.168.214.37, where `querySunapiMaxChannel()` now correctly returns `4` instead of `1`.
+
+---
+
+### TC-H-026 — UDP extended fields are undefined, not a false default, when the packet is too short
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-026 |
+| **SRS** | FR-CAM-081 |
+| **Priority** | P1 |
+| **Type** | Unit (real captured packet bytes, direct require) |
+
+**Precondition**: A real 262-byte WiseNet UDP response captured live from a camera on this network (261-byte common header + 1 trailing byte) — numerically satisfies the old `b.length >= 261` gate but is 71 bytes short of the 72-byte extended block.
+
+**Steps**: Call `_parseResponse()` directly against the captured bytes, then `mapUDPDevice()` on the result.
+
+**Expected**: `modelType`, `chDeviceNameNew` **shall** be `undefined` — not a false `0`/`''` that would be indistinguishable from real data. `mapUDPDevice()`'s `Type`/`DeviceType` **shall** also be `undefined`, not `0`/`"Camera"`.
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-027 — UDP extended fields parse correctly when the packet is genuinely complete
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-027 |
+| **SRS** | FR-CAM-081 |
+| **Priority** | P1 |
+| **Type** | Unit (synthetic 333-byte packet, direct require) |
+
+**Precondition**: The same real 261-byte common header, with a synthetic 72-byte extended block appended (`modelType = 0x03`, i.e. Recorder) — 333 bytes total, matching the full documented extended-field layout.
+
+**Steps**: Call `_parseResponse()`, then `mapUDPDevice()` on the result.
+
+**Expected**: `modelType: 3`, `chDeviceNameNew` parses as set. `mapUDPDevice()`'s `Type: 3`, `DeviceType: 'Recorder'`.
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-028 — UDPDiscoveryFallback parses a real captured packet correctly
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-028 |
+| **SRS** | FR-CAM-082 |
+| **Priority** | P1 |
+| **Type** | Unit (real captured packet bytes, direct require) |
+
+**Precondition**: The same real 262-byte WiseNet UDP response used in TC-H-026, from `192.168.214.37` (device: PNM-C32083).
+
+**Steps**: Call `UDPDiscoveryFallback._parseResponse()` (`server/src/utils/udpDiscovery.js`) directly against the captured bytes.
+
+**Expected**: `chIP: '192.168.214.37'`, `chMac: '00:09:18:21:95:85'`, `chDeviceName: 'PNM-C32083'`, `nPort: 443`, `nTcpPort: 10030`, `modelType: undefined`. The port assertions specifically catch an endianness inversion bug found and fixed during implementation (`ntohs()`'s `big` flag means little-endian on the wire, not big-endian — a naive reimplementation produced a plausible-looking but wrong port number that only a byte-exact fixture like this one would catch).
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-029 — UDPDiscoveryFallback matches the submodule end-to-end (parity)
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-029 |
+| **SRS** | FR-CAM-082 |
+| **Priority** | P1 |
+| **Type** | Unit (direct require of both implementations, skips if submodule unavailable) |
+
+**Steps**: Parse the same real 262-byte packet with both `UDPDiscoveryFallback._parseResponse()` and the submodule's `_parseResponse()`; compare every field, then run both results through `mapUDPDevice()` and compare `Model`/`Port`/`DeviceType`.
+
+**Expected**: All compared fields are identical between the two implementations.
+
+Automated in `test/api/nvr_channel_discovery.test.js`. Also verified live (manual, not part of this automated suite): `UDPDiscoveryFallback` run standalone against this network's real broadcast domain discovered all 13 known cameras on the 192.168.214.x subnet, matching model names and ports exactly.
+
+---
+
+### TC-H-030 — `supported_protocol`/`no_password` read from distinct, correctly-ordered offsets
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-030 |
+| **SRS** | FR-CAM-083 |
+| **Priority** | P1 |
+| **Type** | Unit (synthetic extended-block bytes with distinct sentinel values, direct require) |
+
+**Precondition**: A real 261-byte base-field prefix (from the same captured packet as TC-H-026), with a synthetic extended block appended carrying distinct sentinel values for `supported_protocol` (`0x07`) and `no_password` (`0x01`).
+
+**Steps**: Call the submodule's `_parseResponse()` against the fixture; check `supportedProtocol` and `noPassword` independently, then run the result through `mapUDPDevice()`.
+
+**Expected**: `supportedProtocol === 7` and `noPassword === 1` — two distinct values, neither aliasing the other. `mapUDPDevice()` surfaces the raw byte as `SupportedProtocol: 7`. Regression guard for a real bug: prior to the fix, `noPassword` read the byte belonging to `supported_protocol` (one field too early) and the real trailing `no_password` byte was never read at all — two adjacent 1-byte struct fields silently collapsing into one.
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-031 — Extended field block is gated on `nMode`, not merely on remaining packet length
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-031 |
+| **SRS** | FR-CAM-084 |
+| **Priority** | P1 |
+| **Type** | Unit (synthetic 334-byte packet, base-mode `nMode=11`, direct require) |
+
+**Precondition**: The same real captured 261-byte prefix (which itself carries `nMode=11`, a base-mode response), padded with a full, plausible-looking 73-byte extended block (`modelType=3`, `chDeviceNameNew='XRN-1610S-TEST'`, etc.) — 334 bytes total, numerically long enough for the whole extended block.
+
+**Steps**: Call the submodule's `_parseResponse()` against this fixture, without altering its `nMode` byte.
+
+**Expected**: `nMode === 11`; `modelType`, `chDeviceNameNew`, and `supportedProtocol` are all `undefined` — the mode gate (`nMode !== 12`) takes precedence over the packet being numerically long enough for the block. `mapUDPDevice()`'s `DeviceType` stays `undefined` too. Regression guard proving the length-based heuristic (FR-CAM-081) is no longer, by itself, sufficient evidence that the extended block is present.
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-032 — npm-package-backed `UDPDiscovery` matches the submodule-loaded copy for a genuine `nMode=12` (DEF_RES_SCAN_EXT) response
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-032 |
+| **SRS** | FR-CAM-084, FR-CAM-087 |
+| **Priority** | P1 |
+| **Type** | Unit (synthetic 334-byte packet, `nMode` forced to 12, direct require of both install paths, skips if submodule unavailable) |
+| **Note (2026-07-03)** | Renamed from "`UDPDiscoveryFallback` vs submodule" — `server/src/utils/udpDiscovery.js` no longer has an independent implementation (FR-CAM-087); this now compares the npm-package-backed copy (`server/src/utils/udpDiscovery.js`'s re-export) against the copy loaded directly from the git submodule path — both are the same source, loaded via two different install paths |
+
+**Steps**: Take the same 261-byte prefix used in TC-H-031, overwrite its `nMode` byte to `12`, append the same synthetic extended block, and parse with both `UDPDiscovery` (`server/src/utils/udpDiscovery.js`, npm-package-backed) and `UDPDiscovery` loaded directly from `submodules/WiseNetChromeIPInstaller/nodejs/udpDiscovery.js`. Compare `modelType`, `chDeviceNameNew`, `version`, `httpType`, `nHttpsPort`, `supportedProtocol`, `noPassword`; run both through `mapUDPDevice()` and compare `DeviceType`/`SupportedProtocol`.
+
+**Expected**: `modelType === 3`, `supportedProtocol === 5`, `DeviceType === 'Recorder'`, and every compared field identical between the two loaded copies.
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-033 — `_parseResponse()` rejects response modes belonging to a different exchange (RSA/password-apply)
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-033 |
+| **SRS** | FR-CAM-084 |
+| **Priority** | P1 |
+| **Type** | Unit (real 261-byte prefix with `nMode` overwritten to each of 7 non-scan values, direct require) |
+
+**Precondition**: The vendor spec's Table 1/2 `nMode` enum defines 7 response values that belong to exchanges other than "IP Scan" (RSA key exchange §3.5, password-apply §3.6/§3.7): `13, 23, 24, 25, 33, 66, 77`.
+
+**Steps**: For each of the 7 values, overwrite the real captured prefix's `nMode` byte and call the submodule's `_parseResponse()`. Then confirm the same bytes with `nMode` restored to a real scan value (`11`) still parse normally.
+
+**Expected**: Every one of the 7 non-scan `nMode` values yields `null` — not a partially/incorrectly parsed device object built from an incompatible struct layout. The sanity check (`nMode=11`) still returns a normally-parsed device (`chIP: '192.168.214.37'`).
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-034 — npm-package-backed `UDPDiscovery` also rejects non-scan `nMode` values
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-034 |
+| **SRS** | FR-CAM-084, FR-CAM-087 |
+| **Priority** | P1 |
+| **Type** | Unit (same 7 non-scan `nMode` values as TC-H-033, npm-package-backed copy, direct require) |
+| **Note (2026-07-03)** | Renamed from "`UDPDiscoveryFallback`" — see TC-H-032's note |
+
+**Steps**: Same as TC-H-033, but against `server/src/utils/udpDiscovery.js`'s `UDPDiscovery._parseResponse()` (npm-package-backed) instead of the submodule.
+
+**Expected**: Identical outcome to TC-H-033 — all 7 values yield `null`, confirming both loaded copies apply the same dispatch.
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-035 — RTSP URL/Port never derived from `nTcpPort` or `nPort`
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-035 |
+| **SRS** | FR-CAM-088 |
+| **Priority** | P1 |
+| **Type** | Unit (real captured packet, direct require of `server/src/utils/udpDiscovery.js` + `discoveryService.js`) |
+
+**Steps (TC-H-035a)**: Parse the same real 262-byte captured packet used by TC-H-028 (`nTcpPort=10030`, a VNP-only field) via `UDPDiscovery._parseResponse()` and inspect `result.rtspUrl`.
+
+**Expected (TC-H-035a)**: `rtspUrl` contains port `554`, not `10030`.
+
+**Steps (TC-H-035b)**: Pass the same parsed result (`nPort=443`, the device's HTTPS web port) through `mapUDPDevice()` and inspect `Port`/`rtspUrl`.
+
+**Expected (TC-H-035b)**: `Port` is `554`, not `443`; `rtspUrl` uses port `554`.
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-036 — SUNAPI CGI Digest-auth challenge detection recognizes combined multi-scheme `WWW-Authenticate` headers
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-036 |
+| **SRS** | FR-CAM-089 |
+| **Priority** | P2 |
+| **Type** | Unit (synthetic challenge string, direct require of `buildDigestAuthHeader()` from `discoveryService.js`) |
+
+**Steps**: Call `buildDigestAuthHeader()` with a synthetic challenge offering both schemes in one string — `Basic realm="BasicRealm", Digest realm="DigestRealm", qop="auth", nonce="abc123nonce", opaque="op1"` — and inspect the computed `Authorization` header. Also verify the old anchored regex (`/^Digest\s/i`) would *not* have matched this string (regression guard), and that a single-scheme Digest challenge (the pre-existing FR-CAM-072 case) still works unchanged.
+
+**Expected**: The computed header contains `realm="DigestRealm"` and the correct `nonce`, and does **not** contain `realm="BasicRealm"` (i.e. parameter extraction is scoped to the Digest portion of the challenge, not the full string).
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-037 — ONVIF `enrichDevice()` authenticates via HTTP Basic when the device accepts it
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-037 |
+| **SRS** | FR-CAM-090 |
+| **Priority** | P1 |
+| **Type** | Unit (mock ONVIF SOAP server enforcing Basic auth, direct require of `onvifDiscovery.js`) |
+
+**Steps**: Start a mock ONVIF SOAP server that requires HTTP Basic auth (`admin`/`right-pass`) on every request. Call `enrichDevice(ip, xaddr, { username: 'admin', password: 'right-pass' })`.
+
+**Expected**: `result.Manufacturer` is populated from `GetDeviceInformation` — the Basic-authenticated request succeeds on the first attempt, no Digest retry needed.
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-038 — ONVIF `enrichDevice()` retries with computed RFC 7616 Digest after a Digest-only device rejects Basic
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-038 |
+| **SRS** | FR-CAM-090 |
+| **Priority** | P1 |
+| **Type** | Unit (mock ONVIF SOAP server performing real RFC 7616 Digest verification, direct require of `onvifDiscovery.js`) |
+
+**Steps**: Start a mock ONVIF SOAP server that 401s any `Basic` `Authorization` attempt outright and, on a `Digest` attempt, verifies the response hash server-side (computes its own expected `response` from `username`/`realm`/`password`/`nonce`/`nc`/`cnonce`/`qop`/method/URI and compares). Call `enrichDevice(ip, xaddr, { username: 'admin', password: 'right-pass' })`.
+
+**Expected**: `result.Manufacturer` is populated — `soapPost()`'s first (Basic) attempt is 401-rejected, and the computed Digest retry succeeds.
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-039 — ONVIF Digest retry with a wrong password still fails (does not mask bad credentials)
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-039 |
+| **SRS** | FR-CAM-090 |
+| **Priority** | P1 |
+| **Type** | Unit (same mock server as TC-H-038, direct require of `onvifDiscovery.js`) |
+
+**Steps**: Against the same Digest-only mock server as TC-H-038 (real credentials `admin`/`right-pass`), call `enrichDevice(ip, xaddr, { username: 'admin', password: 'wrong-pass' })`.
+
+**Expected**: `result.Manufacturer` stays empty — the Digest retry itself receives a mismatched `response` hash and is rejected, exactly as FR-CAM-072/089's SUNAPI equivalent behaves: a genuinely wrong password is never masked by the scheme-mismatch retry.
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-039b — ONVIF `enrichDevice()` without credentials against an auth-required device is unchanged from pre-FR-CAM-090 behavior
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-039b |
+| **SRS** | FR-CAM-090 |
+| **Priority** | P2 |
+| **Type** | Regression (same Digest-only mock server as TC-H-038, direct require of `onvifDiscovery.js`) |
+
+**Steps**: Against the same Digest-only mock server as TC-H-038, call `enrichDevice(ip, xaddr)` with no third argument (no `credentials`).
+
+**Expected**: `result.Manufacturer` stays empty and the call does not throw — `soapPost()` sends no `Authorization` header at all (matching FR-CAM-012/014's original best-effort behavior) and never attempts a Digest retry, since `credentials` was never given.
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
+### TC-H-040 — UDP discovery `MaxChannel` is derived from `nMulticastPort` only when `nMode` is `DEF_RES_SCAN_EXT` (12)
+
+| Field | Value |
+|---|---|
+| **ID** | TC-H-040 |
+| **SRS** | FR-CAM-091 |
+| **Priority** | P2 |
+| **Type** | Unit (real captured packet with `nMode` byte overwritten, direct require of `server/src/utils/udpDiscovery.js` + `discoveryService.js`) |
+
+**Steps**: Parse the same real 262-byte captured packet used by TC-H-028/035 (`nMode=11`, base mode; `nMulticastPort=10050`) via `UDPDiscovery._parseResponse()` and `mapUDPDevice()`. Then reparse the identical bytes with only the `nMode` byte overwritten to `12` (`DEF_RES_SCAN_EXT`).
+
+**Expected**: With `nMode=11`, `_parseResponse()`'s `nMaxChannel` is `undefined` and `mapUDPDevice()`'s `MaxChannel` falls back to `1`. With `nMode=12` (same underlying bytes, so `nMulticastPort` still decodes to `10050`), `nMaxChannel` equals `10050` and `mapUDPDevice()`'s `MaxChannel` surfaces `10050`.
+
+Automated in `test/api/nvr_channel_discovery.test.js`.
+
+---
+
 ## 11. Test Execution Order
 
 ```
@@ -793,3 +1187,10 @@ Group B camera records created during tests must be cleaned up after each group.
 | 1.3 | 2026-07-02 | LTS Engineering Team | TC-H-004/TC-H-017 목 서버 엔드포인트 정정 — 존재하지 않는 `media.cgi?msubmenu=channellist` JSON 응답 대신 실제 엔드포인트 `GET /stw-cgi/attributes.cgi/attributes`의 XML 응답으로 수정 (FR-CAM-062a) |
 | 1.4 | 2026-07-02 | LTS Engineering Team | Traceability에 FR-CAM-072(TC-CH-F-012/F-012b, Channel Slot 스위트로 자동화)·FR-CAM-073(TC-G-007, 수동) 추가; §9에 TC-G-007 신규 추가 — SUNAPI HTTPS 자체 서명 인증서 수정을 실 카메라(192.168.214.37)로 검증 |
 | 1.5 | 2026-07-02 | LTS Engineering Team | §10에 TC-H-018/H-018b/H-019/H-020 신규 추가 — ONVIF GetVideoSources 기반 MaxChannel/channelIndex(FR-CAM-075), 온디맨드 probe HTTP/HTTPS 동시 시도(FR-CAM-074), ONVIF SOAP 동일 호스트 리다이렉트 추적(FR-CAM-076) 모두 mock 서버로 자동화(`test/api/nvr_channel_discovery.test.js`); TC-G-007의 오래된 "MaxChannel=1" 서술 정정(실 카메라 상태가 이후 4채널로 변경됨을 확인) |
+| 1.6 | 2026-07-02 | LTS Engineering Team | §10에 TC-H-021~025 신규 추가 — `channelRtspUrl()` 이중 컨벤션(FR-CAM-078), `defaultSunapiRtspUrl()`/`querySunapiRtspPort()` RTSP 포트 확인(FR-CAM-079), SUNAPI CGI 클라이언트 동일 호스트 리다이렉트 추적(FR-CAM-077, TC-H-020의 SUNAPI측 대응) 모두 실제 모듈 direct-require + mock 서버로 자동화; Traceability에 FR-CAM-077~080 추가; Test Scripts 필드에 `nvr_channel_discovery.test.js` 누락분 반영 |
+| 1.7 | 2026-07-02 | LTS Engineering Team | §10에 TC-H-026/H-027 신규 추가 — UDP Discovery 확장 필드 bounds-check 버그 수정 검증(FR-CAM-081), 실제 캡처한 262바이트 패킷 + 합성 333바이트 패킷으로 자동화; Traceability에 FR-CAM-081 추가 |
+| 1.8 | 2026-07-02 | LTS Engineering Team | §10에 TC-H-028/H-029 신규 추가 — `UDPDiscoveryFallback`이 서브모듈과 byte-for-byte parity를 갖도록 수정한 것을 검증(FR-CAM-082), 엔디언 버그(포트 번호) 회귀 방지용 실측 바이트 fixture 포함; Traceability에 FR-CAM-082 추가 |
+| 1.9 | 2026-07-03 | LTS Engineering Team | §10에 TC-H-030~034 신규 추가 — `supported_protocol`/`no_password` 오프셋 회귀 검증(FR-CAM-083), `nMode` 기반 확장 필드 게이팅(FR-CAM-084, TC-H-027 fixture를 nMode=12로 수정)과 non-scan 모드 조기 거부(TC-H-033/034, 서브모듈+폴백 양쪽) 검증; Traceability에 FR-CAM-083/084 추가 |
+| 1.10 | 2026-07-03 | LTS Engineering Team | §10에 TC-H-035(RTSP URL/Port가 nTcpPort/nPort를 쓰지 않음, FR-CAM-088)·TC-H-036(콤바인드 WWW-Authenticate 헤더 Digest 감지, FR-CAM-089) 신규 추가; TC-H-032/034를 `server/src/utils/udpDiscovery.js`의 인라인 폴백 완전 제거(FR-CAM-087)에 맞춰 "UDPDiscoveryFallback vs 서브모듈" → "npm 패키지 재노출 vs 서브모듈 직접 로드" 비교로 명칭·본문 정정; Traceability에 FR-CAM-085~089 추가, FR-CAM-082를 FR-CAM-087로 superseded 표시 |
+| 1.11 | 2026-07-03 | LTS Engineering Team | §10에 TC-H-037~039b 신규 추가 — ONVIF SOAP 클라이언트의 HTTP Basic→Digest 인증 재시도(FR-CAM-090): Basic 수락 기기 인증 성공(TC-H-037), Digest 전용 기기에서 계산된 RFC 7616 Digest로 재시도 성공(TC-H-038), 잘못된 비밀번호는 Digest 재시도 후에도 여전히 실패(TC-H-039, mock 서버가 서버측에서 실제 해시를 검증), credentials 미제공 시 기존 무인증 동작 불변(TC-H-039b); Traceability에 FR-CAM-090 추가 |
+| 1.12 | 2026-07-03 | LTS Engineering Team | §10에 TC-H-040 신규 추가 — UDP Discovery `MaxChannel`이 확장 응답(`nMode=12`)에서만 `nMulticastPort`로부터 도출되고 base 모드(`nMode=11`)에서는 도출되지 않음을 검증(FR-CAM-091, 실 캡처 패킷의 `nMode` 바이트만 덮어쓴 합성 픽스처로 파싱 메커니즘 확인 — 진짜 nMode=12 기기는 미포착); Traceability에 FR-CAM-091 추가 |

@@ -2,10 +2,10 @@
 
 const http   = require('http');
 const https  = require('https');
-const crypto = require('crypto');
 
 const { getUDPDiscovery }  = require('../utils/udpDiscovery');
 const { ONVIFDiscovery }   = require('./onvifDiscovery');
+const { buildDigestAuthHeader, challengesDigest } = require('../utils/digestAuth');
 
 const SCAN_TIMEOUT  = 10000; // each scan duration (ms)
 const SCAN_INTERVAL = 15000; // pause between scans — long enough for cameras to reset rate limits
@@ -116,37 +116,9 @@ function parseSunapiMaxChannel(ip, path, statusCode, body) {
   return 1;
 }
 
-/**
- * Computes an RFC 7616 Digest Authorization header from a `WWW-Authenticate`
- * challenge string. Supports the common `qop=auth` case (and falls back to
- * the qop-less RFC 2069 form some embedded HTTP servers still send).
- * MD5 only — no SUNAPI firmware observed advertising SHA-256.
- */
-function buildDigestAuthHeader(challenge, method, uri, username, password) {
-  const param = (name) => {
-    const m = challenge.match(new RegExp(`${name}="?([^",]+)"?`, 'i'));
-    return m ? m[1] : null;
-  };
-  const realm  = param('realm')  || '';
-  const nonce  = param('nonce')  || '';
-  const opaque = param('opaque');
-  const qopOffered = (param('qop') || '').split(',').map((s) => s.trim());
-  const qop    = qopOffered.includes('auth') ? 'auth' : null;
-  const nc     = '00000001';
-  const cnonce = crypto.randomBytes(8).toString('hex');
-
-  const md5 = (s) => crypto.createHash('md5').update(s).digest('hex');
-  const ha1 = md5(`${username}:${realm}:${password}`);
-  const ha2 = md5(`${method}:${uri}`);
-  const response = qop
-    ? md5(`${ha1}:${nonce}:${nc}:${cnonce}:${qop}:${ha2}`)
-    : md5(`${ha1}:${nonce}:${ha2}`);
-
-  let header = `Digest username="${username}", realm="${realm}", nonce="${nonce}", uri="${uri}", response="${response}"`;
-  if (qop)    header += `, qop=${qop}, nc=${nc}, cnonce="${cnonce}"`;
-  if (opaque) header += `, opaque="${opaque}"`;
-  return header;
-}
+// buildDigestAuthHeader() moved to ../utils/digestAuth.js (shared with
+// onvifDiscovery.js's ONVIF SOAP client, FR-CAM-090) — re-exported below
+// unchanged so existing direct-require callers (e.g. TC-H-036) keep working.
 
 async function querySunapiMaxChannel(
   ip, httpPort, httpType, timeoutMs = 2000,
@@ -180,7 +152,12 @@ async function querySunapiMaxChannel(
 
   if ((res.statusCode === 401 || res.statusCode === 403) && username && password) {
     const challenge = res.headers['www-authenticate'] || '';
-    if (/^Digest\s/i.test(challenge)) {
+    // Word-boundary match, not string-start anchored — a combined header
+    // offering multiple schemes (e.g. `Basic realm="x", Digest realm="y",
+    // qop="auth", nonce="..."`, which Node produces when a server sends
+    // more than one WWW-Authenticate header) still needs to be recognized
+    // as offering Digest even when Digest isn't the first scheme listed.
+    if (challengesDigest(challenge)) {
       console.debug(`[Discovery][SUNAPI] ${ip} ${path} → HTTP ${res.statusCode}, Basic rejected — retrying with Digest (challenge received)`);
       const digestHeader = buildDigestAuthHeader(challenge, 'GET', path, username, password);
       try {
@@ -204,13 +181,152 @@ async function querySunapiMaxChannel(
   return 1;
 }
 
+/**
+ * Parses the plain-text `key=value` (one per line) response body returned by
+ * SUNAPI's `network.cgi` — unlike `attributes.cgi` (XML), these CGI actions
+ * return simple text, e.g.:
+ *   FixedPorts=3702,49152
+ *   UsedPorts=
+ *   HTTPPort=80
+ *   HTTPSPort=443
+ *   WebSessionTimeout=10
+ *   RTSPPort=554
+ *   RTSPTimeout=60s
+ */
+function parsePortConfResponse(body) {
+  const out = {};
+  for (const line of String(body || '').split(/\r?\n/)) {
+    const eq = line.indexOf('=');
+    if (eq < 0) continue;
+    out[line.slice(0, eq).trim()] = line.slice(eq + 1).trim();
+  }
+  return out;
+}
+
+/**
+ * Reads the currently-configured RTSP port from SUNAPI's port configuration
+ * CGI — GET /stw-cgi/network.cgi?msubmenu=portconf&action=view. Verified
+ * live against two real devices (192.168.214.32, 192.168.214.37): the
+ * response is plain `key=value` text (not XML) and includes `RTSPPort`
+ * directly, e.g. `RTSPPort=554`.
+ *
+ * This endpoint requires admin auth (confirmed: HTTP 401 with no
+ * credentials) — unlike querySunapiMaxChannel()'s attributes.cgi/attributes,
+ * which is readable at guest level. Callers must gate on
+ * hasConfiguredSunapiCredentials()/explicit username+password before calling
+ * this, same as the cameraId-scoped skipSunapi gate in
+ * POST /api/cameras/probe-channels (docs/design/Design_Channel_Slot.md §4.6b)
+ * — with no credentials this returns null immediately without a network
+ * round-trip.
+ *
+ * Returns the parsed port number, or null on any failure (no credentials,
+ * auth rejected, timeout, connection error, missing/unparseable RTSPPort
+ * field) — callers should fall back to the SUNAPI default of 554.
+ */
+async function querySunapiRtspPort(
+  ip, httpPort, httpType, timeoutMs = 2000,
+  username = process.env.RTSP_DEFAULT_USERNAME || '',
+  password = process.env.RTSP_DEFAULT_PASSWORD || '',
+) {
+  if (!username || !password) return null;
+
+  const proto = httpType ? https : http;
+  const port  = httpType ? (httpPort || 443) : (httpPort || 80);
+  const path  = '/stw-cgi/network.cgi?msubmenu=portconf&action=view';
+
+  const basicAuthHeader = 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64');
+
+  console.debug(`[Discovery][SUNAPI] querying ${proto === https ? 'https' : 'http'}://${ip}:${port}${path} timeoutMs=${timeoutMs}`);
+
+  const extractPort = (body) => {
+    const parsed = parseInt(parsePortConfResponse(body).RTSPPort, 10);
+    return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  };
+
+  let res;
+  try {
+    res = await sunapiRequest(proto, ip, port, path, timeoutMs, {
+      Accept: 'text/plain, */*',
+      Authorization: basicAuthHeader,
+    });
+  } catch (err) {
+    console.debug(err.message === 'timeout'
+      ? `[Discovery][SUNAPI] ${ip} ${path} → timeout after ${timeoutMs}ms`
+      : `[Discovery][SUNAPI] ${ip} ${path} → connection error: ${err.message}`);
+    return null;
+  }
+
+  if (res.statusCode === 200) {
+    const rtspPort = extractPort(res.body);
+    console.debug(`[Discovery][SUNAPI] ${ip} ${path} → HTTP 200, RTSPPort=${rtspPort ?? '(not reported)'}`);
+    return rtspPort;
+  }
+
+  if (res.statusCode === 401 || res.statusCode === 403) {
+    const challenge = res.headers['www-authenticate'] || '';
+    // Word-boundary match, not string-start anchored — a combined header
+    // offering multiple schemes (e.g. `Basic realm="x", Digest realm="y",
+    // qop="auth", nonce="..."`, which Node produces when a server sends
+    // more than one WWW-Authenticate header) still needs to be recognized
+    // as offering Digest even when Digest isn't the first scheme listed.
+    if (challengesDigest(challenge)) {
+      console.debug(`[Discovery][SUNAPI] ${ip} ${path} → HTTP ${res.statusCode}, Basic rejected — retrying with Digest (challenge received)`);
+      const digestHeader = buildDigestAuthHeader(challenge, 'GET', path, username, password);
+      try {
+        const res2 = await sunapiRequest(proto, ip, port, path, timeoutMs, {
+          Accept: 'text/plain, */*',
+          Authorization: digestHeader,
+        });
+        if (res2.statusCode === 200) {
+          const rtspPort = extractPort(res2.body);
+          console.debug(`[Discovery][SUNAPI] ${ip} ${path} → Digest retry HTTP 200, RTSPPort=${rtspPort ?? '(not reported)'}`);
+          return rtspPort;
+        }
+        console.debug(`[Discovery][SUNAPI] ${ip} ${path} → Digest retry HTTP ${res2.statusCode} (auth rejected)`);
+        return null;
+      } catch (err) {
+        console.debug(err.message === 'timeout'
+          ? `[Discovery][SUNAPI] ${ip} ${path} → Digest retry timeout after ${timeoutMs}ms`
+          : `[Discovery][SUNAPI] ${ip} ${path} → Digest retry connection error: ${err.message}`);
+        return null;
+      }
+    }
+  }
+
+  console.debug(`[Discovery][SUNAPI] ${ip} ${path} → HTTP ${res.statusCode} (auth rejected)`);
+  return null;
+}
+
 // ─── UDP device mapper ────────────────────────────────────────────────────────
+
+// WiseNet UDP discovery's `nModelType`/`modelType` byte — SUNAPI IP Installer
+// spec §3.4.2 "Response" (http://55.101.56.209:8080/site/SUNAPI/SUNAPI_ipinstaller.html#_response).
+// Only trust this when the raw response actually carried it — udpDiscovery.js's
+// `_parseResponse()` now leaves `modelType` `undefined` (not a false `0`) when
+// the packet was too short for the extended fields (see its 2026-07-02 fix);
+// a 262-byte response (observed live from several real cameras on this
+// network) doesn't carry this field at all.
+const DEVICE_TYPE_LABELS = {
+  0x00: 'Camera',
+  0x01: 'Encoder',
+  0x02: 'Decoder',
+  0x03: 'Recorder',
+  0x04: 'IOBox',
+  0x05: 'NetworkSpeaker',
+  0x06: 'NetworkMic',
+  0x07: 'LEDBox',
+  0x08: 'EmergencyBell',
+  0x09: 'AccessController',
+};
 
 function mapUDPDevice(raw) {
   const clean = (v) => String(v || '').replace(/\xff/g, '').replace(/[^\x20-\x7E]/g, '').trim();
 
-  // Accept both WiseNet submodule shape (chIP/chMac/...) and
-  // inline fallback shape (ip/mac/model/httpPort/...)
+  // Both submodules/WiseNetChromeIPInstaller/nodejs/udpDiscovery.js and its
+  // self-contained fallback (server/src/utils/udpDiscovery.js's
+  // UDPDiscoveryFallback, 2026-07-02 — now a real WiseNet binary parser, not
+  // an ONVIF-XML stub) emit the same chIP/chMac/... shape; MACAddress/
+  // IPAddress/ip/mac are accepted too for forward/test-fixture compatibility.
   const mac = clean(raw.chMac || raw.MACAddress || raw.mac);
   const ip  = clean(raw.chIP  || raw.IPAddress  || raw.ip);
   if (!ip) return null;
@@ -228,7 +344,13 @@ function mapUDPDevice(raw) {
 
   const httpPort  = resolvePort(raw.nHttpPort,  raw.httpPort ?? raw.HttpPort,  80);
   const httpsPort = resolvePort(raw.nHttpsPort, raw.httpsPort ?? raw.HttpsPort, 443);
-  const rtspPort  = resolvePort(raw.nPort,      raw.Port,                    554);
+  // `raw.nPort`/`raw.Port` is NOT the RTSP port — per SUNAPI IP Installer
+  // §3.4.2, `nPort` is "HTTP port for web-connection" (443 on real devices,
+  // confirming it's the HTTPS/web port). No UDP discovery response field
+  // reliably carries the real RTSP port; default to SUNAPI's documented
+  // standard (554) and let querySunapiRtspPort()'s CGI query confirm the
+  // real value when it differs (see docs/ops/Camera_Discovery_Guide.md §3).
+  const rtspPort  = 554;
   const httpType  = raw.httpType != null
     ? raw.httpType !== 0
     : (raw.HttpType != null ? !!raw.HttpType : false);
@@ -241,36 +363,51 @@ function mapUDPDevice(raw) {
   const supportOnvif  = raw.SupportOnvif !== false;
   const id = mac ? `${mac}_${ip}` : `ip_${ip}`;
 
-  if(!ip && ip === '192.168.214.32') {
-    console.info(`[Discovery][UDP] ${ip} (${mac || 'no MAC'}) → model=${model || '(unknown)'} httpType=${httpType ? 'https' : 'http'} httpPort=${httpPort} httpsPort=${httpsPort} rtspPort=${rtspPort} SunapiMaxChannel=${raw.MaxChannel || 1} SupportSunapi=${supportSunapi} SupportOnvif=${supportOnvif}`);
-  }
-
   return {
     id,
     source:       'udp',
     Model:        model,
     Manufacturer: 'Hanwha Vision',
     Type:         raw.modelType,
+    DeviceType:   raw.modelType != null ? (DEVICE_TYPE_LABELS[raw.modelType] || `Unknown (0x${raw.modelType.toString(16).padStart(2, '0')})`) : undefined,
+    // UDP response's `supported_protocol` byte (SUNAPI IP Installer §3.4.2) —
+    // was previously misparsed: `_parseResponse()` read this byte's value
+    // into `noPassword` and never advanced to read the actual `no_password`
+    // byte that follows it (a one-field-early off-by-one, not a missing
+    // field — fixed 2026-07-03). Vendor spec doesn't document this byte's
+    // bit meaning any further than its name, so it's surfaced raw/undefined
+    // rather than decoded into a label.
+    SupportedProtocol: raw.supportedProtocol,
     IPAddress:    ip,
     MACAddress:   mac,
     Port:         rtspPort,
     Channel:      1,
-    // TODO(pending SUNAPI IP Installer spec §3.4.2 Response field offset):
-    // MaxChannel SHOULD be read directly from the UDP discovery binary
-    // response once the exact byte offset/size is confirmed (the current
-    // parser in submodules/WiseNetChromeIPInstaller/nodejs/udpDiscovery.js
-    // and the inline fallback in utils/udpDiscovery.js both stop at byte 333
-    // and do not expose it yet — see docs/design/Design_Channel_Slot.md §4.6a).
-    // Until then this stays hardcoded to 1, and the CGI-based
-    // querySunapiMaxChannel() secondary path (gated by
-    // hasConfiguredSunapiCredentials()) is the only channel-count source.
-    MaxChannel:   raw.MaxChannel > 1 ? raw.MaxChannel : 1,
+    // UPDATE (2026-07-02, FR-CAM-081; parsed 2026-07-03, FR-CAM-091): the
+    // vendor spec (SUNAPI IP Installer §3.4.2 Response,
+    // http://55.101.56.209:8080/site/SUNAPI/SUNAPI_ipinstaller.html#_response)
+    // documents MaxChannel as the same slot as `nMulticastPort`, reinterpreted
+    // — spec prose ties this to "when nVersion 0x08 is supported," but the
+    // two real cameras captured on this network so far (192.168.214.37, two
+    // devices sharing that IP) both send the base (non-extended) `nMode=11`
+    // response, which has no `nVersion` field to check at all. `UdpResponse`
+    // (response.js)'s `MaxChannel` getter uses the simpler, verifiable
+    // condition instead: `nMode === DEF_RES_SCAN_EXT` (12) — the extended
+    // scan-reply mode's own indicator, gating the same base field
+    // (`nMulticastPort`) `_parseResponse()` (udpDiscovery.js) already surfaces
+    // as `raw.nMaxChannel` (`n`-prefixed like this adapter's other raw numeric
+    // wire fields). Still no live `nMode=12` device captured to confirm the
+    // value itself is sane (vs. e.g. a genuine multicast port number that
+    // happens to look like a channel count) — `raw.nMaxChannel > 1` below
+    // stays a sanity floor, and the CGI-based querySunapiMaxChannel()
+    // secondary path (gated by hasConfiguredSunapiCredentials()) remains a
+    // fallback/cross-check, not replaced by this.
+    MaxChannel:   raw.nMaxChannel > 1 ? raw.nMaxChannel : 1,
     // Protocol-specific alias (only meaningful when SupportSunapi is true) so
     // the UI can show SUNAPI's own reported count distinctly from ONVIF's
     // (onvifDiscovery.js's OnvifMaxChannel) — MaxChannel itself stays the
     // historical merged/generic field. Updated again below when the CGI
     // fallback (querySunapiMaxChannel()) succeeds with a higher value.
-    SunapiMaxChannel: supportSunapi ? (raw.MaxChannel > 1 ? raw.MaxChannel : 1) : undefined,
+    SunapiMaxChannel: supportSunapi ? (raw.nMaxChannel > 1 ? raw.nMaxChannel : 1) : undefined,
     HttpType:     httpType,
     HttpPort:     httpPort,
     HttpsPort:    httpsPort,
@@ -311,10 +448,20 @@ function mergeDevices(existing, incoming) {
 
   // Fill in empty basic fields (never overwrite existing data)
   for (const key of ['Model', 'Manufacturer', 'MACAddress', 'FirmwareVersion',
-                      'SerialNumber', 'Gateway', 'SubnetMask', 'URL']) {
+                      'SerialNumber', 'Gateway', 'SubnetMask', 'URL', 'DeviceType']) {
     if (!hasMeaningful(merged[key]) && hasMeaningful(incoming[key])) {
       merged[key] = incoming[key];
     }
+  }
+
+  // Type (raw modelType byte, 0x00-based) — only ever set by UDP discovery,
+  // never ONVIF, so no cross-protocol conflict; a plain `!= null` check
+  // (not hasMeaningful(), which treats numeric 0 as falsy/empty via its
+  // `String(v || '')` coercion — wrong here, since 0x00 = Camera is a real,
+  // meaningful value, not "absent")
+  if (merged.Type == null && incoming.Type != null) merged.Type = incoming.Type;
+  if (merged.SupportedProtocol == null && incoming.SupportedProtocol != null) {
+    merged.SupportedProtocol = incoming.SupportedProtocol;
   }
 
   // rtspUrl: prefer a real GetStreamUri URL over the fallback 'rtsp://ip:554/'
@@ -594,4 +741,4 @@ function getDiscoveryService(io) {
   return _svc;
 }
 
-module.exports = { getDiscoveryService, mapUDPDevice, querySunapiMaxChannel, hasConfiguredSunapiCredentials, buildDigestAuthHeader };
+module.exports = { getDiscoveryService, mapUDPDevice, querySunapiMaxChannel, querySunapiRtspPort, hasConfiguredSunapiCredentials, buildDigestAuthHeader };

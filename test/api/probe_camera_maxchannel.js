@@ -86,7 +86,7 @@ function withTimeout(promise, ms, fallback) {
       1,
     ),
     withTimeout(
-      enrichDeviceAutoScheme(ip, { onvifPort, onvifHttpsPort }),
+      enrichDeviceAutoScheme(ip, { onvifPort, onvifHttpsPort, username, password }),
       timeoutMs,
       null,
     ),

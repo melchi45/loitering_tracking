@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Global Channel Slot Mapping for Cameras / YouTube Streams
-**Version:** 1.14
+**Version:** 1.15
 **Date:** 2026-07-02
 
 ---
@@ -277,7 +277,7 @@ router.post('/probe-channels', async (req, res) => {
 });
 ```
 
-**Why `enrichDevice(ip, guessedXAddr)` instead of a full WS-Discovery round-trip**: WS-Discovery is a multicast broadcast that finds *all* devices on the subnet and cannot be targeted at one IP. Most ONVIF devices (Hanwha, Axis, Dahua, Hikvision) respond at the conventional `/onvif/device_service` path regardless of how their XAddr was originally discovered, so guessing that path for a known IP works in practice without needing a scan. This reuses `enrichDevice()` completely unchanged — same best-effort, no-WS-Security-auth behavior as the full discovery flow (see §7 Limitations).
+**Why `enrichDevice(ip, guessedXAddr)` instead of a full WS-Discovery round-trip**: WS-Discovery is a multicast broadcast that finds *all* devices on the subnet and cannot be targeted at one IP. Most ONVIF devices (Hanwha, Axis, Dahua, Hikvision) respond at the conventional `/onvif/device_service` path regardless of how their XAddr was originally discovered, so guessing that path for a known IP works in practice without needing a scan. This reuses `enrichDevice()` completely unchanged — same best-effort behavior as the full discovery flow, including (2026-07-03, FR-CAM-090) the HTTP Basic→Digest fallback when credentials are available; still no SOAP-level WS-Security auth (see §7 Limitations).
 
 **Why independent per-protocol timeouts**: `enrichDevice()` makes up to ~19 sequential SOAP calls (`GetDeviceInformation`, `GetCapabilities`, `GetProfiles`, up to 16× `GetStreamUri`), each with its own 4s cap inside `onvifDiscovery.js` — for a fully unresponsive device this could otherwise take over a minute before the HTTP response returns, unacceptable for a synchronous "click to detect" button. `withTimeout()` bounds the whole ONVIF attempt (and, separately, the whole SUNAPI attempt) to `PROBE_TIMEOUT_MS` (8s) each, run in parallel via `Promise.all`, so the endpoint's worst case is ~8s, not minutes.
 
@@ -518,7 +518,7 @@ A camera that rejects a truly wrong password still 401s the Digest retry too —
 
 **Follow-on fix, same session — self-signed TLS certificate rejected on the HTTPS SUNAPI path**: probing a second camera (192.168.214.37, `--https` since its HTTP:80 redirects to HTTPS:443 via nginx) surfaced a related but distinct failure: `connection error: self-signed certificate`. `sunapiRequest()`'s `https.get()` call used Node's default TLS validation, which rejects the self-signed certificate that on-prem IP cameras/NVRs almost universally ship with — this has nothing to do with FR-CH-067's Digest fix above, it's a separate transport-layer problem that only manifests for cameras whose SUNAPI web UI is HTTPS-only. `onvifDiscovery.js`'s own HTTPS SOAP client already sets `rejectUnauthorized: false` for exactly this reason (line ~133, predates this session) — `sunapiRequest()` was simply missing the same option. Fix: added `rejectUnauthorized: false` to the request options in `sunapiRequest()`. After the fix, 192.168.214.37 resolved cleanly via Digest+HTTPS to `HTTP 200, MaxChannel=1` (a genuinely single-channel device — this camera's correct result, not a bug). This only affects transport trust (accepting the LAN device's self-signed cert); it does not skip authentication — Digest/Basic credential checks still apply on top.
 
-**Scope note**: this only covers SUNAPI's CGI query. ONVIF's `enrichDevice()`/`soapPost()` still sends no WS-Security auth at all (pre-existing gap, §7) — unaffected by this fix, and unrelated to the symptom above (the ONVIF branch's `AUTH_REQUIRED` failures on this device are expected given that gap, not evidence of a credential problem).
+**Scope note (updated 2026-07-03)**: at the time of this fix, ONVIF's `enrichDevice()`/`soapPost()` sent no auth at all, so the ONVIF branch's `AUTH_REQUIRED` failures on this device were expected, not evidence of a credential problem. FR-CAM-090 (Design_Camera_Discovery.md §3.1g) later wired the same Basic→Digest HTTP fallback into `soapPost()` — see §7's Limitations table entry, now scoped to the remaining SOAP-level WS-Security gap only.
 
 ### 4.6h `probe-channels` writes a corrected MaxChannel back into the discovery registry (2026-07-02, FR-CH-068)
 
@@ -569,6 +569,43 @@ if (discoverySvc) {
 **Why this needed no client-side changes at all**: `App.tsx` passes `useDiscoveryStore`'s `selected` field as `DiscoveredCameraPanel`'s `camera` prop, and `CameraList.tsx`'s existing `discovery:result` socket handler already calls `addOrUpdate(data.device)` — which both appends/replaces the list entry *and* refreshes `selected` when the ids match (`discoveryStore.ts`'s `addOrUpdate`). So the `_emit()` above is all that's needed: the sidebar list badge and, if the panel happens to be open on that device, its "SUNAPI MaxCh"/"ONVIF MaxCh" rows (§5.2b) both pick up the correction automatically through the same pipe that already delivers live scan results — no new client code, no new socket event.
 
 **Scope**: this applies uniformly to all three `probe-channels` callers (Add's "Detect Channels," Edit's "Re-detect," Found's "Re-detect") — whichever one happens to probe an IP the registry already knows about benefits every other client's view of that device, not just the one that ran the probe. It does not create new registry entries — an IP the scan has never seen has nothing to correct, and `probe-channels` remains usable standalone for such IPs exactly as before (§4.6).
+
+### 4.6i `probe-channels` falls back to the registry's own MaxChannel when this request's live probes both find nothing (2026-07-02, FR-CH-069)
+
+**Reported symptom**: "attributes.cgi 또는 ONVIF의 VideoSource를 검색하지 못한 경우 SUNAPI UDP Discovery의 MaxChannel을 사용해야 하는데 그렇지 않아 MaxChannel이 다시 1로 설정된다" — when a probe's live SUNAPI CGI query and ONVIF `GetVideoSources`/`GetProfiles` query both fail to determine a channel count on a given request, the response regressed to `maxChannel: 1, protocol: 'none'` even when the background/manual UDP Discovery scan had already established a higher count for that exact IP.
+
+**Root cause**: §4.6's decision block only ever consulted *this request's own* live `sunapiMax`/`onvifMax` results — `knownDevice` (the same `DiscoveryService.getByIp(ip)` lookup §4.6d already uses) was read earlier in the handler only to compute `cachedMaxChannel` (§4.6d, gated on `SupportSunapi` and used to *skip* the live SUNAPI query *before* it runs), and separately by §4.6h to *write into* the registry *after* a successful probe — neither existing use covers "the live re-query for this one request came back empty, but the registry already has a better answer, so use that instead of reporting `1`." A transient auth failure, the wrong port, or (with §4.6g/FR-CAM-074's dual-scheme ONVIF trial) a scheme the device didn't happen to answer on this time would all silently discard a channel count the operator had already confirmed in an earlier session.
+
+**Fix**: the entire `maxChannel`/`protocol`/`profiles` decision (§4.6's `if (onvifMax > 1 ...) else if (sunapiMax > 1 ...)` block) was extracted into a pure, exported function — `resolveProbeChannelsDecision({ onvifMax, onvifProfiles, sunapiMax, sunapiProfiles, knownDevice, baseRtspUrl })` (`api/cameras.js`) — with a third branch added:
+
+```javascript
+// api/cameras.js
+function resolveProbeChannelsDecision({ onvifMax, onvifProfiles, sunapiMax, sunapiProfiles, knownDevice, baseRtspUrl }) {
+  if (onvifMax > 1 && onvifProfiles.length > 0) { /* ONVIF wins — unchanged from §4.6 */ }
+  if (sunapiMax > 1) { /* SUNAPI wins — unchanged from §4.6 */ }
+  if ((knownDevice?.MaxChannel || 1) > 1) {
+    // NEW: both live probes above found nothing this request, but the registry
+    // already knows better — reuse it instead of falling through to 'none'.
+    const maxChannel = knownDevice.MaxChannel;
+    if (knownDevice.SupportSunapi) {
+      // synthesize profiles via channelRtspUrl() against baseRtspUrl, same as
+      // the live-SUNAPI-success path
+    } else if (knownDevice.profiles?.some(p => p.rtspUrl)) {
+      // reuse the registry's own cached ONVIF profiles directly
+    } // else: bare count only, profiles: []
+    return { maxChannel, protocol: knownDevice.SupportSunapi ? 'sunapi' : 'onvif', ... };
+  }
+  return { maxChannel: 1, protocol: 'none', profiles: [] }; // unchanged fallback
+}
+```
+
+`router.post('/probe-channels', ...)` now just calls this function and logs a distinct debug line when the new branch fires (`usedRegistryFallback` flag in the return value).
+
+**Precedence, and why this doesn't conflict with §4.6d/§4.6h**: §4.6d's `cachedMaxChannel` still runs *first*, before either live query — a `SupportSunapi`-flagged cache hit skips the live SUNAPI CGI call entirely, so `sunapiMax` is already the cached value by the time this new branch would even be considered (making it a no-op in that case, not a conflict). §4.6h's registry write-back still runs *after* this decision, using whatever `maxChannel`/`protocol` this function returned — if the new fallback branch fired, that just means the write-back is re-affirming a value the registry already had (a no-op per §4.6h's raise-only rule), not overwriting anything.
+
+**Why a general fallback, not `SupportSunapi`-gated like §4.6d**: §4.6d's cache reuse is specifically "skip a redundant SUNAPI CGI round-trip when a SUNAPI-flagged scan already answered" — narrowly scoped to one protocol, before querying. This fallback is deliberately broader: it fires regardless of which protocol the *original* scan used to establish the count (SUNAPI or ONVIF), because from the operator's point of view the question is simply "does this on-demand probe's `maxChannel` result reflect everything already known about this device," not "did SUNAPI specifically re-confirm it."
+
+**Verification**: extracting the decision into `resolveProbeChannelsDecision()` makes the new branch (and the three pre-existing branches) unit-testable without a live server — `test/api/channel_slot.test.js` TC-CH-F-013 (registry SUNAPI fallback + profile synthesis), TC-CH-F-013b (registry ONVIF-only fallback, reusing cached profiles), TC-CH-F-013c (no registry entry, or registry itself single-channel → unchanged `none` result), TC-CH-F-013d (a successful *live* probe still wins over the registry value — this fallback only fires when live results are genuinely empty, never overrides a working live answer).
 
 ## 5. Frontend Design
 
@@ -839,7 +876,7 @@ Added to the same `GET /health` fetch `App.tsx` already performs on mount for `s
 
 | Limitation | Rationale |
 |---|---|
-| `POST /api/cameras/probe-channels`'s ONVIF probe (and the underlying discovery flow) sends no WS-Security authentication | `onvifDiscovery.js` `soapPost()` has never sent auth headers, pre-dating this feature — an authenticated ONVIF device will simply return empty/failed SOAP responses (`enrichDevice()` swallows each step's error and returns `MaxChannel: 1`), so the probe silently reports "no multi-channel NVR" rather than surfacing an auth error. Fixing ONVIF auth is a separate, larger pre-existing gap out of scope here |
+| `POST /api/cameras/probe-channels`'s ONVIF probe still sends no SOAP-level WS-Security (`wsse:UsernameToken`) authentication | `onvifDiscovery.js` `soapPost()` now tries HTTP Basic and retries with HTTP Digest when challenged (2026-07-03, FR-CAM-090/Design_Camera_Discovery.md §3.1g), using the same `effectiveUsername`/`effectivePassword` the SUNAPI probe already resolves — this covers devices that gate their ONVIF endpoint at the HTTP layer (e.g. an nginx front-end). A device that instead requires a `wsse:UsernameToken`/`PasswordDigest` element inside the SOAP `<s:Header>` itself (ONVIF's own spec-native auth scheme) is unaffected — `enrichDevice()` still swallows that failure and returns `MaxChannel: 1`. Implementing WS-Security is a separate, larger gap, still out of scope here |
 | Edit-screen channel switching (both persisted `nvrProfiles` and a fresh Re-detect) never issues a live per-click device query | Selecting a channel button always resolves from already-known data (`nvrProfiles` array or path-substitution) — this is intentional (§4.6's rationale: bounding worst-case latency to one Re-detect click, not one query per channel button click) |
 | ONVIF's guessed `/onvif/device_service` XAddr is a convention, not a guarantee | A minority of ONVIF devices expose their device service at a non-standard path; for those, `POST /api/cameras/probe-channels` falls through to the SUNAPI branch (or reports `protocol: 'none'`) even though the device may in fact be ONVIF-capable |
 | `channelSlot` gaps are never auto-compacted | Channel Slot is a stable identity (like a physical BNC port number), not a dense array index — this is intentional, not a limitation to "fix" |
@@ -867,3 +904,4 @@ Added to the same `GET /health` fetch `App.tsx` already performs on mount for `s
 | 1.12 | 2026-07-02 | §4.6g에 후속 수정 추가 — 두 번째 실 카메라(192.168.214.37, HTTPS-only SUNAPI)로 검증 중 `self-signed certificate` 오류 발견, `sunapiRequest()`에 `rejectUnauthorized: false` 누락(`onvifDiscovery.js`는 동일 사유로 이미 적용돼 있었음)이 원인임을 특정해 수정 |
 | 1.13 | 2026-07-02 | §5.4b 신규 추가 — Edit 모달 "Re-detect"가 저장 전 RTSP URL/IP 수정은 반영하지 않고 여전히 카메라의 저장된 주소로 probe하던 버그 수정 (§4.6e는 username/password만 폼 값을 사용하도록 고쳤고 RTSP URL 필드는 누락돼 있었음) — `handleRedetectChannels()`가 `rtspForm.rtspUrl`에서 IP를 파싱하도록 변경, §5.4 Re-detect 서술 갱신 |
 | 1.14 | 2026-07-02 | §4.6h 신규 추가 — probe-channels 결과가 discovery 레지스트리 값보다 높으면 `DiscoveryService.applyProbeResult()`로 레지스트리를 갱신하고 discovery:result 재브로드캐스트 (FR-CH-068) — UDP=1/attributes.cgi=2로 확인된 실 카메라(192.168.214.32)에서 Re-detect 정정이 패널을 닫으면 사라지던 문제 수정, 클라이언트 코드 변경 불필요(기존 addOrUpdate() 소켓 파이프 재사용) |
+| 1.15 | 2026-07-02 | §4.6i 신규 추가 — probe-channels가 이번 요청의 라이브 SUNAPI+ONVIF 쿼리 모두 실패했을 때 discovery 레지스트리에 이미 알려진 MaxChannel로 폴백해야 함 (FR-CH-069) — attributes.cgi/GetVideoSources를 못 찾으면 MaxChannel이 다시 1로 되돌아가던 문제 리포트로 도입. 결정 로직을 `resolveProbeChannelsDecision()`(순수 함수)으로 추출해 `test/api/channel_slot.test.js` TC-CH-F-013~013d로 자동화 |

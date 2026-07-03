@@ -5,6 +5,7 @@ const http   = require('http');
 const https  = require('https');
 const { EventEmitter } = require('events');
 const { randomUUID }   = require('crypto');
+const { buildDigestAuthHeader, challengesDigest } = require('../utils/digestAuth');
 
 const ONVIF_MULTICAST_ADDR = '239.255.255.250';
 const ONVIF_MULTICAST_PORT = 3702;
@@ -124,8 +125,10 @@ function splitProfileBlocks(xml) {
 // devices that force HTTP→HTTPS on the plain port (observed: 192.168.214.37),
 // and every SOAP call fails with a raw "HTTP 301" otherwise. Only
 // same-hostname redirects are followed (no cross-host hop) to avoid an SSRF
-// pivot via an unexpected Location header.
-function soapPost(xaddr, body, redirectsLeft = 1) {
+// pivot via an unexpected Location header. `authHeader` (when given) is a
+// complete `Authorization` header value carried unchanged through the
+// redirect — soapPost() below is the only caller and decides its content.
+function soapRequest(xaddr, body, authHeader, redirectsLeft = 1) {
   return new Promise((resolve, reject) => {
     let url;
     try { url = new URL(xaddr); } catch { return reject(new Error('Invalid XAddr')); }
@@ -142,6 +145,7 @@ function soapPost(xaddr, body, redirectsLeft = 1) {
       headers: {
         'Content-Type':   'text/xml; charset=utf-8',
         'Content-Length': bodyBuf.length,
+        ...(authHeader ? { Authorization: authHeader } : {}),
       },
       timeout: HTTP_TIMEOUT,
       rejectUnauthorized: false,
@@ -154,7 +158,7 @@ function soapPost(xaddr, body, redirectsLeft = 1) {
         try { loc = new URL(res.headers.location, xaddr); } catch { /* ignore */ }
         if (loc && loc.hostname.toLowerCase() === url.hostname.toLowerCase()) {
           console.debug(`[ONVIFDiscovery] ${url.hostname} ${options.path} → HTTP ${res.statusCode} redirect to ${loc.toString()} — following`);
-          resolve(soapPost(loc.toString(), body, redirectsLeft - 1));
+          resolve(soapRequest(loc.toString(), body, authHeader, redirectsLeft - 1));
           return;
         }
       }
@@ -165,7 +169,9 @@ function soapPost(xaddr, body, redirectsLeft = 1) {
         if (res.statusCode >= 200 && res.statusCode < 300) {
           resolve(data);
         } else if (res.statusCode === 401) {
-          reject(new Error('AUTH_REQUIRED'));
+          const err = new Error('AUTH_REQUIRED');
+          err.wwwAuthenticate = res.headers['www-authenticate'] || '';
+          reject(err);
         } else {
           reject(new Error(`HTTP ${res.statusCode}`));
         }
@@ -179,9 +185,43 @@ function soapPost(xaddr, body, redirectsLeft = 1) {
   });
 }
 
+/**
+ * SOAP POST with Basic→Digest auth fallback (FR-CAM-090) — the ONVIF-side
+ * counterpart of discoveryService.js's querySunapiMaxChannel()/
+ * querySunapiRtspPort() (FR-CAM-072/089). `credentials` is `{ username,
+ * password }` or falsy/absent for the historical unauthenticated behavior.
+ *
+ * First attempt always sends Basic (or no `Authorization` header at all when
+ * no credentials are given — same "best-effort, no auth" default as before).
+ * A `401` whose `WWW-Authenticate` header advertises `Digest` and for which
+ * credentials are available triggers exactly one authenticated retry with a
+ * computed RFC 7616 Digest response; a `Basic`-only challenge, or a Digest
+ * retry that itself still 401s (genuinely wrong credentials), surfaces as
+ * `AUTH_REQUIRED` unchanged — same semantics as the SUNAPI CGI client.
+ */
+function soapPost(xaddr, body, credentials = null, redirectsLeft = 1) {
+  const { username, password } = credentials || {};
+  const hasCreds = !!(username && password);
+  const basicAuthHeader = hasCreds
+    ? 'Basic ' + Buffer.from(`${username}:${password}`).toString('base64')
+    : null;
+
+  return soapRequest(xaddr, body, basicAuthHeader, redirectsLeft).catch((err) => {
+    if (err.message !== 'AUTH_REQUIRED' || !hasCreds || !challengesDigest(err.wwwAuthenticate)) {
+      throw err;
+    }
+    let url;
+    try { url = new URL(xaddr); } catch { throw err; }
+    const uri = url.pathname || '/onvif/device_service';
+    console.debug(`[ONVIFDiscovery] ${url.hostname} ${uri} → HTTP 401, Basic rejected — retrying with Digest (challenge received)`);
+    const digestHeader = buildDigestAuthHeader(err.wwwAuthenticate, 'POST', uri, username, password);
+    return soapRequest(xaddr, body, digestHeader, redirectsLeft);
+  });
+}
+
 // ─── Device enrichment ───────────────────────────────────────────────────────
 
-async function enrichDevice(ip, xaddr) {
+async function enrichDevice(ip, xaddr, credentials = null) {
   const result = {
     Manufacturer: '',
     Model:        '',
@@ -192,11 +232,12 @@ async function enrichDevice(ip, xaddr) {
     rtspUrl:      null,
   };
 
-  console.debug(`[ONVIFDiscovery][enrichDevice] ${ip} — starting probe at ${xaddr}`);
+  console.debug(`[ONVIFDiscovery][enrichDevice] ${ip} — starting probe at ${xaddr} auth=${credentials && credentials.username && credentials.password ? 'yes' : 'no'}`);
 
-  // 1. GetDeviceInformation (best-effort, no auth)
+  // 1. GetDeviceInformation (best-effort — unauthenticated unless `credentials`
+  // given, in which case soapPost() tries Basic then Digest-on-challenge, FR-CAM-090)
   try {
-    const xml = await soapPost(xaddr, buildGetDeviceInformation());
+    const xml = await soapPost(xaddr, buildGetDeviceInformation(), credentials);
     result.Manufacturer    = extractTag(xml, 'Manufacturer') || '';
     result.Model           = extractTag(xml, 'Model')        || '';
     result.FirmwareVersion = extractTag(xml, 'FirmwareVersion') || '';
@@ -208,7 +249,7 @@ async function enrichDevice(ip, xaddr) {
 
   // 2. GetCapabilities → find media service URL
   try {
-    const xml = await soapPost(xaddr, buildGetCapabilities());
+    const xml = await soapPost(xaddr, buildGetCapabilities(), credentials);
     const mediaXAddr = extractTag(xml, 'XAddr');
     if (mediaXAddr) result.mediaUrl = mediaXAddr;
     console.debug(`[ONVIFDiscovery][enrichDevice] ${ip} GetCapabilities → mediaUrl=${result.mediaUrl}`);
@@ -224,7 +265,7 @@ async function enrichDevice(ip, xaddr) {
   // MaxChannel if derived from GetProfiles' SourceToken set alone (below).
   let videoSourceTokens = [];
   try {
-    const xml = await soapPost(result.mediaUrl, buildGetVideoSources());
+    const xml = await soapPost(result.mediaUrl, buildGetVideoSources(), credentials);
     videoSourceTokens = extractAllAttrs(xml, 'VideoSources', 'token');
     console.debug(`[ONVIFDiscovery][enrichDevice] ${ip} GetVideoSources → ${videoSourceTokens.length} VideoSource(s)${videoSourceTokens.length ? ': ' + videoSourceTokens.join(', ') : ''}`);
   } catch (err) {
@@ -238,7 +279,7 @@ async function enrichDevice(ip, xaddr) {
   // non-compliant firmware); videoSourceTokens' order is authoritative when present.
   const sourceTokenOrder = new Map();
   try {
-    const xml    = await soapPost(result.mediaUrl, buildGetProfiles());
+    const xml    = await soapPost(result.mediaUrl, buildGetProfiles(), credentials);
     const blocks = splitProfileBlocks(xml);
 
     for (const block of blocks) {
@@ -278,7 +319,7 @@ async function enrichDevice(ip, xaddr) {
   let resolvedUriCount = 0;
   for (let i = 0; i < Math.min(profileTokens.length, 16); i++) {
     try {
-      const xml = await soapPost(result.mediaUrl, buildGetStreamUri(profileTokens[i]));
+      const xml = await soapPost(result.mediaUrl, buildGetStreamUri(profileTokens[i]), credentials);
       const uri = extractTag(xml, 'Uri');
       if (uri) {
         result.profiles[i].rtspUrl = uri;
@@ -329,13 +370,14 @@ async function enrichDevice(ip, xaddr) {
  * straight from the device's own ProbeMatch response, so the scheme is
  * already known, not guessed.
  */
-async function enrichDeviceAutoScheme(ip, { onvifPort, onvifHttpsPort } = {}) {
+async function enrichDeviceAutoScheme(ip, { onvifPort, onvifHttpsPort, username, password } = {}) {
   const httpXAddr  = `http://${ip}:${onvifPort || 80}/onvif/device_service`;
   const httpsXAddr = `https://${ip}:${onvifHttpsPort || 443}/onvif/device_service`;
+  const credentials = (username && password) ? { username, password } : null;
 
   const [httpResult, httpsResult] = await Promise.all([
-    enrichDevice(ip, httpXAddr).catch(() => null),
-    enrichDevice(ip, httpsXAddr).catch(() => null),
+    enrichDevice(ip, httpXAddr, credentials).catch(() => null),
+    enrichDevice(ip, httpsXAddr, credentials).catch(() => null),
   ]);
 
   const isUseful = (r) => !!r && (r.Manufacturer || r.Model || r.profiles.length > 0 || r.MaxChannel > 1);
@@ -369,6 +411,13 @@ class ONVIFDiscovery extends EventEmitter {
   constructor(options = {}) {
     super();
     this.timeout  = options.timeout || PROBE_TIMEOUT;
+    // Defaults mirror discoveryService.js's querySunapiMaxChannel()/
+    // querySunapiRtspPort() (FR-CAM-068) — same env vars, so a single
+    // RTSP_DEFAULT_USERNAME/PASSWORD configuration authenticates both the
+    // SUNAPI CGI and ONVIF SOAP enrichment paths for the background scan.
+    const username = options.username !== undefined ? options.username : (process.env.RTSP_DEFAULT_USERNAME || '');
+    const password = options.password !== undefined ? options.password : (process.env.RTSP_DEFAULT_PASSWORD || '');
+    this._credentials = (username && password) ? { username, password } : null;
     this._socket  = null;
     this._timer   = null;
     this._seen    = new Set();
@@ -415,7 +464,7 @@ class ONVIFDiscovery extends EventEmitter {
       this.emit('device', basic);
 
       // Enrich asynchronously — emits updated device when done
-      enrichDevice(ip, xaddr)
+      enrichDevice(ip, xaddr, this._credentials)
         .then((info) => {
           if (!info.Model && !info.Manufacturer && !info.rtspUrl) return;
           this.emit('device', { ...basic, ...info });

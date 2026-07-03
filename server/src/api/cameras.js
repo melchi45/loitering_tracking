@@ -3,9 +3,9 @@
 const { Router } = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { validateChannelSlot, nextFreeChannelSlot } = require('../services/channelSlotService');
-const { querySunapiMaxChannel, getDiscoveryService } = require('../services/discoveryService');
+const { querySunapiMaxChannel, querySunapiRtspPort, getDiscoveryService } = require('../services/discoveryService');
 const { enrichDeviceAutoScheme } = require('../services/onvifDiscovery');
-const { channelRtspUrl } = require('../utils/channelRtsp');
+const { channelRtspUrl, defaultSunapiRtspUrl } = require('../utils/channelRtsp');
 
 // POST /api/cameras/probe-channels — best-effort, both branches independently
 // time-boxed so a hung/unreachable device can't stall the request indefinitely.
@@ -49,6 +49,63 @@ function normalizeRtspUrl(rtspUrl) {
   }
 
   return { ok: true, value: parsed.toString(), correctedFromRtps };
+}
+
+/**
+ * Decides POST /api/cameras/probe-channels' combined maxChannel/protocol/profiles
+ * result from this request's live SUNAPI + ONVIF probe results, with a final
+ * fallback (2026-07-02, FR-CH-069) to the UDP Discovery registry's own already-
+ * established MaxChannel when both live probes for *this specific request* came
+ * back empty — a transient auth failure, wrong port, or an ONVIF scheme the dual
+ * HTTP/HTTPS trial didn't happen to answer on shouldn't regress the operator-
+ * facing result from "known N-channel NVR" back down to "single-channel/not
+ * found" when the device's channel count was already independently confirmed by
+ * an earlier scan. Pure/no I/O — extracted specifically so this decision logic
+ * (including the fallback branch) can be unit-tested without a live server; see
+ * test/api/channel_slot.test.js TC-CH-F-013/F-013b.
+ * @param {{ onvifMax: number, onvifProfiles: Array, sunapiMax: number, sunapiProfiles: Array,
+ *           knownDevice: object|null, baseRtspUrl: string|null|undefined }} params
+ * @returns {{ maxChannel: number, supportSunapi: boolean, protocol: 'sunapi'|'onvif'|'none',
+ *             profiles: Array, usedRegistryFallback: boolean }}
+ */
+function resolveProbeChannelsDecision({ onvifMax, onvifProfiles, sunapiMax, sunapiProfiles, knownDevice, baseRtspUrl }) {
+  if (onvifMax > 1 && onvifProfiles.length > 0) {
+    // Prefer ONVIF: real, verified per-channel RTSP URLs.
+    return {
+      maxChannel: onvifMax, supportSunapi: false, protocol: 'onvif',
+      profiles: onvifProfiles.map((p) => ({ channelIndex: p.channelIndex, rtspUrl: p.rtspUrl })),
+      usedRegistryFallback: false,
+    };
+  }
+  if (sunapiMax > 1) {
+    return { maxChannel: sunapiMax, supportSunapi: true, protocol: 'sunapi', profiles: sunapiProfiles, usedRegistryFallback: false };
+  }
+  if ((knownDevice?.MaxChannel || 1) > 1) {
+    // Last-resort fallback: distinct from the cachedMaxChannel check further up
+    // (FR-CH-065, gated on SupportSunapi to skip a redundant CGI round-trip
+    // *before* querying) — this fires *after* both live probes already ran and
+    // found nothing, regardless of which protocol the scan used to establish
+    // the count.
+    const maxChannel = knownDevice.MaxChannel;
+    if (knownDevice.SupportSunapi) {
+      const profiles = baseRtspUrl
+        ? Array.from({ length: maxChannel }, (_, i) => i + 1)
+            .map((ch) => ({ channelIndex: ch, rtspUrl: channelRtspUrl(baseRtspUrl, ch) }))
+            .filter((p) => p.rtspUrl !== baseRtspUrl || p.channelIndex === 1)
+        : [];
+      return { maxChannel, supportSunapi: true, protocol: 'sunapi', profiles, usedRegistryFallback: true };
+    }
+    if (Array.isArray(knownDevice.profiles) && knownDevice.profiles.some((p) => p.rtspUrl)) {
+      const profiles = knownDevice.profiles.filter((p) => p.rtspUrl).map((p) => ({ channelIndex: p.channelIndex, rtspUrl: p.rtspUrl }));
+      return { maxChannel, supportSunapi: false, protocol: 'onvif', profiles, usedRegistryFallback: true };
+    }
+    // Only a bare channel count is known (no protocol-specific profile detail
+    // carried over from the scan) — label as 'sunapi' since that's this
+    // codebase's convention for "count known, profiles synthesized via path
+    // substitution when a baseRtspUrl is available".
+    return { maxChannel, supportSunapi: true, protocol: 'sunapi', profiles: [], usedRegistryFallback: true };
+  }
+  return { maxChannel: 1, supportSunapi: false, protocol: 'none', profiles: [], usedRegistryFallback: false };
 }
 
 /**
@@ -127,10 +184,18 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
    * Unlike the full network discovery scan, this targets exactly one IP and is
    * time-boxed (PROBE_TIMEOUT_MS) per protocol so a hung/unreachable device
    * can't stall the request. Both protocols are tried; SUNAPI can only report a
-   * count (channel RTSP URLs are synthesized via channelRtspUrl() path
-   * substitution against baseRtspUrl), while ONVIF's GetProfiles/GetStreamUri
-   * yields real per-channel RTSP URLs — ONVIF profiles are preferred when both
-   * protocols report channels, since they carry actual verified URLs.
+   * count — channel RTSP URLs are synthesized: if baseRtspUrl is given,
+   * channelRtspUrl() substitutes the channel segment while preserving
+   * whichever convention that URL already uses (`/profileN/` or `/N/H.264/`,
+   * see docs/design/Design_Camera_Discovery.md); otherwise defaultSunapiRtspUrl()
+   * guesses fresh using the `/N/H.264/` (0-based) convention and the
+   * CGI-confirmed RTSP port (querySunapiRtspPort(), falls back to 554) — while
+   * ONVIF's GetProfiles/GetStreamUri yields real per-channel RTSP URLs. ONVIF
+   * profiles are preferred as the merged `profiles`/`protocol` when both
+   * protocols report channels, since they carry actual verified URLs, but
+   * both protocols' own results are always returned independently too (see
+   * sunapiProfiles/onvifProfiles below) so the UI can show which protocol
+   * resolved which channel's URL.
    *
    * Body: { ip, httpPort?, httpType?, onvifPort?, onvifHttpsPort?, username?, password?, baseRtspUrl?, cameraId? }
    *   onvifPort/onvifHttpsPort (2026-07-02): the ONVIF device_service XAddr is guessed
@@ -147,10 +212,18 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
    *   RTSP_DEFAULT_* env), the SUNAPI probe is skipped entirely rather than attempted
    *   with no auth — see docs/design/Design_Channel_Slot.md §4.6b.
    * Response: { success, maxChannel, supportSunapi, protocol: 'sunapi'|'onvif'|'none', profiles: [{channelIndex, rtspUrl}],
-   *             sunapiMaxChannel, onvifMaxChannel: number|null } — the last two (FR-CH-066) report each
-   *             protocol's own count independently of which one "won" as maxChannel/protocol above;
-   *             onvifMaxChannel is null (not 1) when ONVIF never responded, vs. sunapiMaxChannel which
-   *             is always a number (1 when not attempted/not detected — SUNAPI has no null case here).
+   *             sunapiMaxChannel, onvifMaxChannel: number|null,
+   *             sunapiProfiles: [{channelIndex, rtspUrl}], onvifProfiles: [{channelIndex, rtspUrl}],
+   *             sunapiRtspPort: number|null }
+   *   sunapiMaxChannel/onvifMaxChannel (FR-CH-066) report each protocol's own count
+   *   independently of which one "won" as maxChannel/protocol above; onvifMaxChannel is
+   *   null (not 1) when ONVIF never responded, vs. sunapiMaxChannel which is always a
+   *   number (1 when not attempted/not detected — SUNAPI has no null case here).
+   *   sunapiProfiles/onvifProfiles report each protocol's own per-channel RTSP URLs,
+   *   same independence rule as above — lets the UI display both side by side instead
+   *   of only the merged `profiles`. sunapiRtspPort is the CGI-confirmed RTSP port
+   *   (network.cgi?msubmenu=portconf&action=view — requires admin auth, null when
+   *   credentials unavailable/query failed; callers should assume 554 when null).
    */
   router.post('/probe-channels', async (req, res) => {
     try {
@@ -198,24 +271,41 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       console.debug(`[cameras][probe-channels] request ip=${ip} httpPort=${httpPort || '(default)'} httpType=${httpType ? 'https' : 'http'} onvifPort=${onvifPort || 80} auth=${canAuthSunapi ? 'yes' : 'no'}${cameraId ? ` cameraId=${cameraId}` : ''}${cachedMaxChannel ? ` cachedMaxChannel=${cachedMaxChannel}` : ''}`);
 
       let sunapiPromise;
+      let sunapiRtspPortPromise;
       if (cachedMaxChannel) {
         console.debug(`[cameras][probe-channels] ip=${ip} using cached UDP Discovery MaxChannel=${cachedMaxChannel} — skipping SUNAPI CGI query entirely`);
         sunapiPromise = Promise.resolve(cachedMaxChannel);
+        sunapiRtspPortPromise = Promise.resolve(null);
       } else if (skipSunapi) {
         console.debug(`[cameras][probe-channels] ip=${ip} skipping SUNAPI probe — camera ${cameraId} has no username/password on file (checked camera record, request body, RTSP_DEFAULT_* env)`);
         sunapiPromise = Promise.resolve(1);
+        sunapiRtspPortPromise = Promise.resolve(null);
       } else {
         sunapiPromise = withTimeout(
           querySunapiMaxChannel(ip, httpPort, httpType, PROBE_TIMEOUT_MS / 2, effectiveUsername, effectivePassword),
           PROBE_TIMEOUT_MS,
           1,
         );
+        // querySunapiRtspPort() requires admin auth (verified: HTTP 401 with no
+        // credentials) and no-ops internally when username/password are blank,
+        // so this is safe to fire unconditionally alongside the MaxChannel query.
+        sunapiRtspPortPromise = withTimeout(
+          querySunapiRtspPort(ip, httpPort, httpType, PROBE_TIMEOUT_MS / 2, effectiveUsername, effectivePassword),
+          PROBE_TIMEOUT_MS,
+          null,
+        );
       }
 
-      const [sunapiMax, onvifResult] = await Promise.all([
+      const [sunapiMax, sunapiRtspPort, onvifResult] = await Promise.all([
         sunapiPromise,
+        sunapiRtspPortPromise,
         withTimeout(
-          enrichDeviceAutoScheme(ip, { onvifPort, onvifHttpsPort }),
+          // Same effectiveUsername/effectivePassword the SUNAPI probe above uses
+          // (request body → stored camera record → RTSP_DEFAULT_* env) — ONVIF's
+          // soapPost() tries Basic first and retries with Digest on a Digest
+          // challenge (FR-CAM-090), same as querySunapiMaxChannel()/
+          // querySunapiRtspPort() already do for SUNAPI (FR-CAM-072/089).
+          enrichDeviceAutoScheme(ip, { onvifPort, onvifHttpsPort, username: effectiveUsername, password: effectivePassword }),
           PROBE_TIMEOUT_MS,
           null,
         ),
@@ -224,27 +314,30 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       const onvifMax = onvifResult?.MaxChannel || 1;
       const onvifProfiles = (onvifResult?.profiles || []).filter((p) => p.rtspUrl);
 
-      console.debug(`[cameras][probe-channels] ip=${ip} SUNAPI maxChannel=${sunapiMax}; ONVIF maxChannel=${onvifResult ? onvifMax : '(no response/timeout)'}, profiles-with-rtsp=${onvifProfiles.length}`);
+      // sunapiProfiles is computed independently of onvifProfiles/maxChannel
+      // "winner" below (FR-CH-066/FR-CH-06x pattern: report both protocols'
+      // own results, not just the merged view) — reuses the confirmed
+      // baseRtspUrl's convention via channelRtspUrl() when a base URL is
+      // known, otherwise synthesizes fresh via defaultSunapiRtspUrl() using
+      // the CGI-confirmed sunapiRtspPort (falls back to 554 internally).
+      const sunapiProfiles = sunapiMax > 1 || baseRtspUrl
+        ? Array.from({ length: Math.max(sunapiMax, 1) }, (_, i) => i + 1)
+            .map((ch) => ({
+              channelIndex: ch,
+              rtspUrl: baseRtspUrl
+                ? channelRtspUrl(baseRtspUrl, ch)
+                : defaultSunapiRtspUrl(ip, sunapiRtspPort, ch),
+            }))
+            .filter((p) => !baseRtspUrl || p.rtspUrl !== baseRtspUrl || p.channelIndex === 1)
+        : [];
 
-      let maxChannel = 1;
-      let supportSunapi = false;
-      let protocol = 'none';
-      let profiles = [];
+      console.debug(`[cameras][probe-channels] ip=${ip} SUNAPI maxChannel=${sunapiMax} rtspPort=${sunapiRtspPort ?? '(unconfirmed, default 554)'}; ONVIF maxChannel=${onvifResult ? onvifMax : '(no response/timeout)'}, profiles-with-rtsp=${onvifProfiles.length}`);
 
-      if (onvifMax > 1 && onvifProfiles.length > 0) {
-        // Prefer ONVIF: real, verified per-channel RTSP URLs.
-        maxChannel = onvifMax;
-        protocol   = 'onvif';
-        profiles   = onvifProfiles.map((p) => ({ channelIndex: p.channelIndex, rtspUrl: p.rtspUrl }));
-      } else if (sunapiMax > 1) {
-        maxChannel    = sunapiMax;
-        supportSunapi = true;
-        protocol      = 'sunapi';
-        if (baseRtspUrl) {
-          profiles = Array.from({ length: sunapiMax }, (_, i) => i + 1)
-            .map((ch) => ({ channelIndex: ch, rtspUrl: channelRtspUrl(baseRtspUrl, ch) }))
-            .filter((p) => p.rtspUrl !== baseRtspUrl || p.channelIndex === 1);
-        }
+      const { maxChannel, supportSunapi, protocol, profiles, usedRegistryFallback } = resolveProbeChannelsDecision({
+        onvifMax, onvifProfiles, sunapiMax, sunapiProfiles, knownDevice, baseRtspUrl,
+      });
+      if (usedRegistryFallback) {
+        console.debug(`[cameras][probe-channels] ip=${ip} live SUNAPI+ONVIF probes found nothing this request — falling back to UDP Discovery's own MaxChannel=${maxChannel}`);
       }
 
       console.debug(`[cameras][probe-channels] ip=${ip} decision → protocol=${protocol}, maxChannel=${maxChannel}, profiles=${profiles.length}`);
@@ -276,6 +369,15 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
         // "detected as single-channel" from "no data".
         sunapiMaxChannel: sunapiMax,
         onvifMaxChannel: onvifResult ? onvifMax : null,
+        // Per-protocol RTSP URLs, independent of which protocol "won" as
+        // profiles/protocol above — lets the UI show both a SUNAPI-derived
+        // and an ONVIF-derived URL for the same channel side by side.
+        sunapiProfiles,
+        onvifProfiles: onvifProfiles.map((p) => ({ channelIndex: p.channelIndex, rtspUrl: p.rtspUrl })),
+        // CGI-confirmed RTSP port (network.cgi?msubmenu=portconf&action=view),
+        // or null when not queried/confirmed — callers should treat null as
+        // "unconfirmed, SUNAPI default 554 applies" rather than an error.
+        sunapiRtspPort,
       });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -563,3 +665,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
 }
 
 module.exports = camerasRouter;
+// Attached as a property (not a default-export change) so require('./api/cameras')
+// still works as a bare factory function for index.js's existing usage, while
+// tests can also reach the pure decision function directly (no live server needed).
+module.exports.resolveProbeChannelsDecision = resolveProbeChannelsDecision;
