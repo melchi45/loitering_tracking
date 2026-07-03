@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useAuthStore } from '../stores/authStore';
+import { useI18n } from '../i18n';
 
 interface Props {
   onClose: () => void;
@@ -17,6 +18,7 @@ function fileToDataUrl(file: File): Promise<string> {
 }
 
 export default function ProfileModal({ onClose }: Props) {
+  const { t } = useI18n();
   const user          = useAuthStore(s => s.user);
   const updateProfile = useAuthStore(s => s.updateProfile);
 
@@ -190,7 +192,7 @@ export default function ProfileModal({ onClose }: Props) {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Organization / 소속</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t.profileOrganization}</label>
             <input
               type="text"
               value={organization}
@@ -201,7 +203,7 @@ export default function ProfileModal({ onClose }: Props) {
             />
           </div>
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Phone / 연락처</label>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">{t.profilePhone}</label>
             <input
               type="text"
               value={phone}

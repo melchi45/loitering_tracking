@@ -51,6 +51,15 @@ const TRANSLATION_MAP: Record<LangCode, Translations> = {
   es, fr, de, pt, ru, ar, hi, id, tr, vi,
 };
 
+// BCP-47 locale tag for each LangCode — used with Intl/toLocaleDateString()
+// so date/time formatting (weekday names, AM/PM, separators) follows the
+// selected UI language instead of being hardcoded to a single locale.
+export const BCP47_LOCALE: Record<LangCode, string> = {
+  en: 'en-US', ko: 'ko-KR', 'zh-CN': 'zh-CN', 'zh-TW': 'zh-TW', ja: 'ja-JP',
+  es: 'es-ES', fr: 'fr-FR', de: 'de-DE', pt: 'pt-BR', ru: 'ru-RU',
+  ar: 'ar-SA', hi: 'hi-IN', id: 'id-ID', tr: 'tr-TR', vi: 'vi-VN',
+};
+
 const STORAGE_KEY = 'lts-language';
 
 interface I18nContextValue {

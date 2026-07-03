@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import AnalysisDetectionPanel from './AnalysisDetectionPanel';
 import AnalysisLivePanel from './AnalysisLivePanel';
+import { useI18n } from '../i18n';
+import type { Translations } from '../i18n/translations/en';
 
 type GpuInfo = {
   index: number;
@@ -113,16 +115,16 @@ function formatBytes(bytes: number) {
   return `${value.toFixed(value >= 100 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
-function formatRelativeTime(iso: string | null) {
-  if (!iso) return '없음';
+function formatRelativeTime(iso: string | null, t: Translations) {
+  if (!iso) return t.timeNone;
   const deltaMs = Date.now() - new Date(iso).getTime();
-  if (!Number.isFinite(deltaMs) || deltaMs < 0) return '방금';
+  if (!Number.isFinite(deltaMs) || deltaMs < 0) return t.timeJustNow;
   const sec = Math.round(deltaMs / 1000);
-  if (sec < 5) return '방금';
-  if (sec < 60) return `${sec}초 전`;
+  if (sec < 5) return t.timeJustNow;
+  if (sec < 60) return t.timeSecAgo(sec);
   const min = Math.round(sec / 60);
-  if (min < 60) return `${min}분 전`;
-  return `${Math.round(min / 60)}시간 전`;
+  if (min < 60) return t.timeMinAgo(min);
+  return t.timeHourAgo(Math.round(min / 60));
 }
 
 function formatModuleLabel(name: string) {
@@ -174,12 +176,14 @@ function StatCard({
   hint,
   onClick,
   accentClass,
+  clickHint,
 }: {
   label: string;
   value: string;
   hint: string;
   onClick?: () => void;
   accentClass?: string;
+  clickHint: string;
 }) {
   const base = 'rounded-2xl border border-slate-700/70 bg-slate-900/70 px-4 py-4 shadow-[inset_0_1px_0_rgba(255,255,255,0.03)]';
   const interactive = onClick ? 'cursor-pointer hover:border-amber-400/40 hover:bg-slate-800/80 transition-colors' : '';
@@ -189,7 +193,7 @@ function StatCard({
       <p className={`mt-2 text-2xl font-semibold ${accentClass ?? 'text-slate-100'}`}>{value}</p>
       <p className="mt-2 text-xs text-slate-400">{hint}</p>
       {onClick && (
-        <p className="mt-1 text-[10px] text-amber-400/60">클릭하여 자세히 보기 →</p>
+        <p className="mt-1 text-[10px] text-amber-400/60">{clickHint}</p>
       )}
     </div>
   );
@@ -235,6 +239,7 @@ export default function AnalysisServerDashboard({
   title: string;
   description: string;
 }) {
+  const { t } = useI18n();
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fpsHistory, setFpsHistory] = useState<Map<string, number[]>>(new Map());
@@ -318,13 +323,13 @@ export default function AnalysisServerDashboard({
                 <div className="mt-2 flex items-center gap-2">
                   <span className={`h-2.5 w-2.5 rounded-full ${connected ? 'bg-emerald-400 shadow-[0_0_12px_rgba(16,185,129,0.9)]' : 'bg-rose-500'}`} />
                   <span className={`text-sm font-medium ${connected ? 'text-emerald-300' : 'text-rose-300'}`}>
-                    {connected ? '실시간 연결 정상' : '소켓 연결 끊김'}
+                    {connected ? t.dashRealtimeConnected : t.dashSocketDisconnected}
                   </span>
                 </div>
               </div>
               <div className="rounded-2xl border border-slate-700/70 bg-slate-900/70 px-4 py-3">
                 <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">Last response</p>
-                <p className="mt-2 text-sm font-medium text-slate-200">{formatRelativeTime(metrics?.requests.lastResponseAt ?? null)}</p>
+                <p className="mt-2 text-sm font-medium text-slate-200">{formatRelativeTime(metrics?.requests.lastResponseAt ?? null, t)}</p>
               </div>
             </div>
           </div>
@@ -332,7 +337,7 @@ export default function AnalysisServerDashboard({
 
         {error && !metrics && (
           <div className="rounded-2xl border border-rose-500/30 bg-rose-950/30 px-4 py-3 text-sm text-rose-200">
-            분석 메트릭을 아직 불러오지 못했습니다. 원인: {error}
+            {t.dashMetricsLoadError(error ?? '')}
           </div>
         )}
 
@@ -340,13 +345,13 @@ export default function AnalysisServerDashboard({
           <section className="rounded-[24px] border border-slate-700/70 bg-slate-950/45 px-5 py-5">
             <div className="mb-4">
               <p className="text-xs uppercase tracking-[0.24em] text-slate-500">System resources</p>
-              <h3 className="mt-1 text-lg font-semibold text-slate-100">서버 리소스 사용률</h3>
+              <h3 className="mt-1 text-lg font-semibold text-slate-100">{t.dashResourceUsage}</h3>
             </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <UsageGauge
                 label="CPU"
                 pct={metrics.system.cpu.usagePct}
-                sub={`${metrics.system.cpu.cores}코어`}
+                sub={t.dashCores(metrics.system.cpu.cores)}
                 colorClass={
                   (metrics.system.cpu.usagePct ?? 0) >= 90 ? 'bg-rose-500' :
                   (metrics.system.cpu.usagePct ?? 0) >= 70 ? 'bg-amber-400' :
@@ -411,7 +416,7 @@ export default function AnalysisServerDashboard({
                 ))
               ) : (
                 <div className="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-4 flex items-center">
-                  <p className="text-xs text-slate-500">GPU 정보 없음<br />(nvidia-smi 미감지)</p>
+                  <p className="text-xs text-slate-500">{t.dashGpuNone}<br />{t.dashGpuNotDetected}</p>
                 </div>
               )}
             </div>
@@ -420,28 +425,32 @@ export default function AnalysisServerDashboard({
 
         <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
           <StatCard
-            label="최근 처리량"
+            label={t.statsRecentThroughput}
             value={metrics ? `${metrics.recent.framesPerSec.toFixed(1)} fps` : '-'}
-            hint={metrics ? `${metrics.recent.windowSec}초 창에서 ${metrics.recent.frames}프레임 처리` : '메트릭 대기 중'}
+            hint={metrics ? t.dashWindowFramesProcessed(metrics.recent.windowSec, metrics.recent.frames) : t.dashMetricsWaiting}
+            clickHint={t.dashClickForDetails}
           />
           <StatCard
-            label="입력 트래픽"
+            label={t.statsInputTraffic}
             value={metrics ? `${formatBytes(metrics.recent.bytesPerSec)}/s` : '-'}
-            hint={metrics ? `누적 ${formatBytes(metrics.traffic.bytesReceivedTotal)}` : '메트릭 대기 중'}
+            hint={metrics ? t.dashCumulativeBytes(formatBytes(metrics.traffic.bytesReceivedTotal)) : t.dashMetricsWaiting}
+            clickHint={t.dashClickForDetails}
           />
           <StatCard
-            label="감지 이벤트 (누적)"
+            label={t.dashDetectionEventsCumulative}
             value={metrics ? String(metrics.results.detectionsTotal + metrics.results.fireSmokeTotal) : '-'}
-            hint={metrics ? `배회 ${metrics.results.loiteringTotal}건 · 화재/연기 ${metrics.results.fireSmokeTotal}건` : '메트릭 대기 중'}
+            hint={metrics ? t.dashLoiterFireSmokeCounts(metrics.results.loiteringTotal, metrics.results.fireSmokeTotal) : t.dashMetricsWaiting}
             accentClass="text-amber-300"
             onClick={() => setShowLiveDetections(true)}
+            clickHint={t.dashClickForDetails}
           />
           <StatCard
-            label="알림 (배회 누적)"
+            label={t.dashAlertsLoiterCumulative}
             value={metrics ? String(metrics.results.loiteringTotal) : '-'}
-            hint={metrics ? `배회 감지 알림 누적 건수` : '메트릭 대기 중'}
+            hint={metrics ? t.dashLoiterAlertCount : t.dashMetricsWaiting}
             accentClass="text-rose-300"
             onClick={() => setShowEventHistory(true)}
+            clickHint={t.dashClickForDetails}
           />
         </section>
 
@@ -450,7 +459,7 @@ export default function AnalysisServerDashboard({
             <div className="flex items-center justify-between gap-3">
               <div>
                 <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Analysis scope</p>
-                <h3 className="mt-1 text-lg font-semibold text-slate-100">현재 분석 중인 항목</h3>
+                <h3 className="mt-1 text-lg font-semibold text-slate-100">{t.dashCurrentlyAnalyzing}</h3>
               </div>
               <span className="rounded-full border border-amber-400/30 bg-amber-500/10 px-3 py-1 text-xs font-medium text-amber-200">
                 {metrics ? `${metrics.modules.count} modules enabled` : 'loading'}
@@ -466,13 +475,13 @@ export default function AnalysisServerDashboard({
                   {formatModuleLabel(moduleName)}
                 </span>
               )) : (
-                <span className="text-sm text-slate-400">활성화된 분석 모듈이 없습니다.</span>
+                <span className="text-sm text-slate-400">{t.dashNoActiveModules}</span>
               )}
             </div>
 
             <div className="mt-6 grid grid-cols-1 gap-3 md:grid-cols-2">
               <div className="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-4">
-                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">서비스 상태</p>
+                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">{t.serviceStatus}</p>
                 <div className="mt-3 space-y-2 text-sm text-slate-300">
                   <div className="flex items-center justify-between"><span>Detector</span><span className="text-emerald-300">{metrics?.services.detector ?? '-'}</span></div>
                   <div className="flex items-center justify-between"><span>Attribute</span><span className="text-emerald-300">{metrics?.services.attrPipeline ?? '-'}</span></div>
@@ -480,7 +489,7 @@ export default function AnalysisServerDashboard({
                 </div>
               </div>
               <div className="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-4">
-                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">로드된 ONNX 모델</p>
+                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">{t.dashLoadedOnnxModels}</p>
                 <div className="mt-3 space-y-1.5">
                   {metrics?.models && metrics.models.length > 0 ? metrics.models.map((m) => (
                     <div key={m.service} className="flex items-center justify-between gap-2">
@@ -496,12 +505,12 @@ export default function AnalysisServerDashboard({
                       </span>
                     </div>
                   )) : (
-                    <p className="text-xs text-slate-500">{metrics ? '로드된 모델 없음' : '대기 중…'}</p>
+                    <p className="text-xs text-slate-500">{metrics ? t.dashNoModelLoaded : t.dashWaitingEllipsis}</p>
                   )}
                 </div>
               </div>
               <div className="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-4">
-                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">최근 1분 결과</p>
+                <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">{t.dashRecentOneMinResults}</p>
                 <div className="mt-3 grid grid-cols-2 gap-3 text-sm text-slate-300">
                   <div><p className="text-slate-500">Detections</p><p className="mt-1 text-lg font-semibold text-slate-100">{metrics?.recent.detections ?? 0}</p></div>
                   <div><p className="text-slate-500">Tracked</p><p className="mt-1 text-lg font-semibold text-slate-100">{metrics?.recent.trackedObjects ?? 0}</p></div>
@@ -526,7 +535,7 @@ export default function AnalysisServerDashboard({
 
           <div className="rounded-[24px] border border-slate-700/70 bg-slate-950/45 px-5 py-5">
             <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Totals</p>
-            <h3 className="mt-1 text-lg font-semibold text-slate-100">누적 분석 결과</h3>
+            <h3 className="mt-1 text-lg font-semibold text-slate-100">{t.dashCumulativeResults}</h3>
             <div className="mt-5 space-y-3">
               {([
                 { label: 'Frames',          value: metrics?.results.framesTotal ?? 0,          showHist: false, valueClass: 'text-slate-100' },
@@ -558,16 +567,16 @@ export default function AnalysisServerDashboard({
           <section className="rounded-[24px] border border-slate-700/70 bg-slate-950/45 px-5 py-5">
             <div className="mb-4">
               <p className="text-xs uppercase tracking-[0.24em] text-slate-500">ONNX Models</p>
-              <h3 className="mt-1 text-lg font-semibold text-slate-100">로드된 AI 모델</h3>
+              <h3 className="mt-1 text-lg font-semibold text-slate-100">{t.dashLoadedAiModels}</h3>
             </div>
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
               {metrics.models.map((model) => {
                 const serviceLabel: Record<string, string> = {
-                  detector:        'YOLOv8 — 객체 감지',
-                  ppe:             'PPE — 안전모/마스크',
-                  'face-detect':   'SCRFD — 얼굴 감지',
-                  'face-embed':    'ArcFace — 얼굴 임베딩',
-                  'fire-smoke':    '화재/연기 감지',
+                  detector:        t.dashModelDetector,
+                  ppe:             t.dashModelPpe,
+                  'face-detect':   t.dashModelFaceDetect,
+                  'face-embed':    t.dashModelFaceEmbed,
+                  'fire-smoke':    t.dashModelFireSmoke,
                 };
                 const label = serviceLabel[model.service] ?? model.service;
                 const ok   = model.loaded && model.exists;
@@ -594,7 +603,7 @@ export default function AnalysisServerDashboard({
                         warn ? 'text-amber-400' :
                                'text-rose-400'
                       }`}>
-                        {!model.exists ? '파일 없음' : !model.loaded ? '로딩 실패' : '정상 로드'}
+                        {!model.exists ? t.dashFileMissing : !model.loaded ? t.dashLoadFailed : t.dashLoadedOk}
                       </p>
                     </div>
                   </div>
@@ -608,16 +617,16 @@ export default function AnalysisServerDashboard({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Per source</p>
-              <h3 className="mt-1 text-lg font-semibold text-slate-100">연결된 분석 스트림별 부하</h3>
+              <h3 className="mt-1 text-lg font-semibold text-slate-100">{t.dashConnectedStreamLoad}</h3>
             </div>
-            <span className="text-xs text-slate-400">마지막 응답 기준 최근 활동 순으로 정렬</span>
+            <span className="text-xs text-slate-400">{t.dashSortedByRecentActivity}</span>
           </div>
 
           <div className="mt-4 overflow-hidden rounded-2xl border border-slate-800">
             <div className="grid grid-cols-[1.4fr_0.7fr_1.4fr_0.8fr_0.8fr_0.8fr_0.8fr_1fr] bg-slate-900/90 px-4 py-3 text-[11px] uppercase tracking-[0.18em] text-slate-500">
               <span>Camera</span>
               <span>Input</span>
-              <span>FPS / 추이</span>
+              <span>{t.dashFpsTrend}</span>
               <span>Idle</span>
               <span>Frames</span>
               <span>Traffic</span>
@@ -629,10 +638,10 @@ export default function AnalysisServerDashboard({
                 <div key={camera.cameraId} className="grid grid-cols-[1.4fr_0.7fr_1.4fr_0.8fr_0.8fr_0.8fr_0.8fr_1fr] items-center gap-3 px-4 py-3 text-sm text-slate-300">
                   <div className="min-w-0">
                     <p className="truncate font-medium text-slate-100">{camera.cameraName || camera.cameraId}</p>
-                    <p className="mt-1 text-xs text-slate-500">{camera.cameraId} · zones {camera.zoneCount} · last {formatRelativeTime(camera.lastFrameAt)}</p>
+                    <p className="mt-1 text-xs text-slate-500">{camera.cameraId} · zones {camera.zoneCount} · last {formatRelativeTime(camera.lastFrameAt, t)}</p>
                   </div>
                   <span className={camera.streamPresent ? 'text-emerald-300' : 'text-slate-500'}>
-                    {camera.streamPresent ? '있음' : '없음'}
+                    {camera.streamPresent ? t.streamPresentYes : t.streamPresentNo}
                   </span>
                   <div className="flex flex-col gap-1">
                     <span className={camera.inputFps1s > 0 ? 'text-sky-300 tabular-nums' : 'text-slate-500'}>
@@ -649,7 +658,7 @@ export default function AnalysisServerDashboard({
                   </span>
                 </div>
               )) : (
-                <div className="px-4 py-6 text-sm text-slate-400">아직 분석 요청이 들어오지 않았습니다.</div>
+                <div className="px-4 py-6 text-sm text-slate-400">{t.dashNoRequestsYet}</div>
               )}
             </div>
           </div>

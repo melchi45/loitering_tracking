@@ -474,7 +474,7 @@ export function DashboardDetectionPanel() {
         {/* analysis mode: no cameras registered but no data yet */}
         {isAnalysisMode && detectionMap.size === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-2 text-gray-600 px-4 text-center">
-            <span className="text-xs">분석 데이터 수신 대기 중...</span>
+            <span className="text-xs">{t.waitingForAnalysisData}</span>
           </div>
         ) : !isAnalysisMode && cameras.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full gap-2 text-gray-600 px-4 text-center">

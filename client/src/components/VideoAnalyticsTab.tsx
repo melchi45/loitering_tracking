@@ -416,7 +416,7 @@ export default function VideoAnalyticsTab() {
                 ? 'bg-blue-700/70 border-blue-500 text-white hover:bg-blue-700'
                 : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
             }`}
-            title={globalAllOn ? '모든 모듈 비활성화' : '사용 가능한 모든 모듈 활성화'}
+            title={globalAllOn ? t.vaDisableAllModules : t.vaEnableAllAvailable}
           >
             <span className={`w-7 h-3.5 rounded-full flex-shrink-0 relative transition-colors ${globalAllOn ? 'bg-blue-500' : 'bg-gray-600'}`}>
               <span className={`absolute top-0.5 w-2.5 h-2.5 rounded-full bg-white shadow transition-all ${globalAllOn ? 'left-3.5' : 'left-0.5'}`} />
@@ -448,7 +448,7 @@ export default function VideoAnalyticsTab() {
                       ? 'bg-blue-700/70 border-blue-500 text-white hover:bg-blue-700'
                       : 'bg-gray-800 border-gray-700 text-gray-400 hover:bg-gray-700'
                   }`}
-                  title={groupAllOn ? '그룹 전체 비활성화' : '그룹 전체 활성화'}
+                  title={groupAllOn ? t.vaDisableGroup : t.vaEnableGroup}
                 >
                   <span className={`w-5 h-2.5 rounded-full flex-shrink-0 relative transition-colors ${groupAllOn ? 'bg-blue-500' : 'bg-gray-600'}`}>
                     <span className={`absolute top-0.5 w-1.5 h-1.5 rounded-full bg-white shadow transition-all ${groupAllOn ? 'left-2.5' : 'left-0.5'}`} />
@@ -636,7 +636,7 @@ export default function VideoAnalyticsTab() {
                     className="w-full accent-orange-500 h-1"
                   />
                   <p className="text-[9px] text-gray-600 mt-0.5">
-                    낮을수록 감도 ↑ (false positive 증가). 기본값: 0.35
+                    {t.vaFireSensitivityHint}
                   </p>
                 </div>
 
@@ -656,7 +656,7 @@ export default function VideoAnalyticsTab() {
                     className="w-full accent-orange-500 h-1"
                   />
                   <p className="text-[9px] text-gray-600 mt-0.5">
-                    낮을수록 겹치는 박스 더 적게 유지. 기본값: 0.45
+                    {t.vaNmsHint}
                   </p>
                 </div>
 
