@@ -31,6 +31,11 @@ function resolveNvrChannelRtsp(
   return null;
 }
 
+/** Looks up a single protocol's RTSP URL for a channel from a probe-channels per-protocol profiles list — used to show SUNAPI/ONVIF URLs side by side, distinct from the merged resolveNvrChannelRtsp() above. */
+function resolveProtocolChannelRtsp(profiles: NvrProfile[] | null | undefined, targetChannel: number): string | null {
+  return profiles?.find((p) => p.channelIndex === targetChannel)?.rtspUrl ?? null;
+}
+
 export default function CameraEditModal({ camera, onClose }: Props) {
   const updateCamera = useCameraStore((s) => s.updateCamera);
   const cameras       = useCameraStore((s) => s.cameras);
@@ -529,6 +534,16 @@ export default function CameraEditModal({ camera, onClose }: Props) {
                       <p className="text-[10px] text-gray-500 mt-1.5 font-mono truncate" title={nvrRtspPreview}>
                         → {nvrRtspPreview}
                       </p>
+                    )}
+                    {redetected && (
+                      <div className="mt-1.5 space-y-0.5">
+                        <p className="text-[10px] text-gray-500 font-mono truncate" title={resolveProtocolChannelRtsp(redetected.sunapiProfiles, nvrChannel ?? 1) ?? undefined}>
+                          SUNAPI: {resolveProtocolChannelRtsp(redetected.sunapiProfiles, nvrChannel ?? 1) ?? 'not detected'}
+                        </p>
+                        <p className="text-[10px] text-gray-500 font-mono truncate" title={resolveProtocolChannelRtsp(redetected.onvifProfiles, nvrChannel ?? 1) ?? undefined}>
+                          ONVIF: {resolveProtocolChannelRtsp(redetected.onvifProfiles, nvrChannel ?? 1) ?? 'not detected'}
+                        </p>
+                      </div>
                     )}
                   </>
                 )}

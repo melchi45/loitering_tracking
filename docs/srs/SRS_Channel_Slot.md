@@ -3,7 +3,7 @@
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Global Channel Slot Mapping for Cameras / YouTube Streams
 **Document ID:** SRS-LTS-CHSLOT-01
-**Version:** 1.11
+**Version:** 1.12
 **Date:** 2026-07-02
 **Parent RFP:** rfp/RFP_Channel_Slot.md
 
@@ -290,6 +290,14 @@ When an on-demand probe (Add's "Detect Channels", Edit's "Re-detect", or the Fou
 
 **Acceptance**: With a device already present in the discovery registry reporting `MaxChannel: 1`, calling `probe-channels` for that IP with credentials that resolve a real `MaxChannel: 2` from `attributes.cgi` SHALL result in the registry's entry for that IP subsequently reporting `MaxChannel: 2` (verified via `DiscoveryService.getByIp()`), and SHALL trigger exactly one `discovery:result` broadcast reflecting the corrected value. Calling `probe-channels` again with a result of `1` (e.g. a subsequent unauthenticated attempt) SHALL leave the registry's `MaxChannel: 2` unchanged and SHALL NOT broadcast anything. Calling `probe-channels` for an IP that has never been discovered by any scan SHALL have no effect on the registry (nothing to correct). See TC-CH-G-003.
 
+### FR-CH-069 — `POST /api/cameras/probe-channels` SHALL fall back to the UDP Discovery registry's own MaxChannel when this request's own live SUNAPI+ONVIF probes both find nothing (2026-07-02)
+
+When this request's own live SUNAPI CGI query (`sunapiMax`) and ONVIF query (`onvifMax`, from `enrichDeviceAutoScheme()`) both resolve to `≤ 1` (i.e. neither found a multi-channel device on *this specific call*), but the background/manual UDP Discovery registry (`DiscoveryService.getByIp(ip)`) already has a `MaxChannel > 1` on file for this exact IP from a prior scan, the server SHALL use the registry's `MaxChannel` as the response's combined `maxChannel` value rather than reporting `1`/`protocol: 'none'`. When the registry entry has `SupportSunapi: true`, `profiles` SHALL be synthesized via `channelRtspUrl()` path substitution against `baseRtspUrl` (when supplied) exactly as the live-SUNAPI-success path does; when the registry entry instead carries cached ONVIF `profiles` with resolved RTSP URIs, those SHALL be reused directly; otherwise only the bare channel count is reported (`profiles: []`).
+
+**Rationale**: this is a **different** fallback from FR-CH-065's `cachedMaxChannel` (which only applies *before* querying, gated on `SupportSunapi`, purely to skip a redundant CGI round-trip when the answer is already known) and from FR-CH-068's registry write-back (which corrects the registry *from* a successful probe, the opposite direction). This requirement covers the case where the live re-query for *this specific request* comes back empty — a transient auth failure, the wrong port, an ONVIF scheme the dual HTTP/HTTPS trial didn't happen to answer on, etc. — even though the device's true channel count was already independently established by an earlier scan (via either protocol, not just SUNAPI). Without this fallback, a single flaky Re-detect/Detect-Channels click could regress the operator-facing result from "known 2-channel NVR" back down to "single-channel/not found," even though nothing about the device actually changed.
+
+**Acceptance**: With `DiscoveryService.getByIp(ip)` returning a cached device with `MaxChannel: 2` and `SupportSunapi: true`, calling `probe-channels` for that IP under conditions where both the live SUNAPI CGI query and the live ONVIF query fail to determine a channel count (e.g. mock endpoints that both 401/timeout) SHALL still return `maxChannel: 2`, `protocol: 'sunapi'`, `supportSunapi: true` — not `maxChannel: 1`, `protocol: 'none'`. When the cached device instead has `SupportOnvif: true` with cached `profiles` carrying resolved RTSP URIs (no `SupportSunapi`), the response SHALL use `protocol: 'onvif'` and those cached profiles. When `DiscoveryService.getByIp(ip)` returns `null` (this IP was never scanned) or its own `MaxChannel` is also `≤ 1`, behavior SHALL be unchanged from before this requirement (falls through to `maxChannel: 1`, `protocol: 'none'`).
+
 ---
 
 ## 9. Non-Functional Requirements
@@ -318,3 +326,4 @@ When an on-demand probe (Add's "Detect Channels", Edit's "Re-detect", or the Fou
 | 1.9 | 2026-07-02 | FR-CH-066 추가 — SUNAPI/ONVIF 각 프로토콜의 MaxChannel을 병합된 값과 별개로 추적·노출해야 함 (`SunapiMaxChannel`/`OnvifMaxChannel` 필드, probe-channels 응답의 `sunapiMaxChannel`/`onvifMaxChannel`, Found 상세 패널에 항상 표시되는 행). Found 패널에 SUNAPI MaxChannel을 표시해 달라는 요청에 따라 도입 |
 | 1.10 | 2026-07-02 | FR-CH-067 추가 — SUNAPI 쿼리가 Basic 인증만 지원해 Digest를 요구하는 펌웨어에서 정상 자격증명도 401로 거부되던 버그 수정. 실 카메라(192.168.214.32)를 `curl --digest`로 독립 검증해 자격증명 자체는 정상임을 확인 후 도입 |
 | 1.11 | 2026-07-02 | FR-CH-068 추가 — probe-channels의 결과가 discovery 레지스트리 값보다 높으면 레지스트리를 갱신하고 discovery:result를 재브로드캐스트해야 함 (UDP 스캔이 MaxChannel:1로 보고한 실제 다채널 장치를 Re-detect로 확인했을 때, 그 정정이 패널을 닫아도 유지되도록). 실 카메라(192.168.214.32, UDP=1 vs attributes.cgi=2)로 직접 검증 |
+| 1.12 | 2026-07-02 | FR-CH-069 추가 — probe-channels가 이번 요청의 라이브 SUNAPI+ONVIF 쿼리 모두 실패했을 때 UDP Discovery 레지스트리에 이미 기록된 MaxChannel로 폴백해야 함 (기존엔 이번 요청 결과만 보고 1/none으로 되돌아갔음) — attributes.cgi 또는 ONVIF GetVideoSources를 찾지 못하면 MaxChannel이 다시 1로 설정되는 문제로 리포트됨 |

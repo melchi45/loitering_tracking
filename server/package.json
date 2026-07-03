@@ -67,6 +67,9 @@
     "socket.io": "^4.7.2",
     "uuid": "^14.0.0"
   },
+  "optionalDependencies": {
+    "wisenet-chrome-ip-installer": "git+https://github.com/melchi45/WiseNetChromeIPInstaller.git#nodejs-udp-discovery"
+  },
   "devDependencies": {
     "jest": "^29.7.0",
     "nodemon": "^3.1.0",

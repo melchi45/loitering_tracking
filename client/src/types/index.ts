@@ -16,6 +16,12 @@ export interface ProbeChannelsResult {
   sunapiMaxChannel?: number;
   /** ONVIF's own reported channel count (FR-CH-066). null (not 1) when ONVIF never responded, vs. a number when it did. */
   onvifMaxChannel?: number | null;
+  /** SUNAPI's own per-channel RTSP URLs, independent of which protocol "won" as `profiles` above — lets the UI show both side by side. */
+  sunapiProfiles?: NvrProfile[];
+  /** ONVIF's own per-channel RTSP URLs (GetStreamUri-verified), independent of which protocol "won" as `profiles` above. */
+  onvifProfiles?: NvrProfile[];
+  /** CGI-confirmed RTSP port (network.cgi?msubmenu=portconf&action=view). null when credentials unavailable or the query failed — treat as "unconfirmed, SUNAPI default 554 applies". */
+  sunapiRtspPort?: number | null;
 }
 
 export interface Camera {
@@ -245,6 +251,8 @@ export interface DiscoveredCamera {
   FirmwareVersion?: string;
   SerialNumber?: string;
   Type?: number;
+  /** Human-readable label for `Type` (WiseNet UDP discovery's Device Type byte — SUNAPI IP Installer spec §3.4.2), e.g. "Camera"/"Encoder"/"Recorder". Undefined when the discovery response didn't carry this field at all (short/legacy packet), not merely when Type is 0x00. */
+  DeviceType?: string;
   IPAddress: string;
   MACAddress?: string;
   Port?: number;

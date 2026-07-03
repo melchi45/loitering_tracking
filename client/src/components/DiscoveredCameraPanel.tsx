@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useCameraStore } from '../stores/cameraStore';
-import type { DiscoveredCamera, OnvifProfile, ProbeChannelsResult } from '../types';
-import { channelRtspUrl } from '../utils/channelRtsp';
+import type { DiscoveredCamera, OnvifProfile, ProbeChannelsResult, NvrProfile } from '../types';
+import { channelRtspUrl, defaultSunapiRtspUrl } from '../utils/channelRtsp';
 
 function Row({ label, value }: { label: string; value?: string | number | boolean | null }) {
   if (value === undefined || value === null || value === '') return null;
@@ -129,14 +129,30 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
     if (profiles.length >= channel && profiles[channel - 1]?.rtspUrl) {
       return profiles[channel - 1].rtspUrl;
     }
-    const base = camera.rtspUrl || `rtsp://${camera.IPAddress}:${camera.Port || 554}/profile1/media.smp`;
+    const base = camera.rtspUrl || defaultSunapiRtspUrl(camera.IPAddress, camera.Port, 1);
     return channel > 1 ? channelRtspUrl(base, channel) : base;
   };
+
+  // Per-protocol URL for the currently selected channel — shown side by side
+  // in the Device info section so the operator can see which protocol (if
+  // either) actually resolved this channel's RTSP URL, instead of only the
+  // merged resolveRtspUrl() result above.
+  const resolveProtocolUrl = (profiles: NvrProfile[] | undefined, channel: number): string | null =>
+    profiles?.find((p) => p.channelIndex === channel && p.rtspUrl)?.rtspUrl
+      ?? (profiles?.length && profiles.length >= channel ? profiles[channel - 1]?.rtspUrl : undefined)
+      ?? null;
+  const sunapiUrl = resolveProtocolUrl(redetected?.sunapiProfiles, selectedChannel);
+  const onvifUrl  = resolveProtocolUrl(
+    redetected?.onvifProfiles ?? camera.profiles
+      ?.filter((p): p is OnvifProfile & { channelIndex: number } => p.channelIndex != null)
+      .map((p) => ({ channelIndex: p.channelIndex, rtspUrl: p.rtspUrl })),
+    selectedChannel,
+  );
 
   const rtspUrl = hasChannels
     ? resolveRtspUrl(selectedChannel)
     : (selectedProfile?.rtspUrl || camera.rtspUrl ||
-       `rtsp://${camera.IPAddress}:${camera.Port || 554}/profile1/media.smp`);
+       defaultSunapiRtspUrl(camera.IPAddress, camera.Port, 1));
 
   const handleAdd = async () => {
     setAdding(true);
@@ -213,6 +229,7 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
           <div className="text-[10px] font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Device</div>
           <Row label="Manufacturer"    value={camera.Manufacturer} />
           <Row label="Model"           value={camera.Model} />
+          <Row label="Type"            value={camera.DeviceType} />
           <Row label="Firmware"        value={camera.FirmwareVersion} />
           <Row label="Serial"          value={camera.SerialNumber} />
           <div className="flex items-start gap-2 py-1 border-b border-gray-700/50">
@@ -233,6 +250,18 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
             <span className="text-[11px] text-gray-500 w-24 flex-shrink-0">ONVIF MaxCh</span>
             <span className="text-[11px] text-gray-200">
               {effectiveOnvifMaxChannel != null ? `${effectiveOnvifMaxChannel} CH` : 'not detected'}
+            </span>
+          </div>
+          <div className="flex items-start gap-2 py-1 border-b border-gray-700/50">
+            <span className="text-[11px] text-gray-500 w-24 flex-shrink-0">SUNAPI URL{hasChannels ? ` (Ch${selectedChannel})` : ''}</span>
+            <span className="text-[11px] text-gray-200 font-mono truncate" title={sunapiUrl ?? undefined}>
+              {sunapiUrl ?? 'not detected'}
+            </span>
+          </div>
+          <div className="flex items-start gap-2 py-1 border-b border-gray-700/50">
+            <span className="text-[11px] text-gray-500 w-24 flex-shrink-0">ONVIF URL{hasChannels ? ` (Ch${selectedChannel})` : ''}</span>
+            <span className="text-[11px] text-gray-200 font-mono truncate" title={onvifUrl ?? undefined}>
+              {onvifUrl ?? 'not detected'}
             </span>
           </div>
           <div className="flex items-start gap-2 py-1 border-b border-gray-700/50">

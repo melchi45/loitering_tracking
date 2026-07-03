@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Global Channel Slot Mapping for Cameras / YouTube Streams
-**Version:** 1.13
+**Version:** 1.14
 **Date:** 2026-07-02
 **SRS Reference:** SRS_Channel_Slot.md
 
@@ -390,6 +390,48 @@
 
 ---
 
+### TC-CH-F-013: `resolveProbeChannelsDecision()` falls back to the registry's SUNAPI MaxChannel when both live probes find nothing
+
+**SRS:** FR-CH-069
+**Precondition:** `knownDevice = { MaxChannel: 2, SupportSunapi: true }` (simulating a `DiscoveryService.getByIp()` hit); `onvifMax`/`sunapiMax` both `1` (simulating both live probes for this request finding nothing); `baseRtspUrl` provided
+**Steps:** Call `resolveProbeChannelsDecision({ onvifMax: 1, onvifProfiles: [], sunapiMax: 1, sunapiProfiles: [], knownDevice, baseRtspUrl })` directly (no HTTP round-trip)
+**Expected:** `protocol: 'sunapi'`, `maxChannel: 2` (from the registry, not the empty live probes), `supportSunapi: true`, `profiles` synthesized via `channelRtspUrl()` path substitution against `baseRtspUrl` for both channels
+**Acceptance:** Automated in `test/api/channel_slot.test.js` (direct-require of `api/cameras.js`'s exported `resolveProbeChannelsDecision`, no live server needed — same style as TC-CH-G-001~003)
+
+---
+
+### TC-CH-F-013b: `resolveProbeChannelsDecision()` reuses cached ONVIF profiles when the registry entry is ONVIF-only
+
+**SRS:** FR-CH-069
+**Precondition:** `knownDevice = { MaxChannel: 3, SupportSunapi: false, profiles: [...] }` with 2 profiles carrying a resolved `rtspUrl` and 1 with an empty `rtspUrl`; both live probes empty
+**Steps:** Call `resolveProbeChannelsDecision(...)` with this `knownDevice`
+**Expected:** `protocol: 'onvif'`, `maxChannel: 3`, `profiles` contains only the 2 entries with a resolved `rtspUrl` (the unresolved one is filtered out)
+**Acceptance:** Automated in `test/api/channel_slot.test.js`
+
+---
+
+### TC-CH-F-013c: `resolveProbeChannelsDecision()` leaves the result unchanged when the registry has no better answer
+
+**SRS:** FR-CH-069
+**Steps:**
+1. Call with `knownDevice: null` (this IP was never scanned)
+2. Call with `knownDevice: { MaxChannel: 1, SupportSunapi: true }` (registry itself only knows single-channel)
+
+**Expected:** Both cases return `protocol: 'none'`, `maxChannel: 1` — identical to behavior before FR-CH-069, confirming the new fallback branch doesn't fire when there's genuinely nothing better to fall back to.
+**Acceptance:** Automated in `test/api/channel_slot.test.js`
+
+---
+
+### TC-CH-F-013d: `resolveProbeChannelsDecision()` prefers a successful live probe over the registry fallback
+
+**SRS:** FR-CH-069
+**Precondition:** A live probe result that would win under the pre-existing §4.6 rules (`onvifMax > 1` with resolved profiles, or `sunapiMax > 1`), paired with a `knownDevice` carrying a *different* (lower or higher) `MaxChannel`
+**Steps:** Call `resolveProbeChannelsDecision(...)` with both a winning live result and a registry entry
+**Expected:** The live probe result wins in both the ONVIF-live-wins and SUNAPI-live-wins cases — `maxChannel`/`protocol` reflect the live probe, not the registry's `MaxChannel`, confirming FR-CH-069's fallback only activates when the live probes are genuinely empty, never overriding a working live answer.
+**Acceptance:** Automated in `test/api/channel_slot.test.js`
+
+---
+
 ### TC-CH-E-001: Grid cell shows camera matching its channelSlot
 
 **SRS:** FR-CH-050
@@ -478,7 +520,7 @@
 
 ## Automated Coverage
 
-Automated API-level tests for TC-CH-A-*, TC-CH-B-*, and TC-CH-F-001~003/F-006~009/F-011~F-012 are implemented in `test/api/channel_slot.test.js`. TC-CH-G-001 (`hasConfiguredSunapiCredentials()`) is also implemented there as a plain unit test — pure function, no HTTP/DB fixture needed. TC-CH-C-*/D-*/E-* (UI/interaction) are manual/exploratory for this phase — no component test harness exists yet for `CameraList.tsx`/`CameraGrid.tsx`/`CameraEditModal.tsx` in this repo (consistent with how other UI-only TC groups, e.g. TC-LOG-021~028 in `TC_Admin_Log_Viewer.md`, are documented as manual). TC-CH-F-004 (ONVIF-preferred-over-SUNAPI) has no mock-ONVIF-server harness yet and remains manual/exploratory — a pre-existing gap, not introduced by this revision. TC-CH-F-005 (DEBUG-level discovery logging) is manual for a different reason: log output can only be observed by a client with `admin` role auth or direct file access, neither of which this suite's unauthenticated HTTP harness carries — TC-CH-F-006/F-007 are its automated proxy, exercising the same error branches (auth-rejected, malformed/unparseable response body) that the new logging runs through without asserting the log content itself. TC-CH-F-003/F-006~F-009's mock SUNAPI server serves the real endpoint (`GET /stw-cgi/attributes.cgi/attributes`, XML) as of the 2026-07-02 endpoint correction (FR-CAM-062a) — previously it mocked a non-existent JSON path. TC-CH-F-008/F-009 (FR-CH-064's credential gate) are fully automated black-box tests — they use a mock SUNAPI server to prove the probe was actually skipped (F-008) or actually attempted with the camera record's credentials (F-009), not just that the response shape looks right. TC-CH-F-010 (FR-CH-065's UDP Discovery cache reuse, full HTTP integration against a live server) is manual — it needs to seed `discoveryService.js`'s in-process `DiscoveryService` singleton, which lives inside the running LTS server process and isn't reachable from this suite's separate-process HTTP harness. TC-CH-G-002 automates the underlying `getByIp()` lookup method itself in isolation (same direct-require, no-live-server approach as TC-CH-G-001), which is the part of FR-CH-065 that doesn't require a live server to verify. TC-CH-F-011 (FR-CH-066's per-protocol `sunapiMaxChannel`/`onvifMaxChannel` fields) reuses the TC-CH-F-003 mock SUNAPI server and is fully automated — the ONVIF half is inherently exercised too, since `enrichDevice()` always runs in parallel against the same IP and never throws (see Design_Channel_Slot.md §4.6f), so `onvifMaxChannel` reliably comes back as a real (losing) number rather than needing a separate mock-ONVIF harness (unlike TC-CH-F-004, which needs ONVIF to actually *win*). TC-CH-F-012/F-012b (FR-CH-067's HTTP Digest auth retry) use a new mock server (`startMockDigestSunapiServer()`) that challenges every Basic-authenticated request with a genuine RFC 7616 `WWW-Authenticate: Digest` header and independently recomputes the expected MD5 response server-side to validate the client's retry — a wrong password still fails even though a Digest challenge is offered, so this isn't just "checks a Digest header was sent." TC-CH-G-003 (FR-CH-068's registry write-back) is fully automated in the same direct-require, no-live-server style as TC-CH-G-001/G-002 — `applyProbeResult()` is a synchronous, no-I/O method, so its raise/no-regress/unknown-IP branches are all exercised without needing an actual `probe-channels` HTTP round-trip; the full HTTP-triggered path (a real `POST /api/cameras/probe-channels` call actually invoking `applyProbeResult()` against the live server's own singleton and the resulting `discovery:result` reaching a real Socket.IO client) remains manual, for the same reason TC-CH-F-010 does.
+Automated API-level tests for TC-CH-A-*, TC-CH-B-*, and TC-CH-F-001~003/F-006~009/F-011~F-013d are implemented in `test/api/channel_slot.test.js`. TC-CH-G-001 (`hasConfiguredSunapiCredentials()`) is also implemented there as a plain unit test — pure function, no HTTP/DB fixture needed. TC-CH-C-*/D-*/E-* (UI/interaction) are manual/exploratory for this phase — no component test harness exists yet for `CameraList.tsx`/`CameraGrid.tsx`/`CameraEditModal.tsx` in this repo (consistent with how other UI-only TC groups, e.g. TC-LOG-021~028 in `TC_Admin_Log_Viewer.md`, are documented as manual). TC-CH-F-004 (ONVIF-preferred-over-SUNAPI) has no mock-ONVIF-server harness yet and remains manual/exploratory — a pre-existing gap, not introduced by this revision. TC-CH-F-005 (DEBUG-level discovery logging) is manual for a different reason: log output can only be observed by a client with `admin` role auth or direct file access, neither of which this suite's unauthenticated HTTP harness carries — TC-CH-F-006/F-007 are its automated proxy, exercising the same error branches (auth-rejected, malformed/unparseable response body) that the new logging runs through without asserting the log content itself. TC-CH-F-003/F-006~F-009's mock SUNAPI server serves the real endpoint (`GET /stw-cgi/attributes.cgi/attributes`, XML) as of the 2026-07-02 endpoint correction (FR-CAM-062a) — previously it mocked a non-existent JSON path. TC-CH-F-008/F-009 (FR-CH-064's credential gate) are fully automated black-box tests — they use a mock SUNAPI server to prove the probe was actually skipped (F-008) or actually attempted with the camera record's credentials (F-009), not just that the response shape looks right. TC-CH-F-010 (FR-CH-065's UDP Discovery cache reuse, full HTTP integration against a live server) is manual — it needs to seed `discoveryService.js`'s in-process `DiscoveryService` singleton, which lives inside the running LTS server process and isn't reachable from this suite's separate-process HTTP harness. TC-CH-G-002 automates the underlying `getByIp()` lookup method itself in isolation (same direct-require, no-live-server approach as TC-CH-G-001), which is the part of FR-CH-065 that doesn't require a live server to verify. TC-CH-F-011 (FR-CH-066's per-protocol `sunapiMaxChannel`/`onvifMaxChannel` fields) reuses the TC-CH-F-003 mock SUNAPI server and is fully automated — the ONVIF half is inherently exercised too, since `enrichDevice()` always runs in parallel against the same IP and never throws (see Design_Channel_Slot.md §4.6f), so `onvifMaxChannel` reliably comes back as a real (losing) number rather than needing a separate mock-ONVIF harness (unlike TC-CH-F-004, which needs ONVIF to actually *win*). TC-CH-F-012/F-012b (FR-CH-067's HTTP Digest auth retry) use a new mock server (`startMockDigestSunapiServer()`) that challenges every Basic-authenticated request with a genuine RFC 7616 `WWW-Authenticate: Digest` header and independently recomputes the expected MD5 response server-side to validate the client's retry — a wrong password still fails even though a Digest challenge is offered, so this isn't just "checks a Digest header was sent." TC-CH-G-003 (FR-CH-068's registry write-back) is fully automated in the same direct-require, no-live-server style as TC-CH-G-001/G-002 — `applyProbeResult()` is a synchronous, no-I/O method, so its raise/no-regress/unknown-IP branches are all exercised without needing an actual `probe-channels` HTTP round-trip; the full HTTP-triggered path (a real `POST /api/cameras/probe-channels` call actually invoking `applyProbeResult()` against the live server's own singleton and the resulting `discovery:result` reaching a real Socket.IO client) remains manual, for the same reason TC-CH-F-010 does. TC-CH-F-013~013d (FR-CH-069's registry fallback) are also fully automated via direct-require, exercising `api/cameras.js`'s newly-exported `resolveProbeChannelsDecision()` — this required promoting §4.6's inline `maxChannel`/`protocol`/`profiles` decision (previously embedded directly in the route handler) into a standalone pure function specifically so this branch could be unit-tested without a live server, matching the same rationale as TC-CH-G-001~003's direct-require approach.
 
 ---
 
@@ -500,3 +542,4 @@ Automated API-level tests for TC-CH-A-*, TC-CH-B-*, and TC-CH-F-001~003/F-006~00
 | 1.11 | 2026-07-02 | TC-CH-F-011 추가 — probe-channels가 sunapiMaxChannel/onvifMaxChannel을 병합된 maxChannel/protocol과 별개로 반환해야 함 (FR-CH-066), Automated Coverage 갱신 |
 | 1.12 | 2026-07-02 | TC-CH-F-012/F-012b 추가 — SUNAPI가 Digest 챌린지를 보낼 때 Basic 대신 계산된 Digest로 재시도해야 함(FR-CH-067), 자격증명 자체가 틀린 경우엔 재시도해도 여전히 실패해야 함(F-012b), 신규 mock `startMockDigestSunapiServer()` 반영, Automated Coverage 갱신 |
 | 1.13 | 2026-07-02 | TC-CH-G-003 추가 — `DiscoveryService.applyProbeResult()`가 레지스트리 값을 올려주되 낮추지 않고, 미지의 IP는 무시해야 함(FR-CH-068), Automated Coverage 갱신 |
+| 1.14 | 2026-07-02 | TC-CH-F-013~013d 추가 — probe-channels가 이번 요청의 라이브 SUNAPI+ONVIF 쿼리 모두 실패했을 때 discovery 레지스트리의 MaxChannel로 폴백해야 함(FR-CH-069); 결정 로직을 `resolveProbeChannelsDecision()`으로 추출해 자동화, Automated Coverage 갱신 |

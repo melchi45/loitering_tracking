@@ -2,10 +2,10 @@
 /**
  * Dashboard Channel Slot — REST API Tests
  *
- * TC: TC-CH-A-001 ~ TC-CH-B-003, TC-CH-F-001 ~ TC-CH-F-003, TC-CH-F-006 ~ TC-CH-F-009, TC-CH-F-011 ~ TC-CH-F-012,
+ * TC: TC-CH-A-001 ~ TC-CH-B-003, TC-CH-F-001 ~ TC-CH-F-003, TC-CH-F-006 ~ TC-CH-F-009, TC-CH-F-011 ~ TC-CH-F-013d,
  *     TC-CH-G-001 ~ TC-CH-G-003
  *     (see docs/tc/TC_Channel_Slot.md — TC-CH-F-004/F-005/F-010 are manual, not in this file)
- * SRS: FR-CH-001 ~ FR-CH-068 (see docs/srs/SRS_Channel_Slot.md)
+ * SRS: FR-CH-001 ~ FR-CH-069 (see docs/srs/SRS_Channel_Slot.md)
  *
  * Run: node test/api/channel_slot.test.js
  * Set LTS_URL env var to override the base URL (default http://localhost:3080).
@@ -574,6 +574,84 @@ async function runDiscoveryCacheLookupTests() {
   });
 }
 
+// ── Group F (cont.): resolveProbeChannelsDecision() registry fallback (FR-CH-069) ──
+
+async function runProbeChannelsDecisionTests() {
+  console.log('\n── api/cameras.resolveProbeChannelsDecision() registry fallback (FR-CH-069) ──\n');
+
+  // Same direct-require approach as Groups G above — this is a pure, no-I/O
+  // decision function extracted specifically so the registry-fallback branch
+  // can be tested without a live server/HTTP round-trip (see cameras.js).
+  let resolveProbeChannelsDecision;
+  try {
+    ({ resolveProbeChannelsDecision } = require('../../server/src/api/cameras'));
+  } catch (err) {
+    console.log(`      (could not require api/cameras.js from this working directory — skipping: ${err.message})`);
+    return;
+  }
+
+  await test('TC-CH-F-013', 'resolveProbeChannelsDecision falls back to the registry SUNAPI MaxChannel when both live probes find nothing (FR-CH-069)', async () => {
+    const result = resolveProbeChannelsDecision({
+      onvifMax: 1, onvifProfiles: [], sunapiMax: 1, sunapiProfiles: [],
+      knownDevice: { MaxChannel: 2, SupportSunapi: true },
+      baseRtspUrl: 'rtsp://127.0.0.1:554/profile1/media.smp',
+    });
+    assertEq(result.protocol, 'sunapi', 'protocol sunapi — registry fallback used, not none');
+    assertEq(result.maxChannel, 2, 'maxChannel taken from the registry entry, not the empty live probes');
+    assert(result.supportSunapi, 'supportSunapi true');
+    assertEq(result.profiles.length, 2, 'profiles synthesized via channelRtspUrl() from baseRtspUrl');
+    assertEq(result.profiles[1].rtspUrl, 'rtsp://127.0.0.1:554/profile2/media.smp', 'channel 2 URL substituted');
+  });
+
+  await test('TC-CH-F-013b', 'resolveProbeChannelsDecision reuses cached ONVIF profiles when the registry entry is ONVIF-only (FR-CH-069)', async () => {
+    const result = resolveProbeChannelsDecision({
+      onvifMax: 1, onvifProfiles: [], sunapiMax: 1, sunapiProfiles: [],
+      knownDevice: {
+        MaxChannel: 3, SupportSunapi: false,
+        profiles: [
+          { channelIndex: 1, rtspUrl: 'rtsp://127.0.0.1/ch1' },
+          { channelIndex: 2, rtspUrl: 'rtsp://127.0.0.1/ch2' },
+          { channelIndex: 3, rtspUrl: '' }, // unresolved — must be filtered out
+        ],
+      },
+      baseRtspUrl: null,
+    });
+    assertEq(result.protocol, 'onvif', 'protocol onvif — registry entry has no SupportSunapi flag');
+    assertEq(result.maxChannel, 3, 'maxChannel taken from the registry entry');
+    assertEq(result.profiles.length, 2, 'only profiles with a resolved rtspUrl are reused');
+  });
+
+  await test('TC-CH-F-013c', 'resolveProbeChannelsDecision leaves the result unchanged when the registry has no better answer (FR-CH-069)', async () => {
+    const noRegistryHit = resolveProbeChannelsDecision({
+      onvifMax: 1, onvifProfiles: [], sunapiMax: 1, sunapiProfiles: [], knownDevice: null, baseRtspUrl: null,
+    });
+    assertEq(noRegistryHit.protocol, 'none', 'no registry entry at all — falls through to none, unchanged from before FR-CH-069');
+    assertEq(noRegistryHit.maxChannel, 1, 'maxChannel 1');
+
+    const registryAlsoSingleChannel = resolveProbeChannelsDecision({
+      onvifMax: 1, onvifProfiles: [], sunapiMax: 1, sunapiProfiles: [],
+      knownDevice: { MaxChannel: 1, SupportSunapi: true }, baseRtspUrl: null,
+    });
+    assertEq(registryAlsoSingleChannel.protocol, 'none', 'registry itself only knows single-channel — nothing to fall back to');
+  });
+
+  await test('TC-CH-F-013d', 'resolveProbeChannelsDecision prefers a successful live probe over the registry fallback (FR-CH-069 does not override a working live result)', async () => {
+    const liveOnvifWins = resolveProbeChannelsDecision({
+      onvifMax: 5, onvifProfiles: [{ channelIndex: 1, rtspUrl: 'rtsp://live/1' }], sunapiMax: 1, sunapiProfiles: [],
+      knownDevice: { MaxChannel: 2, SupportSunapi: true }, baseRtspUrl: null,
+    });
+    assertEq(liveOnvifWins.protocol, 'onvif', 'a successful live ONVIF result wins over the (lower) registry value');
+    assertEq(liveOnvifWins.maxChannel, 5, 'maxChannel from the live probe, not the registry');
+
+    const liveSunapiWins = resolveProbeChannelsDecision({
+      onvifMax: 1, onvifProfiles: [], sunapiMax: 4, sunapiProfiles: [{ channelIndex: 1, rtspUrl: 'rtsp://live/1' }],
+      knownDevice: { MaxChannel: 99, SupportSunapi: true }, baseRtspUrl: null,
+    });
+    assertEq(liveSunapiWins.protocol, 'sunapi', 'a successful live SUNAPI result wins over the registry value');
+    assertEq(liveSunapiWins.maxChannel, 4, 'maxChannel from the live probe, not the (higher) registry value');
+  });
+}
+
 // ── Cleanup ────────────────────────────────────────────────────────────────────
 
 async function cleanup() {
@@ -593,6 +671,7 @@ async function cleanup() {
   try {
     await runValidationTests();
     await runProbeChannelsTests();
+    await runProbeChannelsDecisionTests();
     await runBackgroundScanCredentialGateTests();
     await runDiscoveryCacheLookupTests();
   } finally {
