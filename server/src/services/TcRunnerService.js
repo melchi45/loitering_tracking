@@ -67,6 +67,7 @@ const SUITES = [
   { file: 'test/api/missing-person.test.js',                srs: 'FR-FACE-MISSING-011~020', label: 'Missing Person API' },
   { file: 'test/api/cross_camera_tracking.test.js',         srs: 'FR-REID-001~030', label: 'Cross-Camera Tracking  A+B+C+G' },
   { file: 'test/api/face_match_history.test.js',            srs: 'FR-FMH-001~011',  label: 'Face Match History  A+B' },
+  { file: 'test/api/face_match_timeline_navigation.test.js',srs: 'FR-FMN-004,FR-FMN-020', label: 'Face Match Timeline Navigation  A' },
   // Detection Snapshots
   { file: 'test/api/detection_snapshot_search.test.js',     srs: 'FR-SNAP-001~010', label: 'Detection Snapshots' },
   // WebRTC

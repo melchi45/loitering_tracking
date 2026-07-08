@@ -593,6 +593,7 @@ function Dashboard() {
   };
 
   const [fullscreenCameraId, setFullscreenCameraId] = useState<string | null>(null);
+  const [focusMatch, setFocusMatch] = useState<{ faceId: string; timestamp: number } | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showStats,    setShowStats]    = useState(false);
   const [showProfile,  setShowProfile]  = useState(false);
@@ -902,7 +903,14 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
     if (tab === 'analytics')  return <VideoAnalyticsTab />;
     if (tab === 'detections') return isAnalysis ? <AnalysisEventsTab /> : <DashboardDetectionPanel />;
     if (tab === 'zones')      return <ZonesPanel onOpenCamera={setFullscreenCameraId} />;
-    if (tab === 'faces')      return <FaceGalleryTab />;
+    if (tab === 'faces')      return (
+      <FaceGalleryTab
+        onFocusMatch={(cameraId, faceId, timestamp) => {
+          setFullscreenCameraId(cameraId);
+          setFocusMatch({ faceId, timestamp });
+        }}
+      />
+    );
     return null;
   }
 
@@ -1026,7 +1034,13 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
 {fullscreenCameraId && (() => {
         const cam = cameras.find(c => c.id === fullscreenCameraId);
         return cam ? (
-          <FullscreenCameraView cameraId={cam.id} cameraName={cam.name} onClose={() => setFullscreenCameraId(null)} />
+          <FullscreenCameraView
+            cameraId={cam.id}
+            cameraName={cam.name}
+            onClose={() => { setFullscreenCameraId(null); setFocusMatch(null); }}
+            initialVideoTab={focusMatch ? 'detections' : undefined}
+            initialFocusMatch={focusMatch ?? undefined}
+          />
         ) : null;
       })()}
       {showSettings && <SettingsModal onClose={() => setShowSettings(false)} analysisMode={isAnalysis} />}

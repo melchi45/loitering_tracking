@@ -94,6 +94,12 @@ function fmtDur(ms: number) {
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m${s % 60 > 0 ? `${s % 60}s` : ''}`;
 }
 
+// Formats a Date as the value a `<input type="datetime-local">` expects (YYYY-MM-DDTHH:mm, local time).
+function toDatetimeLocal(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 function formatTick(ts: number, spanMs: number): string {
   const d = new Date(ts);
   if (spanMs <= 2 * 3600_000)
@@ -132,7 +138,10 @@ function Spinner() {
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export default function DetectionsTimelineInline({ cameraId }: { cameraId: string }) {
+export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }: {
+  cameraId: string;
+  initialFocusMatch?: { faceId: string; timestamp: number };
+}) {
   const [tracks,        setTracks]        = useState<DetectionTrack[]>([]);
   const [loading,       setLoading]       = useState(false);
   const [range,         setRange]         = useState<RangeLabel>('1H');
@@ -228,6 +237,31 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
       .then(d => setMatches(d.success ? d.data : []))
       .catch(e => console.error('[DetectionsTimeline] match-history fetch error:', e));
   }, [fetchKey, range, customApplied, classFilter]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ── Jump to a specific face match (opened via Face ID tab's Live Matches) ──────
+
+  // Effect 1: land the view on a window centered on the focused match, once.
+  useEffect(() => {
+    if (!initialFocusMatch) return;
+    const HALF_WINDOW_MS = 30 * 60 * 1000;
+    const from = new Date(initialFocusMatch.timestamp - HALF_WINDOW_MS);
+    const to   = new Date(initialFocusMatch.timestamp + HALF_WINDOW_MS);
+    setRange('custom');
+    setCustomStart(toDatetimeLocal(from));
+    setCustomEnd(toDatetimeLocal(to));
+    setCustomApplied({ from: from.toISOString(), to: to.toISOString() });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialFocusMatch?.faceId, initialFocusMatch?.timestamp]);
+
+  // Effect 2: once matches for that window have loaded, auto-select the target so its
+  // detail popover (thumbnail/identity/score) appears without an extra click.
+  useEffect(() => {
+    if (!initialFocusMatch) return;
+    const target = matches.find(
+      m => m.faceId === initialFocusMatch.faceId && m.timestamp === initialFocusMatch.timestamp,
+    );
+    if (target) setSelectedMatch(target);
+  }, [matches, initialFocusMatch]);
 
   // ── Visible tracks ────────────────────────────────────────────────────────────
 

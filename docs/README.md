@@ -129,6 +129,7 @@ test/              Test scripts (TC-based automation)
 | **RTSP / WebRTC Architecture** | [rfp/](rfp/RFP_RTSP_WebRTC_Architecture.md) | [prd/](prd/PRD_RTSP_WebRTC_Architecture.md) | [srs/](srs/SRS_RTSP_WebRTC_Architecture.md) | [design/](design/Design_RTSP_WebRTC_Architecture.md) | [tc/](tc/TC_RTSP_WebRTC_Architecture.md) |
 | **Face Search Condition Sync** | [rfp/](rfp/RFP_Face_Search_Condition_Sync.md) | [prd/](prd/PRD_Face_Search_Condition_Sync.md) | [srs/](srs/SRS_Face_Search_Condition_Sync.md) | [design/](design/Design_Face_Search_Condition_Sync.md) | [tc/](tc/TC_Face_Search_Condition_Sync.md) |
 | **Face Match History** | [rfp/](rfp/RFP_Face_Match_History.md) | [prd/](prd/PRD_Face_Match_History.md) | [srs/](srs/SRS_Face_Match_History.md) | [design/](design/Design_Face_Match_History.md) | [tc/](tc/TC_Face_Match_History.md) |
+| **Face Match Timeline Navigation** | [rfp/](rfp/RFP_Face_Match_Timeline_Navigation.md) | [prd/](prd/PRD_Face_Match_Timeline_Navigation.md) | [srs/](srs/SRS_Face_Match_Timeline_Navigation.md) | [design/](design/Design_Face_Match_Timeline_Navigation.md) | [tc/](tc/TC_Face_Match_Timeline_Navigation.md) |
 
 ---
 
@@ -359,6 +360,7 @@ flowchart LR
 | ✅ `test/api/streaming_without_analysis_url.test.js` | [TC_Distributed_AI_Pipeline](tc/TC_Distributed_AI_Pipeline.md) | Streaming mode fallback when `ANALYSIS_SERVER_URL` unset | **Streaming** | `node test/api/streaming_without_analysis_url.test.js` |
 | ✅ `test/api/face_search_condition_sync.test.js` | [TC_Face_Search_Condition_Sync](tc/TC_Face_Search_Condition_Sync.md) | Groups A (Delegation), B (Push/Poll), C (Metrics) | **Streaming** | `node test/api/face_search_condition_sync.test.js` |
 | ✅ `test/api/face_match_history.test.js` | [TC_Face_Match_History](tc/TC_Face_Match_History.md) · [TC_Dashboard_Sidebar_Face_ID](tc/TC_Dashboard_Sidebar_Face_ID.md) | Groups A (Endpoint), B (Camera Name) | All | `node test/api/face_match_history.test.js` |
+| ✅ `test/api/face_match_timeline_navigation.test.js` | [TC_Face_Match_Timeline_Navigation](tc/TC_Face_Match_Timeline_Navigation.md) | Group A (Join Key Contract) | All | `node test/api/face_match_timeline_navigation.test.js` |
 
 ### Phase-2 — Integration Tests (`test/integration/`)
 
@@ -385,7 +387,7 @@ flowchart LR
 
 | Phase | Scope | Scripts | Status |
 |---|---|---|---|
-| Phase-1 (API) | REST API tests — 39 scripts (✅ exist) | 39 | ✅ 350+ pass, 0 fail (existing) |
+| Phase-1 (API) | REST API tests — 40 scripts (✅ exist) | 40 | ✅ 350+ pass, 0 fail (existing) |
 | Phase-2 (Integration) | Socket.IO / MongoDB integration tests — 3 scripts | 3 | 🕐 Planned |
 | Phase-3 (E2E) | Playwright browser automation — 1 script (placeholder exists) | 1 | 🖥 Planned |
 
@@ -450,6 +452,7 @@ node test/generate_report.js
 | 2026-06-25 | **Admin Dashboard TC mode classification**: Phase-1 table "Server Mode" column added — 3 suites marked Analysis (skipped in streaming), 3 suites marked Streaming (skipped in analysis); yellow warning banner removed; suite headers now show mode badges (purple=Analysis, cyan=Streaming) and skip count |
 | 2026-07-08 | **Face Search Condition Sync SDLC chain authored** — RFP/PRD/SRS/Design/TC_Face_Search_Condition_Sync.md; fixes gallery photo enrollment failing on `SERVER_MODE=streaming` (`/api/analysis/face-embed` delegation endpoint) and adds Analysis Server Dashboard visibility (push+5s-poll mirror of `faceGalleries`/`faceGalleryFaces` tagged `source:'local'|'synced'`, no new DB table); `test/api/face_search_condition_sync.test.js` added (`streamingOnly`) |
 | 2026-07-08 | **Face Match History SDLC chain authored** — RFP/PRD/SRS/Design/TC_Face_Match_History.md; fixes Live Matches emptying on refresh (`GET /api/galleries/match-history` — the write path already worked, only the read side was missing), adds `cameraName` threading through `pipelineManager._assignFaceIds()`, and a new "Face Matches" point-marker row in the Fullscreen Detections timeline; `test/api/face_match_history.test.js` fills the previously-📋-planned slot (no flag, all modes) |
+| 2026-07-08 | **Face Match Timeline Navigation SDLC chain authored** — RFP/PRD/SRS/Design/TC_Face_Match_Timeline_Navigation.md; clicking a Face ID tab Live Match now opens that camera's Fullscreen Detections tab centered on the match (client-only prop threading, no new store/endpoint); also fixes a competing-scrollbar layout defect in the Face ID tab's Live Matches list; `test/api/face_match_timeline_navigation.test.js` added (no flag, all modes) |
 
 ---
 
@@ -461,3 +464,4 @@ node test/generate_report.js
 | 2.0 | 2026-06-25 | Full documentation coverage — added partial/design-only/ops sections, cross-reference map, 16 missing test scripts |
 | 2.1 | 2026-07-08 | Added Face Search Condition Sync module (RFP/PRD/SRS/Design/TC), 39th test script, ops guide troubleshooting cross-ref |
 | 2.2 | 2026-07-08 | Added Face Match History module (RFP/PRD/SRS/Design/TC); `face_match_history.test.js` now ✅ (was 📋 planned) |
+| 2.3 | 2026-07-08 | Added Face Match Timeline Navigation module (RFP/PRD/SRS/Design/TC); 40th test script |

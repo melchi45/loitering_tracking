@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-FMH-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-07-08 |
 | **Parent PRD** | prd/PRD_Face_Match_History.md |
@@ -198,6 +198,7 @@ No new events. `face_match` / `missing_person_match` (`SRS_AI_Face_Recognition.m
 | C-01 | A narrow duplicate-display window is possible if a live `face_match` socket event arrives in the same instant as the mount-time history fetch completes — not deduplicated by ID since the socket payload carries no persisted-row identifier. Accepted as a cosmetic, self-resolving edge case (the 50-entry cap and 30s cooldown make it exceedingly rare and harmless) |
 | C-02 | Rows persisted before this feature ships lack `cameraName` — client-side fallback (FR-FMH-021) covers display; the endpoint does not backfill or synthesize it server-side |
 | C-03 | The Detections timeline's "Face Matches" row is independent of the per-object track rows — a match is never joined onto a specific person's Gantt bar by `objectId`/time-overlap, so it can never be silently hidden by falling outside a track's fetched window |
+| C-04 | The `{faceId, timestamp}` pair defined in §6.1 is the join key `SRS_Face_Match_Timeline_Navigation.md` relies on to navigate from a Face ID tab entry to this same match's marker on the Detections timeline — do not change either field's meaning without updating that spec too |
 
 ---
 
@@ -206,3 +207,4 @@ No new events. `face_match` / `missing_person_match` (`SRS_AI_Face_Recognition.m
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-07-08 | LTS Engineering Team | Initial release — SRS for Face Match History |
+| 1.1 | 2026-07-08 | LTS Engineering Team | Added C-04 cross-reference to `SRS_Face_Match_Timeline_Navigation.md`, which uses `{faceId, timestamp}` as a navigation join key |

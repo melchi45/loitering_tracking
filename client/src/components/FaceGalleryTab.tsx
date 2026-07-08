@@ -137,11 +137,15 @@ function UploadArea({ galleryId, onEnrolled, t }: UploadAreaProps) {
 
 // ── MatchLog ──────────────────────────────────────────────────────────────────
 
-function MatchLog({ events, t }: { events: FaceMatchEvent[]; t: ReturnType<typeof useI18n>['t'] }) {
+function MatchLog({ events, t, onSelect }: {
+  events: FaceMatchEvent[];
+  t: ReturnType<typeof useI18n>['t'];
+  onSelect?: (cameraId: string, faceId: string, timestamp: number) => void;
+}) {
   const cameras = useCameraStore(s => s.cameras);
   if (!events.length) return <EmptyState icon="👁" text={String(t.faceNoMatches)} />;
   return (
-    <div className="space-y-1 max-h-48 overflow-y-auto pr-0.5">
+    <div className="flex-1 min-h-0 overflow-y-auto space-y-1 pr-0.5">
       {events.map((ev, i) => {
         const cameraLabel = ev.cameraName ?? cameras.find(c => c.id === ev.cameraId)?.name ?? ev.cameraId;
         const isMissing = ev.galleryType === 'missing';
@@ -153,7 +157,11 @@ function MatchLog({ events, t }: { events: FaceMatchEvent[]; t: ReturnType<typeo
                    : 'bg-gray-800/60 border-gray-700/40';
         const icon = isMissing ? '🚨' : isVip ? '⭐' : isBlock ? '🚫' : '⚡';
         return (
-          <div key={i} className={`flex items-center gap-2 border rounded px-2 py-1 ${bg}`}>
+          <div key={i}
+               className={`flex items-center gap-2 border rounded px-2 py-1 ${bg} ${onSelect ? 'cursor-pointer hover:brightness-125' : ''}`}
+               onClick={() => onSelect?.(ev.cameraId, ev.faceId, ev.timestamp)}
+               title={onSelect ? 'Open in Detections timeline' : undefined}
+          >
             {/* Enrolled gallery photo */}
             {ev.thumbnail
               ? <img src={ev.thumbnail} alt={ev.identity} title="Enrolled" className="w-7 h-7 rounded object-cover flex-shrink-0" />
@@ -237,7 +245,11 @@ function GallerySection({ type, galleries, selectedId, onSelect, onDelete, t }: 
 
 // ── Main component ────────────────────────────────────────────────────────────
 
-export default function FaceGalleryTab() {
+interface FaceGalleryTabProps {
+  onFocusMatch?: (cameraId: string, faceId: string, timestamp: number) => void;
+}
+
+export default function FaceGalleryTab({ onFocusMatch }: FaceGalleryTabProps) {
   const { t } = useI18n();
 
   const [galleries, setGalleries]       = useState<FaceGallery[]>([]);
@@ -441,48 +453,50 @@ export default function FaceGalleryTab() {
       </div>
 
       {/* ── Selected gallery content ── */}
-      <div className="flex-1 overflow-y-auto px-3 py-2 space-y-3">
-        {!selectedGallery
-          ? <EmptyState icon="👆" text={String(t.faceSelectGallery)} />
-          : (
-            <>
-              {/* Gallery type badge */}
-              <div className="flex items-center gap-2">
-                <TypePill type={selectedGallery.type || 'general'} t={t} />
-                <span className="text-[10px] text-gray-400 font-medium">{selectedGallery.name}</span>
-                {selectedGallery.description && (
-                  <span className="text-[9px] text-gray-600 truncate">{selectedGallery.description}</span>
-                )}
-              </div>
+      <div className="flex-1 min-h-0 flex flex-col px-3 py-2 gap-3">
+        <div className="overflow-y-auto space-y-3">
+          {!selectedGallery
+            ? <EmptyState icon="👆" text={String(t.faceSelectGallery)} />
+            : (
+              <>
+                {/* Gallery type badge */}
+                <div className="flex items-center gap-2">
+                  <TypePill type={selectedGallery.type || 'general'} t={t} />
+                  <span className="text-[10px] text-gray-400 font-medium">{selectedGallery.name}</span>
+                  {selectedGallery.description && (
+                    <span className="text-[9px] text-gray-600 truncate">{selectedGallery.description}</span>
+                  )}
+                </div>
 
-              {/* Upload */}
-              <div>
-                <p className="text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1.5">{t.faceEnrollTitle}</p>
-                <UploadArea galleryId={selectedGallery.id} onEnrolled={() => fetchFaces(selectedGallery.id).then(fetchGalleries)} t={t} />
-              </div>
+                {/* Upload */}
+                <div>
+                  <p className="text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1.5">{t.faceEnrollTitle}</p>
+                  <UploadArea galleryId={selectedGallery.id} onEnrolled={() => fetchFaces(selectedGallery.id).then(fetchGalleries)} t={t} />
+                </div>
 
-              {/* Enrolled faces */}
-              <div>
-                <p className="text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1.5">{t.faceEnrolled} ({faces.length})</p>
-                {loadingFaces
-                  ? <EmptyState icon="⏳" text="Loading…" />
-                  : faces.length === 0
-                    ? <EmptyState icon="👤" text={String(t.faceNoFaces)} />
-                    : (
-                      <div className="grid grid-cols-4 gap-1.5">
-                        {faces.map(f => <FaceCard key={f.id} face={f} onDelete={deleteFace} />)}
-                      </div>
-                    )
-                }
-              </div>
-            </>
-          )
-        }
+                {/* Enrolled faces */}
+                <div>
+                  <p className="text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1.5">{t.faceEnrolled} ({faces.length})</p>
+                  {loadingFaces
+                    ? <EmptyState icon="⏳" text="Loading…" />
+                    : faces.length === 0
+                      ? <EmptyState icon="👤" text={String(t.faceNoFaces)} />
+                      : (
+                        <div className="grid grid-cols-4 gap-1.5">
+                          {faces.map(f => <FaceCard key={f.id} face={f} onDelete={deleteFace} />)}
+                        </div>
+                      )
+                  }
+                </div>
+              </>
+            )
+          }
+        </div>
 
-        {/* Live match log — always visible */}
-        <div>
-          <p className="text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1.5">{t.faceLiveMatches}</p>
-          <MatchLog events={matchLog} t={t} />
+        {/* Live match log — always visible, owns its own scroll region */}
+        <div className="flex-1 min-h-0 flex flex-col">
+          <p className="text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1.5 flex-shrink-0">{t.faceLiveMatches}</p>
+          <MatchLog events={matchLog} t={t} onSelect={onFocusMatch} />
         </div>
       </div>
     </div>

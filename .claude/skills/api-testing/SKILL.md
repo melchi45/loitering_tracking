@@ -36,6 +36,7 @@ test/
 | `face_gallery.test.js` | 얼굴 갤러리 조회 |
 | `cross_camera_tracking.test.js` | 크로스 카메라 Re-ID |
 | `face_match_history.test.js` | 얼굴 매칭 이력 조회 API |
+| `face_match_timeline_navigation.test.js` | Live Match → Detections 타임라인 이동 (join key 계약) |
 | `webrtc.test.js` | WebRTC 기본 연결 |
 | `webrtc_ice.test.js` | ICE/STUN/TURN 협상 |
 | `webrtc_stability.test.js` | WebRTC 연결 안정성 |
@@ -275,6 +276,7 @@ npm test -- --testNamePattern="WebRTC ICE"
 | `face_enrollment.test.js`, `face_gallery.test.js` | `docs/tc/TC_AI_Face_Recognition.md` |
 | `cross_camera_tracking.test.js` | `docs/tc/TC_CrossCamera_Face_Tracking.md` |
 | `face_match_history.test.js` | `docs/tc/TC_Face_Match_History.md` |
+| `face_match_timeline_navigation.test.js` | `docs/tc/TC_Face_Match_Timeline_Navigation.md` |
 | `camera_discovery.test.js` | `docs/tc/TC_Camera_Discovery.md` |
 | `channel_slot.test.js` | `docs/tc/TC_Channel_Slot.md` |
 | `webrtc.test.js`, `webrtc_ice.test.js`, `webrtc_stability.test.js` | `docs/tc/TC_WebRTC_Media_Gateway.md`, `docs/tc/TC_STUN_TURN_ICE.md` |

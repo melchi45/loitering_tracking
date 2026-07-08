@@ -16,6 +16,8 @@ interface Props {
   cameraId: string;
   cameraName: string;
   onClose: () => void;
+  initialVideoTab?: 'events' | 'onvif' | 'detections';
+  initialFocusMatch?: { faceId: string; timestamp: number };
 }
 
 const MASK_LABEL: Record<string, string> = {
@@ -841,8 +843,8 @@ const PANEL_MIN_H  = 60;
 const PANEL_MAX_H  = 600;
 const PANEL_STORAGE_KEY = 'lts_fullscreen_panel_height';
 
-export default function FullscreenCameraView({ cameraId, cameraName, onClose }: Props) {
-  const [videoTab, setVideoTab] = useState<'events' | 'onvif' | 'detections'>('onvif');
+export default function FullscreenCameraView({ cameraId, cameraName, onClose, initialVideoTab, initialFocusMatch }: Props) {
+  const [videoTab, setVideoTab] = useState<'events' | 'onvif' | 'detections'>(initialVideoTab ?? 'onvif');
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const { t } = useI18n();
 
@@ -991,7 +993,7 @@ export default function FullscreenCameraView({ cameraId, cameraName, onClose }: 
           <div className="flex-1 min-h-0 overflow-hidden">
             {videoTab === 'events' && <CameraEventsTab cameraId={cameraId} />}
             {videoTab === 'onvif'  && <OnvifTimelineInline cameraId={cameraId} />}
-            {videoTab === 'detections' && <DetectionsTimelineInline cameraId={cameraId} />}
+            {videoTab === 'detections' && <DetectionsTimelineInline cameraId={cameraId} initialFocusMatch={initialFocusMatch} />}
           </div>
         </div>
       </div>
