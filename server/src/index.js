@@ -298,7 +298,7 @@ async function main() {
 
     // Push this server's face galleries/faces to the analysis server for dashboard
     // display (push on mutation, handled in faceGallery.js) + 5s self-healing poll.
-    faceSearchSync.startAutoSync(db);
+    faceSearchSync.startAutoSync(db, pipelineManager);
   }
   // Defer ONNX model loading by 3 seconds so the HTTP server can accept requests
   // immediately on startup without the event loop being blocked by session creation.

@@ -207,6 +207,23 @@ async function runGroupB() {
     const { body } = await get('/api/galleries', ANALYSIS_URL);
     assert(body.data.some(x => x.id === g.id), 'locally-added analysis-server gallery survives reconcile');
   });
+
+  await test('TC-FSC-B-005', 'Condition registered on analysis server is pulled back to streaming (bidirectional)', async () => {
+    if (!(await analysisReachable())) skip('No live analysis server configured');
+    if (!facePath) skip('No face fixture available');
+    // Register directly on the analysis server, exactly like FaceSearchConditionPanel does.
+    const g = await createGallery('TC-FSC-B-005', 'missing', ANALYSIS_URL);
+    const enroll = await postMultipart(`/api/galleries/${g.id}/faces`, facePath, 'Analysis-Registered Person', ANALYSIS_URL);
+    assertEq(enroll.status, 201, 'enroll on analysis server status');
+
+    // Trigger a reconcile round trip from the streaming side and give it time to apply.
+    const trigger = await createGallery('TC-FSC-B-005-trigger', 'general');
+    await del(`/api/galleries/${trigger.id}`);
+    await new Promise(r => setTimeout(r, 6000)); // covers one 5s poll tick if the push-triggered round trip lands late
+
+    const { body } = await get('/api/galleries', BASE_URL);
+    assert(body.data.some(x => x.id === g.id), 'analysis-registered gallery visible on streaming server');
+  });
 }
 
 // ── Group C — Dashboard Metrics ────────────────────────────────────────────────

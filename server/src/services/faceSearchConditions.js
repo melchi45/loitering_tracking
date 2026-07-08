@@ -2,8 +2,10 @@
 
 /**
  * Stateless summary/reconcile helpers over the existing faceGalleries/faceGalleryFaces
- * tables. Used on the analysis server to expose a display-only mirror of face search
- * conditions pushed from a streaming server — never consulted for live matching.
+ * tables, used bidirectionally between a streaming server and its analysis server:
+ *  - streaming → analysis: display-only, embedding stripped (analysis never matches with it)
+ *  - analysis → streaming: embeddings included, so a condition registered directly on the
+ *    analysis server's own dashboard becomes locally matchable on the streaming server too
  */
 
 const GALLERY_TYPES = ['missing', 'vip', 'blocklist', 'general'];
@@ -47,7 +49,21 @@ function listGrouped(db) {
 }
 
 /**
- * Apply an incoming full-state snapshot from a streaming server.
+ * Export this process's own galleries/faces (source 'local' or missing — never re-export
+ * rows that were themselves synced in from the other side) WITH embeddings intact.
+ * Used for the reverse direction of reconcile: a server pulling in conditions that were
+ * registered directly on the OTHER server, so they become locally matchable too — unlike
+ * the display-only, embedding-stripped snapshot faceSearchSync.js sends outbound.
+ */
+function exportLocal(db) {
+  const galleries = db.all('faceGalleries').filter((g) => g.source !== 'synced');
+  const faces      = db.all('faceGalleryFaces').filter((f) => f.source !== 'synced');
+  return { galleries, faces };
+}
+
+/**
+ * Apply an incoming full-state snapshot from the other server (streaming↔analysis, either
+ * direction — the tag means "synced in from elsewhere" regardless of which physical side).
  * Upserts every entry tagged 'synced'; deletes any existing 'synced' row absent from the
  * snapshot. Rows tagged 'local' (or missing a source field) are never touched.
  */
@@ -78,4 +94,4 @@ function applyReconcile(db, snapshot) {
   }
 }
 
-module.exports = { GALLERY_TYPES, summarize, listGrouped, applyReconcile };
+module.exports = { GALLERY_TYPES, summarize, listGrouped, exportLocal, applyReconcile };

@@ -1065,13 +1065,16 @@ router.post('/face-embed', express.raw({ type: 'image/jpeg', limit: '10mb' }), a
 });
 
 // ── POST /api/analysis/face-search-conditions/sync ────────────────────────────
-// Receives a full gallery/face snapshot from a streaming server and mirrors it
-// locally (tagged source:'synced') for dashboard display only — never used for matching.
+// Bidirectional: receives a full gallery/face snapshot from a streaming server and
+// mirrors it locally (tagged source:'synced', display-only — never used for matching
+// here). In the SAME response, returns this analysis server's own locally-registered
+// conditions (source:'local', WITH embeddings) so the streaming server can pull in
+// anything added directly on the analysis dashboard and make it locally matchable.
 router.post('/face-search-conditions/sync', express.json({ limit: '5mb' }), (req, res) => {
   try {
     const db = req.app.get('db');
     faceSearchConditions.applyReconcile(db, req.body);
-    res.json({ success: true });
+    res.json({ success: true, ...faceSearchConditions.exportLocal(db) });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }

@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-FSC-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-07-08 |
 | **Author** | LTS-2026 Engineering |
@@ -29,9 +29,9 @@ This document is the implementation-level design for [PRD_Face_Search_Condition_
 Two independent mechanisms, sharing no state:
 
 1. **Enrollment delegation** — a synchronous, request-scoped HTTP call from streaming to analysis, used only when the streaming server's local face service isn't loaded.
-2. **Face search condition mirror** — an asynchronous, best-effort full-state sync from streaming to analysis, used only for dashboard display.
+2. **Face search condition sync** — an asynchronous, best-effort, **bidirectional** full-state exchange riding one HTTP round trip: streaming pushes its own conditions to analysis (display-only, embedding stripped), and analysis's response carries back its own locally-registered conditions (embedding intact), which the streaming server applies and immediately makes locally matchable via `reloadPersistentGallery()`.
 
-Neither mechanism changes live per-frame named-gallery matching, which remains entirely on the streaming server via the existing `pipelineManager._assignFaceIds()` / `_persistentGallery` path (unchanged, already correct in distributed mode).
+Neither mechanism changes *where* live per-frame named-gallery matching happens — it remains entirely on the streaming server via the existing `pipelineManager._assignFaceIds()` / `_persistentGallery` path — but a condition can now be *registered* on either server and be matched from the streaming side either way. v1.0 only pushed streaming→analysis for display; that left conditions added directly on the analysis dashboard invisible on streaming (reported after initial rollout) — v1.1 closes that gap by making the same sync call carry data back.
 
 ---
 
@@ -89,45 +89,54 @@ faceGalleryFaces.source:  'local' | 'synced'
 - `'local'`: created via that server's own `POST /api/galleries` / `POST /api/galleries/:id/faces`.
 - `'synced'`: written by an incoming `applyReconcile()` call — i.e. mirrored from a streaming server.
 
-### 3.3 Push + Poll — One Function, Two Callers
+### 3.3 Push + Poll, Bidirectional — One Function, Two Callers, One Round Trip
 
 ```mermaid
 sequenceDiagram
     participant Mut as faceGallery.js mutation handler
     participant Timer as setInterval(5000)
-    participant Sync as faceSearchSync.pushReconcile(db)
+    participant Sync as faceSearchSync.pushReconcile(db, pipelineManager)
     participant ANL as Analysis Server
 
     Mut->>Sync: call after commit (fire-and-forget)
     Timer->>Sync: call unconditionally every 5s
-    Sync->>Sync: db.all('faceGalleries'), db.all('faceGalleryFaces')  — embedding stripped
+    Sync->>Sync: faceSearchConditions.exportLocal(db) — own source:'local' rows, embedding stripped
     Sync->>ANL: POST /api/analysis/face-search-conditions/sync { galleries, faces }
-    ANL-->>Sync: 200 (or timeout/error — logged, not retried)
+    ANL->>ANL: applyReconcile(db, body) — upsert/delete source:'synced' rows
+    ANL->>ANL: exportLocal(db) — ITS OWN source:'local' rows, embedding intact
+    ANL-->>Sync: 200 { success, galleries, faces }
+    Sync->>Sync: applyReconcile(db, response) — tags rows source:'synced' locally
+    Sync->>Sync: pipelineManager.reloadPersistentGallery()
 ```
 
 `server/src/services/faceSearchSync.js`:
 ```js
-async function pushReconcile(db) { /* build snapshot, fire-and-forget POST, 4s timeout, warn-only */ }
-function startAutoSync(db) { pushReconcile(db); setInterval(() => pushReconcile(db), 5000).unref(); }
+async function pushReconcile(db, pipelineManager) {
+  // POST exportLocal(db) (no embeddings) to analysis, await its JSON response
+  // apply the response (WITH embeddings) via faceSearchConditions.applyReconcile(db, response)
+  // pipelineManager.reloadPersistentGallery() so it's immediately matchable
+}
+function startAutoSync(db, pipelineManager) { pushReconcile(db, pipelineManager); setInterval(() => pushReconcile(db, pipelineManager), 5000).unref(); }
 ```
 
-Modeled directly on the existing `_forwardToAnalysis()` pattern in `server/src/api/analytics.js:22-49` (own keep-alive `http`/`https` Agent, short timeout, `console.warn` on failure, never blocks the caller).
+Modeled directly on the existing `_forwardToAnalysis()` pattern in `server/src/api/analytics.js:22-49` (own keep-alive `http`/`https` Agent, short timeout, `console.warn` on failure, never blocks the caller) — extended to await and apply the JSON response instead of discarding it.
 
 ### 3.4 `faceSearchConditions.js` — Stateless Query/Reconcile Helper
 
 ```js
 function summarize(db) { /* { total, byType } from db.all('faceGalleries')+('faceGalleryFaces') */ }
-function listGrouped(db) { /* full face list with galleryType resolved, embedding excluded */ }
-function applyReconcile(db, { galleries, faces }) { /* see §4 */ }
+function listGrouped(db) { /* full face list with galleryType resolved, embedding excluded — dashboard display */ }
+function exportLocal(db) { /* { galleries, faces } where source !== 'synced' — WITH embeddings, for the outbound reconcile response */ }
+function applyReconcile(db, { galleries, faces }) { /* see §4 — used on BOTH sides, tag meaning is always "came from the other side" */ }
 ```
 
-No interval, no module-level state — every call reads/writes the DB fresh. This keeps the analysis server's mirror trivially restart-safe: on process restart, the next incoming push/poll simply repopulates it.
+No interval, no module-level state — every call reads/writes the DB fresh. This keeps either side's mirror trivially restart-safe: on process restart, the next round trip simply repopulates it. `applyReconcile` is intentionally direction-agnostic — the same function tags incoming rows `source:'synced'` whether it's running on the analysis server (streaming's push) or the streaming server (analysis's response).
 
 ---
 
 ## 4. Reconcile Algorithm
 
-`applyReconcile(db, snapshot)` runs on the **analysis** server when it receives `POST /api/analysis/face-search-conditions/sync`:
+`applyReconcile(db, snapshot)` is the same function run on **both** sides — once on the analysis server against streaming's push, and once on the streaming server against analysis's response:
 
 ```
 incomingGalleryIds = new Set(snapshot.galleries.map(g => g.id))
@@ -137,7 +146,7 @@ for each g in snapshot.galleries:
     upsert faceGalleries row { ...g, source: 'synced' }
 
 for each f in snapshot.faces:
-    upsert faceGalleryFaces row { ...f, source: 'synced' }   // embedding absent — set to [] or omitted, never used for matching here
+    upsert faceGalleryFaces row { ...f, source: 'synced' }   // embedding present only on the analysis→streaming leg
 
 for each existing row in db.all('faceGalleries') where row.source === 'synced':
     if row.id not in incomingGalleryIds: db.delete('faceGalleries', row.id)
@@ -148,7 +157,18 @@ for each existing row in db.all('faceGalleryFaces') where row.source === 'synced
 // rows with source === 'local' (or missing source) are never touched by this loop
 ```
 
-This is a **full-state reconcile**, not an incremental diff — every push/poll cycle re-sends the complete current gallery/face set. Given realistic list sizes (dozens–low hundreds of named-gallery entries), this is simpler and strictly less bug-prone than maintaining ordering/dedup logic for incremental events, at negligible bandwidth cost on the LAN link streaming↔analysis servers already require.
+`exportLocal(db)` is the mirror-image read used to build what gets sent out on either leg:
+
+```
+return {
+  galleries: db.all('faceGalleries').filter(g => g.source !== 'synced'),
+  faces:     db.all('faceGalleryFaces').filter(f => f.source !== 'synced'),
+}
+// streaming→analysis: caller additionally strips faces[].embedding before serializing
+// analysis→streaming: embedding is kept — the receiving side needs it for real matching
+```
+
+Both legs are **full-state reconciles**, not incremental diffs — every round trip re-sends the complete current `source !== 'synced'` set in each direction. Given realistic list sizes (dozens–low hundreds of named-gallery entries), this is simpler and strictly less bug-prone than maintaining ordering/dedup logic for incremental events, at negligible bandwidth cost on the LAN link streaming↔analysis servers already require. The known tradeoff (documented as SRS C-03): deleting a `source:'synced'` row locally does not delete the `source:'local'` original on the other server, so it reappears on the next round trip — deletion must happen at the row's origin.
 
 ---
 
@@ -182,15 +202,15 @@ FaceSearchConditionPanel.tsx (new)
 | File | Type | Purpose |
 |---|---|---|
 | `server/src/services/faceEnrollHelper.js` | New | Shared detect+embed+thumbnail logic |
-| `server/src/services/faceSearchConditions.js` | New | Stateless summarize/listGrouped/applyReconcile |
-| `server/src/services/faceSearchSync.js` | New | Streaming-side pushReconcile + startAutoSync |
+| `server/src/services/faceSearchConditions.js` | New | Stateless summarize/listGrouped/exportLocal/applyReconcile |
+| `server/src/services/faceSearchSync.js` | New | Bidirectional pushReconcile + startAutoSync |
 | `client/src/utils/galleryTypeMeta.ts` | New | Extracted shared gallery-type metadata |
 | `client/src/components/FaceSearchConditionPanel.tsx` | New | Dashboard detail/add-condition overlay |
-| `server/src/routes/analysisApi.js` | Modified | `/face-embed`, `/face-search-conditions/sync`, `/face-search-conditions`, `faceSearch` in `/metrics` |
+| `server/src/routes/analysisApi.js` | Modified | `/face-embed`, `/face-search-conditions/sync` (now responds with `exportLocal(db)`), `/face-search-conditions`, `faceSearch` in `/metrics` |
 | `server/src/services/analysisClient.js` | Modified | `extractFaceEmbedding()` |
-| `server/src/api/faceGallery.js` | Modified | Delegation branch, `source` tagging, push-on-mutation |
+| `server/src/api/faceGallery.js` | Modified | Delegation branch, `source` tagging, push-on-mutation (now threads `pipelineManager` into `pushReconcile`) |
 | `server/src/services/pipelineManager.js` | Modified | `faceSearch` metrics field, 10s `reloadPersistentGallery()` interval |
-| `server/src/index.js` | Modified | Dedicated `AnalysisClient` wiring, `startAutoSync()` call |
+| `server/src/index.js` | Modified | Dedicated `AnalysisClient` wiring, `startAutoSync(db, pipelineManager)` call |
 | `client/src/components/FaceGalleryTab.tsx` | Modified | Import shared metadata instead of local copy |
 | `client/src/components/AnalysisServerDashboard.tsx` | Modified | StatCard + overlay wiring, `faceSearch` in `MetricsResponse` |
 
@@ -201,3 +221,4 @@ FaceSearchConditionPanel.tsx (new)
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-08 | 초기 작성 — 얼굴 등록 위임 + 얼굴 검색 조건 미러링(push+poll) 설계 |
+| 1.1 | 2026-07-08 | §3.3/§4 양방향 동기화로 개편 — analysis 서버에서 직접 등록한 조건이 streaming으로 반영되지 않던 문제 수정. 동일 HTTP 왕복의 응답 바디에 analysis의 `source:'local'` 조건(임베딩 포함)을 실어 보내고, streaming이 이를 `applyReconcile()` + `reloadPersistentGallery()`로 즉시 매칭 가능하게 반영. `exportLocal()` 신규 추가 |

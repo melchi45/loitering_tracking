@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-FSC-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-07-08 |
 | **Parent PRD** | prd/PRD_Face_Search_Condition_Sync.md |
@@ -123,25 +123,27 @@ pipelineManager._assignFaceIds() vs. local _persistentGallery
 
 ### FR-FSC-011 — Push on Mutation
 
-- After each of the 4 mutation handlers in `faceGallery.js` (create gallery, delete gallery, enroll face, delete face) commits locally, if `process.env.SERVER_MODE === 'streaming'`, `faceSearchSync.pushReconcile(db)` is invoked fire-and-forget (does not block or fail the HTTP response).
+- After each of the 4 mutation handlers in `faceGallery.js` (create gallery, delete gallery, enroll face, delete face) commits locally, if `process.env.SERVER_MODE === 'streaming'`, `faceSearchSync.pushReconcile(db, pipelineManager)` is invoked fire-and-forget (does not block or fail the HTTP response).
 
 ### FR-FSC-012 — Poll (5-Second Interval)
 
-- `faceSearchSync.startAutoSync(db)` is called once at streaming-server startup when `SERVER_MODE==='streaming' && ANALYSIS_SERVER_URL` is set.
-- It invokes `pushReconcile(db)` once immediately, then every 5000ms via `setInterval(...).unref()`.
+- `faceSearchSync.startAutoSync(db, pipelineManager)` is called once at streaming-server startup when `SERVER_MODE==='streaming' && ANALYSIS_SERVER_URL` is set.
+- It invokes `pushReconcile(db, pipelineManager)` once immediately, then every 5000ms via `setInterval(...).unref()`.
 - The push and poll paths call the identical `pushReconcile()` function — no separate incremental-diff logic exists.
 
-### FR-FSC-013 — Snapshot Payload
+### FR-FSC-013 — Outbound Snapshot Payload (Streaming → Analysis)
 
-- `pushReconcile(db)` sends `{ galleries: FaceGallery[], faces: FaceGalleryFace[] }` reflecting the streaming server's current full state.
-- The `embedding` field is excluded from every face entry in the payload.
+- `pushReconcile()` sends `{ galleries: FaceGallery[], faces: FaceGalleryFace[] }` reflecting the streaming server's own locally-registered conditions (`faceSearchConditions.exportLocal()` — rows tagged `source:'local'` or missing `source`; rows already tagged `source:'synced'` on the streaming side are not re-exported).
+- The `embedding` field is excluded from every face entry in the outbound payload.
 
-### FR-FSC-014 — `POST /api/analysis/face-search-conditions/sync`
+### FR-FSC-014 — `POST /api/analysis/face-search-conditions/sync` — Bidirectional
 
-- Applies the incoming snapshot via `faceSearchConditions.applyReconcile(db, snapshot)`:
+- **Inbound half (analysis applies streaming's push):** applies the request body via `faceSearchConditions.applyReconcile(db, req.body)`:
   - Every gallery/face in the snapshot is upserted with `source: 'synced'`.
   - Every existing `source:'synced'` row in the analysis server's DB that is absent from the incoming snapshot is deleted.
   - Rows tagged `source:'local'` (or missing `source`) are never modified or deleted by this endpoint.
+- **Outbound half (analysis responds with its own local conditions):** the HTTP response body is `{ success: true, ...faceSearchConditions.exportLocal(db) }` — the analysis server's own `source:'local'` galleries/faces, **with embeddings intact** (unlike the streaming→analysis direction, this data must be usable for real matching on the receiving side).
+- The streaming server applies this response via the same `faceSearchConditions.applyReconcile()` function (tagging the rows `source:'synced'` on ITS OWN DB) and then calls `pipelineManager.reloadPersistentGallery()`, so a condition registered directly on the analysis server's dashboard becomes visible in the streaming server's Face ID tab **and** locally matchable — not just display-only.
 
 ### FR-FSC-015 — `GET /api/analysis/face-search-conditions`
 
@@ -251,9 +253,9 @@ None added or changed — `face_match`, `missing_person_match`, `face:reidentifi
 
 | ID | Constraint / Assumption |
 |---|---|
-| C-01 | Matching authority stays on the streaming server; the analysis-side mirror is display-only and must never be consulted by `_assignFaceIdsAnalysis()` for live matching |
-| C-02 | Push/poll requires `ANALYSIS_SERVER_URL` to be reachable from the streaming server — identical network precondition to existing `/api/analysis/frame` traffic |
-| C-03 | In a non-shared-DB deployment (`DB_TYPE=json`, separate files per server), a condition added directly on the analysis server's own dashboard is visible there immediately but is never pushed back to the streaming server — FR-FSC-033's 10s reload interval only helps when the DB is a shared MongoDB instance |
+| C-01 | Matching authority for detections received via `/api/analysis/frame` stays on the streaming server; `_assignFaceIdsAnalysis()` on the analysis server never consults `faceGalleryFaces` for live matching. Conditions pulled IN from the analysis server (FR-FSC-014's outbound half) are matched locally on the streaming server exactly like any other `source:'local'` row — there is still only ever one place a given embedding is compared against a gallery |
+| C-02 | Push/poll requires `ANALYSIS_SERVER_URL` to be reachable from the streaming server — identical network precondition to existing `/api/analysis/frame` traffic. The reverse (analysis-to-streaming) data flow rides the SAME HTTP round trip (the sync response body), so no `STREAMING_SERVER_URL` or reverse connectivity is needed |
+| C-03 | **Delete-authority asymmetry**: deleting a `source:'synced'` gallery/face directly via the receiving side's own UI/API removes it locally, but since the row still exists as `source:'local'` on the OTHER server, the next push/poll cycle re-adds it. Deleting a condition must be done on the server where it was originally created (`source:'local'`) to stick |
 | C-04 | The 5-second poll interval and 10-second reload interval are independent constants, not currently configurable via environment variable |
 | C-05 | `source` defaulting to `'local'` for pre-existing rows means a first reconcile after upgrade will not delete any existing gallery/face data, even if it did originate from a since-removed streaming server |
 
@@ -264,3 +266,4 @@ None added or changed — `face_match`, `missing_person_match`, `face:reidentifi
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-07-08 | LTS Engineering Team | Initial release — SRS for Face Search Condition Sync |
+| 1.1 | 2026-07-08 | LTS Engineering Team | Made FR-FSC-013/014 bidirectional — a condition registered directly on the analysis server's dashboard is now pulled back into the streaming server (with embedding) via the same sync HTTP response, fixing the originally-reported "added on analysis, not visible on streaming" gap. Replaced C-03 with the resulting delete-authority asymmetry constraint |

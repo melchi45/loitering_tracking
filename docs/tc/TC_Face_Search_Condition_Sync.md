@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-FSC-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-07-08 |
 | **Parent SRS** | srs/SRS_Face_Search_Condition_Sync.md |
@@ -129,6 +129,15 @@ test/fixtures/face_clear.jpg  (existing fixture, reused)
   4. Assert the locally-added gallery/face on the analysis server still exists afterward
 - **Cleanup:** DELETE the locally-added gallery on the analysis server
 
+### TC-FSC-B-005 — Analysis-Registered Condition Pulled Back to Streaming (Bidirectional)
+- **SRS:** FR-FSC-013, FR-FSC-014
+- **Steps:**
+  1. If `ANALYSIS_SERVER_URL` unreachable → SKIP
+  2. Register a gallery + face directly on the analysis server (same flow as `FaceSearchConditionPanel`'s add-condition form)
+  3. Trigger a reconcile round trip from the streaming side and wait up to one poll interval
+  4. Assert `GET /api/galleries` on the **streaming** server includes the analysis-registered gallery
+- **Cleanup:** DELETE the gallery on the analysis server (its origin)
+
 ---
 
 ## 5. Test Group C — Dashboard Metrics
@@ -169,3 +178,4 @@ test/fixtures/face_clear.jpg  (existing fixture, reused)
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-07-08 | LTS Engineering Team | Initial release — TC for Face Search Condition Sync |
+| 1.1 | 2026-07-08 | LTS Engineering Team | Added TC-FSC-B-005 — verifies a condition registered directly on the analysis server is pulled back to the streaming server (bidirectional sync fix) |

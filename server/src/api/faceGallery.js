@@ -12,10 +12,6 @@ function clientIp(req) {
   return (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
 }
 
-function syncIfStreaming(db) {
-  if (process.env.SERVER_MODE === 'streaming') faceSearchSync.pushReconcile(db);
-}
-
 // Multer: memory storage — process buffer directly, no temp files
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -45,6 +41,10 @@ function multerErrorHandler(err, _req, res, next) {
  */
 function faceGalleryRouter(db, pipelineManager, getFaceService, analysisClient = null) {
   const router = Router();
+
+  function syncIfStreaming() {
+    if (process.env.SERVER_MODE === 'streaming') faceSearchSync.pushReconcile(db, pipelineManager);
+  }
 
   // ── Galleries CRUD ────────────────────────────────────────────────────────
 
@@ -80,7 +80,7 @@ function faceGalleryRouter(db, pipelineManager, getFaceService, analysisClient =
         ip:      clientIp(req),
         detail:  { galleryId: gallery.id, name: gallery.name, type: gallery.type },
       });
-      syncIfStreaming(db);
+      syncIfStreaming();
       res.status(201).json({ success: true, data: { ...gallery, faceCount: 0 } });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -103,7 +103,7 @@ function faceGalleryRouter(db, pipelineManager, getFaceService, analysisClient =
         ip:      clientIp(req),
         detail:  { galleryId: g.id, name: g.name, type: g.type, faceCount },
       });
-      syncIfStreaming(db);
+      syncIfStreaming();
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -183,7 +183,7 @@ function faceGalleryRouter(db, pipelineManager, getFaceService, analysisClient =
       if (pipelineManager && typeof pipelineManager.reloadPersistentGallery === 'function') {
         pipelineManager.reloadPersistentGallery();
       }
-      syncIfStreaming(db);
+      syncIfStreaming();
 
       res.status(201).json({
         success: true,
@@ -211,7 +211,7 @@ function faceGalleryRouter(db, pipelineManager, getFaceService, analysisClient =
       if (pipelineManager && typeof pipelineManager.reloadPersistentGallery === 'function') {
         pipelineManager.reloadPersistentGallery();
       }
-      syncIfStreaming(db);
+      syncIfStreaming();
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
