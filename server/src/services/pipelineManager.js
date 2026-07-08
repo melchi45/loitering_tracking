@@ -665,7 +665,7 @@ class PipelineManager {
             // Emit face detections as separate objects — only if face module enabled
             if (analyticsConfig.isEnabled('face') && detectedFaces.length > 0) {
               const { faces: namedFaces, crossCameraTransitions, pendingMatchEvents } =
-                this._assignFaceIds(camera.id, detectedFaces, timestamp);
+                this._assignFaceIds(camera.id, camera.name || camera.id, detectedFaces, timestamp);
 
               // ── v1.1: Async crop + emit face_match + persist ──
               if (pendingMatchEvents && pendingMatchEvents.length > 0) {
@@ -1675,7 +1675,7 @@ class PipelineManager {
 
     if (analyticsConfig.isEnabled('face') && remoteFaces.length > 0) {
       const { faces: namedFaces, crossCameraTransitions, pendingMatchEvents } =
-        this._assignFaceIds(_cameraId, remoteFaces, _ts);
+        this._assignFaceIds(_cameraId, camera.name || camera.id, remoteFaces, _ts);
 
       if (pendingMatchEvents && pendingMatchEvents.length > 0) {
         const _io = this._io;
@@ -1931,11 +1931,12 @@ class PipelineManager {
    * Expired gallery entries (>FACE_EXPIRY_MS since last seen) are pruned each call.
    *
    * @param {string} cameraId      - ID of the camera that captured these faces
+   * @param {string} cameraName    - Display name of that camera (camera.name || camera.id)
    * @param {Array}  detectedFaces - Output from attributePipeline (each may have .embedding)
    * @param {number} timestamp     - Current frame timestamp (ms since epoch)
    * @returns {Array} detectedFaces with faceId, matchScore, and crossCamera fields added
    */
-  _assignFaceIds(cameraId, detectedFaces, timestamp) {
+  _assignFaceIds(cameraId, cameraName, detectedFaces, timestamp) {
     // Prune stale entries from the shared gallery (in-place replacement)
     this._sharedFaceGallery = this._sharedFaceGallery.filter(
       g => timestamp - g.lastSeenAt < FACE_EXPIRY_MS
@@ -2009,6 +2010,7 @@ class PipelineManager {
             const matchEvt2 = {
               faceId:      bestEntry.faceId,
               cameraId,
+              cameraName,
               identity:    namedMatch2.name,
               galleryId:   namedMatch2.galleryId,
               galleryType: galleryType2,
@@ -2056,6 +2058,7 @@ class PipelineManager {
           const matchEvt = {
             faceId:      newId,
             cameraId,
+            cameraName,
             identity:    namedMatch.name,
             galleryId:   namedMatch.galleryId,
             galleryType,

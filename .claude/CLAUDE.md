@@ -337,6 +337,7 @@ loitering_tracking/
 | DELETE | `/api/galleries/:id/faces/:faceId` | 얼굴 삭제 (GDPR 삭제권) |
 | GET | `/api/galleries/cross-camera-stats` | 크로스카메라 Re-ID 통계 |
 | GET | `/api/galleries/trajectories` | 인물 이동 궤적 조회 (query: maxAgeMs) |
+| GET | `/api/galleries/match-history` | 얼굴 매칭 이력 조회 (query: limit(기본 50, 최대 200), cameraId?, galleryType?, from?, to? — cameraName 포함) |
 
 ### 스냅샷 · 검색 · 통계
 

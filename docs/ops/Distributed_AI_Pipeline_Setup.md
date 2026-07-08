@@ -949,6 +949,25 @@ curl -X POST http://192.168.1.200:3001/api/analysis/face-embed \
 
 **원인 3 — analysis 서버가 재시작되어 미러가 초기화됨:** 정상 동작입니다. 미러는 순수 인메모리가 아니라 `faceGalleries`/`faceGalleryFaces`에 `source:'synced'`로 저장되지만, 재시작 직후에는 다음 push/poll 주기(최대 5초)까지 최신 상태가 아닐 수 있습니다.
 
+### 9.12 Face ID 탭 Live Matches가 새로고침하면 사라짐 / 카메라가 ID로 표시됨
+
+**증상 1:** Face ID 탭에서 실시간으로 보이던 매칭 기록이 페이지 새로고침 후 비어 있음
+
+**원인:** `faceMatchHistory` DB 테이블 저장 자체는 정상 동작합니다 (`pipelineManager.js`가 combined/streaming 양쪽 모드에서 매 매칭마다 저장). 문제는 조회 쪽입니다 — `FaceGalleryTab.tsx`의 Live Matches 목록은 `face_match` Socket.IO 이벤트로만 채워지며, 마운트 시 DB에서 이력을 불러오는 코드가 없었습니다.
+
+**해결 (코드 수정 적용됨):** `GET /api/galleries/match-history?limit=50`를 마운트 시 호출해 최근 이력을 먼저 채운 뒤, 이후 실시간 이벤트가 그 위에 이어붙습니다.
+
+```bash
+# 저장 여부 직접 확인
+curl http://localhost:3443/api/galleries/match-history?limit=5
+```
+
+**증상 2:** Live Matches의 카메라가 이름이 아니라 내부 ID(해시처럼 보이는 문자열)로 표시됨
+
+**원인:** `pipelineManager.js`의 `_assignFaceIds()`가 `cameraId`만 받고 `camera.name`을 전달받지 않아, 매칭 이벤트에 `cameraName` 필드 자체가 없었습니다.
+
+**해결 (코드 수정 적용됨):** `_assignFaceIds(cameraId, cameraName, detectedFaces, timestamp)`로 시그니처 변경 — 매칭 이벤트·`face_match` 소켓 페이로드·DB 저장 레코드 모두에 `cameraName`이 포함됩니다. 이 수정 이전에 저장된 이력 레코드는 `cameraName`이 없으므로, 클라이언트가 카메라 목록에서 이름을 찾아 대체 표시합니다 (그래도 못 찾으면 원본 ID 표시).
+
 ---
 
 ## Revision History
@@ -961,3 +980,4 @@ curl -X POST http://192.168.1.200:3001/api/analysis/face-embed \
 | 1.3 | 2026-06-10 | 섹션 5.6 추가: Dashboard UI 런타임 감도 조정, `/api/analysis/config/fire-smoke` 엔드포인트; fireSmokeService 임계값 인스턴스 프로퍼티화 |
 | 1.4 | 2026-06-10 | 섹션 5.2.1 추가: 분석 이벤트 DB 저장 정책, `/api/analysis/events` GET/DELETE 엔드포인트, Dashboard Detections 탭 연동 |
 | 1.5 | 2026-07-08 | 섹션 9.10/9.11 추가: 얼굴 갤러리 등록 위임(`/api/analysis/face-embed`) 트러블슈팅, Face Search Condition 동기화(push+poll) 트러블슈팅 — [Design_Face_Search_Condition_Sync.md](../design/Design_Face_Search_Condition_Sync.md) 참조 |
+| 1.6 | 2026-07-08 | 섹션 9.12 추가: Face ID 탭 Live Matches 새로고침 시 소실 및 카메라 ID 표시 트러블슈팅 — [Design_Face_Match_History.md](../design/Design_Face_Match_History.md) 참조 |

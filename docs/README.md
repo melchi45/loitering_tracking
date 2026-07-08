@@ -128,6 +128,7 @@ test/              Test scripts (TC-based automation)
 | **ONVIF Metadata Pipeline** | [rfp/](rfp/RFP_ONVIF_Metadata_Pipeline.md) | [prd/](prd/PRD_ONVIF_Metadata_Pipeline.md) | [srs/](srs/SRS_ONVIF_Metadata_Pipeline.md) | [design/](design/Design_ONVIF_Metadata_Pipeline.md) | [tc/](tc/TC_ONVIF_Metadata_Pipeline.md) |
 | **RTSP / WebRTC Architecture** | [rfp/](rfp/RFP_RTSP_WebRTC_Architecture.md) | [prd/](prd/PRD_RTSP_WebRTC_Architecture.md) | [srs/](srs/SRS_RTSP_WebRTC_Architecture.md) | [design/](design/Design_RTSP_WebRTC_Architecture.md) | [tc/](tc/TC_RTSP_WebRTC_Architecture.md) |
 | **Face Search Condition Sync** | [rfp/](rfp/RFP_Face_Search_Condition_Sync.md) | [prd/](prd/PRD_Face_Search_Condition_Sync.md) | [srs/](srs/SRS_Face_Search_Condition_Sync.md) | [design/](design/Design_Face_Search_Condition_Sync.md) | [tc/](tc/TC_Face_Search_Condition_Sync.md) |
+| **Face Match History** | [rfp/](rfp/RFP_Face_Match_History.md) | [prd/](prd/PRD_Face_Match_History.md) | [srs/](srs/SRS_Face_Match_History.md) | [design/](design/Design_Face_Match_History.md) | [tc/](tc/TC_Face_Match_History.md) |
 
 ---
 
@@ -357,7 +358,7 @@ flowchart LR
 | ✅ `test/api/streaming_mode_model_skip.test.js` | [TC_Streaming_Model_Load_Policy](tc/TC_Streaming_Model_Load_Policy.md) | `SERVER_MODE=streaming` model-skip contract — unit tests | **Streaming** | `node test/api/streaming_mode_model_skip.test.js` |
 | ✅ `test/api/streaming_without_analysis_url.test.js` | [TC_Distributed_AI_Pipeline](tc/TC_Distributed_AI_Pipeline.md) | Streaming mode fallback when `ANALYSIS_SERVER_URL` unset | **Streaming** | `node test/api/streaming_without_analysis_url.test.js` |
 | ✅ `test/api/face_search_condition_sync.test.js` | [TC_Face_Search_Condition_Sync](tc/TC_Face_Search_Condition_Sync.md) | Groups A (Delegation), B (Push/Poll), C (Metrics) | **Streaming** | `node test/api/face_search_condition_sync.test.js` |
-| 📋 `test/api/face_match_history.test.js` | [TC_Dashboard_Sidebar_Face_ID](tc/TC_Dashboard_Sidebar_Face_ID.md) | Group E (Match History CRUD) | All | `node test/api/face_match_history.test.js` |
+| ✅ `test/api/face_match_history.test.js` | [TC_Face_Match_History](tc/TC_Face_Match_History.md) · [TC_Dashboard_Sidebar_Face_ID](tc/TC_Dashboard_Sidebar_Face_ID.md) | Groups A (Endpoint), B (Camera Name) | All | `node test/api/face_match_history.test.js` |
 
 ### Phase-2 — Integration Tests (`test/integration/`)
 
@@ -384,7 +385,7 @@ flowchart LR
 
 | Phase | Scope | Scripts | Status |
 |---|---|---|---|
-| Phase-1 (API) | REST API tests — 38 scripts (✅ exist) + 1 (📋 planned) | 39 | ✅ 350+ pass, 0 fail (existing) |
+| Phase-1 (API) | REST API tests — 39 scripts (✅ exist) | 39 | ✅ 350+ pass, 0 fail (existing) |
 | Phase-2 (Integration) | Socket.IO / MongoDB integration tests — 3 scripts | 3 | 🕐 Planned |
 | Phase-3 (E2E) | Playwright browser automation — 1 script (placeholder exists) | 1 | 🖥 Planned |
 
@@ -448,6 +449,7 @@ node test/generate_report.js
 | 2026-06-25 | **docs/README.md v2.0 — Comprehensive update**: (1) Added 7 fully documented modules missing from table (AI_Missing_Person_Detection, AI_Model_Catalog, Distributed_AI_Pipeline, Fullscreen_Camera_View, ONVIF_Metadata_Pipeline, RTSP_WebRTC_Architecture, User_Profile); (2) Added "Partially Documented Modules" section (Admin Dashboard, Dashboard Analysis Mode, ICE Test UI, Thermal Radiometry Overlay, RTSP Capture Backend, FFmpeg RTSP Capture, Streaming Model Load Policy); (3) Added "Design-Only / Architectural Reference Documents" section (9 docs: Server_Architecture, WebRTC_Engine_Modes, WebRTC_Client_Telemetry, ONVIF_Timeline, AI_AppearanceReID, AI_ReID, Client_Log_Backchannel, DataChannel_CameraEvents, FullscreenPanel_Splitbar); (4) Added "Operations Guides" section (11 docs with design cross-refs); (5) Added "Document Cross-Reference Map" section with layered Mermaid diagrams and inter-module dependency tables; (6) Updated Test Script Status — added 16 previously unlisted Phase-1 scripts; updated Phase Coverage Summary from 23→38 scripts |
 | 2026-06-25 | **Admin Dashboard TC mode classification**: Phase-1 table "Server Mode" column added — 3 suites marked Analysis (skipped in streaming), 3 suites marked Streaming (skipped in analysis); yellow warning banner removed; suite headers now show mode badges (purple=Analysis, cyan=Streaming) and skip count |
 | 2026-07-08 | **Face Search Condition Sync SDLC chain authored** — RFP/PRD/SRS/Design/TC_Face_Search_Condition_Sync.md; fixes gallery photo enrollment failing on `SERVER_MODE=streaming` (`/api/analysis/face-embed` delegation endpoint) and adds Analysis Server Dashboard visibility (push+5s-poll mirror of `faceGalleries`/`faceGalleryFaces` tagged `source:'local'|'synced'`, no new DB table); `test/api/face_search_condition_sync.test.js` added (`streamingOnly`) |
+| 2026-07-08 | **Face Match History SDLC chain authored** — RFP/PRD/SRS/Design/TC_Face_Match_History.md; fixes Live Matches emptying on refresh (`GET /api/galleries/match-history` — the write path already worked, only the read side was missing), adds `cameraName` threading through `pipelineManager._assignFaceIds()`, and a new "Face Matches" point-marker row in the Fullscreen Detections timeline; `test/api/face_match_history.test.js` fills the previously-📋-planned slot (no flag, all modes) |
 
 ---
 
@@ -458,3 +460,4 @@ node test/generate_report.js
 | 1.0 | 2026-05-28 | Initial release |
 | 2.0 | 2026-06-25 | Full documentation coverage — added partial/design-only/ops sections, cross-reference map, 16 missing test scripts |
 | 2.1 | 2026-07-08 | Added Face Search Condition Sync module (RFP/PRD/SRS/Design/TC), 39th test script, ops guide troubleshooting cross-ref |
+| 2.2 | 2026-07-08 | Added Face Match History module (RFP/PRD/SRS/Design/TC); `face_match_history.test.js` now ✅ (was 📋 planned) |

@@ -241,6 +241,28 @@ function faceGalleryRouter(db, pipelineManager, getFaceService, analysisClient =
     }
   });
 
+  // GET /api/galleries/match-history?limit=50&cameraId=&galleryType=&from=&to=
+  router.get('/match-history', (req, res) => {
+    try {
+      const limit       = Math.min(200, parseInt(req.query.limit) || 50);
+      const cameraId    = req.query.cameraId    ? String(req.query.cameraId)    : null;
+      const galleryType = req.query.galleryType ? String(req.query.galleryType) : null;
+      const fromTs      = req.query.from ? new Date(String(req.query.from)).getTime() : null;
+      const toTs        = req.query.to   ? new Date(String(req.query.to)).getTime()   : null;
+
+      let matches = db.all('faceMatchHistory');
+      if (cameraId)    matches = matches.filter((m) => m.cameraId === cameraId);
+      if (galleryType) matches = matches.filter((m) => m.galleryType === galleryType);
+      if (fromTs)      matches = matches.filter((m) => (m.timestamp || 0) >= fromTs);
+      if (toTs)        matches = matches.filter((m) => (m.timestamp || 0) <= toTs);
+
+      matches.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+      res.json({ success: true, data: matches.slice(0, limit) });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   return router;
 }
 

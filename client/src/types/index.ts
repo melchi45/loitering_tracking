@@ -127,6 +127,7 @@ export interface EnrolledFace {
 export interface FaceMatchEvent {
   faceId:        string;
   cameraId:      string;
+  cameraName?:   string;   // absent on rows persisted before this field existed
   identity:      string;
   galleryId:     string;
   galleryType:   GalleryType;

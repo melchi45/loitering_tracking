@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-AI-03 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
-| **Date** | 2026-05-26 |
+| **Date** | 2026-07-08 |
 | **Parent PRD** | prd/PRD_AI_Face_Recognition.md |
 | **Parent RFP** | rfp/RFP_AI_Face_Recognition.md |
 
@@ -205,6 +205,7 @@ Server start
   {
     "faceId":      "F7",
     "cameraId":    "cam-01",
+    "cameraName":  "TNO-C3020T",
     "identity":    "Kim Minsu",
     "galleryId":   "gallery-uuid",
     "galleryType": "missing",
@@ -214,6 +215,7 @@ Server start
   }
   ```
 - `galleryType` must be populated from the gallery record at emit time
+- `cameraName` (v1.1, see `SRS_Face_Match_History.md` FR-FMH-002) is `camera.name || camera.id`, resolved at the call site that already has the full camera object in scope — never omitted going forward, though rows persisted before this field existed will lack it
 
 ### FR-FAC-022 — Identity Assignment on Detection Object
 
@@ -400,6 +402,7 @@ Server start
 interface FaceMatchEvent {
   faceId:      string;     // shared gallery face ID (e.g. 'F7')
   cameraId:    string;     // camera that detected the match
+  cameraName?: string;     // v1.1 — camera.name || camera.id; absent on pre-v1.1 persisted rows
   identity:    string;     // enrolledFace.name
   galleryId:   string;     // source gallery UUID
   galleryType: GalleryType;
@@ -425,6 +428,7 @@ interface FaceMatchEvent {
 | FR-FAC-017 | DELETE | `/api/galleries/:id/faces/:faceId` | None | Delete enrolled face |
 | FR-FAC-043 | GET | `/api/faces/trajectories` | None | Active person trajectories |
 | FR-FAC-043 | GET | `/api/faces/cross-camera-stats` | None | Cross-camera Re-ID stats |
+| FR-FMH-010 | GET | `/api/galleries/match-history` | None | Query persisted `faceMatchHistory` — see `SRS_Face_Match_History.md` |
 
 ### 11.2 Socket.IO Event Summary
 
@@ -455,3 +459,4 @@ interface FaceMatchEvent {
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for AI Face Recognition |
+| 1.1 | 2026-07-08 | LTS Engineering Team | Added `cameraName` field to `face_match` payload (FR-FAC-021) and `FaceMatchEvent` schema (§10.3); added `GET /api/galleries/match-history` to §11.1 — full spec in new `SRS_Face_Match_History.md` |

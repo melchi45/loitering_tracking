@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useI18n } from '../i18n';
 import type { FaceGallery, EnrolledFace, FaceMatchEvent, GalleryType } from '../types';
 import { GALLERY_TYPE_META, GALLERY_TYPE_ORDER } from '../utils/galleryTypeMeta';
+import { useCameraStore } from '../stores/cameraStore';
 
 const API = '/api/galleries';
 
@@ -137,10 +138,12 @@ function UploadArea({ galleryId, onEnrolled, t }: UploadAreaProps) {
 // ── MatchLog ──────────────────────────────────────────────────────────────────
 
 function MatchLog({ events, t }: { events: FaceMatchEvent[]; t: ReturnType<typeof useI18n>['t'] }) {
+  const cameras = useCameraStore(s => s.cameras);
   if (!events.length) return <EmptyState icon="👁" text={String(t.faceNoMatches)} />;
   return (
     <div className="space-y-1 max-h-48 overflow-y-auto pr-0.5">
       {events.map((ev, i) => {
+        const cameraLabel = ev.cameraName ?? cameras.find(c => c.id === ev.cameraId)?.name ?? ev.cameraId;
         const isMissing = ev.galleryType === 'missing';
         const isVip     = ev.galleryType === 'vip';
         const isBlock   = ev.galleryType === 'blocklist';
@@ -171,7 +174,7 @@ function MatchLog({ events, t }: { events: FaceMatchEvent[]; t: ReturnType<typeo
                 <span className={`font-bold text-[10px] truncate ${isMissing ? 'text-red-200' : 'text-yellow-300'}`}>{ev.identity}</span>
                 <span className="text-[9px] text-gray-500 flex-shrink-0">{pct(ev.matchScore)}</span>
               </div>
-              <div className="text-[9px] text-gray-500 truncate">{ev.cameraId} · {formatTime(ev.timestamp)}</div>
+              <div className="text-[9px] text-gray-500 truncate">{cameraLabel} · {formatTime(ev.timestamp)}</div>
             </div>
             <span className="text-lg flex-shrink-0">{icon}</span>
           </div>
@@ -267,7 +270,19 @@ export default function FaceGalleryTab() {
     } catch (_) {} finally { setLoadingFaces(false); }
   }, []);
 
+  const fetchMatchHistory = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/match-history?limit=50`);
+      const j = await r.json();
+      if (j.success) {
+        matchLogRef.current = j.data;
+        setMatchLog(j.data);
+      }
+    } catch (_) {}
+  }, []);
+
   useEffect(() => { fetchGalleries(); }, [fetchGalleries]);
+  useEffect(() => { fetchMatchHistory(); }, [fetchMatchHistory]);
 
   useEffect(() => {
     if (selectedId) fetchFaces(selectedId);

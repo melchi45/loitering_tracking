@@ -24,6 +24,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import type { FaceMatchEvent } from '../types';
+import { GALLERY_TYPE_META } from '../utils/galleryTypeMeta';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -145,6 +147,8 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
   const [customApplied, setCustomApplied] = useState<{ from: string; to: string } | null>(null);
   const [showDetail,    setShowDetail]    = useState(true);  // toggle individual rows
   const [containerW,    setContainerW]    = useState(800);   // tracked via ResizeObserver
+  const [matches,       setMatches]       = useState<FaceMatchEvent[]>([]);
+  const [selectedMatch, setSelectedMatch] = useState<FaceMatchEvent | null>(null);
 
   // Per-track snapshot cache: objectId → snapshot array
   const [snapCache,      setSnapCache]      = useState<Map<string, DetectionSnapshot[]>>(new Map());
@@ -207,6 +211,22 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
       })
       .catch(e => console.error('[DetectionsTimeline] fetch error:', e))
       .finally(() => setLoading(false));
+
+    // Face match events for this camera, scoped to the same range — rendered as a
+    // dedicated point-marker row rather than joined onto a specific track's bar.
+    const matchParams = new URLSearchParams({ cameraId, limit: '200' });
+    if (range === 'custom' && customApplied) {
+      matchParams.set('from', customApplied.from);
+      matchParams.set('to',   customApplied.to);
+    } else {
+      const now = Date.now();
+      matchParams.set('from', new Date(now - (RANGE_MS[range] ?? RANGE_MS['1H'])).toISOString());
+      matchParams.set('to',   new Date(now).toISOString());
+    }
+    fetch(`/api/galleries/match-history?${matchParams}`)
+      .then(r => r.json())
+      .then(d => setMatches(d.success ? d.data : []))
+      .catch(e => console.error('[DetectionsTimeline] match-history fetch error:', e));
   }, [fetchKey, range, customApplied, classFilter]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Visible tracks ────────────────────────────────────────────────────────────
@@ -467,7 +487,7 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
           {/* ── Individual track rows (scroll=vertical, no zoom) ─────────────── */}
           {showDetail && (
             <div
-              className="flex-1 min-h-0 overflow-y-auto"
+              className="flex-1 min-h-0 overflow-y-auto relative"
               onMouseDown={handleMouseDown}
               onClick={() => { if (!hasDraggedRef.current) { setSelected(null); setZoomedSnap(null); } }}
             >
@@ -488,6 +508,59 @@ export default function DetectionsTimelineInline({ cameraId }: { cameraId: strin
               {!loading && visibleTracks.length === 0 && (
                 <div className="flex items-center justify-center py-8 text-gray-600 text-xs">
                   No detection tracks in this range.
+                </div>
+              )}
+
+              {matches.length > 0 && (
+                <div className="flex" style={{ height: ROW_H, borderBottom: '1px solid rgba(55,65,81,0.4)' }}>
+                  <div className="flex-shrink-0 flex items-center px-2 border-r border-gray-700/50 text-[9px] font-bold text-gray-400"
+                       style={{ width: LABEL_W }}>
+                    🔍 Face Matches
+                  </div>
+                  <div className="flex-1 relative overflow-hidden" style={{ height: ROW_H }}>
+                    {matches.map((m) => {
+                      const pct = ((m.timestamp - viewStart) / viewSpan) * 100;
+                      if (pct < 0 || pct > 100) return null;
+                      const meta = GALLERY_TYPE_META[m.galleryType];
+                      return (
+                        <div key={`${m.faceId}-${m.timestamp}`}
+                             className="absolute cursor-pointer hover:z-20"
+                             style={{
+                               left:      `${pct}%`,
+                               top:       BAR_TOP + BAR_H / 2 - 7,
+                               width:     14,
+                               height:    14,
+                               transform: 'translateX(-50%) rotate(45deg)',
+                               backgroundColor: meta.rowClass.includes('red') ? '#ef4444'
+                                 : meta.rowClass.includes('yellow') ? '#eab308'
+                                 : meta.rowClass.includes('orange') ? '#f97316' : '#3b82f6',
+                               border: '1px solid rgba(255,255,255,0.6)',
+                               zIndex: 4,
+                             }}
+                             onMouseDown={e => e.stopPropagation()}
+                             onClick={e => { e.stopPropagation(); setSelectedMatch(prev => prev === m ? null : m); }}
+                             title={`${m.identity} — ${(m.matchScore * 100).toFixed(0)}% — ${new Date(m.timestamp).toLocaleTimeString('en', { hour12: false })}`}
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {selectedMatch && (
+                <div className="absolute z-30 bg-gray-900 border border-gray-600 rounded-lg shadow-xl p-2 flex gap-2 items-start"
+                     style={{ top: 60, right: 12, width: 220 }}
+                     onMouseDown={e => e.stopPropagation()}
+                >
+                  <img src={selectedMatch.thumbnail} alt={selectedMatch.identity}
+                       className="w-12 h-12 rounded object-cover flex-shrink-0" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[10px] font-bold text-gray-100 truncate">{selectedMatch.identity}</p>
+                    <p className="text-[9px] text-gray-400">{(selectedMatch.matchScore * 100).toFixed(1)}% · {selectedMatch.galleryType}</p>
+                    <p className="text-[9px] text-gray-500">{new Date(selectedMatch.timestamp).toLocaleString()}</p>
+                  </div>
+                  <button onClick={() => setSelectedMatch(null)}
+                          className="text-gray-500 hover:text-white text-xs flex-shrink-0">✕</button>
                 </div>
               )}
 
