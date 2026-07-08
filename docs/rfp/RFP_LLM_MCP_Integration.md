@@ -527,6 +527,13 @@ All tool inputs validated via Zod schemas before reaching the LTS API. Invalid i
 | `query_analysis_events` | Read | AI 감지 이벤트 조회 (배회/화재/연기) |
 | `get_detection_tracks` | Read | 객체 감지 트랙 이력 (체류 시간/클래스별) |
 | `get_analysis_metrics` | Read | AI 파이프라인 메트릭 (FPS/GPU/모델 정보) |
+| `query_face_trajectories` | Read | 크로스카메라 얼굴 궤적 DB 조회 (v1.2) |
+| `get_model_catalog` | Read | YOLO 탐지 모델 카탈로그 조회 — 벤치마크·다운로드 상태·활성 모델 (v1.3) |
+| `get_fire_smoke_config` | Read | 화재/연기 감지 confidence·NMS 임계값 조회 (v1.3) |
+| `get_tracker_config` | Read | ByteTrack/Kalman 추적기 파라미터 조회 (v1.3) |
+| `search_all` | Read | alerts/detections/faces/events/matches 통합 전문 검색 (v1.3) |
+| `list_face_galleries` | Read | 얼굴 갤러리 목록·등록 얼굴 수 조회 (v1.3) |
+| `get_onvif_snapshot` | Read | ONVIF 이벤트 발생 시점 카메라 프레임 조회 (v1.3) |
 
 ### B. Example LLM Interaction Flows
 
@@ -585,6 +592,13 @@ User: "Zone B keeps triggering false alarms — why?"
 | `query_analysis_events` | `GET /api/analysis/events` |
 | `get_detection_tracks` | `GET /api/analysis/detection-tracks` |
 | `get_analysis_metrics` | `GET /api/analysis/metrics` |
+| `query_face_trajectories` | `GET /api/analysis/face-trajectories` |
+| `get_model_catalog` | `GET /api/analysis/models` |
+| `get_fire_smoke_config` | `GET /api/analysis/config/fire-smoke` |
+| `get_tracker_config` | `GET /api/tracker/config` |
+| `search_all` | `GET /api/search` |
+| `list_face_galleries` | `GET /api/galleries` |
+| `get_onvif_snapshot` | `GET /api/onvif-snapshots` |
 
 ---
 
@@ -719,3 +733,4 @@ Can you summarize the camera events by time slot?
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for LLM MCP Integration |
 | 1.1 | 2026-06-25 | LTS Engineering Team | Appendix A 도구 목록 10종 추가 (서버 상태, 카메라 CRUD, ONVIF, AI Detection); Appendix C API 엔드포인트 매핑 업데이트 |
+| 1.3 | 2026-07-08 | LTS Engineering Team | SRS/Design 커버리지 점검(2026-07-08) 결과 반영 — Appendix A/C에 query_face_trajectories(v1.2, 기존 누락분) 및 6개 v1.3 도구(get_model_catalog, get_fire_smoke_config, get_tracker_config, search_all, list_face_galleries, get_onvif_snapshot) 추가 |

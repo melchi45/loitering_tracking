@@ -80,4 +80,58 @@ export function registerOnvifTools(server, client) {
       }
     }
   );
+
+  // ── get_onvif_snapshot ──────────────────────────────────────────────────────
+  server.tool(
+    'get_onvif_snapshot',
+    'Retrieve the camera frame captured at the moment an ONVIF event started (e.g. the frame when a ' +
+    'fire/motion/line-crossing alarm fired). Returns the JPEG image plus event metadata — use after ' +
+    'query_onvif_events to visually verify a specific event.',
+    {
+      eventId:   z.string().optional().describe('Specific ONVIF event ID to fetch the snapshot for'),
+      cameraId:  z.string().optional().describe('Filter by camera ID'),
+      topicType: z.string().optional().describe('Filter by ONVIF topicType (e.g. earlyFireDetection)'),
+      from:      z.string().optional().describe('ISO8601 start time'),
+      to:        z.string().optional().describe('ISO8601 end time'),
+      limit:     z.number().int().min(1).max(20).optional().describe('Max snapshots (default 3)'),
+    },
+    async ({ eventId, cameraId, topicType, from, to, limit = 3 }) => {
+      try {
+        const params = { limit };
+        if (eventId)   params.eventId   = eventId;
+        if (cameraId)  params.cameraId  = cameraId;
+        if (topicType) params.topicType = topicType;
+        if (from)      params.from      = from;
+        if (to)        params.to        = to;
+
+        const { total, snapshots = [] } = await client.get('/api/onvif-snapshots', params);
+
+        if (snapshots.length === 0) {
+          return { content: [{ type: 'text', text: 'No ONVIF snapshots found for the given filters.' }] };
+        }
+
+        const content = [{
+          type: 'text',
+          text: `${total ?? snapshots.length} snapshot(s) found (showing ${snapshots.length}):`,
+        }];
+
+        for (const s of snapshots) {
+          content.push({
+            type: 'text',
+            text: `📷 Camera: ${s.cameraId}  🕐 ${s.timestamp}  Topic: ${s.topicType || s.topicLabel || 'N/A'}`,
+          });
+          if (s.frameData) {
+            const base64 = s.frameData.replace(/^data:image\/[^;]+;base64,/, '');
+            content.push({ type: 'image', data: base64, mimeType: 'image/jpeg' });
+          } else {
+            content.push({ type: 'text', text: '(no frame captured for this event)' });
+          }
+        }
+
+        return { content };
+      } catch (err) {
+        return { content: [{ type: 'text', text: `Error: ${err.message}` }], isError: true };
+      }
+    }
+  );
 }

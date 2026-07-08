@@ -66,13 +66,32 @@ loitering_tracking/
 │   │   ├── MsalService.js          # Microsoft MSAL 인증
 │   │   ├── mongoDbService.js       # MongoDB 연결 · 5초 keep-alive 핑 · 재연결 Retry (선형 back-off) · findDirect() 직접 쿼리 (onvif_snapshots 등 비hydration 테이블용)
 │   │   ├── analyticsConfig.js      # 분석 설정
+│   │   ├── missingPersonService.js # 실종자 등록·검색·감지 매칭·상태 관리
+│   │   ├── systemMetrics.js        # CPU·메모리·GPU·디스크 I/O 수집 (admin/system)
+│   │   ├── TcRunnerService.js      # TC-ID 단위 테스트 실행기 (admin/tc-results)
 │   │   └── channelSlotService.js   # Dashboard Channel Slot 검증·자동배정·시작 시 backfill 마이그레이션 (MAX_CHANNEL_NUM)
+│   ├── api/                        # REST 리소스 라우터 (팩토리 함수, db/pipelineManager 주입)
+│   │   ├── cameras.js              # /api/cameras — CRUD·probe-channels·stream start/stop/reconnect·ai/toggle
+│   │   ├── zones.js                # /api/cameras/:cameraId/zones — 구역 CRUD
+│   │   ├── events.js               # /api/events, /api/alerts — buildEventsRouters()
+│   │   ├── analytics.js            # /api/analytics/config
+│   │   ├── tracker.js              # /api/tracker/config(/reset)
+│   │   ├── settings.js             # /api/settings — 범용 key-value 설정 API
+│   │   ├── missingPersons.js       # /api/missing-persons — 실종자 등록·검색·감지·통계
+│   │   ├── youtubeStreams.js       # /api/youtube-streams — YouTube 가상 카메라 CRUD
+│   │   ├── internal.js             # /internal/mediamtx — MediaMTX publish/unpublish 웹훅 (loopback 전용)
+│   │   ├── faceGallery.js          # /api/galleries — 갤러리·얼굴 등록(multer+sharp)·크로스카메라 통계
+│   │   ├── snapshots.js            # /api/snapshots — 감지 스냅샷 조회/삭제
+│   │   ├── search.js               # /api/search — alerts/detections/faces/events/matches 통합 검색
+│   │   └── stats.js                # /api/stats(/items,/hourly) — 대시보드 통계
 │   ├── routes/
-│   │   ├── admin.js                # 관리자 라우터
-│   │   ├── auth.js                 # 인증 라우터
+│   │   ├── admin.js                # 관리자 라우터 (/admin — 사용자·시스템·감사로그·TC결과)
+│   │   ├── auth.js                 # 인증 라우터 (/auth — 회원가입·로그인·OAuth)
 │   │   ├── analysisApi.js          # AI 분석 API (analysis/combined 모드)
 │   │   ├── analysisProxy.js        # 분석 API 프록시 (streaming 모드)
-│   │   └── onvifApi.js             # ONVIF 이벤트 REST API (GET/DELETE /api/onvif-events, GET /api/onvif-snapshots)
+│   │   ├── onvifApi.js             # ONVIF 이벤트 REST API (GET/DELETE /api/onvif-events, GET /api/onvif-snapshots)
+│   │   ├── internalApi.js          # /api/internal — ingest-daemon 전용 (frame/:cameraId JPEG, apprtp/:cameraId ONVIF 메타데이터)
+│   │   └── clientLogs.js           # /api/client-logs(/webrtc) — 브라우저 콘솔 로그·WebRTC 통계 수신
 │   ├── socket/
 │   │   └── streamHandler.js        # Socket.IO 스트림 이벤트
 │   ├── middleware/
@@ -84,7 +103,9 @@ loitering_tracking/
 │   │   └── installDb.js            # MongoDB 컬렉션·인덱스·사용자 생성 스크립트
 │   ├── config/                     # 환경별 설정
 │   └── utils/
-│       └── logger.js               # 프로덕션 로거 — [YY-MM-DD HH:mm:ss.sss] 타임스탬프, /var/log/lts 파일 저장, makeLineRelay
+│       ├── logger.js               # 프로덕션 로거 — [YY-MM-DD HH:mm:ss.sss] 타임스탬프, /var/log/lts 파일 저장, makeLineRelay
+│       ├── onvifParser.js          # ONVIF Application RTP 메타데이터 XML 파싱 (state-change dedup)
+│       └── channelRtsp.js          # NVR 채널별 RTSP URL 치환 (SUNAPI/ONVIF 경로 규칙)
 ├── client/src/
 │   ├── App.tsx
 │   ├── components/
@@ -194,18 +215,141 @@ loitering_tracking/
 
 ## API 엔드포인트
 
+> 라우터 소스: `server/src/api/*.js` (REST 리소스), `server/src/routes/*.js` (auth/admin/internal/onvif/client-logs).
+
+### 인증 (`/auth`)
+
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
-| GET | `/api/cameras` | 카메라 목록 조회 |
-| POST | `/api/cameras` | 카메라 추가 (body: channelSlot — Dashboard Channel Slot 1..MAX_CHANNEL_NUM, 생략 시 최저 빈 슬롯 자동 배정; maxChannel/supportSunapi/nvrProfiles — SUNAPI/ONVIF NVR 채널 정보, 편집 화면 채널 전환용) |
-| PUT | `/api/cameras/:id` | 카메라 설정 수정 (body: channelSlot?, channelIndex? 포함 — 409: 이미 사용 중인 channelSlot) |
-| POST | `/api/cameras/discover` | ONVIF 자동 탐색 |
-| GET | `/api/alerts` | 알림 목록 조회 |
-| PATCH | `/api/alerts/:id/acknowledge` | 알림 확인 처리 |
-| GET | `/api/zones` | 구역 목록 조회 |
-| POST | `/api/zones` | 구역 생성 |
-| PATCH | `/api/zones/:id` | 구역 수정 |
-| GET | `/api/analytics/summary` | 분석 요약 통계 |
+| POST | `/auth/register` | 회원가입 (첫 사용자는 자동 승인·admin, 이후는 status=pending) |
+| POST | `/auth/login` | 로그인 (accessToken 응답 + refreshToken 쿠키) |
+| POST | `/auth/refresh` | refreshToken 쿠키로 accessToken 재발급 (rotate) |
+| POST | `/auth/logout` | 로그아웃 (refreshToken 폐기) |
+| GET | `/auth/me` | 내 프로필 조회 |
+| PATCH | `/auth/me` | 내 프로필 수정 (body: name?, organization?, phone?, bio?, avatarDataUrl?) |
+| GET | `/auth/google`, `/auth/google/callback` | Google OAuth 로그인 |
+| GET | `/auth/microsoft`, `/auth/microsoft/callback` | Microsoft MSAL OAuth 로그인 |
+
+### 관리자 (`/admin`, admin 역할 전용)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/admin/users` | 사용자 목록 조회 (query: status, search) |
+| GET | `/admin/users/:id` | 사용자 상세 조회 |
+| PATCH | `/admin/users/:id` | 사용자 상태 변경 (body: action=approve\|reject\|revoke\|reactivate, role?) |
+| DELETE | `/admin/users/:id` | 사용자 삭제 |
+| GET | `/admin/system` | CPU·메모리·GPU·디스크 I/O·스토리지·DB 쿼리 통계 |
+| GET | `/admin/audit` | 감사 로그 조회 |
+| GET | `/admin/tc-results` | 최신 서버 시작 시 TC 테스트 실행 결과 (TC번호·SRS·Pass/Fail) |
+| DELETE | `/admin/tc-results` | TC 테스트 결과 전체 삭제 |
+| POST | `/admin/tc-results/run` | TC 테스트 수동 재실행 트리거 (body: { port? }) |
+| GET | `/admin/logs/recent` | 최근 서버 로그 조회 (query: source=server\|ingest\|mediamtx, limit) |
+| PATCH | `/admin/logs/level` | Socket.IO 릴레이 로그 레벨 런타임 변경 (body: { level } — 파일 로깅 불변) |
+
+### 카메라 (`/api/cameras`)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/api/cameras` | 카메라 목록 조회 (password 제외, pipelineStatus 포함) |
+| POST | `/api/cameras` | 카메라 추가 (body: channelSlot — Dashboard Channel Slot 1..MAX_CHANNEL_NUM, 생략 시 최저 빈 슬롯 자동 배정; maxChannel/supportSunapi/nvrProfiles — SUNAPI/ONVIF NVR 채널 정보) |
+| POST | `/api/cameras/discover` | ONVIF/UDP 자동 탐색 트리거 (결과는 Socket.IO `discovery:result`) |
+| POST | `/api/cameras/probe-channels` | 단일 IP SUNAPI/ONVIF MaxChannel 온디맨드 재탐지 (body: ip, httpPort?, onvifPort?, username?, password?, baseRtspUrl?, cameraId?) |
+| GET | `/api/cameras/:id` | 카메라 상세 조회 |
+| PUT | `/api/cameras/:id` | 카메라 설정 수정 (body: channelSlot?, channelIndex? 포함 — 409: 이미 사용 중인 channelSlot; rtspUrl/자격증명/webrtcEnabled 변경 시 파이프라인 자동 재시작) |
+| POST | `/api/cameras/:id/stream/reconnect` | 파이프라인 중지 후 재시작 |
+| DELETE | `/api/cameras/:id` | 카메라 삭제 (YouTube 카메라는 yt-dlp/ffmpeg 프로세스도 중지) |
+| POST | `/api/cameras/:id/ai/toggle` | AI 추론 ON/OFF 토글 (파이프라인 재시작 없이) |
+| POST | `/api/cameras/:id/stream/start` | 파이프라인 시작 |
+| POST | `/api/cameras/:id/stream/stop` | 파이프라인 중지 |
+
+### 구역 (`/api/cameras/:cameraId/zones`)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/api/cameras/:cameraId/zones` | 카메라별 구역 목록 조회 |
+| POST | `/api/cameras/:cameraId/zones` | 구역 생성 (body: name, polygon(≥3점), type?=MONITOR\|EXCLUDE, dwellThreshold?, minDisplacement?, reentryWindow?, schedule?, targetClasses?) |
+| PUT | `/api/cameras/:cameraId/zones/:id` | 구역 수정 |
+| DELETE | `/api/cameras/:cameraId/zones/:id` | 구역 삭제 |
+
+### 이벤트 & 알림 (`/api/events`, `/api/alerts`)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/api/events` | 이벤트 목록 조회 (query: cameraId, from, to, limit) |
+| GET | `/api/events/:id` | 이벤트 상세 조회 |
+| GET | `/api/events/:id/clip` | 배회 클립 영상 스트리밍 (HTTP Range 지원, video/mp4) |
+| GET | `/api/alerts` | 알림 목록 조회 (query: acknowledged, cameraId, limit) |
+| POST | `/api/alerts/:id/acknowledge` | 알림 확인 처리 |
+
+### 설정 (분석·추적기·범용 key-value)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET/PUT | `/api/analytics/config` | AI 분석 활성 항목 설정 (human/face 등) — streaming 모드는 analysis 서버로 자동 forward |
+| GET/PUT | `/api/tracker/config` | ByteTrack 파라미터 설정 (fastSpeedThreshold, fastQScale 등) |
+| POST | `/api/tracker/config/reset` | 추적기 설정 기본값 초기화 |
+| GET | `/api/settings` | 전체 설정 조회 (analytics/tracker/language/layout/webrtcConfig 등) |
+| GET/PUT/DELETE | `/api/settings/:key` | 개별 설정 키 조회/upsert/삭제 |
+
+### 실종자 수색 (`/api/missing-persons`)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| POST | `/api/missing-persons` | 실종자 프로필 등록 |
+| GET | `/api/missing-persons` | 실종자 검색 (query: q, name, age, gender, status=MISSING(기본), limit) |
+| GET | `/api/missing-persons/detections` | 날짜별 매칭 감지 조회 (query: date, missingPersonId, status, cameraId, limit) |
+| PUT | `/api/missing-persons/:id/status` | 실종자 상태 변경 (body: status=FOUND\|MISSING\|UNCONFIRMED, notes?) |
+| PUT | `/api/missing-persons/detections/:id/status` | 감지 확인 상태 변경 (body: status=PENDING\|CONFIRMED\|FALSE_POSITIVE, confirmedBy?) |
+| GET | `/api/missing-persons/stats` | 실종자 등록·감지 통계 |
+
+### YouTube 스트림 (`/api/youtube-streams`)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| POST | `/api/youtube-streams` | YouTube 스트림 수집 (body: youtubeUrl, name, resolution?, bitrate?, repeatPlayback?, webrtcEnabled?, channelSlot? — 생략 시 최저 빈 슬롯 자동 배정) |
+| GET | `/api/youtube-streams` | 활성 스트림 목록 조회 |
+| GET | `/api/youtube-streams/:id/status` | 스트림 상태 폴링 (starting 단계 UI용) |
+| PATCH | `/api/youtube-streams/:id` | 스트림 설정 수정 (재시작 트리거, body: channelSlot? 포함 — 409: 이미 사용 중인 channelSlot) |
+| DELETE | `/api/youtube-streams/:id` | 스트림 중지 및 카메라 레코드 삭제 |
+| POST | `/api/youtube-streams/:id/restart` | error 상태 스트림 수동 재시작 |
+
+### 내부 API (localhost 전용)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| POST | `/internal/mediamtx` | MediaMTX publish/unpublish 웹훅 (loopback 전용, body: { event, path }) |
+| POST | `/api/internal/frame/:cameraId` | ingest-daemon → AI JPEG 프레임 콜백 (body: image/jpeg binary, ~10 FPS) |
+| POST | `/api/internal/apprtp/:cameraId` | ingest-daemon → ONVIF Application RTP 콜백 (body: { pt, timestamp, seq, payload }) |
+
+### 얼굴 갤러리 (`/api/galleries`)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/api/galleries` | 갤러리 목록 조회 (faceCount 포함) |
+| POST | `/api/galleries` | 갤러리 생성 (body: name, description?, type?=general\|vip\|blocklist\|missing) |
+| DELETE | `/api/galleries/:id` | 갤러리 삭제 (소속 얼굴 전체 삭제 포함) |
+| GET | `/api/galleries/:id/faces` | 등록 얼굴 목록 조회 (embedding 제외) |
+| POST | `/api/galleries/:id/faces` | 얼굴 등록 (multipart: photo — 감지→임베딩 추출→64×64 썸네일 생성) |
+| DELETE | `/api/galleries/:id/faces/:faceId` | 얼굴 삭제 (GDPR 삭제권) |
+| GET | `/api/galleries/cross-camera-stats` | 크로스카메라 Re-ID 통계 |
+| GET | `/api/galleries/trajectories` | 인물 이동 궤적 조회 (query: maxAgeMs) |
+
+### 스냅샷 · 검색 · 통계
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
+| GET | `/api/snapshots` | 감지 스냅샷 목록 조회 (query: cameraId, objectId, className, isLoitering, from, to, q, limit, offset — cropData 제외) |
+| GET | `/api/snapshots/:id` | 스냅샷 상세 조회 (cropData 포함) |
+| DELETE | `/api/snapshots/:id` | 스냅샷 삭제 |
+| GET | `/api/search` | 통합 검색 — alerts/detections/faces/events/matches (query: q(필수), types?, from?, to?, minConfidence?, maxConfidence?, limit?, offset?) |
+| GET | `/api/stats` | 시스템 전체 통계 (카메라/구역/이벤트/알림/얼굴 요약) |
+| GET | `/api/stats/items` | 특정 타입·날짜·시간대 아이템 목록 (query: type(필수)=detections\|alerts\|matches\|events, date(필수), hour(필수, 0-23)) |
+| GET | `/api/stats/hourly` | 일자별 시간대 통계 (query: date, 기본 오늘) |
+
+### AI 분석 (`/api/analysis`, analysis/combined 모드)
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
 | GET | `/api/analysis/metrics` | 분석 서버 대시보드 메트릭 |
 | GET | `/api/analysis/client-status` | 분석 클라이언트 상태 (streaming 모드 전용 — 회로차단기 상태·통계) |
 | GET | `/api/analysis/config/fire-smoke` | 화재/연기 감지 임계값 조회 |
@@ -220,10 +364,11 @@ loitering_tracking/
 | GET | `/api/analysis/models` | YOLO 모델 카탈로그 조회 (다운로드 상태·활성 모델 포함) |
 | POST | `/api/analysis/models/switch` | 활성 YOLO 탐지 모델 런타임 전환 (body: modelId) |
 | POST | `/api/analysis/models/download` | YOLO 모델 다운로드 시작 (body: modelId) |
-| POST | `/api/faces/register` | 얼굴 등록 |
-| POST | `/api/faces/search` | 얼굴 검색 |
-| POST | `/api/youtube-streams` | YouTube 스트림 수집 (body: channelSlot — Dashboard Channel Slot, 생략 시 최저 빈 슬롯 자동 배정) *(구 표기 `/api/streams/youtube`는 오기 — 실제 마운트 경로로 정정, Channel Slot 기능 추가 시 확인됨)* |
-| PATCH | `/api/youtube-streams/:id` | YouTube 스트림 설정 수정 (body: channelSlot? 포함 — 409: 이미 사용 중인 channelSlot) |
+
+### ONVIF 이벤트 & 로그 & 헬스체크
+
+| 메서드 | 경로 | 설명 |
+|--------|------|------|
 | GET | `/health` | 서버 상태 확인 (maxChannelNum — 현재 유효 MAX_CHANNEL_NUM 포함) |
 | GET | `/api/client-logs` | 브라우저 콘솔 로그 조회 (query: level, sessionId, from, to, limit) |
 | POST | `/api/client-logs` | 브라우저 콘솔 로그 수신 (HTTP 직접 전송 경로) |
@@ -235,29 +380,35 @@ loitering_tracking/
 | GET | `/api/onvif-event-types` | ONVIF 이벤트 타입 레지스트리 전체 조회 (ever-seen topicTypes) |
 | DELETE | `/api/onvif-event-types` | ONVIF 이벤트 타입 레지스트리 초기화 (Admin 페이지용) |
 | GET | `/api/onvif-snapshots` | ONVIF 이벤트 시작 시점 프레임 조회 (query: eventId, cameraId, topicType, from, to, limit — frameData=base64 JPEG) |
-| GET | `/admin/system` | CPU·메모리·GPU·디스크 I/O·스토리지·DB 쿼리 통계 (admin 전용) |
-| GET | `/admin/tc-results` | 최신 서버 시작 시 TC 테스트 실행 결과 (TC번호·SRS·Pass/Fail, admin 전용) |
-| DELETE | `/admin/tc-results` | TC 테스트 결과 전체 삭제 (admin 전용) |
-| POST | `/admin/tc-results/run` | TC 테스트 수동 재실행 트리거 (admin 전용, body: { port? }) |
-| GET | `/admin/logs/recent` | 최근 서버 로그 조회 (query: source=server\|ingest\|mediamtx, limit — admin 전용) |
-| PATCH | `/admin/logs/level` | Socket.IO 릴레이 로그 레벨 런타임 변경 (body: { level } — admin 전용, 파일 로깅 불변) |
 
 ---
 
 ## Socket.IO 이벤트
 
+> 소스: `server/src/services/pipelineManager.js` (송신 대부분), `server/src/socket/streamHandler.js` (구독·발견 이벤트 수신), `client/src/App.tsx`/`hooks/`.
+
 | 이벤트 | 방향 | 설명 |
 |--------|------|------|
-| `frameData` | Server → Client | 어노테이션된 JPEG 프레임 |
-| `newAlert` | Server → Client | 신규 알림 발생 |
-| `alert:acknowledged` | Server → Client | 알림 확인 처리됨 |
-| `objectTracked` | Server → Client | 추적 객체 업데이트 |
-| `cameraStatus` | Server → Client | 카메라 연결 상태 변경 |
+| `frame` | Server → Client | 카메라별 어노테이션 JPEG 프레임 (`io.to(cameraId).volatile.emit`) |
+| `detections` | Server → Client | 프레임별 감지 박스 배열 (카메라 room 대상) |
+| `loitering` | Server → Client | 배회 이벤트 발생 (카메라 room 대상) |
+| `alert:new` | Server → Client | 신규 알림 발생 (전체 브로드캐스트) |
+| `snapshot:new` | Server → Client | 신규 감지 스냅샷 생성 (카메라 room 대상) |
+| `fire:alert` | Server → Client | 화재/연기 감지 알림 (카메라 room 대상) |
+| `face_match` | Server → Client | 얼굴 갤러리 매칭 이벤트 (전체 브로드캐스트) |
+| `missing_person_match` | Server → Client | 실종자 갤러리 매칭 시 `face_match`와 별도로 추가 브로드캐스트 |
 | `face:reidentified` | Server → Client | 얼굴 Re-ID 크로스카메라 전환 감지 |
 | `clothing:reidentified` | Server → Client | 의상 Appearance Re-ID 크로스카메라 전환 감지 |
-| `camera:capabilities` | Server → Client | 카메라 WebRTC 지원 여부 오버라이드 (mediasoup 모드 전용) |
-| `subscribeCamera` | Client → Server | 카메라 스트림 구독 |
+| `person:trajectory-update` | Server → Client | 인물 이동 궤적(segments) 갱신 — 크로스카메라 얼굴/의상 추적 패널용 |
+| `camera:status` | Server → Client | 카메라 연결 상태 변경 |
+| `camera:error` | Server → Client | 카메라 파이프라인 오류 (카메라 room 대상) |
+| `camera:stats` | Server → Client | 카메라 파이프라인 통계 (카메라 room 대상) |
+| `camera:stream-unavailable` | Server → Client | 스트림 소스 unreachable (카메라 room 대상) |
+| `camera:subscribe` / `camera:unsubscribe` | Client → Server | 카메라 스트림 구독/구독 해제 (body: `{ cameraId }`, ref-count 기반) |
+| `camera:capabilities` | Server → Client | 카메라 WebRTC 지원 여부 오버라이드 (mediasoup 모드) — 클라이언트 리스너만 존재, 현재 서버 emit 코드 없음(사문화됨, 확인 필요) |
 | `appRtp` | Server → Client | RTSP Application RTP 패킷 (ONVIF 메타데이터 등) |
+| `discovery:trigger` / `discovery:start` / `discovery:rescan` / `discovery:stop` | Client → Server | ONVIF/UDP 자동 탐색 시작·재스캔·중지 요청 |
+| `discovery:started` / `discovery:scanning` / `discovery:result` / `discovery:done` / `discovery:error` / `discovery:stopped` / `discovery:cleared` / `discovery:disabled` | Server → Client | 자동 탐색 진행 상태·결과 브로드캐스트 |
 | `client:log` | Client → Server | 브라우저 콘솔 로그 배치 (clientLogger 백채널) |
 | `client:webrtc-stats` | Client → Server | WebRTC PeerConnection getStats() 폴링 결과 |
 | `onvif:event` | Server → Client | ONVIF 상태 변화 이벤트 (DB 저장 후 브로드캐스트) |
@@ -301,6 +452,18 @@ node test/run_all.js
 docker compose up -d
 docker compose logs -f server
 docker compose build server && docker compose up -d server
+
+# ── GPU / ONNX Runtime / 진단 스크립트 ──────────────────────────────────────
+cd server
+npm run check:gpu             # CUDA/GPU 사용 가능 여부 점검
+npm run download-models       # YOLOv8 ONNX 모델 다운로드 (linux/windows 변형 스크립트 포함)
+npm run build-ort:auto        # onnxruntime CUDA 소스 빌드 자동화 (build-ort:auto:dry — dry-run)
+npm run discover               # 카메라 ONVIF/UDP 탐색 CLI (discoverCameras.js)
+npm run health                 # /health 헬스체크 CLI (healthCheck.js)
+npm run ice-test                # WebRTC ICE 연결 테스트 (ice-test:headless — 헤드리스)
+npm run turn-test               # TURN 서버 연결 테스트 (turn-test:headless — 헤드리스)
+npm run setup-env:linux         # 초기 환경 설정 스크립트 (setup-env:windows — PowerShell 버전)
+npm run check-capture-backend:linux  # CAPTURE_BACKEND 사전 점검 (check-capture-backend:windows)
 
 # ── MongoDB 원격 서버 초기 설정 ──────────────────────────────────────────────
 cd server && npm run install_db
@@ -381,7 +544,7 @@ npm run test:report
 
 ## MCP 도구 목록
 
-Claude에서 직접 사용 가능한 LTS-2026 MCP 도구 (v1.1 — 21종):
+Claude에서 직접 사용 가능한 LTS-2026 MCP 도구 (v1.3 — 35종, 소스: `mcp-server/create-server.js`):
 
 ### 시스템
 | 도구 | 설명 |
@@ -418,6 +581,7 @@ Claude에서 직접 사용 가능한 LTS-2026 MCP 도구 (v1.1 — 21종):
 |------|------|
 | `mcp_lts_query_onvif_events` | ONVIF 이벤트 조회 (화재/움직임/라인크로싱 등) |
 | `mcp_lts_get_onvif_event_types` | 시스템 ever-seen ONVIF topicType 레지스트리 조회 |
+| `mcp_lts_get_onvif_snapshot` | ONVIF 이벤트 발생 시점 카메라 프레임(JPEG) 조회 |
 
 ### AI 감지 분석
 | 도구 | 설명 |
@@ -434,6 +598,26 @@ Claude에서 직접 사용 가능한 LTS-2026 MCP 도구 (v1.1 — 21종):
 | `mcp_lts_get_stats_dashboard` | 시스템 전체 통계 대시보드 |
 | `mcp_lts_get_object_snapshots` | 추적 객체 JPEG 스냅샷 |
 | `mcp_lts_search_person` | 실종자 검색 (배회 이벤트 + 추적 이력 + 스냅샷) |
+
+### 실종자 관리 (Missing Person Registry)
+| 도구 | 설명 |
+|------|------|
+| `mcp_lts_register_missing_person` | 실종자 프로필 등록 (연락처·임베딩 포함) |
+| `mcp_lts_search_missing_person` | 실종자 등록부 검색 (필터·자유 텍스트) |
+| `mcp_lts_get_missing_person_detections` | 날짜·상태별 실종자 매칭 감지 조회 |
+| `mcp_lts_update_missing_person_status` | 실종자 상태 변경 (FOUND/MISSING/UNCONFIRMED) |
+| `mcp_lts_get_missing_person_statistics` | 실종자 등록부·감지 통계 조회 |
+
+### AI / 검색 / 얼굴 갤러리 설정
+| 도구 | 설명 |
+|------|------|
+| `mcp_lts_get_model_catalog` | YOLO 탐지 모델 카탈로그 조회 (벤치마크·다운로드 상태·활성 모델, combined/analysis 모드 전용) |
+| `mcp_lts_get_fire_smoke_config` | 화재/연기 감지 confidence·NMS 임계값 조회 (combined/analysis 모드 전용) |
+| `mcp_lts_get_tracker_config` | ByteTrack/Kalman 추적기 파라미터 조회 |
+| `mcp_lts_search_all` | alerts/detections/faces/events/matches 통합 전문 검색 |
+| `mcp_lts_list_face_galleries` | 얼굴 갤러리(general/vip/blocklist/missing) 목록·등록 얼굴 수 조회 |
+
+> admin 전용 REST(`/admin/audit`, `/admin/tc-results`, `/admin/users`)는 MCP 도구로 노출하지 않음 — `LTSClient`가 Authorization 헤더를 보내지 않아 401/403 발생. 서비스 계정 인증 추가 전까지 범위 제외 (`docs/mrd/MRD_LLM_MCP_Tool_Expansion.md` §7).
 
 ---
 

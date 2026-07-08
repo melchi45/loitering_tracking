@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-MCP-01 |
-| **Version** | 1.1 |
+| **Version** | 1.3 |
 | **Status** | Active |
-| **Date** | 2026-05-26 |
+| **Date** | 2026-07-08 |
 | **Parent SRS** | srs/SRS_LLM_MCP_Server.md |
 
 ---
@@ -86,19 +86,37 @@
 
 ## 2. File Structure
 
+> v1.3 기준 — 35 tools / 7 resources. §6/§7의 세부 모듈 설계는 v1.0 5개 도구 모듈만 다루고
+> 이후 확장분(v1.1~v1.3)은 §6.10 이후에 이어 붙는 형태로 유지된다.
+
 ```
 mcp-server/
 ├── package.json          # "type": "module" (ESM); deps: @modelcontextprotocol/sdk, zod, express, cors
 ├── index.js              # Entry point: transport selection, Express app (http mode)
 ├── create-server.js      # McpServer factory; exports TOOL_CATALOG, RESOURCE_CATALOG
-├── lts-client.js         # LTSClient class: get(), post(), put() with fetch + AbortSignal
-├── resources.js          # Four MCP resource registrations
+├── lts-client.js         # LTSClient class: get(), post(), put(), patch(), delete() with fetch + AbortSignal
+├── resources.js          # lts://cameras, lts://alerts/active, lts://zones/{cameraId},
+│                         # lts://system/summary, lts://stats/dashboard
+├── test/
+│   ├── tools.test.js     # Tool handler unit tests (MockMcpServer + mockClient)
+│   └── lts-client.test.js
 └── tools/
-    ├── loitering.js      # query_loitering_events, get_tracking_history
+    ├── loitering.js      # query_loitering_events, get_tracking_history, query_face_trajectories
     ├── alerts.js         # get_active_alerts, explain_alert, acknowledge_alert
-    ├── cameras.js        # get_camera_status, get_zone_config, update_zone_threshold
+    ├── cameras.js        # get_camera_status, get_zone_config, update_zone_threshold,
+    │                     # add_camera, update_camera, delete_camera, toggle_camera_ai
     ├── analytics.js      # get_analytics_summary, generate_security_report
-    └── stats.js          # get_stats_dashboard
+    ├── stats.js          # get_stats_dashboard
+    ├── snapshots.js      # get_object_snapshots, search_person
+    ├── system.js         # get_server_status
+    ├── onvif.js          # query_onvif_events, get_onvif_event_types, get_onvif_snapshot (v1.3)
+    ├── detections.js     # query_analysis_events, get_detection_tracks, get_analysis_metrics
+    ├── missing-person.js # register_missing_person, search_missing_person,
+    │                     # get_missing_person_detections, update_missing_person_status,
+    │                     # get_missing_person_statistics + missing-persons:// resources
+    ├── config.js         # get_model_catalog, get_fire_smoke_config, get_tracker_config (v1.3)
+    ├── search.js         # search_all (v1.3)
+    └── faces.js          # list_face_galleries (v1.3)
 ```
 
 ---
@@ -395,6 +413,7 @@ try {
 |---|---|---|
 | `query_onvif_events` | `GET /api/onvif-events` | API-side 필터(cameraId/type/severity/from/to/limit) + 클라이언트측 `ruleName` 필터 |
 | `get_onvif_event_types` | `GET /api/onvif-event-types` | Ever-seen topicType 레지스트리 전체 반환 |
+| `get_onvif_snapshot` (v1.3) | `GET /api/onvif-snapshots` | `frameData` data URL에서 `data:image/...;base64,` 접두어 제거 후 MCP `image` content 블록으로 반환; 프레임 없으면 텍스트 안내 |
 
 **`query_onvif_events` `ruleName` 필터 설계**:
 - `/api/onvif-events` API는 `ruleName` 쿼리 파라미터 미지원
@@ -408,6 +427,24 @@ try {
 | `query_analysis_events` | `GET /api/analysis/events` | type=all 시 파라미터 미전송; 타입별 count 헤더 생성 |
 | `get_detection_tracks` | `GET /api/analysis/detection-tracks` | `inProgressOnly` 클라이언트측 필터; API는 `class` 파라미터 사용 |
 | `get_analysis_metrics` | `GET /api/analysis/metrics` | analysis/combined 모드 전용; non-analysis 시 `isError: true` |
+
+### 6.13 Tools: AI / Detection Config (config.js) — v1.3
+
+| Tool | API Call | Key Logic |
+|---|---|---|
+| `get_model_catalog` | `GET /api/analysis/models` | `active` 플래그로 ▶ 마커, `downloading`/`exists`로 status 문자열 합성; combined/analysis 모드 전용 (streaming 프록시 미지원) |
+| `get_fire_smoke_config` | `GET /api/analysis/config/fire-smoke` | `available: false` 시 서비스 미로드 안내로 조기 반환 |
+| `get_tracker_config` | `GET /api/tracker/config` | `key` 파라미터로 단일 필드만 반환하는 선택적 축소 조회 지원 |
+
+### 6.14 Tool: `search_all` (search.js) — v1.3
+
+- `GET /api/search`를 그대로 래핑하되, `_type`(detection/alert/face/event/match)별로 서로 다른 한 줄 요약 포맷터를 적용해 LLM이 결과 유형을 즉시 구분할 수 있도록 함
+- `query_analysis_events` + `get_active_alerts` + `get_object_snapshots`를 개별 호출·수동 병합하는 대신 자유 텍스트 질의 1회로 대체하는 것이 설계 목적
+
+### 6.15 Tool: `list_face_galleries` (faces.js) — v1.3
+
+- `GET /api/galleries` 응답(`faceCount` 포함)을 그대로 나열하며, `type` 파라미터로 클라이언트측 필터링
+- 얼굴 임베딩(`embedding`)이나 썸네일은 반환하지 않음 — 갤러리 존재 여부·크기 확인용 (개인정보 최소 노출 원칙)
 
 ---
 
@@ -716,3 +753,4 @@ The `MCP_PUBLIC_URL` environment variable overrides the base URL in `/schema` re
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for LLM MCP Server |
 | 1.1 | 2026-06-25 | LTS Engineering Team | §6.10~6.12 확장 도구 3그룹 추가 (system.js, onvif.js, detections.js); §6.8 카메라 CRUD 4종 추가; 버전 1.1 |
+| 1.3 | 2026-07-08 | LTS Engineering Team | §2 File Structure 전체 갱신 (test/, missing-person.js, config.js, search.js, faces.js 반영); §6.11에 get_onvif_snapshot 추가; §6.13~6.15 신규 모듈 설계 추가 (config.js/search.js/faces.js); 버전 1.1→1.3 (v1.2 query_face_trajectories 항목은 이전 리비전에서 누락되어 있었음 — 이번 갱신에서 §2에 함께 반영) |

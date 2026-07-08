@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-MCP-001 |
-| **Version** | 1.2 |
+| **Version** | 1.3 |
 | **Status** | In Progress — M1–M4 Complete, M5 Extended Tools Added |
-| **Date** | 2026-06-25 |
+| **Date** | 2026-07-08 |
 | **Author** | LTS-2026 Engineering |
 | **Related RFP** | LTS-2026-010 |
 
@@ -630,6 +630,131 @@ Output:
 
 ---
 
+## 7c. Tool API Reference — Extended Tools (v1.3)
+
+> 배경: SRS/Design 문서 커버리지 점검(2026-07-08) 결과, YOLO 모델 카탈로그·화재/연기 임계값·
+> 추적기 파라미터·통합 검색·얼굴 갤러리 목록·ONVIF 이벤트 스냅샷이 REST API에는 존재하지만
+> MCP 도구로 노출되지 않은 것으로 확인되어 아래 6종을 추가한다. 관리자 전용(`/admin/*`)
+> 감사 로그·TC 결과 조회는 MCP 서버가 JWT/역할 인증 토큰을 보유하지 않아 이번 범위에서 제외한다
+> (§11 Out of Scope 표 참조).
+
+### `get_model_catalog`
+
+```
+Description: YOLO 탐지 모델 카탈로그 조회 (YOLO26/YOLO12/YOLOv8 계열, 벤치마크, 다운로드 상태, 활성 모델)
+
+Input: (없음)
+
+Output:
+  "Active model file: yolo26s.onnx
+
+   ▶ YOLO26s (yolo26s, YOLO26)
+       mAP=48.6  size=640px  CPU=87.2ms  T4=2.5ms  params=9.5M  flops=20.7B
+       status=ACTIVE  fileSize=42MB
+
+     YOLO12n (yolo12n, YOLO12)
+       mAP=40.6  size=640px  CPU=58.0ms  T4=1.6ms  params=2.6M  flops=6.5B
+       status=not downloaded"
+
+Note: combined/analysis 모드 전용 — streaming 모드 프록시(analysisProxy.js)는 미지원.
+```
+
+### `get_fire_smoke_config`
+
+```
+Description: 화재/연기 감지 confidence·NMS 임계값 조회
+
+Input: (없음)
+
+Output:
+  "Fire/Smoke detection config:
+     confThreshold: 0.35
+     nmsThreshold:  0.45"
+  (FireSmokeService 미로드 시: "FireSmokeService is not loaded on this server.")
+
+Note: combined/analysis 모드 전용 — streaming 모드 프록시는 미지원.
+```
+
+### `get_tracker_config`
+
+```
+Description: ByteTrack/Kalman 추적기 파라미터 조회 (트랙 수명, IoU 임계값, 적응형 프로세스
+             노이즈 스케일, 다중 단서(Face/Color/Cloth/Accessories) 연관 가중치)
+
+Input:
+  key? : string — 특정 설정 키 하나만 반환 (예: "iouThreshold")
+
+Output:
+  "Tracker config:
+     maxAge: 90
+     iouThreshold: 0.25
+     fastSpeedThreshold: 30
+     ..."
+  (key 지정 시: "iouThreshold = 0.25")
+```
+
+### `search_all`
+
+```
+Description: alerts/detections/faces/events/matches 통합 전문(全文) 검색 — 자유 텍스트 설명으로
+             질의할 때 query_analysis_events + get_active_alerts + get_object_snapshots를
+             개별 호출하는 대신 단일 호출로 대체
+
+Input:
+  q             : string — 검색어 (필수)
+  types?        : string — 콤마 구분 결과 타입 (기본: alerts,detections,faces,events)
+  from?, to?    : ISO8601
+  minConfidence?, maxConfidence? : number (0.0–1.0)
+  limit?        : 1-200 (기본 30)
+
+Output:
+  "42 result(s) for "red jacket" (showing 30):
+
+   [detection] person @ cam-001 — 2026-07-08T09:00:00Z (loitering) — zone: Entrance
+   [alert] loitering @ cam-001 — 2026-07-08T09:00:00Z (OPEN)
+   ..."
+```
+
+### `list_face_galleries`
+
+```
+Description: 얼굴 갤러리(general/vip/blocklist/missing) 목록과 등록 얼굴 수 조회 — search_person /
+             query_face_trajectories 호출 전 어떤 갤러리가 존재하는지 확인하거나 GDPR/감사
+             목적의 등록 현황 확인에 사용
+
+Input:
+  type? : 'general' | 'vip' | 'blocklist' | 'missing' — 갤러리 타입 필터
+
+Output:
+  "2 galleries:
+
+   VIP (g1) — type=vip, faces=3
+   Watchlist (g2) — type=blocklist, faces=5 — 사내 블랙리스트"
+```
+
+### `get_onvif_snapshot`
+
+```
+Description: ONVIF 이벤트 발생 시점의 카메라 프레임(JPEG) 조회 — query_onvif_events로 이벤트를
+             찾은 뒤 시각적으로 검증할 때 사용
+
+Input:
+  eventId?, cameraId?, topicType? : string
+  from?, to?  : ISO8601
+  limit?      : 1-20 (기본 3)
+
+Output:
+  content: [
+    { type: 'text', text: 'N snapshot(s) found ...' },
+    { type: 'text', text: '📷 Camera: cam-001  🕐 <ts>  Topic: earlyFireDetection' },
+    { type: 'image', data: '<base64 JPEG>', mimeType: 'image/jpeg' },
+    ...
+  ]
+  (프레임 미저장 시: "(no frame captured for this event)")
+```
+
+---
+
 ## 8. Resource API Reference
 
 ### `lts://cameras`
@@ -710,7 +835,7 @@ If zone or event sub-calls fail, `explain_alert` degrades gracefully:
 - [ ] Server appears in Claude Code's MCP server list after settings update
 
 ### AC-002: Tool Coverage
-- [ ] All 10 tools registered and callable via MCP protocol
+- [ ] All 35 tools registered and callable via MCP protocol
 - [ ] Each tool returns structured text content on success
 - [ ] Each tool returns `isError: true` on LTS API failure
 
@@ -755,6 +880,7 @@ If zone or event sub-calls fail, `explain_alert` degrades gracefully:
 | Alert creation | Alerts generated only by detection pipeline |
 | Historical data export (CSV, PDF) | `generate_security_report` covers markdown; CSV/PDF is a future enhancement |
 | Push notifications to LLM | MCP is pull-based; real-time push requires webhook integration (separate RFP) |
+| Admin-gated tools (audit log, TC test results, user management) | `LTSClient` sends no Authorization header; `/admin/*` requires JWT + `role=admin` — would need a service-account credential plumbed into the MCP server first |
 
 ---
 
@@ -850,3 +976,4 @@ If zone or event sub-calls fail, `explain_alert` degrades gracefully:
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for LLM MCP Server |
 | 1.1 | 2026-05-28 | LTS Engineering Team | 버전 헤더 갱신 |
 | 1.2 | 2026-06-25 | LTS Engineering Team | §7b 확장 도구 10종 추가 (get_server_status, 카메라 CRUD 4종, ONVIF 2종, AI Detection 3종); 버전 1.2로 갱신 |
+| 1.3 | 2026-07-08 | LTS Engineering Team | SRS/Design 커버리지 점검 결과 반영 — §7c 확장 도구 6종 추가 (get_model_catalog, get_fire_smoke_config, get_tracker_config, search_all, list_face_galleries, get_onvif_snapshot); §11 Out of Scope에 admin-gated 도구 제외 사유 추가; AC-002 도구 수 35종으로 갱신 |

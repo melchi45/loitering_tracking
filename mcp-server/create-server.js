@@ -11,6 +11,9 @@ import { registerSystemTools }    from './tools/system.js';
 import { registerOnvifTools }     from './tools/onvif.js';
 import { registerDetectionTools } from './tools/detections.js';
 import { registerMissingPersonTools, registerMissingPersonResources } from './tools/missing-person.js';
+import { registerConfigTools }    from './tools/config.js';
+import { registerSearchTools }    from './tools/search.js';
+import { registerFaceGalleryTools } from './tools/faces.js';
 import { registerResources }      from './resources.js';
 
 /**
@@ -20,7 +23,7 @@ import { registerResources }      from './resources.js';
 export function createServer(baseUrl) {
   const server = new McpServer({
     name:        'lts-mcp-server',
-    version:     '1.2.0',
+    version:     '1.3.0',
     description: 'LTS-2026 Loitering Tracking System — LLM integration via MCP',
   });
 
@@ -36,6 +39,9 @@ export function createServer(baseUrl) {
   registerOnvifTools(server, client);
   registerDetectionTools(server, client);
   registerMissingPersonTools(server, client);
+  registerConfigTools(server, client);
+  registerSearchTools(server, client);
+  registerFaceGalleryTools(server, client);
   registerResources(server, client);
   registerMissingPersonResources(server, client);
 
@@ -70,6 +76,7 @@ export const TOOL_CATALOG = [
   // ── ONVIF Events ─────────────────────────────────────────────────────────
   { name: 'query_onvif_events',       access: 'read',  description: 'Query ONVIF metadata events (motion, fire, line-crossing, audio alarm) with filters.' },
   { name: 'get_onvif_event_types',    access: 'read',  description: 'Get all ONVIF topicTypes ever seen by the system (event type registry).' },
+  { name: 'get_onvif_snapshot',       access: 'read',  description: 'Get the camera frame captured at the moment a specific ONVIF event started.' },
   // ── AI Detections ────────────────────────────────────────────────────────
   { name: 'query_analysis_events',    access: 'read',  description: 'Query AI analysis events (loitering, fire, smoke) with time/camera/type filters.' },
   { name: 'get_detection_tracks',     access: 'read',  description: 'Object detection track history: dwell time, class, first/last seen per object.' },
@@ -83,6 +90,14 @@ export const TOOL_CATALOG = [
   { name: 'get_missing_person_detections',  access: 'read',  description: 'Retrieve missing-person detections by date and status.' },
   { name: 'update_missing_person_status',   access: 'write', description: 'Update a missing person status: FOUND/MISSING/UNCONFIRMED.' },
   { name: 'get_missing_person_statistics',  access: 'read',  description: 'Get missing-person registry and detection statistics.' },
+  // ── AI / Detection Config (v1.3) ─────────────────────────────────────────
+  { name: 'get_model_catalog',        access: 'read',  description: 'YOLO detection model catalog: variants, benchmarks, download status, active model.' },
+  { name: 'get_fire_smoke_config',    access: 'read',  description: 'Current fire/smoke detection confidence and NMS thresholds.' },
+  { name: 'get_tracker_config',       access: 'read',  description: 'ByteTrack/Kalman-filter tracker parameters (lifecycle, IoU, multi-cue weights).' },
+  // ── Search (v1.3) ────────────────────────────────────────────────────────
+  { name: 'search_all',               access: 'read',  description: 'Unified full-text search across alerts, detections, faces, events, and match history.' },
+  // ── Face Galleries (v1.3) ────────────────────────────────────────────────
+  { name: 'list_face_galleries',      access: 'read',  description: 'List face galleries (general/VIP/blocklist/missing) with enrolled face counts.' },
 ];
 
 export const RESOURCE_CATALOG = [

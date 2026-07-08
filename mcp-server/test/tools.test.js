@@ -11,6 +11,10 @@ import { registerCameraTools }    from '../tools/cameras.js';
 import { registerAlertTools }     from '../tools/alerts.js';
 import { registerLoiteringTools } from '../tools/loitering.js';
 import { registerAnalyticsTools } from '../tools/analytics.js';
+import { registerOnvifTools }     from '../tools/onvif.js';
+import { registerConfigTools }    from '../tools/config.js';
+import { registerSearchTools }    from '../tools/search.js';
+import { registerFaceGalleryTools } from '../tools/faces.js';
 import { createServer, TOOL_CATALOG, RESOURCE_CATALOG } from '../create-server.js';
 
 // ── Test infrastructure ───────────────────────────────────────────────────────
@@ -291,11 +295,156 @@ describe('get_analytics_summary', () => {
   });
 });
 
+// ── Config tools (v1.3) ───────────────────────────────────────────────────────
+
+describe('get_model_catalog', () => {
+  it('reports the active model and status of others', async () => {
+    const srv = new MockMcpServer();
+    registerConfigTools(srv, mockClient({
+      get: async () => ({
+        activeFile: 'yolo26s.onnx',
+        catalog: [
+          { id: 'yolo26s', label: 'YOLO26s', series: 'YOLO26', size: 640, mAP: 48.6, cpuMs: 87.2, t4Ms: 2.5, params: '9.5M', flops: '20.7B', active: true, exists: true, downloading: false },
+          { id: 'yolo12n', label: 'YOLO12n', series: 'YOLO12', size: 640, mAP: 40.6, cpuMs: 58.0, t4Ms: 1.6, params: '2.6M', flops: '6.5B', active: false, exists: false, downloading: false },
+        ],
+      }),
+    }));
+    const result = await srv.tools.get_model_catalog({});
+    const text = result.content[0].text;
+    assert.ok(text.includes('yolo26s.onnx'));
+    assert.ok(text.includes('ACTIVE'));
+    assert.ok(text.includes('not downloaded'));
+  });
+});
+
+describe('get_fire_smoke_config', () => {
+  it('reports thresholds when service is available', async () => {
+    const srv = new MockMcpServer();
+    registerConfigTools(srv, mockClient({
+      get: async () => ({ confThreshold: 0.35, nmsThreshold: 0.45, available: true }),
+    }));
+    const result = await srv.tools.get_fire_smoke_config({});
+    assert.ok(result.content[0].text.includes('0.35'));
+  });
+
+  it('reports unavailable when service is not loaded', async () => {
+    const srv = new MockMcpServer();
+    registerConfigTools(srv, mockClient({
+      get: async () => ({ available: false }),
+    }));
+    const result = await srv.tools.get_fire_smoke_config({});
+    assert.ok(result.content[0].text.includes('not loaded'));
+  });
+});
+
+describe('get_tracker_config', () => {
+  it('returns all config keys', async () => {
+    const srv = new MockMcpServer();
+    registerConfigTools(srv, mockClient({
+      get: async () => ({ data: { maxAge: 90, iouThreshold: 0.25 } }),
+    }));
+    const result = await srv.tools.get_tracker_config({});
+    const text = result.content[0].text;
+    assert.ok(text.includes('maxAge: 90'));
+    assert.ok(text.includes('iouThreshold: 0.25'));
+  });
+
+  it('returns a single key when requested', async () => {
+    const srv = new MockMcpServer();
+    registerConfigTools(srv, mockClient({
+      get: async () => ({ data: { maxAge: 90, iouThreshold: 0.25 } }),
+    }));
+    const result = await srv.tools.get_tracker_config({ key: 'iouThreshold' });
+    assert.equal(result.content[0].text, 'iouThreshold = 0.25');
+  });
+});
+
+// ── Search tools (v1.3) ───────────────────────────────────────────────────────
+
+describe('search_all', () => {
+  it('formats mixed result types', async () => {
+    const srv = new MockMcpServer();
+    registerSearchTools(srv, mockClient({
+      get: async () => ({
+        query: 'red jacket', total: 2,
+        results: [
+          { _type: 'detection', className: 'person', cameraId: 'cam1', timestamp: '2026-07-01T00:00:00Z', isLoitering: true },
+          { _type: 'alert', type: 'loitering', cameraId: 'cam1', timestamp: '2026-07-01T00:00:00Z', acknowledged: false },
+        ],
+      }),
+    }));
+    const result = await srv.tools.search_all({ q: 'red jacket' });
+    const text = result.content[0].text;
+    assert.ok(text.includes('[detection]'));
+    assert.ok(text.includes('[alert]'));
+    assert.ok(text.includes('OPEN'));
+  });
+
+  it('reports no results found', async () => {
+    const srv = new MockMcpServer();
+    registerSearchTools(srv, mockClient({ get: async () => ({ total: 0, results: [] }) }));
+    const result = await srv.tools.search_all({ q: 'nothing' });
+    assert.ok(result.content[0].text.includes('No results'));
+  });
+});
+
+// ── Face gallery tools (v1.3) ─────────────────────────────────────────────────
+
+describe('list_face_galleries', () => {
+  const galleries = [
+    { id: 'g1', name: 'VIP', type: 'vip', faceCount: 3 },
+    { id: 'g2', name: 'Watchlist', type: 'blocklist', faceCount: 5 },
+  ];
+
+  it('lists all galleries', async () => {
+    const srv = new MockMcpServer();
+    registerFaceGalleryTools(srv, mockClient({ get: async () => ({ data: galleries }) }));
+    const result = await srv.tools.list_face_galleries({});
+    const text = result.content[0].text;
+    assert.ok(text.includes('VIP'));
+    assert.ok(text.includes('Watchlist'));
+  });
+
+  it('filters by gallery type', async () => {
+    const srv = new MockMcpServer();
+    registerFaceGalleryTools(srv, mockClient({ get: async () => ({ data: galleries }) }));
+    const result = await srv.tools.list_face_galleries({ type: 'vip' });
+    const text = result.content[0].text;
+    assert.ok(text.includes('VIP'));
+    assert.ok(!text.includes('Watchlist'));
+  });
+});
+
+// ── ONVIF snapshot tool (v1.3) ─────────────────────────────────────────────────
+
+describe('get_onvif_snapshot', () => {
+  it('returns image content for a found snapshot', async () => {
+    const srv = new MockMcpServer();
+    registerOnvifTools(srv, mockClient({
+      get: async () => ({
+        total: 1,
+        snapshots: [{ cameraId: 'cam1', timestamp: '2026-07-01T00:00:00Z', topicType: 'earlyFireDetection', frameData: 'data:image/jpeg;base64,AAAA' }],
+      }),
+    }));
+    const result = await srv.tools.get_onvif_snapshot({});
+    const imagePart = result.content.find(c => c.type === 'image');
+    assert.ok(imagePart);
+    assert.equal(imagePart.data, 'AAAA');
+  });
+
+  it('reports no snapshots found', async () => {
+    const srv = new MockMcpServer();
+    registerOnvifTools(srv, mockClient({ get: async () => ({ total: 0, snapshots: [] }) }));
+    const result = await srv.tools.get_onvif_snapshot({});
+    assert.ok(result.content[0].text.includes('No ONVIF snapshots'));
+  });
+});
+
 // ── Catalog integrity ─────────────────────────────────────────────────────────
 
 describe('TOOL_CATALOG', () => {
-  it('exports exactly 10 tools', () => {
-    assert.equal(TOOL_CATALOG.length, 10);
+  it('exports exactly 35 tools', () => {
+    assert.equal(TOOL_CATALOG.length, 35);
   });
 
   it('every tool has name, access, and description', () => {
@@ -306,10 +455,15 @@ describe('TOOL_CATALOG', () => {
       assert.ok(['read', 'write'].includes(t.access), `${t.name}: invalid access`);
     }
   });
+
+  it('has no duplicate tool names', () => {
+    const names = TOOL_CATALOG.map(t => t.name);
+    assert.equal(new Set(names).size, names.length);
+  });
 });
 
 describe('RESOURCE_CATALOG', () => {
-  it('exports exactly 4 resources', () => {
-    assert.equal(RESOURCE_CATALOG.length, 4);
+  it('exports exactly 7 resources', () => {
+    assert.equal(RESOURCE_CATALOG.length, 7);
   });
 });

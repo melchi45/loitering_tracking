@@ -1,16 +1,19 @@
 'use strict';
 /**
  * MCP Server Extended Integration Tests
- * TC: TC-LTS-MCP-02 Groups J~O
- * SRS: FR-MCP-070 ~ FR-MCP-110
+ * TC: TC-LTS-MCP-02 Groups J~P
+ * SRS: FR-MCP-070 ~ FR-MCP-125
  *
- * Tests new MCP tools added in v1.1/v1.2:
+ * Tests new MCP tools added in v1.1/v1.2/v1.3:
  *   Group J — System tools (get_server_status)
  *   Group K — Camera CRUD (add_camera, update_camera, delete_camera, toggle_camera_ai)
  *   Group L — ONVIF Events (query_onvif_events, get_onvif_event_types)
  *   Group M — AI Detection tools (query_analysis_events, get_detection_tracks, get_analysis_metrics)
  *   Group N — Schema catalog completeness check
  *   Group O — Face Trajectory tool (query_face_trajectories)
+ *   Group P — Config/Search/Face Gallery/ONVIF Snapshot tools (v1.3: get_model_catalog,
+ *             get_fire_smoke_config, get_tracker_config, search_all, list_face_galleries,
+ *             get_onvif_snapshot)
  *
  * Prerequisites:
  *   - LTS server running on LTS_URL (default http://localhost:3080)
@@ -72,6 +75,7 @@ class MockMcpServer {
 // ── Dynamic import of ESM modules ────────────────────────────────────────────
 
 let LTSClient, registerSystemTools, registerOnvifTools, registerDetectionTools, registerCameraTools, registerLoiteringTools, TOOL_CATALOG;
+let registerConfigTools, registerSearchTools, registerFaceGalleryTools;
 
 async function loadModules() {
   const ltsClientMod   = await import(`file://${MCP_DIR}/lts-client.js`);
@@ -81,6 +85,9 @@ async function loadModules() {
   const camerasMod     = await import(`file://${MCP_DIR}/tools/cameras.js`);
   const loiteringMod   = await import(`file://${MCP_DIR}/tools/loitering.js`);
   const serverMod      = await import(`file://${MCP_DIR}/create-server.js`);
+  const configMod      = await import(`file://${MCP_DIR}/tools/config.js`);
+  const searchMod      = await import(`file://${MCP_DIR}/tools/search.js`);
+  const facesMod       = await import(`file://${MCP_DIR}/tools/faces.js`);
 
   LTSClient               = ltsClientMod.LTSClient;
   registerSystemTools     = systemMod.registerSystemTools;
@@ -89,6 +96,9 @@ async function loadModules() {
   registerCameraTools     = camerasMod.registerCameraTools;
   registerLoiteringTools  = loiteringMod.registerLoiteringTools;
   TOOL_CATALOG            = serverMod.TOOL_CATALOG;
+  registerConfigTools       = configMod.registerConfigTools;
+  registerSearchTools       = searchMod.registerSearchTools;
+  registerFaceGalleryTools  = facesMod.registerFaceGalleryTools;
 }
 
 // ── Prerequisites check ──────────────────────────────────────────────────────
@@ -288,6 +298,8 @@ async function runGroupN() {
     'query_loitering_events', 'get_active_alerts', 'acknowledge_alert',
     'get_analytics_summary', 'generate_security_report',
     'query_face_trajectories',
+    'get_model_catalog', 'get_fire_smoke_config', 'get_tracker_config',
+    'search_all', 'list_face_galleries', 'get_onvif_snapshot',
   ];
 
   const catalogNames = new Set(TOOL_CATALOG.map(t => t.name));
@@ -386,11 +398,97 @@ async function runGroupO() {
   });
 }
 
+// ── Group P — Config/Search/Face Gallery/ONVIF Snapshot Tools (v1.3) ──────────
+
+async function runGroupP() {
+  console.log('\n[Group P] Config / Search / Face Gallery Tools (v1.3)\n');
+
+  const srv    = new MockMcpServer();
+  const client = new LTSClient(BASE_URL);
+  registerConfigTools(srv, client);
+  registerSearchTools(srv, client);
+  registerFaceGalleryTools(srv, client);
+  registerOnvifTools(srv, client);
+
+  await test('TC-P-001', 'get_model_catalog — returns text content (or graceful mode error)', async () => {
+    const result = await srv.tools.get_model_catalog({});
+    assert(Array.isArray(result.content), 'content is array');
+    assert(typeof result.content[0].text === 'string', 'text is string');
+  });
+
+  await test('TC-P-002', 'get_fire_smoke_config — returns text content (or graceful mode error)', async () => {
+    const result = await srv.tools.get_fire_smoke_config({});
+    assert(Array.isArray(result.content), 'content is array');
+    assert(typeof result.content[0].text === 'string', 'text is string');
+  });
+
+  await test('TC-P-003', 'get_tracker_config — returns config key/value text', async () => {
+    const result = await srv.tools.get_tracker_config({});
+    assert(!result.isError, `Tool returned error: ${result.content[0]?.text}`);
+    assert(/config/i.test(result.content[0].text), `Expected config text, got: ${result.content[0].text.slice(0, 100)}`);
+  });
+
+  await test('TC-P-004', 'get_tracker_config — single key lookup accepted', async () => {
+    const result = await srv.tools.get_tracker_config({ key: 'iouThreshold' });
+    assert(Array.isArray(result.content), 'content is array');
+  });
+
+  await test('TC-P-005', 'search_all — requires q and returns text content', async () => {
+    const result = await srv.tools.search_all({ q: '__mcp_tc_p_probe__' });
+    assert(Array.isArray(result.content), 'content is array');
+    assert(typeof result.content[0].text === 'string', 'text is string');
+  });
+
+  await test('TC-P-006', 'list_face_galleries — returns text content', async () => {
+    const result = await srv.tools.list_face_galleries({});
+    assert(Array.isArray(result.content), 'content is array');
+    assert(typeof result.content[0].text === 'string', 'text is string');
+  });
+
+  await test('TC-P-007', 'list_face_galleries — type filter accepted', async () => {
+    const result = await srv.tools.list_face_galleries({ type: 'vip' });
+    assert(!result.isError, `Tool returned error: ${result.content[0]?.text}`);
+  });
+
+  await test('TC-P-008', 'get_onvif_snapshot — returns text content, no crash on empty result', async () => {
+    const result = await srv.tools.get_onvif_snapshot({ limit: 1 });
+    assert(Array.isArray(result.content), 'content is array');
+    assert(typeof result.content[0].text === 'string', 'text is string');
+  });
+
+  // REST API integration tests (live server) — endpoints mounted unconditionally in index.js
+  await test('TC-P-009', 'GET /api/tracker/config — HTTP 200', async () => {
+    const res = await httpGet(`${BASE_URL}/api/tracker/config`);
+    assert(res.status === 200, `Expected 200, got ${res.status}`);
+    const body = res.json();
+    assert(body.success === true, 'Expected success: true');
+  });
+
+  await test('TC-P-010', 'GET /api/galleries — HTTP 200', async () => {
+    const res = await httpGet(`${BASE_URL}/api/galleries`);
+    assert(res.status === 200, `Expected 200, got ${res.status}`);
+    const body = res.json();
+    assert(Array.isArray(body.data), 'data must be an array');
+  });
+
+  await test('TC-P-011', 'GET /api/search?q=... — HTTP 200', async () => {
+    const res = await httpGet(`${BASE_URL}/api/search?q=__mcp_tc_p_probe__`);
+    assert(res.status === 200, `Expected 200, got ${res.status}`);
+    const body = res.json();
+    assert(Array.isArray(body.results), 'results must be an array');
+  });
+
+  await test('TC-P-012', 'GET /api/search without q — HTTP 400', async () => {
+    const res = await httpGet(`${BASE_URL}/api/search`);
+    assert(res.status === 400, `Expected 400, got ${res.status}`);
+  });
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
   console.log('╔══════════════════════════════════════════════════════════╗');
-  console.log('║  TC-LTS-MCP-02 — MCP Server Extended Tests (v1.2)        ║');
+  console.log('║  TC-LTS-MCP-02 — MCP Server Extended Tests (v1.3)        ║');
   console.log('╚══════════════════════════════════════════════════════════╝');
 
   await loadModules();
@@ -401,6 +499,7 @@ async function main() {
   await runGroupM();
   await runGroupN();
   await runGroupO();
+  await runGroupP();
 
   console.log('\n─────────────────────────────────────────────────────────');
   console.log(`  Results: ${passed} passed, ${failed} failed`);

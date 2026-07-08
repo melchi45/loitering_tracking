@@ -4,11 +4,11 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-MCP-01 |
-| **Version** | 1.1 |
+| **Version** | 1.3 |
 | **Status** | Active |
-| **Date** | 2026-06-25 |
+| **Date** | 2026-07-08 |
 | **Parent SRS** | srs/SRS_LLM_MCP_Server.md |
-| **Test Scripts** | test/api/mcp_server.test.js, test/api/mcp_server_extended.test.js |
+| **Test Scripts** | test/api/mcp_server.test.js, test/api/mcp_server_extended.test.js, mcp-server/test/tools.test.js, mcp-server/test/lts-client.test.js |
 
 ---
 
@@ -80,6 +80,13 @@
 | FR-MCP-100 | TC-M-001, TC-M-002, TC-M-003 |
 | FR-MCP-101 | TC-M-004, TC-M-005 |
 | FR-MCP-102 | TC-M-006 |
+| FR-MCP-110 | TC-O-001, TC-O-002, TC-O-003, TC-O-004, TC-O-005, TC-O-006 |
+| FR-MCP-120 | TC-P-001 |
+| FR-MCP-121 | TC-P-002, TC-P-003 |
+| FR-MCP-122 | TC-P-004, TC-P-005, TC-P-012 |
+| FR-MCP-123 | TC-P-006, TC-P-007, TC-P-012 |
+| FR-MCP-124 | TC-P-008, TC-P-009, TC-P-012 |
+| FR-MCP-125 | TC-P-010, TC-P-011 |
 
 ### 1.3 Test Data
 
@@ -461,36 +468,120 @@
 ### TC-O-004 — query_face_trajectories limit 준수
 
 - **SRS:** FR-MCP-110
-- **Steps:** Call `query_face_trajectories({ limit: 5 })`; mock returns 5 records
+- **Steps:** Call `query_face_trajectories({ limit: 10 })`; mock returns 5 records
 - **Expected:** Output shows 5 records; `Found 5 face trajectory record(s)`
 
 ---
 
-## 18. Test Execution Order (v1.2)
+## 17b. Test Group P — Config / Search / Face Gallery / ONVIF Snapshot Tools (v1.3)
+
+> 2026-07-08 SRS/Design 커버리지 점검에서 추가된 6개 도구(FR-MCP-120~125)에 대한 테스트.
+> 소스: `mcp-server/test/tools.test.js` (mocked unit tests, 46개 assertion) +
+> `test/api/mcp_server_extended.test.js` Group P (live-server integration, 12개 케이스).
+
+### TC-P-001 — get_model_catalog 텍스트 반환
+
+- **SRS:** FR-MCP-120
+- **Steps:** Mock `GET /api/analysis/models` → `{ activeFile, catalog: [...] }`; call `get_model_catalog({})`
+- **Expected:** 활성 모델 파일명과 각 모델 status(ACTIVE/downloaded/not downloaded)가 텍스트에 포함됨
+
+### TC-P-002 — get_fire_smoke_config 임계값 반환
+
+- **SRS:** FR-MCP-121
+- **Steps:** Mock `{ confThreshold: 0.35, nmsThreshold: 0.45, available: true }`; call `get_fire_smoke_config({})`
+- **Expected:** 출력에 `confThreshold`/`nmsThreshold` 값 포함
+
+### TC-P-003 — get_fire_smoke_config 서비스 미로드
+
+- **SRS:** FR-MCP-121
+- **Steps:** Mock `{ available: false }`; call `get_fire_smoke_config({})`
+- **Expected:** "not loaded" 안내 메시지 반환, `isError` 미설정
+
+### TC-P-004 — get_tracker_config 전체 조회
+
+- **SRS:** FR-MCP-122
+- **Steps:** Mock `{ data: { maxAge: 90, iouThreshold: 0.25 } }`; call `get_tracker_config({})`
+- **Expected:** 모든 키-값이 출력에 포함
+
+### TC-P-005 — get_tracker_config 단일 키 조회
+
+- **SRS:** FR-MCP-122
+- **Steps:** Call `get_tracker_config({ key: 'iouThreshold' })`
+- **Expected:** 출력이 정확히 `"iouThreshold = 0.25"`
+
+### TC-P-006 — search_all 혼합 결과 포맷팅
+
+- **SRS:** FR-MCP-123
+- **Steps:** Mock `/api/search` 응답에 `_type: 'detection'`과 `_type: 'alert'` 레코드 포함; call `search_all({ q: '...' })`
+- **Expected:** 출력에 `[detection]`, `[alert]`, `OPEN`(미확인 알림) 라벨 포함
+
+### TC-P-007 — search_all 결과 없음
+
+- **SRS:** FR-MCP-123
+- **Steps:** Mock `{ total: 0, results: [] }`; call `search_all({ q: 'nothing' })`
+- **Expected:** "No results" 메시지 반환
+
+### TC-P-008 — list_face_galleries 전체 목록
+
+- **SRS:** FR-MCP-124
+- **Steps:** Mock 2개 갤러리(VIP, Watchlist) 반환; call `list_face_galleries({})`
+- **Expected:** 두 갤러리 이름 모두 출력에 포함
+
+### TC-P-009 — list_face_galleries 타입 필터
+
+- **SRS:** FR-MCP-124
+- **Steps:** Call `list_face_galleries({ type: 'vip' })`
+- **Expected:** VIP만 포함, Watchlist(blocklist)는 제외
+
+### TC-P-010 — get_onvif_snapshot 이미지 콘텐츠 반환
+
+- **SRS:** FR-MCP-125
+- **Steps:** Mock snapshot에 `frameData: 'data:image/jpeg;base64,AAAA'` 포함; call `get_onvif_snapshot({})`
+- **Expected:** `content` 배열에 `type: 'image'`, `data: 'AAAA'` (data URL 접두어 제거됨) 블록 존재
+
+### TC-P-011 — get_onvif_snapshot 결과 없음
+
+- **SRS:** FR-MCP-125
+- **Steps:** Mock `{ total: 0, snapshots: [] }`; call `get_onvif_snapshot({})`
+- **Expected:** "No ONVIF snapshots" 메시지 반환
+
+### TC-P-012 — REST 통합: /api/tracker/config, /api/galleries, /api/search (live server)
+
+- **SRS:** FR-MCP-122, FR-MCP-123, FR-MCP-124
+- **Steps:** `GET /api/tracker/config`, `GET /api/galleries`, `GET /api/search?q=...` (HTTP 200 기대), `GET /api/search` 파라미터 없이 호출 (HTTP 400 기대)
+- **Expected:** 모든 엔드포인트가 예상 상태 코드와 스키마(`success`/`data`/`results` 배열)로 응답
+
+---
+
+## 18. Test Execution Order (v1.3)
 
 ```
 [Suite 1 — mcp_server.test.js]
 Group A (startup) → Group B (loitering) → Group C (alerts) → Group D (camera/zone) → Group E (analytics) → Group F (resources) → Group G (HTTP SSE) → Group H (security) → Group I (stats dashboard)
 
 [Suite 2 — mcp_server_extended.test.js]
-Group J (system) → Group K (camera CRUD) → Group L (ONVIF events) → Group M (AI detections) → Group N (catalog) → Group O (face trajectories)
+Group J (system) → Group K (camera CRUD) → Group L (ONVIF events) → Group M (AI detections) → Group N (catalog) → Group O (face trajectories) → Group P (config/search/face gallery/onvif snapshot)
+
+[Suite 3 — mcp-server/test/*.test.js (mocked unit tests, run via `node --test`)]
+tools.test.js (46 assertions incl. Group P equivalents) → lts-client.test.js
 ```
 
 ---
 
-## 19. Pass/Fail Criteria (v1.2)
+## 19. Pass/Fail Criteria (v1.3)
 
 | Category | Pass Condition |
 |---|---|
-| Startup | 22 tools + 5 resources registered; transport selection correct |
+| Startup | 35 tools + 7 resources registered; transport selection correct |
 | System Tool | `get_server_status` returns status text; `isError` not set on success |
 | Camera CRUD | add/update/delete/toggle all succeed on valid inputs; error returned for invalid IDs |
-| ONVIF Tools | `query_onvif_events` and `get_onvif_event_types` return text; no crash on empty results or bad filters |
+| ONVIF Tools | `query_onvif_events`, `get_onvif_event_types`, `get_onvif_snapshot` return text; no crash on empty results or bad filters |
 | Detection Tools | All three tools return text content; `get_analysis_metrics` gracefully handles non-analysis mode |
 | Face Trajectory Tool | `query_face_trajectories` returns trajectory records; empty result handled gracefully |
-| Catalog | All 22 tools present with valid access tags |
+| Config/Search/Gallery Tools (v1.3) | `get_model_catalog`/`get_fire_smoke_config` degrade gracefully outside combined/analysis mode; `get_tracker_config` supports single-key lookup; `search_all` requires `q`; `list_face_galleries` supports type filter |
+| Catalog | All 35 tools present with valid access tags; no duplicate names |
 | Error handling | `isError: true` on failures; no unhandled exceptions |
-| Security | Auth token enforced on HTTP transport; RTSP credentials masked in `add_camera` response |
+| Security | Auth token enforced on HTTP transport; RTSP credentials masked in `add_camera` response; admin-gated routes (audit log, TC results) intentionally NOT exposed as MCP tools (no service-account credential) |
 
 ---
 
@@ -501,3 +592,4 @@ Group J (system) → Group K (camera CRUD) → Group L (ONVIF events) → Group 
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for LLM MCP Server |
 | 1.1 | 2026-06-25 | LTS Engineering Team | Groups J~N 추가 (확장 도구 v1.1): System, Camera CRUD, ONVIF, AI Detections, Catalog (FR-MCP-070~102 추적); TC-LTS-MCP-02 연계 |
 | 1.2 | 2026-06-25 | LTS Engineering Team | Group O 추가 (TC-O-001~O-004) — query_face_trajectories (FR-MCP-110); §18 실행 순서·§19 Pass/Fail 기준 업데이트 |
+| 1.3 | 2026-07-08 | LTS Engineering Team | §17b Group P 추가 (TC-P-001~012) — get_model_catalog/get_fire_smoke_config/get_tracker_config/search_all/list_face_galleries/get_onvif_snapshot (FR-MCP-120~125); mcp-server/test/tools.test.js·test/api/mcp_server_extended.test.js 양쪽에 테스트 구현; §1.2 트레이서빌리티에 FR-MCP-110/120~125 행 추가(기존 누락분 포함); §18/§19를 35 tools/7 resources 기준으로 갱신 |

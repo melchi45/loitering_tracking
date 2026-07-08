@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-MCP-01 |
-| **Version** | 1.1 |
+| **Version** | 1.3 |
 | **Status** | Active |
-| **Date** | 2026-06-25 |
+| **Date** | 2026-07-08 |
 | **Parent PRD** | prd/PRD_LLM_MCP_Server.md |
 | **Parent RFP** | rfp/RFP_LLM_MCP_Integration.md |
 
@@ -500,6 +500,76 @@ Network failures shall produce: `"Error: LTS API <status>: <statusText>: <body>"
 
 ---
 
+## §10d — Config / Search / Face Gallery MCP 도구 (v1.3)
+
+> 배경: 2026-07-08 SRS/Design 커버리지 점검에서 YOLO 모델 카탈로그, 화재/연기 임계값,
+> 추적기 파라미터, 통합 검색, 얼굴 갤러리 목록, ONVIF 이벤트 스냅샷이 REST API에는
+> 존재하지만 MCP 도구로 노출되지 않았음이 확인되어 아래 6개 FR을 추가한다.
+
+### FR-MCP-120 — `get_model_catalog`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | YOLO 탐지 모델 카탈로그 조회 (변형·벤치마크·다운로드 상태·활성 모델) |
+| 입력 | 없음 |
+| 처리 | `GET /api/analysis/models` 호출 |
+| 출력 | 활성 모델 파일명 + 각 모델의 label/series/mAP/cpuMs/t4Ms/params/flops/status |
+| 오류 | API 오류 시 `isError: true` |
+| 비고 | combined/analysis 모드 전용 — streaming 모드는 `analysisProxy.js`가 `/models`를 프록시하지 않아 404 발생 |
+
+### FR-MCP-121 — `get_fire_smoke_config`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | 화재/연기 감지 confidence·NMS 임계값 조회 |
+| 입력 | 없음 |
+| 처리 | `GET /api/analysis/config/fire-smoke` 호출 |
+| 출력 | `confThreshold`, `nmsThreshold` |
+| 오류 | `available: false` (FireSmokeService 미로드) 시 안내 메시지, API 오류 시 `isError: true` |
+| 비고 | combined/analysis 모드 전용 |
+
+### FR-MCP-122 — `get_tracker_config`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | ByteTrack/Kalman 추적기 파라미터 조회 |
+| 입력 | `key?` — 단일 설정 키만 반환 |
+| 처리 | `GET /api/tracker/config` 호출 |
+| 출력 | 전체 설정 키-값 목록, 또는 `key` 지정 시 단일 값 |
+| 오류 | API 오류 시 `isError: true` |
+
+### FR-MCP-123 — `search_all`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | alerts/detections/faces/events/matches 통합 전문 검색 |
+| 입력 | `q` (필수) · `types?` (콤마 구분) · `from?` · `to?` · `minConfidence?` · `maxConfidence?` · `limit?` (1–200, 기본 30) |
+| 처리 | `GET /api/search` 호출 |
+| 출력 | 결과 타입별(`_type`) 요약 라인 (detection/alert/face/event/match) |
+| 오류 | `q` 누락 시 API가 400 반환 → `isError: true`; 결과 없을 시 "No results found" |
+
+### FR-MCP-124 — `list_face_galleries`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | 얼굴 갤러리(general/vip/blocklist/missing) 목록과 등록 얼굴 수 조회 |
+| 입력 | `type?` — 갤러리 타입 필터 |
+| 처리 | `GET /api/galleries` 호출 |
+| 출력 | 갤러리별 name, id, type, faceCount, description |
+| 오류 | API 오류 시 `isError: true` |
+
+### FR-MCP-125 — `get_onvif_snapshot`
+
+| 항목 | 내용 |
+|---|---|
+| 기능 | ONVIF 이벤트 발생 시점 카메라 프레임(JPEG) 조회 |
+| 입력 | `eventId?` · `cameraId?` · `topicType?` · `from?` · `to?` · `limit?` (1–20, 기본 3) |
+| 처리 | `GET /api/onvif-snapshots` 호출; `frameData` data URL에서 base64 부분만 추출 |
+| 출력 | 텍스트(카메라/시각/topicType) + `type: 'image'` MCP content 블록 |
+| 오류 | 프레임 미저장 시 "(no frame captured for this event)"; API 오류 시 `isError: true` |
+
+---
+
 ## 11. Non-Functional Requirements
 
 | ID | Category | Requirement |
@@ -538,6 +608,13 @@ Network failures shall produce: `"Error: LTS API <status>: <statusText>: <body>"
 | `lts://system/summary` | `GET /api/cameras`, `GET /api/alerts?limit=100`, `GET /api/events?limit=100` |
 | `get_stats_dashboard` | `GET /api/stats` |
 | `lts://stats/dashboard` | `GET /api/stats` |
+| `query_face_trajectories` | `GET /api/analysis/face-trajectories` |
+| `get_model_catalog` | `GET /api/analysis/models` |
+| `get_fire_smoke_config` | `GET /api/analysis/config/fire-smoke` |
+| `get_tracker_config` | `GET /api/tracker/config` |
+| `search_all` | `GET /api/search` |
+| `list_face_galleries` | `GET /api/galleries` |
+| `get_onvif_snapshot` | `GET /api/onvif-snapshots` |
 | `get_server_status` | `GET /health`, `GET /admin/system` (선택) |
 | `add_camera` | `POST /api/cameras` |
 | `update_camera` | `PUT /api/cameras/:id` |
@@ -595,6 +672,7 @@ Registered in `.vscode/mcp.json`.
 | C-06 | No local caching of LTS data; every tool call fetches fresh data |
 | C-07 | The `package.json` must have `"type": "module"` for ESM imports to function |
 | C-08 | MCP protocol stdio is not compatible with `console.log`; all logs must use `console.error` |
+| C-09 | `LTSClient` sends no Authorization header — any tool backed by an `/admin/*` route (JWT + `role=admin`) will fail with 401/403; admin-gated capabilities (audit log, TC test results, user management) are out of scope until a service-account credential is added |
 
 ---
 
@@ -605,3 +683,4 @@ Registered in `.vscode/mcp.json`.
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for LLM MCP Server |
 | 1.1 | 2026-06-25 | LTS Engineering Team | §10b 확장 도구 10종 추가 (FR-MCP-070~102): get_server_status, 카메라 CRUD, ONVIF 이벤트, AI 감지 분석 |
 | 1.2 | 2026-06-25 | LTS Engineering Team | §10c 추가 — FR-MCP-110 query_face_trajectories (크로스카메라 얼굴 궤적 DB 조회) |
+| 1.3 | 2026-07-08 | LTS Engineering Team | §10d 추가 — FR-MCP-120~125 (get_model_catalog, get_fire_smoke_config, get_tracker_config, search_all, list_face_galleries, get_onvif_snapshot); §12.1 REST 매핑, C-09 admin 인증 제약 추가; 버전 헤더 1.1→1.3 정정 |
