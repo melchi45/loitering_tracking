@@ -127,6 +127,7 @@ test/              Test scripts (TC-based automation)
 | **Fullscreen Camera View** | [rfp/](rfp/RFP_Fullscreen_Camera_View.md) | [prd/](prd/PRD_Fullscreen_Camera_View.md) | [srs/](srs/SRS_Fullscreen_Camera_View.md) | [design/](design/Design_Fullscreen_Camera_View.md) | [tc/](tc/TC_Fullscreen_Camera_View.md) |
 | **ONVIF Metadata Pipeline** | [rfp/](rfp/RFP_ONVIF_Metadata_Pipeline.md) | [prd/](prd/PRD_ONVIF_Metadata_Pipeline.md) | [srs/](srs/SRS_ONVIF_Metadata_Pipeline.md) | [design/](design/Design_ONVIF_Metadata_Pipeline.md) | [tc/](tc/TC_ONVIF_Metadata_Pipeline.md) |
 | **RTSP / WebRTC Architecture** | [rfp/](rfp/RFP_RTSP_WebRTC_Architecture.md) | [prd/](prd/PRD_RTSP_WebRTC_Architecture.md) | [srs/](srs/SRS_RTSP_WebRTC_Architecture.md) | [design/](design/Design_RTSP_WebRTC_Architecture.md) | [tc/](tc/TC_RTSP_WebRTC_Architecture.md) |
+| **Face Search Condition Sync** | [rfp/](rfp/RFP_Face_Search_Condition_Sync.md) | [prd/](prd/PRD_Face_Search_Condition_Sync.md) | [srs/](srs/SRS_Face_Search_Condition_Sync.md) | [design/](design/Design_Face_Search_Condition_Sync.md) | [tc/](tc/TC_Face_Search_Condition_Sync.md) |
 
 ---
 
@@ -174,7 +175,7 @@ Operations guides are authored at the **PIA stage** (Production Input Approval).
 | [ops/MongoDB_Setup.md](ops/MongoDB_Setup.md) | MongoDB 5.0 installation (Ubuntu 18.04), collection/index creation, `mongoimport` migration, replica set config | [Design_DB_Layer](design/Design_DB_Layer.md) · [SRS_DB_Layer](srs/SRS_DB_Layer.md) |
 | [ops/HTTPS_TLS_Setup.md](ops/HTTPS_TLS_Setup.md) | Self-signed / CA-signed TLS certificate setup, `server/.env` HTTPS variables, HTTP→HTTPS redirect, HSTS | [Design_HTTPS_TLS](design/Design_HTTPS_TLS.md) · [SRS_HTTPS_TLS](srs/SRS_HTTPS_TLS.md) |
 | [ops/MCP_Server_Setup.md](ops/MCP_Server_Setup.md) | MCP server startup (stdio vs HTTP+SSE modes), Claude Code integration, `npm run mcp:*` scripts | [Design_LLM_MCP_Server](design/Design_LLM_MCP_Server.md) · [SRS_LLM_MCP_Server](srs/SRS_LLM_MCP_Server.md) |
-| [ops/Distributed_AI_Pipeline_Setup.md](ops/Distributed_AI_Pipeline_Setup.md) | streaming + analysis server pair setup, `ANALYSIS_SERVER_URL`, circuit-breaker tuning, health-check endpoints | [Design_Distributed_AI_Pipeline](design/Design_Distributed_AI_Pipeline.md) · [SRS_Distributed_AI_Pipeline](srs/SRS_Distributed_AI_Pipeline.md) |
+| [ops/Distributed_AI_Pipeline_Setup.md](ops/Distributed_AI_Pipeline_Setup.md) | streaming + analysis server pair setup, `ANALYSIS_SERVER_URL`, circuit-breaker tuning, health-check endpoints, face enrollment delegation and face search condition sync troubleshooting (§9.10/9.11) | [Design_Distributed_AI_Pipeline](design/Design_Distributed_AI_Pipeline.md) · [SRS_Distributed_AI_Pipeline](srs/SRS_Distributed_AI_Pipeline.md) · [Design_Face_Search_Condition_Sync](design/Design_Face_Search_Condition_Sync.md) |
 | [ops/RTSP_Capture_Backend_Setup.md](ops/RTSP_Capture_Backend_Setup.md) | `CAPTURE_BACKEND` selection guide — ingest-daemon vs GStreamer vs PyAV, dependency installation | [Design_RTSP_Capture_Backend](design/Design_RTSP_Capture_Backend.md) ② · [Design_Video_Capture_Pipeline](design/Design_Video_Capture_Pipeline.md) |
 | [ops/RTSP_WebRTC_Architecture_Setup.md](ops/RTSP_WebRTC_Architecture_Setup.md) | MediaMTX + mediasoup engine setup, STUN/TURN configuration, `SERVER_IP` / `ICE_SERVERS` env vars | [Design_RTSP_WebRTC_Architecture](design/Design_RTSP_WebRTC_Architecture.md) · [Design_WebRTC_Engine_Modes](design/Design_WebRTC_Engine_Modes.md) ① |
 | [ops/Logging_Guide.md](ops/Logging_Guide.md) | `LOG_LEVEL` / `LOG_TO_FILE` / `LOG_DIR` / `LOG_FILTER_PATTERNS` env vars, log file rotation, `makeLineRelay` child-process relay | [Design_Server_Architecture](design/Design_Server_Architecture.md) ① |
@@ -249,6 +250,8 @@ flowchart LR
     AppR --> CCF
     REID[AI ReID ①] --> FR
     REID --> CCF
+    FSC[Face Search Condition Sync] --> FR
+    FSC --> DAP
 ```
 
 ### Dashboard / UI Layer
@@ -353,6 +356,7 @@ flowchart LR
 | ✅ `test/api/distributed_pipeline.test.js` | [TC_Distributed_AI_Pipeline](tc/TC_Distributed_AI_Pipeline.md) | Distributed AI pipeline endpoint and circuit-breaker tests | All | `node test/api/distributed_pipeline.test.js` |
 | ✅ `test/api/streaming_mode_model_skip.test.js` | [TC_Streaming_Model_Load_Policy](tc/TC_Streaming_Model_Load_Policy.md) | `SERVER_MODE=streaming` model-skip contract — unit tests | **Streaming** | `node test/api/streaming_mode_model_skip.test.js` |
 | ✅ `test/api/streaming_without_analysis_url.test.js` | [TC_Distributed_AI_Pipeline](tc/TC_Distributed_AI_Pipeline.md) | Streaming mode fallback when `ANALYSIS_SERVER_URL` unset | **Streaming** | `node test/api/streaming_without_analysis_url.test.js` |
+| ✅ `test/api/face_search_condition_sync.test.js` | [TC_Face_Search_Condition_Sync](tc/TC_Face_Search_Condition_Sync.md) | Groups A (Delegation), B (Push/Poll), C (Metrics) | **Streaming** | `node test/api/face_search_condition_sync.test.js` |
 | 📋 `test/api/face_match_history.test.js` | [TC_Dashboard_Sidebar_Face_ID](tc/TC_Dashboard_Sidebar_Face_ID.md) | Group E (Match History CRUD) | All | `node test/api/face_match_history.test.js` |
 
 ### Phase-2 — Integration Tests (`test/integration/`)
@@ -380,7 +384,7 @@ flowchart LR
 
 | Phase | Scope | Scripts | Status |
 |---|---|---|---|
-| Phase-1 (API) | REST API tests — 37 scripts (✅ exist) + 1 (📋 planned) | 38 | ✅ 350+ pass, 0 fail (existing) |
+| Phase-1 (API) | REST API tests — 38 scripts (✅ exist) + 1 (📋 planned) | 39 | ✅ 350+ pass, 0 fail (existing) |
 | Phase-2 (Integration) | Socket.IO / MongoDB integration tests — 3 scripts | 3 | 🕐 Planned |
 | Phase-3 (E2E) | Playwright browser automation — 1 script (placeholder exists) | 1 | 🖥 Planned |
 
@@ -443,6 +447,7 @@ node test/generate_report.js
 | 2026-06-05 | Video Capture Pipeline SDLC chain authored — 5-document chain; 40 test cases in Groups A–G; 4-phase improvement roadmap |
 | 2026-06-25 | **docs/README.md v2.0 — Comprehensive update**: (1) Added 7 fully documented modules missing from table (AI_Missing_Person_Detection, AI_Model_Catalog, Distributed_AI_Pipeline, Fullscreen_Camera_View, ONVIF_Metadata_Pipeline, RTSP_WebRTC_Architecture, User_Profile); (2) Added "Partially Documented Modules" section (Admin Dashboard, Dashboard Analysis Mode, ICE Test UI, Thermal Radiometry Overlay, RTSP Capture Backend, FFmpeg RTSP Capture, Streaming Model Load Policy); (3) Added "Design-Only / Architectural Reference Documents" section (9 docs: Server_Architecture, WebRTC_Engine_Modes, WebRTC_Client_Telemetry, ONVIF_Timeline, AI_AppearanceReID, AI_ReID, Client_Log_Backchannel, DataChannel_CameraEvents, FullscreenPanel_Splitbar); (4) Added "Operations Guides" section (11 docs with design cross-refs); (5) Added "Document Cross-Reference Map" section with layered Mermaid diagrams and inter-module dependency tables; (6) Updated Test Script Status — added 16 previously unlisted Phase-1 scripts; updated Phase Coverage Summary from 23→38 scripts |
 | 2026-06-25 | **Admin Dashboard TC mode classification**: Phase-1 table "Server Mode" column added — 3 suites marked Analysis (skipped in streaming), 3 suites marked Streaming (skipped in analysis); yellow warning banner removed; suite headers now show mode badges (purple=Analysis, cyan=Streaming) and skip count |
+| 2026-07-08 | **Face Search Condition Sync SDLC chain authored** — RFP/PRD/SRS/Design/TC_Face_Search_Condition_Sync.md; fixes gallery photo enrollment failing on `SERVER_MODE=streaming` (`/api/analysis/face-embed` delegation endpoint) and adds Analysis Server Dashboard visibility (push+5s-poll mirror of `faceGalleries`/`faceGalleryFaces` tagged `source:'local'|'synced'`, no new DB table); `test/api/face_search_condition_sync.test.js` added (`streamingOnly`) |
 
 ---
 
@@ -452,3 +457,4 @@ node test/generate_report.js
 |---|---|---|
 | 1.0 | 2026-05-28 | Initial release |
 | 2.0 | 2026-06-25 | Full documentation coverage — added partial/design-only/ops sections, cross-reference map, 16 missing test scripts |
+| 2.1 | 2026-07-08 | Added Face Search Condition Sync module (RFP/PRD/SRS/Design/TC), 39th test script, ops guide troubleshooting cross-ref |

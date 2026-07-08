@@ -1,8 +1,10 @@
 import { useEffect, useState } from 'react';
 import AnalysisDetectionPanel from './AnalysisDetectionPanel';
 import AnalysisLivePanel from './AnalysisLivePanel';
+import FaceSearchConditionPanel from './FaceSearchConditionPanel';
 import { useI18n } from '../i18n';
 import type { Translations } from '../i18n/translations/en';
+import type { GalleryType } from '../types';
 
 type GpuInfo = {
   index: number;
@@ -81,6 +83,10 @@ type MetricsResponse = {
     faces: number;
     fireSmoke: number;
     loitering: number;
+  };
+  faceSearch?: {
+    total: number;
+    byType: Record<GalleryType, number>;
   };
   cameras: Array<{
     cameraId: string;
@@ -245,6 +251,7 @@ export default function AnalysisServerDashboard({
   const [fpsHistory, setFpsHistory] = useState<Map<string, number[]>>(new Map());
   const [showEventHistory,   setShowEventHistory]   = useState(false);
   const [showLiveDetections, setShowLiveDetections] = useState(false);
+  const [showFaceSearch,     setShowFaceSearch]     = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -297,6 +304,13 @@ export default function AnalysisServerDashboard({
       {showLiveDetections && (
         <div className="absolute inset-0 z-20 rounded-[28px] overflow-hidden">
           <AnalysisLivePanel onClose={() => setShowLiveDetections(false)} />
+        </div>
+      )}
+
+      {/* ── Face Search Condition overlay (VIP/Blocklist/Missing/General 검색 조건) ── */}
+      {showFaceSearch && (
+        <div className="absolute inset-0 z-20 rounded-[28px] overflow-hidden">
+          <FaceSearchConditionPanel onClose={() => setShowFaceSearch(false)} />
         </div>
       )}
       <div className="flex flex-col gap-6">
@@ -423,7 +437,15 @@ export default function AnalysisServerDashboard({
           </section>
         )}
 
-        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-5">
+          <StatCard
+            label="Active Face Search"
+            value={metrics ? String(metrics.faceSearch?.total ?? 0) : '-'}
+            hint={metrics?.faceSearch ? `missing ${metrics.faceSearch.byType.missing} · vip ${metrics.faceSearch.byType.vip} · blocklist ${metrics.faceSearch.byType.blocklist}` : t.dashMetricsWaiting}
+            accentClass="text-red-300"
+            onClick={() => setShowFaceSearch(true)}
+            clickHint={t.dashClickForDetails}
+          />
           <StatCard
             label={t.statsRecentThroughput}
             value={metrics ? `${metrics.recent.framesPerSec.toFixed(1)} fps` : '-'}

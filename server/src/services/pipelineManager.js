@@ -4,6 +4,7 @@ const path = require('path');
 const fs   = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const snapshotSvc = require('./snapshotService');
+const faceSearchConditions = require('./faceSearchConditions');
 
 /**
  * Parse width/height from JPEG SOF marker — no full decode, reads ~100 bytes.
@@ -226,6 +227,14 @@ class PipelineManager {
     this._persistentGallery = [];
     // Cooldown map for face_match alerts: `${faceId}:${galleryFaceId}` → lastEmittedAt (ms)
     this._faceMatchCooldown = new Map();
+
+    // Bound how long a gallery/face row written by a different process to a shared DB
+    // (e.g. a condition added directly on the analysis server's own dashboard) can
+    // remain invisible to this process's live-matching gallery — reloadPersistentGallery()
+    // is otherwise only triggered by this process's own local /api/galleries mutations.
+    if (process.env.SERVER_MODE !== 'analysis') {
+      setInterval(() => this.reloadPersistentGallery(), 10_000).unref();
+    }
 
     // Cross-camera Re-ID statistics for the current server session
     // Map: faceId → { faceId, firstCameraId, lastCameraId, transitionCount, lastSeenAt }
@@ -1574,6 +1583,7 @@ class PipelineManager {
       cameras,
       models: this._getLoadedModels(),
       system: getSystemMetrics(),
+      faceSearch: faceSearchConditions.summarize(this._db),
     };
   }
 

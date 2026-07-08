@@ -110,8 +110,9 @@ const SUITES = [
   // Capture / Pipeline (captureOnly: tests the RTSP capture backend which analysis server lacks)
   { file: 'test/api/capture-backend.test.js',               srs: 'FR-CAP-001~020',                          label: 'RTSP Capture Backend',        captureOnly: true },
   { file: 'test/api/distributed_pipeline.test.js',          srs: 'FR-DIST-001~020',                         label: 'Distributed Pipeline  SERVER_MODE' },
-  { file: 'test/api/streaming_mode_model_skip.test.js',     srs: 'FR-STREAM-MODEL-001~005',                 label: 'Streaming Model-Load Guard' },
-  { file: 'test/api/streaming_without_analysis_url.test.js',srs: 'FR-STREAM-FALLBACK-001~005',              label: 'Streaming Monitoring-Only Fallback' },
+  { file: 'test/api/streaming_mode_model_skip.test.js',     srs: 'FR-STREAM-MODEL-001~005',                 label: 'Streaming Model-Load Guard', streamingOnly: true },
+  { file: 'test/api/streaming_without_analysis_url.test.js',srs: 'FR-STREAM-FALLBACK-001~005',              label: 'Streaming Monitoring-Only Fallback', streamingOnly: true },
+  { file: 'test/api/face_search_condition_sync.test.js',    srs: 'FR-FSC-001~016',                          label: 'Face Search Condition Sync', streamingOnly: true },
   // YouTube (captureOnly: YouTubeStreamService is disabled in analysis mode)
   { file: 'test/api/youtube_streams.test.js',               srs: 'FR-YT-001~020',                           label: 'YouTube RTSP Ingest  A+D',    captureOnly: true },
   { file: 'test/api/youtube_streams_lts2026.test.js',       srs: 'FR-YT-LTS-001~010',                      label: 'LTS2026 YouTube Schema  A+B+D', captureOnly: true },

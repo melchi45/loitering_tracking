@@ -105,6 +105,29 @@ class AnalysisClient {
     }
   }
 
+  /**
+   * Delegate face-photo detect+embed to the analysis server for gallery enrollment
+   * when this process has no local face model loaded (streaming mode). Unlike
+   * analyzeFrame(), this bypasses the circuit breaker/backpressure gating — enrollment
+   * is a rare, synchronous, user-triggered action, not high-frequency per-frame traffic.
+   *
+   * @returns {Promise<{ success: true, bbox, score, embedding, thumbnail } | { success: false, status: number, error: string }>}
+   */
+  async extractFaceEmbedding(jpegBuffer) {
+    try {
+      return await this._postJpeg('/api/analysis/face-embed', jpegBuffer, '{}');
+    } catch (err) {
+      const match = /^HTTP (\d+): (.*)$/s.exec(err.message);
+      if (match) {
+        const status = parseInt(match[1], 10);
+        let error = match[2];
+        try { error = JSON.parse(match[2]).error || error; } catch { /* keep raw text */ }
+        return { success: false, status, error };
+      }
+      return { success: false, status: 503, error: err.message };
+    }
+  }
+
   /** GET /api/analysis/health */
   async healthCheck() {
     try {

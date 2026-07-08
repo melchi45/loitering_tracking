@@ -63,6 +63,7 @@ test/
 | `timeline_range.test.js` | Timeline 1H Range | streaming 캡처+ONVIF 필요 |
 | `streaming_mode_model_skip.test.js` | Streaming Model-Load Guard | streaming 전용 로직 |
 | `streaming_without_analysis_url.test.js` | Streaming Monitoring-Only Fallback | streaming 전용 fallback |
+| `face_search_condition_sync.test.js` | Face Search Condition Sync (얼굴 등록 위임 + push/poll) | streaming→analysis 전용 흐름 |
 
 ### `captureOnly` — analysis 모드에서 스킵
 
@@ -281,6 +282,7 @@ npm test -- --testNamePattern="WebRTC ICE"
 | `ai_detection_modules.test.js` | `docs/tc/TC_AI_Human_Detection.md`, `docs/tc/TC_AI_Fire_Smoke_Detection.md` 등 |
 | `stats_panel.test.js` | `docs/tc/TC_Stats_Panel.md` |
 | `detection_snapshot_search.test.js` | `docs/tc/TC_Detection_Snapshot_Search.md` |
+| `face_search_condition_sync.test.js` | `docs/tc/TC_Face_Search_Condition_Sync.md` |
 
 ## 코드 수정 시 문서 동기화 의무
 

@@ -8,7 +8,8 @@ const { getDB } = require('../db');
  *
  * @param {{
  *   event: 'signup'|'signin'|'signin_blocked'|'logout'|'token_refresh'|
- *          'approved'|'rejected'|'revoked'|'role_changed'|'deleted',
+ *          'approved'|'rejected'|'revoked'|'role_changed'|'deleted'|
+ *          'gallery_created'|'gallery_deleted'|'face_enrolled'|'face_deleted',
  *   userId?: string,
  *   email?: string,
  *   ip?: string,

@@ -36,6 +36,8 @@ const internalRouter         = require('./api/internal');
 const { router: ingestFrameRouter, setPipelineManager: setIngestPM, setSocketIO: setIngestIO, setDb: setIngestDb, closeOpenEventsForCamera } = require('./routes/internalApi');
 const { router: onvifEventsRouter, typesRouter: onvifTypesRouter, snapshotsRouter: onvifSnapshotsRouter, setDb: setOnvifDb } = require('./routes/onvifApi');
 const faceGalleryRouter      = require('./api/faceGallery');
+const AnalysisClient         = require('./services/analysisClient');
+const faceSearchSync         = require('./services/faceSearchSync');
 const { buildRouter: buildSnapshotsRouter } = require('./api/snapshots');
 const { buildRouter: buildSearchRouter }    = require('./api/search');
 const { buildRouter: buildStatsRouter }     = require('./api/stats');
@@ -246,7 +248,15 @@ async function main() {
 
   // Face gallery — getter always resolves to the live FaceService once models are loaded
   const getFaceService = () => pipelineManager._attrPipeline?._face ?? null;
-  app.use('/api/galleries', faceGalleryRouter(db, pipelineManager, getFaceService));
+
+  // Dedicated AnalysisClient for gallery-enrollment delegation (streaming mode only) —
+  // separate from pipelineManager's own lazily-created client, which may not exist
+  // until a camera has started, so enrollment works even with zero cameras configured.
+  const galleryAnalysisClient = (SERVER_MODE === 'streaming' && process.env.ANALYSIS_SERVER_URL)
+    ? new AnalysisClient(process.env.ANALYSIS_SERVER_URL)
+    : null;
+
+  app.use('/api/galleries', faceGalleryRouter(db, pipelineManager, getFaceService, galleryAnalysisClient));
 
   // Detection Snapshots & Global Search
   app.use('/api/snapshots', buildSnapshotsRouter(db));
@@ -285,6 +295,10 @@ async function main() {
     const analysisProxyRouter = require('./routes/analysisProxy');
     app.use('/api/analysis', analysisProxyRouter);
     console.log('[Server] Analysis proxy mounted at /api/analysis →', process.env.ANALYSIS_SERVER_URL);
+
+    // Push this server's face galleries/faces to the analysis server for dashboard
+    // display (push on mutation, handled in faceGallery.js) + 5s self-healing poll.
+    faceSearchSync.startAutoSync(db);
   }
   // Defer ONNX model loading by 3 seconds so the HTTP server can accept requests
   // immediately on startup without the event loop being blocked by session creation.

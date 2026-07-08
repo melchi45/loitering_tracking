@@ -28,6 +28,8 @@ const FireSmokeService  = require('../services/fireSmokeService');
 const analyticsConfig   = require('../services/analyticsConfig');
 const { getSystemMetrics } = require('../services/systemMetrics');
 const snapshotSvc      = require('../services/snapshotService');
+const { extractFaceForEnrollment } = require('../services/faceEnrollHelper');
+const faceSearchConditions = require('../services/faceSearchConditions');
 
 // ── YOLO Model catalog ────────────────────────────────────────────────────────
 // Each entry = one downloadable ONNX model.  file is relative to server/models/.
@@ -1044,6 +1046,47 @@ router.get('/health', (_req, res) => {
   });
 });
 
+// ── POST /api/analysis/face-embed ─────────────────────────────────────────────
+// Delegated enrollment: a streaming server with no local face model forwards the
+// enrollment photo here for detect+embed+thumbnail extraction.
+router.post('/face-embed', express.raw({ type: 'image/jpeg', limit: '10mb' }), async (req, res) => {
+  try {
+    await _ensureServices();
+    const faceService = _attrPipeline?._face;
+    if (!faceService || !faceService.ready) {
+      return res.status(503).json({ success: false, error: 'Face service not available — models not loaded' });
+    }
+    const extracted = await extractFaceForEnrollment(faceService, req.body);
+    res.json({ success: true, ...extracted });
+  } catch (err) {
+    const status = /No face detected/.test(err.message) || /Could not extract/.test(err.message) ? 422 : 500;
+    res.status(status).json({ success: false, error: err.message });
+  }
+});
+
+// ── POST /api/analysis/face-search-conditions/sync ────────────────────────────
+// Receives a full gallery/face snapshot from a streaming server and mirrors it
+// locally (tagged source:'synced') for dashboard display only — never used for matching.
+router.post('/face-search-conditions/sync', express.json({ limit: '5mb' }), (req, res) => {
+  try {
+    const db = req.app.get('db');
+    faceSearchConditions.applyReconcile(db, req.body);
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ── GET /api/analysis/face-search-conditions ──────────────────────────────────
+router.get('/face-search-conditions', (req, res) => {
+  try {
+    const db = req.app.get('db');
+    res.json(faceSearchConditions.listGrouped(db));
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 router.get('/metrics', (req, res) => {
   // In combined mode, PipelineManager accumulates local inference stats directly.
   // Delegate to it so the Analysis Dashboard reflects real data.
@@ -1120,6 +1163,7 @@ router.get('/metrics', (req, res) => {
     cameras,
     models: _getLoadedModels(),
     system: getSystemMetrics(),
+    faceSearch: faceSearchConditions.summarize(req.app.get('db')),
   });
 });
 

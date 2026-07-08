@@ -4,6 +4,17 @@ const { Router } = require('express');
 const { v4: uuidv4 } = require('uuid');
 const multer = require('multer');
 const sharp = require('sharp');
+const AuditService = require('../services/AuditService');
+const { extractFaceForEnrollment } = require('../services/faceEnrollHelper');
+const faceSearchSync = require('../services/faceSearchSync');
+
+function clientIp(req) {
+  return (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
+}
+
+function syncIfStreaming(db) {
+  if (process.env.SERVER_MODE === 'streaming') faceSearchSync.pushReconcile(db);
+}
 
 // Multer: memory storage — process buffer directly, no temp files
 const upload = multer({
@@ -30,8 +41,9 @@ function multerErrorHandler(err, _req, res, next) {
  * @param {import('../db').db} db
  * @param {import('../services/pipelineManager')} pipelineManager
  * @param {(() => import('../services/faceService')|null)} getFaceService  Lazy getter — returns null until models load
+ * @param {import('../services/analysisClient')|null} [analysisClient]  Dedicated client for enrollment delegation (streaming mode only)
  */
-function faceGalleryRouter(db, pipelineManager, getFaceService) {
+function faceGalleryRouter(db, pipelineManager, getFaceService, analysisClient = null) {
   const router = Router();
 
   // ── Galleries CRUD ────────────────────────────────────────────────────────
@@ -59,8 +71,16 @@ function faceGalleryRouter(db, pipelineManager, getFaceService) {
       if (!name || !name.trim()) return res.status(400).json({ success: false, error: 'name is required' });
       const VALID_TYPES = ['general', 'vip', 'blocklist', 'missing'];
       const galleryType = VALID_TYPES.includes(type) ? type : 'general';
-      const gallery = { id: uuidv4(), name: name.trim(), description: description.trim(), type: galleryType };
+      const gallery = { id: uuidv4(), name: name.trim(), description: description.trim(), type: galleryType, source: 'local' };
       db.insert('faceGalleries', gallery);
+      AuditService.log({
+        event:   'gallery_created',
+        actorId: req.user?.sub,
+        email:   req.user?.email,
+        ip:      clientIp(req),
+        detail:  { galleryId: gallery.id, name: gallery.name, type: gallery.type },
+      });
+      syncIfStreaming(db);
       res.status(201).json({ success: true, data: { ...gallery, faceCount: 0 } });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -72,9 +92,18 @@ function faceGalleryRouter(db, pipelineManager, getFaceService) {
     try {
       const g = db.findOne('faceGalleries', { id: req.params.id });
       if (!g) return res.status(404).json({ success: false, error: 'Gallery not found' });
+      const faceCount = db.find('faceGalleryFaces', { galleryId: req.params.id }).length;
       db.find('faceGalleryFaces', { galleryId: req.params.id })
         .forEach((f) => db.delete('faceGalleryFaces', f.id));
       db.delete('faceGalleries', req.params.id);
+      AuditService.log({
+        event:   'gallery_deleted',
+        actorId: req.user?.sub,
+        email:   req.user?.email,
+        ip:      clientIp(req),
+        detail:  { galleryId: g.id, name: g.name, type: g.type, faceCount },
+      });
+      syncIfStreaming(db);
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
@@ -107,60 +136,54 @@ function faceGalleryRouter(db, pipelineManager, getFaceService) {
       const { name = 'Unknown' } = req.body;
 
       const faceService = typeof getFaceService === 'function' ? getFaceService() : getFaceService;
-      if (!faceService || !faceService.ready) {
+
+      let extracted;
+      if (faceService && faceService.ready) {
+        // Local path — models are loaded on this process (combined/analysis mode).
+        try {
+          extracted = await extractFaceForEnrollment(faceService, req.file.buffer);
+        } catch (err) {
+          const status = /No face detected/.test(err.message) || /Could not extract/.test(err.message) ? 422 : 500;
+          return res.status(status).json({ success: false, error: err.message });
+        }
+      } else if (analysisClient) {
+        // Delegated path — streaming mode has no local face model; ask the analysis server.
+        const jpegBuf = await sharp(req.file.buffer).jpeg({ quality: 95 }).toBuffer();
+        const delegated = await analysisClient.extractFaceEmbedding(jpegBuf);
+        if (!delegated || !delegated.success) {
+          const status = delegated && delegated.status ? delegated.status : 503;
+          const error = (delegated && delegated.error) || 'Face service not available — models not loaded';
+          return res.status(status).json({ success: false, error });
+        }
+        extracted = delegated;
+      } else {
         return res.status(503).json({ success: false, error: 'Face service not available — models not loaded' });
       }
-
-      // Normalize to JPEG for consistent processing
-      const jpegBuf = await sharp(req.file.buffer).jpeg({ quality: 95 }).toBuffer();
-      const { width: origW, height: origH } = await sharp(jpegBuf).metadata();
-
-      // Stage 1: detect face(s)
-      const faces = await faceService.detectFaces(jpegBuf, origW, origH);
-      if (!faces.length) {
-        return res.status(422).json({ success: false, error: 'No face detected in the uploaded photo. Please use a clear frontal face image.' });
-      }
-
-      // Pick the largest face (most likely the subject)
-      const best = faces.reduce((a, b) =>
-        b.bbox.width * b.bbox.height > a.bbox.width * a.bbox.height ? b : a,
-      );
-
-      // Stage 2: extract embedding
-      const embedding = await faceService.getEmbedding(jpegBuf, best.bbox);
-      if (!embedding) {
-        return res.status(422).json({ success: false, error: 'Could not extract face embedding. Image quality may be too low.' });
-      }
-
-      // Build 64×64 thumbnail (base64 JPEG)
-      const { x, y, width, height } = best.bbox;
-      const thumbBuf = await sharp(jpegBuf)
-        .extract({
-          left: Math.max(0, Math.round(x)),
-          top:  Math.max(0, Math.round(y)),
-          width:  Math.max(1, Math.round(width)),
-          height: Math.max(1, Math.round(height)),
-        })
-        .resize(64, 64, { fit: 'cover' })
-        .jpeg({ quality: 80 })
-        .toBuffer();
-      const thumbnail = `data:image/jpeg;base64,${thumbBuf.toString('base64')}`;
 
       const face = {
         id:        uuidv4(),
         galleryId: g.id,
         name:      name.trim() || 'Unknown',
-        embedding, // 512-D array stored in JSON
-        thumbnail,
-        bbox:      best.bbox,
-        score:     best.score,
+        embedding: extracted.embedding, // 512-D array stored in JSON
+        thumbnail: extracted.thumbnail,
+        bbox:      extracted.bbox,
+        score:     extracted.score,
+        source:    'local',
       };
       db.insert('faceGalleryFaces', face);
+      AuditService.log({
+        event:   'face_enrolled',
+        actorId: req.user?.sub,
+        email:   req.user?.email,
+        ip:      clientIp(req),
+        detail:  { galleryId: g.id, galleryType: g.type, faceId: face.id, name: face.name },
+      });
 
       // Notify pipeline to reload gallery
       if (pipelineManager && typeof pipelineManager.reloadPersistentGallery === 'function') {
         pipelineManager.reloadPersistentGallery();
       }
+      syncIfStreaming(db);
 
       res.status(201).json({
         success: true,
@@ -178,9 +201,17 @@ function faceGalleryRouter(db, pipelineManager, getFaceService) {
       const f = db.findOne('faceGalleryFaces', { id: req.params.faceId, galleryId: req.params.id });
       if (!f) return res.status(404).json({ success: false, error: 'Face not found' });
       db.delete('faceGalleryFaces', req.params.faceId);
+      AuditService.log({
+        event:   'face_deleted',
+        actorId: req.user?.sub,
+        email:   req.user?.email,
+        ip:      clientIp(req),
+        detail:  { galleryId: req.params.id, faceId: f.id, name: f.name },
+      });
       if (pipelineManager && typeof pipelineManager.reloadPersistentGallery === 'function') {
         pipelineManager.reloadPersistentGallery();
       }
+      syncIfStreaming(db);
       res.json({ success: true });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });

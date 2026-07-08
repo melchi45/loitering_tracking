@@ -67,6 +67,9 @@ loitering_tracking/
 │   │   ├── mongoDbService.js       # MongoDB 연결 · 5초 keep-alive 핑 · 재연결 Retry (선형 back-off) · findDirect() 직접 쿼리 (onvif_snapshots 등 비hydration 테이블용)
 │   │   ├── analyticsConfig.js      # 분석 설정
 │   │   ├── missingPersonService.js # 실종자 등록·검색·감지 매칭·상태 관리
+│   │   ├── faceEnrollHelper.js     # 얼굴 등록 사진 detect+embed+썸네일 공용 로직 (로컬/위임 양쪽에서 재사용)
+│   │   ├── faceSearchConditions.js # Face Search Condition 요약/목록/reconcile 적용 (analysis 서버, 무상태)
+│   │   ├── faceSearchSync.js       # streaming→analysis 갤러리/얼굴 스냅샷 push+5s poll (streaming 서버 전용)
 │   │   ├── systemMetrics.js        # CPU·메모리·GPU·디스크 I/O 수집 (admin/system)
 │   │   ├── TcRunnerService.js      # TC-ID 단위 테스트 실행기 (admin/tc-results)
 │   │   └── channelSlotService.js   # Dashboard Channel Slot 검증·자동배정·시작 시 backfill 마이그레이션 (MAX_CHANNEL_NUM)
@@ -122,6 +125,7 @@ loitering_tracking/
 │   │   ├── AnalysisServerDashboard.tsx # analysis 모드 메인 대시보드
 │   │   ├── AnalysisLivePanel.tsx   # 실시간 감지 피드 오버레이 (analysis 모드)
 │   │   ├── AnalysisDetectionPanel.tsx  # 이벤트 히스토리 오버레이 (배회/화재/연기)
+│   │   ├── FaceSearchConditionPanel.tsx # Face Search Condition 상세·추가 오버레이 (Analysis Server Dashboard 전용)
 │   │   ├── AnalysisEventsTab.tsx   # Detections 탭 — 이벤트 히스토리 (analysis 모드)
 │   │   ├── OnvifTimelineOverlay.tsx # ONVIF 이벤트 타임라인 오버레이 (줌/팬/상세/Raw XML)
 │   │   ├── DetectionsTimelineInline.tsx # 감지 트랙 Gantt 타임라인 (FullscreenCameraView Detections 탭)
@@ -364,6 +368,9 @@ loitering_tracking/
 | GET | `/api/analysis/models` | YOLO 모델 카탈로그 조회 (다운로드 상태·활성 모델 포함) |
 | POST | `/api/analysis/models/switch` | 활성 YOLO 탐지 모델 런타임 전환 (body: modelId) |
 | POST | `/api/analysis/models/download` | YOLO 모델 다운로드 시작 (body: modelId) |
+| POST | `/api/analysis/face-embed` | 얼굴 등록 사진 detect+embed 위임 수신 (streaming 모드가 로컬 얼굴 모델 없을 때 호출, raw JPEG → bbox/score/embedding/thumbnail) |
+| POST | `/api/analysis/face-search-conditions/sync` | streaming 서버의 `faceGalleries`/`faceGalleryFaces` 전체 스냅샷 반영 (embedding 제외, `source:'synced'` 태그로 upsert/delete) |
+| GET | `/api/analysis/face-search-conditions` | 활성 Face Search Condition 상세 조회 (Analysis Server Dashboard 드릴다운용) — `total`/`byType`는 `/api/analysis/metrics`의 `faceSearch` 필드에도 포함 |
 
 ### ONVIF 이벤트 & 로그 & 헬스체크
 

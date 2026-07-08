@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-SA-01 |
-| **Version** | 1.5 |
+| **Version** | 1.6 |
 | **Status** | Active |
-| **Date** | 2026-06-11 |
+| **Date** | 2026-07-08 |
 | **Author** | LTS-2026 Engineering |
 
 ---
@@ -19,6 +19,7 @@
    - 3.1 [combined 모드](#31-combined-모드)
    - 3.2 [streaming 모드](#32-streaming-모드)
    - 3.3 [analysis 모드](#33-analysis-모드)
+   - 3.4 [얼굴 등록 위임 + Face Search Condition 동기화](#34-얼굴-등록-위임--face-search-condition-동기화-v16-신규)
 4. [DB 서버 아키텍처](#4-db-서버-아키텍처)
 5. [MCP 서버 아키텍처](#5-mcp-서버-아키텍처)
 6. [배포 시나리오](#6-배포-시나리오)
@@ -360,6 +361,37 @@ ONNX_CUDA=1
 ONNX_THREADS_PROD=0      # 0=auto (GPU 사용시 권장)
 ANALYSIS_MAX_CONCURRENT=100
 ```
+
+---
+
+### 3.4 얼굴 등록 위임 + Face Search Condition 동기화 (v1.6 신규)
+
+`streaming` 모드는 로컬 얼굴 모델이 없어 `POST /api/galleries/:id/faces` 사진 등록이 기본적으로 503을 반환합니다. `analysisClient`가 구성되어 있으면 detect+embed 단계를 analysis 서버로 위임합니다. 상세 설계는 [Design_Face_Search_Condition_Sync.md](Design_Face_Search_Condition_Sync.md) 참조.
+
+```mermaid
+sequenceDiagram
+    participant STR as Streaming Server
+    participant ANL as Analysis Server
+
+    STR->>ANL: POST /api/analysis/face-embed (raw JPEG)
+    ANL-->>STR: { bbox, score, embedding, thumbnail }
+    STR->>STR: faceGalleryFaces insert (source:'local')
+
+    Note over STR,ANL: 별도 채널 — 대시보드 표시 전용, 매칭에는 미사용
+    STR->>ANL: POST /api/analysis/face-search-conditions/sync (5s 간격 + 변경 시)
+    ANL->>ANL: faceGalleries/faceGalleryFaces upsert (source:'synced')
+```
+
+**핵심 원칙:** 실시간 얼굴 매칭(named-gallery 대조)은 이 기능과 무관하게 이미 streaming 서버에서 정상 동작합니다 — `/api/analysis/frame` 응답의 `detectedFaces`에 임베딩이 그대로 포함되어 전달되고, streaming 서버 자체의 `_persistentGallery`가 매칭을 수행합니다. §3.4는 (1) 등록 위임과 (2) 대시보드 가시성만 다루며, analysis 서버에 별도 매칭 엔진을 두지 않습니다.
+
+**신규 엔드포인트 (analysis 서버):**
+
+| 엔드포인트 | 설명 |
+|---|---|
+| `POST /api/analysis/face-embed` | 등록 사진 detect+embed 위임 (streaming 모드 전용 호출) |
+| `POST /api/analysis/face-search-conditions/sync` | streaming 서버가 보낸 갤러리/얼굴 전체 스냅샷 반영 |
+| `GET /api/analysis/face-search-conditions` | Analysis Server Dashboard 상세 조회용 |
+| `GET /api/analysis/metrics`의 `faceSearch` 필드 | 대시보드 카운트 배지용 (기존 2초 폴링에 포함) |
 
 ---
 
@@ -882,6 +914,8 @@ if (subscribedRef.current.size > 0 && !subscribedRef.current.has(ev.cameraId)) r
 | SPA 서빙 | ✅ | ✅ | ✅ |
 | ffmpeg 필요 | ✅ | ✅ | ❌ |
 | GPU 가속 (CUDA) | 선택 | ❌ | 선택 |
+| 얼굴 등록 위임 (`/api/analysis/face-embed`) | 불필요(로컬) | ✅ 위임 | ✅ 수신 |
+| Face Search Condition 동기화 (push+poll) | 불필요 | ✅ 송신 | ✅ 수신·표시 |
 
 ---
 
@@ -895,3 +929,4 @@ if (subscribedRef.current.size > 0 && !subscribedRef.current.has(ev.cameraId)) r
 | 1.3 | 2026-06-11 | CAPTURE_BACKEND 기본값 `ingest-daemon`으로 변경; RTSPCapture 표기를 CaptureBackend로 일반화 |
 | 1.4 | 2026-06-17 | analysis 모드 불필요 서비스 억제: MediaMTX(CAPTURE_BACKEND 무관), YouTubeStream 바이너리 탐색, UDPDiscovery 서브모듈 로그 모두 비활성화 |
 | 1.5 | 2026-06-23 | Section 4 DB 아키텍처 업데이트: 플러그어블 백엔드(BaseDatabase/JsonDatabase/MongoDatabase), server/src/db/ 구조, MongoDB 모드 lts.json 완전 제거 반영 |
+| 1.6 | 2026-07-08 | §3.4 신규 — 얼굴 등록 위임(`/api/analysis/face-embed`) + Face Search Condition 동기화(push+5s poll, `faceGalleries`/`faceGalleryFaces`의 `source` 태그) 추가; §10 기능 매트릭스에 2행 추가; 상세는 [Design_Face_Search_Condition_Sync.md](Design_Face_Search_Condition_Sync.md) |
