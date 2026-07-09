@@ -1,6 +1,25 @@
 version: '3.8'
 
 services:
+  # Optional — AI-05 Phase-3 Human Parsing model catalog / CCFR Phase-2 Appearance
+  # Re-ID (Proposed). Not required unless QDRANT_ENABLED=true in server/.env.
+  # See docs/design/Design_AI_AppearanceReID.md §12.
+  qdrant:
+    image: qdrant/qdrant:v1.18.2-unprivileged
+    container_name: lts-qdrant
+    ports:
+      - "6333:6333"
+      - "6334:6334"
+    volumes:
+      - ./server/storage/qdrant:/qdrant/storage
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/6333 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
   mediamtx:
     image: bluenviron/mediamtx:latest
     container_name: lts-mediamtx

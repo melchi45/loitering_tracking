@@ -8,7 +8,7 @@
 | **Issue Date** | May 15, 2026 |
 | **Proposal Deadline** | June 30, 2026 |
 | **Zone Target Key** | `color` |
-| **Status** | **Phase-1 Implemented (RGB color extraction) / Phase-2 PAR Pending** |
+| **Status** | **Phase-1 Implemented (RGB color extraction) / Phase-1.5 K-Means Proposed / Phase-2 PAR Pending / Phase-3 Human Parsing Proposed** |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -440,6 +440,29 @@ Auto-activated when 'color' or 'cloth' is included in Zone targetClasses
 Output: detection.color.upper / detection.color.lower (color name)
 ```
 
+#### Phase-3: Human Parsing 기반 정밀 색상 분류 (Proposed, 2026-07-09)
+
+**격차 분석 배경**: 참고 가이드 CCTV/IPTV 상의하의 색상분류 가이드(내용 통합 완료, 원본은 2026-07-09 삭제됨)와 `ReID_및_색상분석_활용가이드.md`를 현재 구현(Phase-1)과 비교한 결과, 현재 방식(고정 비율 bbox crop → 8×8 리사이즈 → 단순 픽셀 평균 → HSV 매핑)은 가이드가 제시하는 4단계 티어 중 **가장 단순한 티어("많은 현장에서는 별도 AI 모델 없이 처리")보다도 더 축약된 방식**이다 — 해당 티어는 K-Means/Dominant Color 추출을 전제하지만 현재는 단순 평균만 사용한다. 가이드의 최상위 티어는 Human Parsing(SCHP/CE2P/SegFormer)을 이용한 픽셀 단위 의류 마스크 추출을 권장한다.
+
+**후보 모델 비교**:
+
+| 모델 | 라이선스 | 클래스 | ONNX | 비고 |
+|---|---|---|---|---|
+| SCHP (LIP-20, ResNet-101) | MIT | 20 (LIP 데이터셋) | 커뮤니티 변환 존재 (`pirocheto/schp-lip-20`) | 정확도 높으나 무거움(473×473 기준) |
+| SegFormer (`segformer_b2_clothes`, MiT-B2) | NVIDIA SegFormer NC(비상업) 라이선스 상속 | 18 (의류 세분화) | 즉시 사용 가능 (`Xenova/segformer_b2_clothes`) | **본 프로젝트는 상업 배포가 아니므로 NC 라이선스 제약이 적용되지 않음** — 사용 가능 |
+
+**상호 대체(interchangeable) 설계**: 두 모델은 서로 다른 클래스 인덱스 체계를 가지므로, 기존 YOLO 탐지 모델 카탈로그(`GET/POST /api/analysis/models`)와 동일한 다운로드+활성화(Activate) UX를 Admin Dashboard의 "AI Models" 탭에 확장 적용하고, 모델별 `classMap`(어떤 클래스 인덱스가 상의/하의에 해당하는지) 메타데이터를 카탈로그 엔트리에 포함시켜 모델 교체 시에도 상의/하의 판정이 깨지지 않도록 한다. 상세 설계는 `docs/design/Design_AI_Color_Analysis.md` §10 참조.
+
+**실시간 다채널 부담 완화**: 매 프레임 실행이 아니라 **트랙(track) 단위로 N초마다 1회만 실행**하고 결과를 캐시해 재사용한다 (사용자 결정, 2026-07-09).
+
+**검토 후 제외한 대안 — Person Attribute Recognition (whole-crop)**: 가이드 2번째 티어(RAP/PETA 데이터셋 기반 ALM/MGN/OSNet-PAR, crop 전체에서 `{upper_color, lower_color, gender, backpack}` 직접 분류)도 검토했으나, 이미 존재하는 `openpar.onnx`(Phase-2, whole-crop 속성 분류)가 동일한 패턴이면서 색상 헤드가 없다는 점, 그리고 whole-crop 방식은 Phase-1의 고정 사각형 crop이 겪는 배경/피부색 오염 문제를 그대로 안고 있다는 점에서 픽셀 마스크 기반 Human Parsing을 우선 채택했다. 상세 근거는 `docs/design/Design_AI_Color_Analysis.md` §10.2 참조.
+
+**검토 후 제외한 후보 모델 — CE2P**: 가이드 1번째 티어에 SCHP·SegFormer와 함께 CE2P도 나열되어 있으나, CE2P는 유지보수되는 ONNX 변환본이 공개되어 있지 않다(Caffe/PyTorch 연구용 체크포인트뿐). SCHP(`pirocheto/schp-lip-20`)와 SegFormer(`Xenova/segformer_b2_clothes`)는 즉시 사용 가능한 커뮤니티 ONNX가 있어 우선 채택했다. CE2P는 카탈로그에 등록하지 않았으며, 유지보수되는 ONNX가 공개되고 SCHP/SegFormer로 부족함이 확인될 경우 재검토 대상이다.
+
+**Phase-1.5 (Proposed, 2026-07-09) — 가이드 4번째 티어(모델 불필요) 반영**: 가이드 §4("상하의 색상만 필요할 경우")는 Human Parsing 없이도 고정 상/하의 bbox split + K-Means/Dominant Color 조합으로 "실무 정확도 약 85~90%"를 달성할 수 있다고 명시한다. 이는 현재 Phase-1(고정 crop + 단순 평균)보다 더 정확하지만 Phase-3(Human Parsing 모델)보다는 훨씬 저렴한 중간 티어로, 지금까지의 Phase-3 제안만으로는 다루지 않았던 격차다. `server/src/utils/kmeansColor.js`(Phase-3용으로 이미 구현·테스트됨)를 재사용해 Phase-1의 8×8 단순 평균을 K-Means 대표색 추출로 교체하는 안을 Phase-1.5로 제안한다 — 모델 다운로드나 새 설정 토글 없이 항상 켜져 있는 Phase-1 경로 자체의 품질을 올리는 변경이다. 상세 설계는 `docs/design/Design_AI_Color_Analysis.md` §11 참조.
+
+---
+
 ### Appendix D: Related RFP Documents
 
 | Document | Description |
@@ -465,3 +488,7 @@ Output: detection.color.upper / detection.color.lower (color name)
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for AI Color Analysis |
+| 1.1 | 2026-07-09 | Youngho Kim | Appendix E에 Phase-3 Human Parsing(SCHP/SegFormer) 제안 추가 — 가이드 문서(`CCTV_IPTV_상의하의_색상분류_가이드.md`, `ReID_및_색상분석_활용가이드.md`) 격차 분석 반영 |
+| 1.2 | 2026-07-09 | Youngho Kim | Person Attribute Recognition(whole-crop) 대안 검토·제외 근거 추가 — 원본 가이드 삭제 전 최종 반영 확인 |
+| 1.3 | 2026-07-09 | Youngho Kim | CE2P 후보 검토·제외 근거, Phase-1.5(가이드 4번째 티어 — K-Means, 모델 불필요) 제안 추가 — 원본 가이드 최종 반영 확인 |
+| 1.4 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` 삭제 완료 — 내용 전체가 Appendix E에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |

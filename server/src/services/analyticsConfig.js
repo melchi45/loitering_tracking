@@ -41,6 +41,9 @@ const DEFAULT_CONFIG = {
   hat:         false,
   color:       false,
   cloth:       false,
+  // AI-05 Phase-3 Human Parsing (Proposed) — see docs/design/Design_AI_Color_Analysis.md §10.
+  // Opt-in (default false): heavier than Phase-1 color, gated independently of color/cloth.
+  humanParsing: false,
   // Hazard detection
   fire:        false,
   smoke:       false,
@@ -296,7 +299,7 @@ function isEnabled(moduleId) {
 }
 
 // Attribute modules that need person detections from YOLO to function
-const PERSON_ATTR_MODULES = ['mask', 'hat', 'color', 'cloth', 'face'];
+const PERSON_ATTR_MODULES = ['mask', 'hat', 'color', 'cloth', 'face', 'humanParsing'];
 
 function _anyPersonAttrEnabled() {
   const cfg = _getOrInit();

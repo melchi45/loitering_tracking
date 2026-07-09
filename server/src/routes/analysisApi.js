@@ -18,6 +18,8 @@
  */
 
 const crypto        = require('crypto');
+const fs            = require('fs');
+const path          = require('path');
 const express       = require('express');
 const router        = express.Router();
 const DetectionService = require('../services/detection');
@@ -25,6 +27,8 @@ const { ByteTracker }  = require('../services/tracking');
 const BehaviorEngine   = require('../services/behaviorEngine');
 const AttributePipeline = require('../services/attributePipeline');
 const FireSmokeService  = require('../services/fireSmokeService');
+const { AppearanceReidService } = require('../services/appearanceReidService');
+const { SCHP_LIP20_CLASS_MAP, SEGFORMER_CLOTHES_CLASS_MAP } = require('../services/colorClothService');
 const analyticsConfig   = require('../services/analyticsConfig');
 const { getSystemMetrics } = require('../services/systemMetrics');
 const snapshotSvc      = require('../services/snapshotService');
@@ -65,6 +69,130 @@ const MODEL_CATALOG = [
   { id: 'yolov8l', label: 'YOLOv8l', series: 'YOLOv8', size: 640, mAP: 52.9, cpuMs: 375.2, t4Ms: 9.06, params: '43.7M', flops: '165.2B', file: 'yolov8l.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8l.onnx' },
   { id: 'yolov8x', label: 'YOLOv8x', series: 'YOLOv8', size: 640, mAP: 53.9, cpuMs: 479.1, t4Ms: 14.37,params: '68.2M', flops: '257.8B', file: 'yolov8x.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8x.onnx' },
 ];
+
+// ── Non-detector model families ─────────────────────────────────────────────
+// All other ONNX model files used by the AI pipeline (face, PPE, fire/smoke,
+// cloth-PAR), plus AI-05 Phase-3 Human Parsing + CrossCamera Face Tracking
+// Phase-2 Appearance Re-ID (still Proposed — see docs/design/Design_AI_Color_Analysis.md
+// §10 / Design_AI_AppearanceReID.md §12). Reuses the download/switch/progress
+// mechanics above, but these are NOT swapped into `_detector` — see the family
+// branch in the /models/switch and /models/download handlers below.
+//
+// `source` selects the download strategy (see doDownload()/_findPythonWithUltralytics()):
+//   undefined            → plain HTTP(S) ONNX download (default)
+//   requiresConversion   → GitHub .pt release → `ultralytics export` (YOLO26/12, unchanged)
+//   hfExport: {repo,file}→ huggingface_hub .pt download → `ultralytics export` (PPE, Fire/Smoke)
+//   manualOnly: true     → no automated source exists; operator must export and place the file manually
+const EXTENDED_CATALOG = [
+  // Face detection (SCRFD) — already required by FaceService, now catalog-managed.
+  {
+    id: 'scrfd-2.5g', label: 'SCRFD 2.5G', family: 'face-detection', series: 'Face Detection',
+    file: 'scrfd_2.5g.onnx', size: 640,
+    url: 'https://huggingface.co/JackCui/facefusion/resolve/main/scrfd_2.5g.onnx',
+    license: 'MIT (InsightFace)',
+  },
+  // Face recognition (ArcFace) — already required by FaceService, now catalog-managed.
+  {
+    id: 'arcface-w600k-r50', label: 'ArcFace ResNet50 (w600k)', family: 'face-recognition', series: 'Face Recognition',
+    file: 'arcface_w600k_r50.onnx', size: 112,
+    url: 'https://huggingface.co/FoivosPar/Arc2Face/resolve/da2f1e9aa3954dad093213acfc9ae75a68da6ffd/arcface.onnx',
+    license: 'MIT-derivative (InsightFace ArcFace export)',
+  },
+  // PPE — mask + helmet (AI-04/AI-07). No pre-built ONNX; huggingface_hub .pt → ultralytics export.
+  {
+    id: 'yolov8m-ppe', label: 'YOLOv8m PPE (Mask+Helmet)', family: 'ppe', series: 'PPE Detection',
+    file: 'yolov8m_ppe.onnx', size: 640,
+    hfExport: { repo: 'keremberke/yolov8m-protective-equipment-detection', file: 'best.pt' },
+    license: 'See Hugging Face model card',
+  },
+  // Fire & Smoke (AI-09). No pre-built ONNX; huggingface_hub .pt → ultralytics export.
+  {
+    id: 'yolov8s-fire-smoke', label: 'YOLOv8s Fire & Smoke', family: 'fire-smoke', series: 'Fire & Smoke Detection',
+    file: 'yolov8s_fire_smoke.onnx', size: 640,
+    hfExport: { repo: 'Mehedi-2-96/fire-smoke-detection-yolo', file: 'fire_smoke_yolov8s_model.pt' },
+    license: 'See Hugging Face model card',
+  },
+  // Cloth type PAR (AI-06). No public pretrained ONNX exists (OpenPAR requires training
+  // your own checkpoint) — download is not automatable; operator must export manually.
+  {
+    id: 'openpar-market1501', label: 'OpenPAR (manual export)', family: 'cloth-par', series: 'Cloth Attribute (PAR)',
+    file: 'openpar.onnx', manualOnly: true,
+    docRef: 'https://github.com/Event-AHU/OpenPAR',
+    license: 'See OpenPAR repository',
+  },
+  // AI-05 Phase-3 Human Parsing (Proposed) — see Design_AI_Color_Analysis.md §10.
+  {
+    id: 'schp-lip20', label: 'SCHP (LIP-20)', family: 'human-parsing', series: 'Human Parsing',
+    file: 'schp_lip.onnx',
+    url: 'https://huggingface.co/pirocheto/schp-lip-20/resolve/main/onnx/schp-lip-20-int8-static.onnx',
+    license: 'MIT', inputSize: 473, classMap: SCHP_LIP20_CLASS_MAP,
+  },
+  {
+    id: 'segformer-clothes', label: 'SegFormer B2 Clothes', family: 'human-parsing', series: 'Human Parsing',
+    file: 'segformer_clothes.onnx',
+    url: 'https://huggingface.co/Xenova/segformer_b2_clothes/resolve/main/onnx/model_quantized.onnx',
+    license: 'NVIDIA SegFormer NC (non-commercial — acceptable, this project is non-commercial)',
+    inputSize: 512, classMap: SEGFORMER_CLOTHES_CLASS_MAP,
+  },
+  // CrossCamera Face Tracking Phase-2 Appearance Re-ID (Proposed) — see Design_AI_AppearanceReID.md §12.
+  {
+    id: 'osnet-retail-0287', label: 'OSNet (Person Re-ID)', family: 'appearance-reid', series: 'Appearance Re-ID',
+    file: 'appearance_reid_osnet.onnx',
+    url: 'https://storage.openvinotoolkit.org/repositories/open_model_zoo/2023.0/models_bin/1/person-reidentification-retail-0287/person-reidentification-retail-0267.onnx',
+    license: 'Apache-2.0',
+  },
+];
+const ALL_MODELS = [...MODEL_CATALOG, ...EXTENDED_CATALOG];
+
+// Resolve which model file is currently active for a given catalog entry's family.
+// Centralizes the per-family "what's loaded right now" lookup used by GET /models.
+function _activeFileForEntry(m, detectorActiveFile) {
+  switch (m.family) {
+    case 'human-parsing':
+      return _attrPipeline?._color?._hpReady ? path.basename(_attrPipeline._color.hpModelPath) : null;
+    case 'appearance-reid':
+      return _appearanceReid?.ready ? path.basename(_appearanceReid.modelPath) : null;
+    case 'face-detection':
+      return _attrPipeline?._face?.ready ? path.basename(_attrPipeline._face.scrfdPath) : null;
+    case 'face-recognition':
+      return _attrPipeline?._face?._arcface ? path.basename(_attrPipeline._face.arcfacePath) : null;
+    case 'ppe':
+      return _attrPipeline?._ppe?.ready ? path.basename(_attrPipeline._ppe.modelPath) : null;
+    case 'fire-smoke':
+      return _fireSmokeService?.ready ? path.basename(_fireSmokeService.modelPath) : null;
+    case 'cloth-par':
+      return _attrPipeline?._color?._parReady ? path.basename(_attrPipeline._color.parModelPath) : null;
+    default:
+      return detectorActiveFile; // YOLO detector families (undefined `family`)
+  }
+}
+
+// Find a working Python interpreter for `ultralytics` export subprocesses.
+// checkYolo12=true additionally verifies the `cfg/models/12` package directory exists
+// (ultralytics < 8.3 lacks YOLO12 architecture support — a plain `import ultralytics` is insufficient).
+// checkHfHub=true additionally verifies `huggingface_hub` is importable (PPE/Fire-Smoke hfExport path).
+function _findPythonWithUltralytics({ checkYolo12 = false, checkHfHub = false } = {}) {
+  const { execFileSync } = require('child_process');
+  const candidates = [
+    process.env.PYTHON_EXEC,
+    process.platform === 'win32' ? process.env.PYTHON_EXEC_WINDOWS : process.env.PYTHON_EXEC_LINUX,
+    '/usr/bin/python3',
+    'python3',
+    'python',
+  ].filter(Boolean);
+  const parts = ['import ultralytics'];
+  if (checkHfHub) parts.push('import huggingface_hub');
+  if (checkYolo12) {
+    parts.push('import os');
+    parts.push('cfg12 = os.path.join(os.path.dirname(ultralytics.__file__), "cfg", "models", "12")');
+    parts.push('assert os.path.exists(cfg12), "YOLO12 not supported (ultralytics " + ultralytics.__version__ + ")"');
+  }
+  const script = parts.join('; ');
+  for (const cand of candidates) {
+    try { execFileSync(cand, ['-c', script], { timeout: 8000 }); return cand; } catch {}
+  }
+  return null;
+}
 
 // Download progress state: id → { percent, status, error }
 const _downloadProgress = new Map();
@@ -372,6 +500,7 @@ function _assignClothingIdsAnalysis(cameraId, enrichedObjects, now, oIdToFaceId 
 let _detector         = null;
 let _attrPipeline     = null;
 let _fireSmokeService = null;
+let _appearanceReid   = null; // CrossCamera Face Tracking Phase-2 (Proposed)
 let _servicesReady    = false;
 
 // Single promise guards concurrent callers — all waiters share the same load.
@@ -409,6 +538,14 @@ async function _loadServices() {
   } catch (err) {
     console.warn('[AnalysisAPI] FireSmokeService load warn:', err.message);
     _fireSmokeService = null;
+  }
+  try {
+    _appearanceReid = new AppearanceReidService();
+    await _appearanceReid.load();
+    console.log('[AnalysisAPI] AppearanceReidService loaded (Proposed):', _appearanceReid.status);
+  } catch (err) {
+    console.warn('[AnalysisAPI] AppearanceReidService load warn:', err.message);
+    _appearanceReid = null;
   }
   _servicesReady = true;
 }
@@ -1388,23 +1525,24 @@ router.get('/contexts', (_req, res) => {
 });
 
 // ── GET /api/analysis/models ─────────────────────────────────────────────────
-// Returns the full model catalog with per-model download status and active flag.
+// Returns the full model catalog (all families) with per-model download status and active flag.
 router.get('/models', (req, res) => {
-  const fs   = require('fs');
-  const path = require('path');
   const modelsDir = path.resolve(__dirname, '..', '..', 'models');
   const activeFile = _detector ? path.basename(_detector.modelPath) : null;
 
-  const catalog = MODEL_CATALOG.map(m => {
+  const catalog = ALL_MODELS.map(m => {
     const filePath = path.join(modelsDir, m.file);
     const exists   = fs.existsSync(filePath);
     const stat     = exists ? fs.statSync(filePath) : null;
     const progress = _downloadProgress.get(m.id);
+    const active   = _activeFileForEntry(m, activeFile) === m.file;
     return {
       ...m,
-      url: undefined,           // don't expose raw GitHub URL to client
+      url: undefined,           // don't expose raw model source URL to client
+      classMap: undefined,      // internal detail, not needed by the UI
+      hfExport: undefined,      // internal detail, not needed by the UI
       exists,
-      active:   activeFile === m.file,
+      active,
       sizeBytes: stat ? stat.size : null,
       converting: progress?.status === 'converting',
       downloading: progress?.status === 'downloading' || progress?.status === 'converting',
@@ -1417,12 +1555,11 @@ router.get('/models', (req, res) => {
 });
 
 // ── POST /api/analysis/models/switch ─────────────────────────────────────────
-// Hot-swap the active YOLO detection model.  Body: { modelId: string }
+// Hot-swap the active model for its family (YOLO detector, face, PPE, fire/smoke,
+// cloth-PAR, human-parsing, appearance-reid).  Body: { modelId: string }
 router.post('/models/switch', express.json({ limit: '1kb' }), async (req, res) => {
   const { modelId } = req.body || {};
-  const fs   = require('fs');
-  const path = require('path');
-  const entry = MODEL_CATALOG.find(m => m.id === modelId);
+  const entry = ALL_MODELS.find(m => m.id === modelId);
   if (!entry) return res.status(400).json({ error: 'Unknown modelId' });
 
   const filePath = path.resolve(__dirname, '..', '..', 'models', entry.file);
@@ -1431,14 +1568,46 @@ router.post('/models/switch', express.json({ limit: '1kb' }), async (req, res) =
   }
 
   try {
-    if (!_detector) {
-      const DetectionService = require('../services/detection');
-      _detector = new DetectionService({ modelPath: filePath });
-      await _detector.load();
-    } else {
-      await _detector.reload(filePath);
+    switch (entry.family) {
+      case 'human-parsing':
+        // AI-05 Phase-3 (Proposed) — hot-swap the active Human Parsing model.
+        if (!_attrPipeline) return res.status(409).json({ error: 'AttributePipeline not loaded' });
+        await _attrPipeline._color.reloadHumanParsing(filePath, entry.classMap, entry.inputSize);
+        break;
+      case 'appearance-reid':
+        // CrossCamera Face Tracking Phase-2 (Proposed) — hot-swap the appearance embedding model.
+        if (!_appearanceReid) _appearanceReid = new AppearanceReidService();
+        await _appearanceReid.reload(filePath);
+        break;
+      case 'face-detection':
+        if (!_attrPipeline) return res.status(409).json({ error: 'AttributePipeline not loaded' });
+        await _attrPipeline._face.reloadDetector(filePath);
+        break;
+      case 'face-recognition':
+        if (!_attrPipeline) return res.status(409).json({ error: 'AttributePipeline not loaded' });
+        await _attrPipeline._face.reloadRecognizer(filePath);
+        break;
+      case 'ppe':
+        if (!_attrPipeline) return res.status(409).json({ error: 'AttributePipeline not loaded' });
+        await _attrPipeline._ppe.reload(filePath);
+        break;
+      case 'fire-smoke':
+        if (!_fireSmokeService) _fireSmokeService = new FireSmokeService();
+        await _fireSmokeService.reload(filePath);
+        break;
+      case 'cloth-par':
+        if (!_attrPipeline) return res.status(409).json({ error: 'AttributePipeline not loaded' });
+        await _attrPipeline._color.reloadPar(filePath);
+        break;
+      default: // YOLO detector families (undefined `family`)
+        if (!_detector) {
+          _detector = new DetectionService({ modelPath: filePath });
+          await _detector.load();
+        } else {
+          await _detector.reload(filePath);
+        }
     }
-    console.log(`[AnalysisAPI] Switched YOLO model → ${entry.label}`);
+    console.log(`[AnalysisAPI] Switched ${entry.family || 'detector'} model → ${entry.label}`);
     res.json({ ok: true, active: entry.label, file: entry.file });
   } catch (err) {
     console.error('[AnalysisAPI] Model switch failed:', err.message);
@@ -1447,21 +1616,29 @@ router.post('/models/switch', express.json({ limit: '1kb' }), async (req, res) =
 });
 
 // ── POST /api/analysis/models/download ───────────────────────────────────────
-// Trigger async download of a model from Ultralytics GitHub releases.
-// Body: { modelId: string }  — responds immediately; progress via polling GET /models
+// Trigger async download/export of a model. Body: { modelId: string }
+// Responds immediately; progress is observed by polling GET /models.
 router.post('/models/download', express.json({ limit: '1kb' }), async (req, res) => {
   const { modelId } = req.body || {};
-  const fs   = require('fs');
-  const path = require('path');
   const https = require('https');
   const http  = require('http');
 
-  const entry = MODEL_CATALOG.find(m => m.id === modelId);
+  const entry = ALL_MODELS.find(m => m.id === modelId);
   if (!entry) return res.status(400).json({ error: 'Unknown modelId' });
+
+  if (entry.manualOnly) {
+    return res.status(409).json({
+      error: 'No public pretrained ONNX exists for this model — export it manually and place the file in server/models/.',
+      docRef: entry.docRef || null,
+    });
+  }
 
   const modelsDir = path.resolve(__dirname, '..', '..', 'models');
   const filePath  = path.join(modelsDir, entry.file);
 
+  if (fs.existsSync(filePath)) {
+    return res.json({ ok: true, already: true, message: `${entry.label} is already downloaded` });
+  }
   if (_downloadProgress.get(modelId)?.status === 'downloading') {
     return res.status(409).json({ error: 'Download already in progress' });
   }
@@ -1509,60 +1686,68 @@ router.post('/models/download', express.json({ limit: '1kb' }), async (req, res)
     req2.setTimeout(300_000, () => { req2.destroy(); cb(new Error('Download timeout')); });
   };
 
+  // PT → ONNX via ultralytics export, shared by both the GitHub-release (.pt URL) path
+  // and the huggingface_hub (hfExport) path — only the fetch step differs.
+  const exportPtToOnnx = async (ptPath, pyExec) => {
+    const { execFile } = require('child_process');
+    const script = [
+      'from ultralytics import YOLO',
+      `m = YOLO(${JSON.stringify(ptPath)})`,
+      `m.export(format="onnx", imgsz=${entry.size || 640}, dynamic=False)`,
+    ].join('; ');
+    await new Promise((resolve, reject) => {
+      execFile(pyExec, ['-c', script], { timeout: 300_000 }, (err, stdout, stderr) => {
+        if (err) { console.error('[AnalysisAPI] ONNX export stderr:', stderr); return reject(err); }
+        resolve();
+      });
+    });
+    const exportedOnnx = ptPath.replace(/\.pt$/, '.onnx');
+    if (exportedOnnx !== filePath && fs.existsSync(exportedOnnx)) {
+      fs.renameSync(exportedOnnx, filePath);
+    }
+    fs.unlink(ptPath, () => {});
+  };
+
   try {
     if (!fs.existsSync(modelsDir)) fs.mkdirSync(modelsDir, { recursive: true });
 
-    if (entry.requiresConversion) {
-      // PT → ONNX via ultralytics export
+    if (entry.hfExport) {
+      // huggingface_hub .pt download → ultralytics export (PPE, Fire & Smoke)
+      const pyExec = _findPythonWithUltralytics({ checkHfHub: true });
+      if (!pyExec) throw new Error('Python with ultralytics + huggingface_hub not found. Run: pip install -U ultralytics huggingface_hub');
+
+      _downloadProgress.set(modelId, { status: 'converting', percent: 50, error: null });
       const { execFile } = require('child_process');
+      const script = [
+        'from ultralytics import YOLO',
+        'from huggingface_hub import hf_hub_download',
+        'import shutil',
+        `pt = hf_hub_download(repo_id=${JSON.stringify(entry.hfExport.repo)}, filename=${JSON.stringify(entry.hfExport.file)})`,
+        `YOLO(pt).export(format="onnx", imgsz=${entry.size || 640}, simplify=True)`,
+        'onnx = pt.replace(".pt", ".onnx")',
+        `shutil.copy(onnx, ${JSON.stringify(filePath)})`,
+      ].join('; ');
+      await new Promise((resolve, reject) => {
+        execFile(pyExec, ['-c', script], { timeout: 300_000 }, (err, stdout, stderr) => {
+          if (err) { console.error('[AnalysisAPI] HF export stderr:', stderr); return reject(err); }
+          resolve();
+        });
+      });
+    } else if (entry.requiresConversion) {
+      // PT → ONNX via ultralytics export (YOLO26/YOLO12 GitHub release .pt)
       const ptFile = entry.file.replace('.onnx', '.pt');
       const ptPath = path.join(modelsDir, ptFile);
 
-      _downloadProgress.set(modelId, { status: 'downloading', percent: 0, error: null });
       await new Promise((resolve, reject) => doDownload(entry.url, ptPath, (err) => err ? reject(err) : resolve()));
       _downloadProgress.set(modelId, { status: 'converting', percent: 95, error: null });
 
       // Resolve Python with ultralytics that supports YOLO12 (cfg/models/12 directory).
       // ultralytics < 8.3.x uses 'v12' or missing dir and cannot export YOLO12 weights.
       // Check must verify YOLO12 support explicitly, not just 'import ultralytics'.
-      const { execFileSync } = require('child_process');
-      const pyCandidates = [
-        process.env.PYTHON_EXEC,
-        process.platform === 'win32' ? process.env.PYTHON_EXEC_WINDOWS : process.env.PYTHON_EXEC_LINUX,
-        '/usr/bin/python3',
-        'python3',
-        'python',
-      ].filter(Boolean);
-      const pyCheckScript = [
-        'import ultralytics, os',
-        'cfg12 = os.path.join(os.path.dirname(ultralytics.__file__), "cfg", "models", "12")',
-        'assert os.path.exists(cfg12), "YOLO12 not supported (ultralytics " + ultralytics.__version__ + ")"',
-      ].join('; ');
-      let pyExec = null;
-      for (const cand of pyCandidates) {
-        try { execFileSync(cand, ['-c', pyCheckScript], { timeout: 8000 }); pyExec = cand; break; } catch {}
-      }
+      const pyExec = _findPythonWithUltralytics({ checkYolo12: true });
       if (!pyExec) throw new Error('Python with ultralytics >=8.3 (YOLO12 support) not found. Run: pip install -U ultralytics');
 
-      const script = [
-        'from ultralytics import YOLO',
-        `m = YOLO(${JSON.stringify(ptPath)})`,
-        `m.export(format="onnx", imgsz=${entry.size}, dynamic=False)`,
-      ].join('; ');
-
-      await new Promise((resolve, reject) => {
-        execFile(pyExec, ['-c', script], { timeout: 300_000 }, (err, stdout, stderr) => {
-          if (err) { console.error('[AnalysisAPI] ONNX export stderr:', stderr); return reject(err); }
-          resolve();
-        });
-      });
-
-      // ultralytics writes <stem>.onnx next to the .pt file
-      const exportedOnnx = ptPath.replace(/\.pt$/, '.onnx');
-      if (exportedOnnx !== filePath && fs.existsSync(exportedOnnx)) {
-        fs.renameSync(exportedOnnx, filePath);
-      }
-      fs.unlink(ptPath, () => {});
+      await exportPtToOnnx(ptPath, pyExec);
     } else {
       await new Promise((resolve, reject) => doDownload(entry.url, filePath, (err) => err ? reject(err) : resolve()));
     }

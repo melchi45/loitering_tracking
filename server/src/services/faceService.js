@@ -80,6 +80,20 @@ class FaceService {
   get ready()  { return this._ready;  }
   get status() { return this._status; }
 
+  /** Activate/switch the active SCRFD face-detection model (model catalog hot-swap). */
+  async reloadDetector(filePath) {
+    this._scrfd    = await createOnnxSession(ort, filePath, 'FaceService/SCRFD');
+    this.scrfdPath = filePath;
+    this._ready    = true;
+    this._status   = 'loaded';
+  }
+
+  /** Activate/switch the active ArcFace recognition model (model catalog hot-swap). */
+  async reloadRecognizer(filePath) {
+    this._arcface    = await createOnnxSession(ort, filePath, 'FaceService/ArcFace');
+    this.arcfacePath = filePath;
+  }
+
   /**
    * Detect faces in a JPEG frame.
    * @param {Buffer} jpegBuffer

@@ -1238,8 +1238,8 @@ Each camera zone can independently activate one or more AI analysis modules via 
 | 2 | ☑ **Vehicle** | `vehicle` | [AI-02](docs/RFP_AI_Vehicle_Detection.md) | ✅ Implemented | Vehicle detection — bicycle/car/motorcycle/bus/truck |
 | 3 | ☑ **Face** | `face` | [AI-03](docs/RFP_AI_Face_Recognition.md) | ✅ Implemented | Face detection — SCRFD-2.5G (3.2MB) + ArcFace ResNet50 Re-ID (249MB) |
 | 4 | ☑ **Mask** | `mask` | [AI-04](docs/RFP_AI_Mask_Detection.md) | ✅ Implemented | Mask detection — YOLOv8m PPE (99MB), mask/no_mask 2-class |
-| 5 | ☑ **Color** | `color` | [AI-05](docs/RFP_AI_Color_Analysis.md) | ✅ Implemented | Upper/lower body color analysis — Phase-1 pixel average, 11-color classification (no model required) |
-| 6 | ☑ **Cloth** | `cloth` | [AI-06](docs/RFP_AI_Cloth_Analysis.md) | ✅ Implemented | Clothing type classification — OpenPAR (openpar.onnx 94MB), upper/lower garment + sleeve length |
+| 5 | ☑ **Color** | `color` | [AI-05](docs/RFP_AI_Color_Analysis.md) | ✅ Implemented | Upper/lower body color analysis — **Phase-1** pixel average, 11-color classification (no model required) · **Phase-1.5** K-Means dominant color on the same fixed ROI (no model) 📝 Proposed, not yet implemented · **Phase-2** PAR pending · **Phase-3** Human Parsing (SCHP/SegFormer, `humanParsing` toggle, model-catalog hot-swap) 🟡 Implemented, opt-in (disabled by default — model not auto-downloaded, no behavioral test coverage yet) |
+| 6 | ☑ **Cloth** | `cloth` | [AI-06](docs/RFP_AI_Cloth_Analysis.md) | ✅ Implemented | Clothing type classification — OpenPAR (openpar.onnx 94MB), upper/lower garment + sleeve length — **Phase-2** active; distinct from Color's proposed Phase-3 pixel-mask (see [Design_AI_Cloth_Analysis.md §10](docs/design/Design_AI_Cloth_Analysis.md#10-relationship-to-proposed-human-parsing-color-phase-3)) |
 | 7 | ☑ **Hat** | `hat` | [AI-07](docs/RFP_AI_Hat_Detection.md) | ✅ Implemented | Helmet/hat detection — YOLOv8m PPE (99MB), hardhat/no_hardhat classification |
 | 8 | ☑ **Accessories** | `accessories` | [AI-08](docs/RFP_AI_Accessories_Detection.md) | ✅ Implemented | Accessories detection — YOLOv8n COCO (backpack/umbrella/handbag/tie/suitcase) |
 | 9 | ☑ **Fire** | `fire` | [AI-09](docs/RFP_AI_Fire_Smoke_Detection.md) | ✅ Implemented | Fire detection — YOLOv8s 3-class (yolov8s_fire_smoke.onnx 43MB, Abonia1/GitHub) |
@@ -1786,9 +1786,11 @@ The `nodejs-udp-discovery` branch adds:
 | 11 | User Auth | JWT RS256 · bcrypt · RBAC(admin/operator/viewer) · refresh token 로테이션 · admin 승인 · AuditService · **Google OAuth 2.0**(passport-google-oauth20) · **Microsoft OAuth**(MSAL, @azure/msal-node) | 이메일 인증 · 2FA(TOTP) | ✅ Done | May 28, 2026 |
 | 11-B | Missing Person | `missingPersonService.js` · ArcFace 임베딩 비교 · 실종자 등록/탐지/통계 · MCP 도구 5종 | UI 뷰 보강 | ✅ Done | Jun 2026 |
 | 12 | Video Recording | DVR/NVR 녹화 스케줄러 · 이전/이후 이벤트 클립 · 영상 재생 UI · 보존 정책 | 전체 미착수 | 🔲 Planned | Jul 28, 2026 |
+| 12-A | Human Parsing 색상 분류 | SCHP/SegFormer 모델 카탈로그, 트랙 단위 캐시, K-Means 마스크 색상 추출 (Phase-3) 코드 구현 완료 — `colorClothService.js#_runHumanParsing`, `kmeansColor.js`(단위 테스트 완료); 기존 고정 ROI에 K-Means 대표색만 적용하는 모델 불필요 개선(Phase-1.5)은 미착수 — [Design_AI_Color_Analysis.md §10](docs/design/Design_AI_Color_Analysis.md#10-phase-3-proposed-architecture--human-parsing-model-catalog), [§11](docs/design/Design_AI_Color_Analysis.md#11-phase-15-proposed--k-means-dominant-color-on-the-existing-fixed-roi-no-model) | 모델 파일 미배포(자동 다운로드 비활성)·`humanParsing` 토글 기본 OFF·마스크 분류 동작 테스트 없음 | 🟡 In Progress | TBD |
+| 12-B | Appearance/Body Re-ID 고도화 | OSNet 임베딩(`appearanceReidService.js`) + Qdrant `appearance_embeddings` 컬렉션(`qdrantService.js`) 코드 구현 완료, 실시간 매칭에 80/20 가중치 반영(`pipelineManager.js#_weightedAppearSim`), 색상 사전필터 검색(`GET /api/search?types=appearance`) — [Design_AI_AppearanceReID.md §12](docs/design/Design_AI_AppearanceReID.md#12-phase-2-개선-제안--실제-re-id-임베딩-모델-도입) | 장시간 재등장 시 Qdrant 조회(kNN)는 미배선(upsert만 동작, 실시간 매칭은 여전히 5분 TTL 인메모리 갤러리만 조회) · OSNet 전처리 실제 모델 출력 대비 미검증 · 모델 파일/Qdrant 모두 기본 비활성(opt-in) · 테스트 없음 | 🟡 In Progress | TBD |
 | 13 | PTZ Control | ONVIF PTZ API(pan/tilt/zoom) · 원격 제어 UI 오버레이 · 프리셋 위치 관리 | 전체 미착수 | 🔲 Planned | Aug 11, 2026 |
 | 14 | Notification Hub | **Webhook** `ALERT_WEBHOOK_URL` HTTP POST · **Email** nodemailer(`SMTP_HOST/USER/PASS`) · loitering 알림 발송 | SMS · Slack · Teams 미착수 · 스로틀 규칙 UI 없음 | ⚠️ Partial | Aug 25, 2026 |
-| 15 | Heatmap & Path | — | 전체 미착수 | 🔲 Planned | Sep 8, 2026 |
+| 15 | Heatmap & Path | — | 전체 미착수 (Loitering 가이드 §4 Track 좌표 누적→Heatmap 대응) | 🔲 Planned | Sep 8, 2026 |
 | 16 | Advanced AI | — | 낙상 · 싸움 · 역주행 감지 전체 미착수 | 🔲 Planned | Sep 22, 2026 |
 | 17 | Auto Reports | — | PDF · Excel · 이메일 예약 발송 전체 미착수 | 🔲 Planned | Oct 6, 2026 |
 | 18 | Map Layout | — | 도면/위성맵 카메라 배치 전체 미착수 | 🔲 Planned | Oct 20, 2026 |

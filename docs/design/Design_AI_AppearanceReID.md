@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-AI-APPREID-01 |
-| **Version** | 1.1 |
+| **Version** | 1.5 |
 | **Status** | Active |
 | **Date** | 2026-06-10 |
 | **Parent SRS** | srs/SRS_CrossCamera_Face_Tracking.md |
@@ -18,6 +18,10 @@
 |------|------|--------|-----------|
 | 1.0 | 2026-06-10 | Youngho Kim | 최초 작성 — 의상 색상+타입 기반 Appearance Re-ID 설계 문서화 |
 | 1.1 | 2026-06-10 | Youngho Kim | Section 2.1 추가: SERVER_MODE별 적용 범위 — streaming 모드 `_processRemoteResult` 내 의상 Re-ID 코드 반영 |
+| 1.2 | 2026-07-09 | Youngho Kim | §12 추가 — `Multi_Camera_Tracking_ReID_가이드.md`/`ReID_및_색상분석_활용가이드.md` 격차 분석 기반 실제 Re-ID 임베딩 모델(OSNet 등) 도입 및 Qdrant 벡터 DB 확장 제안 (Proposed, 미구현) |
+| 1.3 | 2026-07-09 | Youngho Kim | §12.4 추가 — 색상 사전 필터링 기반 검색 성능 최적화(Proposed); 원본 가이드 삭제 전 최종 반영 확인 |
+| 1.4 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/Multi_Camera_Tracking_ReID_가이드.md` 삭제 완료 — 내용 전체가 §12에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |
+| 1.5 | 2026-07-09 | Youngho Kim | 코드 동기화 — §12를 Proposed→Implemented(opt-in)로 갱신, §12.6 구현 현황(FR 단위) 신설. `appearanceReidService.js`/`qdrantService.js`/`_weightedAppearSim()` 실제 구현 확인. FR-CCFR-064(장시간 재등장 조회 미배선)·065(정확도 미검증)는 잔여 격차로 명시 |
 
 ---
 
@@ -38,6 +42,13 @@
 9. [임계값 및 설정](#9-임계값-및-설정)
 10. [Face Re-ID와의 비교](#10-face-reid와의-비교)
 11. [오류 처리 및 한계](#11-오류-처리-및-한계)
+12. [Phase-2 개선 제안 — 실제 Re-ID 임베딩 모델 도입](#12-phase-2-개선-제안--실제-re-id-임베딩-모델-도입)
+    - 12.1 [근본 원인 — 가중치가 뒤바뀐 구조](#121-근본-원인--가중치가-뒤바뀐-구조)
+    - 12.2 [제안: 경량 Re-ID 임베딩 모델 도입](#122-제안-경량-re-id-임베딩-모델-도입)
+    - 12.3 [Vector DB 확장 — 기존 Qdrant 인프라 재사용](#123-vector-db-확장--기존-qdrant-인프라-재사용)
+    - 12.4 [검색 성능 최적화 — 색상 사전 필터링 (Implemented — stage 1만)](#124-검색-성능-최적화--색상-사전-필터링-implemented--stage-1만)
+    - 12.5 [비범위 (Non-Goals, 이번 제안)](#125-비범위-non-goals-이번-제안)
+    - 12.6 [구현 현황 (2026-07-09 코드 동기화)](#126-구현-현황-2026-07-09-코드-동기화)
 
 ---
 
@@ -522,3 +533,88 @@ PipelineManager                    Socket.IO Client (DetectionPanel)
 | `openpar.onnx` 미존재 | colorSim만 사용 (typeSim = 0.5 중립), 정확도 소폭 감소 |
 | `_clothingAppearSim()` 양측 모두 upper/lower 없음 | `w=0` → 유사도 0 반환 → 매칭 안 됨 |
 | 클라이언트 combined 계산 시 face 이벤트 만료 | `Math.abs(timestamp - now) < 10_000` (10초 내) → null 반환 |
+
+---
+
+## 12. Phase-2 개선 제안 — 실제 Re-ID 임베딩 모델 도입
+
+> **Status: Implemented, opt-in** (2026-07-09 설계 제안 → 2026-07-09 코드 구현 완료, 기본 비활성). `appearanceReidService.js`(OSNet 임베딩), `qdrantService.js`(Qdrant 클라이언트), `pipelineManager.js#_weightedAppearSim()`(80/20 가중치)로 구현되었으며 모델 파일(`appearance_reid_osnet.onnx`) 미배포 시·`QDRANT_ENABLED=false`(기본값) 시 자동으로 Phase-1 동작으로 폴백한다. 남은 격차는 §12.6 참조. 본 섹션은 §11에서 이미 자인한 한계("동일 제복 착용자 오탐 가능", "옷 갈아입으면 매칭 실패")를 근거로, 외부 참고 가이드였던 Multi-Camera Tracking Re-ID 가이드(내용 전체를 본 §12에 통합 후 2026-07-09 원본 삭제) 및 `docs/rfp/ReID_및_색상분석_활용가이드.md` 대비 격차 분석을 기록한다. 대응 SRS 요구사항은 `docs/srs/SRS_CrossCamera_Face_Tracking.md` §14 (FR-CCFR-060~065) 참조.
+
+### 12.1 근본 원인 — 가중치가 뒤바뀐 구조
+
+`ReID_및_색상분석_활용가이드.md`는 "색상은 Re-ID의 핵심 Feature가 아니라 보조 Feature"라고 명시하며, 예시 가중치로 **Re-ID Feature 80% : Color Attribute 20%**를 제시한다. Multi-Camera Tracking Re-ID 가이드(원본 삭제됨, 내용 §12에 통합)도 동일하게 Re-ID Feature를 주 신호로, 상의/하의 색상·성별·가방 여부를 보조 신호로 사용하라고 권장한다.
+
+현재 `_clothingAppearSim()`(§4.1)은 실제 Re-ID 임베딩 모델이 전혀 없는 상태에서 **RGB 색상 거리(60/40 가중) + PAR 타입 일치만으로 유사도 100%를 산출**한다 — 가이드가 "보조 신호 20%"로 규정한 요소가 현재 시스템에서는 "유일한 신호 100%"로 쓰이고 있다. 이것이 §11의 "동일 제복 착용자 오탐", "옷 갈아입으면 매칭 실패" 한계의 직접적 원인이다.
+
+### 12.2 제안: 경량 Re-ID 임베딩 모델 도입
+
+| 모델 | 특징 | 채택 우선순위 |
+|---|---|---|
+| **OSNet / OSNet-AIN** | 경량, 실시간 처리 적합, ONNX 변환 가능, Edge 환경 적용 가능 | **1순위** (가이드 공통 추천) |
+| FastReID | 높은 정확도, 대규모 검색 지원, 상용 사례 다수 | 2순위 (GPU 여유 있을 때) |
+| TransReID | Transformer 기반, 복잡한 장면에 유리 | 3순위 (GPU 요구사항 높음) |
+
+도입 시 `_clothingAppearSim()`의 유사도 계산을 다음과 같이 재구성한다:
+
+```
+Phase-1 (기존, OSNet 미로딩 시 폴백):  similarity = colorSim*0.6 + lowerColorSim*0.4  (typeSim 있으면 가중 조정)  → 100% color-based
+
+Phase-2 (구현됨, OSNet 로딩 시):  similarity = osnetCosineSim * 0.8 + colorSim * 0.2   ← 가이드 권장 가중치 그대로 반영
+       (OSNet 모델 미로딩 시에만 Phase-1 방식으로 폴백 — 완전 대체가 아니라 상위 계층 추가)
+```
+
+**구현 위치**: `pipelineManager.js`의 `_weightedAppearSim(a, b)` — `a.embedding && b.embedding`일 때만 위 Phase-2 수식을 적용하고, 그 외에는 기존 `_clothingAppearSim()`을 그대로 호출한다. `AppearanceReidService.getEmbedding()`은 person crop을 256×128로 리사이즈해 OSNet(`person-reidentification-retail-0287`, Intel Open Model Zoo)에 통과시켜 256-D L2-정규화 임베딩을 반환한다. **주의**: 전처리(BGR 채널 순서·정규화 방식)는 모델 카드 관례를 따랐을 뿐 실제 모델 출력 대비 end-to-end 검증은 수행되지 않았다(모델 다운로드 미실행) — 프로덕션 반영 전 검증 필요.
+
+### 12.3 Vector DB 확장 — 기존 Qdrant 인프라 재사용
+
+`docs/mrd/MRD_LTS2026.md` §6.4 로드맵(Phase 12b)과 `docs/design/Design_RTSP_WebRTC_Architecture.md` Milestone 3는 이미 **얼굴 임베딩 전용** Qdrant 벡터 DB 도입을 계획하고 있다. 이 인프라를 의상/외형(appearance) 임베딩까지 확장하는 것을 제안한다 — 별도 벡터 DB를 새로 두지 않고 같은 Qdrant 인스턴스에 컬렉션만 분리:
+
+```
+Qdrant 인스턴스 (M3, 기존 계획)
+  ├─ collection: face_embeddings         (기존 계획 — ArcFace 512D)
+  └─ collection: appearance_embeddings   (구현됨 — OSNet 256D, qdrantService.js)
+        payload: { trackId, cameraId, colorUpper, colorLower, timestamp }
+```
+
+**구현 현황**: `qdrantService.js`가 두 컬렉션 생성(`_ensureCollection`)과 `upsertAppearance()`/`queryAppearance()`(kNN)/`scrollAppearanceByFilter()`(색상 필터, §12.4)를 제공한다. `pipelineManager.js#_assignClothingIds()`는 매 프레임 임베딩이 있을 때 best-effort로 `upsertAppearance()`를 호출해 Qdrant에 벡터를 적재한다(write 경로 완료).
+
+**남은 격차**: Multi-Camera Tracking Re-ID 가이드(원본 삭제됨, 내용 §12에 통합)가 강조하는 "장시간 후 재등장 추적"(예: 1시간 후 다른 카메라 재등장)을 위한 **조회(read) 경로는 아직 배선되지 않았다** — 실시간 매칭 루프(`_assignClothingIds()`의 갤러리 검색)는 여전히 `_sharedClothingGallery`(세션 범위, TTL 5분)만 조회하며, `queryAppearance()`는 어디에서도 호출되지 않는다. 즉 벡터는 저장되지만 5분이 지나 인메모리 갤러리에서 만료된 후에는 아직 아무 코드 경로도 그 벡터를 다시 찾아 매칭에 사용하지 않는다 — 장시간 재등장 시나리오는 여전히 미지원.
+
+### 12.4 검색 성능 최적화 — 색상 사전 필터링 (Implemented — stage 1만)
+
+`ReID_및_색상분석_활용가이드.md`의 "검색과 Re-ID의 결합" 절은 실시간 매칭(위 §12.2)과는 별개로, **사후 검색(search) 성능 최적화** 패턴을 별도로 제시한다: 검색 시 먼저 `상의=빨강, 하의=검정` 같은 색상 조건으로 후보를 줄인 뒤, 그 후보 집합 안에서만 Re-ID 임베딩 유사도 계산을 수행 — 이 두 단계 결합이 "검색 속도와 정확도를 동시에 향상"시킨다.
+
+`server/src/api/search.js`에 구현됨 — 실제 배선:
+
+```
+1. GET /api/search?types=appearance&upperColor=red&lowerColor=black
+   → qdrantService.scrollAppearanceByFilter({ colorUpper, colorLower }, limit)  [구현됨, FR-CCFR-066]
+2. (미구현) 축소된 후보 집합 내에서 osnetCosineSim 재정렬 — 현재는 filter 결과를 그대로
+   timestamp 내림차순 정렬만 하며, query-by-example(사진/벡터 입력) 기반 유사도 재랭킹은 없음
+3. detections 타입 검색(GET /api/search?types=detections&upperColor=&lowerColor=)도 동일 색상
+   파라미터를 지원 — snapshot.attributes.color 문자열 매칭 (Qdrant 불필요)
+```
+
+색상은 여전히 "Re-ID 대체"가 아니라 "검색 인덱스"로만 쓰인다 — §12.1의 실시간 매칭 가중치(80/20) 재조정과는 별개의, 검색 API 계층에서의 활용이다. **비고**: `docs/prd/PRD_AI_Color_Analysis.md` §8.2가 제안했던 신규 `GET /api/events?upperColor=&lowerColor=` 엔드포인트 대신, 기존 통합검색 `GET /api/search`에 파라미터를 추가하는 방식으로 구현되었다 — PRD는 이 사실을 반영해 갱신 필요.
+
+### 12.5 비범위 (Non-Goals, 이번 제안)
+
+- 얼굴 Re-ID(ArcFace)는 이번 제안의 대상이 아님 — 이미 실제 임베딩 모델을 사용 중이며 별도로 Qdrant 확장이 계획되어 있음(M3)
+- OSNet 도입 시에도 색상 보조 신호(`colorSim`)는 완전히 제거하지 않음 — 가이드 권장 20% 가중치로 유지
+- 본 절은 설계 제안 기록이며, 실제 코드(`pipelineManager.js`, `analysisApi.js` 등) 구현은 별도 사용자 요청 시 진행
+
+### 12.6 구현 현황 (2026-07-09 코드 동기화)
+
+§12.1~12.5는 설계 제안으로 작성되었으나, 이후 별도 세션에서 실제 코드로 구현되었다. 구현 여부를 FR 단위로 정리한다 (SRS FR-CCFR-060~066 대응):
+
+| FR | 항목 | 상태 | 비고 |
+|---|---|---|---|
+| FR-CCFR-060 | 임베딩 모델 상태 노출 | ✅ Done | `getServiceStatus().appearanceReid`, `/health` capabilities `appearanceReid` |
+| FR-CCFR-061 | 80/20 가중 유사도 | ✅ Done | `_weightedAppearSim()` |
+| FR-CCFR-062 | 모델 미로딩 시 폴백 | ✅ Done | `_weightedAppearSim()`이 `_clothingAppearSim()`로 폴백 |
+| FR-CCFR-063 | `appearance_embeddings` 컬렉션 | ✅ Done | `qdrantService.js`, write 경로(`upsertAppearance`) 배선 완료 |
+| FR-CCFR-064 | 장시간 재등장 지원 | 🟡 Partial | 벡터 저장(write)만 배선됨 — 실시간 매칭이 Qdrant를 조회(read)하지 않아 5분 TTL 밖 재등장은 여전히 미매칭 |
+| FR-CCFR-065 | 동일 제복 오탐 감소 | 🟡 Unverified | 가중치 로직은 구현됐으나 OSNet 전처리가 실제 모델 출력 대비 검증되지 않음(§12.2 참조) — 정량 측정 없음 |
+| FR-CCFR-066 | 색상 사전 필터 검색 | ✅ Done | `GET /api/search?types=appearance\|detections&upperColor=&lowerColor=` (§12.4) |
+
+**공통 전제**: 세 가지 모두 opt-in이다 — `appearance_reid_osnet.onnx` 모델 파일은 `npm run download-models`에서 기본 비활성(`enabled:false`, 라이선스 검토 후 수동 활성화 필요), `QDRANT_ENABLED=false`가 기본값이며 비활성 시 기존 Phase-1 동작과 100% 동일하게 폴백한다. 자동화 테스트는 없음(TC_CrossCamera_Face_Tracking.md §11 참조).

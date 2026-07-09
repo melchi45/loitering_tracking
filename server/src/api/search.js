@@ -17,13 +17,18 @@ const { Router } = require('express');
 const DEFAULT_TYPES = 'alerts,detections,faces,events';
 const MAX_LIMIT     = 200;
 
-function buildRouter(db) {
+/**
+ * @param {object} db
+ * @param {import('../services/qdrantService').QdrantService} [qdrantService]
+ *   Optional — enables `types=appearance` (CrossCamera Face Tracking Phase-2, Proposed).
+ */
+function buildRouter(db, qdrantService = null) {
   const router = Router();
 
-  router.get('/', (req, res) => {
+  router.get('/', async (req, res) => {
     try {
       const { q, types = DEFAULT_TYPES, from, to, limit = 30, offset = 0,
-              minConfidence, maxConfidence } = req.query;
+              minConfidence, maxConfidence, upperColor, lowerColor } = req.query;
 
       if (!q || q.trim() === '') {
         return res.status(400).json({ success: false, error: 'q parameter required' });
@@ -66,6 +71,17 @@ function buildRouter(db) {
             const c = (s.confidence != null) ? s.confidence : 1.0;
             return c >= effectiveMinConf && c <= effectiveMaxConf;
           });
+        }
+
+        // Color pre-filter (FR-CCFR-066, Proposed) — narrows candidates by clothing
+        // color before ranking; distinct from real-time Re-ID weighting (§12.1).
+        if (upperColor) {
+          const uc = String(upperColor).toLowerCase();
+          snaps = snaps.filter(s => (s.attributes?.color?.upper || '').toLowerCase() === uc);
+        }
+        if (lowerColor) {
+          const lc = String(lowerColor).toLowerCase();
+          snaps = snaps.filter(s => (s.attributes?.color?.lower || '').toLowerCase() === lc);
         }
 
         snaps.sort((a, b) => (b.timestamp || '').localeCompare(a.timestamp || ''));
@@ -258,6 +274,26 @@ function buildRouter(db) {
             liveCropData: r.liveCropData,
             timestamp:   r.timestamp,
             createdAt:   r.createdAt,
+          });
+        }
+      }
+
+      // ── Appearance Re-ID vector search (CrossCamera Face Tracking Phase-2, Proposed) ──
+      // Color-filtered listing only (no query-by-example-photo yet) — FR-CCFR-066.
+      if (typeSet.has('appearance') && qdrantService?.ready) {
+        const must = [];
+        if (upperColor) must.push({ key: 'colorUpper', match: { value: String(upperColor).toLowerCase() } });
+        if (lowerColor) must.push({ key: 'colorLower', match: { value: String(lowerColor).toLowerCase() } });
+        const filter = must.length ? { must } : undefined;
+        const points = await qdrantService.scrollAppearanceByFilter(filter, lim);
+        for (const p of points) {
+          results.push({
+            _type:      'appearance',
+            id:         p.id,
+            cameraId:   p.payload?.cameraId,
+            colorUpper: p.payload?.colorUpper,
+            colorLower: p.payload?.colorLower,
+            timestamp:  p.payload?.timestamp,
           });
         }
       }

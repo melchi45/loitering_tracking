@@ -4,11 +4,11 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-AI-05 |
-| **Version** | 1.0 |
+| **Version** | 1.3 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent SRS** | srs/SRS_AI_Color_Analysis.md |
-| **Test Scripts** | test/api/ai_detection_modules.test.js (Groups A, B, D, F) |
+| **Test Scripts** | test/api/ai_detection_modules.test.js (Groups A, B, D) — Group F is Planned, no script yet |
 
 ---
 
@@ -20,8 +20,10 @@
 5. [Test Group C — HSV Classification Logic Validation](#5-test-group-c--hsv-classification-logic-validation)
 6. [Test Group D — ROI and API Schema Verification](#6-test-group-d--roi-and-api-schema-verification)
 7. [Test Group E — Error Handling & Edge Cases](#7-test-group-e--error-handling--edge-cases)
-8. [Test Execution Order](#8-test-execution-order)
-9. [Pass/Fail Criteria](#9-passfail-criteria)
+8. [Test Group F — Phase-3 Human Parsing (Planned)](#8-test-group-f--phase-3-human-parsing-planned)
+9. [Test Group G — Phase-1.5 K-Means Dominant Color (Planned)](#9-test-group-g--phase-15-k-means-dominant-color-planned)
+10. [Test Execution Order](#10-test-execution-order)
+11. [Pass/Fail Criteria](#11-passfail-criteria)
 
 ---
 
@@ -289,7 +291,71 @@ No external test framework — built-in fetch only
 
 ---
 
-## 8. Test Execution Order
+## 8. Test Group F — Phase-3 Human Parsing (Planned)
+
+> **Status: Planned — not yet implemented.** No runnable test script exists for this group; it is recorded here as a specification for future implementation, derived from gap analysis against the CCTV/IPTV 상의하의 색상분류 guide (now-consolidated, original deleted 2026-07-09) and `docs/rfp/ReID_및_색상분석_활용가이드.md` (2026-07-09). These test IDs are **not** registered in `test/tc_runner_cli.js` / `server/src/services/TcRunnerService.js` — doing so before the corresponding code exists would violate this project's TDD convention (registering a suite against a nonexistent test file).
+
+### TC-F-001 (Planned) — humanParsing Toggle Round-Trips via Analytics Config
+- **SRS:** FR-CLR-022
+- **Steps:** `PUT /api/analytics/config` with `humanParsing: true`, then `GET` → assert persisted; repeat with `false`
+
+### TC-F-002 (Planned) — Model Catalog Lists Human Parsing Family Entries
+- **SRS:** FR-CLR-023
+- **Steps:** `GET /api/analysis/models` → assert entries with `family: 'human-parsing'` (SCHP, SegFormer) are present with `classMap` metadata
+
+### TC-F-003 (Planned) — Only One Human Parsing Model Active at a Time
+- **SRS:** FR-CLR-023
+- **Steps:** Activate SCHP entry, then activate SegFormer entry → assert SCHP is no longer marked `active`
+
+### TC-F-004 (Planned) — Throttled Execution Does Not Re-run Model Within Interval
+- **SRS:** FR-CLR-024
+- **Steps:** Trigger enrichment twice for the same `objectId` within `HP_INTERVAL_MS` → assert second call returns cached `color` object (same reference/timestamp), model not invoked twice
+
+### TC-F-005 (Planned) — Cache Entry Removed on Track Drop
+- **SRS:** FR-CLR-024
+- **Steps:** Force a track to expire (age out) → assert `dropTrack(objectId)` removes the corresponding cache entry (verified indirectly: next detection of a new track reusing an old ID does not inherit stale cached color)
+
+### TC-F-006 (Planned) — Fallback to Phase-1 When Mask Pixel Count Below Threshold
+- **SRS:** FR-CLR-025
+- **Steps:** Supply a person crop where the parsed mask yields < 20 pixels for a region → assert that region's color falls back to the Phase-1 fixed-fraction average rather than an unreliable K-Means result
+
+### TC-F-007 (Planned) — Output Schema Carries `source` Field
+- **SRS:** FR-CLR-026
+- **Steps:** With `humanParsing` enabled and model active, assert `color.source === 'human-parsing'`; with it disabled, assert `source` is absent or `'legacy'`
+
+### TC-F-008 (Planned) — Graceful Degrade When Model File Absent
+- **SRS:** FR-CLR-022, C-08
+- **Steps:** With `humanParsing: true` but no model file on disk → assert Phase-1 color output is still produced (no crash, no missing `color` field) and `GET /api/capabilities` reports the model as not loaded
+
+---
+
+## 9. Test Group G — Phase-1.5 K-Means Dominant Color (Planned)
+
+> **Status: Planned — not yet implemented.** No runnable test script exists for this group. Recorded per gap analysis against `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` §4 (2026-07-09). See `docs/design/Design_AI_Color_Analysis.md` §11, `docs/srs/SRS_AI_Color_Analysis.md` §12 (FR-CLR-028~029). Not registered in `test/tc_runner_cli.js` / `TcRunnerService.js` — same TDD-convention reason as Group F.
+
+### TC-G-001 (Planned) — K-Means Reduction Produces Same Schema as Plain Mean
+- **SRS:** FR-CLR-028
+- **Steps:** Call the Phase-1.5 reduction path on a synthetic ROI pixel set → assert return shape is still `{upper, lower, upperRgb, lowerRgb}` (FR-CLR-009 unchanged)
+
+### TC-G-002 (Planned) — K-Means Output Differs from Plain Mean on a Bimodal ROI
+- **SRS:** FR-CLR-028
+- **Steps:** Construct an ROI pixel set with two distinct color clusters of unequal size (e.g. 80% red-ish, 20% blue-ish, mirroring `kmeansColor.test.js`'s existing bimodal fixture) → assert the K-Means result is closer to the majority cluster's centroid than the plain mean would be
+
+### TC-G-003 (Planned) — Fallback to Plain Mean Below Minimum Pixel Count
+- **SRS:** FR-CLR-029
+- **Steps:** Supply an ROI patch small enough that the resized pixel count falls below `dominantColor()`'s 20-pixel floor → assert the region's color falls back to the existing plain-mean result rather than `null`/error
+
+### TC-G-004 (Planned) — ROI Geometry Unchanged
+- **SRS:** FR-CLR-028
+- **Steps:** Assert the upper/lower ROI rectangles computed for a given bbox are identical to the FR-CLR-005/FR-CLR-006 formulas before and after the Phase-1.5 change (only the reduction step differs)
+
+### TC-G-005 (Planned) — No New Analytics Config Toggle
+- **SRS:** FR-CLR-028
+- **Steps:** `GET /api/analytics/config` → assert no new `color`-related key was added for this change (Phase-1.5 is not gated separately from the existing always-on `color` feature)
+
+---
+
+## 10. Test Execution Order
 
 ```
 Phase 1 — Prerequisite Checks
@@ -317,13 +383,19 @@ Phase 6 — ROI & Schema (Group D)
 Phase 7 — Error Handling (Group E)
   TC-E-001 → TC-E-004
   (TC-E-004 restores color enabled state)
+
+Phase 8 — Phase-3 Human Parsing (Group F, Planned — not yet executable)
+  TC-F-001 → TC-F-008
+
+Phase 9 — Phase-1.5 K-Means Dominant Color (Group G, Planned — not yet executable)
+  TC-G-001 → TC-G-005
 ```
 
 ---
 
-## 9. Pass/Fail Criteria
+## 11. Pass/Fail Criteria
 
-### 9.1 Release Criteria
+### 11.1 Release Criteria
 
 | Group | Required Pass Rate | Blocking |
 |---|---|---|
@@ -332,15 +404,17 @@ Phase 7 — Error Handling (Group E)
 | C — HSV Classification | 100% (10/10) | Yes |
 | D — ROI & Schema | 100% (3/3) | Yes |
 | E — Error Handling | ≥ 75% (3/4) | Yes |
+| F — Phase-3 Human Parsing | N/A (planned, no test script yet) | No |
+| G — Phase-1.5 K-Means Dominant Color | N/A (planned, no test script yet) | No |
 
-### 9.2 Known Skip Conditions
+### 11.2 Known Skip Conditions
 
 | Test | Skip Condition |
 |---|---|
 | TC-A-005 (colorMethod field) | Only if API does not expose this field |
 | TC-C-001 through TC-C-010 | Unit test environment required for direct function testing |
 
-### 9.3 Failure Response
+### 11.3 Failure Response
 
 | Severity | Condition | Action |
 |---|---|---|
@@ -357,3 +431,6 @@ Phase 7 — Error Handling (Group E)
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for AI Color Analysis |
+| 1.1 | 2026-07-09 | Youngho Kim | Added Test Group F (Phase-3 Human Parsing, Planned) — TC-F-001~008, not yet registered in runnable SUITES |
+| 1.2 | 2026-07-09 | Youngho Kim | Added Test Group G (Phase-1.5 K-Means Dominant Color, Planned) — TC-G-001~005, not yet registered in runnable SUITES; renumbered §9/§10 → §10/§11 |
+| 1.3 | 2026-07-09 | Youngho Kim | Source guide `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` deleted — full content confirmed reflected in Groups F–G, in-doc citation updated to archival note |

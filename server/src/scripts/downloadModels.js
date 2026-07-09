@@ -41,6 +41,46 @@ const DIRECT_MODELS = [
     module:  'AI-03 Face Recognition (ArcFace ResNet50)',
     enabled: true,
   },
+  // ── AI-05 Phase-3 (proposed, disabled by default) ──────────────────────────
+  // Verify the source/license yourself before enabling — these are optional,
+  // not yet wired into a required pipeline path. Set enabled:true to fetch.
+  // Source: https://huggingface.co/pirocheto/schp-lip-20 (MIT license)
+  // Input: pixel_values [1,3,473,473] float32 · Output: logits [1,20,473,473]
+  // LIP-20 classes: 0 bg,1 hat,2 hair,3 glove,4 sunglasses,5 upper-clothes,
+  //   6 dress,7 coat,8 socks,9 pants,10 jumpsuits,11 scarf,12 skirt,13 face,
+  //   14 l-arm,15 r-arm,16 l-leg,17 r-leg,18 l-shoe,19 r-shoe
+  {
+    file:    'schp_lip.onnx',
+    url:     'https://huggingface.co/pirocheto/schp-lip-20/resolve/main/onnx/schp-lip-20-int8-static.onnx',
+    size:    '~68 MB (int8, self-contained)',
+    module:  'AI-05 Phase-3 Human Parsing (SCHP LIP-20, Proposed — see docs/design/Design_AI_Color_Analysis.md §10)',
+    enabled: false,
+  },
+  // Source: https://huggingface.co/Xenova/segformer_b2_clothes
+  // (fine-tuned from nvidia/segformer-b2, NVIDIA SegFormer NC license —
+  //  non-commercial only; acceptable for this non-commercial project)
+  // Input: pixel_values [1,3,512,512] float32 · Output: logits [1,18,128,128]
+  // (¼-resolution output — bilinear-upsample or downsample color buffer to match)
+  // 18 classes: 0 bg,1 hat,2 hair,3 sunglasses,4 upper-clothes,5 skirt,6 pants,
+  //   7 dress,8 belt,9 l-shoe,10 r-shoe,11 face,12 l-leg,13 r-leg,14 l-arm,
+  //   15 r-arm,16 bag,17 scarf
+  {
+    file:    'segformer_clothes.onnx',
+    url:     'https://huggingface.co/Xenova/segformer_b2_clothes/resolve/main/onnx/model_quantized.onnx',
+    size:    '~29 MB (int8 quantized)',
+    module:  'AI-05 Phase-3 Human Parsing alt. (SegFormer clothes, Proposed, non-commercial license)',
+    enabled: false,
+  },
+  // Source: Intel Open Model Zoo — person-reidentification-retail-0287
+  // (OSNet-family backbone, Apache 2.0)
+  // Input: data [1,3,256,128] float32 BGR NCHW · Output: reid_embedding [1,256]
+  {
+    file:    'appearance_reid_osnet.onnx',
+    url:     'https://storage.openvinotoolkit.org/repositories/open_model_zoo/2023.0/models_bin/1/person-reidentification-retail-0287/person-reidentification-retail-0267.onnx',
+    size:    '~3.5 MB',
+    module:  'CCFR Phase-2 Appearance Re-ID embedding (OSNet, Proposed — see docs/design/Design_AI_AppearanceReID.md §12)',
+    enabled: false,
+  },
 ];
 
 // ─── YOLO12 models (PT download → ultralytics ONNX export, automated) ────────
@@ -52,9 +92,15 @@ const YOLO12_MODELS = [
   { id: 'yolo12x', ptFile: 'yolo12x.pt', onnxFile: 'yolo12x.onnx', url: 'https://github.com/ultralytics/assets/releases/download/v8.4.0/yolo12x.pt', size: '~118 MB PT' },
 ];
 
-// Find Python with ultralytics that supports YOLO12 (cfg/models/12 directory).
-// ultralytics < 8.3.x has no YOLO12 support; check explicitly.
+// Find a Python interpreter satisfying `checkScript`, trying each candidate in order.
 const { execFileSync } = require('child_process');
+function _findPython(candidates, checkScript) {
+  for (const cand of candidates) {
+    try { execFileSync(cand, ['-c', checkScript], { timeout: 8000, stdio: 'pipe' }); return cand; } catch {}
+  }
+  return null;
+}
+
 const _pyCandidates = [
   process.env.PYTHON_EXEC,
   process.platform === 'win32' ? process.env.PYTHON_EXEC_WINDOWS : process.env.PYTHON_EXEC_LINUX,
@@ -62,18 +108,70 @@ const _pyCandidates = [
   'python3',
   'python',
 ].filter(Boolean);
-const _pyCheckScript = [
+
+// YOLO12/26: ultralytics < 8.3.x has no YOLO12 support; check explicitly (cfg/models/12 directory).
+const PYTHON_EXEC = _findPython(_pyCandidates, [
   'import ultralytics, os',
   'cfg12 = os.path.join(os.path.dirname(ultralytics.__file__), "cfg", "models", "12")',
   'assert os.path.exists(cfg12), "YOLO12 not supported (ultralytics " + ultralytics.__version__ + ")"',
-].join('; ');
-let PYTHON_EXEC = null;
-for (const cand of _pyCandidates) {
-  try { execFileSync(cand, ['-c', _pyCheckScript], { timeout: 8000, stdio: 'pipe' }); PYTHON_EXEC = cand; break; } catch {}
-}
-if (!PYTHON_EXEC) {
+].join('; ')) || (() => {
   console.warn('Warning: Python with ultralytics >=8.3 (YOLO12 support) not found — YOLO12 export will fail. Run: pip install -U ultralytics');
-  PYTHON_EXEC = 'python3';
+  return 'python3';
+})();
+
+// PPE / Fire & Smoke: exported via huggingface_hub .pt download + ultralytics export.
+const PYTHON_EXEC_HF = _findPython(_pyCandidates, 'import ultralytics, huggingface_hub');
+if (!PYTHON_EXEC_HF) {
+  console.warn('Warning: Python with ultralytics + huggingface_hub not found — PPE/Fire-Smoke auto-export will fail. Run: pip install -U ultralytics huggingface_hub');
+}
+
+// ─── PPE + Fire & Smoke (HuggingFace .pt download → ultralytics ONNX export, automated) ──
+const HF_EXPORT_MODELS = [
+  {
+    id: 'yolov8m-ppe', onnxFile: 'yolov8m_ppe.onnx',
+    hfRepo: 'keremberke/yolov8m-protective-equipment-detection', hfFile: 'best.pt',
+    module: 'AI-04 Mask + AI-07 Helmet Detection',
+  },
+  {
+    id: 'yolov8s-fire-smoke', onnxFile: 'yolov8s_fire_smoke.onnx',
+    hfRepo: 'Mehedi-2-96/fire-smoke-detection-yolo', hfFile: 'fire_smoke_yolov8s_model.pt',
+    module: 'AI-09 Fire & Smoke Detection',
+  },
+];
+
+async function exportHfPtToOnnx(m) {
+  const { execFile } = require('child_process');
+  const onnxPath = path.join(MODELS_DIR, m.onnxFile);
+
+  if (fs.existsSync(onnxPath)) {
+    console.log(`  [SKIP] ${m.onnxFile} (already exists)`);
+    return 'skipped';
+  }
+  if (!PYTHON_EXEC_HF) {
+    console.log(`  [FAIL] ${m.onnxFile}: Python with ultralytics + huggingface_hub not found`);
+    return 'failed';
+  }
+
+  console.log(`  Downloading + converting ${m.onnxFile} via huggingface_hub (${m.hfRepo})...`);
+  const script = [
+    'from ultralytics import YOLO',
+    'from huggingface_hub import hf_hub_download',
+    'import shutil',
+    `pt = hf_hub_download(repo_id=${JSON.stringify(m.hfRepo)}, filename=${JSON.stringify(m.hfFile)})`,
+    'YOLO(pt).export(format="onnx", imgsz=640, simplify=True)',
+    'onnx = pt.replace(".pt", ".onnx")',
+    `shutil.copy(onnx, ${JSON.stringify(onnxPath)})`,
+  ].join('; ');
+
+  await new Promise((resolve, reject) => {
+    execFile(PYTHON_EXEC_HF, ['-c', script], { timeout: 300_000 }, (err, _out, stderr) => {
+      if (err) { console.error('  export stderr:', stderr); return reject(err); }
+      resolve();
+    });
+  });
+
+  console.log(`  [OK] ${m.onnxFile}`);
+  return 'converted';
 }
 
 async function exportYolo12ToOnnx(m) {
@@ -116,51 +214,14 @@ async function exportYolo12ToOnnx(m) {
   return 'converted';
 }
 
-// ─── Models requiring Python / ultralytics export ────────────────────────────
+// ─── Models with no automatable source — manual export only ──────────────────
+// AI-04/AI-07 (PPE) and AI-09 (Fire & Smoke) are handled automatically above
+// (HF_EXPORT_MODELS / exportHfPtToOnnx) and via the Admin Dashboard's AI Models
+// UI (POST /api/analysis/models/download). OpenPAR has no public pretrained
+// ONNX — the operator must train/export their own checkpoint.
 const PYTHON_EXPORT_INSTRUCTIONS = `
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│  Models requiring Python + ultralytics export                               │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  AI-04 Mask Detection + AI-07 Helmet Detection                              │
-│  Source: https://huggingface.co/keremberke/yolov8m-protective-equipment-detection
-│                                                                             │
-│  pip install ultralytics huggingface_hub                                    │
-│                                                                             │
-│  python3 << 'PYEOF'                                                         │
-│  from ultralytics import YOLO                                               │
-│  from huggingface_hub import hf_hub_download                                │
-│  import shutil, os                                                          │
-│                                                                             │
-│  pt = hf_hub_download(                                                      │
-│      repo_id="keremberke/yolov8m-protective-equipment-detection",           │
-│      filename="best.pt")                                                    │
-│  YOLO(pt).export(format="onnx", imgsz=640, simplify=True)                  │
-│  onnx = pt.replace(".pt", ".onnx")                                          │
-│  dest = os.path.join("server/models", "yolov8m_ppe.onnx")                  │
-│  shutil.copy(onnx, dest)                                                    │
-│  print("Saved:", dest)                                                      │
-│  PYEOF                                                                      │
-├─────────────────────────────────────────────────────────────────────────────┤
-│  AI-09 Fire & Smoke Detection                                               │
-│  Source: https://huggingface.co/Mehedi-2-96/fire-smoke-detection-yolo       │
-│          Classes: fire(0), other(1, skipped), smoke(2) — output [1,7,8400] │
-│                                                                             │
-│  pip install ultralytics huggingface_hub                                    │
-│                                                                             │
-│  python3 << 'PYEOF'                                                         │
-│  from ultralytics import YOLO                                               │
-│  from huggingface_hub import hf_hub_download                                │
-│  import shutil, os                                                          │
-│                                                                             │
-│  pt = hf_hub_download(                                                      │
-│      repo_id="Mehedi-2-96/fire-smoke-detection-yolo",                       │
-│      filename="fire_smoke_yolov8s_model.pt")                                │
-│  YOLO(pt).export(format="onnx", imgsz=640, simplify=True)                  │
-│  onnx = pt.replace(".pt", ".onnx")                                          │
-│  dest = os.path.join("server/models", "yolov8s_fire_smoke.onnx")           │
-│  shutil.copy(onnx, dest)                                                    │
-│  print("Saved:", dest)                                                      │
-│  PYEOF                                                                      │
+│  Models requiring a manually-exported checkpoint (no public pretrained ONNX) │
 ├─────────────────────────────────────────────────────────────────────────────┤
 │  AI-05 Color + AI-06 Cloth (PAR multi-label attributes)                     │
 │  Source: https://github.com/Event-AHU/OpenPAR                               │
@@ -242,6 +303,9 @@ function printStatus() {
     { file: 'yolov8m_ppe.onnx',        module: 'AI-04 Mask + AI-07 Helmet' },
     { file: 'openpar.onnx',            module: 'AI-05 Color + AI-06 Cloth' },
     { file: 'yolov8s_fire_smoke.onnx', module: 'AI-09 Fire & Smoke Detection' },
+    { file: 'schp_lip.onnx',            module: 'AI-05 Phase-3 Human Parsing (SCHP, Proposed)' },
+    { file: 'segformer_clothes.onnx',   module: 'AI-05 Phase-3 Human Parsing alt. (SegFormer, Proposed)' },
+    { file: 'appearance_reid_osnet.onnx', module: 'CCFR Phase-2 Appearance Re-ID (OSNet, Proposed)' },
     ...YOLO12_MODELS.map(m => ({ file: m.onnxFile, module: `YOLO12 Detection (${m.id})` })),
   ];
   console.log('\n=== Model Status ===');
@@ -277,6 +341,20 @@ async function main() {
     try {
       const result = await exportYolo12ToOnnx(m);
       if (result === 'skipped') skipped++; else downloaded++;
+    } catch (e) {
+      console.error(`  [FAIL] ${m.id}: ${e.message}`);
+      failed++;
+    }
+  }
+
+  // PPE + Fire & Smoke: automated HuggingFace .pt download + ONNX export
+  console.log('\n=== PPE / Fire & Smoke Models (HuggingFace → ONNX auto-export) ===\n');
+  for (const m of HF_EXPORT_MODELS) {
+    try {
+      const result = await exportHfPtToOnnx(m);
+      if (result === 'skipped') skipped++;
+      else if (result === 'failed') failed++;
+      else downloaded++;
     } catch (e) {
       console.error(`  [FAIL] ${m.id}: ${e.message}`);
       failed++;

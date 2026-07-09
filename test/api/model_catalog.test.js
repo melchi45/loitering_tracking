@@ -3,7 +3,8 @@
  * AI Model Catalog Tests
  *
  * TC: TC_AI_Model_Catalog
- *   Covers: TC-MC-001, TC-MC-002, TC-MC-005, TC-MC-007, TC-MC-008
+ *   Covers: TC-MC-001, TC-MC-002, TC-MC-002b, TC-MC-005, TC-MC-007, TC-MC-008,
+ *           TC-MC-012, TC-MC-013
  *
  * Network-dependent tests (TC-MC-004, TC-MC-009) require INTEGRATION_DOWNLOAD=1
  *
@@ -67,23 +68,27 @@ async function post(path, payload) {
 // ── TC-MC-001: Catalog completeness ──────────────────────────────────────────
 
 async function runGroupA() {
-  console.log('\n[Group A] Catalog API — TC-MC-001, TC-MC-002');
+  console.log('\n[Group A] Catalog API — TC-MC-001, TC-MC-002, TC-MC-012');
 
-  await test('TC-MC-001', 'GET /api/analysis/models returns 15 models with required fields', async () => {
+  await test('TC-MC-001', 'GET /api/analysis/models returns the YOLO detector catalog with required fields', async () => {
     const { status, body } = await get('/api/analysis/models');
     assertEq(status, 200, 'HTTP status');
-    assert(Array.isArray(body.models), 'models is array');
-    assertEq(body.models.length, 15, 'model count');
+    assert(Array.isArray(body.catalog), 'catalog is array');
 
-    const bySeriesV8   = body.models.filter(m => m.series === 'YOLOv8');
-    const bySeries11   = body.models.filter(m => m.series === 'YOLO11');
-    const bySeries12   = body.models.filter(m => m.series === 'YOLO12');
+    const detectors = body.catalog.filter(m => !m.family);
+    assertEq(detectors.length, 20, 'YOLO detector count (26/12/11/v8 × n/s/m/l/x)');
+
+    const bySeries26  = detectors.filter(m => m.series === 'YOLO26');
+    const bySeriesV8   = detectors.filter(m => m.series === 'YOLOv8');
+    const bySeries11   = detectors.filter(m => m.series === 'YOLO11');
+    const bySeries12   = detectors.filter(m => m.series === 'YOLO12');
+    assertEq(bySeries26.length, 5, 'YOLO26 count');
     assertEq(bySeriesV8.length, 5, 'YOLOv8 count');
     assertEq(bySeries11.length, 5, 'YOLO11 count');
     assertEq(bySeries12.length, 5, 'YOLO12 count');
 
-    const required = ['id', 'label', 'series', 'mAP', 'cpuMs', 't4Ms', 'params', 'flops', 'downloaded', 'active', 'downloading', 'converting'];
-    for (const m of body.models) {
+    const required = ['id', 'label', 'series', 'mAP', 'cpuMs', 't4Ms', 'params', 'flops', 'exists', 'active', 'downloading', 'converting'];
+    for (const m of detectors) {
       for (const field of required) {
         assert(field in m, `model ${m.id} missing field: ${field}`);
       }
@@ -93,18 +98,41 @@ async function runGroupA() {
   await test('TC-MC-002', 'YOLO12 entries have requiresConversion implied (converting field present)', async () => {
     const { status, body } = await get('/api/analysis/models');
     assertEq(status, 200, 'HTTP status');
-    const yolo12 = body.models.filter(m => m.series === 'YOLO12');
+    const yolo12 = body.catalog.filter(m => m.series === 'YOLO12');
     assertEq(yolo12.length, 5, 'YOLO12 count');
     for (const m of yolo12) {
       assert('converting' in m, `${m.id} should have converting field`);
     }
   });
 
-  await test('TC-MC-002b', 'Active model flag is set for exactly one entry', async () => {
+  await test('TC-MC-002b', 'Active model flag is set for at most one entry per family', async () => {
     const { status, body } = await get('/api/analysis/models');
     assertEq(status, 200, 'HTTP status');
-    const activeModels = body.models.filter(m => m.active);
-    assert(activeModels.length <= 1, `expected at most 1 active model, got ${activeModels.length}`);
+    const byFamily = new Map();
+    for (const m of body.catalog) {
+      if (!m.active) continue;
+      const key = m.family || 'detector';
+      byFamily.set(key, (byFamily.get(key) || 0) + 1);
+    }
+    for (const [family, count] of byFamily) {
+      assert(count <= 1, `expected at most 1 active model for family=${family}, got ${count}`);
+    }
+  });
+
+  await test('TC-MC-012', 'Catalog includes all non-detector model families', async () => {
+    const { status, body } = await get('/api/analysis/models');
+    assertEq(status, 200, 'HTTP status');
+    const families = new Set(body.catalog.map(m => m.family).filter(Boolean));
+    const expected = ['face-detection', 'face-recognition', 'ppe', 'fire-smoke', 'cloth-par', 'human-parsing', 'appearance-reid'];
+    for (const family of expected) {
+      assert(families.has(family), `catalog missing family: ${family}`);
+    }
+    // manualOnly entries (no automatable source) must never expose a raw download URL
+    const manualEntries = body.catalog.filter(m => m.manualOnly);
+    assert(manualEntries.length >= 1, 'expected at least one manualOnly entry (cloth-par)');
+    for (const m of manualEntries) {
+      assert(m.url === undefined, `manualOnly entry ${m.id} should not expose a url field`);
+    }
   });
 }
 
@@ -119,16 +147,29 @@ async function runGroupB() {
     assert(body.error, 'response should have error field');
   });
 
-  await test('TC-MC-008', 'POST /api/analysis/models/switch with non-downloaded YOLO12 returns 400', async () => {
+  await test('TC-MC-008', 'POST /api/analysis/models/switch with non-downloaded YOLO12 returns 409', async () => {
     const { status: catalogStatus, body: catalogBody } = await get('/api/analysis/models');
     assertEq(catalogStatus, 200, 'catalog HTTP status');
-    const notDownloaded = catalogBody.models.find(m => m.series === 'YOLO12' && !m.downloaded);
+    const notDownloaded = catalogBody.catalog.find(m => m.series === 'YOLO12' && !m.exists);
     if (!notDownloaded) {
       console.log('    [INFO] All YOLO12 models already downloaded — TC-MC-008 cannot fully validate');
       return;
     }
     const { status, body } = await post('/api/analysis/models/switch', { modelId: notDownloaded.id });
-    assertEq(status, 400, `expected 400 for non-downloaded model ${notDownloaded.id}`);
+    assertEq(status, 409, `expected 409 for non-downloaded model ${notDownloaded.id}`);
+    assert(body.error, 'response should have error field');
+  });
+
+  await test('TC-MC-013', 'POST /api/analysis/models/download for a manualOnly entry returns 409', async () => {
+    const { status: catalogStatus, body: catalogBody } = await get('/api/analysis/models');
+    assertEq(catalogStatus, 200, 'catalog HTTP status');
+    const manualEntry = catalogBody.catalog.find(m => m.manualOnly);
+    if (!manualEntry) {
+      console.log('    [INFO] No manualOnly catalog entry found — TC-MC-013 cannot fully validate');
+      return;
+    }
+    const { status, body } = await post('/api/analysis/models/download', { modelId: manualEntry.id });
+    assertEq(status, 409, `expected 409 for manualOnly model ${manualEntry.id}`);
     assert(body.error, 'response should have error field');
   });
 }
@@ -154,8 +195,8 @@ async function runGroupC() {
       while (Date.now() < deadline) {
         await new Promise(r => setTimeout(r, 3000));
         const { body: cb } = await get('/api/analysis/models');
-        const m = (cb.models || []).find(m => m.id === 'yolov8s');
-        if (m?.downloaded) { downloaded = true; break; }
+        const m = (cb.catalog || []).find(m => m.id === 'yolov8s');
+        if (m?.exists) { downloaded = true; break; }
       }
       assert(downloaded, 'yolov8s.onnx should be downloaded within 120s');
     }
@@ -170,8 +211,8 @@ async function runGroupC() {
       while (Date.now() < deadline) {
         await new Promise(r => setTimeout(r, 5000));
         const { body: cb } = await get('/api/analysis/models');
-        const m = (cb.models || []).find(m => m.id === 'yolo12n');
-        if (m?.downloaded) { downloaded = true; break; }
+        const m = (cb.catalog || []).find(m => m.id === 'yolo12n');
+        if (m?.exists) { downloaded = true; break; }
         if (m?.converting) console.log('    [INFO] YOLO12n: converting...');
       }
       assert(downloaded, 'yolo12n.onnx should be ready within 600s');

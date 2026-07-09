@@ -75,6 +75,14 @@ class FireSmokeService {
   get ready()  { return this._ready;  }
   get status() { return this._status; }
 
+  /** Activate/switch the active fire/smoke model (model catalog hot-swap). */
+  async reload(filePath) {
+    this._session  = await createOnnxSession(ort, filePath, 'FireSmokeService');
+    this.modelPath = filePath;
+    this._ready    = true;
+    this._status   = 'loaded';
+  }
+
   /**
    * Detect fire and smoke in a JPEG frame.
    * @param {Buffer} jpegBuffer

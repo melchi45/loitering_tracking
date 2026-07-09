@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-AI-06-CLR |
-| **Version** | 1.0 |
+| **Version** | 1.3 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent PRD** | prd/PRD_AI_Color_Analysis.md |
@@ -23,6 +23,8 @@
 8. [Data Requirements](#8-data-requirements)
 9. [Interface Requirements](#9-interface-requirements)
 10. [Constraints & Assumptions](#10-constraints--assumptions)
+11. [Functional Requirements — Phase-3 Human Parsing (Proposed)](#11-functional-requirements--phase-3-human-parsing-proposed)
+12. [Functional Requirements — Phase-1.5 K-Means Dominant Color (Proposed)](#12-functional-requirements--phase-15-k-means-dominant-color-proposed)
 
 ---
 
@@ -82,6 +84,7 @@ Color extraction is activated only when the current zone has `targetClass: 'colo
 
 - Phase-1 (current): HSV pixel-average method — always available, no model required
 - Phase-2 (planned): PAR ONNX model color output — covered in SRS-LTS-AI-07-CLT
+- Phase-3 (proposed, 2026-07-09): Human Parsing model (SCHP LIP-20 / SegFormer clothes) for pixel-mask-based dominant color extraction — see §11
 
 ---
 
@@ -334,6 +337,63 @@ No dedicated REST endpoints for color analysis. Color data flows exclusively thr
 | C-05 | Color accuracy may degrade under extreme illumination conditions (very dark/overexposed frames) |
 | C-06 | Color extraction classifies the dominant single color per region — no multi-color or pattern support in Phase-1 |
 | C-07 | `sharp` library must be installed in the server runtime environment |
+| C-08 | Phase-3 Human Parsing (§11) is a proposed enhancement, not yet implemented; FR-CLR-001 through FR-CLR-021 above describe Phase-1 behavior only |
+| C-09 | Phase-1.5 K-Means reduction (§12) is a proposed enhancement, not yet implemented; until implemented, FR-CLR-008 (8×8 plain mean) describes actual behavior |
+
+---
+
+## 11. Functional Requirements — Phase-3 Human Parsing (Proposed)
+
+> **Status: Proposed, not yet implemented.** This section records requirements derived from gap analysis against the CCTV/IPTV 상의하의 색상분류 guide (now-consolidated, original deleted 2026-07-09) and `docs/rfp/ReID_및_색상분석_활용가이드.md` (2026-07-09). Implementation is pending a separate user request; see `docs/design/Design_AI_Color_Analysis.md` §10 for the corresponding architecture.
+
+### FR-CLR-022 — Human Parsing Global Toggle
+
+- A boolean `humanParsing` key must be added to `analyticsConfig.js`'s `DEFAULT_CONFIG`, defaulting to `false`
+- When `humanParsing` is disabled or its model is not loaded, color extraction must silently fall back to Phase-1 behavior (FR-CLR-005/006)
+
+### FR-CLR-023 — Model Catalog Registration (Substitutable Models)
+
+- Human Parsing models (SCHP LIP-20, SegFormer clothes) must be registered in a model catalog with the same download + activate UX as the existing YOLO detector catalog (`GET/POST /api/analysis/models`)
+- Each catalog entry must carry a `classMap` field mapping the model's own class indices to the semantic roles `upper` and `lower`, so that switching the active model does not require code changes
+- Only one Human Parsing model may be active at a time per analysis server instance
+
+### FR-CLR-024 — Per-Track Throttled Execution
+
+- Human Parsing inference must not run on every frame; it must run at most once per tracked person (`objectId`) per a fixed interval (default 4000 ms)
+- Between runs, the previously computed color result for that `objectId` must be reused from a cache
+- The cache entry for a given `objectId` must be removed when the corresponding track is dropped by the tracker (lifecycle hook, not a fixed-size/LRU eviction)
+
+### FR-CLR-025 — Mask-Based Dominant Color Extraction
+
+- When the Human Parsing model is active and ready, color extraction must classify each pixel of the person crop into the model's class set, then select pixels belonging to `upper`-mapped classes and `lower`-mapped classes per FR-CLR-023's `classMap`
+- A K-Means (or equivalent dominant-color) algorithm must compute the representative RGB for each pixel set
+- If a region's pixel count is below a minimum threshold (default 20), that region must fall back to the Phase-1 fixed-fraction ROI average (FR-CLR-005/006) instead of returning an unreliable color
+
+### FR-CLR-026 — Output Schema Extension
+
+- When Phase-3 produces a color result, the output object (FR-CLR-009 schema) must include an additional `source` field with value `'human-parsing'`; Phase-1-derived output must omit this field or set it to `'legacy'`
+
+### FR-CLR-027 — Licensing Constraint
+
+- Any Human Parsing model added to the catalog must have its license terms recorded in the catalog entry metadata
+- This project is not a commercial deployment; models with non-commercial-only license terms (e.g. NVIDIA SegFormer NC-inherited checkpoints) are permitted for this project but the catalog entry must flag the restriction so the field is preserved if the project's deployment model changes
+
+---
+
+## 12. Functional Requirements — Phase-1.5 K-Means Dominant Color (Proposed)
+
+> **Status: Proposed, not yet implemented.** Closes the remaining gap against the CCTV/IPTV 상의하의 색상분류 guide's (now-consolidated, original deleted 2026-07-09) §4 (the guide's no-model "fixed split + K-Means" tier), distinct from §11's Phase-3 (which requires a Human Parsing model). See `docs/design/Design_AI_Color_Analysis.md` §11 for the corresponding architecture.
+
+### FR-CLR-028 — K-Means Reduction Replaces Plain Mean (Always-On, No Toggle)
+
+- The pixel-reduction step used by the always-on Phase-1 `color` path must use a K-Means/dominant-color algorithm (`kmeansColor.dominantColor()`) instead of a plain channel-wise mean, applied to the same fixed upper/lower ROI rectangles defined by FR-CLR-005/FR-CLR-006 (ROI geometry is unchanged)
+- This requirement does not introduce a new `analyticsConfig` toggle — it changes the internal implementation of the existing always-on `color` targetClass, not its activation condition (FR-CLR-014 is unaffected)
+- The external return schema (FR-CLR-009: `{upper, lower, upperRgb, lowerRgb}`) must remain unchanged
+
+### FR-CLR-029 — Fallback on Degenerate Pixel Count
+
+- If the K-Means input for a region yields fewer than the minimum pixel count accepted by `dominantColor()` (same 20-pixel floor used in FR-CLR-025 for Phase-3), that region must fall back to the plain-mean result rather than an unreliable/null color
+- This mirrors the Phase-3 fallback behavior (FR-CLR-025) so both proposed enhancements degrade the same way under a degenerate ROI
 
 ---
 
@@ -342,3 +402,6 @@ No dedicated REST endpoints for color analysis. Color data flows exclusively thr
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for AI Color Analysis |
+| 1.1 | 2026-07-09 | Youngho Kim | Added §11 Phase-3 Human Parsing proposed requirements (FR-CLR-022~027), C-08 constraint, §2.3 phase note — gap analysis vs CCTV_IPTV_상의하의_색상분류_가이드.md / ReID_및_색상분석_활용가이드.md |
+| 1.2 | 2026-07-09 | Youngho Kim | Added §12 Phase-1.5 proposed requirements (FR-CLR-028~029) — K-Means dominant color on the existing fixed ROI, no model required; closes the guide's tier-4 gap ahead of source guide deletion |
+| 1.3 | 2026-07-09 | Youngho Kim | Source guide `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` deleted — full content confirmed reflected in §11–12, in-doc citations updated to archival notes |

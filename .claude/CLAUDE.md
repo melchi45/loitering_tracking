@@ -53,7 +53,9 @@ loitering_tracking/
 │   │   ├── mediamtxManager.js      # MediaMTX 경로 등록/해제 (WebRTC WHEP)
 │   │   ├── analysisClient.js       # streaming→analysis HTTP 클라이언트 (회로차단기)
 │   │   ├── fireSmokeService.js     # 화재·연기 감지
-│   │   ├── colorClothService.js    # 색상·의류 분석
+│   │   ├── colorClothService.js    # 색상·의류 분석 (Phase-3 Human Parsing 포함, opt-in — `humanParsing` 토글)
+│   │   ├── appearanceReidService.js # CrossCamera Phase-2 Appearance/Body Re-ID OSNet 임베딩 추출 (opt-in, 모델 미배포 시 자동 비활성)
+│   │   ├── qdrantService.js        # Qdrant 벡터 DB 클라이언트 — face_embeddings/appearance_embeddings 컬렉션, 서킷브레이커 (opt-in, `QDRANT_ENABLED=true`)
 │   │   ├── protectiveEquipService.js # 안전모·마스크 감지
 │   │   ├── discoveryService.js     # 카메라 자동 탐색
 │   │   ├── onvifDiscovery.js       # ONVIF WS-Discovery
@@ -108,7 +110,8 @@ loitering_tracking/
 │   └── utils/
 │       ├── logger.js               # 프로덕션 로거 — [YY-MM-DD HH:mm:ss.sss] 타임스탬프, /var/log/lts 파일 저장, makeLineRelay
 │       ├── onvifParser.js          # ONVIF Application RTP 메타데이터 XML 파싱 (state-change dedup)
-│       └── channelRtsp.js          # NVR 채널별 RTSP URL 치환 (SUNAPI/ONVIF 경로 규칙)
+│       ├── channelRtsp.js          # NVR 채널별 RTSP URL 치환 (SUNAPI/ONVIF 경로 규칙)
+│       └── kmeansColor.js          # K-Means 대표색 클러스터링 (Human Parsing 마스크 픽셀 대표색 추출용)
 ├── client/src/
 │   ├── App.tsx
 │   ├── components/
@@ -346,7 +349,7 @@ loitering_tracking/
 | GET | `/api/snapshots` | 감지 스냅샷 목록 조회 (query: cameraId, objectId, className, isLoitering, from, to, q, limit, offset — cropData 제외) |
 | GET | `/api/snapshots/:id` | 스냅샷 상세 조회 (cropData 포함) |
 | DELETE | `/api/snapshots/:id` | 스냅샷 삭제 |
-| GET | `/api/search` | 통합 검색 — alerts/detections/faces/events/matches (query: q(필수), types?, from?, to?, minConfidence?, maxConfidence?, limit?, offset?) |
+| GET | `/api/search` | 통합 검색 — alerts/detections/faces/events/matches/appearance(Proposed, Qdrant 필요) (query: q(필수), types?, from?, to?, minConfidence?, maxConfidence?, upperColor?, lowerColor?(FR-CCFR-066 색상 사전필터), limit?, offset?) |
 | GET | `/api/stats` | 시스템 전체 통계 (카메라/구역/이벤트/알림/얼굴 요약) |
 | GET | `/api/stats/items` | 특정 타입·날짜·시간대 아이템 목록 (query: type(필수)=detections\|alerts\|matches\|events, date(필수), hour(필수, 0-23)) |
 | GET | `/api/stats/hourly` | 일자별 시간대 통계 (query: date, 기본 오늘) |
@@ -366,9 +369,9 @@ loitering_tracking/
 | GET | `/api/analysis/detection-snapshots` | bbox crop 이미지 조회 (query: objectId(필수), cameraId, from, to, limit — cropData base64 JPEG) |
 | GET | `/api/analysis/face-trajectories` | 크로스카메라 얼굴 궤적 DB 조회 (query: faceId, alias, cameraId, from, to, limit — max 500) |
 | DELETE | `/api/analysis/face-trajectories` | 얼굴 궤적 이력 전체 삭제 |
-| GET | `/api/analysis/models` | YOLO 모델 카탈로그 조회 (다운로드 상태·활성 모델 포함) |
-| POST | `/api/analysis/models/switch` | 활성 YOLO 탐지 모델 런타임 전환 (body: modelId) |
-| POST | `/api/analysis/models/download` | YOLO 모델 다운로드 시작 (body: modelId) |
+| GET | `/api/analysis/models` | AI 모델 카탈로그 조회 — YOLO 탐지기 + face/PPE/fire-smoke/cloth-PAR/Human Parsing(Proposed)/Appearance Re-ID(Proposed) 전체 family 통합, 다운로드 상태·활성 모델 포함 |
+| POST | `/api/analysis/models/switch` | family별 활성 모델 런타임 전환 (body: modelId — YOLO 탐지기 외 face-detection/face-recognition/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid 지원) |
+| POST | `/api/analysis/models/download` | 모델 다운로드/변환 시작 (body: modelId — HuggingFace `.pt`→ONNX 자동 변환 포함; `manualOnly` 모델은 409 반환) |
 | POST | `/api/analysis/face-embed` | 얼굴 등록 사진 detect+embed 위임 수신 (streaming 모드가 로컬 얼굴 모델 없을 때 호출, raw JPEG → bbox/score/embedding/thumbnail) |
 | POST | `/api/analysis/face-search-conditions/sync` | streaming 서버의 `faceGalleries`/`faceGalleryFaces` 전체 스냅샷 반영 (embedding 제외, `source:'synced'` 태그로 upsert/delete) |
 | GET | `/api/analysis/face-search-conditions` | 활성 Face Search Condition 상세 조회 (Analysis Server Dashboard 드릴다운용) — `total`/`byType`는 `/api/analysis/metrics`의 `faceSearch` 필드에도 포함 |
@@ -460,6 +463,10 @@ node test/run_all.js
 docker compose up -d
 docker compose logs -f server
 docker compose build server && docker compose up -d server
+
+# qdrant 서비스는 docker-compose.yml에 기본 포함되어 위 명령으로 함께 기동되지만,
+# server/.env의 QDRANT_ENABLED=true 없이는 서버가 연결하지 않음 (opt-in, 미사용 시 무해)
+docker compose up -d qdrant     # qdrant만 개별 기동 (AI-05 Phase-3 / CrossCamera Phase-2)
 
 # ── GPU / ONNX Runtime / 진단 스크립트 ──────────────────────────────────────
 cd server
@@ -619,7 +626,7 @@ Claude에서 직접 사용 가능한 LTS-2026 MCP 도구 (v1.3 — 35종, 소스
 ### AI / 검색 / 얼굴 갤러리 설정
 | 도구 | 설명 |
 |------|------|
-| `mcp_lts_get_model_catalog` | YOLO 탐지 모델 카탈로그 조회 (벤치마크·다운로드 상태·활성 모델, combined/analysis 모드 전용) |
+| `mcp_lts_get_model_catalog` | 전체 AI 모델 카탈로그 조회 — YOLO 탐지기(26/12/11/v8) + 얼굴 감지·인식·PPE·화재연기·의상PAR·(제안)Human Parsing·Appearance Re-ID (벤치마크·다운로드 상태·family별 활성 모델, combined/analysis 모드 전용) |
 | `mcp_lts_get_fire_smoke_config` | 화재/연기 감지 confidence·NMS 임계값 조회 (combined/analysis 모드 전용) |
 | `mcp_lts_get_tracker_config` | ByteTrack/Kalman 추적기 파라미터 조회 |
 | `mcp_lts_search_all` | alerts/detections/faces/events/matches 통합 전문 검색 |

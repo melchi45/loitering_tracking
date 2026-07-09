@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-004 |
-| **Version** | 1.0 |
+| **Version** | 1.3 |
 | **Status** | Draft |
 | **Date** | 2026-05-21 |
 | **Related RFP** | RFP_CrossCamera_Face_Tracking.md |
@@ -20,6 +20,7 @@
 6. [API / Interface Contract](#6-api--interface-contract)
 7. [Acceptance Criteria](#7-acceptance-criteria)
 8. [Milestones & TODO](#8-milestones--todo)
+9. [Appearance/Body Re-ID Upgrade (Proposed)](#9-appearancebody-re-id-upgrade-proposed)
 
 ---
 
@@ -305,9 +306,35 @@ GET /api/crosscamera/stats
 
 ---
 
+## 9. Appearance/Body Re-ID Upgrade (Proposed)
+
+> **Status: Proposed, not yet implemented** (2026-07-09). Gap analysis against the (now-consolidated, original deleted 2026-07-09) Multi-Camera Tracking Re-ID guide / `docs/rfp/ReID_및_색상분석_활용가이드.md`. See RFP §8, SRS §14, Design_AI_AppearanceReID.md §12.
+
+### 9.1 Goals (additive to §2.1)
+
+- **G6**: Introduce a lightweight appearance-embedding model (OSNet/OSNet-AIN preferred) so body-based Re-ID no longer relies solely on RGB color distance.
+- **G7**: Recompose `_clothingAppearSim()`'s similarity score to `embedding*0.8 + color*0.2`, matching the reference guides' recommended weighting, with automatic fallback to the current color-only method when no embedding model is loaded.
+- **G8**: Extend the existing planned Qdrant Face Re-ID infrastructure (Phase 12b) with a second `appearance_embeddings` collection so long-gap (1hr+), no-face-visible re-appearances remain matchable beyond the current 5-minute in-memory gallery TTL.
+
+### 9.2 Non-Goals
+
+- Replacing ArcFace face Re-ID — out of scope; this proposal only affects the body/clothing appearance channel.
+- Building a new, separate vector database — the existing planned Qdrant instance (M3) is reused, not duplicated.
+
+### 9.3 Milestone (additive to §8.1)
+
+| Milestone | Description | Target | Status |
+|---|---|---|---|
+| M9 | OSNet embedding model integration + weighted similarity recomposition | TBD | 📝 Proposed |
+| M10 | `appearance_embeddings` Qdrant collection (shared instance with M3) | TBD | 📝 Proposed |
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for CrossCamera Face Tracking |
 | 1.1 | 2026-06-25 | LTS Engineering Team | M8 완료 — DB 영속화 (faceTrajectories), REST API, MCP tool query_face_trajectories |
+| 1.2 | 2026-07-09 | Youngho Kim | Added §9 Appearance/Body Re-ID upgrade proposal (G6-G8, M9-M10) — not yet implemented |
+| 1.3 | 2026-07-09 | Youngho Kim | Source guide `docs/rfp/Multi_Camera_Tracking_ReID_가이드.md` deleted — full content confirmed reflected in §9, in-doc citation updated to archival note |

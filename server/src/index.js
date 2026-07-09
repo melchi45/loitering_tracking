@@ -20,6 +20,7 @@ const { Server: SocketIOServer } = require('socket.io');
 const { initDB, flushNow }    = require('./db');
 const { ensureMongoDB }       = require('./scripts/ensureMongodb');
 const PipelineManager     = require('./services/pipelineManager');
+const { QdrantService }   = require('./services/qdrantService');
 const ZoneManager         = require('./services/zoneManager');
 const AlertService        = require('./services/alertService');
 const { getDiscoveryService } = require('./services/discoveryService');
@@ -103,6 +104,11 @@ async function main() {
   await ensureMongoDB();
   const db = await initDB();
   console.log('[Server] Database initialised (mode:', require('./db').getStorageMode(), ')');
+
+  // Optional vector DB (Proposed — AI-05 Phase-3 / CrossCamera Face Tracking Phase-2).
+  // Disabled unless QDRANT_ENABLED=true; falls back to in-memory galleries otherwise.
+  const qdrantService = new QdrantService();
+  await qdrantService.init();
 
   // ── Express ─────────────────────────────────────────────────────────────
   const app = express();
@@ -195,7 +201,7 @@ async function main() {
   alertService.on('alert', (alert) => io.emit('alert:new', alert));
   // Pass the shared ZoneManager so zone additions/deletions via REST API are
   // immediately visible to the pipeline without a server restart.
-  const pipelineManager     = new PipelineManager(io, db, zoneManager);
+  const pipelineManager     = new PipelineManager(io, db, zoneManager, qdrantService);
   // Only expose pipelineManager to route handlers in combined mode.
   // In analysis mode, GET /api/analysis/metrics must read analysisApi._metrics
   // (populated by POST /api/analysis/frame from the streaming server) — not
@@ -260,7 +266,7 @@ async function main() {
 
   // Detection Snapshots & Global Search
   app.use('/api/snapshots', buildSnapshotsRouter(db));
-  app.use('/api/search',    buildSearchRouter(db));
+  app.use('/api/search',    buildSearchRouter(db, qdrantService));
 
   // System-wide Stats Dashboard
   app.use('/api/stats',     buildStatsRouter(db));
@@ -456,10 +462,15 @@ async function main() {
     const faceFile = has('scrfd_2.5g.onnx') && has('arcface_w600k_r50.onnx');
     const fsFile   = has('yolov8s_fire_smoke.onnx');
     const parFile  = has('openpar.onnx');
+    // AI-05 Phase-3 Human Parsing / CrossCamera Phase-2 Appearance Re-ID (Proposed)
+    const hpFile   = has('schp_lip.onnx') || has('segformer_clothes.onnx');
+    const reidFile = has('appearance_reid_osnet.onnx');
 
     const ppeStatus  = toStatus('ppe',       ppeFile);
     const faceStatus = toStatus('face',      faceFile);
     const fsStatus   = toStatus('firesmoke', fsFile);
+    const hpStatus   = toStatus('humanParsing',   hpFile);
+    const reidStatus = toStatus('appearanceReid', reidFile);
 
     // available = module can be enabled (not failed/missing/pending)
     const avail = (st) => st === 'loaded' || st === 'available' || st === 'builtin';
@@ -474,6 +485,8 @@ async function main() {
       hat:         ppeStatus,
       color:       'builtin',
       cloth:       toStatus('cloth', parFile),
+      humanParsing:   hpStatus,
+      appearanceReid: reidStatus,
       backpack:    yoloStatus,
       handbag:     yoloStatus,
       suitcase:    yoloStatus,

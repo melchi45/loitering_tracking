@@ -75,6 +75,15 @@ class ProtectiveEquipService {
   get ready()  { return this._ready;  }
   get status() { return this._status; }
 
+  /** Activate/switch the active PPE model (model catalog hot-swap). */
+  async reload(filePath) {
+    this._session   = await createOnnxSession(ort, filePath, 'PPEService');
+    this.modelPath  = filePath;
+    this._ready     = true;
+    this._status    = 'loaded';
+    this._numClasses = NUM_PPE_CLASSES; // re-inferred on first inference
+  }
+
   /**
    * Detect PPE items in a JPEG frame.
    * @param {Buffer} jpegBuffer

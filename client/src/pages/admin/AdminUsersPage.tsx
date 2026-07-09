@@ -64,11 +64,11 @@ interface ModelCatalogEntry {
   id:              string;
   label:           string;
   series:          string;
-  mAP:             number;
-  cpuMs:           number;
-  t4Ms:            number;
-  params:          string;
-  flops:           string;
+  mAP?:            number;
+  cpuMs?:          number;
+  t4Ms?:           number;
+  params?:         string;
+  flops?:          string;
   file:            string;
   exists:          boolean;
   active:          boolean;
@@ -78,6 +78,14 @@ interface ModelCatalogEntry {
   downloadPercent: number | null;
   downloadError:   string | null;
   requiresConversion?: boolean;
+  // No public pretrained ONNX exists — operator must export manually (e.g. openpar.onnx)
+  manualOnly?: boolean;
+  docRef?:     string;
+  // Non-detector model families. human-parsing / appearance-reid remain Proposed
+  // (AI-05 Phase-3 / CrossCamera Phase-2) — the rest are production model files.
+  family?:  'human-parsing' | 'appearance-reid' | 'face-detection' | 'face-recognition'
+          | 'ppe' | 'fire-smoke' | 'cloth-par';
+  license?: string;
 }
 
 interface AdminModuleItem  { id: string; label: string; desc: string; model?: string; }
@@ -99,6 +107,7 @@ const ADMIN_MODULE_GROUPS: AdminModuleGroup[] = [
       { id: 'face',  label: 'Face Recognition', desc: 'SCRFD + ArcFace Re-ID',  model: 'scrfd_2.5g.onnx + arcface_w600k_r50.onnx' },
       { id: 'color', label: 'Color Analysis',   desc: 'Upper/lower body color — no model required' },
       { id: 'cloth', label: 'Cloth Analysis',   desc: 'Clothing type (OpenPAR)', model: 'openpar.onnx' },
+      { id: 'humanParsing', label: 'Human Parsing (Proposed)', desc: 'Precision color via pixel mask — Phase-3', model: 'schp_lip.onnx / segformer_clothes.onnx' },
       { id: 'mask',  label: 'Mask Detection',   desc: 'PPE mask compliance',    model: 'yolov8m_ppe.onnx' },
       { id: 'hat',   label: 'Helmet Detection', desc: 'PPE safety helmet',      model: 'yolov8m_ppe.onnx' },
     ],
@@ -112,6 +121,15 @@ const ADMIN_MODULE_GROUPS: AdminModuleGroup[] = [
     ],
   },
 ];
+
+// Non-detector model families rendered below the YOLO Detection Model table.
+// human-parsing / appearance-reid remain Proposed (AI-05 Phase-3 / CrossCamera Phase-2).
+const EXTENDED_SERIES_ORDER = [
+  'Face Detection', 'Face Recognition', 'PPE Detection',
+  'Fire & Smoke Detection', 'Cloth Attribute (PAR)',
+  'Human Parsing', 'Appearance Re-ID',
+] as const;
+const PROPOSED_SERIES = new Set<string>(['Human Parsing', 'Appearance Re-ID']);
 
 // ── Badges ───────────────────────────────────────────────────────────────────
 
@@ -1085,7 +1103,7 @@ function AiModelsSection() {
     <div className="p-6 space-y-8">
       <SectionHeader
         title="AI Models"
-        subtitle="YOLO detection model catalog — download, activate, and configure AI analysis modules"
+        subtitle="Full AI model catalog — download, activate, and configure every detection/attribute/hazard model"
       />
 
       {loadError && <ErrorBar msg="Failed to load AI configuration. Is the analysis server running?" />}
@@ -1164,12 +1182,12 @@ function AiModelsSection() {
 
                       {/* mAP */}
                       <span className={`text-xs font-mono text-right tabular-nums ${
-                        m.mAP >= 51 ? 'text-green-400' : m.mAP >= 44 ? 'text-yellow-400' : 'text-gray-400'
+                        (m.mAP ?? 0) >= 51 ? 'text-green-400' : (m.mAP ?? 0) >= 44 ? 'text-yellow-400' : 'text-gray-400'
                       }`}>{m.mAP}</span>
 
                       {/* CPU ms */}
                       <span className={`text-xs font-mono text-right tabular-nums ${
-                        m.cpuMs <= 90 ? 'text-green-400' : m.cpuMs <= 240 ? 'text-yellow-400' : 'text-red-400'
+                        (m.cpuMs ?? 0) <= 90 ? 'text-green-400' : (m.cpuMs ?? 0) <= 240 ? 'text-yellow-400' : 'text-red-400'
                       }`}>{m.cpuMs}</span>
 
                       {/* T4 ms */}
@@ -1231,6 +1249,115 @@ function AiModelsSection() {
           <span className="ml-auto">mAP COCO val2017 50-95 · ONNX Runtime CPU ms</span>
         </div>
       </div>
+
+      {/* ── Additional Model Families (Face / PPE / Fire-Smoke / Cloth-PAR / Human Parsing / Appearance Re-ID) ── */}
+      {EXTENDED_SERIES_ORDER.map(series => {
+        const entries = catalog.filter(m => m.series === series);
+        if (!entries.length) return null;
+        const isProposed = PROPOSED_SERIES.has(series);
+        return (
+          <div key={series}>
+            <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
+              <span className={isProposed ? 'text-purple-400' : 'text-cyan-400'}>◈</span>
+              {series}
+              {isProposed && (
+                <span className="text-[9px] bg-purple-900/50 text-purple-300 border border-purple-700/40 rounded px-1.5 py-0.5">
+                  Proposed
+                </span>
+              )}
+              {entries.find(m => m.active) && (
+                <span className="text-[10px] bg-indigo-800/60 text-indigo-200 border border-indigo-600/40 rounded px-2 py-0.5">
+                  Active: {entries.find(m => m.active)!.label}
+                </span>
+              )}
+            </h3>
+            <div className="border border-gray-800 rounded-lg overflow-hidden">
+              <div className="grid grid-cols-[1fr_auto_auto_auto] gap-x-4 px-4 py-1.5 bg-gray-900/60 border-b border-gray-800 text-[10px] text-gray-500 uppercase tracking-wide">
+                <span>Model</span>
+                <span>License</span>
+                <span className="text-right">Size</span>
+                <span className="text-right">Action</span>
+              </div>
+              {entries.map(m => {
+                const isSwitching   = switching === m.id;
+                const isDownloading = dlLoading === m.id || m.downloading;
+                const pct = m.downloadPercent ?? 0;
+                return (
+                  <div
+                    key={m.id}
+                    className={`grid grid-cols-[1fr_auto_auto_auto] gap-x-4 items-center px-4 py-2.5 border-b border-gray-800/60 last:border-0 transition-colors ${
+                      m.active ? 'bg-indigo-950/30' : 'hover:bg-gray-900/40'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className={`w-3 h-3 rounded-full border-2 flex-shrink-0 ${
+                        m.active ? 'border-indigo-400 bg-indigo-400' : 'border-gray-600'
+                      }`} />
+                      <span className={`text-sm font-mono font-semibold ${m.active ? 'text-indigo-300' : 'text-gray-200'}`}>
+                        {m.label}
+                      </span>
+                      {m.active && <span className="text-[9px] text-indigo-400 font-medium">● active</span>}
+                      {m.downloading && (
+                        <span className="text-[9px] text-blue-400 animate-pulse">↓ {pct}%</span>
+                      )}
+                      {m.downloadError && (
+                        <span className="text-[9px] text-red-400" title={m.downloadError}>✗ error</span>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-gray-500 truncate" title={m.license}>{m.license ?? '—'}</span>
+                    <span className="text-xs font-mono text-right text-gray-600">
+                      {m.sizeBytes ? `${(m.sizeBytes / 1024 / 1024).toFixed(0)}MB` : '—'}
+                    </span>
+                    <div className="flex justify-end">
+                      {m.manualOnly && !m.exists && (
+                        <a
+                          href={m.docRef}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="No public pretrained ONNX — export manually, then place the file in server/models/"
+                          className="text-[10px] text-gray-500 underline decoration-dotted hover:text-gray-300"
+                        >
+                          Manual export
+                        </a>
+                      )}
+                      {!m.exists && !m.manualOnly && !isDownloading && (
+                        <button
+                          onClick={() => downloadModel(m.id)}
+                          disabled={!!dlLoading}
+                          className="px-2.5 py-1 text-[10px] font-medium rounded bg-blue-700/70 text-blue-200 border border-blue-600/50 hover:bg-blue-700 disabled:opacity-40 transition-colors"
+                        >
+                          ↓ Download
+                        </button>
+                      )}
+                      {isDownloading && (
+                        <span className="text-[10px] text-blue-400 animate-pulse">
+                          {m.converting ? 'Converting…' : `${pct}%`}
+                        </span>
+                      )}
+                      {m.exists && !m.active && !isSwitching && (
+                        <button
+                          onClick={() => switchModel(m.id)}
+                          disabled={!!switching}
+                          className="px-2.5 py-1 text-[10px] font-medium rounded bg-indigo-700/70 text-indigo-200 border border-indigo-600/50 hover:bg-indigo-700 disabled:opacity-40 transition-colors"
+                        >
+                          Activate
+                        </button>
+                      )}
+                      {isSwitching && <span className="text-[10px] text-yellow-400 animate-pulse">Switching…</span>}
+                      {m.active && <span className="text-[10px] text-indigo-400 font-medium">Active</span>}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <p className="mt-1 text-[10px] text-gray-600">
+              {isProposed
+                ? 'Not yet enabled by default — verify the model source before downloading. See docs/design/Design_AI_Color_Analysis.md §10 / Design_AI_AppearanceReID.md §12.'
+                : 'Required by the corresponding AI Analysis Module below — see docs/design/Design_AI_Model_Catalog.md.'}
+            </p>
+          </div>
+        );
+      })}
 
       {/* ── AI Module Enable / Disable ── */}
       <div>

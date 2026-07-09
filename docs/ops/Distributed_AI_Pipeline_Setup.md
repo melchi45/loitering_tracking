@@ -68,6 +68,19 @@ LTS-2026의 Distributed AI Pipeline 기능은 `server/.env`의 `SERVER_MODE` 환
 | RAM | 16GB 이상 |
 | ONNX 모델 | `server/models/yolov8n.onnx` (또는 커스텀 모델) |
 
+### 1.4 계획된 모델 (Planned, 미구현) — 2026-07-09
+
+아래 모델들은 참고 가이드 문서(`docs/rfp/ReID_및_색상분석_활용가이드.md`, 그리고 내용이 본 절에 통합된 후 2026-07-09 삭제된 Multi-Camera Tracking Re-ID 가이드 및 CCTV/IPTV 상의하의 색상분류 가이드) 대비 격차 분석에서 제안된 것으로, **아직 코드에 통합되지 않았다**. `openpar.onnx`와 동일하게 파일이 없으면 해당 기능이 자동으로 비활성화되는 방식으로 설계될 예정이다.
+
+| 모델 | 용도 | 배치 경로(예정) | 상태 | 관련 설계 문서 |
+|---|---|---|---|---|
+| SCHP (LIP-20) 또는 SegFormer clothes | Human Parsing 기반 정밀 색상 분류 (Color Analysis Phase-3) | `server/models/schp_lip.onnx` | 📝 Proposed | [Design_AI_Color_Analysis.md §10](../design/Design_AI_Color_Analysis.md#10-phase-3-proposed-architecture--human-parsing-model-catalog) |
+| OSNet / OSNet-AIN | Appearance/Body Re-ID 임베딩 (색상 단독 매칭 대체) | TBD | 📝 Proposed | [Design_AI_AppearanceReID.md §12](../design/Design_AI_AppearanceReID.md#12-phase-2-개선-제안--실제-re-id-임베딩-모델-도입) |
+
+**모델 불필요 항목 — Phase-1.5**: 위 표와 달리 별도 모델 다운로드가 필요 없는 제안도 있다. `server/src/utils/kmeansColor.js`(Phase-3용으로 이미 구현·테스트됨)를 재사용해 Color Analysis Phase-1의 고정 ROI 8×8 단순 평균을 K-Means 대표색 추출로 교체하는 안 — 가이드 §4(모델 불필요 티어)에 대응. 상세는 [Design_AI_Color_Analysis.md §11](../design/Design_AI_Color_Analysis.md#11-phase-15-proposed--k-means-dominant-color-on-the-existing-fixed-roi-no-model) 참조.
+
+이 모델들은 본 문서의 §2~§9(설치·운영·트러블슈팅 절차)에 아직 반영되어 있지 않으며, 실제 구현이 진행되는 시점에 해당 섹션들이 별도로 업데이트된다.
+
 ---
 
 ## 2. combined 모드 설정 (기본)
@@ -981,3 +994,7 @@ curl http://localhost:3443/api/galleries/match-history?limit=5
 | 1.4 | 2026-06-10 | 섹션 5.2.1 추가: 분석 이벤트 DB 저장 정책, `/api/analysis/events` GET/DELETE 엔드포인트, Dashboard Detections 탭 연동 |
 | 1.5 | 2026-07-08 | 섹션 9.10/9.11 추가: 얼굴 갤러리 등록 위임(`/api/analysis/face-embed`) 트러블슈팅, Face Search Condition 동기화(push+poll) 트러블슈팅 — [Design_Face_Search_Condition_Sync.md](../design/Design_Face_Search_Condition_Sync.md) 참조 |
 | 1.6 | 2026-07-08 | 섹션 9.12 추가: Face ID 탭 Live Matches 새로고침 시 소실 및 카메라 ID 표시 트러블슈팅 — [Design_Face_Match_History.md](../design/Design_Face_Match_History.md) 참조 |
+| 1.7 | 2026-07-09 | 섹션 1.4 추가: 계획된 모델(SCHP/SegFormer, OSNet) 안내 — 4개 참고 가이드 문서 격차 분석 기반, 미구현 상태 명시 |
+| 1.8 | 2026-07-09 | 원본 가이드 `docs/rfp/Multi_Camera_Tracking_ReID_가이드.md` 삭제 완료 — 내용 전체가 §1.4에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |
+| 1.9 | 2026-07-09 | 섹션 1.4에 Phase-1.5(K-Means, 모델 불필요) 안내 추가 — CCTV_IPTV_상의하의_색상분류_가이드.md 최종 반영 확인 |
+| 1.10 | 2026-07-09 | 원본 가이드 `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` 삭제 완료 — 내용 전체가 §1.4에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |

@@ -51,6 +51,7 @@ const ZoneManager      = require('./zoneManager');
 const AlertService     = require('./alertService');
 const AttributePipeline = require('./attributePipeline');
 const FireSmokeService  = require('./fireSmokeService');
+const { AppearanceReidService, cosineSim } = require('./appearanceReidService');
 const analyticsConfig  = require('./analyticsConfig');
 const { getSystemMetrics } = require('./systemMetrics');
 
@@ -174,6 +175,19 @@ function _clothingAppearSim(a, b) {
   return w > 0 ? score / w : 0;
 }
 
+// CrossCamera Face Tracking Phase-2 (Proposed) — FR-CCFR-061/062.
+// When both sides carry an OSNet appearance embedding, blend embedding similarity
+// (80%) with the existing color+type similarity (20%); otherwise fall back to the
+// Phase-1 color-only similarity unchanged. See docs/design/Design_AI_AppearanceReID.md §12.
+function _weightedAppearSim(a, b) {
+  if (a.embedding && b.embedding) {
+    const embSim   = cosineSim(a.embedding, b.embedding);
+    const colorSim = _clothingAppearSim(a, b);
+    return embSim * 0.8 + colorSim * 0.2;
+  }
+  return _clothingAppearSim(a, b);
+}
+
 const FACE_MATCH_THRESH     = 0.35;     // cosine similarity threshold for same-person
 const FACE_EXPIRY_MS        = 30000;    // forget a face after 30s of absence
 const FACE_TRACKING_PATH    = path.join(__dirname, '../../../storage/face_tracking.json');
@@ -181,6 +195,9 @@ const CLOTHING_MATCH_THRESH = 0.75;     // weighted colour+type threshold for sa
 const CLOTHING_EXPIRY_MS    = 300_000;  // 5 min — outfit doesn't change between rooms
 const CLOTHING_FACE_W       = 0.70;     // face weight in combined Re-ID confidence
 const CLOTHING_APPEAR_W     = 0.30;     // clothing weight in combined Re-ID confidence
+// CrossCamera Face Tracking Phase-2 (Proposed) — per-track OSNet embedding throttle,
+// mirrors AI-05 Phase-3's HP_INTERVAL_MS pattern (colorClothService.js).
+const APPEARANCE_EMBED_INTERVAL_MS = 4000;
 
 // Maximum number of concurrent camera pipelines (each = 1 capture backend process).
 // Configurable via MAX_PIPELINES env var; 0 = unlimited.
@@ -197,8 +214,11 @@ class PipelineManager {
    * @param {ZoneManager} [zoneManager]  Shared ZoneManager from index.js.
    *   When provided, zone cache invalidations from the REST API are reflected
    *   here immediately. If omitted a private instance is created (legacy behaviour).
+   * @param {import('./qdrantService').QdrantService} [qdrantService]  Optional vector DB
+   *   client (Proposed — CrossCamera Face Tracking Phase-2). Best-effort only; all
+   *   Qdrant calls degrade to a no-op when disabled/unreachable.
    */
-  constructor(io, db, zoneManager = null) {
+  constructor(io, db, zoneManager = null, qdrantService = null) {
     this._io             = io;
     this._db             = db;
     this._pipelines       = new Map(); // cameraId → PipelineContext
@@ -209,6 +229,10 @@ class PipelineManager {
     this._batchQueue      = null;  // BatchDetectionQueue wrapping _detector
     this._attrPipeline    = null;  // Shared attribute pipeline
     this._fireSmokeService = null; // Shared fire/smoke detector
+    // CrossCamera Face Tracking Phase-2 (Proposed) — appearance/body Re-ID embedding.
+    this._qdrant          = qdrantService;
+    this._appearanceReid  = new AppearanceReidService();
+    this._appearanceEmbedCache = new Map(); // objectId -> { ts, embedding }
     this._analysisClient   = null; // Remote analysis client (streaming mode only)
     this._fireAlertCooldown = new Map(); // `${cameraId}:${zoneName}:${cls}` → lastAlertTs
     // Hook called just before a camera is marked offline (stopCamera).
@@ -341,6 +365,13 @@ class PipelineManager {
         this._attrPipeline = new AttributePipeline();
         await this._attrPipeline.load().catch((err) => {
           console.warn('[PipelineManager] AttributePipeline load warn:', err.message);
+        });
+      }
+
+      // CrossCamera Face Tracking Phase-2 (Proposed) — appearance Re-ID embedding model
+      if (this._appearanceReid.status === 'not_started') {
+        await this._appearanceReid.load().catch((err) => {
+          console.warn('[PipelineManager] AppearanceReidService load warn:', err.message);
         });
       }
 
@@ -813,8 +844,20 @@ class PipelineManager {
                 if (p) _oIdToFaceId.set(String(p.objectId), fd.faceId);
               }
 
+              // CrossCamera Face Tracking Phase-2 (Proposed) — per-track throttled
+              // OSNet embedding extraction, fed into _assignClothingIds()'s weighted match.
+              const _oIdToEmbedding = new Map();
+              if (this._appearanceReid.ready) {
+                await Promise.all(attrObjects
+                  .filter(o => o.className === 'person' && o.color?.upperRgb)
+                  .map(async (o) => {
+                    const emb = await this._getAppearanceEmbedding(jpegBuffer, o.objectId, o.bbox);
+                    if (emb) _oIdToEmbedding.set(String(o.objectId), emb);
+                  }));
+              }
+
               const { assignments: _ca, crossCameraTransitions: _clothCCT } =
-                this._assignClothingIds(camera.id, attrObjects, timestamp, _oIdToFaceId);
+                this._assignClothingIds(camera.id, attrObjects, timestamp, _oIdToFaceId, _oIdToEmbedding);
 
               for (const a of _ca) clothingAssignMap.set(String(a.objectId), a);
 
@@ -986,6 +1029,11 @@ class PipelineManager {
               const meta = ctx._trackMeta.get(trackKey);
               if (!meta) continue;
               ctx._trackMeta.delete(trackKey);
+              // AI-05 Phase-3 / CrossCamera Phase-2 (Proposed) per-track caches —
+              // unlike _sharedClothingGallery/_sharedFaceGallery, these are keyed by
+              // objectId and must not outlive the track.
+              if (this._attrPipeline) this._attrPipeline.dropTrack(trackKey);
+              this._appearanceEmbedCache.delete(trackKey);
 
               const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
 
@@ -1253,6 +1301,8 @@ class PipelineManager {
         // Streaming mode: finalize tracks not seen in 15s (replaces popRemovedTracks)
         for (const [trackKey, meta] of _staleToFinalize) {
           ctx._trackMeta.delete(trackKey);
+          if (this._attrPipeline) this._attrPipeline.dropTrack(trackKey);
+          this._appearanceEmbedCache.delete(trackKey);
           const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
           const meetsRisk = meta.isLoitering || (meta.maxRiskScore ?? 0) >= 0.3;
           if (!meetsRisk && dwellMs < 500) continue;
@@ -1459,10 +1509,14 @@ class PipelineManager {
    */
   getServiceStatus() {
     return {
-      ppe:       this._attrPipeline     ? this._attrPipeline.ppeStatus   : 'not_started',
-      face:      this._attrPipeline     ? this._attrPipeline.faceStatus  : 'not_started',
-      cloth:     this._attrPipeline     ? this._attrPipeline.clothStatus : 'not_started',
-      firesmoke: this._fireSmokeService ? this._fireSmokeService.status  : 'not_started',
+      ppe:           this._attrPipeline     ? this._attrPipeline.ppeStatus   : 'not_started',
+      face:          this._attrPipeline     ? this._attrPipeline.faceStatus  : 'not_started',
+      cloth:         this._attrPipeline     ? this._attrPipeline.clothStatus : 'not_started',
+      firesmoke:     this._fireSmokeService ? this._fireSmokeService.status  : 'not_started',
+      // AI-05 Phase-3 Human Parsing (Proposed)
+      humanParsing:  this._attrPipeline     ? this._attrPipeline.humanParsingStatus : 'not_started',
+      // CrossCamera Face Tracking Phase-2 Appearance Re-ID (Proposed)
+      appearanceReid: this._appearanceReid  ? this._appearanceReid.status : 'not_started',
     };
   }
 
@@ -2089,9 +2143,13 @@ class PipelineManager {
    * @param {Array}  enrichedObjects - Tracked person objects with color/cloth attributes
    * @param {number} timestamp       - Frame timestamp (ms)
    * @param {Map}    objectIdToFaceId - Optional objectId→faceId link from face Re-ID
+   * @param {Map}    [objectIdToEmbedding] - Optional objectId→OSNet embedding (Proposed,
+   *   CrossCamera Face Tracking Phase-2). When present for both sides of a comparison,
+   *   matching uses the 80/20 embedding/color weighting (FR-CCFR-061); otherwise the
+   *   existing Phase-1 color-only similarity is used unchanged (FR-CCFR-062).
    * @returns {{ assignments, crossCameraTransitions }}
    */
-  _assignClothingIds(cameraId, enrichedObjects, timestamp, objectIdToFaceId = new Map()) {
+  _assignClothingIds(cameraId, enrichedObjects, timestamp, objectIdToFaceId = new Map(), objectIdToEmbedding = new Map()) {
     // Prune expired gallery entries
     this._sharedClothingGallery = this._sharedClothingGallery.filter(
       g => timestamp - g.lastSeenAt < CLOTHING_EXPIRY_MS
@@ -2099,26 +2157,41 @@ class PipelineManager {
 
     const assignments          = [];
     const crossCameraTransitions = [];
+    // Fix: prevent two people in the same frame both matching the same gallery
+    // entry (the face-Re-ID equivalent, _assignFaceIds, already guards this).
+    const usedGalleryIds = new Set();
 
     for (const obj of enrichedObjects) {
       if (obj.className !== 'person') continue;
       if (!obj.color?.upperRgb) continue; // need at least upper colour to match
 
       const feature = {
-        upperRgb: obj.color.upperRgb,
-        lowerRgb: obj.color.lowerRgb ?? null,
-        upper:    obj.cloth?.upper   ?? null,
-        lower:    obj.cloth?.lower   ?? null,
+        upperRgb:  obj.color.upperRgb,
+        lowerRgb:  obj.color.lowerRgb ?? null,
+        upper:     obj.cloth?.upper   ?? null,
+        lower:     obj.cloth?.lower   ?? null,
+        embedding: objectIdToEmbedding.get(String(obj.objectId)) ?? null,
       };
       const linkedFaceId = objectIdToFaceId.get(String(obj.objectId)) ?? null;
 
       let bestEntry = null, bestScore = CLOTHING_MATCH_THRESH;
       for (const g of this._sharedClothingGallery) {
-        const sim = _clothingAppearSim(feature, g.feature);
+        if (usedGalleryIds.has(g.clothingId)) continue;
+        const sim = _weightedAppearSim(feature, g.feature);
         if (sim > bestScore) { bestScore = sim; bestEntry = g; }
       }
 
+      // Best-effort Qdrant upsert — fire-and-forget, never blocks the frame pipeline.
+      if (feature.embedding && this._qdrant?.ready) {
+        const idForUpsert = bestEntry ? bestEntry.clothingId : `C${this._clothingCounter}`;
+        this._qdrant.upsertAppearance(idForUpsert, feature.embedding, {
+          cameraId, colorUpper: feature.upper, colorLower: feature.lower, timestamp,
+        }).catch(() => {});
+      }
+
       if (bestEntry) {
+        usedGalleryIds.add(bestEntry.clothingId);
+        if (feature.embedding) bestEntry.feature.embedding = feature.embedding;
         const prevCameraId = bestEntry.lastCameraId;
 
         if (prevCameraId !== cameraId) {
@@ -2167,6 +2240,23 @@ class PipelineManager {
     }
 
     return { assignments, crossCameraTransitions };
+  }
+
+  /**
+   * CrossCamera Face Tracking Phase-2 (Proposed) — per-track throttled OSNet
+   * embedding extraction. Reuses a cached embedding within APPEARANCE_EMBED_INTERVAL_MS
+   * instead of re-running the model every frame (mirrors AI-05 Phase-3's HP cache).
+   * @returns {Promise<number[]|null>}
+   */
+  async _getAppearanceEmbedding(jpegBuffer, objectId, bbox) {
+    const key = String(objectId);
+    const now = Date.now();
+    const cached = this._appearanceEmbedCache.get(key);
+    if (cached && (now - cached.ts) < APPEARANCE_EMBED_INTERVAL_MS) return cached.embedding;
+
+    const emb = await this._appearanceReid.getEmbedding(jpegBuffer, bbox);
+    if (emb) this._appearanceEmbedCache.set(key, { ts: now, embedding: emb });
+    return emb;
   }
 
   /**
@@ -2349,6 +2439,11 @@ class PipelineManager {
     await this._attrPipeline.load().catch((err) => {
       console.warn('[PipelineManager] Eager FaceService load warn:', err.message);
     });
+    if (this._appearanceReid.status === 'not_started') {
+      await this._appearanceReid.load().catch((err) => {
+        console.warn('[PipelineManager] Eager AppearanceReidService load warn:', err.message);
+      });
+    }
     console.log(`[PipelineManager] Eager load — face:${this._attrPipeline.faceStatus}`);
   }
 

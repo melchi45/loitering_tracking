@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-MAIN-01 |
-| **Version** | 1.0 |
+| **Version** | 1.2 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent PRD** | prd/PRD_LTS2026_Loitering_Tracking_System.md |
@@ -286,6 +286,23 @@ riskScore = min(1,
 
 A zone's `minRiskScore` (0.0–1.0, default 0.0) gates loitering alert emission. Objects must satisfy both `isLoitering = true` and `riskScore >= minRiskScore` to trigger an alert.
 
+### 가이드 대비 정합성 확인 (2026-07-09)
+
+참고 가이드 `docs/rfp/Loitering_Detection_가이드.md`는 실무 권장 규칙으로 다음 3가지를 제시한다: Rule 1(체류시간 > 60초), Rule 2(체류시간 > 30초 AND 평균 속도 < 0.2m/s), Rule 3(ROI 재진입 횟수 > 5회). 현재 구현(FR-MAIN-030~038)은 이 3가지 규칙 요소를 모두 포함하며, 단순 AND 조건이 아니라 **가중 합산 리스크 점수**(FR-MAIN-036)로 통합해 오히려 가이드보다 더 세밀하게 처리한다:
+
+| 가이드 규칙 | 현재 구현 대응 |
+|---|---|
+| Rule 1 — 체류시간 > 60초 | `zone.dwellThreshold` (FR-MAIN-037, `isLoitering` 판정 기준) |
+| Rule 2 — 체류시간 + 평균 속도 | `riskScore`의 velocity 항(FR-MAIN-036, 15% 가중) — AND 조건 대신 연속 가중치로 대체 |
+| Rule 3 — ROI 재진입 횟수 > 5회 | `revisitCount`/`reentryWindow` (FR-MAIN-032), `riskScore`의 25% 가중 |
+| (가이드 미언급) | `pacingScore`(FR-MAIN-034), `circularScore`(FR-MAIN-035) — 가이드에 없는 추가 행동 패턴 신호 |
+
+**결론**: 배회 감지 규칙 엔진은 가이드 대비 격차가 없으며, 오히려 초과 구현된 상태다. AI 기반 배회 감지(ST-GCN/Trajectory Transformer/ActionFormer)는 가이드 자체가 "실무에서는 과도한 경우가 많음"이라고 명시하므로 도입 제안에서 제외한다.
+
+**Heatmap 기반 분석 (가이드 §4) — 별도 로드맵 항목으로 이미 존재, 미구현**: 가이드는 Track 좌표 누적 → Heatmap 생성 → 체류 밀집 구역 분석을 장기 통계/핫스팟 탐지 용도로 별도 제시한다. 이는 현재 FR-MAIN-030~038의 실시간 배회 판정과는 무관한 별개 기능이며, `docs/mrd/MRD_LTS2026.md` §6.4 로드맵에 "Heatmap & Path Visualization | Phase 15"로 이미 계획되어 있다 (Track 좌표는 이미 `pacingScore`/`circularScore` 계산용 position history buffer에 누적되고 있어 — FR-MAIN-034/035 — 재사용 가능한 데이터 소스가 이미 존재함). 별도 SRS 문서화는 Phase 15 착수 시점에 진행하며, 본 절에서는 가이드와의 대응 관계만 확인한다.
+
+**Re-ID 적용 (가이드 §"Re-ID 적용") — 단일 카메라 내 occlusion 시 ID 유지**: 가이드는 "Tracking만 사용할 경우 가림(Occlusion)이나 재등장 시 ID가 변경될 수 있다"며 OSNet Re-ID를 통한 동일인 유지를 권장한다. 현재 FR-MAIN-033(Appearance-Based Cross-ID Revisit)이 이를 부분적으로 구현하고 있으나, 얼굴 매칭이 우선이고 실패 시 "의상 색상 매칭(fallback)"에 의존한다 — 이 fallback이 정확히 `Design_AI_AppearanceReID.md` §12에서 격차로 지적한 "색상만으로는 동일 제복 착용자 구분 불가" 문제를 그대로 안고 있다. 즉 §12에서 제안한 OSNet 임베딩 모델 도입은 크로스카메라 Re-ID뿐 아니라 FR-MAIN-033의 단일 카메라 내 occlusion 복원력도 함께 개선할 것으로 예상된다 — 별도 FR 추가 없이 교차참조로 기록한다.
+
 ---
 
 ## 7. Functional Requirements — Zone Management
@@ -536,3 +553,5 @@ Tracker configuration (appearance weights, Kalman parameters) shall be persisted
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for LTS2026 Loitering Tracking System |
+| 1.1 | 2026-07-09 | Youngho Kim | §6에 가이드(`Loitering_Detection_가이드.md`) 대비 정합성 확인 노트 추가 — 격차 없음, 오히려 초과 구현 확인 |
+| 1.2 | 2026-07-09 | Youngho Kim | §6 정합성 노트에 Heatmap 분석(MRD Phase 15 교차참조) 및 FR-MAIN-033 occlusion 복원력(Design_AI_AppearanceReID.md §12 교차참조) 추가 — 원본 가이드 삭제 전 최종 반영 확인 |

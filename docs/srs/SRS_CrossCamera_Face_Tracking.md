@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-CCFR-01 |
-| **Version** | 1.0 |
+| **Version** | 1.4 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent PRD** | prd/PRD_CrossCamera_Face_Tracking.md |
@@ -27,6 +27,7 @@
 11. [Non-Functional Requirements](#11-non-functional-requirements)
 12. [Interface Requirements](#12-interface-requirements)
 13. [Constraints and Assumptions](#13-constraints-and-assumptions)
+14. [Functional Requirements — Appearance/Body Re-ID Upgrade (Proposed)](#14-functional-requirements--appearancebody-re-id-upgrade-proposed)
 
 ---
 
@@ -544,9 +545,51 @@ The `_assignFaceIds()` method shall return an object containing:
 
 ---
 
+## 14. Functional Requirements — Appearance/Body Re-ID Upgrade (Proposed)
+
+> **Status: Proposed, not yet implemented.** Requirements derived from gap analysis against the Multi-Camera Tracking Re-ID guide (original deleted 2026-07-09, content consolidated into this section) and `docs/rfp/ReID_및_색상분석_활용가이드.md` (2026-07-09). Directly addresses the limitation already documented in C-07 above (occlusion > 30s breaks face-only alias continuity) by extending re-identification into a body-appearance channel that does not require a visible face. See `docs/design/Design_AI_AppearanceReID.md` §12 for architecture.
+
+### FR-CCFR-060 — Appearance Embedding Model Status
+
+- The system must expose the load status of an appearance-embedding model (e.g. OSNet/OSNet-AIN) via the existing capabilities/status mechanism, analogous to how `cloth`/`face` model status is already exposed
+- When the model file is absent, status must be `not_started`; the system must continue operating using the existing color-only `_clothingAppearSim()` path (no regression)
+
+### FR-CCFR-061 — Weighted Similarity Recomposition
+
+- When the appearance-embedding model is loaded and ready, `_clothingAppearSim()`'s combined score must be computed as `osnetCosineSim * 0.8 + colorSim * 0.2`, replacing the current 100%-color-based score
+- The 80/20 weighting must match the ratio recommended in `ReID_및_색상분석_활용가이드.md` ("Re-ID Feature 80% : Color Attribute 20%")
+
+### FR-CCFR-062 — Graceful Fallback
+
+- When the appearance-embedding model is not loaded, the similarity computation must fall back to the current Phase-1 behavior (color + PAR type) exactly as implemented today — this FR set is additive, not a replacement requiring the new model
+
+### FR-CCFR-063 — Appearance Vector Collection
+
+- Appearance embeddings must be stored in a Qdrant collection named `appearance_embeddings`, distinct from the `face_embeddings` collection already planned for Face Re-ID (MRD §6.4 Phase 12b / `Design_RTSP_WebRTC_Architecture.md` Milestone 3) — both collections may share the same Qdrant instance
+- Each stored vector's payload must include at minimum `trackId`, `cameraId`, `colorUpper`, `colorLower`, `timestamp`
+
+### FR-CCFR-064 — Long-Gap Re-appearance Support
+
+- Appearance vector search must not be bounded by the existing in-memory `_sharedClothingGallery`'s TTL (currently 5 minutes) — a person re-appearing on a different camera after a longer gap (e.g. 1+ hour) with no face visible must still be matchable via the persisted appearance vector collection
+
+### FR-CCFR-065 — Same-Uniform False-Positive Mitigation
+
+- The weighted similarity introduced by FR-CCFR-061 must reduce (not merely maintain) the false-positive rate for two different persons wearing visually identical clothing, relative to the current color-only baseline, as a direct measure of whether the embedding model is contributing discriminative signal beyond color
+
+### FR-CCFR-066 — Color-Prefiltered Search (Proposed)
+
+- Search-time (not real-time tracking) queries against the appearance vector collection (FR-CCFR-063) must support narrowing candidates by `upperColor`/`lowerColor` before computing embedding cosine similarity, per the two-stage pattern in `ReID_및_색상분석_활용가이드.md` ("검색과 Re-ID의 결합")
+- This is distinct from FR-CCFR-061's real-time weighted matching: color here is used purely as a search index/pre-filter, not blended into the similarity score
+- This requirement is additive to the existing `GET /api/events?upperColor=&lowerColor=` search endpoint proposed in `docs/prd/PRD_AI_Color_Analysis.md` §8.2 — the appearance-embedding ranking step runs only within the color-filtered candidate set
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for CrossCamera Face Tracking |
 | 1.1 | 2026-06-25 | LTS Engineering Team | FR-CCFR-043~045 추가 — faceTrajectories DB 영속화, REST API (GET/DELETE /api/analysis/face-trajectories), C-02 수정 |
+| 1.2 | 2026-07-09 | Youngho Kim | §14 추가 — Appearance/Body Re-ID 고도화 제안(FR-CCFR-060~065, Proposed) — OSNet 임베딩 모델 + Qdrant `appearance_embeddings` 컬렉션 확장, 가중치 재조정 |
+| 1.3 | 2026-07-09 | Youngho Kim | FR-CCFR-066 추가 — 색상 사전 필터링 기반 검색 최적화(Proposed) — 원본 가이드 삭제 전 최종 반영 확인 |
+| 1.4 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/Multi_Camera_Tracking_ReID_가이드.md` 삭제 완료 — 내용 전체가 §14에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |

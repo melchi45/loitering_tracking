@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-AI-04 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent SRS** | srs/SRS_AI_Cloth_Analysis.md |
@@ -21,6 +21,7 @@
 7. [Sequence Diagrams](#7-sequence-diagrams)
 8. [Configuration & Environment](#8-configuration--environment)
 9. [Error Handling](#9-error-handling)
+10. [Relationship to Proposed Human Parsing (Color Phase-3)](#10-relationship-to-proposed-human-parsing-color-phase-3)
 
 ---
 
@@ -416,8 +417,23 @@ const zone = {
 
 ---
 
+## 10. Relationship to Proposed Human Parsing (Color Phase-3)
+
+`docs/design/Design_AI_Color_Analysis.md` §10 (proposed, 2026-07-09) introduces a Human Parsing model (SCHP/SegFormer) for **Color Analysis** Phase-3. This is a distinct concern from Cloth Analysis (this document):
+
+| | Cloth Analysis (this doc, `_runPAR()`) | Color Analysis Phase-3 (proposed) |
+|---|---|---|
+| Question answered | What **type** of garment? (tshirt/shirt/jacket/pants/jeans/shorts/skirt, sleeve length) | What **region** of the crop is upper vs. lower clothing, for color sampling? |
+| Model | `openpar.onnx` (custom-trained ResNet50 head, whole-bbox crop) | SCHP/SegFormer (pixel-level segmentation mask) |
+| Output | Classification label (`upper`, `lower`, `sleeve`) | Per-pixel class mask consumed by `colorClothService`'s K-Means color extraction |
+
+The two do not overlap or conflict — Human Parsing's mask could, in principle, also improve `_runPAR()`'s crop quality in a future phase, but that integration is out of scope for the current Color Analysis Phase-3 proposal and is not tracked here.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for AI Cloth Analysis |
+| 1.1 | 2026-07-09 | Youngho Kim | Added §10 cross-reference clarifying PAR(clothing type) vs proposed Human Parsing(clothing region mask, Color Analysis Phase-3) boundary |

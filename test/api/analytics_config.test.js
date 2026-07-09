@@ -180,6 +180,7 @@ async function runGroupC() {
     { key: 'color',      label: 'Color Analysis'         },
     { key: 'cloth',      label: 'Cloth Analysis'         },
     { key: 'accessory',  label: 'Accessories Detection'  },
+    { key: 'humanParsing', label: 'Human Parsing (Phase-3, Proposed)' },
   ];
 
   for (const mod of MODULES) {

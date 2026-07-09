@@ -224,9 +224,45 @@ REST endpoints for DB-persisted trajectories:
 
 ---
 
+## 8. Appearance/Body Re-ID 격차 분석 및 고도화 제안 (Proposed, 2026-07-09)
+
+### 8.1 문제 재정의
+
+§1.1의 "Gallery expiry" 갭은 얼굴 기반 Re-ID(ArcFace)에 한정된 것이었다. 얼굴이 보이지 않는 경우(뒷모습, 마스크 착용, 원거리)를 보완하기 위해 `_clothingAppearSim()`(의상 기반 Re-ID, `Design_AI_AppearanceReID.md`)가 이미 존재하지만, 이는 **실제 Re-ID 임베딩 모델이 없는 RGB 색상 거리 계산일 뿐**이다.
+
+참고 가이드였던 Multi-Camera Tracking Re-ID 가이드(원본 삭제됨, 내용 본 §8에 통합)와 `docs/rfp/ReID_및_색상분석_활용가이드.md`는 공통적으로:
+- 색상은 Re-ID의 **보조 신호(20%)**로만 사용해야 하며, 주 신호는 OSNet/FastReID/TransReID 같은 **실제 임베딩 모델(80%)**이어야 한다
+- 장시간(1시간 이상) 후 재등장 추적을 위해서는 Feature(임베딩) DB(Vector DB)가 필요하다
+
+현재 시스템은 이 두 조건 모두를 충족하지 못한다 — 색상이 유일한 신호(100%)이고, 의상 갤러리(`_sharedClothingGallery`)는 세션 범위(TTL 5분)로만 유지된다.
+
+### 8.2 제안
+
+1. OSNet-AIN 등 경량 Re-ID 임베딩 모델을 도입하여 `_clothingAppearSim()`의 가중치를 임베딩 80% + 색상 20%로 재조정
+2. 기존 MRD 로드맵(Phase 12b, 얼굴 전용 Qdrant)을 재사용해 `appearance_embeddings` 컬렉션을 추가, 장시간 재등장 추적을 지원
+3. 검색 API 계층에서는 색상을 Re-ID 임베딩 유사도 계산 전 사전 필터로 활용 (FR-CCFR-066, Design §12.4)
+4. 상세 설계: `docs/design/Design_AI_AppearanceReID.md` §12 참조
+
+### 8.3 활용 사례 대비 기존 구현 확인 (2026-07-09)
+
+Multi-Camera Tracking Re-ID 가이드(원본 삭제됨, 내용 본 §8에 통합)가 제시하는 활용 사례 3가지를 현재 구현과 대조한다:
+
+| 가이드 활용 사례 | 현재 구현 대응 |
+|---|---|
+| 카메라 간 이동 추적 (주차장→출입문→로비) | **이미 구현됨** — §2~§3의 PersonTrajectory/PersonSegment + Person Trails 패널이 정확히 이 시나리오를 표시 (`Camera-A → Camera-B ► Here`) |
+| Loitering 대상자 이동경로 분석 (출입구 배회→엘리베이터→복도 재등장) | **이미 구현됨** — 동일 Person Trails 메커니즘, §5 Multi-Camera Dwell Aggregation(Phase-2, 미구현)이 완전한 총 체류시간 합산까지 확장할 계획 |
+| 조건 검색 (빨간 상의 + 검은 하의 + 배회 이벤트) | **부분 구현** — 배회 이벤트 자체는 완전 구현, 색상 조건 검색은 `docs/prd/PRD_AI_Color_Analysis.md` §8.2 TODO(`GET /api/events?upperColor=&lowerColor=`)로 아직 미구현 |
+
+가이드가 제시하는 활용 사례 중 "카메라 간 이동 추적"과 "이동경로 분석"은 격차가 없다 — 이번 절(§8)의 실제 신규 격차는 8.1~8.2(임베딩 모델 부재)와 색상 조건 검색 엔드포인트 미구현뿐이다.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for CrossCamera Face Tracking |
 | 1.1 | 2026-06-25 | LTS Engineering Team | §6 Persistence 업데이트 — DB 영속화 완료; §7 Feature Status 업데이트 (Phase-2 항목 완료 표시) |
+| 1.2 | 2026-07-09 | Youngho Kim | §8 추가 — Appearance/Body Re-ID 격차 분석 및 OSNet 임베딩 모델 도입 제안 (Proposed, 미구현) |
+| 1.3 | 2026-07-09 | Youngho Kim | §8.3 추가 — Multi-Camera 가이드 활용사례(이동추적/이동경로분석) 기존 구현 확인, 색상 검색 API 사전필터 제안(§8.2 4번) — 원본 가이드 삭제 전 최종 반영 확인 |
+| 1.4 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/Multi_Camera_Tracking_ReID_가이드.md` 삭제 완료 — 내용 전체가 §8에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |

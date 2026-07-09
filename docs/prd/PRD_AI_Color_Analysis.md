@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-AI-05 |
-| **Version** | 1.0 |
+| **Version** | 1.3 |
 | **Status** | Draft |
 | **Date** | 2026-05-21 |
 | **Related RFP** | RFP_AI_Color_Analysis.md (LTS-2026-AI-05) |
@@ -77,7 +77,9 @@ black (#1a1a1a), white (#f5f5f5), gray (#808080), red (#e53935), orange (#fb8c00
 ### 4.3 Phase Status
 
 - **Phase-1 (complete):** `colorClothService.js` uses `avgColor()` + `rgbToColorName()`. Body ROIs are shrunk to 8×8 via `sharp`, RGB averaged, and mapped to the 11-color table. No ML model required. Latency < 2 ms/person.
+- **Phase-1.5 (proposed, 2026-07-09):** Same fixed ROI rectangles as Phase-1, but the plain 8×8 mean is replaced with `kmeansColor.dominantColor()` (K-Means over a larger resized patch). No model, no new toggle — a strict accuracy upgrade to the always-on Phase-1 path, matching the reference guide's own no-model tier (see RFP §Appendix E, Design §11).
 - **Phase-2 (pending):** `openpar.onnx` provides ML-based multi-attribute color output alongside clothing type. Replaces the heuristic RGB average with a trained classifier.
+- **Phase-3 (proposed, 2026-07-09):** Human Parsing model (SCHP LIP-20 or SegFormer clothes) produces a pixel-level upper/lower clothing mask per tracked person; K-Means dominant-color extraction runs on the masked pixels instead of a fixed-fraction rectangle. Runs per-track on a throttled interval (not per-frame) with cached fallback to Phase-1 when the model is unavailable or the mask has too few pixels. Model choice is admin-selectable/downloadable via the same Admin Dashboard "AI Models" catalog UX used for YOLO detectors (see RFP §Appendix E, Design §10).
 
 ### 4.4 Zone Activation
 
@@ -175,6 +177,8 @@ When DNN inference is unavailable, the HSV histogram method provides approximate
 | M2 | Phase-2: Export OpenPAR ONNX model for ML-based color classification | TBD | - | ⏳ Pending |
 | M3 | Phase-2: Integrate EfficientNet-B0 color models and validate accuracy | TBD | - | ⏳ Pending |
 | M4 | Person search API for color queries | TBD | - | ⏳ Pending |
+| M5 | Phase-3: Human Parsing (SCHP/SegFormer) model catalog + per-track throttled color extraction | TBD | - | 📝 Proposed |
+| M6 | Phase-1.5: Replace Phase-1's plain-mean reduction with K-Means dominant color on the same fixed ROI (no model) | TBD | - | 📝 Proposed |
 
 ### 8.2 TODO
 
@@ -187,6 +191,9 @@ When DNN inference is unavailable, the HSV histogram method provides approximate
 - [ ] Benchmark Phase-1 heuristic vs. Phase-2 ML model on RAP v2 dataset
 - [ ] Add color description display to `FullscreenCameraView.tsx` detection panel
 - [ ] Write unit tests for `rgbToColorName()` covering all 11 color boundaries
+- [ ] (Phase-3, proposed) Add `schp_lip.onnx` / SegFormer clothes model entries to the Admin Dashboard AI Models catalog with download + activate actions
+- [ ] (Phase-3, proposed) Implement per-track parse cache + K-Means dominant-color extraction on Human Parsing mask output, with fallback to Phase-1 fixed-fraction average
+- [ ] (Phase-1.5, proposed) Replace `avgColor()`'s plain 8×8 mean with `kmeansColor.dominantColor()` over a larger resized patch, for the always-on fixed-ROI path (no model, no toggle)
 
 ---
 
@@ -195,3 +202,6 @@ When DNN inference is unavailable, the HSV histogram method provides approximate
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for AI Color Analysis |
+| 1.1 | 2026-07-09 | Youngho Kim | Added Phase-3 (Human Parsing) product requirements — M5 milestone, TODO items, phase-status note |
+| 1.2 | 2026-07-09 | Youngho Kim | Added Phase-1.5 (K-Means on existing fixed ROI, no model) — M6 milestone, TODO item, phase-status note — closes the guide's tier-4 gap ahead of source guide deletion |
+| 1.3 | 2026-07-09 | Youngho Kim | Source guide `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` deleted — full content confirmed reflected in §4.3/§8 |

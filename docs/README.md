@@ -158,7 +158,7 @@ These documents capture cross-cutting design decisions or narrow implementation 
 | [Design_WebRTC_Engine_Modes.md](design/Design_WebRTC_Engine_Modes.md) | `WEBRTC_ENGINE=mediamtx` vs `mediasoup` engine selection, capability negotiation, RTP fan-out | RTSP/WebRTC Architecture, WebRTC Media Gateway |
 | [Design_WebRTC_Client_Telemetry.md](design/Design_WebRTC_Client_Telemetry.md) | `client:webrtc-stats` Socket.IO event relay — PeerConnection `getStats()` polling, DB persistence | WebRTC Media Gateway, RTSP/WebRTC Architecture |
 | [Design_ONVIF_Timeline.md](design/Design_ONVIF_Timeline.md) | `OnvifTimelineOverlay` / `OnvifTimelineInline` — interval building, Gantt rendering, zoom/pan, raw XML panel | ONVIF Metadata Pipeline, Fullscreen Camera View |
-| [Design_AI_AppearanceReID.md](design/Design_AI_AppearanceReID.md) | Appearance-based Re-ID (clothing color embedding) — feature extraction, cross-camera matching threshold | Object Tracking, Cross-Camera Face Tracking |
+| [Design_AI_AppearanceReID.md](design/Design_AI_AppearanceReID.md) | Appearance-based Re-ID (clothing color embedding) — feature extraction, cross-camera matching threshold. §12 (v1.5): Phase-2 OSNet embedding model (80/20 weighting) + Qdrant `appearance_embeddings` collection — code implemented and opt-in (`appearanceReidService.js`, `qdrantService.js`); long-gap Qdrant kNN query still not wired into real-time matching, no test coverage | Object Tracking, Cross-Camera Face Tracking |
 | [Design_AI_ReID.md](design/Design_AI_ReID.md) | Generic Re-ID framework — embedding architecture, gallery update, distance metrics | Face Recognition, Cross-Camera Face Tracking |
 | [Design_Client_Log_Backchannel.md](design/Design_Client_Log_Backchannel.md) | `clientLogger` — browser console → Socket.IO `client:log` → DB `client_logs` table relay | Dashboard Layout, Design_Server_Architecture |
 | [Design_DataChannel_CameraEvents.md](design/Design_DataChannel_CameraEvents.md) | WebRTC DataChannel for per-camera event push (mediasoup mode) | ONVIF Metadata Pipeline, Camera Discovery |
@@ -465,3 +465,7 @@ node test/generate_report.js
 | 2.1 | 2026-07-08 | Added Face Search Condition Sync module (RFP/PRD/SRS/Design/TC), 39th test script, ops guide troubleshooting cross-ref |
 | 2.2 | 2026-07-08 | Added Face Match History module (RFP/PRD/SRS/Design/TC); `face_match_history.test.js` now ✅ (was 📋 planned) |
 | 2.3 | 2026-07-08 | Added Face Match Timeline Navigation module (RFP/PRD/SRS/Design/TC); 40th test script |
+| 2.4 | 2026-07-09 | Design_AI_AppearanceReID.md 설명에 §12(OSNet 임베딩 모델 + Qdrant `appearance_embeddings`, Proposed) 반영 — 4개 참고 가이드 문서 격차 분석에 따른 AI-05/AppearanceReID Phase 확장 문서화 |
+| 2.5 | 2026-07-09 | AI-05 Color Analysis RFP/PRD/SRS/Design/TC에 Phase-1.5(K-Means 대표색 추출, 모델 불필요) 추가 — `CCTV_IPTV_상의하의_색상분류_가이드.md` 최종 반영 확인, 가이드 4개 티어(Human Parsing/PAR/Re-ID attribute head/K-Means) 모두 문서화 완료 |
+| 2.6 | 2026-07-09 | 원본 가이드 `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` 삭제 완료 (사용자 확인) |
+| 2.6 | 2026-07-09 | 코드 동기화 — AI-05 Phase-3 Human Parsing(`colorClothService.js`, `kmeansColor.js`)과 CrossCamera Phase-2 Appearance Re-ID(`appearanceReidService.js`, `qdrantService.js`)가 실제 구현됨을 확인, RFP/PRD/SRS/Design/TC/ops 전 계층 상태를 Proposed→Implemented(opt-in)로 갱신 |

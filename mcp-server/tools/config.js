@@ -4,8 +4,10 @@ export function registerConfigTools(server, client) {
   // ── get_model_catalog ────────────────────────────────────────────────────────
   server.tool(
     'get_model_catalog',
-    'Get the YOLO object-detection model catalog: available model variants (YOLO26/YOLO12/YOLOv8 series), ' +
-    'accuracy/speed benchmarks, download status, and which model is currently active. ' +
+    'Get the full AI model catalog: YOLO object-detection variants (YOLO26/YOLO12/YOLO11/YOLOv8 series) plus ' +
+    'all other ONNX model families (face detection/recognition, PPE, fire & smoke, cloth-PAR, and the proposed ' +
+    'human-parsing / appearance-reid families) — accuracy/speed benchmarks where available, download status, ' +
+    'and which model is currently active per family. ' +
     'Only available in combined/analysis mode (analysisApi) — not exposed via the streaming-mode proxy.',
     {},
     async () => {
@@ -21,18 +23,22 @@ export function registerConfigTools(server, client) {
             ? 'ACTIVE'
             : m.downloading
               ? `downloading${m.downloadPercent != null ? ` ${m.downloadPercent}%` : ''}${m.converting ? ' (converting)' : ''}`
-              : m.exists ? 'downloaded' : 'not downloaded';
+              : m.exists ? 'downloaded'
+              : m.manualOnly ? 'manual export required' : 'not downloaded';
+          const benchmark = m.mAP != null
+            ? `    mAP=${m.mAP}  size=${m.size}px  CPU=${m.cpuMs}ms  T4=${m.t4Ms}ms  params=${m.params}  flops=${m.flops}`
+            : null;
           return [
-            `${m.active ? '▶ ' : '  '}${m.label} (${m.id}, ${m.series})`,
-            `    mAP=${m.mAP}  size=${m.size}px  CPU=${m.cpuMs}ms  T4=${m.t4Ms}ms  params=${m.params}  flops=${m.flops}`,
+            `${m.active ? '▶ ' : '  '}${m.label} (${m.id}, ${m.series}${m.family ? `, family=${m.family}` : ''})`,
+            benchmark,
             `    status=${status}${m.sizeBytes ? `  fileSize=${Math.round(m.sizeBytes / 1024 / 1024)}MB` : ''}${m.downloadError ? `  error=${m.downloadError}` : ''}`,
-          ].join('\n');
+          ].filter(Boolean).join('\n');
         });
 
         return {
           content: [{
             type: 'text',
-            text: `Active model file: ${activeFile || 'none'}\n\n${lines.join('\n\n')}`,
+            text: `Active YOLO detector file: ${activeFile || 'none'}\n\n${lines.join('\n\n')}`,
           }],
         };
       } catch (err) {

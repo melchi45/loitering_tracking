@@ -158,6 +158,14 @@ const MODULES = [
     capKey:      'vehicle',
     targetClass: 'vehicle',
   },
+  {
+    id:          'human_parsing',
+    label:       'Human Parsing (Phase-3, Proposed)',
+    keys:        ['humanParsing'],
+    phase2keys:  [],
+    capKey:      'humanParsing',
+    targetClass: 'humanParsing',
+  },
 ];
 
 // ── Prerequisites ─────────────────────────────────────────────────────────────

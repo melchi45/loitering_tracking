@@ -44,6 +44,11 @@ class AttributePipeline {
   get ppeStatus()   { return this._ppe.status;       }
   get faceStatus()  { return this._face.status;      }
   get clothStatus() { return this._color._parReady ? 'loaded' : 'not_started'; }
+  // AI-05 Phase-3 Human Parsing (Proposed)
+  get humanParsingStatus() { return this._color.humanParsingStatus; }
+
+  /** Drop a per-track Human Parsing color cache entry (tracker lifecycle hook). */
+  dropTrack(objectId) { this._color.dropTrack(objectId); }
 
   /**
    * Fast pixel-average colour only — no GPU/model (~0.5 ms/person).
@@ -76,7 +81,11 @@ class AttributePipeline {
     // Gate each service by BOTH model availability AND analytics config toggle
     const needFace  = this._face.ready  && (config.face  !== false);
     const needPPE   = this._ppe.ready   && (config.mask  !== false || config.hat !== false);
-    const needColor = this._color.ready && (config.color !== false || config.cloth !== false);
+    // AI-05 Phase-3 (Proposed): humanParsing must also open this gate — otherwise
+    // disabling legacy color/cloth while enabling only humanParsing would silently
+    // skip the entire color block and Phase-3 would never run.
+    const needColor = this._color.ready &&
+      (config.color !== false || config.cloth !== false || config.humanParsing === true);
 
     if (!needFace && !needPPE && !needColor) return { enrichedObjects: trackedObjects, detectedFaces: [] };
 
@@ -101,8 +110,12 @@ class AttributePipeline {
     // Color analysis is per-person (crop-based), run in parallel per person
     const colorMap = new Map();
     if (needColor) {
+      const useHumanParsing = config.humanParsing === true;
       await Promise.all(persons.map(async (p) => {
-        const attrs = await this._color.analyze(jpegBuffer, p.bbox, origW, origH);
+        const attrs = await this._color.analyze(jpegBuffer, p.bbox, origW, origH, {
+          objectId: p.objectId,
+          useHumanParsing,
+        });
         colorMap.set(p.objectId, attrs);
       }));
     }
