@@ -10,10 +10,13 @@ argument-hint: "배포 환경 또는 작업 (예: production, staging, restart, 
 
 ```
 docker-compose.yml
+├── qdrant         — 벡터 DB, opt-in (포트 6333, 6334) — QDRANT_ENABLED=true 없이는 서버가 연결 안 함, 무해
 ├── mediamtx       — RTSP/WebRTC/HLS 미디어 프록시 (포트 8554, 8889, 9997)
 ├── server         — Node.js 백엔드 API + AI 파이프라인 (포트 3080)
 └── client         — React 정적 파일 (Nginx, 포트 3000)
 ```
+
+`docker compose up -d`는 `qdrant`도 함께 기동합니다(기본 포함, opt-in). `qdrant`만 개별로 올리려면 `docker compose up -d qdrant`. 상세: [`docs/ops/Distributed_AI_Pipeline_Setup.md` §7.5](../../../docs/ops/Distributed_AI_Pipeline_Setup.md#75-qdrant-벡터-db-opt-in--ai-05-phase-3--crosscamera-phase-2).
 
 ## 기본 운영 명령
 
@@ -239,6 +242,7 @@ curl -I http://localhost:3000
 | mediamtx WebRTC | 8889 | WebRTC 시그널링 |
 | mediamtx API | 9997 | MediaMTX 관리 API |
 | MongoDB | 27017 | 데이터베이스 |
+| Qdrant | 6333, 6334 | 벡터 DB (opt-in, `QDRANT_ENABLED=true`) |
 
 ## 프로세스 관리 및 종료
 
@@ -324,6 +328,7 @@ chmod -R 755 server/models server/storage
 | `mediamtx.yml` | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/ops/RTSP_Capture_Backend_Setup.md`, `docs/design/Design_Server_Architecture.md` |
 | `server/.env` (`SERVER_MODE` 변경) | `docs/design/Design_Server_Architecture.md` 모드별 기능 매트릭스 |
 | 새 서비스 컨테이너 추가 | `docs/design/Design_LTS2026_Loitering_Tracking_System.md` 배포 아키텍처 다이어그램 + Ops 가이드 신규 추가 |
+| `docker-compose.yml` (`qdrant` 서비스), `QDRANT_ENABLED`/`QDRANT_URL` | `docs/ops/Distributed_AI_Pipeline_Setup.md` §5.1/§7.5, `docs/design/Design_AI_AppearanceReID.md` §12.3 |
 
 **공통 규칙**
 - **포트 변경** → Design 아키텍처 포트 표 + SRS 시스템 제약 + Ops 가이드 업데이트

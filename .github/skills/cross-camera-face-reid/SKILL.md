@@ -1,6 +1,6 @@
 ---
 name: cross-camera-face-reid
-description: "LTS-2026 얼굴 인식 및 크로스 카메라 Re-ID 개발. Use when: 얼굴 등록/검색 기능 구현, 크로스 카메라 동일인 추적, 얼굴 임베딩 벡터 유사도 조정, Face ID 사이드바 UI 수정, 개인정보 보호 마스킹 설정, 얼굴 인식 정확도 개선, 미등록 인물 알림 설정, GDPR 감사 로그 구성. Covers: faceService.js, Design_Face_Recognition, Design_CrossCamera_Face_Tracking, Face ID sidebar component."
+description: "LTS-2026 얼굴 인식 및 크로스 카메라 Re-ID 개발. Use when: 얼굴 등록/검색 기능 구현, 크로스 카메라 동일인 추적, 얼굴 임베딩 벡터 유사도 조정, Face ID 사이드바 UI 수정, 개인정보 보호 마스킹 설정, 얼굴 인식 정확도 개선, 미등록 인물 알림 설정, GDPR 감사 로그 구성, Appearance/Body Re-ID(OSNet, opt-in) 조정, Qdrant 벡터 DB 연동. Covers: faceService.js, appearanceReidService.js, qdrantService.js, Design_Face_Recognition, Design_CrossCamera_Face_Tracking, Design_AI_AppearanceReID, Face ID sidebar component."
 argument-hint: "작업 유형 (예: face-registration, reid-threshold, privacy-masking, face-search)"
 ---
 
@@ -27,6 +27,9 @@ argument-hint: "작업 유형 (예: face-registration, reid-threshold, privacy-m
 | `storage/face_tracking.json` | 로컬 얼굴 추적 데이터 (MongoDB 미사용 시) |
 | `client/src/components/` | Face ID 사이드바 UI (등록·검색·결과 표시) |
 | `server/src/services/mongoDbService.js` | 얼굴 임베딩 벡터 인덱스(Atlas Vector Search) |
+| `server/src/services/appearanceReidService.js` | CrossCamera Phase-2 Appearance/Body Re-ID — OSNet 256D 임베딩, opt-in (모델 파일 미배포 시 자동 비활성) |
+| `server/src/services/qdrantService.js` | Qdrant 벡터 DB 클라이언트 — `face_embeddings`/`appearance_embeddings` 컬렉션, 서킷브레이커, opt-in (`QDRANT_ENABLED=true`) |
+| `server/src/services/pipelineManager.js` | `_weightedAppearSim()` — OSNet 임베딩 80% + 색상 20% 가중 유사도, 모델 미로딩 시 Phase-1 색상 전용으로 자동 폴백 |
 
 ## 주요 작업 절차
 
@@ -140,6 +143,7 @@ Content-Type: multipart/form-data
 | `FaceGalleryTab.tsx` | `docs/design/Design_Dashboard_Sidebar_Face_ID.md`, `docs/tc/TC_Dashboard_Sidebar_Face_ID.md` |
 | 개인정보 마스킹 정책 변경 | `docs/srs/SRS_AI_Face_Recognition.md` GDPR 섹션 + `docs/design/Design_AI_Face_Recognition.md` |
 | `crossCameraStore.ts` / `clothingReIdStore.ts` (만료·hydration 로직) | `docs/design/Design_CrossCamera_Face_Tracking.md` §4.6 — 시간 기반 만료 재도입 금지, hydrate() 패턴 유지 확인 |
+| `appearanceReidService.js` / `qdrantService.js` / `pipelineManager.js#_weightedAppearSim()` | `docs/design/Design_AI_AppearanceReID.md` §12.6, `docs/srs/SRS_CrossCamera_Face_Tracking.md` §14 (FR-CCFR-060~066) — 2026-07-09 opt-in 구현 완료; 장시간 재등장 Qdrant 조회(kNN)는 아직 미배선(write만 존재)이므로 이 부분을 구현할 경우 FR-CCFR-064 상태를 Done으로 갱신할 것 |
 
 **공통 규칙**
 - **새 기능 추가** → PRD + SRS + Design + TC 문서 모두 추가

@@ -1,8 +1,8 @@
 ---
 **Document:** SRS_Admin_Dashboard  
-**Version:** 1.0  
+**Version:** 1.2  
 **Status:** Draft  
-**Date:** 2026-06-17  
+**Date:** 2026-07-09  
 **Child Design:** [Design_Admin_Dashboard](../design/Design_Admin_Dashboard.md)  
 **Child TC:** [TC_Admin_Dashboard](../tc/TC_Admin_Dashboard.md)  
 **Related SRS:** [SRS_AI_Model_Catalog](SRS_AI_Model_Catalog.md) · [SRS_User_Authentication](SRS_User_Authentication.md)  
@@ -18,7 +18,7 @@ This SRS specifies software requirements for the LTS-2026 Admin Dashboard (`Admi
 
 Admin Dashboard provides four management sections accessible via left sidebar navigation:
 - Users — account management
-- AI Models — YOLO model catalog and AI module control
+- AI Models — full AI model catalog (YOLO detector + face/PPE/fire-smoke/cloth-PAR/human-parsing/appearance-reid) and AI module control
 - ONVIF — event type registry
 - Audit Log — activity history
 
@@ -41,18 +41,28 @@ Admin Dashboard provides four management sections accessible via left sidebar na
 
 | ID | Requirement |
 |---|---|
-| FR-AD-010 | The AI Models section shall display all models from `GET /api/analysis/models` (response key: `catalog`), grouped by series: YOLO12 → YOLO11 → YOLOv8. |
+| FR-AD-010 | The AI Models section shall display all YOLO detector models from `GET /api/analysis/models` (response key: `catalog`, filtered to entries with no `family`), grouped by series: YOLO26 → YOLO12 → YOLO11 → YOLOv8. |
 | FR-AD-011 | Each model row shall display: label, mAP, CPU ms, T4 ms, params, file size (MB). |
 | FR-AD-012 | Color coding: mAP ≥ 51 → green, ≥ 44 → yellow, < 44 → gray; CPU ms ≤ 90 → green, ≤ 240 → yellow, > 240 → red. |
 | FR-AD-013 | The active model shall be indicated by a filled indigo radio indicator and "● active" label. |
 | FR-AD-014 | A model where `exists === false` and not downloading shall show a Download button. |
-| FR-AD-015 | A YOLO12 series model (download requiring PT→ONNX conversion) shall show "↓ PT→ONNX" button label. |
+| FR-AD-015 | A YOLO26/YOLO12 series model (download requiring PT→ONNX conversion) shall show "↓ PT→ONNX" button label. |
 | FR-AD-016 | A model where `exists === true` and not active shall show an "Activate" button. |
 | FR-AD-017 | Clicking "Activate" shall call `POST /api/analysis/models/switch { modelId }` and refresh the catalog. |
 | FR-AD-018 | Clicking "Download" shall call `POST /api/analysis/models/download { modelId }` and start 2-second polling until no model is `downloading` or `converting`. |
 | FR-AD-019 | While a model is converting, the action column shall show "Converting…" with amber text. |
 | FR-AD-020 | While a model is downloading (not converting), the action column shall show the percent progress. |
 | FR-AD-021 | Download errors from `downloadError` field shall be displayed via `ErrorBar`. |
+
+### 4.1b Additional Model Family Tables
+
+| ID | Requirement |
+|---|---|
+| FR-AD-022 | Below the YOLO Detection Model table, the AI Models section shall render one table per non-detector `family` present in the catalog, in the order: Face Detection → Face Recognition → PPE Detection → Fire & Smoke Detection → Cloth Attribute (PAR) → Human Parsing → Appearance Re-ID (`EXTENDED_SERIES_ORDER`). |
+| FR-AD-023 | Each row in these tables shall display: label, license, file size (MB), and an action control — Download / Activate / Active / percent-progress, following the same rules as FR-AD-014~020. |
+| FR-AD-024 | An entry with `manualOnly === true` shall show a "Manual export" reference link (to `docRef`) instead of a Download button when `exists === false`, and shall never render a Download button for that entry. |
+| FR-AD-025 | Only the `Human Parsing` and `Appearance Re-ID` family tables shall display a "Proposed" badge; Face Detection, Face Recognition, PPE Detection, Fire & Smoke Detection, and Cloth Attribute (PAR) shall not, since they are production models already required or optionally enabled by the pipeline. |
+| FR-AD-026 | Each family's active/downloading/converting state shall be independent of every other family's — activating a model in one family shall not change the displayed active model of any other family. |
 
 ### 4.2 AI Analysis Module Toggles
 
@@ -103,3 +113,4 @@ Admin Dashboard provides four management sections accessible via left sidebar na
 |---|---|---|
 | 1.0 | 2026-06-17 | 초기 작성 — AI Models 섹션(FR-AD-010~035), Users/ONVIF/Audit 기능 요구사항 정의 |
 | 1.1 | 2026-06-17 | FR-AD-005 추가 — streaming 모드에서 AI Models 탭 숨김 (`GET /health` serverMode 판별) |
+| 1.2 | 2026-07-09 | §4.1b 신규 — 전체 모델 파일(face/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid) 테이블 요구사항(FR-AD-022~026) 추가, FR-AD-010/015 YOLO26 반영 |

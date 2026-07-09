@@ -1,8 +1,8 @@
 ---
 **Document:** TC_Admin_Dashboard  
-**Version:** 1.0  
+**Version:** 1.2  
 **Status:** Draft  
-**Date:** 2026-06-17  
+**Date:** 2026-07-09  
 **Parent SRS:** [SRS_Admin_Dashboard](../srs/SRS_Admin_Dashboard.md)  
 **Parent Design:** [Design_Admin_Dashboard](../design/Design_Admin_Dashboard.md)  
 **Related TC:** [TC_AI_Model_Catalog](TC_AI_Model_Catalog.md)  
@@ -72,7 +72,7 @@
 2. Observe the YOLO Detection Model table
 
 **Expected:**
-- Three series groups displayed: YOLO12, YOLO11, YOLOv8
+- Four series groups displayed: YOLO26, YOLO12, YOLO11, YOLOv8
 - Each group has 5 model rows
 - Columns: Model · mAP · CPU ms · T4 ms · Params · Size · Action
 
@@ -184,6 +184,24 @@
 
 ---
 
+### TC-AD-012: Additional Model Family Tables
+
+**Pre-condition:** Analysis server running; Admin Dashboard → AI Models section  
+**Steps:**
+1. Scroll below the YOLO Detection Model table
+2. Observe each family table in order
+
+**Expected:**
+- Tables appear in order: Face Detection, Face Recognition, PPE Detection, Fire & Smoke Detection, Cloth Attribute (PAR), Human Parsing, Appearance Re-ID (only families present in the catalog response are rendered)
+- Only "Human Parsing" and "Appearance Re-ID" show a purple "Proposed" badge; the other five do not
+- Each table has columns: Model · License · Size · Action
+- The Cloth Attribute (PAR) row shows a "Manual export" link (not a Download button) when the file does not exist
+- Activating a model in one family (e.g. PPE) does not change the Active indicator shown for the YOLO Detection Model table or any other family table
+
+**Priority:** P1
+
+---
+
 ## 3. Audit Page — TC Runner (TcRunnerService) Test Cases
 
 TcRunnerService는 서버 시작 시 TC 스크립트를 자동 실행하고 결과를 `tc_results` DB에 저장합니다.
@@ -275,3 +293,4 @@ Admin Dashboard의 **Audit** 탭에서 결과를 확인할 수 있습니다.
 |---|---|---|
 | 1.0 | 2026-06-17 | 초기 작성 — TC-AD-001~011, AI Models 섹션 및 접근 제어 테스트 |
 | 1.1 | 2026-06-24 | TC-AUDIT-001~007 추가 — Streaming/Analysis 모드 TC 구분, HTTPS 프로토콜 전파, MCP 카탈로그 업데이트, Auth/Dedup/WebRTC/capture-backend 수정 내용 반영 |
+| 1.2 | 2026-07-09 | TC-AD-004 YOLO26 시리즈 반영, TC-AD-012 신규 — 전체 모델 파일(face/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid) 테이블 표시 및 family별 독립 전환 테스트 |

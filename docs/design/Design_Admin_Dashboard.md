@@ -1,6 +1,6 @@
 # Design: Admin Dashboard
 
-**Version:** 1.3
+**Version:** 1.4
 **Status:** Implemented
 **Related:** [Design_ONVIF_Timeline.md](Design_ONVIF_Timeline.md) · [SRS_User_Authentication.md](../srs/SRS_User_Authentication.md) · [Design_AI_Model_Catalog.md](Design_AI_Model_Catalog.md)
 
@@ -92,7 +92,7 @@ type AdminSection = 'users' | 'ai-models' | 'onvif' | 'audit';
 
 ### 4.2 AI Models 섹션 (`AiModelsSection`)
 
-**목적:** YOLO 탐지 모델 카탈로그 관리 및 AI 분석 모듈 활성화/비활성화
+**목적:** 전체 AI 모델 카탈로그(YOLO 탐지기 + 얼굴/PPE/화재연기/의상PAR/Human Parsing/Appearance Re-ID) 관리 및 AI 분석 모듈 활성화/비활성화
 
 **참조:** [Design_AI_Model_Catalog.md](Design_AI_Model_Catalog.md) · [SRS_AI_Model_Catalog](../srs/SRS_AI_Model_Catalog.md)
 
@@ -100,7 +100,7 @@ type AdminSection = 'users' | 'ai-models' | 'onvif' | 'audit';
 
 | State | Type | Description |
 |-------|------|-------------|
-| `catalog` | `ModelCatalogEntry[]` | 15개 YOLO 모델 목록 (exists/active/downloading/converting) |
+| `catalog` | `ModelCatalogEntry[]` | 전체 카탈로그 28개 항목 — YOLO 감지기 20개(`family` undefined) + 비감지기 8개(`family` 지정, exists/active/downloading/converting은 family별 독립) |
 | `switching` | string\|null | 전환 중인 modelId |
 | `dlLoading` | string\|null | 다운로드 트리거 중인 modelId |
 | `enabled` | `Record<string, boolean>` | AI 모듈 활성화 상태 |
@@ -109,17 +109,23 @@ type AdminSection = 'users' | 'ai-models' | 'onvif' | 'audit';
 
 **UI 구성:**
 
-1. **YOLO Detection Model** — 시리즈별(YOLO12→YOLO11→YOLOv8) 테이블
+1. **YOLO Detection Model** — 시리즈별(YOLO26→YOLO12→YOLO11→YOLOv8) 테이블
    - 컬럼: Model · mAP · CPU ms · T4 ms · Params · Size · Action
-   - Action: 미다운로드 → `↓ Download` / `↓ PT→ONNX` (YOLO12), 다운로드됨 → `Activate`, 활성 → `Active`
-   - 다운로드 진행 중: `converting…` (YOLO12) 또는 `N%` (직접 ONNX) 텍스트
+   - Action: 미다운로드 → `↓ Download` / `↓ PT→ONNX` (YOLO26/YOLO12), 다운로드됨 → `Activate`, 활성 → `Active`
+   - 다운로드 진행 중: `converting…` (PT→ONNX 계열) 또는 `N%` (직접 ONNX) 텍스트
    - 2초 폴링: 다운로드 중인 모델이 있을 때 자동 갱신
 
-2. **AI Analysis Modules** — `ADMIN_MODULE_GROUPS` (Core / Attributes / Hazards)
+2. **Additional Model Families** — `EXTENDED_SERIES_ORDER` 순서(Face Detection → Face Recognition → PPE Detection → Fire & Smoke Detection → Cloth Attribute (PAR) → Human Parsing → Appearance Re-ID)로 family별 테이블
+   - 컬럼: Model · License · Size · Action
+   - `manualOnly` 항목(cloth-PAR/OpenPAR)은 Download 버튼 대신 "Manual export" 참조 링크(`docRef`) 표시 — 공개된 사전학습 ONNX가 없어 자동 다운로드 불가
+   - `human-parsing`/`appearance-reid`만 "Proposed" 배지 표시(자주색) — 나머지(face/ppe/fire-smoke)는 이미 프로덕션에서 사용되는 필수/기본 모델이므로 배지 없음
+   - family별로 독립적인 Active 상태 — 예: PPE 모델 전환이 YOLO 감지기나 얼굴 모델의 Active 상태에 영향을 주지 않음
+
+3. **AI Analysis Modules** — `ADMIN_MODULE_GROUPS` (Core / Attributes / Hazards)
    - Core Detection: Human, Vehicle
-   - AI Attributes: Face, Color, Cloth, Mask, Hat
+   - AI Attributes: Face, Color, Cloth, Human Parsing(Proposed), Mask, Hat
    - Hazard Detection: Fire, Smoke
-   - 각 항목: 이름 + 설명 + `requires: <model>` + 토글 스위치
+   - 각 항목: 이름 + 설명 + `requires: <model>` + 토글 스위치 — 이 토글은 모델 선택이 아니라 모듈 자체의 on/off이며, 위 카탈로그 테이블(다운로드/전환)과는 별개의 API(`/api/analytics/config`)
 
 **API:**
 
@@ -248,3 +254,4 @@ client/src/pages/admin/
 | 1.1 | 2026-06-16 | Escape 키 → 메인 Dashboard 이동 단축키 추가 |
 | 1.2 | 2026-06-17 | AI Models 섹션 추가 — YOLO 카탈로그(v8/11/12) 다운로드·전환, AI 모듈 Enable/Disable; 내비 "User Management" → "Admin Dashboard" 수정 |
 | 1.3 | 2026-06-17 | AI Models 탭 — SERVER_MODE=streaming 시 숨김 처리 (streaming 서버는 원격 analysis 서버에 AI 위임) |
+| 1.4 | 2026-07-09 | §4.2 전면 개정 — 전체 모델 카탈로그(face/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid)로 확대, "Additional Model Families" 테이블(family별 독립 Download/Activate, manualOnly 안내) 문서화 |
