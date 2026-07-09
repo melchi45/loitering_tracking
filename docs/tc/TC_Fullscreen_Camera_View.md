@@ -1,6 +1,6 @@
 # TC: Fullscreen Camera View — 탭 확장 & Detections Timeline
 
-**Version:** 1.4
+**Version:** 1.5
 **Status:** Ready for Test
 **SDLC:** [RFP](../rfp/RFP_Fullscreen_Camera_View.md) · [PRD](../prd/PRD_Fullscreen_Camera_View.md) · [SRS](../srs/SRS_Fullscreen_Camera_View.md) · [Design](../design/Design_Fullscreen_Camera_View.md)
 
@@ -226,6 +226,21 @@ curl -X DELETE "http://localhost:3080/api/analysis/detection-tracks"
 | **절차 4** | Overview 스크롤 휠 |
 | **기대** | 타임라인 줌 인/아웃; Detail rows 스크롤은 수직 전용 |
 
+### TC-24: Detections Timeline crop 화질 & 상세정보 패널 잘림 방지
+
+| 항목 | 내용 |
+|------|------|
+| **SRS** | SRS-08-1~5 |
+| **전제** | `SERVER_MODE=streaming`, `SNAPSHOT_ENABLED=true`, 카메라 전체화면 → Detections 탭 진입, 세로가 긴(portrait) person bbox의 crop이 저장된 트랙 1건 이상 존재 |
+| **절차 1** | 필름스트립 crop 썸네일을 육안으로 확인 |
+| **기대** | 320px/q70 대비 블록·번짐이 눈에 띄게 줄어든 화질 (640px/q85 기본값) |
+| **절차 2** | 트랙 행 클릭 → 우측 상세정보 패널(200px) 오픈 → 필름스트립 crop 클릭 |
+| **기대** | 확대 미리보기(`zoomedSnap`)가 인물의 머리~발끝까지 잘림 없이 전부 표시됨; 미리보기 박스 높이가 crop 비율에 따라 달라짐 (고정 120px 아님) |
+| **절차 3** | 하단 "All crop thumbnails" 3열 그리드 확인 |
+| **기대** | 세로가 긴 crop이 검정 letterbox와 함께 전체가 보임 (상하 잘림 없음); 셀 높이는 52px로 균일 |
+| **절차 4** | Gantt 바 위 필름스트립 마커(28×34px)를 확인 |
+| **기대** | 마커는 기존과 동일하게 `object-cover`로 채워짐 (스크러버 아이콘 용도이므로 잘림 방지 대상 아님) — 회귀 없음 |
+
 ---
 
 ## ONVIF Timeline 범위 프리셋 TC
@@ -270,3 +285,4 @@ curl -X DELETE "http://localhost:3080/api/analysis/detection-tracks"
 | 1.2 | 2026-06-26 | TC-19~20 추가 — ONVIF·Detections Timeline Name 컬럼 표시 검증 |
 | 1.3 | 2026-06-26 | TC-19 제목 수정(Overlay 명시), TC-21 추가 — `OnvifTimelineInline`(FullscreenCameraView 하단 탭) Name 컬럼 세부 검증 (SRS-06-11~16) |
 | 1.4 | 2026-06-26 | TC-22~23 추가 — Detections/ONVIF Timeline Overview strip 접기/펼치기 토글 + scroll isolation 검증 (SRS-07-3~5, SRS-07-7~9) |
+| 1.5 | 2026-07-09 | TC-24 추가 — Detections crop 화질(640×640/q85) 및 상세정보 패널 잘림 방지 검증 (SRS-08-1~5) |

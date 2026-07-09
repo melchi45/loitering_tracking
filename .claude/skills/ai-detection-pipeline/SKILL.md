@@ -1,6 +1,6 @@
 ---
 name: ai-detection-pipeline
-description: "LTS-2026 AI 추론 파이프라인 개발 및 디버깅. Use when: YOLOv8 감지 설정, behaviorEngine 배회 점수 조정, attributePipeline 속성 분석(의상·색상·마스크·헬멧), fireSmokeService 화재/연기 감지, 감지 임계값 튜닝, pipelineManager 서비스 추가/수정, AI 모델 교체, 감지 정확도 문제 해결. Covers: detection.js, behaviorEngine.js, attributePipeline.js, pipelineManager.js, trackerConfig.js, tracking.js, colorClothService.js, fireSmokeService.js, protectiveEquipService.js."
+description: "LTS-2026 AI 추론 파이프라인 개발 및 디버깅. Use when: YOLOv8 감지 설정, behaviorEngine 배회 점수 조정, attributePipeline 속성 분석(의상·색상·마스크·헬멧), fireSmokeService 화재/연기 감지, 감지 임계값 튜닝, pipelineManager 서비스 추가/수정, AI 모델 교체, 감지 정확도 문제 해결, Human Parsing 기반 정밀 색상 분류(opt-in), Appearance/Body Re-ID(OSNet, opt-in). Covers: detection.js, behaviorEngine.js, attributePipeline.js, pipelineManager.js, trackerConfig.js, tracking.js, colorClothService.js, fireSmokeService.js, protectiveEquipService.js, appearanceReidService.js, qdrantService.js, kmeansColor.js."
 argument-hint: "추가 또는 수정할 AI 기능 (예: loitering threshold, attribute detection, fire smoke)"
 ---
 
@@ -29,10 +29,12 @@ RTSP/WebRTC 스트림
 | `server/src/services/attributePipeline.js` | 의상·색상·보호장구 속성 분류 |
 | `server/src/services/trackerConfig.js` | 추적기 파라미터(IoU threshold, max age) |
 | `server/src/services/pipelineManager.js` | 서비스 생명주기 관리 |
-| `server/src/services/colorClothService.js` | 색상 및 의류 분석 |
+| `server/src/services/colorClothService.js` | 색상 및 의류 분석 — Phase-3 Human Parsing(`_runHumanParsing()`) 포함, opt-in (`humanParsing` 토글 기본 비활성) |
 | `server/src/services/fireSmokeService.js` | 화재·연기 감지 모델 |
 | `server/src/services/protectiveEquipService.js` | 안전모·마스크 착용 감지 |
 | `server/src/services/faceService.js` | 얼굴 인식 및 Re-ID 임베딩 |
+| `server/src/services/appearanceReidService.js` | CrossCamera Phase-2 Appearance/Body Re-ID — OSNet 256D 임베딩 추출, opt-in (모델 파일 미배포 시 자동 비활성) |
+| `server/src/utils/kmeansColor.js` | K-Means 대표색 클러스터링 — Human Parsing 마스크 픽셀 대표색 추출용, 단위 테스트 완료 |
 
 ## 주요 작업 절차
 
@@ -49,15 +51,17 @@ RTSP/WebRTC 스트림
 4. `client/src/types/` 에 TypeScript 타입 추가
 5. 대시보드 컴포넌트에서 새 속성 표시
 
-### YOLO 모델 카탈로그 — 런타임 전환 (YOLOv8 / YOLO11 / YOLO12 / YOLO26)
+### AI 모델 카탈로그 — 런타임 전환 (YOLO 탐지기 + face/PPE/fire-smoke/cloth-PAR/Human Parsing/Appearance Re-ID)
 
-`analysisApi.js`는 20개 모델 카탈로그를 유지합니다. 서버 재시작 없이 모델 다운로드·전환이 가능합니다.
+`analysisApi.js`는 `MODEL_CATALOG`(YOLO 20종) + `EXTENDED_CATALOG`(face-detection/face-recognition/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid, `family` 필드로 구분)를 `ALL_MODELS`로 통합 관리합니다. 서버 재시작 없이 모델 다운로드·전환이 가능합니다.
 
 | API | 설명 |
 |---|---|
-| `GET /api/analysis/models` | 카탈로그 조회 (downloaded/active/downloading/converting 상태 포함) |
-| `POST /api/analysis/models/switch { modelId }` | 활성 모델 핫 스왑 |
-| `POST /api/analysis/models/download { modelId }` | 모델 다운로드 (YOLOv8/YOLO11: 직접 ONNX, YOLO26/YOLO12: PT→ONNX 변환) |
+| `GET /api/analysis/models` | 전체 family 카탈로그 조회 (downloaded/active/downloading/converting 상태 포함) |
+| `POST /api/analysis/models/switch { modelId }` | family별 활성 모델 핫 스왑 — `_activeFileForEntry()`가 family에 따라 올바른 서비스(`_attrPipeline._color`, `_appearanceReid` 등)로 라우팅 |
+| `POST /api/analysis/models/download { modelId }` | 모델 다운로드 (직접 ONNX 또는 HuggingFace `.pt`→`ultralytics export` 변환); `manualOnly:true` 모델(예: `openpar.onnx`)은 409 반환 — 수동 배치 필요 |
+
+`human-parsing`/`appearance-reid` family는 코드 구현이 완료되어 있으나 모델 파일이 `downloadModels.js`의 `DIRECT_MODELS`에서 기본 `enabled:false`(라이선스 검토 후 수동 활성화) — Admin Dashboard "AI Models" 탭에서 개별 다운로드해야 활성화됨. 상세: `docs/design/Design_AI_AppearanceReID.md` §12.6, `docs/design/Design_AI_Color_Analysis.md` §10.
 
 #### YOLO26 / YOLO12 다운로드 특이사항
 
@@ -127,6 +131,8 @@ cd server && node src/scripts/downloadModels.js
 ```
 
 - YOLO12 5개 모델 자동 다운로드 + ONNX 변환
+- PPE(`yolov8m_ppe.onnx`)·Fire & Smoke(`yolov8s_fire_smoke.onnx`)도 `HF_EXPORT_MODELS`/`exportHfPtToOnnx()`로 자동 다운로드+변환 (HuggingFace Hub `.pt` → `ultralytics export`, `huggingface_hub` Python 패키지 필요)
+- `openpar.onnx`(cloth-PAR)는 공개 사전학습 ONNX가 없어 자동화 불가 — `PYTHON_EXPORT_INSTRUCTIONS`에 수동 export 절차만 안내
 - 이미 존재하는 파일은 건너뜀
 
 **SDLC 참조:** [SRS_AI_Model_Catalog](../../../docs/srs/SRS_AI_Model_Catalog.md) · [Design_AI_Model_Catalog](../../../docs/design/Design_AI_Model_Catalog.md) · [TC_AI_Model_Catalog](../../../docs/tc/TC_AI_Model_Catalog.md) · `test/api/model_catalog.test.js`
@@ -559,6 +565,8 @@ if (snapshotSvc.isEnabled() && enrichedObjects.length > 0 && io) {
 조건: `isFirstSeen` (새 객체 첫 등장) | `isLoitering` | `hasFaceMatch` | 또는 SNAPSHOT_INTERVAL_SEC 경과
 
 `analysisEvents` 스키마에 `cropData?: string` 추가 (data:image/jpeg;base64,... 형식)
+
+**Crop 해상도/품질:** `snapshotService.cropJpeg()`(`server/src/services/snapshotService.js`)는 `SNAPSHOT_MAX_DIMENSION`(기본 640px) / `SNAPSHOT_JPEG_QUALITY`(기본 85)로 `sharp`가 리사이즈·재인코딩합니다. `fit:'inside'` + `withoutEnlargement:true`로 비율 유지·업스케일 방지. 클라이언트 상세 뷰(예: `DetectionsTimelineInline`)는 이 crop을 `object-contain`으로 렌더링해 잘림 없이 표시해야 합니다 — 자세한 규칙은 `react-dashboard-dev/SKILL.md`의 "Crop 렌더링 규칙" 참고.
 
 **조회/삭제 API:**
 ```

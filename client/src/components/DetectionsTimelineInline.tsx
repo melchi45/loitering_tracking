@@ -775,12 +775,19 @@ export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }
                       className="text-gray-500 hover:text-white flex-shrink-0 ml-1 text-[11px]">✕</button>
             </div>
 
-            {/* Zoomed snapshot */}
+            {/* Zoomed snapshot — box follows the crop's own aspect ratio (object-contain,
+                no crop) so portrait person bboxes render full-frame instead of being
+                cover-cropped top/bottom */}
             {zoomedSnap && (
               <div className="flex-shrink-0 px-1 pt-1 pb-0.5 border-b border-gray-700/50 bg-black/40">
-                <div className="relative overflow-hidden rounded border border-white/20">
+                <div className="relative overflow-hidden rounded border border-white/20 bg-black flex items-center justify-center">
                   <img src={zoomedSnap.cropData} alt={zoomedSnap.className}
-                       className="w-full object-cover" style={{ maxHeight: 120 }} />
+                       className="w-full h-auto object-contain"
+                       style={{
+                         aspectRatio: zoomedSnap.cropWidth && zoomedSnap.cropHeight
+                           ? `${zoomedSnap.cropWidth} / ${zoomedSnap.cropHeight}` : '1 / 1',
+                         maxHeight: 260,
+                       }} />
                   {zoomedSnap.isLoitering && (
                     <span className="absolute top-1 right-1 bg-red-600 text-white text-[7px] px-1 rounded">⚠ loitering</span>
                   )}
@@ -803,11 +810,13 @@ export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }
                 <div className="grid gap-1 p-1" style={{ gridTemplateColumns: 'repeat(3, 1fr)' }}>
                   {detailSnaps.map(s => (
                     <div key={s.id}
-                         className={`relative overflow-hidden rounded border cursor-pointer transition-all
+                         className={`relative overflow-hidden rounded border cursor-pointer transition-all bg-black
+                                     flex items-center justify-center
                                      ${zoomedSnap?.id === s.id ? 'border-white/80 ring-1 ring-white/30' : 'border-gray-700 hover:border-gray-500'}`}
+                         style={{ height: 52 }}
                          onClick={() => setZoomedSnap(prev => prev?.id === s.id ? null : s)}>
                       <img src={s.cropData} alt={s.className}
-                           className="w-full object-cover" style={{ height: 52 }} />
+                           className="w-full h-full object-contain" />
                       {s.isLoitering && (
                         <span className="absolute top-0 right-0 bg-red-600 text-white text-[5px] px-0.5">⚠</span>
                       )}

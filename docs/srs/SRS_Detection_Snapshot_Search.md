@@ -25,7 +25,7 @@ When `SNAPSHOT_ENABLED=false`, no snapshots MUST be saved.
 
 - Input: `jpegBuffer` (Buffer), `bbox` (`{ x, y, width, height }` in pixels), `frameWidth`, `frameHeight`
 - The crop region MUST be clamped to frame boundaries before extraction
-- Output: resized JPEG Buffer ≤ `SNAPSHOT_MAX_DIMENSION` × `SNAPSHOT_MAX_DIMENSION` px, quality = `SNAPSHOT_JPEG_QUALITY`
+- Output: resized JPEG Buffer ≤ `SNAPSHOT_MAX_DIMENSION` × `SNAPSHOT_MAX_DIMENSION` px (default 640×640), quality = `SNAPSHOT_JPEG_QUALITY` (default 85)
 - Implementation: `sharp(jpegBuffer).extract({ left, top, width, height }).resize(...).jpeg({ quality }).toBuffer()`
 - The crop operation MUST run asynchronously and MUST NOT block the frame pipeline
 
@@ -100,7 +100,8 @@ Match: case-insensitive substring search.
 ### FR-SNAP-009 — Detection Tab Crop Thumbnail
 
 - The Detections tab row MUST show the crop thumbnail when a snapshot exists for the detection's `objectId` + `cameraId` within the same second
-- Thumbnail display: 48×64 px (portrait), `object-cover`, click to expand to full crop
+- Compact thumbnail display: 48×64 px (portrait), `object-cover`
+- "Click to expand" / detail views MUST render the crop with `object-contain` inside a box sized from the record's `cropWidth`/`cropHeight` (CSS `aspect-ratio`), NOT `object-cover` — the full image MUST be visible without cropping. See `SRS_Fullscreen_Camera_View.md` FR-FCV for the Detections timeline detail-panel implementation of this rule.
 - Snapshot lookup: poll `GET /api/snapshots?cameraId=&objectId=&limit=1` or serve via Socket.IO `snapshot:new` event
 
 ### FR-SNAP-010 — Header Search Bar
@@ -119,7 +120,7 @@ Match: case-insensitive substring search.
 | ID | Requirement |
 |---|---|
 | NFR-SNAP-01 | `sharp` crop MUST complete in < 50 ms (p95) per detection frame |
-| NFR-SNAP-02 | Crop JPEG size MUST be ≤ 100 KB (enforced by quality + dimension limits) |
+| NFR-SNAP-02 | Crop JPEG size MUST be ≤ 200 KB (enforced by quality + dimension limits) |
 | NFR-SNAP-03 | Snapshot insert MUST be fire-and-forget (non-blocking to pipeline) |
 | NFR-SNAP-04 | Search response time MUST be < 200 ms for ≤ 50,000 records (in-memory scan) |
 | NFR-SNAP-05 | `SNAPSHOT_ENABLED=false` MUST completely disable snapshot I/O |
@@ -234,8 +235,8 @@ The client listens for this event and matches it to active detection rows by `ob
 | `SNAPSHOT_ENABLED` | `true` | Set `false` to disable all snapshot saving |
 | `SNAPSHOT_INTERVAL_SEC` | `30` | Min seconds between snapshots per track |
 | `SNAPSHOT_MAX_PER_CAMERA_DAY` | `500` | Prune threshold per camera per 24h |
-| `SNAPSHOT_JPEG_QUALITY` | `70` | JPEG compression quality (1–100) |
-| `SNAPSHOT_MAX_DIMENSION` | `320` | Max crop width/height in pixels |
+| `SNAPSHOT_JPEG_QUALITY` | `85` | JPEG compression quality (1–100) |
+| `SNAPSHOT_MAX_DIMENSION` | `640` | Max crop width/height in pixels |
 
 ---
 
@@ -409,8 +410,31 @@ When non-numeric values are passed for `minConfidence` or `maxConfidence`, they 
 
 ---
 
+## 10. v1.4 Amendment — Crop Quality & Detail-View Rendering
+
+**Revision:** v1.4 · 2026-07-09
+
+### 10.1 Background
+
+Streaming-mode users reported that crops shown in the Detections timeline (Fullscreen Camera View) looked visibly degraded compared to the source video, and that the enlarged crop in the right-side detail panel appeared cropped/cut off rather than showing the full bounding-box region.
+
+### 10.2 Updated Requirements
+
+- FR-SNAP-002 crop output dimension/quality raised to `SNAPSHOT_MAX_DIMENSION=640`, `SNAPSHOT_JPEG_QUALITY=85` (see §5 Configuration, updated).
+- FR-SNAP-009 detail/expand views MUST use `object-contain` with a dynamically sized box (see updated FR-SNAP-009 above).
+- NFR-SNAP-02 crop size ceiling raised to ≤ 200 KB to accommodate the higher-quality output.
+
+### 10.3 New Non-Functional Requirement
+
+#### NFR-SNAP-010 — No Crop-Induced Data Loss in Detail Views
+
+Any UI surface that lets the user inspect a single saved crop at larger size (timeline detail panel, "click to enlarge" preview) MUST render the full extent of the stored `cropData` — i.e. `object-fit: contain`, never `cover` — so that no part of the originally captured bounding-box region is hidden from the viewer.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for Detection Snapshot Search |
+| 1.4 | 2026-07-09 | LTS Engineering Team | §10 amendment — raised crop quality defaults, added NFR-SNAP-010 (no crop-induced data loss in detail views) |

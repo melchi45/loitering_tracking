@@ -94,8 +94,8 @@ let sharp = null;
 try { sharp = require('sharp'); } catch { console.warn('[Snapshot] sharp not found — snapshots disabled'); }
 
 const INTERVAL_SEC  = parseInt(process.env.SNAPSHOT_INTERVAL_SEC    || '30');
-const MAX_DIMENSION = parseInt(process.env.SNAPSHOT_MAX_DIMENSION   || '320');
-const JPEG_QUALITY  = parseInt(process.env.SNAPSHOT_JPEG_QUALITY    || '70');
+const MAX_DIMENSION = parseInt(process.env.SNAPSHOT_MAX_DIMENSION   || '640');  // v1.4: was 320
+const JPEG_QUALITY  = parseInt(process.env.SNAPSHOT_JPEG_QUALITY    || '85');   // v1.4: was 70
 const ENABLED       = process.env.SNAPSHOT_ENABLED !== 'false';
 
 // Throttle: Map<'cameraId:objectId', lastSaveTimestamp>
@@ -581,8 +581,40 @@ Add Confidence Range input to header row:
 
 ---
 
+## 14. v1.4 Amendment — Crop Quality Defaults & Detail-View Rendering
+
+**Revision:** v1.4 · 2026-07-09
+
+### 14.1 Background
+
+`snapshotService.cropJpeg()` (server/src/services/snapshotService.js) capped every stored crop at 320×320 px, JPEG quality 70. This is the single source image consumed by every crop consumer in the app (Detections tab thumbnail, Detections timeline filmstrip, detail panel, header search results). At 320px/q70 the crop is visibly softer/blockier than the source video, most noticeable when a user enlarges a crop to inspect it.
+
+### 14.2 Server Change
+
+`server/src/services/snapshotService.js` L33-34 defaults raised:
+
+```js
+const MAX_DIM      = parseInt(process.env.SNAPSHOT_MAX_DIMENSION || '640', 10);  // was 320
+const JPEG_QUALITY  = parseInt(process.env.SNAPSHOT_JPEG_QUALITY  || '85',  10);  // was 70
+```
+
+`cropJpeg()` itself is unchanged — `fit: 'inside'` already preserves aspect ratio and `withoutEnlargement: true` already prevents upscaling small crops, so no distortion is introduced by the higher cap. Typical crop size grows from ~15-25 KB to ~40-80 KB (still well under the revised NFR-SNAP-02 ceiling of 200 KB).
+
+Both values remain overridable via `.env` (`SNAPSHOT_MAX_DIMENSION`, `SNAPSHOT_JPEG_QUALITY`) for deployments that need to trade quality for storage.
+
+### 14.3 Client Change — Detail-View `object-contain`
+
+`client/src/components/DetectionsTimelineInline.tsx` previously rendered every crop — including the enlarged "zoomed snapshot" preview and the detail-panel thumbnail grid — with `object-cover` inside a fixed-height box (`maxHeight: 120` / `height: 52`). Because saved person crops are typically portrait (taller than wide), `object-cover` cropped the top/bottom of the image to fill the fixed box, hiding part of the captured region.
+
+Fix: the zoomed-snapshot `<img>` now sets `style.aspectRatio` from the snapshot's own `cropWidth`/`cropHeight` (falling back to `1/1` if absent) and uses `object-contain` with a `maxHeight: 260` safety cap — the box height follows the crop's real proportions instead of a fixed value, and `object-contain` guarantees no part of the image is ever clipped even if the cap is hit. The thumbnail grid keeps its fixed 52px cell (grid uniformity) but also switched `object-cover` → `object-contain` with a `bg-black` letterbox background so no cropping occurs there either.
+
+See `Design_Fullscreen_Camera_View.md` for the full before/after layout of the Detections timeline detail panel.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Detection Snapshot Search |
+| 1.4 | 2026-07-09 | LTS Engineering Team | §14 amendment — crop quality defaults raised (640×640/q85), detail-view object-contain fix |

@@ -30,8 +30,8 @@ try {
 const ENABLED          = process.env.SNAPSHOT_ENABLED !== 'false';
 const INTERVAL_SEC     = parseInt(process.env.SNAPSHOT_INTERVAL_SEC          || '30', 10);
 const LOITER_INTERVAL  = parseInt(process.env.SNAPSHOT_LOITERING_INTERVAL_SEC || '10', 10);
-const MAX_DIM          = parseInt(process.env.SNAPSHOT_MAX_DIMENSION         || '320', 10);
-const JPEG_QUALITY     = parseInt(process.env.SNAPSHOT_JPEG_QUALITY          || '70',  10);
+const MAX_DIM          = parseInt(process.env.SNAPSHOT_MAX_DIMENSION         || '640', 10);
+const JPEG_QUALITY     = parseInt(process.env.SNAPSHOT_JPEG_QUALITY          || '85',  10);
 const MAX_PER_CAM_DAY  = parseInt(process.env.SNAPSHOT_MAX_PER_CAMERA_DAY   || '500', 10);
 
 // ── In-session state (reset on process restart) ───────────────────────────────

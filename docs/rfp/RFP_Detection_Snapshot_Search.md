@@ -64,7 +64,7 @@ The current LTS-2026 system detects persons, vehicles, faces, fire, and smoke in
 | ID | Requirement |
 |---|---|
 | NFR-SNAP-01 | Crop operation MUST complete in < 50 ms per detection (uses `sharp` native library) |
-| NFR-SNAP-02 | Snapshot crop size MUST NOT exceed 100 KB per image (JPEG quality 70, max 320×320 px) |
+| NFR-SNAP-02 | Snapshot crop size MUST NOT exceed 200 KB per image (JPEG quality 85, max 640×640 px) |
 | NFR-SNAP-03 | Storage growth rate MUST be bounded: default max 500 snapshots per camera per 24 hours |
 | NFR-SNAP-04 | Search response MUST return within 200 ms for up to 10,000 snapshot records |
 | NFR-SNAP-05 | Crop saving MUST be non-blocking (async, does not delay frame processing) |
@@ -98,3 +98,4 @@ The current LTS-2026 system detects persons, vehicles, faces, fire, and smoke in
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for Detection Snapshot Search |
+| 1.1 | 2026-07-09 | LTS Engineering Team | Raised crop quality target (NFR-SNAP-02: 320×320/q70 → 640×640/q85) — Streaming mode Detections timeline crops looked visibly degraded from the source video |

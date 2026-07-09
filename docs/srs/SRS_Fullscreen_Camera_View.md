@@ -1,6 +1,6 @@
 # SRS: Fullscreen Camera View — 탭 확장 & 이력 데이터 통합
 
-**Version:** 1.4
+**Version:** 1.5
 **Status:** Implemented
 **SDLC:** [RFP](../rfp/RFP_Fullscreen_Camera_View.md) · [PRD](../prd/PRD_Fullscreen_Camera_View.md) · [Design](../design/Design_Fullscreen_Camera_View.md) · [TC](../tc/TC_Fullscreen_Camera_View.md)
 
@@ -91,6 +91,14 @@
 - **SRS-07-9**: Detail panel(`showDetail && selected` 조건)은 행이 접혀 있을 때 자동으로 닫히며, showDetail=true 상태에서 트랙/이벤트 선택 시에만 열린다
 - **SRS-07-10**: Tick labels 영역은 `flex-shrink-0`으로 레이아웃에 항상 포함되며, Overview 높이 50px + Tick 높이 20px 합산이 최소 표시 높이를 보장한다
 
+### FR-08: Detections 상세정보 패널 Crop 렌더링 (`DetectionsTimelineInline`)
+
+- **SRS-08-1**: 상세정보 패널(`selected && showDetail`)의 확대 미리보기(`zoomedSnap`)는 `object-fit: contain`으로 렌더링하며, `object-cover`로 인한 상하/좌우 잘림이 발생해서는 안 된다
+- **SRS-08-2**: 확대 미리보기 컨테이너의 CSS `aspect-ratio`는 해당 스냅샷의 `cropWidth`/`cropHeight` 값으로 동적 설정하며, 두 값이 없으면 `1 / 1`로 폴백한다
+- **SRS-08-3**: 확대 미리보기는 `maxHeight: 260px` 상한을 두되, 상한에 도달해도 `object-contain`으로 인해 이미지의 어떤 부분도 잘리지 않는다 (letterbox로 여백만 발생)
+- **SRS-08-4**: 하단 crop 썸네일 그리드(3열)는 각 셀 고정 높이 52px을 유지하되 `object-fit: contain` + `bg-black` 배경으로 렌더링하여 크롭 없이 letterbox 표시한다
+- **SRS-08-5**: Gantt 바 위 필름스트립 마커(`SNAP_W=28 / SNAP_H=34`)는 타임라인 스크러버 아이콘 용도이므로 SRS-08-1~4의 대상에서 제외하며 계속 `object-cover`를 사용한다
+
 ### FR-05: API 확장 (`GET /api/analysis/events`)
 
 - **SRS-05-1**: `cameraId` 쿼리 파라미터로 특정 카메라 이벤트만 필터링한다
@@ -126,6 +134,7 @@
 | SRS-06-1~4 | `OnvifTimelineOverlay.tsx` | useCameraStore import, cameraName 조회, Name 헤더 행 |
 | SRS-06-5~10 | `DetectionsTimelineInline.tsx` | LABEL_W=100 상수, Name 컬럼 렌더링, 너비 계산 보정 |
 | SRS-07-1~10 | `DetectionsTimelineInline.tsx`, `OnvifTimelineInline.tsx` | OVERVIEW_H=50 상수, showDetail 상태, ResizeObserver containerW, ganttW 계산, Overview 미니 바 렌더링, Overview 클릭 토글, Tick labels flex-shrink-0, Detail panel 조건 렌더링 |
+| SRS-08-1~5 | `DetectionsTimelineInline.tsx` | 확대 미리보기 `object-contain` + `aspectRatio` 동적 계산 (L784-790), 썸네일 그리드 `object-contain` + `bg-black` (L811-819) |
 
 ---
 
@@ -138,3 +147,4 @@
 | 1.2 | 2026-06-26 | FR-06 추가 — ONVIF·Detections Timeline Name 컬럼 SRS (SRS-06-1~10); 추적 매트릭스 업데이트 |
 | 1.3 | 2026-06-26 | FR-06 SRS-06-11~16 추가 — `OnvifTimelineInline` Name 컬럼 누락 보완: LABEL_W=130, OnvifRow.sourceToken/ruleName, sticky 헤더, 드래그 너비 보정, tick 오프셋 |
 | 1.4 | 2026-06-26 | FR-07 신규 (SRS-07-1~10) — 2-panel 레이아웃: Overview strip 50px + Detail rows + Tick labels 항상 표시; showDetail 토글; ResizeObserver containerW; ganttW 계산; Detections·ONVIF 미니 바 렌더링 명세; Detail panel 조건 렌더링 |
+| 1.5 | 2026-07-09 | FR-08 신규 (SRS-08-1~5) — Detections 상세정보 패널 crop `object-contain` + `cropWidth`/`cropHeight` 기반 동적 aspect-ratio 렌더링(잘림 방지); 필름스트립 마커는 대상 제외 명시 |

@@ -1,6 +1,6 @@
 # PRD: Fullscreen Camera View — 탭 확장 & 이력 데이터 통합
 
-**Version:** 1.4
+**Version:** 1.5
 **Status:** Implemented
 **SDLC:** [RFP](../rfp/RFP_Fullscreen_Camera_View.md) · [SRS](../srs/SRS_Fullscreen_Camera_View.md) · [Design](../design/Design_Fullscreen_Camera_View.md) · [TC](../tc/TC_Fullscreen_Camera_View.md)
 
@@ -29,6 +29,7 @@
 | US-07 | 운영자 | Detections 타임라인에서 각 트랙이 어떤 클래스·ID·인물인지 Gantt 바 없이도 파악하고 싶다 | 좌측 Name 컬럼에 className·objectId·identity 표시 |
 | US-08 | 운영자 | Detections Timeline에서 전체 트랙 밀도를 한눈에 파악하고, 필요한 시간대만 클릭해 세부 행을 열고 싶다 | Overview strip에 전체 트랙 미니 바 표시; 클릭 시 세부 행 접기/펼치기 |
 | US-09 | 운영자 | ONVIF Timeline(인라인 탭)에서 이벤트 전체 패턴을 빠르게 조망한 후 세부 행을 선택적으로 확인하고 싶다 | ONVIF Inline Overview strip에 전체 이벤트 미니 바 표시; 클릭 시 행 토글 |
+| US-10 | 운영자 | Detections 타임라인의 crop 이미지가 실제 영상만큼 선명하게 보이고, 트랙을 선택했을 때 우측 상세정보 패널에서 crop 인물/객체의 전체 모습이 잘리지 않고 다 보이길 원한다 | crop 해상도/품질 상향(640×640/q85); 상세정보 패널 확대 미리보기·썸네일 그리드가 `object-contain`으로 렌더링되어 원본 crop이 잘리지 않음 |
 
 ---
 
@@ -114,6 +115,21 @@ Apply 클릭 전까지 fetch 없음. Apply 클릭 시 지정 범위로 `GET /api
 
 **Detail panel** (`showDetail && selected` 조건): 행이 접혀있으면 detail 패널도 자동으로 닫힘
 
+### 3.7 Detections 상세정보 패널 Crop 화질 & 레이아웃 개선
+
+Streaming 모드 사용자 피드백: Detections 타임라인 crop 이미지가 원본 영상보다 흐릿하게 보이고, 필름스트립 crop을 선택했을 때 우측 상세정보 패널의 확대 미리보기가 인물/객체의 상하를 잘라내어 보여줌.
+
+**원인 및 개선:**
+
+| 항목 | 개선 전 | 개선 후 |
+|---|---|---|
+| Crop 저장 해상도/품질 (`SNAPSHOT_MAX_DIMENSION`/`SNAPSHOT_JPEG_QUALITY`) | 320×320 px, quality 70 | 640×640 px, quality 85 |
+| 상세정보 패널 확대 미리보기 (`zoomedSnap`) | `object-cover`, 고정 `maxHeight: 120px` → 세로가 긴 crop이 상하로 잘림 | `object-contain` + `aspectRatio`를 `cropWidth`/`cropHeight`에서 동적 계산, `maxHeight: 260px` 상한(도달해도 letterbox로 표시, 잘리지 않음) |
+| 상세정보 패널 crop 썸네일 그리드 (3열) | `object-cover`, 고정 높이 52px → 잘림 | `object-contain` + `bg-black` letterbox, 고정 높이 52px 유지(그리드 균일성) |
+| Gantt 바 필름스트립 마커 (28×34px) | `object-cover` | 변경 없음 — 타임라인 스크러버 아이콘 용도로 의도된 동작이므로 유지 |
+
+관련 문서: `PRD_Detection_Snapshot_Search.md` §6.3(crop 렌더링 규칙), `SRS_Fullscreen_Camera_View.md` FR-08.
+
 ### 3.5 API 확장 (`/api/analysis/events`)
 
 추가된 쿼리 파라미터:
@@ -147,3 +163,4 @@ Apply 클릭 전까지 fetch 없음. Apply 클릭 시 지정 범위로 `GET /api
 | 1.2 | 2026-06-26 | US-06/07 추가, §3.4 Timeline Name 컬럼 추가 — ONVIF Overlay·Detections 좌측 Name 컬럼 + cameraName 표시 |
 | 1.3 | 2026-06-26 | §3.4 `OnvifTimelineInline` Name 컬럼 누락 보완 — 인라인 탭(FullscreenCameraView 하단)에도 동일 Name 컬럼 구현; OnvifRow.sourceToken/ruleName 독립 저장 명세 추가 |
 | 1.4 | 2026-06-26 | US-08~09 추가; §3.6 Timeline 2-Panel Overview & Collapse 신규 — Detections·ONVIF Inline 3단 flex-col 구조 (Overview strip 50px + Detail rows + Tick labels 항상 표시), showDetail 토글, containerW ResizeObserver, ganttW 계산 명세 |
+| 1.5 | 2026-07-09 | US-10 추가; §3.7 신규 — Detections crop 화질 상향(640×640/q85) 및 상세정보 패널 crop `object-contain` 동적 레이아웃(잘림 방지) |

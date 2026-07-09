@@ -14,7 +14,7 @@
 |---|---|---|
 | JPEG crop library | `sharp` (npm) | Native libvips binding; 10–50× faster than pure-JS alternatives; supports JPEG region extraction |
 | Crop storage format | Base64 JPEG in DB | Eliminates separate file system; portable; works with JSON and MongoDB backends |
-| Crop dimensions | Max 320×320 px, JPEG quality 70 | Balance between visual clarity and storage size (< 30 KB typical) |
+| Crop dimensions | Max 640×640 px, JPEG quality 85 | Raised from 320×320/q70 — the original defaults produced visibly soft/blocky crops in the Detections timeline and detail panel; 640/q85 keeps typical size < 80 KB while looking close to the source frame |
 | Search index | In-memory JS filter (Phase-1) | Sufficient for ≤ 50,000 records; MongoDB `$text` index for Phase-2 |
 | Snapshot throttle | In-memory Map per cameraId+objectId | O(1) lookup; reset on server restart |
 
@@ -36,7 +36,7 @@
   bbox:        { x, y, width, height },  // pixels in original frame
   frameWidth:  number,
   frameHeight: number,
-  cropData:    string,     // base64 JPEG (< 100 KB)
+  cropData:    string,     // base64 JPEG (< 200 KB)
   cropWidth:   number,
   cropHeight:  number,
   attributes:  object,     // { color, cloth, face: { faceId, name, matchScore }, hat, mask, ... }
@@ -185,6 +185,17 @@ Response:
 └───────────────────────────────────────────────────────────────────────────┘
 ```
 
+### 6.3 Crop Rendering Convention — Compact vs. Detail
+
+Every surface that renders `cropData` MUST classify itself as one of two display modes:
+
+| Mode | `object-fit` | Sizing | Used by |
+|---|---|---|---|
+| Compact marker | `cover` | Fixed small box (filmstrip icon, grid tile) | Gantt filmstrip thumbnail, header SearchBar result row |
+| Detail view | `contain`, box height derived from `cropWidth`/`cropHeight` (CSS `aspect-ratio`) | Dynamic, capped at a max height | Detections timeline right-side detail panel (`DetectionsTimelineInline`), any "click to enlarge" preview |
+
+Detail-view surfaces MUST NOT crop the saved image — see `PRD_Fullscreen_Camera_View.md` §6 for the concrete layout this drives in the Detections tab.
+
 ---
 
 ## 7. `.env` Configuration
@@ -194,8 +205,8 @@ Response:
 SNAPSHOT_ENABLED=true
 SNAPSHOT_INTERVAL_SEC=30        # min seconds between snapshots for same track
 SNAPSHOT_MAX_PER_CAMERA_DAY=500 # prune threshold per camera per 24h
-SNAPSHOT_JPEG_QUALITY=70        # JPEG quality 1-100
-SNAPSHOT_MAX_DIMENSION=320      # max width or height of crop in pixels
+SNAPSHOT_JPEG_QUALITY=85        # JPEG quality 1-100
+SNAPSHOT_MAX_DIMENSION=640      # max width or height of crop in pixels
 ```
 
 ---
@@ -221,3 +232,4 @@ SNAPSHOT_MAX_DIMENSION=320      # max width or height of crop in pixels
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for Detection Snapshot Search |
+| 1.1 | 2026-07-09 | LTS Engineering Team | Raised crop quality defaults (640×640/q85), added §6.3 compact-vs-detail crop rendering convention |

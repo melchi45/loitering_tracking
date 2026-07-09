@@ -603,8 +603,58 @@
 
 ---
 
+## Group K — Crop Quality & Detail-View Rendering (v1.4)
+
+> **Target SRS:** FR-SNAP-002, FR-SNAP-009, NFR-SNAP-02, NFR-SNAP-010
+> **Test type:** Manual / visual QA (image quality and layout are not meaningfully assertable via Jest)
+
+### TC-K-001 — Crop Resolution Uses Raised Defaults
+
+| Field | Value |
+|---|---|
+| **ID** | TC-K-001 |
+| **Priority** | High |
+| **Pre-condition** | Server running with default `.env` (`SNAPSHOT_MAX_DIMENSION` unset → 640, `SNAPSHOT_JPEG_QUALITY` unset → 85) |
+| **Steps** | 1. Trigger a snapshot save for a bbox ≥ 640px on its long side (e.g. a near-camera person). 2. `GET /api/snapshots/:id`. |
+| **Expected** | `cropWidth` or `cropHeight` = 640 (the resized long side); decoded JPEG shows materially less blockiness than the pre-v1.4 320px/q70 output for the same bbox |
+| **Covers** | FR-SNAP-002 |
+
+### TC-K-002 — Crop Size Stays Within Revised Ceiling
+
+| Field | Value |
+|---|---|
+| **ID** | TC-K-002 |
+| **Priority** | Medium |
+| **Steps** | 1. Save 20 snapshots across varied bbox sizes/content. 2. Measure decoded `cropData` byte size for each. |
+| **Expected** | All ≤ 200 KB (NFR-SNAP-02) |
+| **Covers** | NFR-SNAP-02 |
+
+### TC-K-003 — Detections Timeline Detail Panel Shows Full Crop (No Cropping)
+
+| Field | Value |
+|---|---|
+| **ID** | TC-K-003 |
+| **Priority** | High |
+| **Pre-condition** | Fullscreen Camera View → Detections tab, a track with ≥ 1 saved snapshot of a portrait (taller-than-wide) person bbox |
+| **Steps** | 1. Click a track row to open the right-side detail panel. 2. Click a filmstrip crop to open the "zoomed snapshot" preview. |
+| **Expected** | The enlarged preview shows the full person from head to feet (or full bbox extent) — no top/bottom clipping. The preview box height varies with the crop's aspect ratio instead of a fixed 120px crop. |
+| **Covers** | FR-SNAP-009, NFR-SNAP-010 |
+
+### TC-K-004 — Detail Panel Thumbnail Grid Does Not Crop
+
+| Field | Value |
+|---|---|
+| **ID** | TC-K-004 |
+| **Priority** | Medium |
+| **Steps** | With the detail panel open, inspect the "All crop thumbnails" grid below the zoomed preview. |
+| **Expected** | Each grid tile letterboxes (black bars) a portrait crop rather than cutting off its top/bottom; no part of the saved image is invisible |
+| **Covers** | NFR-SNAP-010 |
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for Detection Snapshot Search |
+| 1.4 | 2026-07-09 | LTS Engineering Team | Added Group K — crop quality defaults (640×640/q85) and detail-view object-contain rendering |

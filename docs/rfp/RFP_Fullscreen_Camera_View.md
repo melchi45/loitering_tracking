@@ -1,6 +1,6 @@
 # RFP: Fullscreen Camera View — 탭 확장 & 이력 데이터 통합
 
-**Version:** 1.4
+**Version:** 1.5
 **Status:** Fulfilled
 **SDLC:** [PRD](../prd/PRD_Fullscreen_Camera_View.md) · [SRS](../srs/SRS_Fullscreen_Camera_View.md) · [Design](../design/Design_Fullscreen_Camera_View.md) · [TC](../tc/TC_Fullscreen_Camera_View.md)
 
@@ -36,6 +36,8 @@ LTS-2026의 메인 대시보드에서 카메라를 선택하면 전체화면 오
 | REQ-09 | ONVIF Timeline 헤더 카메라 ID 뱃지를 카메라 표시 이름(displayName)으로 우선 표시 |
 | REQ-10 | `DetectionsTimelineInline` 상단에 Overview strip(50px) 추가 — 뷰포트 내 전체 트랙을 클래스별 미니 바(8px)로 오버레이 표시, 스크롤=줌 인터랙션, 클릭=Detail rows 접기/펼치기 토글 |
 | REQ-11 | `OnvifTimelineInline` 도 동일한 2-panel 구조 적용 — Overview strip에 모든 이벤트 타입 오버레이 (point 이벤트=2px 수직 바, duration=8px 미니 바), Tick 레이블 항상 표시 |
+| REQ-12 | Detections Timeline crop 이미지 화질을 원본 영상에 근접한 수준으로 상향 (`SNAPSHOT_MAX_DIMENSION`/`SNAPSHOT_JPEG_QUALITY` 기본값 상향) |
+| REQ-13 | Detections Timeline에서 crop 선택 시 우측 상세정보 패널이 crop의 전체 이미지를 잘림 없이 보여주도록 레이아웃을 crop 비율에 맞춰 동적으로 조정 |
 
 ### 2.2 제외 범위 (Out of Scope)
 
@@ -66,6 +68,8 @@ LTS-2026의 메인 대시보드에서 카메라를 선택하면 전체화면 오
 | 기존 컴포넌트 수정 | `client/src/components/OnvifTimelineOverlay.tsx` (Name 컬럼 헤더 + cameraName 표시) |
 | 기존 컴포넌트 수정 | `client/src/components/DetectionsTimelineInline.tsx` (Name 컬럼 + 2-panel Overview strip + showDetail 토글 + ResizeObserver) |
 | 기존 컴포넌트 수정 | `client/src/components/OnvifTimelineInline.tsx` (2-panel Overview strip + showDetail 토글) |
+| 기존 컴포넌트 수정 | `client/src/components/DetectionsTimelineInline.tsx` (상세정보 패널 crop `object-contain` + 동적 aspect-ratio) |
+| 서버 설정 변경 | `server/src/services/snapshotService.js`, `server/.env*` (`SNAPSHOT_MAX_DIMENSION`/`SNAPSHOT_JPEG_QUALITY` 기본값 상향) |
 | 클라이언트 빌드 | `client/dist/` |
 | SDLC 문서 | PRD · SRS · Design · TC |
 
@@ -80,3 +84,4 @@ LTS-2026의 메인 대시보드에서 카메라를 선택하면 전체화면 오
 | 1.2 | 2026-06-26 | REQ-08/09 추가 — ONVIF·Detections Timeline 좌측 Name 컬럼 및 cameraName 표시 요구사항 |
 | 1.3 | 2026-06-26 | §4 납품물 `OnvifTimelineInline.tsx` 설명에 Name 컬럼 + OnvifRow 독립 저장 명시 — 누락 보완 |
 | 1.4 | 2026-06-26 | REQ-10~11 추가 — Detections·ONVIF Timeline 2-panel Overview strip + Detail rows 접기/펼치기 토글 요구사항; §4 납품물 업데이트 |
+| 1.5 | 2026-07-09 | REQ-12~13 추가 — Detections crop 화질 상향, 상세정보 패널 crop 잘림 방지(동적 레이아웃) 요구사항; §4 납품물 업데이트 |
