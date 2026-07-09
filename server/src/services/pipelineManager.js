@@ -6,6 +6,66 @@ const { v4: uuidv4 } = require('uuid');
 const snapshotSvc = require('./snapshotService');
 const faceSearchConditions = require('./faceSearchConditions');
 
+// ── Lazy-load sharp (optional dependency, mirrors snapshotService.js) ─────────
+let sharp = null;
+try {
+  sharp = require('sharp');
+} catch {
+  console.warn('[PipelineManager] sharp not found — streaming-mode analysis-frame downscale disabled (full-resolution frames forwarded as-is)');
+}
+
+// Streaming mode only: max width of the copy forwarded to the (possibly remote)
+// analysis server. ingest-daemon always delivers native/decoded resolution now —
+// this keeps the analysis HTTP hop cheap while detectionSnapshots crop still uses
+// the untouched native buffer (see _processRemoteResult's bbox up-scaling).
+const _AI_MAX_WIDTH = parseInt(process.env.AI_MAX_WIDTH || '640', 10);
+
+/**
+ * Downscales a JPEG buffer to at most `maxWidth` (aspect-preserving, no upscale).
+ * Returns the original buffer unchanged if sharp is unavailable or already narrow enough.
+ * @param {Buffer} jpegBuffer
+ * @param {number} maxWidth
+ * @returns {Promise<{ buf: Buffer, width: number, height: number }>}
+ */
+async function _downscaleForAnalysis(jpegBuffer, maxWidth) {
+  if (!sharp) return { buf: jpegBuffer, width: 0, height: 0 };
+  try {
+    const img  = sharp(jpegBuffer);
+    const meta = await img.metadata();
+    if (!meta.width || meta.width <= maxWidth) {
+      return { buf: jpegBuffer, width: meta.width || 0, height: meta.height || 0 };
+    }
+    const buf = await img.resize(maxWidth, null, { withoutEnlargement: true }).jpeg().toBuffer();
+    const outMeta = await sharp(buf).metadata();
+    return { buf, width: outMeta.width, height: outMeta.height };
+  } catch {
+    return { buf: jpegBuffer, width: 0, height: 0 };
+  }
+}
+
+/**
+ * Scales a bbox from one frame's coordinate space to another (e.g. the downscaled
+ * copy sent to a remote analysis server → the native buffer retained for cropping).
+ * Falls back to the original bbox (no scaling) when either dimension is unknown.
+ * @param {{x:number,y:number,width:number,height:number}} bbox
+ * @param {number} fromW
+ * @param {number} fromH
+ * @param {number} toW
+ * @param {number} toH
+ */
+function _scaleBbox(bbox, fromW, fromH, toW, toH) {
+  if (!bbox || !fromW || !fromH || !toW || !toH) return bbox;
+  const sx = toW / fromW;
+  const sy = toH / fromH;
+  if (sx === 1 && sy === 1) return bbox;
+  return {
+    x:      bbox.x      * sx,
+    y:      bbox.y      * sy,
+    width:  bbox.width  * sx,
+    height: bbox.height * sy,
+  };
+}
+
 /**
  * Parse width/height from JPEG SOF marker — no full decode, reads ~100 bytes.
  * @param {Buffer} buf
@@ -1692,14 +1752,18 @@ class PipelineManager {
     ctx._pendingFrame = null;
     ctx._analyzing    = true;
 
-    this._analysisClient.analyzeFrame({
-      cameraId:   frame.cameraId,
-      cameraName: camera.name || frame.cameraId,
-      frameId:    frame.frameId,
-      timestamp:  new Date(frame.ts).toISOString(),
-      jpegBuffer: frame.buf,
-      zones:      frame.zones,
-    }).then(result => {
+    // frame.buf stays native resolution (retained for crop in _processRemoteResult);
+    // only the copy actually sent over the wire to the analysis server is downscaled.
+    _downscaleForAnalysis(frame.buf, _AI_MAX_WIDTH).then(({ buf: analysisBuf }) =>
+      this._analysisClient.analyzeFrame({
+        cameraId:   frame.cameraId,
+        cameraName: camera.name || frame.cameraId,
+        frameId:    frame.frameId,
+        timestamp:  new Date(frame.ts).toISOString(),
+        jpegBuffer: analysisBuf,
+        zones:      frame.zones,
+      })
+    ).then(result => {
       ctx._analyzing = false;
       if (!ctx.running) { ctx._pendingFrame = null; return; }
       if (result) this._processRemoteResult(frame, result, camera, analyticsConfig);
@@ -1739,8 +1803,11 @@ class PipelineManager {
             let liveCropData;
             try {
               if (snapshotSvc.isEnabled() && _buf && faceBbox) {
+                // faceBbox is in the analysis server's (possibly downscaled) coordinate
+                // space — _buf is the native buffer retained locally, so scale up first.
+                const cropBbox = _scaleBbox(faceBbox, remoteFrameWidth, remoteFrameHeight, _fw, _fh);
                 const { data: cropBuf } = await snapshotSvc.cropJpeg(
-                  _buf, faceBbox, remoteFrameWidth, remoteFrameHeight
+                  _buf, cropBbox, _fw, _fh
                 );
                 liveCropData = 'data:image/jpeg;base64,' + cropBuf.toString('base64');
               }
@@ -1954,10 +2021,15 @@ class PipelineManager {
                   isFireSmoke,
                   timestamp:   _ts,
                 })) continue;
+            // det.bbox is in the analysis server's (possibly downscaled) coordinate
+            // space — _buf is the native buffer retained locally, so scale up first.
+            // The scaled bbox (not det.bbox) is what gets persisted, so the stored
+            // record's bbox/frameWidth/frameHeight/cropWidth/cropHeight stay consistent.
+            const cropBbox = _scaleBbox(det.bbox, remoteFrameWidth, remoteFrameHeight, _fw, _fh);
             const { data: cropBuf, width: cw, height: ch } =
-              await snapshotSvc.cropJpeg(_buf, det.bbox, remoteFrameWidth, remoteFrameHeight);
+              await snapshotSvc.cropJpeg(_buf, cropBbox, _fw, _fh);
             const snapId = await snapshotSvc.saveSnapshot(
-              _db, _cam, det, cropBuf, cw, ch, remoteFrameWidth, remoteFrameHeight, _ts
+              _db, _cam, { ...det, bbox: cropBbox }, cropBuf, cw, ch, _fw, _fh, _ts
             );
             _io.to(_cameraId).emit('snapshot:new', {
               cameraId:   _cameraId,

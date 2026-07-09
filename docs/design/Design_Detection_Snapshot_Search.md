@@ -612,9 +612,112 @@ See `Design_Fullscreen_Camera_View.md` for the full before/after layout of the D
 
 ---
 
+## 15. v1.5 Correction — The Real Upstream Bottleneck Is `AI_MAX_WIDTH`, Not `SNAPSHOT_MAX_DIMENSION`
+
+**Revision:** v1.5 · 2026-07-09
+
+### 15.1 Background
+
+§14 raised `SNAPSHOT_MAX_DIMENSION`/`SNAPSHOT_JPEG_QUALITY` (the crop-step's own resize/quality ceiling) but this alone does not fix crop quality for most deployments. Further investigation traced the actual bottleneck one layer upstream: `ingest_daemon.py`'s AI thread (`push_jpeg()`) resizes every frame to at most `AI_MAX_WIDTH` (env, default `640`) **before** that JPEG ever reaches Node.js:
+
+```python
+# ingest-daemon/ingest_daemon.py
+img = _resize_frame(img, AI_MAX_WIDTH)   # default 640
+buf = io.BytesIO()
+img.save(buf, format="JPEG", quality=JPEG_QUALITY)
+```
+
+This resized JPEG (`jpegBuffer` in `pipelineManager.js`'s `capture.on('frame', ...)` handler) is the **single source buffer** used for both:
+1. YOLO inference input (`detection.js`, which internally letterboxes to 640×640 regardless of input size — so this part is unaffected by `AI_MAX_WIDTH`)
+2. `snapshotService.cropJpeg()` — the crop is extracted directly from this same buffer, in all three server modes (combined/analysis local inference at pipelineManager.js L1107-1122, and streaming mode's `_processRemoteResult` at L1719-1958, which reuses `frame.buf` — the identical buffer sent to the remote analysis server, never a higher-resolution original)
+
+Consequence: with the package default `AI_MAX_WIDTH=640`, a 16:9 camera's frame is already downscaled to roughly 640×360 **before** `cropJpeg()` runs. Raising `SNAPSHOT_MAX_DIMENSION` past that point (§14 raised it to 640) cannot recover detail that was already discarded — `fit: 'inside', withoutEnlargement: true` means the resize step becomes a no-op once the source is already smaller than the target.
+
+### 15.2 Fix
+
+`server/.env` (+ all three `.env.*.example` templates): `AI_MAX_WIDTH` raised `640` → `1920`.
+
+`_resize_frame()` only downscales when `img.width > max_width`, so `AI_MAX_WIDTH=1920` passes through any camera at or below 1080p **unmodified** (no resize, no quality loss from this stage at all), while still bounding pathological 4K+ sources. No application code changes were needed — `detection.js`'s letterbox preprocessing and bbox scale-back (`_postprocess`, `origW`/`origH`) already handle arbitrary input resolutions correctly.
+
+**Trade-off:** raising `AI_MAX_WIDTH` increases ingest-daemon PIL resize/encode CPU, the `/api/internal/frame/:cameraId` HTTP payload size, and Node.js JPEG-decode CPU — proportional to camera count × FPS (~10 fps/camera). GPU/ONNX inference time is unaffected (the tensor is always 640×640). Deployments with many concurrent cameras or a network hop between ingest-daemon and the Node.js host should verify headroom before adopting `1920`, or keep a lower value and accept the §14 fix as a partial improvement only.
+
+Full operator-facing guidance: `Design_RTSP_Capture_Backend.md` §9.1, `docs/ops/RTSP_Capture_Backend_Setup.md` "AI 프레임 해상도 튜닝".
+
+### 15.3 Corrected Understanding of §14
+
+§14's `SNAPSHOT_MAX_DIMENSION=640`/`SNAPSHOT_JPEG_QUALITY=85` change remains valid and still improves quality for crops smaller than the (now larger) `AI_MAX_WIDTH` source frame — it is not superseded, just insufficient alone. Both settings must be raised together for the fix to reach its intended effect.
+
+---
+
+## 16. v1.6 Superseding Fix — Decouple Analysis-Server Bandwidth From Crop Resolution
+
+**Revision:** v1.6 · 2026-07-09
+
+### 16.1 Why §15's Fix Was Replaced
+
+§15's "raise `AI_MAX_WIDTH`" fix works, but it couples two unrelated concerns: crop fidelity and the bandwidth/CPU cost of the streaming→analysis-server HTTP hop. Raising `AI_MAX_WIDTH` to get better crops also makes every frame forwarded to the (possibly remote) analysis server bigger, at ~10 fps per camera — undesirable for deployments where that hop is bandwidth- or CPU-constrained. This amendment replaces §15's config-only fix with a code-level change that gets full-resolution crops **without** growing the analysis-server payload.
+
+### 16.2 Architecture
+
+```
+ingest_daemon.py  push_jpeg()
+    │  no resize — always native/decoded resolution
+    ▼
+Node.js  capture.on('frame', jpegBuffer)      ← single source buffer, all modes
+    │
+    ├─ combined / analysis mode (local inference)
+    │     detection.js processes jpegBuffer directly; letterboxes internally to
+    │     640×640 for the model, then _postprocess() scales bbox back to the
+    │     buffer's own origW/origH. snapshotService.cropJpeg() crops that same
+    │     native buffer — correct and full-resolution with ZERO extra code.
+    │
+    └─ streaming mode
+          ctx._pendingFrame.buf = jpegBuffer   (native — retained for crop)
+          _downscaleForAnalysis(buf, AI_MAX_WIDTH)  → analysisBuf (sharp, aspect-preserving)
+              │
+              ▼
+          analysisClient.analyzeFrame({ jpegBuffer: analysisBuf, ... })  → remote analysis server
+              │
+              ▼  result.frameWidth/frameHeight = analysisBuf's own dimensions; bbox in that coordinate space
+          _processRemoteResult(frame, result, ...)
+              │  frame.buf = native buffer (unchanged)
+              │  remoteFrameWidth/Height = result.frameWidth/Height (downscaled coordinate space)
+              │  frame.fw/fh = native dimensions
+              ▼
+          cropBbox = _scaleBbox(det.bbox, remoteFrameWidth, remoteFrameHeight, frame.fw, frame.fh)
+          snapshotSvc.cropJpeg(frame.buf, cropBbox, frame.fw, frame.fh)   ← full-resolution crop
+```
+
+### 16.3 Code Changes
+
+- **`ingest-daemon/ingest_daemon.py`**: removed `_resize_frame()` and the `AI_MAX_WIDTH` env read entirely. `push_jpeg()` now always sends the native decoded frame.
+- **`server/src/services/pipelineManager.js`**:
+  - New `_downscaleForAnalysis(jpegBuffer, maxWidth)` — lazy-loads `sharp` (same optional-dependency pattern as `snapshotService.js`), resizes aspect-preserving, no-op if already ≤ `maxWidth` or `sharp` unavailable.
+  - New `_scaleBbox(bbox, fromW, fromH, toW, toH)` — proportional bbox scaling between two coordinate spaces; returns the bbox unchanged if either dimension is falsy or scale is 1:1.
+  - `_AI_MAX_WIDTH = parseInt(process.env.AI_MAX_WIDTH || '640', 10)` — now read by Node.js, not the Python daemon.
+  - `_runPendingAnalysis()`: downscales a copy via `_downscaleForAnalysis()` immediately before `analysisClient.analyzeFrame()`; `ctx._pendingFrame.buf` (native) is untouched and still passed through to `_processRemoteResult()`.
+  - `_processRemoteResult()`: both crop call sites (pending face-match live crop, and the general `detectionSnapshots` save loop) now compute `cropBbox = _scaleBbox(bbox, remoteFrameWidth, remoteFrameHeight, _fw, _fh)` and crop `_buf` (native) at `_fw`×`_fh` instead of the previous `remoteFrameWidth`×`remoteFrameHeight`. The `detections` Socket.IO event emitted to the browser is **unchanged** — it still carries the original (unscaled) bbox paired with `remoteFrameWidth`/`remoteFrameHeight`, which `CameraView.tsx` already interprets as a normalized coordinate space independent of the video's actual rendered resolution, so client-side overlay alignment is unaffected.
+- **`server/.env` + all three `.env.*.example` templates**: `AI_MAX_WIDTH` reverted `1920` → `640` (its role changed — it no longer bounds the ingest-daemon→Node.js hop, only the streaming→analysis-server hop) with rewritten comments.
+
+### 16.4 Trade-offs
+
+- **Analysis-server hop**: unchanged from before §15 — still bounded by `AI_MAX_WIDTH` (default 640), independent of crop quality.
+- **ingest-daemon → Node.js hop**: now always native resolution. For most IP cameras (≤1080p) this is a modest increase over the old 640-capped default; for 4K+ cameras it is proportionally larger. This hop is typically LAN-local (ingest-daemon and Node.js on the same host or same network segment), unlike the analysis-server hop which may cross a WAN.
+- **`!ctx.useWebRTC` cameras** (raw JPEG frames pushed to the browser via Socket.IO `'frame'`, used when WebRTC is disabled for that camera): these now also receive native-resolution JPEGs at ~10 fps, since they share the same source buffer. This is a genuine bandwidth increase for that specific fallback path; most cameras use WebRTC and are unaffected.
+- **combined/analysis mode**: `detection.js`'s JPEG decode + letterbox now processes a larger native buffer instead of the old 640-capped one — a modest CPU increase per frame, offset by no longer needing any workaround.
+- GPU/ONNX inference time is unaffected either way (input tensor is always 640×640).
+
+### 16.5 §15 Amendment Status
+
+§15's "raise `AI_MAX_WIDTH` to 1920" is superseded by this amendment and should **not** be applied — `AI_MAX_WIDTH` has reverted to `640` with a different meaning (§16.3). §14's `SNAPSHOT_MAX_DIMENSION`/`SNAPSHOT_JPEG_QUALITY` change remains valid and unaffected.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Detection Snapshot Search |
 | 1.4 | 2026-07-09 | LTS Engineering Team | §14 amendment — crop quality defaults raised (640×640/q85), detail-view object-contain fix |
+| 1.5 | 2026-07-09 | LTS Engineering Team | §15 correction — real bottleneck identified as `AI_MAX_WIDTH` (ingest_daemon.py), the crop's actual source buffer; raised 640→1920 |
+| 1.6 | 2026-07-09 | LTS Engineering Team | §16 supersedes §15 — code-level fix: ingest_daemon.py sends native resolution always; `pipelineManager.js` downscales only the streaming→analysis-server copy and rescales bbox back to native before cropping; `AI_MAX_WIDTH` reverted to 640 with new meaning |

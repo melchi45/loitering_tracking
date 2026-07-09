@@ -481,6 +481,24 @@ INGEST_DAEMON_BIN=../ingest-daemon/ingest_daemon.py
 INGEST_DAEMON_ADDR=:7070
 ```
 
+### AI 프레임 해상도와 `AI_MAX_WIDTH` — 감지 스냅샷 crop 화질
+
+`ingest_daemon.py`가 Node.js로 전송하는 AI JPEG(≈10 FPS)는 **항상 원본(native, 디코딩된 그대로) 해상도**입니다 — 리사이즈하지 않습니다. combined/analysis 모드(로컬 추론)는 이 원본 버퍼에서 직접 crop하므로 **추가 설정 없이 항상 고화질**입니다.
+
+`AI_MAX_WIDTH`는 **streaming 모드에서만** 의미가 있습니다 — streaming 서버가 remote analysis 서버로 프레임을 전송하기 **직전**, Node.js(`pipelineManager.js`)가 `sharp`로 이 값까지 다운스케일한 **별도 사본**을 만들어 보냅니다. `detectionSnapshots` crop은 이 다운스케일 사본이 아니라 로컬에 보관된 원본 버퍼에서 이루어지며, analysis 서버가 반환한 bbox 좌표는 crop 직전에 원본 좌표계로 자동 보정됩니다.
+
+```env
+# server/.env
+AI_MAX_WIDTH=640    # streaming → analysis 서버 전송용 다운스케일 목표 폭. crop 화질과는 무관
+```
+
+- 이 값을 낮추면 streaming ↔ analysis 서버 간 네트워크·CPU 부하가 줄지만, **crop 화질에는 아무 영향이 없습니다** (crop은 항상 원본에서 이루어지기 때문).
+- crop 화질을 조정하려면 대신 `SNAPSHOT_MAX_DIMENSION`/`SNAPSHOT_JPEG_QUALITY`(§ [Design_Detection_Snapshot_Search.md §14](../design/Design_Detection_Snapshot_Search.md))를 사용하십시오.
+- ingest-daemon → Node.js 홉은 이제 항상 원본 해상도이므로, 카메라 해상도가 매우 높거나(4K 이상) `!ctx.useWebRTC` 카메라(브라우저에 raw JPEG 직접 전송)가 많은 배포에서는 이 홉/브라우저 페이로드 증가를 감안하십시오.
+- 변경 후에는 서버(Node.js) 재시작이 필요합니다 — `AI_MAX_WIDTH`는 이제 `pipelineManager.js`가 읽으므로 `npm run ingest:restart`(ingest-daemon만 재시작)로는 반영되지 않습니다.
+
+상세 설계: [Design_RTSP_Capture_Backend.md §9.1](../design/Design_RTSP_Capture_Backend.md), [Design_Detection_Snapshot_Search.md §15](../design/Design_Detection_Snapshot_Search.md)
+
 ### 데몬 시작 확인
 
 서버 시작 시 자동으로 기동됩니다. 수동 확인:
@@ -664,3 +682,5 @@ curl http://localhost:3080/api/onvif-events?cameraId=<CAM_ID>&limit=1 | python3 
 | 1.0 | 2026-06-04 | 초기 작성 |
 | 1.1 | 2026-06-19 | Ingest-Daemon Watchdog 및 자동 복구 섹션 추가 (RTSP_READ_TIMEOUT, 계층 3 프로세스 재시작, 수동 진단 절차)
 | 1.2 | 2026-06-26 | ONVIF 이벤트 타임라인 운영 안내 섹션 추가 — 전체화면 하단 탭 Name 컬럼 설명·트러블슈팅 curl 예시 |
+| 1.3 | 2026-07-09 | "AI 프레임 해상도 튜닝(`AI_MAX_WIDTH`)" 섹션 신규 — Detections 탭 crop 화질이 흐릿한 근본 원인(AI JPEG가 YOLO 입력·crop 소스 겸용) 및 화질/부하 트레이드오프 안내 |
+| 1.4 | 2026-07-09 | 위 섹션 재작성 — ingest-daemon은 항상 원본 해상도 전송으로 변경, `AI_MAX_WIDTH`는 streaming→analysis 서버 전송용 Node.js 다운스케일 전용으로 재정의(crop 화질과 무관), 반영에 서버 재시작 필요로 정정 |

@@ -650,6 +650,39 @@
 | **Expected** | Each grid tile letterboxes (black bars) a portrait crop rather than cutting off its top/bottom; no part of the saved image is invisible |
 | **Covers** | NFR-SNAP-010 |
 
+### TC-K-005 — Streaming Mode: Crop Resolution Independent of `AI_MAX_WIDTH` (v1.6)
+
+| Field | Value |
+|---|---|
+| **ID** | TC-K-005 |
+| **Priority** | High |
+| **Pre-condition** | `SERVER_MODE=streaming` with a working `ANALYSIS_SERVER_URL`; `AI_MAX_WIDTH=640` (default); camera resolution > 640px wide (e.g. 1080p) |
+| **Steps** | 1. Trigger a snapshot save (loitering or first-seen). 2. `GET /api/snapshots/:id`. 3. Compare `cropWidth`/`cropHeight` and visual sharpness against the same test run with `SERVER_MODE=combined` on the same camera/scene. |
+| **Expected** | Crop resolution/sharpness in streaming mode is equivalent to combined mode — NOT capped at ~640px-wide-frame-derived dimensions. Confirms the crop uses the native buffer (`ctx._pendingFrame.buf`), not the downscaled copy sent to the analysis server. |
+| **Covers** | FR-SNAP-032, FR-SNAP-033, NFR-SNAP-011 |
+
+### TC-K-006 — Streaming Mode: Bbox Alignment After Rescale (v1.6)
+
+| Field | Value |
+|---|---|
+| **ID** | TC-K-006 |
+| **Priority** | High |
+| **Pre-condition** | Same as TC-K-005 |
+| **Steps** | 1. Trigger a snapshot save for a person near the frame edge. 2. Inspect the saved crop. |
+| **Expected** | The crop is correctly centered on the person with no visible offset/misalignment — confirms `_scaleBbox()` correctly maps the analysis server's (downscaled) bbox coordinates to the native buffer before cropping. A regression here would show the crop offset toward one corner or cutting off the subject. |
+| **Covers** | FR-SNAP-034 |
+
+### TC-K-007 — Streaming Mode: Live Overlay Alignment Unaffected (Regression, v1.6)
+
+| Field | Value |
+|---|---|
+| **ID** | TC-K-007 |
+| **Priority** | Medium |
+| **Pre-condition** | Same as TC-K-005; camera view open in the dashboard |
+| **Steps** | 1. Observe the live bbox overlay drawn on top of the video feed for a moving person. |
+| **Expected** | Overlay boxes track the person accurately with no offset — confirms the `detections` Socket.IO event (unscaled bbox + `remoteFrameWidth`/`remoteFrameHeight`) was left unchanged by the v1.6 crop fix, and `CameraView.tsx`'s proportional scaling still works |
+| **Covers** | FR-SNAP-034 (regression boundary) |
+
 ---
 
 ## Document History
@@ -658,3 +691,4 @@
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for Detection Snapshot Search |
 | 1.4 | 2026-07-09 | LTS Engineering Team | Added Group K — crop quality defaults (640×640/q85) and detail-view object-contain rendering |
+| 1.6 | 2026-07-09 | LTS Engineering Team | Added TC-K-005~007 — streaming-mode crop uses native resolution independent of `AI_MAX_WIDTH`, bbox rescale correctness, live overlay regression check |

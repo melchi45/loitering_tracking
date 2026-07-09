@@ -673,6 +673,16 @@ curl http://127.0.0.1:9997/v3/paths/list
 
 H.264 B-프레임 카메라에서 빈 프레임 발생 시: ingest-daemon은 모든 패킷을 디코딩 후 N번째 프레임만 전송합니다 (`AI_FRAME_INTERVAL`). 구 서브프로세스 백엔드에서 패킷 자체를 스킵하던 방식과 다릅니다.
 
+### AI 프레임 해상도 (`AI_MAX_WIDTH`) — crop 화질과 직결
+
+`ingest_daemon.py`가 `/api/internal/frame/:cameraId`로 보내는 JPEG(≈10 FPS)는 **항상 원본(native) 해상도**입니다(리사이즈 없음). combined/analysis 모드는 이 원본 버퍼에서 직접 crop하므로 자동으로 고화질입니다. `AI_MAX_WIDTH`는 **streaming 모드 전용** — `pipelineManager.js`가 remote analysis 서버로 전송하기 직전 `sharp`로 이 값까지 다운스케일한 **별도 사본**을 만들고(`_downscaleForAnalysis()`), `detectionSnapshots` crop은 로컬에 남겨둔 원본 버퍼에서 이루어집니다. analysis 서버가 반환하는 bbox는 다운스케일 좌표계이므로 crop 직전 `_scaleBbox()`가 원본 좌표계로 보정합니다.
+
+- `AI_MAX_WIDTH`를 낮춰도 **crop 화질은 영향 없음** — streaming↔analysis 서버 간 네트워크/CPU 부하만 조절
+- crop 화질은 `SNAPSHOT_MAX_DIMENSION`/`SNAPSHOT_JPEG_QUALITY`로 별도 조정
+- `AI_MAX_WIDTH`는 이제 `pipelineManager.js`(Node.js)가 읽으므로 변경 후 서버 재시작 필요 — `npm run ingest:restart`(ingest-daemon만 재시작)로는 반영 안 됨
+
+상세: [Design_RTSP_Capture_Backend.md §9.1](../../../docs/design/Design_RTSP_Capture_Backend.md), [RTSP_Capture_Backend_Setup.md](../../../docs/ops/RTSP_Capture_Backend_Setup.md), [Design_Detection_Snapshot_Search.md §15](../../../docs/design/Design_Detection_Snapshot_Search.md)
+
 ### `camera:capabilities` 소켓 이벤트
 
 `streamHandler.js`에서 클라이언트가 `camera:subscribe`를 보낼 때:

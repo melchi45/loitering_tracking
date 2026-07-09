@@ -237,6 +237,7 @@ The client listens for this event and matches it to active detection rows by `ob
 | `SNAPSHOT_MAX_PER_CAMERA_DAY` | `500` | Prune threshold per camera per 24h |
 | `SNAPSHOT_JPEG_QUALITY` | `85` | JPEG compression quality (1–100) |
 | `SNAPSHOT_MAX_DIMENSION` | `640` | Max crop width/height in pixels |
+| `AI_MAX_WIDTH` | `640` | Streaming-mode only — max width of the copy forwarded to the remote analysis server (`pipelineManager.js`). Does NOT bound crop resolution (§12); see `Design_RTSP_Capture_Backend.md` §9.1 |
 
 ---
 
@@ -432,9 +433,53 @@ Any UI surface that lets the user inspect a single saved crop at larger size (ti
 
 ---
 
+## 11. v1.5 Correction — Upstream Frame Resolution Is the Real Constraint
+
+**Revision:** v1.5 · 2026-07-09
+
+§10's `SNAPSHOT_MAX_DIMENSION`/`SNAPSHOT_JPEG_QUALITY` change (crop-step resize/quality) is necessary but not sufficient: the crop's actual source buffer (the JPEG `ingest_daemon.py` sends to Node.js for AI inference — `AI_MAX_WIDTH` env, package default `640`) was itself already downscaled before `cropJpeg()` ever runs, capping achievable quality regardless of `SNAPSHOT_MAX_DIMENSION`.
+
+#### FR-SNAP-031 — AI Frame Resolution Governs Crop Quality Ceiling
+
+The resolution of the JPEG buffer produced by the capture backend for AI inference (`AI_MAX_WIDTH` in `ingest_daemon.py`) MUST be treated as the effective upper bound on `detectionSnapshots.cropData` fidelity — `SNAPSHOT_MAX_DIMENSION` only ever downsizes from that buffer, never upscales past it (`withoutEnlargement: true`). Deployments seeking higher crop fidelity MUST raise `AI_MAX_WIDTH`, not only `SNAPSHOT_MAX_DIMENSION`.
+
+`AI_MAX_WIDTH` default raised `640` → `1920` in `server/.env` and all `.env.*.example` templates. Detail: `Design_RTSP_Capture_Backend.md` §9.1.
+
+> **Superseded by §12 below** — this fix was replaced the same day by a code-level change that decouples crop fidelity from the analysis-server bandwidth setting. Do not raise `AI_MAX_WIDTH` for crop quality; see §12.
+
+---
+
+## 12. v1.6 Superseding Amendment — Crop Uses Native Resolution Regardless of `AI_MAX_WIDTH`
+
+**Revision:** v1.6 · 2026-07-09
+
+§11's FR-SNAP-031 (raise `AI_MAX_WIDTH` to widen the crop source) is **superseded**. It coupled crop fidelity to the streaming→analysis-server network/CPU cost, which is undesirable for bandwidth-constrained deployments. FR-SNAP-031 MUST NOT be applied as written — `AI_MAX_WIDTH` has reverted to `640` with a redefined scope (below).
+
+#### FR-SNAP-032 — Ingest Layer Delivers Native Resolution (supersedes FR-SNAP-031)
+
+The capture backend (`ingest_daemon.py`) MUST deliver frames to the Node.js server at native/decoded resolution, with no intermediate downscale. This buffer MUST be the sole source for both AI inference input and `detectionSnapshots` crop extraction in combined/analysis mode (local inference), requiring no additional coordinate transformation.
+
+#### FR-SNAP-033 — Streaming Mode Decouples Analysis Payload From Crop Source
+
+In `SERVER_MODE=streaming`, the Node.js server MUST retain the native-resolution frame buffer locally and forward only a downscaled copy (target width: `AI_MAX_WIDTH`, default `640`) to the remote analysis server. `detectionSnapshots` crop extraction MUST use the retained native buffer, not the downscaled copy sent for analysis.
+
+#### FR-SNAP-034 — Bounding-Box Coordinate Rescaling
+
+Because the remote analysis server's response bbox coordinates are expressed relative to the downscaled copy it received (`result.frameWidth`/`result.frameHeight`), the streaming server MUST rescale each bbox to the retained native buffer's coordinate space (proportional scale by width/height ratio) before passing it to the crop function. The Socket.IO `detections` event broadcast to browser clients MUST continue to use the original (unscaled) bbox paired with the downscaled `frameWidth`/`frameHeight` — client-side overlay rendering already normalizes against these paired values independent of actual video resolution (`CameraView.tsx`), so this event's contract is unchanged by this amendment.
+
+#### NFR-SNAP-011 — Crop Fidelity Independent of Analysis Bandwidth Setting
+
+Changing `AI_MAX_WIDTH` MUST NOT affect `detectionSnapshots` crop resolution or quality in any server mode. Crop fidelity MUST be governed solely by the camera's native resolution and `SNAPSHOT_MAX_DIMENSION`/`SNAPSHOT_JPEG_QUALITY`.
+
+Configuration: `server/.env` + all `.env.*.example` templates — `AI_MAX_WIDTH` reverted `1920` → `640` (§5 Configuration re-updated). Design detail: `Design_RTSP_Capture_Backend.md` §9.1, `Design_Detection_Snapshot_Search.md` §16.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for Detection Snapshot Search |
 | 1.4 | 2026-07-09 | LTS Engineering Team | §10 amendment — raised crop quality defaults, added NFR-SNAP-010 (no crop-induced data loss in detail views) |
+| 1.5 | 2026-07-09 | LTS Engineering Team | §11 correction — added FR-SNAP-031, `AI_MAX_WIDTH` (ingest_daemon.py) identified as the real crop-fidelity ceiling, raised 640→1920 |
+| 1.6 | 2026-07-09 | LTS Engineering Team | §12 supersedes §11/FR-SNAP-031 — added FR-SNAP-032~034, NFR-SNAP-011: ingest layer now always native resolution, streaming mode downscales only the analysis-server copy and rescales bbox back to native for crop; `AI_MAX_WIDTH` reverted to 640 (§5 Configuration row added) |

@@ -23,8 +23,13 @@ HTTP API (default :7070):
 Environment:
   AI_FRAME_INTERVAL — push every Nth decoded frame to AI (default: 3, overridden per-camera by captureFps)
   JPEG_QUALITY      — JPEG encode quality 1-95 (default: 85)
-  AI_MAX_WIDTH      — resize AI frames to at most this width (default: 640)
   IDR_WAIT_TIMEOUT  — seconds to wait for first IDR keyframe (default: 2)
+
+AI frames are sent at native/decoded resolution (no resize) — this is the sole
+source buffer for both AI inference and detectionSnapshots crop extraction on
+the Node.js side. Node.js downscales its own copy (env AI_MAX_WIDTH, read by
+pipelineManager.js) before forwarding to a remote analysis server in streaming
+mode, so that hop stays cheap while crops stay full-resolution.
 """
 
 import argparse
@@ -58,7 +63,6 @@ log = logging.getLogger("ingest")
 # ── Configuration ─────────────────────────────────────────────────────────────
 AI_FRAME_INTERVAL  = int(os.environ.get("AI_FRAME_INTERVAL", "3"))
 JPEG_QUALITY       = int(os.environ.get("JPEG_QUALITY", "85"))
-AI_MAX_WIDTH       = int(os.environ.get("AI_MAX_WIDTH", "640"))
 IDR_WAIT_TIMEOUT   = float(os.environ.get("IDR_WAIT_TIMEOUT", "2"))
 # Frame watchdog timeout (seconds).  _Watchdog closes the container from a
 # background thread after this many seconds with no RTP packet.  RTSP keepalive
@@ -163,13 +167,6 @@ _MEDIASOUP_AUDIO_PT   = 111         # must match AUDIO_PT constant in mediasoupE
 _SSL_CTX_NOVERIFY = ssl.create_default_context()
 _SSL_CTX_NOVERIFY.check_hostname = False
 _SSL_CTX_NOVERIFY.verify_mode    = ssl.CERT_NONE
-
-
-def _resize_frame(img: Image.Image, max_width: int) -> Image.Image:
-    if img.width <= max_width:
-        return img
-    ratio = max_width / img.width
-    return img.resize((max_width, int(img.height * ratio)), Image.BILINEAR)
 
 
 # ── Camera session ────────────────────────────────────────────────────────────
@@ -372,8 +369,12 @@ class CameraSession:
 
         def _encode_and_post():
             try:
+                # Sent at native/decoded resolution — this is the sole source buffer
+                # for both AI inference and detectionSnapshots crop extraction on the
+                # Node.js side. Node.js (pipelineManager.js) downscales its own copy
+                # before forwarding to a remote analysis server (streaming mode) so
+                # that hop stays cheap while crops stay full-resolution.
                 img = Image.fromarray(raw)
-                img = _resize_frame(img, AI_MAX_WIDTH)
                 buf = io.BytesIO()
                 img.save(buf, format="JPEG", quality=JPEG_QUALITY)
                 jpeg_bytes = buf.getvalue()

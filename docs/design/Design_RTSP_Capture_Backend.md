@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAPTURE-002 |
-| **Version** | 1.6 |
+| **Version** | 1.8 |
 | **Status** | Active |
-| **Date** | 2026-06-11 |
+| **Date** | 2026-07-09 |
 | **Ops Guide** | [RTSP_Capture_Backend_Setup.md](../ops/RTSP_Capture_Backend_Setup.md) |
 | **Related Design** | [Design_FFmpeg_RTSP_Capture.md](../design/Design_FFmpeg_RTSP_Capture.md) · [Design_RTSP_WebRTC_Architecture.md](../design/Design_RTSP_WebRTC_Architecture.md) |
 
@@ -592,6 +592,21 @@ stdout: [FF D8 FF ... FF D9][FF D8 FF ... FF D9][FF D8 FF ... (불완전)]
 | `GSTREAMER_HW_ACCEL` | `auto` | gstreamer | GStreamer 하드웨어 가속 모드: `auto` / `nvdec` / `vaapi` / `software` |
 | `PYAV_HW_ACCEL` | `none` | pyav | PyAV 하드웨어 가속 (인라인 사이드카): `none` / `cuda` / `videotoolbox` |
 | `MAX_PIPELINES` | `0` | 전체 | 동시 캡처 파이프라인 최대 수 (0=무제한) |
+| `AI_MAX_WIDTH` | `640` | streaming (Node.js) | (§9.1) streaming 서버가 remote analysis 서버로 전송하는 다운스케일 사본의 최대 가로 픽셀 |
+| `JPEG_QUALITY` | `85` | ingest-daemon | AI JPEG 인코딩 품질(1-95) — 항상 원본(native) 해상도로 인코딩 |
+
+### 9.1 AI 프레임 해상도와 `detectionSnapshots` crop 화질
+
+`ingest_daemon.py`의 AI 스레드(§6.2 다이어그램, `push_jpeg()`)는 프레임을 **원본(native, 디코딩된 그대로) 해상도로** JPEG 인코딩하여 Node.js `/api/internal/frame/:cameraId`로 전송합니다 — 리사이즈하지 않습니다. 이 원본 JPEG 버퍼가 `pipelineManager.js`의 `capture.on('frame', jpegBuffer)`에서 유일한 소스가 되며, 서버 모드별로 다르게 소비됩니다:
+
+- **combined / analysis 모드(로컬 추론)**: `detection.js`가 이 원본 버퍼를 직접 받아 내부적으로 640×640 letterbox 재조정 후 추론합니다. bbox는 `_postprocess()`가 원본 좌표계(`origW`/`origH`)로 스케일-백하므로, `detectionSnapshots` crop(`snapshotService.cropJpeg()`)도 항상 원본 해상도에서 정확히 잘라냅니다. **추가 코드 없이 자동으로 고화질 crop이 보장됩니다.**
+- **streaming 모드(원격 analysis 서버 위임)**: `pipelineManager.js`가 원본 버퍼를 그대로 보관하되(`ctx._pendingFrame.buf`), remote analysis 서버로 보내기 **직전에만** `sharp`로 `AI_MAX_WIDTH`(기본 640) 폭까지 다운스케일한 **별도 사본**을 만들어 전송합니다(`_downscaleForAnalysis()`). analysis 서버가 반환하는 bbox는 이 다운스케일 사본의 좌표계(`result.frameWidth`/`result.frameHeight`)를 기준으로 하므로, `_processRemoteResult()`가 `_scaleBbox()`로 원본 좌표계로 보정한 뒤 원본 버퍼에서 crop합니다.
+
+이 설계로 두 목표를 동시에 달성합니다: (1) remote analysis 서버로 가는 HTTP 페이로드/디코드 부하는 `AI_MAX_WIDTH`로 계속 작게 유지되고, (2) `detectionSnapshots` crop은 항상 원본 해상도에서 추출되어 `AI_MAX_WIDTH` 설정과 무관하게 고화질입니다.
+
+**`AI_MAX_WIDTH`를 낮추거나 높여도 crop 화질에는 영향이 없습니다** — 이 값은 오직 analysis 서버로 보내는 사본의 네트워크/CPU 부하만 조절합니다. crop 화질은 이제 카메라의 실제 해상도(ingest-daemon이 그대로 전달)와 `SNAPSHOT_MAX_DIMENSION`/`SNAPSHOT_JPEG_QUALITY`(`docs/design/Design_Detection_Snapshot_Search.md` §14)에만 좌우됩니다.
+
+**부하 참고:** ingest-daemon → Node.js 홉은 이제 원본 해상도를 항상 전송하므로 카메라 해상도가 높을수록(예: 4K) 이 홉의 CPU(JPEG 인코딩/디코드)·네트워크가 증가합니다. `!ctx.useWebRTC` 카메라(WebRTC 미사용, 브라우저에 raw JPEG 프레임 직접 전송)의 경우 브라우저로 가는 페이로드도 함께 커집니다. GPU/ONNX 추론 시간 자체는 영향받지 않습니다(입력 텐서가 항상 640×640으로 고정).
 
 `.env` 설정 예시:
 
@@ -780,3 +795,5 @@ inp.read_timeout = int(APP_RTP_READ_TIMEOUT * 1_000_000)  # μs 단위
 | 1.4 | 2026-06-23 | §12 App RTP watchdog segfault 수정 — _Watchdog→read_timeout(AVFormatContext.io_timeout) 교체, codec=unknown cross-thread close 금지, APP_RTP_READ_TIMEOUT=60s |
 | 1.5 | 2026-06-26 | §2 아키텍처 다이어그램에 ingest-daemon 항목 추가 및 현재 기본값 표기 |
 | 1.6 | 2026-07-02 | §10.4 추가 — 카메라 삭제 시 ingest-daemon DELETE가 무재시도·무로그로 실패해 삭제된 카메라를 계속 재연결 시도하던 결함 수정 (재시도 1회 + 로그 + stopCamera()가 정리 작업을 await) |
+| 1.7 | 2026-07-09 | §9 환경변수 표에 `AI_MAX_WIDTH`/`JPEG_QUALITY` 추가, §9.1 신규 — AI 프레임(YOLO 추론+crop 공용 소스 원본) 해상도가 `detectionSnapshots` crop 화질의 실제 상한임을 문서화; 기본값 640→1920 상향 근거 및 CPU/대역폭 트레이드오프 명시 |
+| 1.8 | 2026-07-09 | §9.1 재작성 — v1.7의 "AI_MAX_WIDTH 상향" 방식을 아키텍처 수정으로 대체: `ingest_daemon.py`는 항상 원본(native) 해상도를 전송(리사이즈 제거), `AI_MAX_WIDTH`는 streaming 모드에서 Node.js(`pipelineManager.js`)가 remote analysis 서버 전송 직전 다운스케일하는 사본에만 적용, analysis 결과 bbox는 `_scaleBbox()`로 원본 좌표계 보정 후 crop — analysis 서버 부하와 crop 화질을 완전히 분리 |
