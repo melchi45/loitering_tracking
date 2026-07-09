@@ -349,7 +349,7 @@ loitering_tracking/
 | GET | `/api/snapshots` | 감지 스냅샷 목록 조회 (query: cameraId, objectId, className, isLoitering, from, to, q, limit, offset — cropData 제외) |
 | GET | `/api/snapshots/:id` | 스냅샷 상세 조회 (cropData 포함) |
 | DELETE | `/api/snapshots/:id` | 스냅샷 삭제 |
-| GET | `/api/search` | 통합 검색 — alerts/detections/faces/events/matches/appearance(Proposed, Qdrant 필요) (query: q(필수), types?, from?, to?, minConfidence?, maxConfidence?, upperColor?, lowerColor?(FR-CCFR-066 색상 사전필터), limit?, offset?) |
+| GET | `/api/search` | 통합 검색 — alerts/detections/faces/events/matches/appearance(Implemented, opt-in — `QDRANT_ENABLED=true` 필요, 색상 사전필터 스크롤만 지원·임베딩 유사도 재랭킹 없음) (query: q(필수), types?, from?, to?, minConfidence?, maxConfidence?, upperColor?, lowerColor?(FR-CCFR-066 색상 사전필터, ✅ Done), limit?, offset?) |
 | GET | `/api/stats` | 시스템 전체 통계 (카메라/구역/이벤트/알림/얼굴 요약) |
 | GET | `/api/stats/items` | 특정 타입·날짜·시간대 아이템 목록 (query: type(필수)=detections\|alerts\|matches\|events, date(필수), hour(필수, 0-23)) |
 | GET | `/api/stats/hourly` | 일자별 시간대 통계 (query: date, 기본 오늘) |

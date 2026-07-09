@@ -225,6 +225,9 @@ HTTP_PORT=3001
 HTTPS_ENABLED=false   # 내부망 운영 시 HTTPS 불필요 (방화벽으로 외부 차단)
 
 # ── 배회 감지 파라미터 ────────────────────────────────────────────────────────
+# MIN_DISPLACEMENT_PX와 behaviorEngine.js의 velocity 계산은 모두 픽셀 좌표계 기준이며,
+# 카메라별 픽셀→미터 환산(캘리브레이션)은 아직 구현되지 않았다 (Proposed —
+# docs/design/Design_LTS2026_Loitering_Tracking_System.md §6.2.1, MRD Phase 12b-4).
 LOITERING_THRESHOLD_SEC=30
 MIN_DISPLACEMENT_PX=50
 REENTRY_WINDOW_SEC=120
@@ -556,6 +559,35 @@ docker compose -f docker-compose.analysis.yml logs -f lts-analysis
 docker compose -f docker-compose.analysis.yml build lts-analysis
 docker compose -f docker-compose.analysis.yml up -d lts-analysis
 ```
+
+### 7.5 Qdrant 벡터 DB (opt-in — AI-05 Phase-3 / CrossCamera Phase-2)
+
+`docker-compose.yml`(combined 기본 스택)에 `qdrant` 서비스가 기본 포함되어 있습니다 — `docker compose up -d`로 전체 스택을 올리면 함께 기동되지만, `server/.env`의 `QDRANT_ENABLED=true`(기본값 `false`) 없이는 서버가 연결을 시도하지 않으므로 미사용 시에도 무해합니다.
+
+```bash
+# qdrant만 개별 기동 (전체 스택 재기동 없이)
+docker compose up -d qdrant
+
+# 헬스체크
+curl http://localhost:6333/collections   # {"result":{"collections":[]}}
+```
+
+```dotenv
+# server/.env — Qdrant 활성화
+QDRANT_ENABLED=true
+QDRANT_URL=http://localhost:6333   # docker-compose.yml 기본 포트 매핑과 일치
+```
+
+활성화 시 서버 시작 로그에서 확인:
+```
+[QdrantService] connected — collections ready (http://localhost:6333)
+[QdrantService] created collection 'face_embeddings' (dim=512)
+[QdrantService] created collection 'appearance_embeddings' (dim=256)
+```
+
+Qdrant가 응답하지 않으면(`_call()`이 5회 연속 실패) 서킷브레이커가 열려 15초간 호출을 건너뛰고 기존 인메모리 갤러리 동작으로 자동 폴백합니다 — `QdrantService` 관련 에러가 있어도 배회 감지·Re-ID 자체는 중단되지 않습니다. 상세 설계는 [Design_AI_AppearanceReID.md §12.3](../design/Design_AI_AppearanceReID.md#123-vector-db-확장--기존-qdrant-인프라-재사용) 참조.
+
+**운영 참고**: `GET /api/search?types=appearance&upperColor=&lowerColor=`는 색상 사전 필터(스크롤)만 수행하며 임베딩 유사도 재랭킹은 하지 않습니다(§12.4). 또한 Loitering/Intrusion 알림(`/api/alerts`) 자체에는 아직 색상 속성이 첨부되지 않으므로, 운영자가 색상으로 대상을 식별하려면 스냅샷 검색(`GET /api/search?types=detections`)을 함께 사용해야 합니다 — 알림 레코드 속성 첨부는 Phase 12b-5(Proposed, 미구현)로 별도 로드맵 등재되어 있습니다.
 
 ---
 
@@ -1009,3 +1041,6 @@ curl http://localhost:3443/api/galleries/match-history?limit=5
 | 1.9 | 2026-07-09 | 섹션 1.4에 Phase-1.5(K-Means, 모델 불필요) 안내 추가 — CCTV_IPTV_상의하의_색상분류_가이드.md 최종 반영 확인 |
 | 1.10 | 2026-07-09 | 원본 가이드 `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` 삭제 완료 — 내용 전체가 §1.4에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |
 | 1.11 | 2026-07-09 | 섹션 1.4 전면 개정 — 전체 AI 모델 카탈로그(YOLO 20종 + face/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid 8종) 표로 교체, SCHP/OSNet "아직 코드에 통합되지 않았다"는 오래된 서술 정정(실제로는 opt-in 구현 완료), PPE/Fire-Smoke HuggingFace 자동 export·OpenPAR manualOnly 안내 추가 — [Design_AI_Model_Catalog.md](../design/Design_AI_Model_Catalog.md) 참조 |
+| 1.12 | 2026-07-09 | 섹션 5.1에 `QDRANT_ENABLED`/`QDRANT_URL` 환경변수 추가; 섹션 7.5 신설 — `docker-compose.yml`의 opt-in `qdrant` 서비스 기동·헬스체크·서킷브레이커 폴백 동작 안내 |
+| 1.13 | 2026-07-09 | 배회 감지 파라미터 표에 `MIN_DISPLACEMENT_PX`/velocity 픽셀-미터 캘리브레이션 미구현 안내 주석 추가 — `docs/rfp/Loitering_Detection_가이드.md` 흡수 반영, 원본 삭제 |
+| 1.14 | 2026-07-09 | §7.5에 색상 사전 필터/알림 속성 미첨부 운영 참고 추가 — `docs/rfp/ReID_및_색상분석_활용가이드.md` 흡수 반영, 원본 삭제 |

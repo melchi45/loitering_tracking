@@ -511,14 +511,18 @@ isPointInZone(x, y, zone):
   type:           'MONITOR'|'EXCLUDE'
   polygon:        [{x, y}]       // ≥ 3 vertices (pixel coords)
   dwellThreshold: number         // seconds before loitering flag
-  minDisplacement: number        // max movement (px) for loitering (default 50)
-  reentryWindow:  number         // seconds for re-entry bonus (default 60)
+  minDisplacement: number        // max movement (px) for loitering (default 50) — pixel-native, no meter conversion (see note below)
+  reentryWindow:  number         // seconds for re-entry bonus (default 120)
   targetClasses:  string[]       // e.g. ['person', 'vehicle']
   minRiskScore:   number         // 0–1 minimum riskScore to emit alert
   schedule:       { startTime, endTime, days: string[] } | null
   createdAt:      string         // ISO-8601
 }
 ```
+
+> **Correction (2026-07-09)**: `reentryWindow` default was previously documented here as 60s — the actual code default (`zoneManager.js`, `REENTRY_WINDOW_SEC` env fallback) is **120s**, matching `Design_LTS2026_Loitering_Tracking_System.md` §6.3 and `docs/ops/Distributed_AI_Pipeline_Setup.md`. Corrected above.
+>
+> **Unit note (Proposed, not implemented)**: `minDisplacement` and all velocity computation in `behaviorEngine.js` are pixel-native — no per-camera pixel-to-meter calibration exists. `docs/rfp/Loitering_Detection_가이드.md` (absorbed into SRS, source deleted) specified its rules in real-world units ("0.2 m/s", "3 m"); see `Design_LTS2026_Loitering_Tracking_System.md` §6.2.1 for the proposed calibration Phase (`docs/mrd/MRD_LTS2026.md` §6.4 Phase 12b-4).
 
 ### 6.4 Zone API Router (`zones.js`)
 
@@ -769,3 +773,4 @@ Client               REST API (zones.js)       ZoneManager        BehaviorEngine
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Object Tracking |
+| 1.1 | 2026-07-09 | Youngho Kim | §6.3 Zone Schema `reentryWindow` 기본값 오기재 수정(60→120, 실제 코드/타 문서와 일치); 픽셀-미터 캘리브레이션 격차 노트 추가 — `docs/rfp/Loitering_Detection_가이드.md` 흡수 반영, 원본 삭제 |

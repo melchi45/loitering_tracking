@@ -135,8 +135,9 @@ Same-frame entries are excluded from gallery matching to prevent false-positive 
 - **Dwell condition**: `dwellTime ≥ dwellThreshold` AND `10s-window maxDisplacement < minDisplacement`.
 - **Pacing score**: x-direction reversal count, saturates at 10 reversals → score 1.0.
 - **Circular motion score**: `max(0, 1 − straightLineDisplacement / totalPathLength)`.
-- **Composite risk score** (5 factors, weights sum to 1.0): dwell 35%, revisit 30%, low-velocity 15%, pacing 12%, circular 8%.
+- **Composite risk score** (5 factors, weights sum to 1.0): dwell 35%, revisit 30%, low-velocity 15%, pacing 12%, circular 8%. Dwell ratio saturates at 2× `dwellThreshold`.
 - Per-zone `minRiskScore` gate: alert suppressed if risk score < threshold.
+- *(Proposed, not implemented)* Per-camera pixel-to-meter calibration — `minDisplacement`/velocity are pixel-native today, no real-world unit support. See `docs/design/Design_LTS2026_Loitering_Tracking_System.md` §6.2.1.
 
 ### 4.10 HSV Color Classification
 
@@ -302,3 +303,4 @@ Changes take effect on the next processed frame without server restart.
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for Object Tracking |
+| 1.1 | 2026-07-09 | Youngho Kim | §4.9 risk-score saturation 명확화; 픽셀-미터 캘리브레이션 Proposed 항목 추가 — `docs/rfp/Loitering_Detection_가이드.md` 흡수 반영, 원본 삭제 |

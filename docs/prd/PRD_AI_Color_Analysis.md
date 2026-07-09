@@ -186,7 +186,7 @@ When DNN inference is unavailable, the HSV histogram method provides approximate
 - [ ] Implement `_runPAR()` in `colorClothService.js` to replace heuristic when `openpar.onnx` is available
 - [ ] Add EMA temporal smoothing (`smoothColorHistory()`) for both upper and lower color outputs
 - [x] Implement color-prefiltered search — done as `GET /api/search?types=detections|appearance&upperColor=&lowerColor=` (`server/src/api/search.js`), not a new `/api/events` endpoint as originally scoped
-- [ ] Extend loitering alert schema to include `appearance.upperBody` and `appearance.lowerBody`
+- [ ] Extend loitering alert schema to include `appearance.upperBody` and `appearance.lowerBody` — confirmed still unimplemented (2026-07-09, `ReID_및_색상분석_활용가이드.md` §3 final check before source guide deletion); now tracked as FR-CCFR-067 in `docs/srs/SRS_CrossCamera_Face_Tracking.md` §14, design in `docs/design/Design_AI_AppearanceReID.md` §12.7, roadmap `docs/mrd/MRD_LTS2026.md` §6.4 Phase 12b-5
 - [ ] Add `colorFilter` zone policy support (alert when specific colors enter zone)
 - [ ] Benchmark Phase-1 heuristic vs. Phase-2 ML model on RAP v2 dataset
 - [ ] Add color description display to `FullscreenCameraView.tsx` detection panel
@@ -206,3 +206,4 @@ When DNN inference is unavailable, the HSV histogram method provides approximate
 | 1.2 | 2026-07-09 | Youngho Kim | Added Phase-1.5 (K-Means on existing fixed ROI, no model) — M6 milestone, TODO item, phase-status note — closes the guide's tier-4 gap ahead of source guide deletion |
 | 1.3 | 2026-07-09 | Youngho Kim | Source guide `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` deleted — full content confirmed reflected in §4.3/§8 |
 | 1.4 | 2026-07-09 | Youngho Kim | Code sync — M4 (color search) and M5 (Human Parsing) flipped Pending/Proposed→Done; AC-10 and §8.2 endpoint corrected to actual delivered shape (`GET /api/search`, not `/api/events`); M6 (Phase-1.5) confirmed still not implemented |
+| 1.5 | 2026-07-09 | Youngho Kim | §8.2 alert-schema TODO cross-referenced to new FR-CCFR-067/Phase 12b-5 (confirmed still unimplemented) — `ReID_및_색상분석_활용가이드.md` §3 최종 반영 확인, 원본 가이드 삭제 |

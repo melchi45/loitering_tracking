@@ -96,8 +96,9 @@ A technical user responsible for deploying and maintaining the system, integrati
 - Circular motion score: `max(0, 1 − straightLineDisplacement / totalPathLength)`.
 - Re-entry / revisit count with configurable reentry window.
 - Appearance-based cross-ID revisit detection: ArcFace primary (threshold 0.45), clothing color fallback; 2-minute appearance memory per zone.
-- Composite risk score: `riskScore = min(1, dwell×0.35 + revisit×0.30 + lowVelocity×0.15 + pacing×0.12 + circular×0.08)`.
+- Composite risk score: `riskScore = min(1, dwell×0.35 + revisit×0.30 + lowVelocity×0.15 + pacing×0.12 + circular×0.08)`, where the dwell term saturates at 2× `dwellThreshold` (0.5 ratio exactly at the threshold).
 - Per-zone `minRiskScore` threshold for alert suppression (0.0–1.0).
+- *(Proposed, not implemented)* Per-camera pixel-to-meter calibration so `minDisplacement`/velocity can be set in real-world units instead of pixels — see `docs/design/Design_LTS2026_Loitering_Tracking_System.md` §6.2.1.
 
 ### 4.5 Zone Management
 
@@ -314,3 +315,4 @@ A technical user responsible for deploying and maintaining the system, integrati
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for LTS2026 Loitering Tracking System |
+| 1.1 | 2026-07-09 | Youngho Kim | §4.4 risk-score saturation 명확화; 픽셀-미터 캘리브레이션 Proposed 항목 추가 — `docs/rfp/Loitering_Detection_가이드.md` 흡수 반영, 원본 삭제 |

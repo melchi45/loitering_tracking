@@ -319,6 +319,8 @@ GET /api/events?upperColor=red&lowerColor=blue&fromTime=2026-05-01&toTime=2026-0
 
 Response: list of events where person wore matching colors.
 
+**구현 현황 확인 (2026-07-09, `docs/rfp/ReID_및_색상분석_활용가이드.md` 최종 정합성 확인 및 삭제 전)**: 이 가이드의 §3(이벤트 설명/Event Metadata — 알림에 색상 속성 첨부)이 요구하는 내용은 사실 이 RFP의 §7.2가 v1.0(2026-05-28)에서 이미 명세했었다. 그러나 실제 구현을 확인한 결과 **§7.2 Alert Schema Extension은 여전히 미구현**이다 — `alertService.js#createAlert()`는 `color`/`appearance` 필드를 저장하지 않는다. §7.3의 검색 엔드포인트 모양도 실제로는 `GET /api/events?upperColor=`가 아니라 `GET /api/search?types=detections|appearance&upperColor=&lowerColor=`로 구현되었다(FR-CCFR-066, ✅ Done — `server/src/api/search.js`). §7.2(알림 자체에 색상 첨부)는 별도 항목으로 `docs/mrd/MRD_LTS2026.md` §6.4 Phase 12b-5, `docs/srs/SRS_CrossCamera_Face_Tracking.md` FR-CCFR-067(Proposed, 미구현), `docs/design/Design_AI_AppearanceReID.md` §12.7에 기록했다.
+
 ---
 
 ## 8. Performance Requirements
@@ -495,3 +497,4 @@ Output: detection.color.upper / detection.color.lower (color name)
 | 1.3 | 2026-07-09 | Youngho Kim | CE2P 후보 검토·제외 근거, Phase-1.5(가이드 4번째 티어 — K-Means, 모델 불필요) 제안 추가 — 원본 가이드 최종 반영 확인 |
 | 1.4 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` 삭제 완료 — 내용 전체가 Appendix E에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |
 | 1.5 | 2026-07-09 | Youngho Kim | 코드 동기화 — Appendix E Phase-3를 Proposed→Implemented(opt-in)로 갱신 (`colorClothService.js#_runHumanParsing`/`kmeansColor.js` 구현 확인); Phase-1.5는 여전히 미구현 |
+| 1.6 | 2026-07-09 | Youngho Kim | §7.3에 구현 현황 확인 추가 — §7.2 Alert Schema Extension은 여전히 미구현(Phase 12b-5로 별도 기록), §7.3 검색 엔드포인트는 `GET /api/search`로 구현됨(FR-CCFR-066) — `ReID_및_색상분석_활용가이드.md` 최종 반영 확인, 원본 가이드 삭제 |

@@ -401,6 +401,12 @@ No dedicated REST endpoints for color analysis. Color data flows exclusively thr
 
 ---
 
+## 13. Cross-Reference — Alert Attribute Enrichment (Proposed, out of this doc's scope)
+
+> **Final consistency check before deleting `docs/rfp/ReID_및_색상분석_활용가이드.md`.** This guide's §3 ("이벤트 설명/Event Metadata") asks for the color this document already computes (§3–§9 of this SRS) to be attached to loitering/intrusion **alert** records, not just detection snapshots. That requirement belongs to the alert/behavior layer, not the color-computation layer this document specifies, so it is not defined here as a new FR-CLR — it is tracked as **FR-CCFR-067** in `docs/srs/SRS_CrossCamera_Face_Tracking.md` §14 (📝 Proposed, not implemented), with design detail in `docs/design/Design_AI_AppearanceReID.md` §12.7 and roadmap entry `docs/mrd/MRD_LTS2026.md` §6.4 Phase 12b-5. This document's own color output schema (FR-CLR-009) is unaffected — the gap is that `alertService.js` doesn't yet read it.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
@@ -410,3 +416,4 @@ No dedicated REST endpoints for color analysis. Color data flows exclusively thr
 | 1.2 | 2026-07-09 | Youngho Kim | Added §12 Phase-1.5 proposed requirements (FR-CLR-028~029) — K-Means dominant color on the existing fixed ROI, no model required; closes the guide's tier-4 gap ahead of source guide deletion |
 | 1.3 | 2026-07-09 | Youngho Kim | Source guide `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` deleted — full content confirmed reflected in §11–12, in-doc citations updated to archival notes |
 | 1.4 | 2026-07-09 | Youngho Kim | Code sync — §11 all FR-CLR-022~027 flipped Proposed→Implemented (opt-in, no behavioral test coverage yet); §12 Phase-1.5 (FR-CLR-028~029) confirmed still unimplemented, not touched |
+| 1.5 | 2026-07-09 | Youngho Kim | Added §13 — cross-reference to FR-CCFR-067 (Alert Attribute Enrichment, Proposed) closing `ReID_및_색상분석_활용가이드.md` §3; source guide deleted |

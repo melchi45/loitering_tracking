@@ -73,7 +73,7 @@ function buildRouter(db, qdrantService = null) {
           });
         }
 
-        // Color pre-filter (FR-CCFR-066, Proposed) — narrows candidates by clothing
+        // Color pre-filter (FR-CCFR-066, Done) — narrows candidates by clothing
         // color before ranking; distinct from real-time Re-ID weighting (§12.1).
         if (upperColor) {
           const uc = String(upperColor).toLowerCase();

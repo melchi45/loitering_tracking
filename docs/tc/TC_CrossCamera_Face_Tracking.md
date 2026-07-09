@@ -649,6 +649,11 @@ No additional npm packages — uses built-in fetch (Node 18+)
 - **Steps:** Query the appearance search with `types=appearance&upperColor=red&lowerColor=black` against a fixture set containing both matching and non-matching colors → assert non-matching-color entries are excluded
 - **Note:** `GET /api/search?types=appearance` + `qdrantService.scrollAppearanceByFilter()` is implemented and testable today; the "ranked by embedding cosine similarity within the filtered set" half of this TC is not implemented (no query-by-example step exists yet — see Design §12.4) and should be split out or deferred when this TC is finally automated
 
+### TC-I-008 (Planned — not implemented, FR-CCFR-067 / MRD Phase 12b-5) — Alert Records Carry Color Attributes
+- **SRS:** FR-CCFR-067
+- **Steps:** Trigger a loitering alert for a tracked person with known `color.upper`/`color.lower` → assert `POST` alert record / `GET /api/alerts` / `GET /api/search?types=alerts` response / `alert:new` Socket.IO payload all include the same color values
+- **Note:** not runnable today — `alertService.js#createAlert()` has no color/cloth field. Tracked here (`ReID_및_색상분석_활용가이드.md` §3 final check before source guide deletion) so this TC is ready to activate once `Design_AI_AppearanceReID.md` §12.7 is implemented.
+
 ---
 
 ## 12. Test Execution Order
@@ -740,5 +745,6 @@ Phase 10 — Appearance Re-ID Upgrade (Group I, Planned — not yet executable)
 | 1.1 | 2026-06-25 | LTS Engineering Team | Group H (TC-H-001~H-006) 추가 — DB 영속화 face-trajectories REST API 테스트 |
 | 1.2 | 2026-07-09 | Youngho Kim | Group I (TC-I-001~I-006, Planned) 추가 — Appearance Re-ID 임베딩 모델 고도화 갭 분석 기반 테스트 명세 (미구현); TOC 누락 항목(Group H) 보정 |
 | 1.3 | 2026-07-09 | Youngho Kim | TC-I-007 (Planned) 추가 — 색상 사전 필터링 검색 최적화 테스트 명세; 원본 가이드 삭제 전 최종 반영 확인 |
+| 1.4 | 2026-07-09 | Youngho Kim | TC-I-008 (Planned) 추가 — 알림 레코드 색상 속성 첨부(FR-CCFR-067) 테스트 명세 — `ReID_및_색상분석_활용가이드.md` §3 최종 반영 확인, 원본 가이드 삭제 |
 | 1.4 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/Multi_Camera_Tracking_ReID_가이드.md` 삭제 완료 — 내용 전체가 §11에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |
 | 1.5 | 2026-07-09 | Youngho Kim | 코드 동기화 — §11 코드는 구현 완료(opt-in)로 확인, 테스트 스크립트 부재만 남은 상태로 재정의; TC-I-005(장시간 재등장)는 현재 실패할 것으로 예상됨을 명시 (Qdrant 조회 미배선) |

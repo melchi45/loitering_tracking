@@ -253,9 +253,18 @@ Multi-Camera Tracking Re-ID 가이드(원본 삭제됨, 내용 본 §8에 통합
 |---|---|
 | 카메라 간 이동 추적 (주차장→출입문→로비) | **이미 구현됨** — §2~§3의 PersonTrajectory/PersonSegment + Person Trails 패널이 정확히 이 시나리오를 표시 (`Camera-A → Camera-B ► Here`) |
 | Loitering 대상자 이동경로 분석 (출입구 배회→엘리베이터→복도 재등장) | **이미 구현됨** — 동일 Person Trails 메커니즘, §5 Multi-Camera Dwell Aggregation(Phase-2, 미구현)이 완전한 총 체류시간 합산까지 확장할 계획 |
-| 조건 검색 (빨간 상의 + 검은 하의 + 배회 이벤트) | **부분 구현** — 배회 이벤트 자체는 완전 구현, 색상 조건 검색은 `docs/prd/PRD_AI_Color_Analysis.md` §8.2 TODO(`GET /api/events?upperColor=&lowerColor=`)로 아직 미구현 |
+| 조건 검색 (빨간 상의 + 검은 하의 + 배회 이벤트) | **구현됨(필터 단계만)** — `GET /api/search?types=appearance\|detections&upperColor=&lowerColor=`(FR-CCFR-066, ✅ Done). 원래 §8.2 4번/`PRD_AI_Color_Analysis.md` §8.2가 제안한 `GET /api/events?upperColor=&lowerColor=` 대신 기존 통합검색에 파라미터 추가하는 방식으로 구현됨 — 색상 필터로 후보를 줄인 뒤 Re-ID 임베딩 유사도로 재정렬하는 2단계 중 1단계만 구현(§8.4 참조) |
 
-가이드가 제시하는 활용 사례 중 "카메라 간 이동 추적"과 "이동경로 분석"은 격차가 없다 — 이번 절(§8)의 실제 신규 격차는 8.1~8.2(임베딩 모델 부재)와 색상 조건 검색 엔드포인트 미구현뿐이다.
+가이드가 제시하는 활용 사례 중 "카메라 간 이동 추적"과 "이동경로 분석"은 격차가 없다.
+
+### 8.4 `ReID_및_색상분석_활용가이드.md` 최종 정합성 확인 (2026-07-09, 원본 삭제 전)
+
+이 가이드는 §8.1~8.3에서 Multi-Camera Tracking Re-ID 가이드와 함께 근거로만 인용되었을 뿐, 자체 절 단위 확인은 없었다. 가이드의 핵심 절 3개를 재확인한다:
+
+- **§1(색상=보조 Feature), §2(검색 기능)**: 위 §8.1~8.3에서 이미 확인됨 — 80/20 가중치 구현, 색상 사전 필터 구현(1단계만).
+- **§3(이벤트 설명/Event Metadata)**: **신규 확인된 격차** — Loitering/Intrusion 알림에 색상 속성이 첨부되지 않는다 (`alertService.js#createAlert()`가 `color`/`cloth` 필드를 저장하지 않음). 상세 격차 분석과 제안은 `docs/design/Design_AI_AppearanceReID.md` §12.7, 요구사항은 `docs/srs/SRS_CrossCamera_Face_Tracking.md` FR-CCFR-067(Proposed, 미구현) 참조. 로드맵: `docs/mrd/MRD_LTS2026.md` §6.4 Phase 12b-5.
+
+이 확인을 마지막으로 원본 가이드 `docs/rfp/ReID_및_색상분석_활용가이드.md`를 삭제한다.
 
 ---
 
@@ -269,3 +278,4 @@ Multi-Camera Tracking Re-ID 가이드(원본 삭제됨, 내용 본 §8에 통합
 | 1.3 | 2026-07-09 | Youngho Kim | §8.3 추가 — Multi-Camera 가이드 활용사례(이동추적/이동경로분석) 기존 구현 확인, 색상 검색 API 사전필터 제안(§8.2 4번) — 원본 가이드 삭제 전 최종 반영 확인 |
 | 1.4 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/Multi_Camera_Tracking_ReID_가이드.md` 삭제 완료 — 내용 전체가 §8에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |
 | 1.5 | 2026-07-09 | Youngho Kim | 코드 동기화 — §8을 Proposed→Implemented(opt-in)로 갱신 (`appearanceReidService.js`/`qdrantService.js` 구현 확인) |
+| 1.6 | 2026-07-09 | Youngho Kim | §8.3 색상 조건 검색 상태 정정(미구현→구현됨, FR-CCFR-066); §8.4 신설 — `ReID_및_색상분석_활용가이드.md` 최종 정합성 확인, 신규 격차(알림 속성 미첨부, Phase 12b-5) 발견, 원본 가이드 삭제 |

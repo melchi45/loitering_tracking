@@ -22,6 +22,8 @@
 | 1.3 | 2026-07-09 | Youngho Kim | §12.4 추가 — 색상 사전 필터링 기반 검색 성능 최적화(Proposed); 원본 가이드 삭제 전 최종 반영 확인 |
 | 1.4 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/Multi_Camera_Tracking_ReID_가이드.md` 삭제 완료 — 내용 전체가 §12에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |
 | 1.5 | 2026-07-09 | Youngho Kim | 코드 동기화 — §12를 Proposed→Implemented(opt-in)로 갱신, §12.6 구현 현황(FR 단위) 신설. `appearanceReidService.js`/`qdrantService.js`/`_weightedAppearSim()` 실제 구현 확인. FR-CCFR-064(장시간 재등장 조회 미배선)·065(정확도 미검증)는 잔여 격차로 명시 |
+| 1.6 | 2026-07-09 | Youngho Kim | §12.7 신설 — `ReID_및_색상분석_활용가이드.md`를 1차 대상으로 한 절 단위 최종 정합성 확인; 신규 격차(알림 레코드에 색상 속성 미첨부) 발견 및 Phase 12b-5(Event Metadata Enrichment, Proposed) 제안 |
+| 1.7 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/ReID_및_색상분석_활용가이드.md` 삭제 완료 — 전체 내용이 §12(특히 §12.7)에 반영되었음을 확인 |
 
 ---
 
@@ -618,3 +620,26 @@ Qdrant 인스턴스 (M3, 기존 계획)
 | FR-CCFR-066 | 색상 사전 필터 검색 | ✅ Done | `GET /api/search?types=appearance\|detections&upperColor=&lowerColor=` (§12.4) |
 
 **공통 전제**: 세 가지 모두 opt-in이다 — `appearance_reid_osnet.onnx` 모델 파일은 `npm run download-models`에서 기본 비활성(`enabled:false`, 라이선스 검토 후 수동 활성화 필요), `QDRANT_ENABLED=false`가 기본값이며 비활성 시 기존 Phase-1 동작과 100% 동일하게 폴백한다. 자동화 테스트는 없음(TC_CrossCamera_Face_Tracking.md §11 참조).
+
+### 12.7 `ReID_및_색상분석_활용가이드.md` 최종 정합성 확인 및 삭제 전 격차 재검토 (2026-07-09)
+
+§12.1~12.6은 이 가이드를 `Multi_Camera_Tracking_ReID_가이드.md`와 함께 근거 자료로만 인용했을 뿐, 이 가이드 자체를 1차 대상으로 한 절 단위 정합성 확인은 수행하지 않았다. 삭제 전 마지막으로 가이드의 3개 절을 항목별로 재확인한다.
+
+| 가이드 절 | 핵심 주장 | 현재 구현 대응 |
+|---|---|---|
+| §1 Re-ID를 위한 활용 (색상 = 보조 Feature) | Re-ID 핵심 Feature ≠ 색상, Re-ID 보조 Feature = 색상 | ✅ `_weightedAppearSim()` 80/20 가중치로 정확히 구현 (§12.1~12.2) |
+| §2 검색(Search) 기능 + "검색과 Re-ID의 결합" | 색상으로 후보 축소 → 축소된 후보 내에서 Re-ID 유사도 재정렬 | 🟡 1단계(색상 필터, FR-CCFR-066)만 구현, 2단계(재정렬)는 미구현 — §12.4에 이미 명시 |
+| §3 이벤트 설명(Event Metadata) | Loitering/Intrusion 알림에 성별·상의색·하의색을 첨부해 운영자 식별 속도 향상 | ❌ **신규 확인된 격차** — 아래 참조 |
+
+**신규 격차 — 알림(Alert) 레코드에 속성 정보 미첨부**: `alertService.js#createAlert(event)`는 `cameraId, objectId, zoneId, zoneName, dwellTime, timestamp`만 저장하며, `color`/`cloth`/성별 등 어떤 속성도 알림 레코드에 포함하지 않는다. 반면 동일 감지 시점의 `colorClothService`가 산출한 색상 정보는 `detectionSnapshots.attributes.color`에는 이미 저장되고 있다 — 즉 **데이터는 계산되지만 알림 레코드로 전파되지 않는다**. `GET /api/search?types=alerts`는 카메라·±5초 시간창으로 가장 가까운 스냅샷을 찾아 `cropData`(이미지)만 붙일 뿐 `attributes.color`는 응답에 노출하지 않는다(`search.js`). 운영자가 "Loitering Detected"만 보고 색상 정보를 확인하려면 별도로 스냅샷을 조회해야 한다.
+
+성별(성별 분류) 속성은 알림뿐 아니라 파이프라인 전체에 아예 존재하지 않는다 — PAR(`openpar.onnx`) 모델이나 다른 어떤 서비스도 성별을 산출하지 않는다(`server/src/services/` 전체에서 "gender"는 실종자 등록 모듈(`missingPersonService.js`)에서만 사용되며 이는 사용자가 프로필에 직접 입력하는 값이지 AI 추론 결과가 아니다). 성별 분류기 도입은 이번 제안 범위 밖(Non-goal)이며, 별도 모델 조사가 필요한 더 큰 작업이다.
+
+**Phase 제안 — 알림 레코드 속성 첨부 (Event Metadata Enrichment, Proposed, 미구현)**:
+- `behaviorEngine.js`가 발생시키는 loitering/intrusion 이벤트 객체에 해당 시점의 `color`(이미 `AttributePipeline.enrich()`가 계산해 트랙에 부착한 값)를 포함시켜 `alertService.createAlert(event)`로 전달
+- `alertService.js`의 alert 스키마에 `attributes: { color: {upper, lower} }` (선택적, PAR 활성 시 `cloth` 포함) 필드 추가
+- `GET /api/alerts`, `GET /api/search?types=alerts`, Socket.IO `alert:new` 페이로드에 동일 필드 노출
+- 성별은 이번 제안 범위에서 제외(Non-goal) — 별도 PAR 성별 분류 헤드 도입이 선행되어야 함
+- 로드맵 등재: `docs/mrd/MRD_LTS2026.md` §6.4 Phase 12b-5
+
+**결론**: §1·§2는 이미 반영되어 있고(§2는 부분 구현으로 이미 명시됨), §3만 완전히 새로운 미반영 항목이었다. 이 항목을 Phase 12b-5로 기록했으므로 원본 가이드 `docs/rfp/ReID_및_색상분석_활용가이드.md`를 삭제한다.

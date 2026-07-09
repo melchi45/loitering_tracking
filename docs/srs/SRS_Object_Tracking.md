@@ -197,11 +197,13 @@ riskScore = dwellRatio*0.35 + revisitRatio*0.30 + lowVeloScore*0.15
 ```
 
 where:
-- `dwellRatio = min(dwellTime / dwellThreshold, 1.0)`
+- `dwellRatio = min(dwellTime / dwellThreshold, 2.0) / 2.0` — saturates at **2×** `dwellThreshold`, not 1× (at `dwellTime == dwellThreshold`, the moment FR-TRK-018's `isLoitering` flips true, `dwellRatio` is only 0.5)
 - `revisitRatio = min(revisitCount / maxRevisits, 1.0)`
 - `lowVeloScore = max(0, 1 − velocity / velocityThreshold)`
 
 - **Output**: Floating-point `riskScore` in [0, 1].
+
+**Unit note**: `velocity` and all displacement/`dwellThreshold`-adjacent distance values (`minDisplacement`, sliding-window displacement) are computed and configured in **pixel space** (px, px/s) — there is no per-camera pixel-to-real-world-meter calibration in the current implementation. See `SRS_LTS2026_Loitering_Tracking_System.md` §6 for the cross-reference to the reference guide's real-world-unit rules (e.g. "0.2 m/s", "3 m") and the proposed Phase 12b-4 calibration feature that would close this gap.
 
 ### FR-TRK-018 — Loitering Flag
 
@@ -314,3 +316,4 @@ The system shall use a ray-casting algorithm to determine whether the object's c
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for Object Tracking |
+| 1.1 | 2026-07-09 | Youngho Kim | FR-TRK-017 `dwellRatio` 공식을 실제 코드의 2× 임계값 saturation과 일치하도록 수정(기존 1× 단순 비율은 오기재); 픽셀 vs. 미터/초속도 단위계 격차 노트 추가 — `docs/rfp/Loitering_Detection_가이드.md` 흡수 반영, 원본 삭제 전 최종 확인 |

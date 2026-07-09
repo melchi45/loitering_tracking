@@ -460,6 +460,16 @@ No additional npm packages — uses built-in fetch (Node 18+)
   4. Feed a `className: 'person'` object inside same zone
   5. Assert dwell logic applied: `dwellTime > 0`
 
+### TC-E-010 — BehaviorEngine — Pixel-to-Meter Calibration *(Planned — not yet implemented, Phase 12b-4)*
+
+- **SRS:** none yet — proposed in `SRS_Object_Tracking.md` §7 unit note (`docs/rfp/Loitering_Detection_가이드.md` absorbed, source deleted)
+- **Steps (not runnable today):**
+  1. Configure a camera's `pixelsPerMeter` (or homography) calibration
+  2. Set zone `minDisplacement`/velocity threshold in meters/m-per-second
+  3. Assert `behaviorEngine.js` converts pixel-space measurements to the configured real-world unit before threshold comparison
+  4. Assert an uncalibrated camera's zone continues to behave exactly as today (pixel-only, no regression)
+- **Acceptance:** No calibration feature exists in code yet — this TC is a placeholder to activate once `Design_LTS2026_Loitering_Tracking_System.md` §6.2.1 is implemented.
+
 ---
 
 ## 8. Test Group F — Socket.IO Events
@@ -622,3 +632,4 @@ Phase 8 — Edge Cases (Group G)
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for Object Tracking |
+| 1.1 | 2026-07-09 | Youngho Kim | TC-E-010 추가 (Planned, 미구현) — 카메라별 픽셀-미터 캘리브레이션, Phase 12b-4 활성화 시점에 실행 가능 — `docs/rfp/Loitering_Detection_가이드.md` 흡수 반영, 원본 삭제 |

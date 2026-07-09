@@ -269,14 +269,18 @@ When a new `objectId` enters a zone, the system shall check the zone's 2-minute 
 ### FR-MAIN-036 — Composite Risk Score
 
 ```
+dwellRatio = min(dwellTime / dwellThreshold, 2) / 2   // saturates at 2× threshold, not 1×
+
 riskScore = min(1,
-  (dwellTime / dwellThreshold)   × 0.35
+  dwellRatio                     × 0.35
   + min(revisitCount / 5, 1)     × 0.30
   + max(0, 1 − velocity / 80)    × 0.15
   + pacingScore                  × 0.12
   + circularScore                × 0.08
 )
 ```
+
+Note the dwell term saturates at **2× `dwellThreshold`**, not at the threshold itself — at the exact moment `dwellTime == dwellThreshold` (where FR-MAIN-037's `isLoitering` flag flips true), `dwellRatio = 0.5` and its contribution to `riskScore` is only `0.175`, not the full `0.35`. The full weight is reached only once dwell time reaches twice the configured threshold. This intentionally keeps `riskScore` climbing for a while after the binary `isLoitering` flag is already true, so `minRiskScore` (FR-MAIN-038) can distinguish "just crossed the threshold" from "genuinely lingering."
 
 ### FR-MAIN-037 — Loitering Flag
 
@@ -297,11 +301,15 @@ A zone's `minRiskScore` (0.0–1.0, default 0.0) gates loitering alert emission.
 | Rule 3 — ROI 재진입 횟수 > 5회 | `revisitCount`/`reentryWindow` (FR-MAIN-032), `riskScore`의 25% 가중 |
 | (가이드 미언급) | `pacingScore`(FR-MAIN-034), `circularScore`(FR-MAIN-035) — 가이드에 없는 추가 행동 패턴 신호 |
 
-**결론**: 배회 감지 규칙 엔진은 가이드 대비 격차가 없으며, 오히려 초과 구현된 상태다. AI 기반 배회 감지(ST-GCN/Trajectory Transformer/ActionFormer)는 가이드 자체가 "실무에서는 과도한 경우가 많음"이라고 명시하므로 도입 제안에서 제외한다.
+**결론**: 배회 판정 *로직*(Rule 1/2/3의 조합 방식)은 가이드 대비 격차가 없으며, 오히려 초과 구현된 상태다. 다만 그 로직에 입력되는 **단위계**(픽셀 vs. 미터/초속도)에는 신규 격차가 하나 확인되어 아래에 Phase로 기록한다. AI 기반 배회 감지(ST-GCN/Trajectory Transformer/ActionFormer)는 가이드 자체가 "실무에서는 과도한 경우가 많음"이라고 명시하므로 도입 제안에서 제외한다.
 
 **Heatmap 기반 분석 (가이드 §4) — 별도 로드맵 항목으로 이미 존재, 미구현**: 가이드는 Track 좌표 누적 → Heatmap 생성 → 체류 밀집 구역 분석을 장기 통계/핫스팟 탐지 용도로 별도 제시한다. 이는 현재 FR-MAIN-030~038의 실시간 배회 판정과는 무관한 별개 기능이며, `docs/mrd/MRD_LTS2026.md` §6.4 로드맵에 "Heatmap & Path Visualization | Phase 15"로 이미 계획되어 있다 (Track 좌표는 이미 `pacingScore`/`circularScore` 계산용 position history buffer에 누적되고 있어 — FR-MAIN-034/035 — 재사용 가능한 데이터 소스가 이미 존재함). 별도 SRS 문서화는 Phase 15 착수 시점에 진행하며, 본 절에서는 가이드와의 대응 관계만 확인한다.
 
 **Re-ID 적용 (가이드 §"Re-ID 적용") — 단일 카메라 내 occlusion 시 ID 유지**: 가이드는 "Tracking만 사용할 경우 가림(Occlusion)이나 재등장 시 ID가 변경될 수 있다"며 OSNet Re-ID를 통한 동일인 유지를 권장한다. 현재 FR-MAIN-033(Appearance-Based Cross-ID Revisit)이 이를 부분적으로 구현하고 있으나, 얼굴 매칭이 우선이고 실패 시 "의상 색상 매칭(fallback)"에 의존한다 — 이 fallback이 정확히 `Design_AI_AppearanceReID.md` §12에서 격차로 지적한 "색상만으로는 동일 제복 착용자 구분 불가" 문제를 그대로 안고 있다. 즉 §12에서 제안한 OSNet 임베딩 모델 도입은 크로스카메라 Re-ID뿐 아니라 FR-MAIN-033의 단일 카메라 내 occlusion 복원력도 함께 개선할 것으로 예상된다 — 별도 FR 추가 없이 교차참조로 기록한다.
+
+**실측 단위(미터/초속도) 미지원 — 신규 격차 (2026-07-09 재검토)**: 가이드 §2와 "실무 권장 Rule"의 Rule 2는 실세계 물리 단위로 규칙을 정의한다 — `이동거리 &lt; 3m`, `평균 속도 &lt; 0.2m/s`. 그러나 현재 구현은 카메라 픽셀 좌표계에서만 동작한다: `behaviorEngine.js`의 velocity는 px/s 단위로 계산되어 FR-MAIN-036의 `80` (px/s 기준값)과 비교되고, `minDisplacement`/10초 슬라이딩 윈도우 변위(FR-MAIN-031)도 픽셀 단위(`zoneManager.js` 기본값 50px)다. 카메라 설치 높이·각도·초점거리에 따라 동일 픽셀 이동량이 의미하는 실제 이동거리가 카메라마다 달라지므로, 가이드가 명시한 "3m", "0.2m/s" 같은 절대 임계값은 현재 구조로는 직접 설정하거나 검증할 수 없다 — 카메라별 픽셀→미터 보정(캘리브레이션) 계수가 어디에도 존재하지 않는다(리포지토리 전체에서 calibration/homography/scale-factor 관련 로직 0건 확인). 이는 Rule 1/2/3의 판정 *로직* 자체의 격차가 아니라, 그 로직에 입력되는 **단위계**의 격차다.
+
+**Phase 제안 — 카메라별 픽셀-미터 캘리브레이션 (Proposed, 미구현)**: 운영자가 각 카메라에 대해 (a) 두 개의 알려진 실측 기준점 간 거리를 입력하거나, (b) 지면 평면 호모그래피(4점 이상의 픽셀↔실세계 좌표 대응)를 입력하는 UI를 제공하고, `zoneManager.js`의 zone 스키마에 카메라별 `pixelsPerMeter`(또는 호모그래피 행렬) 필드를 추가해 `minDisplacement`/velocity 항을 픽셀 대신 미터 단위로도 표시·설정할 수 있게 한다. 캘리브레이션이 없는 카메라는 현재와 동일하게 픽셀 단위로 동작(하위 호환) — opt-in. 로드맵 등재: `docs/mrd/MRD_LTS2026.md` §6.4 Phase 12b-4. 상세 설계는 착수 시점에 별도 문서화하며, 본 절에서는 가이드와의 대응 관계 및 미구현 상태만 확인한다.
 
 ---
 
@@ -555,3 +563,5 @@ Tracker configuration (appearance weights, Kalman parameters) shall be persisted
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for LTS2026 Loitering Tracking System |
 | 1.1 | 2026-07-09 | Youngho Kim | §6에 가이드(`Loitering_Detection_가이드.md`) 대비 정합성 확인 노트 추가 — 격차 없음, 오히려 초과 구현 확인 |
 | 1.2 | 2026-07-09 | Youngho Kim | §6 정합성 노트에 Heatmap 분석(MRD Phase 15 교차참조) 및 FR-MAIN-033 occlusion 복원력(Design_AI_AppearanceReID.md §12 교차참조) 추가 — 원본 가이드 삭제 전 최종 반영 확인 |
+| 1.3 | 2026-07-09 | Youngho Kim | FR-MAIN-036 공식을 실제 코드의 2× 임계값 saturation 동작과 일치하도록 수정(기존 문서는 1× 기준 단순 비율로 오기재); §6에 신규 격차(픽셀 vs. 미터/초속도 단위계) 확인 및 Phase 12b-4(카메라별 픽셀-미터 캘리브레이션, Proposed) 추가 |
+| 1.4 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/Loitering_Detection_가이드.md` 삭제 완료 — 전체 내용이 §6 정합성 확인 노트 및 관련 MRD/RFP/PRD/Design/TC 문서에 반영되었음을 확인 |

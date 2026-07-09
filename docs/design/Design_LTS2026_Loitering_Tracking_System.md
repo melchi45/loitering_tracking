@@ -316,11 +316,23 @@ score(det, track) =
 
 | Component | Formula | Weight |
 |---|---|---|
-| Dwell ratio | `min(dwellTime / dwellThreshold, 1)` | 0.35 |
+| Dwell ratio | `min(dwellTime / dwellThreshold, 2) / 2` (saturates at 2× threshold — at `dwellTime == dwellThreshold` the ratio is only 0.5) | 0.35 |
 | Revisit ratio | `min(revisitCount / 5, 1)` | 0.30 |
-| Low velocity | `max(0, 1 − velocity / 80)` | 0.15 |
+| Low velocity | `max(0, 1 − velocity / 80)` (velocity in **px/s** — no per-camera pixel→meter calibration exists; see §6.2.1) | 0.15 |
 | Pacing score | `min(xReversals / 10, 1)` | 0.12 |
 | Circular score | `1 − displacement / pathLength` | 0.08 |
+
+#### 6.2.1 Phase Proposal — Per-Camera Pixel-to-Meter Calibration (Proposed, not implemented)
+
+`docs/rfp/Loitering_Detection_가이드.md` (absorbed into `SRS_LTS2026_Loitering_Tracking_System.md` §6, source guide deleted) specified its dwell+displacement rule in real-world units — `이동거리 < 3m`, `평균 속도 < 0.2m/s`. The current implementation only ever operates in pixel space (`velocity` px/s, `minDisplacement`/sliding-window displacement in px, default 50px) — there is no homography or reference-distance calibration anywhere in the codebase, so the same pixel displacement means a different real-world distance on every camera depending on mounting height/angle/focal length.
+
+**Proposed shape** (not built — see `docs/mrd/MRD_LTS2026.md` §6.4 Phase 12b-4):
+- Per-camera calibration input: either (a) a two-point known-distance reference, or (b) a 4+ point ground-plane homography, entered once via an admin UI.
+- Store a `pixelsPerMeter` scalar (or full homography matrix) on the camera record.
+- `zoneManager.js` zone fields (`minDisplacement`, and a new optional `minSpeedMps`) become settable in meters when calibration exists; uncalibrated cameras keep today's pixel-only behavior (backward compatible, opt-in).
+- `behaviorEngine.js`'s velocity/displacement computations stay pixel-native internally (cheapest, no per-frame unit conversion cost) and only convert to meters at the configuration boundary and in event/alert payloads for display.
+
+Non-goal for this proposal: no attempt to auto-derive calibration from EXIF/camera datasheet metadata — manual operator input is the v1 scope (YAGNI).
 
 ### 6.3 ZoneManager Point-in-Polygon
 
@@ -739,3 +751,4 @@ createdAt   ISO-8601
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for LTS2026 Loitering Tracking System |
+| 1.1 | 2026-07-09 | Youngho Kim | §6.2 dwell ratio 공식을 실제 코드의 2× saturation과 일치하도록 수정; §6.2.1 신설 — 카메라별 픽셀-미터 캘리브레이션 Phase 제안(Proposed, 미구현) — `docs/rfp/Loitering_Detection_가이드.md` 흡수 반영, 원본 삭제 |

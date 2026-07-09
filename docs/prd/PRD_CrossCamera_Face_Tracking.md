@@ -315,11 +315,13 @@ GET /api/crosscamera/stats
 - **G6**: Introduce a lightweight appearance-embedding model (OSNet/OSNet-AIN preferred) so body-based Re-ID no longer relies solely on RGB color distance. — ✅ Done (`appearanceReidService.js`)
 - **G7**: Recompose `_clothingAppearSim()`'s similarity score to `embedding*0.8 + color*0.2`, matching the reference guides' recommended weighting, with automatic fallback to the current color-only method when no embedding model is loaded. — ✅ Done (`pipelineManager.js#_weightedAppearSim()`)
 - **G8**: Extend the existing planned Qdrant Face Re-ID infrastructure (Phase 12b) with a second `appearance_embeddings` collection so long-gap (1hr+), no-face-visible re-appearances remain matchable beyond the current 5-minute in-memory gallery TTL. — 🟡 Partial (`qdrantService.js` collection + write path done; kNN read path not wired into real-time matching — see SRS FR-CCFR-064)
+- **G9**: Attach clothing color attributes to loitering/intrusion alert records so an operator can identify the subject from the alert alone (`ReID_및_색상분석_활용가이드.md` §3, "이벤트 설명"). — 📝 Proposed, not implemented (`alertService.js#createAlert()` has no color/cloth field today — see SRS FR-CCFR-067, Design_AI_AppearanceReID.md §12.7)
 
 ### 9.2 Non-Goals
 
 - Replacing ArcFace face Re-ID — out of scope; this proposal only affects the body/clothing appearance channel.
 - Building a new, separate vector database — the existing planned Qdrant instance (M3) is reused, not duplicated.
+- Gender classification on alert records — no gender attribute exists anywhere in the detection pipeline; would require a new PAR classification head, out of scope for G9.
 
 ### 9.3 Milestone (additive to §8.1)
 
@@ -327,6 +329,7 @@ GET /api/crosscamera/stats
 |---|---|---|---|
 | M9 | OSNet embedding model integration + weighted similarity recomposition | TBD | ✅ Done (opt-in, unverified accuracy) |
 | M10 | `appearance_embeddings` Qdrant collection (shared instance with M3) | TBD | 🟡 Partial (write path done, kNN query not wired) |
+| M11 | Alert Attribute Enrichment (G9) — color on alert records | TBD | 📝 Proposed, not implemented — MRD Phase 12b-5 |
 
 ---
 
@@ -339,3 +342,4 @@ GET /api/crosscamera/stats
 | 1.2 | 2026-07-09 | Youngho Kim | Added §9 Appearance/Body Re-ID upgrade proposal (G6-G8, M9-M10) — not yet implemented |
 | 1.3 | 2026-07-09 | Youngho Kim | Source guide `docs/rfp/Multi_Camera_Tracking_ReID_가이드.md` deleted — full content confirmed reflected in §9, in-doc citation updated to archival note |
 | 1.4 | 2026-07-09 | Youngho Kim | Code sync — §9 flipped Proposed→Implemented; G6/G7/M9 Done, G8/M10 Partial (Qdrant write done, kNN read not wired) |
+| 1.5 | 2026-07-09 | Youngho Kim | Added G9/M11 — Alert Attribute Enrichment (Proposed, not implemented), closing the last unabsorbed item from `ReID_및_색상분석_활용가이드.md` §3; source guide deleted |

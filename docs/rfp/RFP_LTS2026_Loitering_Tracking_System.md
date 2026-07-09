@@ -219,6 +219,8 @@ Risk score thresholds (recommended):
 | 0.40 – 0.69 | Medium | Visual alert in dashboard |
 | 0.70 – 1.00 | High | Push notification + audio alert |
 
+**Reference guide cross-check (2026-07-09, `docs/rfp/Loitering_Detection_가이드.md`, absorbed and deleted)**: the guide's "실무 권장 Rule" proposes Rule 1 (dwell > 60s), Rule 2 (dwell > 30s AND avg speed < 0.2m/s), Rule 3 (re-entry > 5). All three rule *elements* are present above as continuous weighted terms rather than hard AND thresholds — see `SRS_LTS2026_Loitering_Tracking_System.md` §6 for the full requirement-by-requirement mapping. One gap the guide surfaces that this RFP did not previously call out: the guide's Rule 2 and §2 use real-world units ("0.2 m/s", "3 m"), while `velocity`/`minDisplacement` above are pixel-native with no per-camera meter calibration — tracked as Phase 12b-4 in the roadmap table below.
+
 #### 2.4.2 Circular Motion Score
 
 ```
@@ -305,6 +307,7 @@ Based on the limitations of pure position-based tracking, the following improvem
 | Body-level ReID embedding (not face) | P2 | 🔲 TODO | FastReID or TorchReID — Python worker needed |
 | Heatmap visualization | P2 | 🔲 TODO | Canvas overlay, /api/cameras/:id/heatmap |
 | Human segmentation mask | P3 | 🔲 TODO | SAM/NanoSAM — GPU required for real-time |
+| Per-camera pixel-to-meter calibration | P2 | 🔲 TODO | Reference-distance or ground-plane homography input; closes Loitering 가이드 Rule 2 real-world-unit gap — see MRD Phase 12b-4 |
 | Cross-camera Re-ID | P3 | 🟡 Done (in-process) | Shared ArcFace gallery; `face:reidentified` event; `/api/crosscamera/stats` — see §2.3.2 |
 
 #### 2.4a.3 Adaptive Kalman Filter Specification *(P1 — Implemented)*
@@ -899,3 +902,4 @@ Vendors are encouraged to propose their own architecture. The reference below il
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for LTS2026 Loitering Tracking System |
+| 1.1 | 2026-07-09 | Youngho Kim | §2.4.1에 참고 가이드(Rule 1/2/3) 대응 관계 확인 노트 추가; §2.4a.2 로드맵 표에 픽셀-미터 캘리브레이션 TODO 행 추가 — `docs/rfp/Loitering_Detection_가이드.md` 흡수 반영, 원본 삭제 |

@@ -6,6 +6,13 @@
  * Test Group B — Tracker Config API      (TC-B-001 ~ TC-B-005)
  * Test Group G — Edge Cases              (TC-G-002 ~ TC-G-005)
  *
+ * Not covered here: Test Group E — BehaviorEngine risk-score computation
+ * (TC-E-001 ~ TC-E-009, docs/tc/TC_Object_Tracking.md) has no dedicated
+ * automated suite in this repo yet; it is documentation-only pending a
+ * behaviorEngine.js unit-test harness. TC-E-010 (per-camera pixel-to-meter
+ * calibration) is additionally not implemented in code (Proposed, Phase
+ * 12b-4 — see Design_LTS2026_Loitering_Tracking_System.md §6.2.1).
+ *
  * SRS: FR-TRK-020 ~ FR-TRK-023, NFR-TRK-01
  *
  * Prerequisites: Server running on BASE_URL (default http://localhost:3080)

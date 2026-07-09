@@ -9,6 +9,13 @@
  *   Group I — SearchFullscreen Filter Chip Tooltips (TC-SNAP-I-001~I-011, source-level + API)
  *   Group J — Confidence Range Filter    (TC-J-001~J-007)
  *
+ * Not covered here: `types=appearance`, `upperColor`/`lowerColor` color-prefilter
+ * params, and `types=matches` on GET /api/search (FR-CCFR-066, TC-I-007 in
+ * docs/tc/TC_CrossCamera_Face_Tracking.md — Planned, no automated suite yet).
+ * TC-I-008 (alert records carrying color attributes, FR-CCFR-067) is additionally
+ * not implemented in code (Proposed, MRD Phase 12b-5 — see
+ * Design_AI_AppearanceReID.md §12.7).
+ *
  * FR References: FR-SNAP-023, FR-SNAP-024, FR-SNAP-025, FR-SNAP-026~030
  *
  * Prerequisites:

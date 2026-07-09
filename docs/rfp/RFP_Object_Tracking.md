@@ -628,6 +628,8 @@ All changes take effect on the **next processed frame** without server restart.
 - **FR-L3**: Each zone shall support a configurable `minRiskScore` threshold for alert suppression.
 - **FR-L4**: Pacing behaviour (back-and-forth motion in x-direction with ≥ 10 reversals) shall contribute to the risk score and can alone trigger escalated alert classification.
 
+**Reference guide unit gap (2026-07-09, `docs/rfp/Loitering_Detection_가이드.md`, absorbed and deleted)**: FR-L1's `displacementThreshold` and the velocity term feeding FR-L2's risk score are pixel-native (`minDisplacement`, `velocity` px/s) — the guide's own rules specify real-world units ("0.2 m/s", "3 m") that cannot currently be configured directly, since no per-camera pixel-to-meter calibration exists. See `docs/design/Design_LTS2026_Loitering_Tracking_System.md` §6.2.1 (Phase 12b-4, Proposed).
+
 ### 4.5 Detection Coverage
 
 - **FR-D1**: The detection pipeline shall support all 80 COCO object class IDs without hard-coded exclusions at the detection layer.
@@ -879,3 +881,4 @@ All changes take effect on the **next processed frame** without server restart.
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for Object Tracking |
+| 1.1 | 2026-07-09 | Youngho Kim | §4.4에 픽셀 vs. 미터/초속도 단위계 격차 노트 추가 — `docs/rfp/Loitering_Detection_가이드.md` 흡수 반영, 원본 삭제 |

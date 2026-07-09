@@ -588,6 +588,14 @@ The `_assignFaceIds()` method shall return an object containing:
 - This is distinct from FR-CCFR-061's real-time weighted matching: color here is used purely as a search index/pre-filter, not blended into the similarity score
 - **Implementation**: `GET /api/search?types=appearance&upperColor=&lowerColor=` (`server/src/api/search.js`) calls `qdrantService.scrollAppearanceByFilter()` — this delivers the color-filter stage only; there is no query-by-example (photo/vector input) step to re-rank the filtered candidates by embedding similarity yet. The endpoint shape landed on the existing `GET /api/search` rather than the `GET /api/events?upperColor=&lowerColor=` path originally proposed in `docs/prd/PRD_AI_Color_Analysis.md` §8.2 — `types=detections` also gained `upperColor`/`lowerColor` filtering (no Qdrant needed, matches snapshot attributes directly)
 
+### FR-CCFR-067 — Alert Attribute Enrichment (Event Metadata) — 📝 Proposed, not implemented
+
+- Per `ReID_및_색상분석_활용가이드.md` §3 ("이벤트 설명"), loitering/intrusion alert records should carry the tracked object's clothing color attributes so an operator can identify the subject without opening the snapshot gallery
+- **Current gap**: `alertService.js#createAlert(event)` persists only `cameraId, objectId, zoneId, zoneName, dwellTime, timestamp` — no `color`/`cloth` field exists on the `alerts` table, even though `AttributePipeline.enrich()` already computes `color.{upper,lower}` on the same track before the alert fires. `GET /api/search?types=alerts` only attaches a `cropData` image (nearest snapshot within ±5s), never `attributes.color`.
+- **Proposed fix**: thread the track's current `color` (and `cloth` when PAR is active) through `behaviorEngine.js`'s emitted loitering/intrusion event into `alertService.createAlert()`, store it on the alert record, and expose it on `GET /api/alerts`, `GET /api/search?types=alerts`, and the `alert:new` Socket.IO payload
+- Gender/성별 classification (also mentioned in the guide) is explicitly out of scope — no gender attribute exists anywhere in the detection pipeline today; introducing one requires a separate PAR classification head, tracked as a future non-goal, not part of this FR
+- Roadmap: `docs/mrd/MRD_LTS2026.md` §6.4 Phase 12b-5; design: `docs/design/Design_AI_AppearanceReID.md` §12.7
+
 ---
 
 ## Document History
@@ -600,3 +608,4 @@ The `_assignFaceIds()` method shall return an object containing:
 | 1.3 | 2026-07-09 | Youngho Kim | FR-CCFR-066 추가 — 색상 사전 필터링 기반 검색 최적화(Proposed) — 원본 가이드 삭제 전 최종 반영 확인 |
 | 1.4 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/Multi_Camera_Tracking_ReID_가이드.md` 삭제 완료 — 내용 전체가 §14에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |
 | 1.5 | 2026-07-09 | Youngho Kim | 코드 동기화 — §14 전체를 Proposed→Implemented(opt-in)로 갱신, FR-CCFR-060~063/066 Done, FR-CCFR-064 Partially Done(Qdrant 조회 미배선), FR-CCFR-065 Implemented but Unverified로 FR별 상태 세분화 |
+| 1.6 | 2026-07-09 | Youngho Kim | FR-CCFR-067 추가 — 알림 레코드 속성 첨부(Event Metadata Enrichment, Proposed, 미구현) — `ReID_및_색상분석_활용가이드.md` §3 최종 반영 확인, 원본 가이드 삭제 |

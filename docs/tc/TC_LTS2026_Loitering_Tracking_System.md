@@ -283,6 +283,11 @@
 - **Expected:** All 50 zones created successfully; all active
 - **Acceptance:** `GET /api/cameras/:id/zones` returns 50 zones
 
+### TC-D-015 — Per-Camera Pixel-to-Meter Calibration *(Planned — not yet implemented, Phase 12b-4)*
+- **Input:** Camera with calibration configured (`pixelsPerMeter` or homography); zone `minDisplacement` set in meters (e.g. `0.2 m/s`, `3 m`, matching `Loitering_Detection_가이드.md` Rule 2 — guide absorbed into §6, source deleted)
+- **Expected:** `behaviorEngine.js` velocity/displacement values convert to real-world units at the configuration boundary and in event payloads; uncalibrated cameras keep today's pixel-only behavior
+- **Acceptance:** Not runnable today — no calibration feature exists in code. Tracked here so this TC is ready to activate once `Design_LTS2026_Loitering_Tracking_System.md` §6.2.1 is implemented.
+
 ---
 
 ## 7. Test Group E — Alert & Storage Layer
@@ -421,3 +426,4 @@ Clean up: delete all test cameras, zones, and events after each group.
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for LTS2026 Loitering Tracking System |
+| 1.1 | 2026-07-09 | Youngho Kim | TC-D-013 추가 (Planned, 미구현) — 카메라별 픽셀-미터 캘리브레이션, Phase 12b-4 활성화 시점에 실행 가능 — `docs/rfp/Loitering_Detection_가이드.md` 흡수 반영, 원본 삭제 |

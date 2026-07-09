@@ -198,7 +198,7 @@ All modules defined below correspond to completed SDLC chains (RFP → PRD → S
 | IP Camera Discovery | CAM-LTS2026-001 | ✅ Complete | UDP broadcast + ONVIF WS-Discovery; camera registration |
 | Object Tracking (MOT) | TRK-LTS2026-001 | ✅ Complete | ByteTrack + 8-dim KF; 5-cue association; adaptive Kalman |
 | Cross-Camera Face Tracking | XCAM-LTS2026-001 | ✅ Complete | Shared ArcFace gallery; `face:reidentified` Socket.IO event |
-| Detection Snapshot & Search | SNAP-LTS2026-001 | ✅ Complete | JPEG crop per track bbox; `GET /api/search`; fullscreen search UI |
+| Detection Snapshot & Search | SNAP-LTS2026-001 | ✅ Complete | JPEG crop per track bbox (640×640/q85); `GET /api/search`; fullscreen search UI |
 | User Authentication | AUTH-LTS2026-001 | ✅ Complete | JWT RS256; RBAC; bcrypt; Google OAuth 2.0; admin approval workflow |
 | Storage / MongoDB | STORE-LTS2026-001 | ✅ Complete | Dual-mode JSON + MongoDB 5.0; atomic write; debounced persistence |
 | HTTPS / TLS | TLS-LTS2026-001 | ✅ Complete | TLS on port 3443; self-signed / mkcert / Let's Encrypt / reverse proxy |
@@ -236,7 +236,7 @@ All modules defined below correspond to completed SDLC chains (RFP → PRD → S
 | Search & Fullscreen | ✅ Complete | Full-screen search; type filter chips; date/time range; i18n |
 | Mobile Layout | ✅ Complete | Touch-optimized responsive layout; swipe navigation |
 | Fullscreen Camera View | ✅ Complete | 3-tab panel (Camera Events / ONVIF Timeline / Detections); real-time DetectionPanel (right); mobile-adaptive |
-| Detections Timeline | ✅ Complete | Gantt-style ByteTracker lifecycle history (loitering-risk tracks only); zoom/pan; custom date range |
+| Detections Timeline | ✅ Complete | Gantt-style ByteTracker lifecycle history (loitering-risk tracks only); zoom/pan; custom date range; detail-panel crop rendered `object-contain` (no cropping) |
 | ONVIF Timeline (Custom Range) | ✅ Complete | Custom datetime-local range picker added to OnvifTimelineInline; SVG spinner; `Custom` button |
 
 ### 6.4 Planned Modules (Roadmap)
@@ -247,6 +247,8 @@ All modules defined below correspond to completed SDLC chains (RFP → PRD → S
 | Vector DB Face Re-ID (Qdrant/pgvector) | Phase 12b | Aug 11, 2026 | [M3](../design/Design_RTSP_WebRTC_Architecture.md#milestone-3--qdrant-벡터-db-기반-얼굴-re-id-고도화-p2) |
 | Human Parsing 기반 정밀 색상 분류 (SCHP/SegFormer 모델 카탈로그, Phase-3) — ✅ 코드 구현 완료(opt-in, 2026-07-09) · K-Means 대표색 추출로 기존 고정 ROI 개선 (모델 불필요, Phase-1.5) — 📝 미구현 | Phase 12b-2 | 2026-07-09 (Phase-3) / TBD (Phase-1.5) | [Design_AI_Color_Analysis.md §10](../design/Design_AI_Color_Analysis.md#10-phase-3-proposed-architecture--human-parsing-model-catalog), [§11](../design/Design_AI_Color_Analysis.md#11-phase-15-proposed--k-means-dominant-color-on-the-existing-fixed-roi-no-model) |
 | Appearance/Body Re-ID 임베딩 모델 + Vector DB 확장 (Qdrant `appearance_embeddings`, 얼굴용 M3와 별도 컬렉션) — ✅ 코드 구현 완료(opt-in, 2026-07-09), 장시간 재등장 조회(kNN)는 미배선 | Phase 12b-3 | 2026-07-09 | [Design_AI_AppearanceReID.md §12](../design/Design_AI_AppearanceReID.md#12-phase-2-개선-제안--실제-re-id-임베딩-모델-도입) |
+| 카메라별 픽셀→실세계 미터 캘리브레이션 (Loitering 가이드 Rule 2 "0.2m/s", "3m" 실측 단위 대응) — 📝 미구현, Proposed | Phase 12b-4 | TBD | [SRS_LTS2026 §6](../srs/SRS_LTS2026_Loitering_Tracking_System.md#6-functional-requirements--loitering-detection) |
+| 알림(Alert) 레코드 속성 첨부 — Loitering/Intrusion 알림에 색상(상의/하의) 첨부, 성별은 범위 외 (ReID·색상분석 가이드 §3 "이벤트 설명" 대응) — 📝 미구현, Proposed | Phase 12b-5 | TBD | [Design_AI_AppearanceReID.md §12.7](../design/Design_AI_AppearanceReID.md#127-reid_및_색상분석_활용가이드md-최종-정합성-확인-및-삭제-전-격차-재검토-2026-07-09) |
 | RTCP Adaptive Streaming (PLI/NACK/REMB) | Phase 12c | Aug 25, 2026 | [M4](../design/Design_RTSP_WebRTC_Architecture.md#milestone-4--rtcp-피드백-처리-nack--pli--remb-p2) |
 | Distributed Cluster Mode (Kafka + GPU Pool) | Phase 12d | Sep 8, 2026 | [M5](../design/Design_RTSP_WebRTC_Architecture.md#milestone-5--분산-클러스터-모드-p3) |
 | PTZ Control (ONVIF) | Phase 13 | Sep 22, 2026 | — |
@@ -328,6 +330,13 @@ All modules defined below correspond to completed SDLC chains (RFP → PRD → S
 | BR-024 | **Detections Timeline(`DetectionsTimelineInline`)** 상단에 Overview strip(높이 50px)을 제공해야 합니다. Overview strip은 현재 뷰포트 내 모든 감지 트랙을 클래스별 색상 미니 바(높이 8px)로 오버레이 표시하며, 스크롤 휠로 줌 인/아웃을 제어합니다 |
 | BR-025 | Overview strip 클릭(드래그 없음) 시 개별 트랙 행(Detail rows)을 접기/펼치기 토글할 수 있어야 합니다. 행이 접혀 있어도 Overview strip과 Tick 레이블(시간 눈금)은 항상 표시됩니다. 상세 패널(스냅샷 뷰어)은 행이 펼쳐져 있고 트랙이 선택된 경우에만 표시됩니다 |
 | BR-026 | **ONVIF Timeline Inline(`OnvifTimelineInline`)** 도 동일한 2-panel 구조(Overview strip + Detail rows + 항상 표시 Tick labels)를 갖춰야 합니다. ONVIF Overview는 모든 이벤트 타입을 오버레이 표시하며, point 이벤트는 2px 수직 바, duration 이벤트는 8px 높이 미니 바로 렌더링합니다 |
+
+### 7.9 Detection Crop Quality & Detail-View Rendering
+
+| Requirement | Detail |
+|---|---|
+| BR-027 | 저장되는 감지 crop 이미지(`detectionSnapshots.cropData`)는 원본 영상 대비 시각적으로 뚜렷이 구분되는 저화질(블록·번짐)을 발생시키지 않아야 합니다. 서버는 `SNAPSHOT_MAX_DIMENSION`/`SNAPSHOT_JPEG_QUALITY` 기본값을 640px/quality 85로 제공하며, 배포 환경별로 `.env`를 통해 조정할 수 있어야 합니다 |
+| BR-028 | Crop을 확대(enlarge)하여 보여주는 모든 상세 뷰(Detections Timeline 우측 상세정보 패널 등)는 저장된 crop의 전체 영역을 잘림 없이 표시해야 합니다(`object-fit: contain`). 타임라인 필름스트립처럼 작은 고정 크기 마커로만 쓰이는 영역은 이 요구사항의 대상이 아닙니다 |
 
 ---
 
@@ -499,6 +508,10 @@ The following table maps planned market releases to engineering phases and targe
 | 1.8 | 2026-06-26 | LTS Engineering Team | §7.8 Timeline 2-Panel Overview & Collapse 추가: BR-024~026 — Detections·ONVIF Timeline Inline 2-panel 구조(Overview strip + Detail rows + 항상 표시 Tick labels) 및 접기/펼치기 요구사항 |
 | 1.9 | 2026-07-09 | Youngho Kim | §6.4 로드맵에 Phase 12b-2(Human Parsing 색상 분류), Phase 12b-3(Appearance/Body Re-ID + Vector DB 확장) 2행 추가 — 4개 참고 가이드 문서 격차 분석 반영 |
 | 1.10 | 2026-07-09 | Youngho Kim | 코드 동기화 — §6.4 Phase 12b-2/12b-3 완료일 반영 (Human Parsing·Appearance Re-ID 코드 구현 완료, opt-in; Phase-1.5·장시간 재등장 조회는 미구현으로 명시) |
-| 1.10 | 2026-07-09 | Youngho Kim | §6.4 Heatmap & Path Visualization 행에 Loitering 가이드 §4 대응 관계 명시 — 원본 가이드 삭제 전 최종 반영 확인 |
-| 1.11 | 2026-07-09 | Youngho Kim | §6.4 Phase 12b-2 행에 Phase-1.5(K-Means, 모델 불필요) 추가 — CCTV_IPTV_상의하의_색상분류_가이드.md 최종 반영 확인 |
-| 1.12 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` 삭제 완료 — 내용 전체가 관련 Design 문서에 반영되었음을 확인 |
+| 1.11 | 2026-07-09 | Youngho Kim | §6.4 Heatmap & Path Visualization 행에 Loitering 가이드 §4 대응 관계 명시 — 원본 가이드 삭제 전 최종 반영 확인 |
+| 1.12 | 2026-07-09 | Youngho Kim | §6.4 Phase 12b-2 행에 Phase-1.5(K-Means, 모델 불필요) 추가 — CCTV_IPTV_상의하의_색상분류_가이드.md 최종 반영 확인 |
+| 1.13 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` 삭제 완료 — 내용 전체가 관련 Design 문서에 반영되었음을 확인 |
+| 1.14 | 2026-07-09 | Youngho Kim | 이력 표 1.10 중복 버전 번호 정정(재번호); §6.4에 Phase 12b-4(카메라별 픽셀-미터 캘리브레이션, Proposed, 미구현) 로드맵 행 추가 — `Loitering_Detection_가이드.md` Rule 2 실측 단위 격차 대응 |
+| 1.15 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/Loitering_Detection_가이드.md` 삭제 완료 — 내용 전체가 SRS §6, §6.4 로드맵 및 관련 RFP/PRD/Design/TC 문서에 반영되었음을 확인 |
+| 1.16 | 2026-07-09 | Youngho Kim | §6.4에 Phase 12b-5(알림 레코드 속성 첨부, Proposed, 미구현) 로드맵 행 추가; 원본 가이드 `docs/rfp/ReID_및_색상분석_활용가이드.md` 삭제 완료 — 내용 전체가 Design_AI_AppearanceReID.md §12, SRS_CrossCamera_Face_Tracking.md §14, 관련 RFP/PRD/TC 문서에 반영되었음을 확인 |
+| 1.17 | 2026-07-09 | LTS Engineering Team | §6.3/6.1 Detections Timeline·Detection Snapshot 설명에 화질 개선(640×640/q85) 반영; §7.9 신규 — BR-027~028 crop 화질 및 상세정보 패널 잘림 방지(`object-contain`) 요구사항 추가 |
