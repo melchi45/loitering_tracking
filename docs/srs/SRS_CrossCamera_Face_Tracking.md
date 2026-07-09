@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-CCFR-01 |
-| **Version** | 1.4 |
+| **Version** | 1.5 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent PRD** | prd/PRD_CrossCamera_Face_Tracking.md |
@@ -545,42 +545,48 @@ The `_assignFaceIds()` method shall return an object containing:
 
 ---
 
-## 14. Functional Requirements — Appearance/Body Re-ID Upgrade (Proposed)
+## 14. Functional Requirements — Appearance/Body Re-ID Upgrade
 
-> **Status: Proposed, not yet implemented.** Requirements derived from gap analysis against the Multi-Camera Tracking Re-ID guide (original deleted 2026-07-09, content consolidated into this section) and `docs/rfp/ReID_및_색상분석_활용가이드.md` (2026-07-09). Directly addresses the limitation already documented in C-07 above (occlusion > 30s breaks face-only alias continuity) by extending re-identification into a body-appearance channel that does not require a visible face. See `docs/design/Design_AI_AppearanceReID.md` §12 for architecture.
+> **Status: Implemented, opt-in** (2026-07-09 proposed → 2026-07-09 code implemented). Requirements derived from gap analysis against the Multi-Camera Tracking Re-ID guide (original deleted 2026-07-09, content consolidated into this section) and `docs/rfp/ReID_및_색상분석_활용가이드.md` (2026-07-09). Directly addresses the limitation already documented in C-07 above (occlusion > 30s breaks face-only alias continuity) by extending re-identification into a body-appearance channel that does not require a visible face. See `docs/design/Design_AI_AppearanceReID.md` §12 (incl. §12.6 implementation status) for architecture. Per-FR status below; none of this has automated test coverage yet (see `TC_CrossCamera_Face_Tracking.md` §11).
 
-### FR-CCFR-060 — Appearance Embedding Model Status
+### FR-CCFR-060 — Appearance Embedding Model Status — ✅ Done
 
 - The system must expose the load status of an appearance-embedding model (e.g. OSNet/OSNet-AIN) via the existing capabilities/status mechanism, analogous to how `cloth`/`face` model status is already exposed
 - When the model file is absent, status must be `not_started`; the system must continue operating using the existing color-only `_clothingAppearSim()` path (no regression)
+- **Implementation**: `pipelineManager.js#getServiceStatus().appearanceReid`, `index.js` `/health` capabilities `appearanceReid`/`humanParsing`; `appearanceReidService.js` status is `not_started`/`missing`/`loaded`/`failed`
 
-### FR-CCFR-061 — Weighted Similarity Recomposition
+### FR-CCFR-061 — Weighted Similarity Recomposition — ✅ Done
 
 - When the appearance-embedding model is loaded and ready, `_clothingAppearSim()`'s combined score must be computed as `osnetCosineSim * 0.8 + colorSim * 0.2`, replacing the current 100%-color-based score
 - The 80/20 weighting must match the ratio recommended in `ReID_및_색상분석_활용가이드.md` ("Re-ID Feature 80% : Color Attribute 20%")
+- **Implementation**: `pipelineManager.js#_weightedAppearSim(a, b)` — exact 0.8/0.2 split when both sides carry an embedding
 
-### FR-CCFR-062 — Graceful Fallback
+### FR-CCFR-062 — Graceful Fallback — ✅ Done
 
 - When the appearance-embedding model is not loaded, the similarity computation must fall back to the current Phase-1 behavior (color + PAR type) exactly as implemented today — this FR set is additive, not a replacement requiring the new model
+- **Implementation**: `_weightedAppearSim()` calls `_clothingAppearSim()` unchanged when either side lacks `embedding`
 
-### FR-CCFR-063 — Appearance Vector Collection
+### FR-CCFR-063 — Appearance Vector Collection — ✅ Done
 
 - Appearance embeddings must be stored in a Qdrant collection named `appearance_embeddings`, distinct from the `face_embeddings` collection already planned for Face Re-ID (MRD §6.4 Phase 12b / `Design_RTSP_WebRTC_Architecture.md` Milestone 3) — both collections may share the same Qdrant instance
 - Each stored vector's payload must include at minimum `trackId`, `cameraId`, `colorUpper`, `colorLower`, `timestamp`
+- **Implementation**: `qdrantService.js` creates both collections on `init()`; `_assignClothingIds()` calls `upsertAppearance(id, embedding, { cameraId, colorUpper, colorLower, timestamp })` best-effort on every match cycle when an embedding is present
 
-### FR-CCFR-064 — Long-Gap Re-appearance Support
+### FR-CCFR-064 — Long-Gap Re-appearance Support — 🟡 Partially Done
 
 - Appearance vector search must not be bounded by the existing in-memory `_sharedClothingGallery`'s TTL (currently 5 minutes) — a person re-appearing on a different camera after a longer gap (e.g. 1+ hour) with no face visible must still be matchable via the persisted appearance vector collection
+- **Implementation status**: the write path (embeddings persisted to Qdrant) is done, but the real-time matching loop in `_assignClothingIds()` still only searches `_sharedClothingGallery` (5-min TTL) — `qdrantService.queryAppearance()` (kNN search) exists but is not called anywhere. A re-appearance after the gallery TTL expires is therefore still unmatched today; wiring a Qdrant query into the match loop remains open work.
 
-### FR-CCFR-065 — Same-Uniform False-Positive Mitigation
+### FR-CCFR-065 — Same-Uniform False-Positive Mitigation — 🟡 Implemented, Unverified
 
 - The weighted similarity introduced by FR-CCFR-061 must reduce (not merely maintain) the false-positive rate for two different persons wearing visually identical clothing, relative to the current color-only baseline, as a direct measure of whether the embedding model is contributing discriminative signal beyond color
+- **Implementation status**: the 80/20 blend is implemented (FR-CCFR-061), but `appearanceReidService.js` itself notes its OSNet preprocessing (BGR channel order, no normalization) "has NOT been verified end-to-end against the actual model output" — the model was never actually downloaded/run in the environment where this was written. No measurement of false-positive rate exists yet.
 
-### FR-CCFR-066 — Color-Prefiltered Search (Proposed)
+### FR-CCFR-066 — Color-Prefiltered Search — ✅ Done (filter stage only)
 
 - Search-time (not real-time tracking) queries against the appearance vector collection (FR-CCFR-063) must support narrowing candidates by `upperColor`/`lowerColor` before computing embedding cosine similarity, per the two-stage pattern in `ReID_및_색상분석_활용가이드.md` ("검색과 Re-ID의 결합")
 - This is distinct from FR-CCFR-061's real-time weighted matching: color here is used purely as a search index/pre-filter, not blended into the similarity score
-- This requirement is additive to the existing `GET /api/events?upperColor=&lowerColor=` search endpoint proposed in `docs/prd/PRD_AI_Color_Analysis.md` §8.2 — the appearance-embedding ranking step runs only within the color-filtered candidate set
+- **Implementation**: `GET /api/search?types=appearance&upperColor=&lowerColor=` (`server/src/api/search.js`) calls `qdrantService.scrollAppearanceByFilter()` — this delivers the color-filter stage only; there is no query-by-example (photo/vector input) step to re-rank the filtered candidates by embedding similarity yet. The endpoint shape landed on the existing `GET /api/search` rather than the `GET /api/events?upperColor=&lowerColor=` path originally proposed in `docs/prd/PRD_AI_Color_Analysis.md` §8.2 — `types=detections` also gained `upperColor`/`lowerColor` filtering (no Qdrant needed, matches snapshot attributes directly)
 
 ---
 
@@ -593,3 +599,4 @@ The `_assignFaceIds()` method shall return an object containing:
 | 1.2 | 2026-07-09 | Youngho Kim | §14 추가 — Appearance/Body Re-ID 고도화 제안(FR-CCFR-060~065, Proposed) — OSNet 임베딩 모델 + Qdrant `appearance_embeddings` 컬렉션 확장, 가중치 재조정 |
 | 1.3 | 2026-07-09 | Youngho Kim | FR-CCFR-066 추가 — 색상 사전 필터링 기반 검색 최적화(Proposed) — 원본 가이드 삭제 전 최종 반영 확인 |
 | 1.4 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/Multi_Camera_Tracking_ReID_가이드.md` 삭제 완료 — 내용 전체가 §14에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |
+| 1.5 | 2026-07-09 | Youngho Kim | 코드 동기화 — §14 전체를 Proposed→Implemented(opt-in)로 갱신, FR-CCFR-060~063/066 Done, FR-CCFR-064 Partially Done(Qdrant 조회 미배선), FR-CCFR-065 Implemented but Unverified로 FR별 상태 세분화 |

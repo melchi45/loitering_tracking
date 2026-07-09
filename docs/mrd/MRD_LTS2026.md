@@ -245,8 +245,8 @@ All modules defined below correspond to completed SDLC chains (RFP → PRD → S
 |---|:---:|---|---|
 | Video Recording (DVR/NVR) + Playback API | Phase 12 | Jul 28, 2026 | [M1, M2](../design/Design_RTSP_WebRTC_Architecture.md#milestone-1--영상-녹화-및-세그먼트-저장-p1) |
 | Vector DB Face Re-ID (Qdrant/pgvector) | Phase 12b | Aug 11, 2026 | [M3](../design/Design_RTSP_WebRTC_Architecture.md#milestone-3--qdrant-벡터-db-기반-얼굴-re-id-고도화-p2) |
-| Human Parsing 기반 정밀 색상 분류 (SCHP/SegFormer 모델 카탈로그, Phase-3) + K-Means 대표색 추출로 기존 고정 ROI 개선 (모델 불필요, Phase-1.5) | Phase 12b-2 | TBD | [Design_AI_Color_Analysis.md §10](../design/Design_AI_Color_Analysis.md#10-phase-3-proposed-architecture--human-parsing-model-catalog), [§11](../design/Design_AI_Color_Analysis.md#11-phase-15-proposed--k-means-dominant-color-on-the-existing-fixed-roi-no-model) |
-| Appearance/Body Re-ID 임베딩 모델 + Vector DB 확장 (Qdrant `appearance_embeddings`, 얼굴용 M3와 별도 컬렉션) | Phase 12b-3 | TBD | [Design_AI_AppearanceReID.md §12](../design/Design_AI_AppearanceReID.md#12-phase-2-개선-제안--실제-re-id-임베딩-모델-도입) |
+| Human Parsing 기반 정밀 색상 분류 (SCHP/SegFormer 모델 카탈로그, Phase-3) — ✅ 코드 구현 완료(opt-in, 2026-07-09) · K-Means 대표색 추출로 기존 고정 ROI 개선 (모델 불필요, Phase-1.5) — 📝 미구현 | Phase 12b-2 | 2026-07-09 (Phase-3) / TBD (Phase-1.5) | [Design_AI_Color_Analysis.md §10](../design/Design_AI_Color_Analysis.md#10-phase-3-proposed-architecture--human-parsing-model-catalog), [§11](../design/Design_AI_Color_Analysis.md#11-phase-15-proposed--k-means-dominant-color-on-the-existing-fixed-roi-no-model) |
+| Appearance/Body Re-ID 임베딩 모델 + Vector DB 확장 (Qdrant `appearance_embeddings`, 얼굴용 M3와 별도 컬렉션) — ✅ 코드 구현 완료(opt-in, 2026-07-09), 장시간 재등장 조회(kNN)는 미배선 | Phase 12b-3 | 2026-07-09 | [Design_AI_AppearanceReID.md §12](../design/Design_AI_AppearanceReID.md#12-phase-2-개선-제안--실제-re-id-임베딩-모델-도입) |
 | RTCP Adaptive Streaming (PLI/NACK/REMB) | Phase 12c | Aug 25, 2026 | [M4](../design/Design_RTSP_WebRTC_Architecture.md#milestone-4--rtcp-피드백-처리-nack--pli--remb-p2) |
 | Distributed Cluster Mode (Kafka + GPU Pool) | Phase 12d | Sep 8, 2026 | [M5](../design/Design_RTSP_WebRTC_Architecture.md#milestone-5--분산-클러스터-모드-p3) |
 | PTZ Control (ONVIF) | Phase 13 | Sep 22, 2026 | — |
@@ -498,6 +498,7 @@ The following table maps planned market releases to engineering phases and targe
 | 1.7 | 2026-06-26 | LTS Engineering Team | §7.6 BR-021~022 명세 보완 — `OnvifTimelineInline`(인라인 탭) 및 `OnvifTimelineOverlay` 모두 Name 컬럼 적용 대상 명시 |
 | 1.8 | 2026-06-26 | LTS Engineering Team | §7.8 Timeline 2-Panel Overview & Collapse 추가: BR-024~026 — Detections·ONVIF Timeline Inline 2-panel 구조(Overview strip + Detail rows + 항상 표시 Tick labels) 및 접기/펼치기 요구사항 |
 | 1.9 | 2026-07-09 | Youngho Kim | §6.4 로드맵에 Phase 12b-2(Human Parsing 색상 분류), Phase 12b-3(Appearance/Body Re-ID + Vector DB 확장) 2행 추가 — 4개 참고 가이드 문서 격차 분석 반영 |
+| 1.10 | 2026-07-09 | Youngho Kim | 코드 동기화 — §6.4 Phase 12b-2/12b-3 완료일 반영 (Human Parsing·Appearance Re-ID 코드 구현 완료, opt-in; Phase-1.5·장시간 재등장 조회는 미구현으로 명시) |
 | 1.10 | 2026-07-09 | Youngho Kim | §6.4 Heatmap & Path Visualization 행에 Loitering 가이드 §4 대응 관계 명시 — 원본 가이드 삭제 전 최종 반영 확인 |
 | 1.11 | 2026-07-09 | Youngho Kim | §6.4 Phase 12b-2 행에 Phase-1.5(K-Means, 모델 불필요) 추가 — CCTV_IPTV_상의하의_색상분류_가이드.md 최종 반영 확인 |
 | 1.12 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` 삭제 완료 — 내용 전체가 관련 Design 문서에 반영되었음을 확인 |

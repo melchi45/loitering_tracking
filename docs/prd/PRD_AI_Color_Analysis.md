@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-AI-05 |
-| **Version** | 1.3 |
+| **Version** | 1.4 |
 | **Status** | Draft |
 | **Date** | 2026-05-21 |
 | **Related RFP** | RFP_AI_Color_Analysis.md (LTS-2026-AI-05) |
@@ -37,7 +37,7 @@ The Color Analysis module classifies the dominant clothing colors of a person's 
 - Classify colors into 11 basic color categories (black, white, gray, red, orange, yellow, green, blue, purple, pink, brown).
 - Support top-2 dominant colors and pattern detection (solid, striped, plaid, etc.) per region.
 - Attach color metadata to tracked person objects and include in alert notifications.
-- Enable color-based person search via `GET /api/events?upperColor=red&lowerColor=blue`.
+- Enable color-based person search — ✅ Done, delivered as `GET /api/search?types=detections&upperColor=red&lowerColor=blue` (not a new `/api/events` endpoint — added as parameters to the existing unified search router, `server/src/api/search.js`).
 
 ### 2.2 Non-Goals
 
@@ -163,7 +163,7 @@ When DNN inference is unavailable, the HSV histogram method provides approximate
 | AC-07 | Phase-1 functional | `color.upperBody.primary` and `color.lowerBody.primary` populated for every detected person when `color` is in zone `targetClasses` |
 | AC-08 | Temporal stability | Color label for a stationary person does not flicker between two different colors across consecutive frames |
 | AC-09 | Alert enrichment | Loitering alert payload contains `appearance.upperBody.primary` and `appearance.lowerBody.primary` |
-| AC-10 | Person search | `GET /api/events?upperColor=red&lowerColor=blue&fromTime=...` returns correct matching events |
+| AC-10 | Person search | `GET /api/search?types=detections&upperColor=red&lowerColor=blue&from=...&to=...` returns correct matching snapshots — ✅ Done (delivered on `/api/search`, not a new `/api/events` endpoint) |
 
 ---
 
@@ -176,16 +176,16 @@ When DNN inference is unavailable, the HSV histogram method provides approximate
 | M1 | Phase-1: RGB color extraction via `sharp` + 11-color mapping (no model) | 2026-05-15 | 2026-05-15 | ✅ Complete |
 | M2 | Phase-2: Export OpenPAR ONNX model for ML-based color classification | TBD | - | ⏳ Pending |
 | M3 | Phase-2: Integrate EfficientNet-B0 color models and validate accuracy | TBD | - | ⏳ Pending |
-| M4 | Person search API for color queries | TBD | - | ⏳ Pending |
-| M5 | Phase-3: Human Parsing (SCHP/SegFormer) model catalog + per-track throttled color extraction | TBD | - | 📝 Proposed |
-| M6 | Phase-1.5: Replace Phase-1's plain-mean reduction with K-Means dominant color on the same fixed ROI (no model) | TBD | - | 📝 Proposed |
+| M4 | Person search API for color queries | TBD | 2026-07-09 | ✅ Done (as `GET /api/search?upperColor=&lowerColor=`, see 8.2) |
+| M5 | Phase-3: Human Parsing (SCHP/SegFormer) model catalog + per-track throttled color extraction | TBD | 2026-07-09 | ✅ Done, opt-in (`humanParsing` toggle default off, no behavioral test coverage) |
+| M6 | Phase-1.5: Replace Phase-1's plain-mean reduction with K-Means dominant color on the same fixed ROI (no model) | TBD | - | 📝 Proposed (still not implemented) |
 
 ### 8.2 TODO
 
 - [ ] Export OpenPAR PyTorch model to ONNX (input `[1, 3, 256, 128]`, opset 11)
 - [ ] Implement `_runPAR()` in `colorClothService.js` to replace heuristic when `openpar.onnx` is available
 - [ ] Add EMA temporal smoothing (`smoothColorHistory()`) for both upper and lower color outputs
-- [ ] Implement `GET /api/events?upperColor=&lowerColor=` search endpoint
+- [x] Implement color-prefiltered search — done as `GET /api/search?types=detections|appearance&upperColor=&lowerColor=` (`server/src/api/search.js`), not a new `/api/events` endpoint as originally scoped
 - [ ] Extend loitering alert schema to include `appearance.upperBody` and `appearance.lowerBody`
 - [ ] Add `colorFilter` zone policy support (alert when specific colors enter zone)
 - [ ] Benchmark Phase-1 heuristic vs. Phase-2 ML model on RAP v2 dataset
@@ -205,3 +205,4 @@ When DNN inference is unavailable, the HSV histogram method provides approximate
 | 1.1 | 2026-07-09 | Youngho Kim | Added Phase-3 (Human Parsing) product requirements — M5 milestone, TODO items, phase-status note |
 | 1.2 | 2026-07-09 | Youngho Kim | Added Phase-1.5 (K-Means on existing fixed ROI, no model) — M6 milestone, TODO item, phase-status note — closes the guide's tier-4 gap ahead of source guide deletion |
 | 1.3 | 2026-07-09 | Youngho Kim | Source guide `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` deleted — full content confirmed reflected in §4.3/§8 |
+| 1.4 | 2026-07-09 | Youngho Kim | Code sync — M4 (color search) and M5 (Human Parsing) flipped Pending/Proposed→Done; AC-10 and §8.2 endpoint corrected to actual delivered shape (`GET /api/search`, not `/api/events`); M6 (Phase-1.5) confirmed still not implemented |

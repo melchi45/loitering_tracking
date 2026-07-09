@@ -224,7 +224,9 @@ REST endpoints for DB-persisted trajectories:
 
 ---
 
-## 8. Appearance/Body Re-ID 격차 분석 및 고도화 제안 (Proposed, 2026-07-09)
+## 8. Appearance/Body Re-ID 격차 분석 및 고도화 제안 (Implemented, opt-in — 2026-07-09 코드 구현 완료)
+
+> 2026-07-09 별도 세션에서 실제 구현됨: `appearanceReidService.js`, `qdrantService.js`, `pipelineManager.js#_weightedAppearSim()`. 모델 파일/Qdrant 모두 기본 비활성(opt-in), 장시간 재등장 조회(FR-CCFR-064)는 write만 배선되고 read는 미배선, 정확도 검증 없음(FR-CCFR-065). FR 단위 상세는 `docs/srs/SRS_CrossCamera_Face_Tracking.md` §14, `docs/design/Design_AI_AppearanceReID.md` §12.6 참조.
 
 ### 8.1 문제 재정의
 
@@ -266,3 +268,4 @@ Multi-Camera Tracking Re-ID 가이드(원본 삭제됨, 내용 본 §8에 통합
 | 1.2 | 2026-07-09 | Youngho Kim | §8 추가 — Appearance/Body Re-ID 격차 분석 및 OSNet 임베딩 모델 도입 제안 (Proposed, 미구현) |
 | 1.3 | 2026-07-09 | Youngho Kim | §8.3 추가 — Multi-Camera 가이드 활용사례(이동추적/이동경로분석) 기존 구현 확인, 색상 검색 API 사전필터 제안(§8.2 4번) — 원본 가이드 삭제 전 최종 반영 확인 |
 | 1.4 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/Multi_Camera_Tracking_ReID_가이드.md` 삭제 완료 — 내용 전체가 §8에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |
+| 1.5 | 2026-07-09 | Youngho Kim | 코드 동기화 — §8을 Proposed→Implemented(opt-in)로 갱신 (`appearanceReidService.js`/`qdrantService.js` 구현 확인) |

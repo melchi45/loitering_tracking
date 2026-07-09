@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-AI-05 |
-| **Version** | 1.4 |
+| **Version** | 1.5 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent SRS** | srs/SRS_AI_Color_Analysis.md |
@@ -571,3 +571,4 @@ Phase-1.5 is a strict quality upgrade to the **always-on** code path (no model, 
 | 1.2 | 2026-07-09 | Youngho Kim | Added §10.2 note on Person Attribute Recognition (whole-crop) alternative considered and rejected — final gap check before source guide deletion |
 | 1.3 | 2026-07-09 | Youngho Kim | Added §10.2 CE2P (considered, excluded — no maintained ONNX export) and FastReID-attribute-head (rejected — same whole-crop pattern as PAR) notes; added §11 Phase-1.5 proposed — K-Means dominant color on the existing fixed ROI, no model required. Closes the remaining gap between `CCTV_IPTV_상의하의_색상분류_가이드.md` and this design ahead of source guide deletion |
 | 1.4 | 2026-07-09 | Youngho Kim | Source guide `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` deleted — full content confirmed reflected in §10–11, in-doc citations updated to archival notes |
+| 1.5 | 2026-07-09 | Youngho Kim | Code sync — §10 Human Parsing flipped Proposed→Implemented, opt-in (`colorClothService.js#_runHumanParsing`, `kmeansColor.js`, `analyticsConfig.humanParsing`, model-catalog hot-swap confirmed in code); §10.5 gating fix confirmed done. §11 Phase-1.5 remains unimplemented — not touched by this sync |

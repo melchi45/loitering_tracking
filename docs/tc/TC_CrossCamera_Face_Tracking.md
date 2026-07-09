@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-CCFR-01 |
-| **Version** | 1.4 |
+| **Version** | 1.5 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent SRS** | srs/SRS_CrossCamera_Face_Tracking.md |
@@ -610,37 +610,44 @@ No additional npm packages — uses built-in fetch (Node 18+)
 
 ---
 
-## 11. Test Group I — Appearance Re-ID Upgrade (Planned)
+## 11. Test Group I — Appearance Re-ID Upgrade (Planned — code now implemented, tests still missing)
 
-> **Status: Planned — not yet implemented.** No runnable test script exists for this group. Recorded per gap analysis against the Multi-Camera Tracking Re-ID guide (original deleted 2026-07-09, content consolidated into this section) and `docs/rfp/ReID_및_색상분석_활용가이드.md` (2026-07-09). Corresponds to `docs/srs/SRS_CrossCamera_Face_Tracking.md` §14 (FR-CCFR-060~065) and `docs/design/Design_AI_AppearanceReID.md` §12. Not registered in `test/tc_runner_cli.js` / `TcRunnerService.js`.
+> **Status: Code implemented 2026-07-09 (opt-in); this test group remains Planned — no runnable test script exists.** `appearanceReidService.js`, `qdrantService.js`, and `pipelineManager.js#_weightedAppearSim()` are real, working code as of 2026-07-09 (see `docs/design/Design_AI_AppearanceReID.md` §12.6), but none of it has automated test coverage — this TC group still describes untested functionality, not unimplemented functionality. Corresponds to `docs/srs/SRS_CrossCamera_Face_Tracking.md` §14 (FR-CCFR-060~066) and `docs/design/Design_AI_AppearanceReID.md` §12. Not registered in `test/tc_runner_cli.js` / `TcRunnerService.js` — per this project's TDD convention, a suite is only registered once a runnable test file exists for it.
 
 ### TC-I-001 (Planned) — OSNet Embedding Model Load Status Exposed
 - **SRS:** FR-CCFR-060
-- **Steps:** `GET /api/capabilities` (or equivalent) → assert an appearance-embedding model status field is present and reflects `not_started` when the model file is absent
+- **Steps:** `GET /health` → assert `capabilities.appearanceReid` is present and reflects `not_started`/`missing` when the model file is absent
+- **Note:** the capability field itself now exists in code (`index.js`) — this TC is executable today; only the automated script is missing
 
 ### TC-I-002 (Planned) — Weighted Similarity Uses 80/20 Split When OSNet Ready
 - **SRS:** FR-CCFR-061
 - **Steps:** With OSNet model active, compute similarity for two crops of the same person → assert the combined score reflects `osnetCosineSim*0.8 + colorSim*0.2` rather than color-only
+- **Note:** requires `appearance_reid_osnet.onnx` to be downloaded and enabled first — model provenance is unverified end-to-end (see `appearanceReidService.js` header comment)
 
 ### TC-I-003 (Planned) — Falls Back to Color-Only When OSNet Not Loaded
 - **SRS:** FR-CCFR-062
 - **Steps:** With no OSNet model file present → assert `_clothingAppearSim()` behavior is unchanged from the current Phase-1 (color+PAR-type) implementation — no regression
+- **Note:** this is the default state of every install (model not bundled) — easiest of this group to automate first
 
 ### TC-I-004 (Planned) — Appearance Embedding Collection Round-Trips in Qdrant
 - **SRS:** FR-CCFR-063
-- **Steps:** Insert a synthetic appearance embedding into the `appearance_embeddings` collection (distinct from the planned `face_embeddings` collection, M3) → query by cosine similarity → assert correct nearest-neighbor retrieval
+- **Steps:** Insert a synthetic appearance embedding into the `appearance_embeddings` collection (distinct from the `face_embeddings` collection, M3) → query by cosine similarity → assert correct nearest-neighbor retrieval
+- **Note:** `qdrantService.js#queryAppearance()` (kNN) exists but is not called by any production code path — this TC would test the client method directly, not an integrated flow
 
 ### TC-I-005 (Planned) — Long-Gap Re-appearance Matched via Appearance Vector DB
 - **SRS:** FR-CCFR-064
 - **Steps:** Simulate a person seen at T, then again at T+90min on a different camera with no face visible → assert the appearance-vector search (not the 5-minute in-memory `_sharedClothingGallery`) still returns a match
+- **Note:** this TC will currently **fail** even with Qdrant enabled — `_assignClothingIds()` never queries Qdrant for matching (write-only), so no code path returns this match yet (see SRS FR-CCFR-064 status: Partially Done)
 
 ### TC-I-006 (Planned) — Same-Uniform False-Positive Rate Reduced vs. Baseline
 - **SRS:** FR-CCFR-065
 - **Steps:** Feed two different persons wearing identical uniforms (synthetic/fixture crops) → assert the OSNet-weighted similarity score is measurably lower than the current color-only baseline score for the same pair
+- **Note:** no baseline measurement has been taken yet — this TC is also the acceptance test for whether the (unverified) OSNet preprocessing is even correct
 
 ### TC-I-007 (Planned) — Color Pre-Filter Narrows Candidates Before Embedding Ranking
 - **SRS:** FR-CCFR-066
-- **Steps:** Query the appearance search with `upperColor=red&lowerColor=black` against a fixture set containing both matching and non-matching colors → assert non-matching-color entries are excluded before similarity ranking is applied, and results are ordered by embedding cosine similarity within the filtered set
+- **Steps:** Query the appearance search with `types=appearance&upperColor=red&lowerColor=black` against a fixture set containing both matching and non-matching colors → assert non-matching-color entries are excluded
+- **Note:** `GET /api/search?types=appearance` + `qdrantService.scrollAppearanceByFilter()` is implemented and testable today; the "ranked by embedding cosine similarity within the filtered set" half of this TC is not implemented (no query-by-example step exists yet — see Design §12.4) and should be split out or deferred when this TC is finally automated
 
 ---
 
@@ -734,3 +741,4 @@ Phase 10 — Appearance Re-ID Upgrade (Group I, Planned — not yet executable)
 | 1.2 | 2026-07-09 | Youngho Kim | Group I (TC-I-001~I-006, Planned) 추가 — Appearance Re-ID 임베딩 모델 고도화 갭 분석 기반 테스트 명세 (미구현); TOC 누락 항목(Group H) 보정 |
 | 1.3 | 2026-07-09 | Youngho Kim | TC-I-007 (Planned) 추가 — 색상 사전 필터링 검색 최적화 테스트 명세; 원본 가이드 삭제 전 최종 반영 확인 |
 | 1.4 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/Multi_Camera_Tracking_ReID_가이드.md` 삭제 완료 — 내용 전체가 §11에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |
+| 1.5 | 2026-07-09 | Youngho Kim | 코드 동기화 — §11 코드는 구현 완료(opt-in)로 확인, 테스트 스크립트 부재만 남은 상태로 재정의; TC-I-005(장시간 재등장)는 현재 실패할 것으로 예상됨을 명시 (Qdrant 조회 미배선) |

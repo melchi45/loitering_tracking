@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-AI-06-CLR |
-| **Version** | 1.3 |
+| **Version** | 1.4 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent PRD** | prd/PRD_AI_Color_Analysis.md |
@@ -342,41 +342,45 @@ No dedicated REST endpoints for color analysis. Color data flows exclusively thr
 
 ---
 
-## 11. Functional Requirements — Phase-3 Human Parsing (Proposed)
+## 11. Functional Requirements — Phase-3 Human Parsing
 
-> **Status: Proposed, not yet implemented.** This section records requirements derived from gap analysis against the CCTV/IPTV 상의하의 색상분류 guide (now-consolidated, original deleted 2026-07-09) and `docs/rfp/ReID_및_색상분석_활용가이드.md` (2026-07-09). Implementation is pending a separate user request; see `docs/design/Design_AI_Color_Analysis.md` §10 for the corresponding architecture.
+> **Status: Implemented, opt-in** (2026-07-09 proposed → 2026-07-09 code implemented). This section records requirements derived from gap analysis against the CCTV/IPTV 상의하의 색상분류 guide (now-consolidated, original deleted 2026-07-09) and `docs/rfp/ReID_및_색상분석_활용가이드.md` (2026-07-09). All 6 FRs below are implemented in code but disabled by default (`humanParsing:false`) with no behavioral test coverage; see `docs/design/Design_AI_Color_Analysis.md` §10 for the corresponding architecture.
 
-### FR-CLR-022 — Human Parsing Global Toggle
+### FR-CLR-022 — Human Parsing Global Toggle — ✅ Done
 
 - A boolean `humanParsing` key must be added to `analyticsConfig.js`'s `DEFAULT_CONFIG`, defaulting to `false`
 - When `humanParsing` is disabled or its model is not loaded, color extraction must silently fall back to Phase-1 behavior (FR-CLR-005/006)
 
-### FR-CLR-023 — Model Catalog Registration (Substitutable Models)
+### FR-CLR-023 — Model Catalog Registration (Substitutable Models) — ✅ Done
 
 - Human Parsing models (SCHP LIP-20, SegFormer clothes) must be registered in a model catalog with the same download + activate UX as the existing YOLO detector catalog (`GET/POST /api/analysis/models`)
 - Each catalog entry must carry a `classMap` field mapping the model's own class indices to the semantic roles `upper` and `lower`, so that switching the active model does not require code changes
 - Only one Human Parsing model may be active at a time per analysis server instance
+- **Implementation**: `analysisApi.js`'s `EXTENDED_CATALOG` (`family: 'human-parsing'`, `schp-lip20`/`segformer-clothes` entries); `/models/switch` calls `colorClothService.js#reloadHumanParsing(filePath, classMap, inputSize)`
 
-### FR-CLR-024 — Per-Track Throttled Execution
+### FR-CLR-024 — Per-Track Throttled Execution — ✅ Done
 
 - Human Parsing inference must not run on every frame; it must run at most once per tracked person (`objectId`) per a fixed interval (default 4000 ms)
 - Between runs, the previously computed color result for that `objectId` must be reused from a cache
 - The cache entry for a given `objectId` must be removed when the corresponding track is dropped by the tracker (lifecycle hook, not a fixed-size/LRU eviction)
+- **Implementation**: `HP_INTERVAL_MS = 4000`, `_parseCache` Map, `dropTrack(objectId)` called from `pipelineManager.js` at both track-finalization sites
 
-### FR-CLR-025 — Mask-Based Dominant Color Extraction
+### FR-CLR-025 — Mask-Based Dominant Color Extraction — ✅ Done
 
 - When the Human Parsing model is active and ready, color extraction must classify each pixel of the person crop into the model's class set, then select pixels belonging to `upper`-mapped classes and `lower`-mapped classes per FR-CLR-023's `classMap`
 - A K-Means (or equivalent dominant-color) algorithm must compute the representative RGB for each pixel set
 - If a region's pixel count is below a minimum threshold (default 20), that region must fall back to the Phase-1 fixed-fraction ROI average (FR-CLR-005/006) instead of returning an unreliable color
+- **Implementation**: `_runHumanParsing()` argmaxes per-pixel class logits, feeds masked pixels to `kmeansColor.js#dominantColor()` (unit-tested), `HP_MIN_MASK_PIXELS = 20` fallback threshold confirmed
 
-### FR-CLR-026 — Output Schema Extension
+### FR-CLR-026 — Output Schema Extension — ✅ Done
 
 - When Phase-3 produces a color result, the output object (FR-CLR-009 schema) must include an additional `source` field with value `'human-parsing'`; Phase-1-derived output must omit this field or set it to `'legacy'`
 
-### FR-CLR-027 — Licensing Constraint
+### FR-CLR-027 — Licensing Constraint — ✅ Done
 
 - Any Human Parsing model added to the catalog must have its license terms recorded in the catalog entry metadata
 - This project is not a commercial deployment; models with non-commercial-only license terms (e.g. NVIDIA SegFormer NC-inherited checkpoints) are permitted for this project but the catalog entry must flag the restriction so the field is preserved if the project's deployment model changes
+- **Implementation**: `EXTENDED_CATALOG` entries carry `license: 'MIT'` (SCHP) and `license: 'NVIDIA SegFormer NC (non-commercial...)'` (SegFormer); `downloadModels.js` DIRECT_MODELS entries default `enabled:false` pending manual license verification
 
 ---
 
@@ -405,3 +409,4 @@ No dedicated REST endpoints for color analysis. Color data flows exclusively thr
 | 1.1 | 2026-07-09 | Youngho Kim | Added §11 Phase-3 Human Parsing proposed requirements (FR-CLR-022~027), C-08 constraint, §2.3 phase note — gap analysis vs CCTV_IPTV_상의하의_색상분류_가이드.md / ReID_및_색상분석_활용가이드.md |
 | 1.2 | 2026-07-09 | Youngho Kim | Added §12 Phase-1.5 proposed requirements (FR-CLR-028~029) — K-Means dominant color on the existing fixed ROI, no model required; closes the guide's tier-4 gap ahead of source guide deletion |
 | 1.3 | 2026-07-09 | Youngho Kim | Source guide `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` deleted — full content confirmed reflected in §11–12, in-doc citations updated to archival notes |
+| 1.4 | 2026-07-09 | Youngho Kim | Code sync — §11 all FR-CLR-022~027 flipped Proposed→Implemented (opt-in, no behavioral test coverage yet); §12 Phase-1.5 (FR-CLR-028~029) confirmed still unimplemented, not touched |

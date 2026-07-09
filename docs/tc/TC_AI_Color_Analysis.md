@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-AI-05 |
-| **Version** | 1.3 |
+| **Version** | 1.4 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent SRS** | srs/SRS_AI_Color_Analysis.md |
@@ -291,17 +291,19 @@ No external test framework — built-in fetch only
 
 ---
 
-## 8. Test Group F — Phase-3 Human Parsing (Planned)
+## 8. Test Group F — Phase-3 Human Parsing (Planned — code now implemented, tests still missing)
 
-> **Status: Planned — not yet implemented.** No runnable test script exists for this group; it is recorded here as a specification for future implementation, derived from gap analysis against the CCTV/IPTV 상의하의 색상분류 guide (now-consolidated, original deleted 2026-07-09) and `docs/rfp/ReID_및_색상분석_활용가이드.md` (2026-07-09). These test IDs are **not** registered in `test/tc_runner_cli.js` / `server/src/services/TcRunnerService.js` — doing so before the corresponding code exists would violate this project's TDD convention (registering a suite against a nonexistent test file).
+> **Status: Code implemented 2026-07-09 (opt-in, `humanParsing` toggle default off); this test group remains mostly Planned.** `colorClothService.js#_runHumanParsing()`/`reloadHumanParsing()`, `kmeansColor.js` (unit-tested separately), and the `human-parsing` model-catalog family are real code as of 2026-07-09 — this group now describes untested behavior, not unimplemented behavior. **Partial exception**: `test/api/analytics_config.test.js` and `test/api/ai_detection_modules.test.js` were extended with a generic `humanParsing` capability/toggle entry (shared harness, not specific to TC-F-001~008 below) — this gives coarse toggle/capability coverage but not the mask-based color extraction behavior itself. These test IDs are **not** registered in `test/tc_runner_cli.js` / `server/src/services/TcRunnerService.js` — per this project's TDD convention, a suite is only registered once a dedicated runnable test file exists for it.
 
 ### TC-F-001 (Planned) — humanParsing Toggle Round-Trips via Analytics Config
 - **SRS:** FR-CLR-022
 - **Steps:** `PUT /api/analytics/config` with `humanParsing: true`, then `GET` → assert persisted; repeat with `false`
+- **Note:** covered at the generic-harness level by `test/api/analytics_config.test.js`'s Group C (see status note above); this specific TC-ID is not separately registered
 
 ### TC-F-002 (Planned) — Model Catalog Lists Human Parsing Family Entries
 - **SRS:** FR-CLR-023
 - **Steps:** `GET /api/analysis/models` → assert entries with `family: 'human-parsing'` (SCHP, SegFormer) are present with `classMap` metadata
+- **Note:** `analysisApi.js`'s `EXTENDED_CATALOG` now contains these entries in code — this TC is executable today, only unautomated
 
 ### TC-F-003 (Planned) — Only One Human Parsing Model Active at a Time
 - **SRS:** FR-CLR-023
@@ -434,3 +436,4 @@ Phase 9 — Phase-1.5 K-Means Dominant Color (Group G, Planned — not yet execu
 | 1.1 | 2026-07-09 | Youngho Kim | Added Test Group F (Phase-3 Human Parsing, Planned) — TC-F-001~008, not yet registered in runnable SUITES |
 | 1.2 | 2026-07-09 | Youngho Kim | Added Test Group G (Phase-1.5 K-Means Dominant Color, Planned) — TC-G-001~005, not yet registered in runnable SUITES; renumbered §9/§10 → §10/§11 |
 | 1.3 | 2026-07-09 | Youngho Kim | Source guide `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` deleted — full content confirmed reflected in Groups F–G, in-doc citation updated to archival note |
+| 1.4 | 2026-07-09 | Youngho Kim | Code sync — Group F confirmed implemented in code (opt-in), tests still missing except coarse toggle/capability coverage now in `analytics_config.test.js`/`ai_detection_modules.test.js`; Group G (Phase-1.5) confirmed still unimplemented, not touched |

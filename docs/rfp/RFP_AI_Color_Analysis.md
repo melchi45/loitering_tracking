@@ -440,7 +440,9 @@ Auto-activated when 'color' or 'cloth' is included in Zone targetClasses
 Output: detection.color.upper / detection.color.lower (color name)
 ```
 
-#### Phase-3: Human Parsing 기반 정밀 색상 분류 (Proposed, 2026-07-09)
+#### Phase-3: Human Parsing 기반 정밀 색상 분류 (Implemented, opt-in — 2026-07-09 코드 구현 완료)
+
+> 2026-07-09 별도 세션에서 실제 구현됨: `colorClothService.js#_runHumanParsing()`, `kmeansColor.js`(단위 테스트 완료), `humanParsing` 토글(기본 비활성). 모델 파일은 `downloadModels.js`에서 기본 비활성(라이선스 검토 후 수동 다운로드), 마스크 분류 자체에 대한 동작 테스트는 없음. 상세는 `docs/srs/SRS_AI_Color_Analysis.md` §11, `docs/design/Design_AI_Color_Analysis.md` §10 참조. (아래 Phase-1.5는 여전히 미구현.)
 
 **격차 분석 배경**: 참고 가이드 CCTV/IPTV 상의하의 색상분류 가이드(내용 통합 완료, 원본은 2026-07-09 삭제됨)와 `ReID_및_색상분석_활용가이드.md`를 현재 구현(Phase-1)과 비교한 결과, 현재 방식(고정 비율 bbox crop → 8×8 리사이즈 → 단순 픽셀 평균 → HSV 매핑)은 가이드가 제시하는 4단계 티어 중 **가장 단순한 티어("많은 현장에서는 별도 AI 모델 없이 처리")보다도 더 축약된 방식**이다 — 해당 티어는 K-Means/Dominant Color 추출을 전제하지만 현재는 단순 평균만 사용한다. 가이드의 최상위 티어는 Human Parsing(SCHP/CE2P/SegFormer)을 이용한 픽셀 단위 의류 마스크 추출을 권장한다.
 
@@ -492,3 +494,4 @@ Output: detection.color.upper / detection.color.lower (color name)
 | 1.2 | 2026-07-09 | Youngho Kim | Person Attribute Recognition(whole-crop) 대안 검토·제외 근거 추가 — 원본 가이드 삭제 전 최종 반영 확인 |
 | 1.3 | 2026-07-09 | Youngho Kim | CE2P 후보 검토·제외 근거, Phase-1.5(가이드 4번째 티어 — K-Means, 모델 불필요) 제안 추가 — 원본 가이드 최종 반영 확인 |
 | 1.4 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` 삭제 완료 — 내용 전체가 Appendix E에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |
+| 1.5 | 2026-07-09 | Youngho Kim | 코드 동기화 — Appendix E Phase-3를 Proposed→Implemented(opt-in)로 갱신 (`colorClothService.js#_runHumanParsing`/`kmeansColor.js` 구현 확인); Phase-1.5는 여전히 미구현 |

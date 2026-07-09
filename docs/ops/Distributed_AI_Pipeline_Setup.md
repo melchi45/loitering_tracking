@@ -68,18 +68,26 @@ LTS-2026의 Distributed AI Pipeline 기능은 `server/.env`의 `SERVER_MODE` 환
 | RAM | 16GB 이상 |
 | ONNX 모델 | `server/models/yolov8n.onnx` (또는 커스텀 모델) |
 
-### 1.4 계획된 모델 (Planned, 미구현) — 2026-07-09
+### 1.4 전체 AI 모델 카탈로그 — Admin Dashboard에서 다운로드/전환
 
-아래 모델들은 참고 가이드 문서(`docs/rfp/ReID_및_색상분석_활용가이드.md`, 그리고 내용이 본 절에 통합된 후 2026-07-09 삭제된 Multi-Camera Tracking Re-ID 가이드 및 CCTV/IPTV 상의하의 색상분류 가이드) 대비 격차 분석에서 제안된 것으로, **아직 코드에 통합되지 않았다**. `openpar.onnx`와 동일하게 파일이 없으면 해당 기능이 자동으로 비활성화되는 방식으로 설계될 예정이다.
+`analysis`/`combined` 서버는 아래 모든 ONNX 모델을 하나의 통합 카탈로그(`GET/POST /api/analysis/models*`)로 관리합니다 — Admin Dashboard → **AI Models** 탭에서 family별로 다운로드·활성화(Activate) 상태를 확인하고 조작할 수 있습니다. 상세 스키마·다운로드 전략은 [Design_AI_Model_Catalog.md](../design/Design_AI_Model_Catalog.md) 참조.
 
-| 모델 | 용도 | 배치 경로(예정) | 상태 | 관련 설계 문서 |
+| Family | 모델 | 배치 경로 | 다운로드 방식 | 상태 |
 |---|---|---|---|---|
-| SCHP (LIP-20) 또는 SegFormer clothes | Human Parsing 기반 정밀 색상 분류 (Color Analysis Phase-3) | `server/models/schp_lip.onnx` | 📝 Proposed | [Design_AI_Color_Analysis.md §10](../design/Design_AI_Color_Analysis.md#10-phase-3-proposed-architecture--human-parsing-model-catalog) |
-| OSNet / OSNet-AIN | Appearance/Body Re-ID 임베딩 (색상 단독 매칭 대체) | TBD | 📝 Proposed | [Design_AI_AppearanceReID.md §12](../design/Design_AI_AppearanceReID.md#12-phase-2-개선-제안--실제-re-id-임베딩-모델-도입) |
+| 감지기 (YOLO) | YOLO26/12/11/v8 n/s/m/l/x (20종) | `server/models/yolo*.onnx` | 직접 ONNX 또는 `.pt`→`ultralytics export` | ✅ Done (기본 활성) |
+| `face-detection` | SCRFD 2.5G | `server/models/scrfd_2.5g.onnx` | 직접 ONNX | ✅ Done (기본 필수) |
+| `face-recognition` | ArcFace ResNet50 (w600k) | `server/models/arcface_w600k_r50.onnx` | 직접 ONNX | ✅ Done (기본 필수) |
+| `ppe` | YOLOv8m PPE (마스크+안전모) | `server/models/yolov8m_ppe.onnx` | HuggingFace `.pt`→`ultralytics export` (자동) | ✅ Done |
+| `fire-smoke` | YOLOv8s Fire & Smoke | `server/models/yolov8s_fire_smoke.onnx` | HuggingFace `.pt`→`ultralytics export` (자동) | ✅ Done |
+| `cloth-par` | OpenPAR | `server/models/openpar.onnx` | **수동 export만 가능** — 공개된 사전학습 ONNX 없음 | ✅ Done (수동 배치 필요) |
+| `human-parsing` | SCHP (LIP-20) 또는 SegFormer clothes | `server/models/schp_lip.onnx` | 직접 ONNX | ✅ 코드 구현 완료, 기본 비활성(opt-in) — [Design_AI_Color_Analysis.md §10](../design/Design_AI_Color_Analysis.md#10-phase-3-proposed-architecture--human-parsing-model-catalog) |
+| `appearance-reid` | OSNet (person Re-ID) | `server/models/appearance_reid_osnet.onnx` | 직접 ONNX | ✅ 코드 구현 완료, 기본 비활성(opt-in) — [Design_AI_AppearanceReID.md §12](../design/Design_AI_AppearanceReID.md#12-phase-2-개선-제안--실제-re-id-임베딩-모델-도입) |
 
-**모델 불필요 항목 — Phase-1.5**: 위 표와 달리 별도 모델 다운로드가 필요 없는 제안도 있다. `server/src/utils/kmeansColor.js`(Phase-3용으로 이미 구현·테스트됨)를 재사용해 Color Analysis Phase-1의 고정 ROI 8×8 단순 평균을 K-Means 대표색 추출로 교체하는 안 — 가이드 §4(모델 불필요 티어)에 대응. 상세는 [Design_AI_Color_Analysis.md §11](../design/Design_AI_Color_Analysis.md#11-phase-15-proposed--k-means-dominant-color-on-the-existing-fixed-roi-no-model) 참조.
+- PPE/Fire & Smoke는 공개된 사전학습 ONNX가 없어 Ultralytics `.pt`가 아닌 **HuggingFace Hub** 저장소에서 `.pt`를 받아 `ultralytics export`로 변환합니다 (`huggingface_hub` Python 패키지 필요) — `npm run download-models` 또는 Admin UI Download 버튼으로 자동 수행됩니다.
+- `cloth-par`(OpenPAR)는 공개된 사전학습 체크포인트 자체가 없어 카탈로그의 `manualOnly` 항목으로 등록되어 있습니다 — Download 버튼 대신 "Manual export" 참조 링크가 표시되며, 직접 학습/변환한 ONNX 파일을 `server/models/openpar.onnx`에 배치하면 즉시 Activate할 수 있습니다.
+- `human-parsing`/`appearance-reid`는 소스 URL 검증 전이라 `downloadModels.js`의 `DIRECT_MODELS`에서 기본 `enabled:false`로 남아 있습니다 — Admin UI Download 버튼으로 개별 다운로드하거나, 검증 후 스크립트에서 `enabled:true`로 전환하세요.
 
-이 모델들은 본 문서의 §2~§9(설치·운영·트러블슈팅 절차)에 아직 반영되어 있지 않으며, 실제 구현이 진행되는 시점에 해당 섹션들이 별도로 업데이트된다.
+**모델 불필요 항목 — Phase-1.5**: Color Analysis Phase-1의 고정 ROI 8×8 단순 평균을 K-Means 대표색 추출로 교체하는 안(모델 다운로드 불필요)은 아직 미구현입니다. 상세는 [Design_AI_Color_Analysis.md §11](../design/Design_AI_Color_Analysis.md#11-phase-15-proposed--k-means-dominant-color-on-the-existing-fixed-roi-no-model) 참조.
 
 ---
 
@@ -284,6 +292,8 @@ npm start
 | `ANALYSIS_FPS` | `0` | `streaming` | 카메라당 전송 fps 상한. `0` = unlimited (권장); `N > 0` = 하드 캡 |
 | `FIRE_SMOKE_CONF_THRESHOLD` | `0.35` | `analysis`, `combined` | 화재/연기 감지 신뢰도 하한. 낮출수록 감도 증가, 오탐 증가 |
 | `FIRE_SMOKE_NMS_THRESHOLD` | `0.45` | `analysis`, `combined` | 화재/연기 NMS IoU 임계값. 낮출수록 겹치는 박스 제거 강화 |
+| `QDRANT_ENABLED` | `false` | `combined`, `analysis` | Qdrant 벡터 DB 연동 활성화 (opt-in). `false` 시 Face/Appearance Re-ID는 기존 인메모리 갤러리로만 동작 — 기능 차이 없음 |
+| `QDRANT_URL` | `http://localhost:6333` | `combined`, `analysis` | Qdrant 서버 접속 URL (`QDRANT_ENABLED=true`일 때만 사용) |
 
 ### 5.2 ANALYSIS_REQUEST_TIMEOUT_MS 권장값
 
@@ -998,3 +1008,4 @@ curl http://localhost:3443/api/galleries/match-history?limit=5
 | 1.8 | 2026-07-09 | 원본 가이드 `docs/rfp/Multi_Camera_Tracking_ReID_가이드.md` 삭제 완료 — 내용 전체가 §1.4에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |
 | 1.9 | 2026-07-09 | 섹션 1.4에 Phase-1.5(K-Means, 모델 불필요) 안내 추가 — CCTV_IPTV_상의하의_색상분류_가이드.md 최종 반영 확인 |
 | 1.10 | 2026-07-09 | 원본 가이드 `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` 삭제 완료 — 내용 전체가 §1.4에 반영되었음을 확인하고 본 문서 내 인용을 아카이브 표기로 변경 |
+| 1.11 | 2026-07-09 | 섹션 1.4 전면 개정 — 전체 AI 모델 카탈로그(YOLO 20종 + face/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid 8종) 표로 교체, SCHP/OSNet "아직 코드에 통합되지 않았다"는 오래된 서술 정정(실제로는 opt-in 구현 완료), PPE/Fire-Smoke HuggingFace 자동 export·OpenPAR manualOnly 안내 추가 — [Design_AI_Model_Catalog.md](../design/Design_AI_Model_Catalog.md) 참조 |

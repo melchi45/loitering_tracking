@@ -3,8 +3,10 @@
  * AI Model Catalog Tests
  *
  * TC: TC_AI_Model_Catalog
- *   Covers: TC-MC-001, TC-MC-002, TC-MC-002b, TC-MC-005, TC-MC-007, TC-MC-008,
+ *   Covers: TC-MC-001, TC-MC-002, TC-MC-002b, TC-MC-007, TC-MC-008,
  *           TC-MC-012, TC-MC-013
+ *   Not automated here (see TC_AI_Model_Catalog.md §3): TC-MC-003, TC-MC-005,
+ *   TC-MC-006, TC-MC-010, TC-MC-011, TC-MC-014, TC-MC-015, TC-MC-016
  *
  * Network-dependent tests (TC-MC-004, TC-MC-009) require INTEGRATION_DOWNLOAD=1
  *

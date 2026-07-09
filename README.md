@@ -1795,7 +1795,7 @@ The `nodejs-udp-discovery` branch adds:
 | 17 | Auto Reports | — | PDF · Excel · 이메일 예약 발송 전체 미착수 | 🔲 Planned | Oct 6, 2026 |
 | 18 | Map Layout | — | 도면/위성맵 카메라 배치 전체 미착수 | 🔲 Planned | Oct 20, 2026 |
 | 19 | Privacy & Audit | **AuditService.js** 불변 감사 로그(최대 10,000건) · RBAC 접근 이력 · `/admin/audit` UI | 얼굴 블러/익명화 미착수 · GDPR 삭제 API 미착수 | ⚠️ Partial | Nov 3, 2026 |
-| 20 | AI Model Mgmt | **YOLO 모델 카탈로그 15종**(YOLOv8/11/12 n/s/m/l/x) · 다운로드 API + SSE 진행률 · **런타임 모델 전환**(hot-swap) · **Admin UI** AiModelsSection · 퍼채널 AI 모듈 활성화 | 커스텀 모델 업로드 미착수 · 카메라별 모델 배정 UI 미착수 · A/B 테스트 미착수 | ⚠️ Partial | Nov 17, 2026 |
+| 20 | AI Model Mgmt | **전체 AI 모델 카탈로그**(YOLO 감지기 20종 YOLOv8/11/12/26 n/s/m/l/x + 얼굴 감지·인식(SCRFD/ArcFace)·PPE·화재연기·의상PAR·Human Parsing·Appearance Re-ID 8종, 총 28종) · family별 독립 다운로드/전환(direct ONNX·HuggingFace PT 변환·수동export) · **런타임 모델 전환**(family별 독립 hot-swap) · **Admin UI** AiModelsSection(family별 테이블) · 퍼채널 AI 모듈 활성화 | 커스텀 모델 업로드 미착수 · 카메라별 모델 배정 UI 미착수 · A/B 테스트 미착수 · SSE 실시간 진행률 미구현(2초 폴링으로 대체) | ⚠️ Partial | Nov 17, 2026 |
 | 21 | Deployment | **Docker Compose** 단일 명령 배포 · **프로덕션 로그**(레벨 필터 · `/var/log/lts`) · `npm run start/stop` 프로세스 관리 · `/admin/system` CPU/메모리/GPU/디스크 메트릭 | Prometheus `/metrics` 미착수 · OpenAPI 문서 미착수 · K8s/Helm 미착수(→ ES-8) | ⚠️ Partial | Dec 1, 2026 |
 
 ### 14.2 Enterprise Scale 마일스톤 — 대규모 분산 / 이중화 (TODO)
