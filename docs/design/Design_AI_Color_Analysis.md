@@ -514,10 +514,19 @@ analyze(jpegBuffer, personBbox, imgW, imgH, opts = {}):
 
 `attributePipeline.js`'s gate was extended as anticipated: `needColor = this._color.ready && (config.color !== false || config.cloth !== false || config.humanParsing === true)`. Note the implemented condition uses `config.humanParsing === true` (explicit opt-in) rather than the `!== false` form originally proposed here — both behave identically given `DEFAULT_CONFIG.humanParsing = false`, but `=== true` is the stricter/safer form (an unset or non-boolean value can never accidentally open the gate).
 
+### 10.5.1 Model-Switch Crash Hardening (Windows/DirectML, incident 2026-07-09)
+
+Activating **SegFormer B2 Clothes** (`segformer_clothes.onnx`, quantized) for the first time on a Windows host running the `dml` execution provider (`onnxOptions.js`) crashed the whole Node process past `index.js`'s `uncaughtException`/`unhandledRejection` handlers — consistent with a native-level DirectML fault on a quantized op the SCHP-only code path had never exercised (SCHP outputs same-resolution logits; SegFormer's downsampled-logits branch in `_runHumanParsing` — `maskW/maskH !== size` — ran for the first time). `reloadHumanParsing()` (`colorClothService.js`) previously flipped `_hpReady = true` right after session creation, with no inference ever attempted against the new model/provider combination before live camera frames hit it.
+
+Fix: `reloadHumanParsing()` now runs one synthetic warm-up inference (`_warmUpHumanParsing()`, all-zero tensor at the model's declared `inputSize`) immediately after session creation and validates the output has 4 usable dims. If the warm-up throws on the preferred provider, it retries once on `['cpu']` before giving up — this catches the common case (quantized kernel unsupported by an EP, which normally throws a clean JS-catchable error) at switch time instead of on live traffic, and avoids leaving `_hpReady` pointing at a session that was never actually exercised. The previous `_hpSession` is now released before being replaced (was previously leaked on every model switch). Separately, `faceService.detectFaces()` was hardened to reject non-finite/zero `origW`/`origH` instead of propagating `NaN` into `sharp().resize()` — this was an unrelated pre-existing bug that surfaced in the same incident's logs (upstream YOLO `detect()` failure left frame dims at their `0` default, which flowed into face detection as `Attribute enrichment warn` noise on every frame).
+
+This hardening reduces risk but cannot guarantee immunity from a genuine native/DirectML process-level fault, which no JS-level `try/catch` can intercept — see §10.6 for the still-open non-goal of process isolation for newly-activated models.
+
 ### 10.6 Explicit Non-Goals (this proposal)
 
 - No admin-configurable interval setting in v1 — `HP_INTERVAL_MS` is a hardcoded constant (avoids speculative config surface; per-track interval tuning can be added later if needed).
 - No Vector DB for color/cloth attributes — color remains a scalar attribute on the tracked object, not an embedding. (Vector DB is separately proposed for Appearance Re-ID — see `Design_AI_AppearanceReID.md` §12.)
+- No child-process/worker-thread isolation for newly-activated models (§10.5.1) — a genuine native execution-provider fault still takes down the whole server process; only the JS-catchable subset of failures (the common case) is mitigated by the warm-up+CPU-fallback check.
 
 ---
 
@@ -572,3 +581,4 @@ Phase-1.5 is a strict quality upgrade to the **always-on** code path (no model, 
 | 1.3 | 2026-07-09 | Youngho Kim | Added §10.2 CE2P (considered, excluded — no maintained ONNX export) and FastReID-attribute-head (rejected — same whole-crop pattern as PAR) notes; added §11 Phase-1.5 proposed — K-Means dominant color on the existing fixed ROI, no model required. Closes the remaining gap between `CCTV_IPTV_상의하의_색상분류_가이드.md` and this design ahead of source guide deletion |
 | 1.4 | 2026-07-09 | Youngho Kim | Source guide `docs/rfp/CCTV_IPTV_상의하의_색상분류_가이드.md` deleted — full content confirmed reflected in §10–11, in-doc citations updated to archival notes |
 | 1.5 | 2026-07-09 | Youngho Kim | Code sync — §10 Human Parsing flipped Proposed→Implemented, opt-in (`colorClothService.js#_runHumanParsing`, `kmeansColor.js`, `analyticsConfig.humanParsing`, model-catalog hot-swap confirmed in code); §10.5 gating fix confirmed done. §11 Phase-1.5 remains unimplemented — not touched by this sync |
+| 1.6 | 2026-07-09 | Youngho Kim | Added §10.5.1 — model-switch crash hardening after a SegFormer B2 Clothes activation crashed the process on Windows/DirectML (`reloadHumanParsing()` warm-up + CPU-fallback retry + session disposal; unrelated `faceService.detectFaces()` NaN-width guard fixed in the same incident); added §10.6 non-goal noting process isolation for newly-activated models is still out of scope |

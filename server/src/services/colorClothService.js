@@ -174,13 +174,54 @@ class ColorClothService {
   async reloadHumanParsing(filePath, classMap, inputSize) {
     const ort = require('onnxruntime-node');
     const { createOnnxSession } = require('../utils/onnxOptions');
-    const session = await createOnnxSession(ort, filePath, 'ColorClothService/HumanParsing');
+    let session = await createOnnxSession(ort, filePath, 'ColorClothService/HumanParsing');
+
+    // Warm-up run with a synthetic tensor — surfaces execution-provider/shape
+    // incompatibilities (e.g. quantized ops unsupported on DirectML, see
+    // Design_AI_Color_Analysis.md §10.5) while switching models instead of on
+    // the first live camera frame, where a native-level provider fault can
+    // crash the whole process past JS try/catch.
+    try {
+      await this._warmUpHumanParsing(session, inputSize);
+    } catch (err) {
+      console.warn(
+        `[ColorClothService] Human Parsing warm-up failed on preferred provider (${err.message}); retrying on CPU provider.`
+      );
+      session.release?.();
+      session = await ort.InferenceSession.create(filePath, {
+        executionProviders: ['cpu'],
+        graphOptimizationLevel: 'all',
+      });
+      await this._warmUpHumanParsing(session, inputSize); // let this throw if still broken
+      console.warn('[ColorClothService] Human Parsing running on CPU fallback provider.');
+    }
+
+    this._hpSession?.release?.();
     this._hpSession   = session;
     this._hpClassMap  = classMap;
     this._hpInputSize = inputSize;
     this.hpModelPath  = filePath;
     this._hpReady     = true;
     this._parseCache.clear(); // model switch invalidates cached mask-derived colors
+  }
+
+  /**
+   * Run one synthetic inference to validate a Human Parsing session's output
+   * shape before it is exposed to live traffic. Throws if the session errors
+   * or returns unusable output dims.
+   */
+  async _warmUpHumanParsing(session, inputSize) {
+    const ort = require('onnxruntime-node');
+    const inputName  = session.inputNames[0];
+    const outputName = session.outputNames[0];
+    const zeros  = new Float32Array(3 * inputSize * inputSize);
+    const tensor = new ort.Tensor('float32', zeros, [1, 3, inputSize, inputSize]);
+    const res    = await session.run({ [inputName]: tensor });
+    const dims   = res[outputName]?.dims;
+    if (!Array.isArray(dims) || dims.length !== 4 || dims[1] < 1 || dims[2] < 1 || dims[3] < 1) {
+      throw new Error(`unexpected output dims: ${JSON.stringify(dims)}`);
+    }
+    return dims;
   }
 
   get humanParsingStatus() { return this._hpReady ? 'loaded' : 'not_started'; }

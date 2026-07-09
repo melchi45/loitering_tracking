@@ -103,6 +103,12 @@ class FaceService {
    */
   async detectFaces(jpegBuffer, origW, origH) {
     if (!this._ready) return [];
+    // Guard against callers passing unresolved frame dims (e.g. upstream
+    // detect() failed and left width/height at their 0 default) — 640/0
+    // would otherwise propagate Infinity/NaN into sharp().resize().
+    if (!Number.isFinite(origW) || !Number.isFinite(origH) || origW <= 0 || origH <= 0) {
+      return [];
+    }
 
     const scale  = Math.min(SCRFD_SIZE / origW, SCRFD_SIZE / origH);
     const scaledW = Math.round(origW * scale);
