@@ -67,7 +67,7 @@ loitering_tracking/
 │   │   ├── AnalysisEventsTab.tsx   # Detections 탭 — 이벤트 히스토리 (analysis 모드)
 │   │   ├── DetectionsTimelineInline.tsx # 감지 트랙 Gantt 타임라인 (FullscreenCameraView Detections 탭)
 │   │   ├── AnalysisHistoryTab.tsx  # 분석 이벤트 이력 탭 (저장된 fire/smoke/loitering)
-│   │   └── ThermalOverlay.tsx      # 열상 카메라 온도 오버레이 (onvif:temperature, FullArea 배너 + 좌표 crosshair)
+│   │   └── ThermalOverlay.tsx      # 열상 카메라 온도 오버레이 (onvif:temperature, FullArea 배너 + 좌표 crosshair, Camera.thermalSensorWidth/Height로 센서 원본 해상도→영상 해상도 좌표 calibration)
 │   ├── stores/            # Zustand 상태 관리
 │   ├── hooks/             # 커스텀 React 훅
 │   ├── i18n/              # 다국어(ko/en) 리소스
@@ -138,7 +138,7 @@ loitering_tracking/
 |--------|------|------|
 | GET | `/api/cameras` | 카메라 목록 조회 |
 | POST | `/api/cameras` | 카메라 추가 (body: channelSlot — Dashboard Channel Slot 1..MAX_CHANNEL_NUM, 생략 시 자동 배정) |
-| PUT | `/api/cameras/:id` | 카메라 설정 수정 (body: channelSlot?, channelIndex? — 409: 슬롯 충돌) |
+| PUT | `/api/cameras/:id` | 카메라 설정 수정 (body: channelSlot?, channelIndex?, thermalSensorWidth?/thermalSensorHeight? — 열상 센서 원본 해상도 calibration — 409: 슬롯 충돌) |
 | POST | `/api/cameras/discover` | 카메라 탐색 트리거 |
 | GET | `/api/alerts` | 경보 목록 조회 |
 | POST | `/api/alerts/:id/acknowledge` | 경보 확인 처리 |

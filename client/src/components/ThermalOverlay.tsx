@@ -29,6 +29,11 @@ interface Props {
   cameraId:    string;
   frameWidth:  number;
   frameHeight: number;
+  /** Thermal sensor's native resolution (Camera.thermalSensorWidth/Height, e.g. 160x120).
+   *  Raw onvif:temperature coordinates are reported in this space, not in frameWidth/frameHeight.
+   *  When absent, raw coordinates are assumed to already match frameWidth/frameHeight (no calibration). */
+  sensorWidth?:  number;
+  sensorHeight?: number;
 }
 
 const FADE_MS = 6000; // remove area if no update for 6 s
@@ -51,12 +56,17 @@ function getRenderArea(fw: number, fh: number, cw: number, ch: number) {
   return             { rw: ch * ia, rh: ch,       ox: (cw - ch * ia) / 2, oy: 0 };
 }
 
-function toScreen(px: number, py: number, fw: number, fh: number, cw: number, ch: number) {
-  if (!fw || !fh || !cw || !ch) return { sx: -9999, sy: -9999 };
+// px/py are raw onvif:temperature coordinates in the thermal sensor's native
+// resolution (sensorW/sensorH, e.g. 160x120) — a different space from fw/fh
+// (the actual video frame resolution, e.g. 640x480) whenever Sensor Coordinate
+// calibration is configured for the camera. fw/fh still drive the letterbox
+// render-area aspect ratio; sensorW/sensorH normalize the raw point within it.
+function toScreen(px: number, py: number, sensorW: number, sensorH: number, fw: number, fh: number, cw: number, ch: number) {
+  if (!fw || !fh || !cw || !ch || !sensorW || !sensorH) return { sx: -9999, sy: -9999 };
   const { rw, rh, ox, oy } = getRenderArea(fw, fh, cw, ch);
   // Clamp to render area so crosshairs never appear in letterbox bars
-  const sx = Math.max(ox, Math.min(ox + rw, ox + (px / fw) * rw));
-  const sy = Math.max(oy, Math.min(oy + rh, oy + (py / fh) * rh));
+  const sx = Math.max(ox, Math.min(ox + rw, ox + (px / sensorW) * rw));
+  const sy = Math.max(oy, Math.min(oy + rh, oy + (py / sensorH) * rh));
   return { sx, sy };
 }
 
@@ -74,7 +84,7 @@ function crosshairLabel(t: number | null): string {
 
 function textWidth(s: string) { return s.length * 6.6 + 6; }
 
-export default function ThermalOverlay({ cameraId, frameWidth, frameHeight }: Props) {
+export default function ThermalOverlay({ cameraId, frameWidth, frameHeight, sensorWidth, sensorHeight }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 0, h: 0 });
 
@@ -142,6 +152,9 @@ export default function ThermalOverlay({ cameraId, frameWidth, frameHeight }: Pr
   const { w, h } = size;
   const fw = frameWidth  || 0;
   const fh = frameHeight || 0;
+  // Fall back to fw/fh (no-op scaling) when Sensor Coordinate isn't configured for this camera.
+  const sensorW = sensorWidth  || fw;
+  const sensorH = sensorHeight || fh;
 
   const allReadings    = Array.from(areas.values());
   const fullAreaSlots  = allReadings.filter(s => isFullArea(s.reading));
@@ -209,7 +222,7 @@ export default function ThermalOverlay({ cameraId, frameWidth, frameHeight }: Pr
               const areaLabel = r.areaName || r.itemId || `A${i + 1}`;
 
               if (r.maxTemp !== null && r.maxTempX !== null && r.maxTempY !== null) {
-                const { sx, sy } = toScreen(r.maxTempX, r.maxTempY, fw, fh, w, h);
+                const { sx, sy } = toScreen(r.maxTempX, r.maxTempY, sensorW, sensorH, fw, fh, w, h);
                 const lbl = `${areaLabel} ${crosshairLabel(r.maxTemp)}`;
                 const lw  = textWidth(lbl);
                 const lx  = Math.max(2, sx + 14 + lw < w - 2 ? sx + 14 : sx - lw - 6);
@@ -230,7 +243,7 @@ export default function ThermalOverlay({ cameraId, frameWidth, frameHeight }: Pr
               }
 
               if (r.minTemp !== null && r.minTempX !== null && r.minTempY !== null) {
-                const { sx, sy } = toScreen(r.minTempX, r.minTempY, fw, fh, w, h);
+                const { sx, sy } = toScreen(r.minTempX, r.minTempY, sensorW, sensorH, fw, fh, w, h);
                 const lbl = `${areaLabel} ${crosshairLabel(r.minTemp)}`;
                 const lw  = textWidth(lbl);
                 const lx  = Math.max(2, sx + 14 + lw < w - 2 ? sx + 14 : sx - lw - 6);

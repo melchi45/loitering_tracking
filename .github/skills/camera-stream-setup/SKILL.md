@@ -692,6 +692,18 @@ H.264 B-프레임 카메라에서 빈 프레임 발생 시: ingest-daemon은 모
 
 > **주의:** 이 이벤트는 클라이언트의 Zustand 스토어를 즉시 덮어씁니다. WEBRTC_ENGINE 체크 없이 보내면 WebRTC가 동작 중에도 JPEG 모드로 강제됩니다.
 
+### 열상 카메라 Sensor Coordinate Calibration (2026-07-10 추가)
+
+열상(Thermal/Radiometry) IP 카메라의 ONVIF `BoxTemperatureReading` 좌표(`maxTempX/Y`, `minTempX/Y`)는 **열상 센서 자체의 원본 해상도**(예: 160×120) 기준이며, 카메라가 실제로 스트리밍하는 영상 해상도(`frameWidth`/`frameHeight`, 예: 640×480)와는 무관합니다. 두 해상도가 다른 카메라에서 Sensor Coordinate 미설정 시 `ThermalOverlay`의 crosshair가 영상 좌상단 작은 corner 안에만 몰려 표시됩니다.
+
+- **Camera 스키마:** `Camera.thermalSensorWidth`/`thermalSensorHeight`(정수, nullable) — `client/src/types/index.ts`. 미설정(`null`)이면 calibration 없음(하위 호환).
+- **설정 UI:** `CameraEditModal.tsx` RTSP/IP 카메라 폼(WebRTC 토글 아래) — Sensor Coordinate Width/Height 입력란. YouTube 폼에는 노출 안 함.
+- **API:** `POST /api/cameras`, `PUT /api/cameras/:id` 둘 다 whitelist 방식 필드 추출이므로 신규 필드는 **두 핸들러 모두**(`server/src/api/cameras.js`)에 추가해야 반영됨.
+- **클라이언트 렌더링:** `ThermalOverlay.tsx`의 `toScreen()`이 원시 좌표 정규화 분모로 `sensorWidth`/`sensorHeight`를 사용하고(미설정 시 `frameWidth`/`frameHeight` 폴백), letterbox 종횡비 계산(`getRenderArea()`)은 항상 `frameWidth`/`frameHeight` 기준을 유지 — **두 해상도를 같은 변수로 혼용하지 않는 것이 설계 핵심.**
+- **재시작 불필요:** calibration은 순수 클라이언트 렌더링 계산이므로 저장 후 파이프라인 재시작 없이 다음 `onvif:temperature` 이벤트부터 즉시 반영됨.
+
+상세: [Design_Thermal_Radiometry_Overlay.md §8](../../../docs/design/Design_Thermal_Radiometry_Overlay.md), [Thermal_Sensor_Calibration_Guide.md](../../../docs/ops/Thermal_Sensor_Calibration_Guide.md)
+
 ## ffmpeg 버전 호환성 *(레거시 참조)*
 
 > `CAPTURE_BACKEND=ffmpeg`는 레거시입니다. 신규 배포에는 `ingest-daemon`을 사용하세요.  
@@ -909,6 +921,7 @@ yt-dlp -F https://youtube.com/watch?v=...
 | Design | [Design_Distributed_AI_Pipeline](../../../docs/design/Design_Distributed_AI_Pipeline.md) — 분산 파이프라인 아키텍처 설계 |
 | Design | [Design_WebRTC_Engine_Modes](../../../docs/design/Design_WebRTC_Engine_Modes.md) — mediamtx·mediasoup·werift 엔진 비교·전환 방법 |
 | Design | [Design_ONVIF_Metadata_Pipeline](../../../docs/design/Design_ONVIF_Metadata_Pipeline.md) — RTSP App RTP ONVIF 메타데이터 수집·라우팅 파이프라인 |
+| MRD/RFP/PRD/SRS/Design/Ops/TC | [MRD_Thermal_Sensor_Coordinate_Calibration](../../../docs/mrd/MRD_Thermal_Sensor_Coordinate_Calibration.md) · [RFP_Thermal_Sensor_Coordinate_Calibration](../../../docs/rfp/RFP_Thermal_Sensor_Coordinate_Calibration.md) · [PRD_Thermal_Sensor_Coordinate_Calibration](../../../docs/prd/PRD_Thermal_Sensor_Coordinate_Calibration.md) · [SRS_Thermal_Radiometry_Overlay](../../../docs/srs/SRS_Thermal_Radiometry_Overlay.md) · [Design_Thermal_Radiometry_Overlay](../../../docs/design/Design_Thermal_Radiometry_Overlay.md) · [Thermal_Sensor_Calibration_Guide](../../../docs/ops/Thermal_Sensor_Calibration_Guide.md) · [TC_Thermal_Radiometry_Overlay](../../../docs/tc/TC_Thermal_Radiometry_Overlay.md) — 열상 센서 원본 해상도→영상 해상도 좌표 calibration |
 | Design | [Design_DataChannel_CameraEvents](../../../docs/design/Design_DataChannel_CameraEvents.md) — WebRTC DataChannel Camera Events Tab UI |
 | TC | [TC_RTSP_Capture_Backend](../../../docs/tc/TC_RTSP_Capture_Backend.md) · [TC_FFmpeg_RTSP_Capture](../../../docs/tc/TC_FFmpeg_RTSP_Capture.md) · [TC_WebRTC_Media_Gateway](../../../docs/tc/TC_WebRTC_Media_Gateway.md) · [TC_STUN_TURN_ICE](../../../docs/tc/TC_STUN_TURN_ICE.md) |
 | TC | [TC_Distributed_AI_Pipeline](../../../docs/tc/TC_Distributed_AI_Pipeline.md) — SERVER_MODE별 기능 테스트 케이스 |
@@ -940,6 +953,7 @@ yt-dlp -F https://youtube.com/watch?v=...
 | `youtubeStreamService.js` | `docs/design/Design_YouTube_RTSP_Ingest.md`, `docs/srs/SRS_LTS2026_YouTube_RTSP_Ingest.md` |
 | `channelSlotService.js`, `api/cameras.js`/`youtubeStreams.js`(channelSlot 검증), `db/index.js`(backfill 훅) | `docs/design/Design_Channel_Slot.md`, `docs/srs/SRS_Channel_Slot.md`, `docs/tc/TC_Channel_Slot.md` |
 | `CameraGrid.tsx`(channelSlot 렌더링), `ChannelSlotPicker.tsx`, `CameraList.tsx`/`CameraEditModal.tsx`(Channel 섹션) | `docs/design/Design_Channel_Slot.md` §5, `docs/prd/PRD_Channel_Slot.md` |
+| `ThermalOverlay.tsx`(toScreen sensorWidth/Height), `CameraEditModal.tsx`(Sensor Coordinate 섹션), `api/cameras.js`(thermalSensorWidth/Height) | `docs/design/Design_Thermal_Radiometry_Overlay.md` §8, `docs/srs/SRS_Thermal_Radiometry_Overlay.md` §6, `docs/tc/TC_Thermal_Radiometry_Overlay.md` 그룹 F |
 | `MAX_CHANNEL_NUM` (server/.env*) | `docs/ops/Channel_Slot_Guide.md` §2 |
 | `mediamtx.yml` | `docs/design/Design_RTSP_Capture_Backend.md`, `docs/ops/RTSP_Capture_Backend_Setup.md` |
 | coturn / TURN 설정 변경 | `docs/design/Design_STUN_TURN_ICE.md`, `docs/tc/TC_STUN_TURN_ICE.md` |

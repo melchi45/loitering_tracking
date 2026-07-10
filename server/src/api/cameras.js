@@ -400,7 +400,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
     try {
       const {
         name, rtspUrl, username, password, ip, mac, httpPort, channelIndex,
-        maxChannel, supportSunapi, nvrProfiles,
+        maxChannel, supportSunapi, nvrProfiles, thermalSensorWidth, thermalSensorHeight,
       } = req.body;
       let { channelSlot } = req.body;
       if (!name || !rtspUrl) {
@@ -435,6 +435,8 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
         maxChannel:    maxChannel ? parseInt(maxChannel, 10) : null,
         supportSunapi: !!supportSunapi,
         nvrProfiles:   Array.isArray(nvrProfiles) ? nvrProfiles : null,
+        thermalSensorWidth:  thermalSensorWidth  ? parseInt(thermalSensorWidth, 10)  : null,
+        thermalSensorHeight: thermalSensorHeight ? parseInt(thermalSensorHeight, 10) : null,
         status:        'offline',
       });
 
@@ -485,7 +487,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
 
       const {
         name, rtspUrl, username, password, webrtcEnabled, channelSlot, channelIndex,
-        maxChannel, supportSunapi, nvrProfiles,
+        maxChannel, supportSunapi, nvrProfiles, thermalSensorWidth, thermalSensorHeight,
       } = req.body;
       let normalizedRtsp = null;
       if (rtspUrl !== undefined) {
@@ -515,6 +517,10 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       if (maxChannel    !== undefined) updates.maxChannel    = maxChannel ? parseInt(maxChannel, 10) : null;
       if (supportSunapi !== undefined) updates.supportSunapi = !!supportSunapi;
       if (nvrProfiles   !== undefined) updates.nvrProfiles   = Array.isArray(nvrProfiles) ? nvrProfiles : null;
+      // Thermal sensor native resolution (e.g. 160x120) — used by ThermalOverlay to
+      // calibrate onvif:temperature raw coordinates onto the actual video resolution.
+      if (thermalSensorWidth  !== undefined) updates.thermalSensorWidth  = thermalSensorWidth  ? parseInt(thermalSensorWidth, 10)  : null;
+      if (thermalSensorHeight !== undefined) updates.thermalSensorHeight = thermalSensorHeight ? parseInt(thermalSensorHeight, 10) : null;
 
       db.update('cameras', camera.id, updates);
       const updated = db.findOne('cameras', { id: camera.id });

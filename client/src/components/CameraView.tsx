@@ -542,6 +542,8 @@ export default function CameraView({ cameraId, cameraName }: Props) {
         cameraId={cameraId}
         frameWidth={frameWidth}
         frameHeight={frameHeight}
+        sensorWidth={camera?.thermalSensorWidth ?? undefined}
+        sensorHeight={camera?.thermalSensorHeight ?? undefined}
       />
 
       {/* Status badge (top-left) */}

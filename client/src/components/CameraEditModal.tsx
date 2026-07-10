@@ -127,6 +127,12 @@ export default function CameraEditModal({ camera, onClose }: Props) {
     webrtcEnabled: !!(camera.webrtcEnabled),
   });
 
+  // ── Thermal sensor calibration state — native sensor resolution (e.g. 160x120)
+  // used to scale onvif:temperature raw coordinates onto the actual video resolution.
+  // Blank means "no calibration" (raw coordinates assumed to already match video resolution).
+  const [thermalSensorWidth,  setThermalSensorWidth]  = useState(camera.thermalSensorWidth  ?? '');
+  const [thermalSensorHeight, setThermalSensorHeight] = useState(camera.thermalSensorHeight ?? '');
+
   // ── YouTube form state ─────────────────────────────────────────────────────
   const [ytForm, setYtForm] = useState({
     name:           camera.name,
@@ -171,6 +177,8 @@ export default function CameraEditModal({ camera, onClose }: Props) {
           maxChannel:    redetected ? redetected.maxChannel : undefined,
           supportSunapi: redetected ? redetected.supportSunapi : undefined,
           nvrProfiles:   redetected ? redetected.profiles : undefined,
+          thermalSensorWidth:  thermalSensorWidth  === '' ? null : Number(thermalSensorWidth),
+          thermalSensorHeight: thermalSensorHeight === '' ? null : Number(thermalSensorHeight),
         }),
       });
       const result = await res.json();
@@ -570,6 +578,38 @@ export default function CameraEditModal({ camera, onClose }: Props) {
                     rtspForm.webrtcEnabled ? 'translate-x-4' : 'translate-x-0.5'
                   }`} />
                 </button>
+              </div>
+
+              {/* Thermal Sensor Coordinate calibration — scales onvif:temperature raw
+                  coordinates (native sensor resolution) onto the actual video resolution */}
+              <div className="py-2 border-t border-gray-700 mt-1">
+                <p className="text-xs text-gray-200 font-medium mb-0.5">Sensor Coordinate</p>
+                <p className="text-[10px] text-gray-500 mb-1.5">
+                  Thermal sensor's native resolution (e.g. 160 x 120). Leave blank if the camera
+                  already reports temperature coordinates at full video resolution.
+                </p>
+                <div className="grid grid-cols-2 gap-2">
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={16384}
+                    value={thermalSensorWidth}
+                    onChange={(e) => setThermalSensorWidth(e.target.value === '' ? '' : Number(e.target.value))}
+                    placeholder="Width (e.g. 160)"
+                    className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                  />
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={1}
+                    max={16384}
+                    value={thermalSensorHeight}
+                    onChange={(e) => setThermalSensorHeight(e.target.value === '' ? '' : Number(e.target.value))}
+                    placeholder="Height (e.g. 120)"
+                    className="w-full bg-gray-900 border border-gray-600 rounded px-2 py-1.5 text-xs text-white placeholder-gray-500 focus:outline-none focus:border-blue-500"
+                  />
+                </div>
               </div>
 
               {error   && <p className="text-xs text-red-400">{error}</p>}

@@ -56,6 +56,10 @@ export interface Camera {
   supportSunapi?: boolean;
   /** Per-channel RTSP URLs resolved at discovery/add-time, used to switch NVR channel later without a live re-query */
   nvrProfiles?: NvrProfile[] | null;
+  /** Thermal sensor native resolution width (e.g. 160) — used to scale onvif:temperature raw coordinates to actual video resolution. Absent/null means no calibration (raw coordinates assumed to already match video resolution). */
+  thermalSensorWidth?: number | null;
+  /** Thermal sensor native resolution height (e.g. 120) — paired with thermalSensorWidth for coordinate calibration. */
+  thermalSensorHeight?: number | null;
 }
 
 export interface BBox {

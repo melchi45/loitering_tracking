@@ -69,6 +69,29 @@ async function post(urlPath, body, contentType = 'application/json') {
   return { status: res.status, body: await res.json().catch(() => ({})) };
 }
 
+async function put(urlPath, body) {
+  const res = await fetch(`${BASE_URL}${urlPath}`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return { status: res.status, body: await res.json().catch(() => ({})) };
+}
+
+// Resolves a camera id to exercise network tests against — TEST_CAMERA_ID env var
+// takes priority, otherwise the first camera returned by GET /api/cameras.
+async function resolveCameraId() {
+  if (process.env.TEST_CAMERA_ID) return process.env.TEST_CAMERA_ID;
+  try {
+    const r = await fetch(`${BASE_URL}/api/cameras`, { signal: AbortSignal.timeout(3000) });
+    const body = await r.json();
+    const cameras = body.cameras || body || [];
+    return Array.isArray(cameras) && cameras[0] ? cameras[0].id : null;
+  } catch {
+    return null;
+  }
+}
+
 // ── XML builders ─────────────────────────────────────────────────────────────
 
 function buildMetadataXml(readings) {
@@ -296,15 +319,7 @@ async function runGroupB() {
   }
 
   // 먼저 카메라 ID를 조회
-  let cameraId = process.env.TEST_CAMERA_ID;
-  if (!cameraId) {
-    try {
-      const r = await fetch(`${BASE_URL}/api/cameras`, { signal: AbortSignal.timeout(3000) });
-      const body = await r.json();
-      const cameras = body.cameras || body || [];
-      cameraId = Array.isArray(cameras) && cameras[0] ? cameras[0].id : null;
-    } catch { cameraId = null; }
-  }
+  const cameraId = await resolveCameraId();
   if (!cameraId) {
     console.warn('  ⊘ 등록된 카메라 없음 — Group B 전체 스킵');
     ['TC-B-001', 'TC-B-002', 'TC-B-003'].forEach(id =>
@@ -485,6 +500,123 @@ async function runGroupC() {
   });
 }
 
+// ── Group F: Sensor Coordinate Calibration (FR-THERMAL-030~033) ─────────────
+
+// Pure-JS reproduction of ThermalOverlay.tsx's getRenderArea()/toScreen() —
+// same letterbox math, kept in sync manually (component logic isn't exported).
+function getRenderArea(fw, fh, cw, ch) {
+  if (!fw || !fh || !cw || !ch) return { rw: cw, rh: ch, ox: 0, oy: 0 };
+  const ia = fw / fh, ca = cw / ch;
+  if (ia > ca) return { rw: cw, rh: cw / ia, ox: 0, oy: (ch - cw / ia) / 2 };
+  return { rw: ch * ia, rh: ch, ox: (cw - ch * ia) / 2, oy: 0 };
+}
+
+function toScreen(px, py, sensorW, sensorH, fw, fh, cw, ch) {
+  if (!fw || !fh || !cw || !ch || !sensorW || !sensorH) return { sx: -9999, sy: -9999 };
+  const { rw, rh, ox, oy } = getRenderArea(fw, fh, cw, ch);
+  const sx = Math.max(ox, Math.min(ox + rw, ox + (px / sensorW) * rw));
+  const sy = Math.max(oy, Math.min(oy + rh, oy + (py / sensorH) * rh));
+  return { sx, sy };
+}
+
+async function runGroupF() {
+  console.log('\n[Group F] Sensor Coordinate Calibration (FR-THERMAL-030~033)');
+
+  // TC-F-003: sensorWidth/Height configured → normalization uses sensor resolution,
+  // not frame resolution — a center-of-sensor point must land at screen center.
+  await test('TC-F-003', 'toScreen — Sensor Coordinate 설정 시 sensorWidth/Height 기준 정규화', () => {
+    const { sx, sy } = toScreen(80, 60, /*sensorW*/160, /*sensorH*/120, /*fw*/640, /*fh*/480, /*cw*/640, /*ch*/480);
+    assert(Math.abs(sx - 320) < 0.01, `sx should be ~320 (center), got ${sx}`);
+    assert(Math.abs(sy - 240) < 0.01, `sy should be ~240 (center), got ${sy}`);
+  });
+
+  // TC-F-004: sensorWidth/Height unset → component-level fallback to frameWidth/Height
+  // (mirrors `const sensorW = sensorWidth || fw` in ThermalOverlay.tsx) — must reproduce
+  // pre-calibration behavior exactly.
+  await test('TC-F-004', 'toScreen — Sensor Coordinate 미설정 시 frameWidth/Height 폴백', () => {
+    const fw = 640, fh = 480;
+    const sensorWidth = 0, sensorHeight = 0; // "unset" as sent by the component (falsy)
+    const effSensorW = sensorWidth || fw;
+    const effSensorH = sensorHeight || fh;
+    const { sx, sy } = toScreen(320, 240, effSensorW, effSensorH, fw, fh, 640, 480);
+    assert(Math.abs(sx - 320) < 0.01, `sx should be ~320 (center), got ${sx}`);
+    assert(Math.abs(sy - 240) < 0.01, `sy should be ~240 (center), got ${sy}`);
+  });
+
+  // TC-F-005: getRenderArea's letterbox aspect ratio always derives from frameWidth/Height,
+  // never from sensorWidth/Height — the two resolutions solve different problems.
+  await test('TC-F-005', 'getRenderArea — letterbox 종횡비는 항상 frameWidth/Height 기준', () => {
+    // sensor is 4:3 (160x120), frame is 16:9 (1920x1080), container is 4:3 (800x600)
+    const { rw, rh, ox, oy } = getRenderArea(1920, 1080, 800, 600);
+    assertEq(rw, 800, 'rw');
+    assertEq(rh, 450, 'rh');
+    assertEq(ox, 0,   'ox');
+    assertEq(oy, 75,  'oy — top/bottom letterbox bars from 16:9 frame in 4:3 container');
+  });
+
+  // TC-F-006: CameraEditModal.tsx — Sensor Coordinate UI wiring (static code check)
+  await test('TC-F-006', 'CameraEditModal.tsx — Sensor Coordinate 입력 UI 및 저장 로직 존재', () => {
+    const fs = require('fs');
+    const modalPath = path.resolve(__dirname, '../../client/src/components/CameraEditModal.tsx');
+    assert(fs.existsSync(modalPath), 'CameraEditModal.tsx 파일 없음');
+    const src = fs.readFileSync(modalPath, 'utf-8');
+    assert(src.includes('thermalSensorWidth') && src.includes('thermalSensorHeight'),
+      'thermalSensorWidth/Height state 없음');
+    assert(src.includes('Sensor Coordinate'), 'Sensor Coordinate 라벨 없음');
+    assert(
+      /thermalSensorWidth:\s*thermalSensorWidth\s*===\s*''\s*\?\s*null\s*:\s*Number\(thermalSensorWidth\)/.test(src),
+      '빈 값 → null 저장 로직 없음'
+    );
+  });
+
+  if (SKIP_NETWORK) {
+    skip('TC-F-001', 'PUT /api/cameras/:id — thermalSensorWidth/Height 저장', 'SKIP_NETWORK=1');
+    skip('TC-F-002', '빈 값 전송 → null로 초기화', 'SKIP_NETWORK=1');
+    return;
+  }
+
+  let serverAlive = false;
+  try {
+    const r = await fetch(`${BASE_URL}/health`, { signal: AbortSignal.timeout(3000) });
+    serverAlive = r.ok;
+  } catch {
+    serverAlive = false;
+  }
+  const cameraId = serverAlive ? await resolveCameraId() : null;
+  if (!cameraId) {
+    const reason = serverAlive ? '카메라 없음' : '서버 미실행';
+    console.warn(`  ⊘ ${reason} — TC-F-001/002 스킵`);
+    skip('TC-F-001', 'PUT /api/cameras/:id — thermalSensorWidth/Height 저장', reason);
+    skip('TC-F-002', '빈 값 전송 → null로 초기화', reason);
+    return;
+  }
+
+  // TC-F-001: persist thermalSensorWidth/Height
+  await test('TC-F-001', 'PUT /api/cameras/:id — thermalSensorWidth/Height 저장', async () => {
+    const { status, body } = await put(`/api/cameras/${cameraId}`, {
+      thermalSensorWidth: 160, thermalSensorHeight: 120,
+    });
+    assert(status === 200, `PUT status should be 200, got ${status}`);
+    assertEq(body.data?.thermalSensorWidth,  160, 'data.thermalSensorWidth');
+    assertEq(body.data?.thermalSensorHeight, 120, 'data.thermalSensorHeight');
+
+    const r = await fetch(`${BASE_URL}/api/cameras/${cameraId}`);
+    const getBody = await r.json();
+    assertEq(getBody.data?.thermalSensorWidth,  160, 'GET data.thermalSensorWidth after PUT');
+    assertEq(getBody.data?.thermalSensorHeight, 120, 'GET data.thermalSensorHeight after PUT');
+  });
+
+  // TC-F-002: clearing (null) resets calibration
+  await test('TC-F-002', '빈 값(null) 전송 → thermalSensorWidth/Height 초기화', async () => {
+    const { status, body } = await put(`/api/cameras/${cameraId}`, {
+      thermalSensorWidth: null, thermalSensorHeight: null,
+    });
+    assert(status === 200, `PUT status should be 200, got ${status}`);
+    assertEq(body.data?.thermalSensorWidth,  null, 'data.thermalSensorWidth');
+    assertEq(body.data?.thermalSensorHeight, null, 'data.thermalSensorHeight');
+  });
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -494,6 +626,7 @@ async function main() {
   await runGroupA();
   await runGroupB();
   await runGroupC();
+  await runGroupF();
 
   console.log(`\n=== Results: ${passed} passed, ${failed} failed, ${results.filter(r => r.status === 'SKIP').length} skipped ===`);
   if (failed > 0) process.exit(1);

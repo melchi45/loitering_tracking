@@ -4,10 +4,10 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-THERMAL-01 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Active |
 | **Date** | 2026-06-23 |
-| **Related** | [Design_ONVIF_Metadata_Pipeline.md](Design_ONVIF_Metadata_Pipeline.md) · [Design_ONVIF_Timeline.md](Design_ONVIF_Timeline.md) · [Design_Fullscreen_Camera_View.md](Design_Fullscreen_Camera_View.md) |
+| **Related** | [Design_ONVIF_Metadata_Pipeline.md](Design_ONVIF_Metadata_Pipeline.md) · [Design_ONVIF_Timeline.md](Design_ONVIF_Timeline.md) · [Design_Fullscreen_Camera_View.md](Design_Fullscreen_Camera_View.md) · [PRD_Thermal_Sensor_Coordinate_Calibration.md](../prd/PRD_Thermal_Sensor_Coordinate_Calibration.md) |
 
 ---
 
@@ -193,16 +193,22 @@ const coordSlots    = allReadings.filter(s => {
 
 ### 5.5 좌표 변환 — `toScreen()`
 
+> **v1.2 변경:** 정규화 분모가 `frameWidth`/`frameHeight`에서 `sensorWidth`/`sensorHeight`로 분리되었다. §8 참조.
+
 ```typescript
-function toScreen(px, py, fw, fh, cw, ch) {
-  if (!fw || !fh || !cw || !ch) return { sx: -9999, sy: -9999 };
+function toScreen(px, py, sensorW, sensorH, fw, fh, cw, ch) {
+  if (!fw || !fh || !cw || !ch || !sensorW || !sensorH) return { sx: -9999, sy: -9999 };
   const { rw, rh, ox, oy } = getRenderArea(fw, fh, cw, ch);
-  return { sx: ox + (px / fw) * rw, sy: oy + (py / fh) * rh };
+  const sx = Math.max(ox, Math.min(ox + rw, ox + (px / sensorW) * rw));
+  const sy = Math.max(oy, Math.min(oy + rh, oy + (py / sensorH) * rh));
+  return { sx, sy };
 }
 ```
 
-- `getRenderArea()`: CameraView `drawOverlay()`와 동일한 레터박스 보정 적용
-- `frameWidth` / `frameHeight` 미전달(0) 시 좌표 `-9999` → off-screen 렌더 (화면 미표시)
+- `getRenderArea(fw, fh, cw, ch)`: CameraView `drawOverlay()`와 동일한 레터박스 보정 적용 — 계속 **영상 프레임 해상도**(`frameWidth`/`frameHeight`) 기준
+- 원시 좌표 정규화(`px / sensorW`, `py / sensorH`)는 **열상 센서 원본 해상도** 기준 — Camera Edit 모달의 Sensor Coordinate 설정값
+- `frameWidth`/`frameHeight`/`sensorWidth`/`sensorHeight` 중 하나라도 미전달(0/falsy) 시 좌표 `-9999` → off-screen 렌더 (화면 미표시)
+- 결과 좌표는 렌더 영역(`ox..ox+rw`, `oy..oy+rh`) 내로 clamp되어 letterbox 바 안에는 표시되지 않음
 
 ### 5.6 온도 표시 포맷
 
@@ -250,13 +256,84 @@ Payload 구조:
 
 ---
 
-## 7. 설계 불변 조건 (Invariants)
+## 8. Sensor Coordinate Calibration (v1.2)
+
+### 8.1 배경
+
+BoxTemperatureReading의 `MaxTemperatureCoordinatesX/Y`, `MinTemperatureCoordinatesX/Y`는 **열상 센서 자체의 원본 해상도**(예: 160×120) 기준 픽셀 좌표다. 반면 카메라가 실제로 스트리밍하는 영상 해상도(`frameWidth`/`frameHeight`, 예: 640×480)는 이와 무관하게 별개로 결정된다. 두 해상도가 다른 카메라에서 §5.5의 예전 `toScreen()`(정규화 분모 = `frameWidth`/`frameHeight`)을 그대로 쓰면, crosshair가 영상 좌상단 160×120 픽셀 영역 안에만 몰려서 표시되는 문제가 발생한다.
+
+### 8.2 Camera 스키마 확장
+
+**파일:** `client/src/types/index.ts`, `server/src/api/cameras.js` (스키마리스 DB — `server/src/db/JsonDatabase.js`는 변경 불필요)
+
+```typescript
+interface Camera {
+  // ...
+  thermalSensorWidth?: number | null;
+  thermalSensorHeight?: number | null;
+}
+```
+
+`POST /api/cameras`, `PUT /api/cameras/:id` 둘 다 whitelist 방식 필드 추출(`req.body`에서 destructuring 후 `!== undefined` 체크)이므로 신규 필드는 두 핸들러 모두에 추가해야 반영된다.
+
+### 8.3 Camera Edit UI
+
+**파일:** `client/src/components/CameraEditModal.tsx`
+
+RTSP/IP 카메라 폼(WebRTC 토글 아래)에 **Sensor Coordinate** Width/Height 숫자 입력란 2개를 추가한다. YouTube 폼에는 노출하지 않는다 (열상 calibration은 IP 카메라 전용 개념).
+
+```typescript
+const [thermalSensorWidth,  setThermalSensorWidth]  = useState(camera.thermalSensorWidth  ?? '');
+const [thermalSensorHeight, setThermalSensorHeight] = useState(camera.thermalSensorHeight ?? '');
+// 저장 시:
+thermalSensorWidth:  thermalSensorWidth  === '' ? null : Number(thermalSensorWidth),
+thermalSensorHeight: thermalSensorHeight === '' ? null : Number(thermalSensorHeight),
+```
+
+### 8.4 `toScreen()` 정규화 기준 분리
+
+`ThermalOverlay`는 `sensorWidth`/`sensorHeight` prop을 새로 받는다 (`CameraView.tsx`가 `camera.thermalSensorWidth/Height`를 전달). 미설정 시 `frameWidth`/`frameHeight`로 폴백해 calibration 도입 이전과 동일하게 동작한다.
+
+```typescript
+const sensorW = sensorWidth  || fw;  // fw = frameWidth
+const sensorH = sensorHeight || fh;  // fh = frameHeight
+
+function toScreen(px, py, sensorW, sensorH, fw, fh, cw, ch) {
+  if (!fw || !fh || !cw || !ch || !sensorW || !sensorH) return { sx: -9999, sy: -9999 };
+  const { rw, rh, ox, oy } = getRenderArea(fw, fh, cw, ch);  // fw/fh — letterbox 종횡비 기준 불변
+  const sx = Math.max(ox, Math.min(ox + rw, ox + (px / sensorW) * rw));  // sensorW — 정규화 기준
+  const sy = Math.max(oy, Math.min(oy + rh, oy + (py / sensorH) * rh));  // sensorH — 정규화 기준
+  return { sx, sy };
+}
+```
+
+**핵심 원칙:** `getRenderArea()`의 종횡비 계산은 계속 `frameWidth`/`frameHeight`(letterbox는 실제 영상 크기 문제)를 쓰고, 원시 좌표 정규화만 `sensorWidth`/`sensorHeight`(센서 원본 해상도 문제)를 쓴다 — 두 해상도는 서로 다른 문제를 풀기 때문에 절대 같은 변수로 합치면 안 된다.
+
+### 8.5 데이터 흐름 (calibration 반영판)
+
+```
+Camera Edit 모달 (Sensor Coordinate 입력)
+  → PUT /api/cameras/:id { thermalSensorWidth, thermalSensorHeight }
+  → db.update('cameras', id, updates)   (스키마리스 저장)
+  → GET /api/cameras 응답에 포함 → cameraStore
+  → CameraView.tsx: camera.thermalSensorWidth/Height
+  → <ThermalOverlay sensorWidth=... sensorHeight=... frameWidth=... frameHeight=... />
+  → toScreen(px, py, sensorW, sensorH, fw, fh, w, h)
+```
+
+서버 파서(`onvifParser.js`)와 `onvif:temperature` emit 로직은 변경되지 않는다 — calibration은 전적으로 클라이언트 렌더링 단계에서만 이뤄진다.
+
+---
+
+## 9. 설계 불변 조건 (Invariants)
 
 1. `FullArea` 리딩(ItemID="Z" 또는 AreaName="FullArea")은 **절대 crosshair를 렌더링하지 않는다.**
 2. `appRtpCallbackUrl`은 카메라 등록 시 항상 payload에 포함되어야 한다.
 3. `coordSlots`는 `isFullArea()` 조건을 명시적으로 평가한 후 구성한다.
 4. 온도 단위 판별은 값 > 200 Kelvin 기준 heuristic을 따른다.
 5. 좌표 없는 리딩(maxTempX=null)은 crosshair 렌더링에서 제외된다.
+6. `toScreen()`의 letterbox 종횡비 계산(`getRenderArea`)은 항상 `frameWidth`/`frameHeight`를 쓰고, 원시 좌표 정규화는 항상 `sensorWidth`/`sensorHeight`(미설정 시 `frameWidth`/`frameHeight` 폴백)를 쓴다 — 두 기준을 혼용하지 않는다.
+7. Sensor Coordinate 미설정 카메라는 calibration 도입 이전과 동일하게 렌더링된다 (하위 호환).
 
 ---
 
@@ -266,3 +343,4 @@ Payload 구조:
 |---|---|---|
 | 1.0 | 2026-06-23 | 초기 작성 — ThermalOverlay 설계 전체 기술 |
 | 1.1 | 2026-06-23 | FullArea coordSlots 제외 규칙 명문화 (버그 수정 반영) |
+| 1.2 | 2026-07-10 | §8 Sensor Coordinate Calibration 추가 — Camera.thermalSensorWidth/Height, CameraEditModal 입력 UI, toScreen() 정규화 기준(sensorWidth/Height) 분리 |

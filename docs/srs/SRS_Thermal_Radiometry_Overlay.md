@@ -4,11 +4,12 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-THERMAL-01 |
-| **Version** | 1.0 |
+| **Version** | 1.2 |
 | **Status** | Active |
 | **Date** | 2026-06-23 |
 | **Design** | [Design_Thermal_Radiometry_Overlay.md](../design/Design_Thermal_Radiometry_Overlay.md) |
 | **TC** | [TC_Thermal_Radiometry_Overlay.md](../tc/TC_Thermal_Radiometry_Overlay.md) |
+| **Related** | [MRD_Thermal_Sensor_Coordinate_Calibration.md](../mrd/MRD_Thermal_Sensor_Coordinate_Calibration.md) · [PRD_Thermal_Sensor_Coordinate_Calibration.md](../prd/PRD_Thermal_Sensor_Coordinate_Calibration.md) |
 
 ---
 
@@ -19,8 +20,9 @@
 3. [FR — 서버 파이프라인](#3-fr--서버-파이프라인)
 4. [FR — 클라이언트 렌더링](#4-fr--클라이언트-렌더링)
 5. [FR — Area 유형별 표시 규칙](#5-fr--area-유형별-표시-규칙)
-6. [Non-Functional Requirements](#6-non-functional-requirements)
-7. [Constraints](#7-constraints)
+6. [FR — Sensor Coordinate Calibration](#6-fr--sensor-coordinate-calibration)
+7. [Non-Functional Requirements](#7-non-functional-requirements)
+8. [Constraints](#8-constraints)
 
 ---
 
@@ -168,7 +170,35 @@ const coordSlots = allReadings.filter(s => {
 
 ---
 
-## 6. Non-Functional Requirements
+## 6. FR — Sensor Coordinate Calibration
+
+### FR-THERMAL-030: Camera 스키마 — 센서 원본 해상도 필드
+
+`Camera` 레코드는 `thermalSensorWidth`, `thermalSensorHeight`(정수, nullable) 필드를 가진다.
+
+- 두 값 모두 `null`/미설정이면 "calibration 없음" — 좌표는 이미 `frameWidth`/`frameHeight`와 일치한다고 간주한다 (기존 동작).
+- `POST /api/cameras`, `PUT /api/cameras/:id` 모두 body에 포함 시 값을 저장하고, 빈 값 전송 시 `null`로 초기화한다.
+
+### FR-THERMAL-031: Camera Edit UI — Sensor Coordinate 입력
+
+`CameraEditModal.tsx`의 RTSP/IP 카메라 폼(YouTube 폼 제외)은 **Sensor Coordinate** Width/Height 숫자 입력란을 제공해야 한다.
+
+- 두 입력을 모두 비우면 저장 시 `thermalSensorWidth`/`thermalSensorHeight` 모두 `null`로 전송한다.
+- 값은 `PUT /api/cameras/:id` 요청 body에 다른 필드와 함께 포함되어야 한다.
+
+### FR-THERMAL-032: 좌표 정규화 기준값 분리
+
+`ThermalOverlay`의 `toScreen()`은 원시 좌표(`px`, `py`)를 정규화할 때 **`sensorWidth`/`sensorHeight`**(Camera.thermalSensorWidth/Height)를 분모로 사용해야 하며, letterbox 렌더 영역 계산(`getRenderArea()`)에는 계속 **`frameWidth`/`frameHeight`**(영상 프레임 해상도)를 사용해야 한다.
+
+- `sensorWidth`/`sensorHeight`가 설정되지 않은(falsy) 경우 각각 `frameWidth`/`frameHeight`로 폴백한다 — calibration 도입 이전과 동일한 출력을 보장한다.
+
+### FR-THERMAL-033: Sensor Coordinate 실시간 반영
+
+Sensor Coordinate 값 변경은 카메라 파이프라인 재시작 없이, 다음 수신되는 `onvif:temperature` 이벤트부터 즉시 반영되어야 한다 (클라이언트 렌더링 전용 계산이므로 서버 재시작 불필요).
+
+---
+
+## 7. Non-Functional Requirements
 
 ### NFR-THERMAL-01: 실시간성
 
@@ -184,11 +214,13 @@ const coordSlots = allReadings.filter(s => {
 
 ---
 
-## 7. Constraints
+## 8. Constraints
 
 1. `onvif:temperature` 이벤트는 DB에 저장하지 않는다 (휘발성 실시간 스트림).
 2. `ThermalOverlay`는 `CameraView` 내부에 항상 마운트된다 (데이터 유무와 무관).
 3. FullArea crosshair 금지 규칙은 카메라 벤더·모델과 무관하게 적용된다.
+4. Sensor Coordinate는 카메라 전체에 단일 값으로 적용된다 — Area별 개별 calibration은 지원하지 않는다.
+5. Sensor Coordinate는 ONVIF/CGI를 통한 자동 탐지를 지원하지 않는다 — 운영자가 수동으로 입력한다.
 
 ---
 
@@ -198,3 +230,4 @@ const coordSlots = allReadings.filter(s => {
 |---|---|---|
 | 1.0 | 2026-06-23 | 초기 작성 — FR-THERMAL-001~023, NFR 정의 |
 | 1.1 | 2026-06-24 | FR-THERMAL-004 추가 — MediaMTX 환경에서 App RTP가 원본 카메라 URL 사용 (온도 데이터 수신 보장) |
+| 1.2 | 2026-07-10 | FR-THERMAL-030~033 추가 — Sensor Coordinate Calibration (Camera.thermalSensorWidth/Height, CameraEditModal 입력 UI, toScreen() 정규화 기준 분리) |

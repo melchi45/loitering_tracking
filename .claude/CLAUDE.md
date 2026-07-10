@@ -133,7 +133,7 @@ loitering_tracking/
 │   │   ├── OnvifTimelineOverlay.tsx # ONVIF 이벤트 타임라인 오버레이 (줌/팬/상세/Raw XML)
 │   │   ├── DetectionsTimelineInline.tsx # 감지 트랙 Gantt 타임라인 (FullscreenCameraView Detections 탭)
 │   │   ├── AnalysisHistoryTab.tsx  # 분석 이벤트 이력 탭 (저장된 fire/smoke/loitering)
-│   │   ├── ThermalOverlay.tsx      # 열상 카메라 온도 오버레이 (onvif:temperature, FullArea 배너 + 좌표 crosshair)
+│   │   ├── ThermalOverlay.tsx      # 열상 카메라 온도 오버레이 (onvif:temperature, FullArea 배너 + 좌표 crosshair, Camera.thermalSensorWidth/Height로 센서 원본 해상도→영상 해상도 좌표 calibration)
 │   │   └── AdminLogPanel.tsx       # 실시간 서버 로그 뷰어 (Socket.IO server:log + 파일 폴링, Admin Dashboard 전용)
 │   ├── stores/                     # Zustand 상태 스토어
 │   ├── hooks/                      # 커스텀 React 훅
@@ -262,7 +262,7 @@ loitering_tracking/
 | POST | `/api/cameras/discover` | ONVIF/UDP 자동 탐색 트리거 (결과는 Socket.IO `discovery:result`) |
 | POST | `/api/cameras/probe-channels` | 단일 IP SUNAPI/ONVIF MaxChannel 온디맨드 재탐지 (body: ip, httpPort?, onvifPort?, username?, password?, baseRtspUrl?, cameraId?) |
 | GET | `/api/cameras/:id` | 카메라 상세 조회 |
-| PUT | `/api/cameras/:id` | 카메라 설정 수정 (body: channelSlot?, channelIndex? 포함 — 409: 이미 사용 중인 channelSlot; rtspUrl/자격증명/webrtcEnabled 변경 시 파이프라인 자동 재시작) |
+| PUT | `/api/cameras/:id` | 카메라 설정 수정 (body: channelSlot?, channelIndex?, thermalSensorWidth?/thermalSensorHeight? — 열상 센서 네이티브 해상도, 예: 160x120, ThermalOverlay 좌표 calibration용, null이면 미보정) 포함 — 409: 이미 사용 중인 channelSlot; rtspUrl/자격증명/webrtcEnabled 변경 시 파이프라인 자동 재시작) |
 | POST | `/api/cameras/:id/stream/reconnect` | 파이프라인 중지 후 재시작 |
 | DELETE | `/api/cameras/:id` | 카메라 삭제 (YouTube 카메라는 yt-dlp/ffmpeg 프로세스도 중지) |
 | POST | `/api/cameras/:id/ai/toggle` | AI 추론 ON/OFF 토글 (파이프라인 재시작 없이) |

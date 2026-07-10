@@ -1,8 +1,8 @@
 # TC: Thermal Radiometry Overlay — ONVIF BoxTemperatureReading 시각화
 
-**Version:** 1.0
+**Version:** 1.2
 **Status:** Ready for Test
-**SDLC:** [SRS](../srs/SRS_Thermal_Radiometry_Overlay.md) · [Design](../design/Design_Thermal_Radiometry_Overlay.md)
+**SDLC:** [SRS](../srs/SRS_Thermal_Radiometry_Overlay.md) · [Design](../design/Design_Thermal_Radiometry_Overlay.md) · [PRD_Thermal_Sensor_Coordinate_Calibration](../prd/PRD_Thermal_Sensor_Coordinate_Calibration.md)
 
 ---
 
@@ -240,9 +240,74 @@
 
 ---
 
+## 그룹 F — Sensor Coordinate Calibration (FR-THERMAL-030~033)
+
+### TC-F-001: Camera 저장 — thermalSensorWidth/Height персист
+
+| 항목 | 내용 |
+|------|------|
+| **SRS** | FR-THERMAL-030 |
+| **절차** | `PUT /api/cameras/:id` body에 `{ thermalSensorWidth: 160, thermalSensorHeight: 120 }` 전송 |
+| **기대** | 응답 `data.thermalSensorWidth === 160`, `data.thermalSensorHeight === 120` |
+| **기대** | 이후 `GET /api/cameras/:id` 조회 시 동일 값 유지 |
+| **자동화** | `test/api/thermal_radiometry_overlay.test.js::TC-F-001` |
+
+### TC-F-002: 빈 값 전송 → null로 초기화 (calibration 해제)
+
+| 항목 | 내용 |
+|------|------|
+| **SRS** | FR-THERMAL-030 |
+| **전제** | 카메라에 `thermalSensorWidth=160, thermalSensorHeight=120` 저장된 상태 |
+| **절차** | `PUT /api/cameras/:id` body에 `{ thermalSensorWidth: null, thermalSensorHeight: null }` 전송 |
+| **기대** | 응답 `data.thermalSensorWidth === null`, `data.thermalSensorHeight === null` |
+| **자동화** | `test/api/thermal_radiometry_overlay.test.js::TC-F-002` |
+
+### TC-F-003: toScreen() — Sensor Coordinate 설정 시 정규화 기준 = sensorWidth/Height
+
+| 항목 | 내용 |
+|------|------|
+| **SRS** | FR-THERMAL-032 |
+| **전제** | `sensorW=160, sensorH=120, fw=640, fh=480`, 컨테이너 `cw=640, ch=480` (letterbox 없음) |
+| **입력** | 원시 좌표 `(px=80, py=60)` (센서 좌표계 정중앙) |
+| **기대** | 화면 좌표가 컨테이너 정중앙(`sx≈320, sy≈240`)에 위치 — `frameWidth` 기준(구버전)이었다면 `sx≈80, sy≈60`(좌상단 corner)로 잘못 계산됨 |
+| **자동화** | `test/api/thermal_radiometry_overlay.test.js::TC-F-003` (순수 함수 로직 재현) |
+
+### TC-F-004: toScreen() — Sensor Coordinate 미설정 시 frameWidth/Height 폴백 (하위 호환)
+
+| 항목 | 내용 |
+|------|------|
+| **SRS** | FR-THERMAL-032 |
+| **전제** | `sensorW/H` 미전달(0 또는 undefined), `fw=640, fh=480`, `cw=640, ch=480` |
+| **입력** | 원시 좌표 `(px=320, py=240)` |
+| **기대** | `sensorW`가 `fw`로, `sensorH`가 `fh`로 폴백되어 `sx≈320, sy≈240`(정중앙) — calibration 도입 이전과 동일한 결과 |
+| **자동화** | `test/api/thermal_radiometry_overlay.test.js::TC-F-004` |
+
+### TC-F-005: getRenderArea 종횡비는 항상 frameWidth/Height 기준 (letterbox 불변)
+
+| 항목 | 내용 |
+|------|------|
+| **SRS** | FR-THERMAL-032, 설계 불변 조건 §9-6 |
+| **전제** | `sensorW=160, sensorH=120`(4:3), `fw=1920, fh=1080`(16:9, letterbox 발생), 컨테이너 `cw=800, ch=600`(4:3) |
+| **기대** | letterbox 상하 여백(`oy > 0`)이 `fw/fh`(16:9) 기준으로 계산됨 — `sensorW/H`(4:3) 기준으로 계산되지 않음 |
+| **자동화** | `test/api/thermal_radiometry_overlay.test.js::TC-F-005` |
+
+### TC-F-006: Camera Edit 모달 저장 필드 확인 (코드 리뷰)
+
+| 항목 | 내용 |
+|------|------|
+| **SRS** | FR-THERMAL-031 |
+| **전제** | `CameraEditModal.tsx` 소스코드 검토 |
+| **확인** | RTSP 폼에 `thermalSensorWidth`/`thermalSensorHeight` state 및 입력란 존재 |
+| **확인** | YouTube 폼에는 해당 입력란이 없음 |
+| **확인** | `handleRtspSave`가 빈 문자열일 때 `null`을, 아니면 `Number(...)`를 PUT body에 포함 |
+| **자동화** | `test/api/thermal_radiometry_overlay.test.js::TC-F-006` (정적 코드 검사) |
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-23 | 초기 작성 — TC-A~E 전체 정의 |
 | 1.1 | 2026-06-24 | TC-A-009 추가 — MediaMTX 환경 App RTP URL 분리 검증 |
+| 1.2 | 2026-07-10 | 그룹 F 추가 — Sensor Coordinate Calibration (TC-F-001~006, FR-THERMAL-030~033) |
