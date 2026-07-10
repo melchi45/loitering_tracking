@@ -1946,13 +1946,27 @@ class PipelineManager {
     }
 
     const allDetections = [...remoteTracked, ...faceDetObjects, ...remoteFireSmoke];
+
+    // Rescale bbox (+ nested face.bbox) from the analysis server's coordinate space
+    // (remoteFrameWidth/Height — the downscaled copy it actually analyzed) to the
+    // native buffer's coordinate space, and report native frameWidth/frameHeight.
+    // Without this, the 'frame' event (always native, from capture.on('frame', ...))
+    // and this 'detections' event would alternately set CameraView's frameWidth/
+    // frameHeight to two different values, making the live bbox overlay flicker
+    // between two different scales on every update.
+    const clientDetections = allDetections.map(det => ({
+      ...det,
+      bbox: _scaleBbox(det.bbox, remoteFrameWidth, remoteFrameHeight, _fw, _fh),
+      ...(det.face ? { face: { ...det.face, bbox: _scaleBbox(det.face.bbox, remoteFrameWidth, remoteFrameHeight, _fw, _fh) } } : {}),
+    }));
+
     this._io.to(_cameraId).emit('detections', {
       cameraId:   _cameraId,
       frameId:    _frameId,
       timestamp:  _ts,
-      detections: allDetections,
-      frameWidth:  remoteFrameWidth,
-      frameHeight: remoteFrameHeight,
+      detections: clientDetections,
+      frameWidth:  _fw,
+      frameHeight: _fh,
     });
 
     // ── Track lifecycle accumulation for streaming mode (local shadow copy) ──

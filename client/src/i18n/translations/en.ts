@@ -117,6 +117,8 @@ export const en = {
   settingsTitle: 'Settings',
   settingsLanguage: 'Language',
   settingsClose: 'Close',
+  settingsMovedNote: 'WebRTC and ICE connectivity settings have moved to the Administrator Dashboard.',
+  settingsGoToAdmin: 'Go to Admin Dashboard',
 
   // Settings — WebRTC
   settingsWebRTC: 'WebRTC',

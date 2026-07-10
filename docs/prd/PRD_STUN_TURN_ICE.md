@@ -346,3 +346,4 @@ socket.on('webrtc:ice-test-stop',    ()              => setIceTestCameraId(null)
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for STUN TURN ICE |
+| 1.1 | 2026-07-10 | LTS Engineering Team | Cross-reference: the operator-facing configuration UI (STUN/TURN inputs + ICE test) relocated to the Administrator Dashboard for streaming/analysis server modes — see `PRD_ICE_Test_UI.md` §9, `Design_Admin_Dashboard.md` §4.3. This document's server-side ICE config contract is unaffected. |

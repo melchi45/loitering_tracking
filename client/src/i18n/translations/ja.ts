@@ -105,6 +105,8 @@ export const ja: Translations = {
   settingsTitle: '設定',
   settingsLanguage: '言語',
   settingsClose: '閉じる',
+  settingsMovedNote: 'WebRTCおよびICE接続設定は管理者ダッシュボードに移動しました。',
+  settingsGoToAdmin: '管理者ダッシュボードへ移動',
 
   settingsWebRTC: 'WebRTC',
   settingsWebRTCEnabled: 'WebRTCを有効化',

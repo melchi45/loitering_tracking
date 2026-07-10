@@ -465,13 +465,44 @@ In `SERVER_MODE=streaming`, the Node.js server MUST retain the native-resolution
 
 #### FR-SNAP-034 — Bounding-Box Coordinate Rescaling
 
-Because the remote analysis server's response bbox coordinates are expressed relative to the downscaled copy it received (`result.frameWidth`/`result.frameHeight`), the streaming server MUST rescale each bbox to the retained native buffer's coordinate space (proportional scale by width/height ratio) before passing it to the crop function. The Socket.IO `detections` event broadcast to browser clients MUST continue to use the original (unscaled) bbox paired with the downscaled `frameWidth`/`frameHeight` — client-side overlay rendering already normalizes against these paired values independent of actual video resolution (`CameraView.tsx`), so this event's contract is unchanged by this amendment.
+Because the remote analysis server's response bbox coordinates are expressed relative to the downscaled copy it received (`result.frameWidth`/`result.frameHeight`), the streaming server MUST rescale each bbox to the retained native buffer's coordinate space (proportional scale by width/height ratio) before passing it to the crop function. **Superseded by §13 below** — the Socket.IO `detections` event broadcast to browser clients was originally left unscaled by this FR, but that produced a live-overlay flicker bug; §13 corrects this to also rescale the client-facing event.
 
 #### NFR-SNAP-011 — Crop Fidelity Independent of Analysis Bandwidth Setting
 
 Changing `AI_MAX_WIDTH` MUST NOT affect `detectionSnapshots` crop resolution or quality in any server mode. Crop fidelity MUST be governed solely by the camera's native resolution and `SNAPSHOT_MAX_DIMENSION`/`SNAPSHOT_JPEG_QUALITY`.
 
 Configuration: `server/.env` + all `.env.*.example` templates — `AI_MAX_WIDTH` reverted `1920` → `640` (§5 Configuration re-updated). Design detail: `Design_RTSP_Capture_Backend.md` §9.1, `Design_Detection_Snapshot_Search.md` §16.
+
+---
+
+## 13. v1.7 Correction — Live Overlay Flicker Between Two Coordinate Spaces
+
+**Revision:** v1.7 · 2026-07-10
+
+### 13.1 Background (Bug Report)
+
+After §12 shipped, streaming-mode users reported the live bbox overlay on camera video alternating between two different scales/positions frame-to-frame — the box would appear correctly sized once, then jump to a different (wrong) size on the next update, repeating indefinitely.
+
+### 13.2 Root Cause
+
+The client (`useCamera.ts`) receives two independent Socket.IO events that both update the SAME `frameWidth`/`frameHeight` state consumed by the bbox-overlay scaling math (`CameraView.tsx` `getRenderArea`/`drawOverlay`):
+
+1. `'frame'` — emitted per raw frame arrival (`!ctx.useWebRTC` cameras only) with `frameWidth`/`frameHeight` parsed directly from the native buffer (native resolution, per §12's FR-SNAP-032).
+2. `'detections'` — emitted whenever a streaming-mode analysis result returns, previously reporting `remoteFrameWidth`/`remoteFrameHeight` (the **downscaled** analysis coordinate space, per FR-SNAP-034 as originally written) paired with the **original, unscaled** `det.bbox`.
+
+Because these two events fire independently and asynchronously, whichever fired most recently determined the client's `frameWidth`/`frameHeight` state — but the `detections` array's `bbox` values were only ever valid relative to the downscaled coordinate space. When `frameWidth`/`frameHeight` held the native value (from a `'frame'` update) while the still-displayed bbox was expressed in downscaled coordinates (from the last `'detections'` update), the overlay rendered at the wrong scale — and vice versa. The two events racing against each other produced the observed flicker.
+
+This affects `SERVER_MODE=streaming` cameras with `webrtcEnabled=false` (raw JPEG display path) — combined/analysis mode is unaffected because its single local buffer already keeps both events self-consistent (§12 FR-SNAP-032).
+
+### 13.3 Fix — FR-SNAP-034 Corrected
+
+#### FR-SNAP-034 (revised) — `detections` Event MUST Also Report Native Coordinates
+
+The Socket.IO `detections` event emitted by `_processRemoteResult()` (streaming mode) MUST rescale every detection's `bbox` (and nested `face.bbox`, when present) from the analysis coordinate space to the native buffer's coordinate space using the same `_scaleBbox()` helper used for cropping, and MUST report `frameWidth`/`frameHeight` as the native buffer's own dimensions (`_fw`/`_fh`) — never `remoteFrameWidth`/`remoteFrameHeight`. This makes the `detections` event's coordinate space match the `frame` event's at all times, eliminating the race.
+
+This rescale is applied to a **new array** built for the emit only — it MUST NOT mutate the `allDetections` array used internally for snapshot cropping (which independently rescales via its own `cropBbox` computation, per FR-SNAP-034 original text) or for `_trackMeta` bookkeeping.
+
+Detail: `server/src/services/pipelineManager.js` `_processRemoteResult()` — `clientDetections` array. `Design_Detection_Snapshot_Search.md` §17.
 
 ---
 
@@ -483,3 +514,4 @@ Configuration: `server/.env` + all `.env.*.example` templates — `AI_MAX_WIDTH`
 | 1.4 | 2026-07-09 | LTS Engineering Team | §10 amendment — raised crop quality defaults, added NFR-SNAP-010 (no crop-induced data loss in detail views) |
 | 1.5 | 2026-07-09 | LTS Engineering Team | §11 correction — added FR-SNAP-031, `AI_MAX_WIDTH` (ingest_daemon.py) identified as the real crop-fidelity ceiling, raised 640→1920 |
 | 1.6 | 2026-07-09 | LTS Engineering Team | §12 supersedes §11/FR-SNAP-031 — added FR-SNAP-032~034, NFR-SNAP-011: ingest layer now always native resolution, streaming mode downscales only the analysis-server copy and rescales bbox back to native for crop; `AI_MAX_WIDTH` reverted to 640 (§5 Configuration row added) |
+| 1.7 | 2026-07-10 | LTS Engineering Team | §13 correction — fixed live-overlay flicker bug (`detections` event alternated between native and downscaled coordinate spaces with the `frame` event); FR-SNAP-034 revised so `detections` also reports native coordinates |

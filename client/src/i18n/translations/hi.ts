@@ -105,6 +105,8 @@ export const hi: Translations = {
   settingsTitle: 'सेटिंग्स',
   settingsLanguage: 'भाषा',
   settingsClose: 'बंद करें',
+  settingsMovedNote: 'WebRTC और ICE कनेक्टिविटी सेटिंग्स को एडमिन डैशबोर्ड में स्थानांतरित कर दिया गया है।',
+  settingsGoToAdmin: 'एडमिन डैशबोर्ड पर जाएं',
 
   settingsWebRTC: 'WebRTC',
   settingsWebRTCEnabled: 'WebRTC सक्षम करें',

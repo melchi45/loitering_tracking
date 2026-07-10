@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-ICE-UI-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
-| **Date** | 2026-06-05 |
+| **Date** | 2026-07-10 |
 | **Parent PRD** | prd/PRD_ICE_Test_UI.md |
 | **Parent SRS** | srs/SRS_STUN_TURN_ICE.md |
 | **Related TC** | tc/TC_ICE_Test_UI.md |
@@ -263,3 +263,32 @@ All other locales SHALL at minimum provide the English string as a placeholder (
 2. `mediasoup` must be installed and the WebRTC gateway must have been initialised successfully for Phase 2 to succeed.
 3. The test transport uses a shared `'__ice-test__'` router ID. Concurrent ICE tests from multiple browser sessions will share the same router but create separate transports (each with a unique `testId`).
 4. The TURN credential is included in `RTCIceServer` for Phase 1 gather operations but is never echoed back in the log output.
+
+---
+
+## 12. v1.1 Amendment — Relocated to Administrator Dashboard
+
+**Date:** 2026-07-10
+
+#### FR-ICE-UI-090 — Mode-Dependent Settings Modal Content
+
+The Settings Modal (`App.tsx` `SettingsModal`) MUST render its full WebRTC/STUN/TURN/ICE-Test UI (§4–§7) only when `serverMode === 'combined'`. For `serverMode === 'streaming'` or `serverMode === 'analysis'`, the modal MUST render only the language selector, plus a note that WebRTC/ICE settings are managed in the Administrator Dashboard, plus (for `role === 'admin'` users) a button that navigates there.
+
+#### FR-ICE-UI-091 — Administrator Dashboard WebRTC / ICE Section
+
+For `serverMode !== 'analysis'`, the Administrator Dashboard MUST provide a "WebRTC / ICE" navigation section implementing the same STUN/TURN configuration and two-phase ICE test described in §3–§7, reusing `useWebRTCConfigStore` so state stays consistent with the Settings Modal (relevant only for `combined` mode, where both surfaces are simultaneously reachable).
+
+#### FR-ICE-UI-092 — No Change to Server Contract
+
+The relocation MUST NOT change the `POST /api/webrtc/ice-test` / `DELETE /api/webrtc/ice-test/:testId` contract (§3) or the client-side two-phase test algorithm (§4–§5) — only the UI location and mode-based visibility change.
+
+Detail: `docs/design/Design_Admin_Dashboard.md` §4.3, `docs/srs/SRS_Admin_Dashboard.md` §8.
+
+---
+
+## Revision History
+
+| Version | Date | Description |
+|---|---|---|
+| 1.0 | 2026-06-05 | Initial release — SRS for In-App ICE Connectivity Test UI |
+| 1.1 | 2026-07-10 | §12 amendment — FR-ICE-UI-090~092: relocated to Administrator Dashboard for streaming/analysis modes, combined mode unchanged |

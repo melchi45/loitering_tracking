@@ -105,6 +105,8 @@ export const id: Translations = {
   settingsTitle: 'Pengaturan',
   settingsLanguage: 'Bahasa',
   settingsClose: 'Tutup',
+  settingsMovedNote: 'Pengaturan WebRTC dan konektivitas ICE telah dipindahkan ke Admin Dashboard.',
+  settingsGoToAdmin: 'Buka Admin Dashboard',
 
   settingsWebRTC: 'WebRTC',
   settingsWebRTCEnabled: 'Aktifkan WebRTC',

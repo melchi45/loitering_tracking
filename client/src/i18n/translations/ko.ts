@@ -105,6 +105,8 @@ export const ko: Translations = {
   settingsTitle: '설정',
   settingsLanguage: '언어',
   settingsClose: '닫기',
+  settingsMovedNote: 'WebRTC 및 ICE 연결 설정이 Administrator Dashboard로 이동되었습니다.',
+  settingsGoToAdmin: 'Admin Dashboard로 이동',
 
   settingsWebRTC: 'WebRTC',
   settingsWebRTCEnabled: 'WebRTC 활성화',

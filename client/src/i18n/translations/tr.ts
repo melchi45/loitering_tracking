@@ -105,6 +105,8 @@ export const tr: Translations = {
   settingsTitle: 'Ayarlar',
   settingsLanguage: 'Dil',
   settingsClose: 'Kapat',
+  settingsMovedNote: 'WebRTC ve ICE bağlantı ayarları Yönetici Panosuna taşındı.',
+  settingsGoToAdmin: 'Yönetici Panosuna Git',
 
   settingsWebRTC: 'WebRTC',
   settingsWebRTCEnabled: "WebRTC'yi Etkinleştir",

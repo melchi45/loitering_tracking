@@ -310,3 +310,4 @@ Group A (endpoint) → Group B (STUN config) → Group C (TURN config) → Group
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for STUN TURN ICE |
+| 1.1 | 2026-07-10 | LTS Engineering Team | Cross-reference: UI-level test cases for the relocated STUN/TURN/ICE-test surface now live in `TC_ICE_Test_UI.md` Group H and `TC_Admin_Dashboard.md` TC-AD-013~017. |

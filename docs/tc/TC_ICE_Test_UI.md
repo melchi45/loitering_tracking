@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-ICE-UI-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
-| **Date** | 2026-06-05 |
+| **Date** | 2026-07-10 |
 | **Parent SRS** | srs/SRS_ICE_Test_UI.md |
 | **Related Design** | design/Design_ICE_Test_UI.md |
 
@@ -468,3 +468,38 @@ All of the following must hold:
 - TC-C-004 (ICE error logging): Pass if log contains `! ICE error:` when STUN is unreachable. May be flaky on networks that drop UDP silently.
 - TC-C-006 (15 s timeout): Pass if timeout message appears within 16 s. May take longer on heavily loaded CI runners.
 - TC-A-005 (90 s auto-expiry): Can be skipped in fast-feedback cycles; mark as deferred to nightly tests.
+
+---
+
+## 12. Test Group H — Administrator Dashboard Relocation (v1.1)
+
+### TC-H-001: Settings Modal Content by Server Mode
+
+**Steps:** Open the Settings Modal against `combined`, `streaming`, and `analysis` servers in turn.
+**Expected:**
+- `combined`: full WebRTC/STUN/TURN/ICE Test UI present (unchanged)
+- `streaming` / `analysis`: only Language selector + relocation note (+ "Go to Admin Dashboard" button for admin users)
+
+### TC-H-002: Admin Dashboard WebRTC / ICE Section Renders Identical Test Flow
+
+**Steps:** In Admin Dashboard → WebRTC / ICE, run the ICE test.
+**Expected:** Same two-phase log format as the Settings Modal (Group C/D above); Download Report and Clear behave identically (Group F).
+
+### TC-H-003: Shared State Between Modal and Admin Section (combined mode only)
+
+**Steps:** In `combined` mode, add a TURN server via Admin Dashboard → WebRTC / ICE, click Apply; then open the Settings Modal.
+**Expected:** The new TURN server appears in the modal's TURN list without a page reload (`useWebRTCConfigStore` shared state).
+
+### TC-H-004: WebRTC / ICE Nav Item Hidden in Analysis Mode
+
+**Steps:** Load Admin Dashboard against a `SERVER_MODE=analysis` server.
+**Expected:** No "WebRTC / ICE" item in the sidebar.
+
+---
+
+## Revision History
+
+| Version | Date | Description |
+|---|---|---|
+| 1.0 | 2026-06-05 | Initial release — Test cases for In-App ICE Connectivity Test UI |
+| 1.1 | 2026-07-10 | Added Group H (TC-H-001~004) — Administrator Dashboard relocation for streaming/analysis modes |

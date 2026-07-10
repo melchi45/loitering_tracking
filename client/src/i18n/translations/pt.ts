@@ -105,6 +105,8 @@ export const pt: Translations = {
   settingsTitle: 'Configurações',
   settingsLanguage: 'Idioma',
   settingsClose: 'Fechar',
+  settingsMovedNote: 'As configurações de WebRTC e conectividade ICE foram movidas para o Painel do Administrador.',
+  settingsGoToAdmin: 'Ir para o Painel do Administrador',
 
   settingsWebRTC: 'WebRTC',
   settingsWebRTCEnabled: 'Habilitar WebRTC',

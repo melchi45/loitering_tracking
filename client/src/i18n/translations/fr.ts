@@ -105,6 +105,8 @@ export const fr: Translations = {
   settingsTitle: 'Paramètres',
   settingsLanguage: 'Langue',
   settingsClose: 'Fermer',
+  settingsMovedNote: 'Les paramètres WebRTC et de connectivité ICE ont été déplacés vers le tableau de bord administrateur.',
+  settingsGoToAdmin: 'Aller au tableau de bord administrateur',
 
   settingsWebRTC: 'WebRTC',
   settingsWebRTCEnabled: 'Activer WebRTC',

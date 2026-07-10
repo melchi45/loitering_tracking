@@ -672,15 +672,26 @@
 | **Expected** | The crop is correctly centered on the person with no visible offset/misalignment — confirms `_scaleBbox()` correctly maps the analysis server's (downscaled) bbox coordinates to the native buffer before cropping. A regression here would show the crop offset toward one corner or cutting off the subject. |
 | **Covers** | FR-SNAP-034 |
 
-### TC-K-007 — Streaming Mode: Live Overlay Alignment Unaffected (Regression, v1.6)
+### TC-K-007 — Streaming Mode: Live Overlay Does Not Flicker Between Scales (v1.7, supersedes v1.6 wording)
 
 | Field | Value |
 |---|---|
 | **ID** | TC-K-007 |
+| **Priority** | High |
+| **Pre-condition** | `SERVER_MODE=streaming`, a camera with `webrtcEnabled=false` (raw JPEG display path) and active AI detections |
+| **Steps** | 1. Open that camera's live view. 2. Observe the bbox overlay over at least 10 seconds / dozens of frame+detection updates. |
+| **Expected** | Overlay boxes stay consistently sized and correctly positioned on the tracked person — no flicker/jump between two different scales. (v1.6 originally left the `detections` event unscaled, assuming this was safe; §17 of `Design_Detection_Snapshot_Search.md` corrects this — the `detections` event now reports native-resolution bbox/`frameWidth`/`frameHeight`, matching the `frame` event, so both stay consistent.) |
+| **Covers** | FR-SNAP-034 (revised, v1.7) |
+
+### TC-K-008 — Live Overlay Regression Check on WebRTC-Enabled Cameras (v1.7)
+
+| Field | Value |
+|---|---|
+| **ID** | TC-K-008 |
 | **Priority** | Medium |
-| **Pre-condition** | Same as TC-K-005; camera view open in the dashboard |
-| **Steps** | 1. Observe the live bbox overlay drawn on top of the video feed for a moving person. |
-| **Expected** | Overlay boxes track the person accurately with no offset — confirms the `detections` Socket.IO event (unscaled bbox + `remoteFrameWidth`/`remoteFrameHeight`) was left unchanged by the v1.6 crop fix, and `CameraView.tsx`'s proportional scaling still works |
+| **Pre-condition** | `SERVER_MODE=streaming`, a camera with `webrtcEnabled=true` |
+| **Steps** | Observe the live bbox overlay over the WebRTC video for at least 10 seconds. |
+| **Expected** | No change in behavior from before v1.7 — this camera never received a `'frame'` Socket.IO event (WebRTC path only receives `'detections'`), so it was not affected by the flicker bug; overlay remains correctly aligned. |
 | **Covers** | FR-SNAP-034 (regression boundary) |
 
 ---
@@ -692,3 +703,4 @@
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for Detection Snapshot Search |
 | 1.4 | 2026-07-09 | LTS Engineering Team | Added Group K — crop quality defaults (640×640/q85) and detail-view object-contain rendering |
 | 1.6 | 2026-07-09 | LTS Engineering Team | Added TC-K-005~007 — streaming-mode crop uses native resolution independent of `AI_MAX_WIDTH`, bbox rescale correctness, live overlay regression check |
+| 1.7 | 2026-07-10 | LTS Engineering Team | TC-K-007 rewritten (v1.6 wording assumed unscaled `detections` event was safe — it wasn't); added TC-K-008 — live overlay flicker fix and WebRTC-camera regression check |

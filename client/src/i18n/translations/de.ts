@@ -105,6 +105,8 @@ export const de: Translations = {
   settingsTitle: 'Einstellungen',
   settingsLanguage: 'Sprache',
   settingsClose: 'Schließen',
+  settingsMovedNote: 'WebRTC- und ICE-Verbindungseinstellungen wurden in das Administrator-Dashboard verschoben.',
+  settingsGoToAdmin: 'Zum Administrator-Dashboard',
 
   settingsWebRTC: 'WebRTC',
   settingsWebRTCEnabled: 'WebRTC aktivieren',

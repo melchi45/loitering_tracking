@@ -105,6 +105,8 @@ export const ar: Translations = {
   settingsTitle: 'الإعدادات',
   settingsLanguage: 'اللغة',
   settingsClose: 'إغلاق',
+  settingsMovedNote: 'تم نقل إعدادات WebRTC واتصال ICE إلى لوحة تحكم المسؤول.',
+  settingsGoToAdmin: 'الانتقال إلى لوحة تحكم المسؤول',
 
   settingsWebRTC: 'WebRTC',
   settingsWebRTCEnabled: 'تمكين WebRTC',

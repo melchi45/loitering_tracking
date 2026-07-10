@@ -1,8 +1,8 @@
 ---
 **Document:** SRS_Admin_Dashboard  
-**Version:** 1.2  
+**Version:** 1.3  
 **Status:** Draft  
-**Date:** 2026-07-09  
+**Date:** 2026-07-10  
 **Child Design:** [Design_Admin_Dashboard](../design/Design_Admin_Dashboard.md)  
 **Child TC:** [TC_Admin_Dashboard](../tc/TC_Admin_Dashboard.md)  
 **Related SRS:** [SRS_AI_Model_Catalog](SRS_AI_Model_Catalog.md) · [SRS_User_Authentication](SRS_User_Authentication.md)  
@@ -16,11 +16,14 @@ This SRS specifies software requirements for the LTS-2026 Admin Dashboard (`Admi
 
 ## 2. Scope
 
-Admin Dashboard provides four management sections accessible via left sidebar navigation:
+Admin Dashboard provides management sections accessible via left sidebar navigation:
 - Users — account management
 - AI Models — full AI model catalog (YOLO detector + face/PPE/fire-smoke/cloth-PAR/human-parsing/appearance-reid) and AI module control
+- WebRTC / ICE — STUN/TURN server configuration and ICE connectivity test (relocated from the per-dashboard Settings modal)
 - ONVIF — event type registry
 - Audit Log — activity history
+- System — CPU/memory/disk/DB metrics
+- Server Logs — real-time log viewer
 
 ## 3. Functional Requirements — Navigation & Access
 
@@ -29,8 +32,8 @@ Admin Dashboard provides four management sections accessible via left sidebar na
 | FR-AD-001 | The Admin Dashboard shall only be accessible when `auth.user.role === 'admin'`; non-admin users shall see `AccessDeniedPage`. |
 | FR-AD-002 | The admin entrypoint in `App.tsx` profile dropdown shall be labeled "Admin Dashboard". |
 | FR-AD-003 | Pressing `Escape` while the Admin Dashboard is open shall navigate back to the main dashboard. |
-| FR-AD-004 | The sidebar shall have four nav items: Users, AI Models, ONVIF, Audit Log. The AI Models item shall be hidden when `SERVER_MODE=streaming`. |
-| FR-AD-005 | On mount, `AdminUsersPage` shall fetch `GET /health` to determine `serverMode`. If `serverMode === 'streaming'`, the AI Models nav item shall not be rendered. |
+| FR-AD-004 | The sidebar shall have seven nav items: Users, AI Models, WebRTC / ICE, ONVIF, Audit Log, System, Server Logs. The AI Models item shall be hidden when `SERVER_MODE=streaming`; the WebRTC / ICE item shall be hidden when `SERVER_MODE=analysis`. |
+| FR-AD-005 | On mount, `AdminUsersPage` shall fetch `GET /health` to determine `serverMode`. If `serverMode === 'streaming'`, the AI Models nav item shall not be rendered. If `serverMode === 'analysis'`, the WebRTC / ICE nav item shall not be rendered. |
 
 ## 4. Functional Requirements — AI Models Section
 
@@ -97,7 +100,20 @@ Admin Dashboard provides four management sections accessible via left sidebar na
 | FR-AD-060 | Audit section shall display the last 200 audit log entries from `GET /admin/audit?limit=200`. |
 | FR-AD-061 | Client-side keyword filter on `event`, `userEmail`, and `detail` fields. |
 
-## 8. Non-Functional Requirements
+## 8. Functional Requirements — WebRTC / ICE Section
+
+> Relocated from the per-dashboard Settings modal (`App.tsx` `SettingsModal`) — see `SRS_STUN_TURN_ICE.md` / `SRS_ICE_Test_UI.md` §v1.1 amendments for the source requirements this section now fulfills.
+
+| ID | Requirement |
+|---|---|
+| FR-AD-070 | The WebRTC / ICE section shall render the WebRTC enable toggle, STUN server list (add/edit/remove), and TURN server list (url/username/credential, add/edit/remove), reusing `useWebRTCConfigStore` state. |
+| FR-AD-071 | Clicking "Apply" shall persist the draft configuration via `useWebRTCConfigStore.setConfig()`, writing to both `localStorage` (`lts-webrtc-config`) and `PUT /api/settings/webrtcConfig`. |
+| FR-AD-072 | The section shall provide an ICE connectivity test (Run/Abort), reusing the same two-phase test logic as the Settings modal (client-side `RTCPeerConnection` candidate gathering, then `POST /api/webrtc/ice-test` engine health check). |
+| FR-AD-073 | The ICE test log shall support "Download Report" (plain-text file) and "Clear" actions, identical in behavior to the Settings modal's implementation. |
+| FR-AD-074 | When one or more configured STUN/TURN URLs fail during the test (`RTCPeerConnectionIceErrorEvent` with `errorCode >= 700`), a banner shall list the failed URLs with a "Remove unreachable servers" action. |
+| FR-AD-075 | Configuration changes made in this section shall be immediately reflected in the combined-mode Settings modal's WebRTC UI (and vice versa), since both read/write the same `useWebRTCConfigStore`. |
+
+## 9. Non-Functional Requirements
 
 | ID | Requirement |
 |---|---|
@@ -114,3 +130,4 @@ Admin Dashboard provides four management sections accessible via left sidebar na
 | 1.0 | 2026-06-17 | 초기 작성 — AI Models 섹션(FR-AD-010~035), Users/ONVIF/Audit 기능 요구사항 정의 |
 | 1.1 | 2026-06-17 | FR-AD-005 추가 — streaming 모드에서 AI Models 탭 숨김 (`GET /health` serverMode 판별) |
 | 1.2 | 2026-07-09 | §4.1b 신규 — 전체 모델 파일(face/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid) 테이블 요구사항(FR-AD-022~026) 추가, FR-AD-010/015 YOLO26 반영 |
+| 1.3 | 2026-07-10 | FR-AD-004/005 정정(System/Logs 탭 반영, WebRTC/ICE 숨김 조건 추가), §8 신규 — WebRTC/ICE 섹션 요구사항(FR-AD-070~075), §2 Scope에 WebRTC/ICE·System·Server Logs 반영 |

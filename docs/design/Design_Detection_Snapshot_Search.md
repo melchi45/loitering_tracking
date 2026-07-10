@@ -696,7 +696,7 @@ Node.js  capture.on('frame', jpegBuffer)      ← single source buffer, all mode
   - New `_scaleBbox(bbox, fromW, fromH, toW, toH)` — proportional bbox scaling between two coordinate spaces; returns the bbox unchanged if either dimension is falsy or scale is 1:1.
   - `_AI_MAX_WIDTH = parseInt(process.env.AI_MAX_WIDTH || '640', 10)` — now read by Node.js, not the Python daemon.
   - `_runPendingAnalysis()`: downscales a copy via `_downscaleForAnalysis()` immediately before `analysisClient.analyzeFrame()`; `ctx._pendingFrame.buf` (native) is untouched and still passed through to `_processRemoteResult()`.
-  - `_processRemoteResult()`: both crop call sites (pending face-match live crop, and the general `detectionSnapshots` save loop) now compute `cropBbox = _scaleBbox(bbox, remoteFrameWidth, remoteFrameHeight, _fw, _fh)` and crop `_buf` (native) at `_fw`×`_fh` instead of the previous `remoteFrameWidth`×`remoteFrameHeight`. The `detections` Socket.IO event emitted to the browser is **unchanged** — it still carries the original (unscaled) bbox paired with `remoteFrameWidth`/`remoteFrameHeight`, which `CameraView.tsx` already interprets as a normalized coordinate space independent of the video's actual rendered resolution, so client-side overlay alignment is unaffected.
+  - `_processRemoteResult()`: both crop call sites (pending face-match live crop, and the general `detectionSnapshots` save loop) now compute `cropBbox = _scaleBbox(bbox, remoteFrameWidth, remoteFrameHeight, _fw, _fh)` and crop `_buf` (native) at `_fw`×`_fh` instead of the previous `remoteFrameWidth`×`remoteFrameHeight`. ~~The `detections` Socket.IO event emitted to the browser is unchanged~~ **— corrected in §17: this event also needed the same rescale, see below.**
 - **`server/.env` + all three `.env.*.example` templates**: `AI_MAX_WIDTH` reverted `1920` → `640` (its role changed — it no longer bounds the ingest-daemon→Node.js hop, only the streaming→analysis-server hop) with rewritten comments.
 
 ### 16.4 Trade-offs
@@ -713,7 +713,62 @@ Node.js  capture.on('frame', jpegBuffer)      ← single source buffer, all mode
 
 ---
 
-## Document History
+## 17. v1.7 Correction — Live Bbox Overlay Flicker
+
+**Revision:** v1.7 · 2026-07-10
+
+### 17.1 Bug Report
+
+§16.3 asserted that leaving the `detections` Socket.IO event's bbox/`frameWidth`/`frameHeight` unscaled (still in the analysis server's downscaled coordinate space) was safe, reasoning that `CameraView.tsx` treats `frameWidth`/`frameHeight` as an abstract normalized coordinate space independent of actual video resolution. In practice, streaming-mode users observed the live bbox overlay **alternating between two different scales/positions** on every update — correct once, wrong once, repeating.
+
+### 17.2 Root Cause
+
+`client/src/hooks/useCamera.ts` listens to two independent Socket.IO events and both write to the **same** `frameWidth`/`frameHeight` React state:
+
+```typescript
+// useCamera.ts
+const handleFrame = (event: FrameEvent) => {
+  // ...
+  if (event.frameWidth && event.frameHeight) {
+    setFrameWidth(event.frameWidth);   // ← native resolution (§16, FR-SNAP-032)
+    setFrameHeight(event.frameHeight);
+  }
+};
+
+const handleDetections = (event: DetectionsEvent) => {
+  // ...
+  if (event.frameWidth && event.frameHeight) {
+    setFrameWidth(event.frameWidth);   // ← was: downscaled analysis resolution
+    setFrameHeight(event.frameHeight);
+  }
+};
+```
+
+`§16.3`'s reasoning ("`CameraView.tsx` treats this as a normalized coordinate space") only holds when **exactly one** event drives `frameWidth`/`frameHeight` for a given camera. Once ingest-daemon started sending native-resolution frames (§16), the `'frame'` event (native) and `'detections'` event (downscaled, streaming mode only) began reporting **different absolute values** for the same camera — and because `detections`' `bbox` values are only valid relative to the downscaled space, whichever event fired last determined whether the currently-displayed bbox was interpreted in the right coordinate space or not. This race is specific to `SERVER_MODE=streaming` cameras with `webrtcEnabled=false` (the raw-JPEG `'frame'`-event display path flagged as a bandwidth trade-off in §16.4) — combined/analysis mode was never affected, since both events there already shared one native buffer.
+
+### 17.3 Fix
+
+`_processRemoteResult()` now builds a separate `clientDetections` array for the Socket.IO emit, rescaling every `bbox` (and nested `face.bbox`) from `remoteFrameWidth`/`remoteFrameHeight` to `_fw`/`_fh` (native) via the same `_scaleBbox()` used for cropping, and emits `frameWidth: _fw, frameHeight: _fh` instead of `remoteFrameWidth`/`remoteFrameHeight`:
+
+```js
+const clientDetections = allDetections.map(det => ({
+  ...det,
+  bbox: _scaleBbox(det.bbox, remoteFrameWidth, remoteFrameHeight, _fw, _fh),
+  ...(det.face ? { face: { ...det.face, bbox: _scaleBbox(det.face.bbox, remoteFrameWidth, remoteFrameHeight, _fw, _fh) } } : {}),
+}));
+
+this._io.to(_cameraId).emit('detections', {
+  cameraId: _cameraId, frameId: _frameId, timestamp: _ts,
+  detections: clientDetections,
+  frameWidth: _fw, frameHeight: _fh,
+});
+```
+
+The original (unscaled) `allDetections` array is left untouched for the crop loop and `_trackMeta` bookkeeping that follow — only the client-facing payload is rescaled. No client-side change was needed: with both events now reporting the same (native) coordinate space, `useCamera.ts`'s dual-write pattern is safe again.
+
+### 17.4 Why Not Fix `useCamera.ts` Instead
+
+An alternative fix would have been to stop `handleFrame` from updating `frameWidth`/`frameHeight` at all, leaving only `handleDetections` as the source of truth. This was rejected: `ZoneEditor` and `ThermalOverlay` also consume `frameWidth`/`frameHeight` from `useCamera()`, and when AI is disabled for a camera (`ctx.aiEnabled === false`), **no `detections` event is ever emitted** — so `frameWidth`/`frameHeight` would be stuck at the hook's hardcoded fallback (640×640) for the lifetime of that camera's session, breaking zone editing and thermal calibration whenever AI is off. Fixing the server-side emit instead keeps both events valid, general-purpose sources of truth in every configuration.
 
 | Version | Date | Author | Description |
 |---|---|---|---|
@@ -721,3 +776,4 @@ Node.js  capture.on('frame', jpegBuffer)      ← single source buffer, all mode
 | 1.4 | 2026-07-09 | LTS Engineering Team | §14 amendment — crop quality defaults raised (640×640/q85), detail-view object-contain fix |
 | 1.5 | 2026-07-09 | LTS Engineering Team | §15 correction — real bottleneck identified as `AI_MAX_WIDTH` (ingest_daemon.py), the crop's actual source buffer; raised 640→1920 |
 | 1.6 | 2026-07-09 | LTS Engineering Team | §16 supersedes §15 — code-level fix: ingest_daemon.py sends native resolution always; `pipelineManager.js` downscales only the streaming→analysis-server copy and rescales bbox back to native before cropping; `AI_MAX_WIDTH` reverted to 640 with new meaning |
+| 1.7 | 2026-07-10 | LTS Engineering Team | §17 correction — fixed live bbox overlay flicker (§16.3's "detections event left unscaled" claim was wrong in practice); `detections` Socket.IO emit now rescales bbox/frameWidth to native, matching the `frame` event |

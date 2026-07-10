@@ -97,9 +97,13 @@ function LayoutPicker({ current, onChange }: { current: LayoutId; onChange: (id:
   );
 }
 
-function SettingsModal({ onClose, analysisMode = false }: { onClose: () => void; analysisMode?: boolean }) {
+function SettingsModal({ onClose, serverMode }: { onClose: () => void; serverMode: string | null }) {
   const { lang, setLang, t } = useI18n();
   const webrtcStore = useWebRTCConfigStore();
+  const auth = useAuthStore();
+  // Only combined-mode servers keep WebRTC/STUN/TURN/ICE-test controls in this quick
+  // modal — streaming and analysis modes manage them from the Administrator Dashboard.
+  const isCombined = serverMode === 'combined';
 
   // Local draft state — only persisted when Apply is clicked
   const [enabled,  setEnabled]  = useState(webrtcStore.enabled);
@@ -357,7 +361,7 @@ function SettingsModal({ onClose, analysisMode = false }: { onClose: () => void;
             </div>
           </div>
 
-          {!analysisMode && (
+          {isCombined && (
           <>
           <div className="border-t border-gray-700 pt-4">
             <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">{t.settingsWebRTC}</p>
@@ -535,12 +539,17 @@ function SettingsModal({ onClose, analysisMode = false }: { onClose: () => void;
           </>
           )}
 
-          {analysisMode && (
+          {!isCombined && (
             <div className="border-t border-gray-700 pt-4">
-              <p className="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">Analysis Mode</p>
-              <p className="text-sm text-gray-300 leading-6">
-                analysis 모드에서는 운영 설정을 서버 환경변수와 백엔드 구성에서 관리합니다. 대시보드 설정에서는 언어만 변경할 수 있습니다.
-              </p>
+              <p className="text-sm text-gray-300 leading-6">{t.settingsMovedNote}</p>
+              {auth.user?.role === 'admin' && (
+                <button
+                  onClick={() => { onClose(); auth.navigateTo('admin'); }}
+                  className="mt-3 w-full py-1.5 rounded-lg text-xs font-semibold bg-blue-700 hover:bg-blue-600 text-white transition-colors"
+                >
+                  {t.settingsGoToAdmin}
+                </button>
+              )}
             </div>
           )}
         </form>
@@ -1043,7 +1052,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
           />
         ) : null;
       })()}
-      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} analysisMode={isAnalysis} />}
+      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} serverMode={serverMode} />}
       {showStats && (isAnalysis
         ? <AnalysisStatsModal open={showStats} onClose={() => setShowStats(false)} />
         : <StatsPanelModal open={showStats} onClose={() => setShowStats(false)} />)}

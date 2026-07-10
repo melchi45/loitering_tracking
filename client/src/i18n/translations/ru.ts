@@ -105,6 +105,8 @@ export const ru: Translations = {
   settingsTitle: 'Настройки',
   settingsLanguage: 'Язык',
   settingsClose: 'Закрыть',
+  settingsMovedNote: 'Настройки WebRTC и ICE-подключения перенесены в панель администратора.',
+  settingsGoToAdmin: 'Перейти в панель администратора',
 
   settingsWebRTC: 'WebRTC',
   settingsWebRTCEnabled: 'Включить WebRTC',

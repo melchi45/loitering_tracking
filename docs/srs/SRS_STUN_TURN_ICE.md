@@ -397,3 +397,4 @@ The report must include actionable guidance for known failure conditions:
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for STUN TURN ICE |
+| 1.1 | 2026-07-10 | LTS Engineering Team | Cross-reference: operator-facing STUN/TURN/ICE-test UI relocated to Administrator Dashboard for streaming/analysis modes — see `SRS_ICE_Test_UI.md` §12 (FR-ICE-UI-090~092), `SRS_Admin_Dashboard.md` §8 (FR-AD-070~075). Server-side requirements in this document are unaffected. |

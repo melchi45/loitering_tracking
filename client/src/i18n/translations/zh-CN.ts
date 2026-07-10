@@ -105,6 +105,8 @@ export const zhCN: Translations = {
   settingsTitle: '设置',
   settingsLanguage: '语言',
   settingsClose: '关闭',
+  settingsMovedNote: 'WebRTC 和 ICE 连接设置已移至管理员仪表盘。',
+  settingsGoToAdmin: '前往管理员仪表盘',
 
   settingsWebRTC: 'WebRTC',
   settingsWebRTCEnabled: '启用 WebRTC',

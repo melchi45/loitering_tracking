@@ -3,6 +3,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { useOnvifEventStore, type OnvifEventType } from '../../stores/onvifEventStore';
 import { useSocket } from '../../hooks/useSocket';
 import AdminLogPanel from '../../components/AdminLogPanel';
+import { useWebRTCConfigStore, type WebRTCConfig, type TurnServer } from '../../stores/webrtcConfigStore';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -56,7 +57,7 @@ interface TcRun {
 }
 
 type StatusFilter = 'all' | 'pending' | 'active' | 'rejected' | 'revoked';
-type AdminSection = 'users' | 'onvif' | 'audit' | 'ai-models' | 'system' | 'logs';
+type AdminSection = 'users' | 'onvif' | 'audit' | 'ai-models' | 'webrtc' | 'system' | 'logs';
 
 // ── AI Models types ───────────────────────────────────────────────────────────
 
@@ -155,6 +156,7 @@ const SEVERITY_BADGE: Record<string, string> = {
 const NAV: { id: AdminSection; label: string; icon: string; desc: string }[] = [
   { id: 'users',     label: 'Users',      icon: '👥', desc: 'Manage user accounts & roles' },
   { id: 'ai-models', label: 'AI Models',  icon: '🤖', desc: 'YOLO model catalog & AI modules' },
+  { id: 'webrtc',    label: 'WebRTC / ICE', icon: '📶', desc: 'STUN/TURN servers & ICE connectivity test' },
   { id: 'onvif',     label: 'ONVIF',      icon: '📡', desc: 'Event type registry' },
   { id: 'audit',     label: 'Audit Log',  icon: '📋', desc: 'Activity history' },
   { id: 'system',    label: 'System',     icon: '📊', desc: 'CPU · Memory · Disk · DB metrics' },
@@ -182,9 +184,14 @@ export default function AdminUsersPage() {
   }, []);
 
   const isStreaming = serverMode === 'streaming';
+  const isAnalysis  = serverMode === 'analysis';
 
-  // Visible nav items: hide AI Models in streaming mode
-  const visibleNav = NAV.filter(item => !(item.id === 'ai-models' && isStreaming));
+  // Visible nav items: hide AI Models in streaming mode (no local models);
+  // hide WebRTC/ICE in analysis mode (no camera capture, nothing to configure)
+  const visibleNav = NAV.filter(item =>
+    !(item.id === 'ai-models' && isStreaming) &&
+    !(item.id === 'webrtc'    && isAnalysis)
+  );
 
   async function apiFetch(path: string, opts: RequestInit = {}) {
     const res = await fetch(path, {
@@ -259,6 +266,7 @@ export default function AdminUsersPage() {
         <main className={`flex-1 bg-gray-950 ${section === 'logs' ? 'overflow-hidden flex flex-col' : 'overflow-y-auto'}`}>
           {section === 'users'     && <UsersSection apiFetch={apiFetch} />}
           {section === 'ai-models' && <AiModelsSection />}
+          {section === 'webrtc'    && <WebRTCSection />}
           {section === 'onvif'     && <OnvifSection apiFetch={apiFetch} />}
           {section === 'audit'     && <AuditSection apiFetch={apiFetch} />}
           {section === 'system'    && <SystemSection apiFetch={apiFetch} />}
@@ -1690,6 +1698,327 @@ function SystemSection({ apiFetch }: { apiFetch: (path: string, opts?: RequestIn
           </div>
         ) : (
           <div className="text-xs text-gray-600">Loading…</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Section: WebRTC / ICE ──────────────────────────────────────────────────────
+//
+// STUN/TURN servers and the ICE connectivity test used to live in the per-dashboard
+// Settings modal (client/src/App.tsx SettingsModal). They moved here so streaming
+// and analysis servers manage them centrally, leaving only Language in that modal.
+// combined-mode servers still keep a quick-access copy in the modal too — this
+// section and that modal both read/write the same webrtcConfigStore, so edits
+// made here take effect immediately in both places.
+
+function WebRTCSection() {
+  const webrtcStore = useWebRTCConfigStore();
+
+  const [enabled,  setEnabled]  = useState(webrtcStore.enabled);
+  const [stunUrls, setStunUrls] = useState<string[]>(webrtcStore.stunUrls);
+  const [turns,    setTurns]    = useState<TurnServer[]>(webrtcStore.turns ?? []);
+  const [saved,    setSaved]    = useState(false);
+
+  const [iceRunning,    setIceRunning]    = useState(false);
+  const [iceLog,        setIceLog]        = useState<string[]>([]);
+  const [iceFailedUrls, setIceFailedUrls] = useState<string[]>([]);
+  const iceLogRef   = useRef<HTMLTextAreaElement>(null);
+  const iceAbortRef = useRef(false);
+
+  function updateStun(idx: number, value: string) {
+    setStunUrls((prev) => prev.map((u, i) => (i === idx ? value : u)));
+    setSaved(false);
+  }
+  function addStun() {
+    setStunUrls((prev) => [...prev, '']);
+    setSaved(false);
+  }
+  function removeStun(idx: number) {
+    setStunUrls((prev) => prev.filter((_, i) => i !== idx));
+    setSaved(false);
+  }
+
+  function updateTurn(idx: number, field: 'url' | 'username' | 'credential', value: string) {
+    setTurns((prev) => prev.map((tv, i) => i === idx ? { ...tv, [field]: value } : tv));
+    setSaved(false);
+  }
+  function addTurn() {
+    setTurns((prev) => [...prev, { url: '', username: '', credential: '' }]);
+    setSaved(false);
+  }
+  function removeTurn(idx: number) {
+    setTurns((prev) => prev.filter((_, i) => i !== idx));
+    setSaved(false);
+  }
+
+  function handleApply() {
+    const cfg: WebRTCConfig = {
+      enabled,
+      stunUrls: stunUrls.map((u) => u.trim()).filter(Boolean),
+      turns: turns.filter((tv) => tv.url.trim()),
+    };
+    webrtcStore.setConfig(cfg);
+    setSaved(true);
+  }
+
+  async function runIceTest() {
+    setIceRunning(true);
+    setIceFailedUrls([]);
+    iceAbortRef.current = false;
+    const lines: string[] = [];
+    const ts = () => new Date().toISOString().slice(11, 23);
+    const log = (msg: string) => {
+      lines.push(`[${ts()}] ${msg}`);
+      setIceLog([...lines]);
+      requestAnimationFrame(() => {
+        if (iceLogRef.current) iceLogRef.current.scrollTop = iceLogRef.current.scrollHeight;
+      });
+    };
+
+    try {
+      const iceServers: RTCIceServer[] = [
+        ...stunUrls.map(u => u.trim()).filter(Boolean).map(urls => ({ urls })),
+        ...turns.filter(tv => tv.url.trim()).map(tv => ({
+          urls: tv.url.trim(), username: tv.username, credential: tv.credential,
+        })),
+      ];
+
+      log('=== Phase 1: ICE Candidate Gathering ===');
+      log(`STUN servers  : ${stunUrls.filter(Boolean).join(', ') || '(none)'}`);
+      log(`TURN servers  : ${turns.filter(tv => tv.url).map(tv => tv.url).join(', ') || '(none)'}`);
+      log(`Total ICE servers: ${iceServers.length}`);
+
+      const pc = new RTCPeerConnection({ iceServers });
+      pc.createDataChannel('lts-ice-check');
+
+      const gathered: RTCIceCandidate[] = [];
+      const failedUrls: string[] = [];
+
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          log('  Gathering timed out after 15 s');
+          log('  ⚠ Timeout caused by unreachable ICE servers — remove them to fix stream instability');
+          resolve();
+        }, 15_000);
+
+        pc.onicecandidate = (e) => {
+          if (!e.candidate) return;
+          gathered.push(e.candidate);
+          const c = e.candidate;
+          log(`  + ${c.type?.padEnd(5)} ${c.address}:${c.port}  proto=${c.protocol}`);
+        };
+
+        pc.onicecandidateerror = (e) => {
+          const err = e as RTCPeerConnectionIceErrorEvent;
+          log(`  ! ICE error: code=${err.errorCode} url=${err.url} "${err.errorText}"`);
+          if (err.errorCode >= 700 && err.url) failedUrls.push(err.url);
+        };
+
+        pc.onicegatheringstatechange = () => {
+          if (pc.iceGatheringState === 'complete') {
+            clearTimeout(timer);
+            resolve();
+          }
+        };
+
+        pc.createOffer()
+          .then(offer => pc.setLocalDescription(offer))
+          .catch(err => { log(`  Offer error: ${err.message}`); clearTimeout(timer); resolve(); });
+      });
+
+      pc.close();
+
+      const dedupedFailed = [...new Set(failedUrls)];
+      if (dedupedFailed.length > 0) setIceFailedUrls(dedupedFailed);
+
+      const hostN  = gathered.filter(c => c.type === 'host').length;
+      const srflxN = gathered.filter(c => c.type === 'srflx').length;
+      const relayN = gathered.filter(c => c.type === 'relay').length;
+
+      log('');
+      log('--- Phase 1 Summary ---');
+      log(`  host  (local)   : ${hostN}`);
+      log(`  srflx (STUN)    : ${srflxN}  ${srflxN > 0 ? '✓ STUN reachable' : '✗ STUN unreachable or no STUN configured'}`);
+      log(`  relay (TURN)    : ${relayN}  ${relayN > 0 ? '✓ TURN reachable' : turns.length > 0 ? '✗ TURN unreachable' : '(no TURN configured)'}`);
+      if (dedupedFailed.length > 0) {
+        log(`  ⚠ ${dedupedFailed.length} unreachable server(s) — causes ${dedupedFailed.length * 5}–15 s gather delay on every WebRTC connect`);
+      }
+
+      if (iceAbortRef.current) { log('Aborted.'); return; }
+
+      log('');
+      log('=== Phase 2: WebRTC Engine ===');
+
+      try {
+        const resp = await fetch('/api/webrtc/ice-test', { method: 'POST' });
+        const contentType = resp.headers.get('content-type') ?? '';
+        if (!contentType.includes('application/json')) {
+          log(`  ✗ Server returned non-JSON (HTTP ${resp.status}) — restart the server and try again`);
+        } else {
+          const data = await resp.json();
+          if (!resp.ok || data.error) {
+            const engineName = data.engine ?? 'webrtc';
+            log(`  ✗ Engine unreachable [${engineName}]: ${data.error ?? `HTTP ${resp.status}`}`);
+            if (data.hint) log(`    → ${data.hint}`);
+          } else {
+            const engineLabel = data.engine ?? 'webrtc';
+            const portInfo    = data.udpPort ? `  UDP port=${data.udpPort}` : '';
+            log(`  ✓ Engine ready  engine=${engineLabel}${portInfo}`);
+          }
+        }
+      } catch (err: unknown) {
+        log(`  ✗ Request failed: ${(err as Error).message}`);
+      }
+    } finally {
+      setIceRunning(false);
+    }
+  }
+
+  function downloadIceReport() {
+    const text = iceLog.join('\n');
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement('a');
+    a.href     = url;
+    a.download = `ice-test-report-${new Date().toISOString().slice(0, 19).replace(/:/g, '-')}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
+  const inputCls = 'w-full bg-gray-800 text-xs text-gray-200 px-2.5 py-1.5 rounded-lg border border-gray-700 focus:outline-none focus:border-blue-500 placeholder-gray-600';
+
+  return (
+    <div className="p-6 max-w-2xl">
+      <SectionHeader title="WebRTC / ICE" subtitle="STUN/TURN servers and ICE connectivity — shared with the dashboard's quick settings" />
+
+      {/* WebRTC configuration panel */}
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-5">
+        <div className="flex items-center justify-between mb-4">
+          <span className="text-sm text-gray-300">Enable WebRTC</span>
+          <button
+            onClick={() => { setEnabled((v) => !v); setSaved(false); }}
+            className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors duration-200 ${
+              enabled ? 'bg-blue-600' : 'bg-gray-600'
+            }`}
+          >
+            <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform duration-200 ${
+              enabled ? 'translate-x-4' : 'translate-x-0.5'
+            }`} />
+          </button>
+        </div>
+
+        {/* STUN servers */}
+        <p className="text-xs text-gray-500 mb-1">STUN Servers</p>
+        <div className="space-y-1 mb-1">
+          {stunUrls.map((url, idx) => (
+            <div key={idx} className="flex gap-1.5 items-center">
+              <input
+                value={url}
+                onChange={(e) => updateStun(idx, e.target.value)}
+                placeholder="stun:stun.l.google.com:19302"
+                className={inputCls + ' flex-1'}
+              />
+              <button onClick={() => removeStun(idx)} className="text-gray-500 hover:text-red-400 transition-colors px-1 text-lg leading-none" title="Remove">×</button>
+            </div>
+          ))}
+        </div>
+        <button onClick={addStun} className="text-xs text-blue-400 hover:text-blue-300 transition-colors mb-4">+ Add</button>
+
+        {/* TURN servers */}
+        <p className="text-xs text-gray-500 mb-1">TURN Servers</p>
+        <div className="space-y-2 mb-1">
+          {turns.map((turn, idx) => (
+            <div key={idx} className="space-y-1 bg-gray-950/60 border border-gray-800 rounded-lg p-2.5">
+              <div className="flex gap-1.5 items-center">
+                <input
+                  value={turn.url}
+                  onChange={(e) => updateTurn(idx, 'url', e.target.value)}
+                  placeholder="turn:your-server:3478"
+                  className={inputCls + ' flex-1'}
+                />
+                <button onClick={() => removeTurn(idx)} className="text-gray-500 hover:text-red-400 transition-colors px-1 text-lg leading-none flex-shrink-0" title="Remove">×</button>
+              </div>
+              <div className="flex gap-1.5">
+                <input
+                  value={turn.username}
+                  onChange={(e) => updateTurn(idx, 'username', e.target.value)}
+                  placeholder="Username"
+                  className={inputCls + ' flex-1'}
+                />
+                <input
+                  value={turn.credential}
+                  onChange={(e) => updateTurn(idx, 'credential', e.target.value)}
+                  placeholder="Credential"
+                  type="password"
+                  autoComplete="new-password"
+                  className={inputCls + ' flex-1'}
+                />
+              </div>
+            </div>
+          ))}
+        </div>
+        <button onClick={addTurn} className="text-xs text-blue-400 hover:text-blue-300 transition-colors mb-4">+ Add</button>
+
+        <button
+          onClick={handleApply}
+          className={`w-full py-2 rounded-lg text-xs font-semibold transition-colors ${
+            saved ? 'bg-green-700/60 text-green-300 cursor-default' : 'bg-blue-700 hover:bg-blue-600 text-white'
+          }`}
+        >
+          {saved ? 'Saved ✓' : 'Apply'}
+        </button>
+      </div>
+
+      {/* ICE connectivity test panel */}
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-sm font-semibold text-gray-300">ICE Connectivity Test</h3>
+          {iceLog.length > 0 && (
+            <div className="flex gap-1">
+              <button onClick={downloadIceReport} className="text-[10px] px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-300 transition-colors">Download Report</button>
+              <button onClick={() => setIceLog([])} className="text-[10px] px-2 py-0.5 rounded bg-gray-800 hover:bg-gray-700 text-gray-400 transition-colors">Clear</button>
+            </div>
+          )}
+        </div>
+
+        <button
+          onClick={iceRunning ? () => { iceAbortRef.current = true; } : runIceTest}
+          className={`w-full py-2 rounded-lg text-xs font-semibold transition-colors mb-3 ${
+            iceRunning ? 'bg-yellow-700/70 text-yellow-200 hover:bg-yellow-700' : 'bg-indigo-700 hover:bg-indigo-600 text-white'
+          }`}
+        >
+          {iceRunning ? 'Testing… (click to abort)' : 'Run ICE Test'}
+        </button>
+
+        {iceFailedUrls.length > 0 && (
+          <div className="bg-yellow-900/40 border border-yellow-700/60 rounded-lg px-3 py-2 mb-3 text-[10px] text-yellow-300">
+            <div className="font-semibold mb-1">⚠ {iceFailedUrls.length} server(s) unreachable (causes gather delay)</div>
+            {iceFailedUrls.map(u => <div key={u} className="font-mono text-yellow-400/80">{u}</div>)}
+            <button
+              onClick={() => {
+                setStunUrls(prev => prev.filter(u => !iceFailedUrls.includes(u.trim())));
+                setTurns(prev => prev.filter(tv => !iceFailedUrls.includes(tv.url.trim())));
+                setIceFailedUrls([]);
+                setSaved(false);
+              }}
+              className="mt-1.5 px-2 py-0.5 bg-yellow-700 hover:bg-yellow-600 text-white rounded text-[10px] font-semibold"
+            >
+              Remove unreachable servers
+            </button>
+          </div>
+        )}
+
+        {iceLog.length > 0 && (
+          <textarea
+            ref={iceLogRef}
+            readOnly
+            value={iceLog.join('\n')}
+            title="ICE Test Log"
+            className="w-full h-48 bg-black/60 text-[10px] font-mono text-green-300 px-2.5 py-2 rounded-lg border border-gray-800 resize-none focus:outline-none"
+            spellCheck={false}
+          />
         )}
       </div>
     </div>

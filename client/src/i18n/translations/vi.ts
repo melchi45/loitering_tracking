@@ -105,6 +105,8 @@ export const vi: Translations = {
   settingsTitle: 'Cài đặt',
   settingsLanguage: 'Ngôn ngữ',
   settingsClose: 'Đóng',
+  settingsMovedNote: 'Cài đặt WebRTC và kết nối ICE đã được chuyển sang Admin Dashboard.',
+  settingsGoToAdmin: 'Đi tới Admin Dashboard',
 
   settingsWebRTC: 'WebRTC',
   settingsWebRTCEnabled: 'Bật WebRTC',

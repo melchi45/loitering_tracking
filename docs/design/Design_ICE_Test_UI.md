@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-ICE-UI-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
-| **Date** | 2026-06-05 |
+| **Date** | 2026-07-10 |
 | **Parent SRS** | srs/SRS_ICE_Test_UI.md |
 | **Related PRD** | prd/PRD_ICE_Test_UI.md |
 
@@ -393,3 +393,38 @@ Log:     ✗ Server transport creation failed: WebRTC gateway not available (…
 | User closes modal during test | State updates continue in background; no memory leak (no intervals/timeouts outside React state) |
 | Concurrent ICE tests | Each browser session gets a unique `testId`; shared `__ice-test__` router supports multiple transports |
 | TURN credential in log | TURN `username` and `credential` are passed to `RTCIceServer` but are never echoed in log lines |
+
+---
+
+## 11. v1.1 Amendment — Relocated to Administrator Dashboard
+
+**Date:** 2026-07-10
+
+### 11.1 Background
+
+This UI (§4) previously rendered inside `SettingsModal` for every server mode except `analysis` (which already showed a language-only note pre-dating this amendment). Streaming-mode users pointed out that WebRTC/STUN/TURN/ICE-test settings — which apply server-wide, not per-browser-session — belonged in the Administrator Dashboard rather than a per-dashboard quick-settings popup.
+
+### 11.2 Component Split
+
+| Mode | Settings Modal (`App.tsx`) | Admin Dashboard (`AdminUsersPage.tsx`) |
+|---|---|---|
+| `combined` | Full §4 UI (unchanged) | New `WebRTCSection` also available (§4.3 of `Design_Admin_Dashboard.md`) — both read/write the same store |
+| `streaming` | Language only + note + "Go to Admin Dashboard" (admin users) | `WebRTCSection` is the only place to configure STUN/TURN/ICE test |
+| `analysis` | Language only + note (no camera capture, no admin button needed since there's nothing to configure — though the button still shows if the user is admin) | WebRTC / ICE nav item hidden entirely |
+
+`SettingsModal`'s prop changed from `analysisMode?: boolean` to `serverMode: string | null`; internally it computes `isCombined = serverMode === 'combined'` and gates the entire §4 block on that instead of `!analysisMode`.
+
+### 11.3 Shared State, No New Endpoints
+
+`WebRTCSection` (Admin Dashboard) ports the exact state shape, handlers, and `runIceTest()` logic from `SettingsModal` verbatim, both operating on `useWebRTCConfigStore`. No new server endpoints were introduced — `POST/DELETE /api/webrtc/ice-test` and `PUT /api/settings/webrtcConfig` are unchanged (§3, §7 above; also `Design_STUN_TURN_ICE.md` §3, §7).
+
+Detail: `docs/design/Design_Admin_Dashboard.md` §4.3.
+
+---
+
+## Revision History
+
+| Version | Date | Description |
+|---|---|---|
+| 1.0 | 2026-06-05 | Initial release — Technical design for In-App ICE Connectivity Test UI |
+| 1.1 | 2026-07-10 | §11 amendment — relocated to Administrator Dashboard for streaming/analysis modes; combined mode keeps both surfaces in sync via `useWebRTCConfigStore` |

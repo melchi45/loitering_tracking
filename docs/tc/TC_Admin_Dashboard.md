@@ -1,8 +1,8 @@
 ---
 **Document:** TC_Admin_Dashboard  
-**Version:** 1.2  
+**Version:** 1.3  
 **Status:** Draft  
-**Date:** 2026-07-09  
+**Date:** 2026-07-10  
 **Parent SRS:** [SRS_Admin_Dashboard](../srs/SRS_Admin_Dashboard.md)  
 **Parent Design:** [Design_Admin_Dashboard](../design/Design_Admin_Dashboard.md)  
 **Related TC:** [TC_AI_Model_Catalog](TC_AI_Model_Catalog.md)  
@@ -59,7 +59,7 @@
 **Steps:**
 1. Observe sidebar nav items
 
-**Expected:** Four items visible: 👥 Users · 🤖 AI Models · 📡 ONVIF · 📋 Audit Log  
+**Expected:** Up to seven items visible: 👥 Users · 🤖 AI Models · 📶 WebRTC / ICE · 📡 ONVIF · 📋 Audit Log · 📊 System · 🖥️ Server Logs — AI Models hidden when `SERVER_MODE=streaming`; WebRTC / ICE hidden when `SERVER_MODE=analysis`  
 **Priority:** P1
 
 ---
@@ -202,6 +202,80 @@
 
 ---
 
+### TC-AD-013: WebRTC / ICE Nav Item Visibility by Server Mode
+
+**Pre-condition:** Admin Dashboard open  
+**Steps:**
+1. Load Admin Dashboard against a `SERVER_MODE=combined` server; observe sidebar
+2. Load against a `SERVER_MODE=streaming` server; observe sidebar
+3. Load against a `SERVER_MODE=analysis` server; observe sidebar
+
+**Expected:**
+- combined and streaming: "WebRTC / ICE" nav item is visible
+- analysis: "WebRTC / ICE" nav item is absent (no camera capture in analysis mode)
+
+**Priority:** P1
+
+---
+
+### TC-AD-014: WebRTC / ICE Section — Configuration Shared With Settings Modal
+
+**Pre-condition:** `SERVER_MODE=combined`; Admin Dashboard → WebRTC / ICE section  
+**Steps:**
+1. Add a STUN server URL and click Apply in the Admin Dashboard section
+2. Open the dashboard's top-right Settings (⚙) modal on the same browser session
+3. Observe the STUN server list in the modal
+
+**Expected:** The newly added STUN URL appears in the Settings modal's STUN list (both surfaces read/write the same `useWebRTCConfigStore`, persisted to `localStorage` + `PUT /api/settings/webrtcConfig`)  
+**Priority:** P1
+
+---
+
+### TC-AD-015: Settings Modal Simplified for Streaming/Analysis Modes
+
+**Pre-condition:** Dashboard open against a `SERVER_MODE=streaming` or `SERVER_MODE=analysis` server  
+**Steps:**
+1. Click the top-right Settings (⚙) icon
+2. Observe the modal contents
+
+**Expected:**
+- Only the Language selector is shown
+- A note explains that WebRTC/ICE settings moved to the Administrator Dashboard
+- If the logged-in user has `role === 'admin'`, a "Go to Admin Dashboard" button is shown and navigates to the Admin Dashboard's WebRTC / ICE section on click
+- No STUN/TURN inputs or ICE Test controls are present
+
+**Priority:** P1
+
+---
+
+### TC-AD-016: Settings Modal Unchanged for Combined Mode
+
+**Pre-condition:** Dashboard open against a `SERVER_MODE=combined` server  
+**Steps:**
+1. Click the top-right Settings (⚙) icon
+2. Observe the modal contents
+
+**Expected:** Language, WebRTC enable toggle, STUN servers, TURN servers, Apply button, and ICE Connectivity Test are all present — unchanged from before the Admin Dashboard relocation  
+**Priority:** P1
+
+---
+
+### TC-AD-017: WebRTC / ICE Section — ICE Connectivity Test
+
+**Pre-condition:** Admin Dashboard → WebRTC / ICE section; at least one STUN server configured  
+**Steps:**
+1. Click "Run ICE Test"
+2. Wait for the test to complete (or click again to abort)
+
+**Expected:**
+- Log textarea appears and streams timestamped lines for Phase 1 (ICE candidate gathering) and Phase 2 (WebRTC engine health check)
+- "Download Report" and "Clear" buttons appear once the log has content
+- If any configured STUN/TURN URL is unreachable, a yellow banner lists it with a "Remove unreachable servers" action
+
+**Priority:** P1
+
+---
+
 ## 3. Audit Page — TC Runner (TcRunnerService) Test Cases
 
 TcRunnerService는 서버 시작 시 TC 스크립트를 자동 실행하고 결과를 `tc_results` DB에 저장합니다.
@@ -294,3 +368,4 @@ Admin Dashboard의 **Audit** 탭에서 결과를 확인할 수 있습니다.
 | 1.0 | 2026-06-17 | 초기 작성 — TC-AD-001~011, AI Models 섹션 및 접근 제어 테스트 |
 | 1.1 | 2026-06-24 | TC-AUDIT-001~007 추가 — Streaming/Analysis 모드 TC 구분, HTTPS 프로토콜 전파, MCP 카탈로그 업데이트, Auth/Dedup/WebRTC/capture-backend 수정 내용 반영 |
 | 1.2 | 2026-07-09 | TC-AD-004 YOLO26 시리즈 반영, TC-AD-012 신규 — 전체 모델 파일(face/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid) 테이블 표시 및 family별 독립 전환 테스트 |
+| 1.3 | 2026-07-10 | TC-AD-003 정정(System/Logs 반영), TC-AD-013~017 신규 — WebRTC/ICE 섹션 신설(모드별 표시 조건, 설정 모달과 상태 공유, streaming/analysis 모달 간소화, combined 모달 무변경, ICE 테스트) |

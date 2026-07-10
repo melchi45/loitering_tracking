@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-ICE-UI-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
-| **Date** | 2026-06-05 |
+| **Date** | 2026-07-10 |
 | **Related Design** | design/Design_ICE_Test_UI.md |
 | **Related SRS** | srs/SRS_ICE_Test_UI.md |
 | **Related TC** | tc/TC_ICE_Test_UI.md |
@@ -221,3 +221,30 @@ Note: Returns 200 even if `testId` is not found (idempotent cleanup).
 | Client UI implemented | Complete | 2026-06-05 |
 | i18n keys added (all 15 locales) | Complete | 2026-06-05 |
 | TypeScript build verified | Complete | 2026-06-05 |
+| Relocated to Admin Dashboard for streaming/analysis modes | Complete | 2026-07-10 |
+
+---
+
+## 9. v1.1 Amendment — Relocated to Administrator Dashboard
+
+**Date:** 2026-07-10
+
+The ICE Test UI (and the WebRTC/STUN/TURN configuration it tests) moved out of the per-dashboard Settings Modal for **streaming** and **analysis** server modes, into a new "WebRTC / ICE" section of the Administrator Dashboard (`AdminUsersPage.tsx`). This keeps the Settings Modal to Language-only for those modes, consistent with the analysis-mode-only simplification that already existed before this change.
+
+- **combined** mode: unchanged — the Settings Modal keeps the full WebRTC/STUN/TURN/ICE Test UI described in §4 above, for quick single-server access.
+- **streaming** mode: this UI (§4) now lives exclusively in Admin Dashboard → WebRTC / ICE. The Settings Modal shows Language plus a note directing admins there.
+- **analysis** mode: Admin Dashboard hides the WebRTC / ICE nav item entirely — analysis servers have no camera capture and no use for STUN/TURN/ICE.
+- Both surfaces (Settings Modal and Admin Dashboard section) read/write the same `useWebRTCConfigStore`, so configuration stays consistent regardless of which one is used.
+
+No change to the server-side `POST /api/webrtc/ice-test` contract (§6) or the two-phase test flow (§4.3) — only the UI's location moved.
+
+See `PRD_Admin_Dashboard`-equivalent coverage in `docs/design/Design_Admin_Dashboard.md` §4.3, `docs/srs/SRS_Admin_Dashboard.md` §8 (FR-AD-070~075), `docs/tc/TC_Admin_Dashboard.md` TC-AD-013~017.
+
+---
+
+## Revision History
+
+| Version | Date | Description |
+|---|---|---|
+| 1.0 | 2026-06-05 | Initial release — PRD for In-App ICE Connectivity Test UI |
+| 1.1 | 2026-07-10 | §9 amendment — relocated to Administrator Dashboard for streaming/analysis modes; combined mode unchanged |
