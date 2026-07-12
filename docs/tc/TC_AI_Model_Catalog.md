@@ -1,8 +1,8 @@
 ---
 **Document:** TC_AI_Model_Catalog  
-**Version:** 2.3  
+**Version:** 2.4  
 **Status:** Draft  
-**Date:** 2026-07-12  
+**Date:** 2026-07-13  
 **Parent SRS:** [SRS_AI_Model_Catalog](../srs/SRS_AI_Model_Catalog.md)  
 **Parent Design:** [Design_AI_Model_Catalog](../design/Design_AI_Model_Catalog.md)  
 **Test Script:** `test/api/model_catalog.test.js`  
@@ -36,6 +36,9 @@
 | TC-MC-020 | FR-MC-021 | age-estimation family exposes exactly 2 entries: InsightFace GenderAge (`insightface-genderage`, direct `url`) and ViT Age Classifier (`vit-age-classifier`, `hfOptimumExport`) — see `TC_AI_Age_Estimation.md` TC-AGE-001 for full detail |
 | TC-MC-021 | FR-MC-016 | `age-estimation` switch case hot-swaps `AgeEstimationService` independently of every other family — see `TC_AI_Age_Estimation.md` TC-AGE-006 |
 | TC-MC-022 | FR-MC-015c | `openpar-pa100k` download runs `exportPromptPAR.py` via `pyExport`: dependency/GPU/`git` pre-checks fail fast with a clear error; on success the script's `Stage N/7` stdout markers drive `_downloadProgress.percent` |
+| TC-MC-023 | FR-MC-026, FR-MC-028 | `POST /api/analysis/models/deactivate` unloads the active model for each of the 8 extended families (releases the ONNX session, resets ready/status), and `GET /api/analysis/models` reports `active: false` for every entry in that family afterward |
+| TC-MC-024 | FR-MC-027 | Deactivate request for a YOLO detector entry (`family` undefined) returns HTTP 400 without touching `_detector` |
+| TC-MC-025 | FR-MC-029, FR-MC-030 | Deactivate succeeds as a no-op when nothing is active for a family (no file downloaded / `AttributePipeline` not loaded), and does not modify the corresponding `analyticsConfig` toggle |
 
 ## 2. Test Cases
 
@@ -360,6 +363,47 @@
 
 ---
 
+### TC-MC-023: Deactivate Unloads the Active Model Per Family
+
+**Pre-condition:** Unit test against the service classes directly (`faceService.js`, `protectiveEquipService.js`, `fireSmokeService.js`, `colorClothService.js`, `appearanceReidService.js`, `ageEstimationService.js`) — no running server or real ONNX file required, since `unload()`/`unloadDetector()`/`unloadRecognizer()`/`unloadPar()`/`unloadHumanParsing()` only touch in-memory state and a stubbed session object.
+**Steps (repeat for each of the 8 extended families):**
+1. Construct the service, set its ready flag `true` and its session field to a stub object with a `release()` spy
+2. Call the corresponding unload method
+3. Assert the stub's `release()` was called exactly once
+4. Assert the ready flag (and `status`, where applicable) is now `false`/`'not_started'`, and the session field is `null`
+
+**Expected:** PASS
+**Priority:** P1
+
+---
+
+### TC-MC-024: Deactivate Rejects the YOLO Detector Family
+
+**Pre-condition:** Analysis server running; a YOLO detector model is active
+**Steps:**
+1. Find any catalog entry with `family === undefined` (e.g. `yolov8n`)
+2. `POST /api/analysis/models/deactivate { modelId: 'yolov8n' }`
+3. Assert HTTP 400 with an `error` field mentioning the core detection pipeline requirement
+4. `GET /api/analysis/models` — assert the YOLO detector's `active` entry is unchanged
+
+**Expected:** PASS
+**Priority:** P1
+
+---
+
+### TC-MC-025: Deactivate Is a Safe No-Op When Nothing Is Active
+
+**Pre-condition:** A `cloth-par` model file exists but has never been activated (or `AttributePipeline` has not finished loading)
+**Steps:**
+1. `POST /api/analysis/models/deactivate { modelId: 'openpar-pa100k' }`
+2. Assert HTTP 200 `{ ok: true, deactivated: <label> }` (no exception, no 409/500)
+3. `GET /api/analytics/config` — assert the `cloth` toggle value is unchanged from before the request (deactivate never touches `analyticsConfig`)
+
+**Expected:** PASS
+**Priority:** P2
+
+---
+
 ## 3. Automated Test Coverage
 
 `test/api/model_catalog.test.js` covers:
@@ -372,8 +416,9 @@
 - TC-MC-017 (cloth-par family exposes exactly 2 entries: PromptPAR + OpenPAR)
 - TC-MC-018 / TC-MC-019 (PromptPAR memory gate — unit tests, no running server required; see Group D in the script)
 - TC-MC-020 (age-estimation family exposes exactly 2 entries: InsightFace GenderAge + ViT Age Classifier)
+- TC-MC-023 (Deactivate unloads each of the 8 extended families — unit tests, no running server required; see Group E in the script)
 
-Network-dependent tests (TC-MC-004, TC-MC-009, TC-MC-014) are skipped by default; enable with `INTEGRATION_DOWNLOAD=1` env var. TC-MC-003, TC-MC-005, TC-MC-006, TC-MC-010, TC-MC-011, TC-MC-015, TC-MC-016, TC-MC-021 are exercised manually / via the Admin Dashboard against a running analysis server (not yet automated). TC-MC-022's full pipeline (steps 3-6) requires a CUDA GPU + real network access and is manual-only by design; only its pre-flight failure paths (steps 1-2) are candidates for automation.
+Network-dependent tests (TC-MC-004, TC-MC-009, TC-MC-014) are skipped by default; enable with `INTEGRATION_DOWNLOAD=1` env var. TC-MC-003, TC-MC-005, TC-MC-006, TC-MC-010, TC-MC-011, TC-MC-015, TC-MC-016, TC-MC-021, TC-MC-024, TC-MC-025 are exercised manually / via the Admin Dashboard against a running analysis server (not yet automated). TC-MC-022's full pipeline (steps 3-6) requires a CUDA GPU + real network access and is manual-only by design; only its pre-flight failure paths (steps 1-2) are candidates for automation.
 
 ---
 
@@ -386,3 +431,4 @@ Network-dependent tests (TC-MC-004, TC-MC-009, TC-MC-014) are skipped by default
 | 2.1 | 2026-07-12 | PromptPAR(PA100k) 통합 반영 — TC-MC-013 `modelId`를 실제 manualOnly 항목(`openpar-resnet50-pa100k`)으로 정정(구 `openpar-market1501`은 실존한 적 없는 placeholder였음), TC-MC-017~019 신규(cloth-par 2-항목 구성 검증, PromptPAR 메모리 게이트 유닛 테스트) — `test/api/model_catalog.test.js` Group D로 자동화 |
 | 2.2 | 2026-07-12 | `age-estimation` family(Proposed) 추가 — TC-MC-020(패밀리 구성)·TC-MC-021(family 독립 전환) 신규, TC-MC-012 family 목록 갱신, §3 자동화 커버리지에 TC-MC-020 추가. 상세는 신규 `TC_AI_Age_Estimation.md`(TC-AGE-001~011) 참조 |
 | 2.3 | 2026-07-12 | PromptPAR Download 자동화(`pyExport`) 반영 — TC-MC-022 신규(사전조건 실패 경로는 자동화 가능, 전체 파이프라인은 GPU·네트워크 필요로 수동 전용) |
+| 2.4 | 2026-07-13 | Runtime Model Deactivate 반영 — TC-MC-023(8개 확장 family 언로드 유닛 테스트, `test/api/model_catalog.test.js` Group E로 자동화)·TC-MC-024(YOLO 탐지기 거부)·TC-MC-025(no-op 안전성 + analyticsConfig 미변경) 신규 |

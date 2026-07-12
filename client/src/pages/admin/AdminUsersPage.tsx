@@ -1078,6 +1078,22 @@ function AiModelsSection() {
     } finally { setSwitching(null); }
   };
 
+  const deactivateModel = async (id: string) => {
+    setSwitching(id);
+    try {
+      const r = await fetch('/api/analysis/models/deactivate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ modelId: id }),
+      });
+      if (r.ok) await fetchCatalog();
+      else {
+        const b = await r.json().catch(() => ({}));
+        setDlError(b.error ?? 'Deactivate failed');
+      }
+    } finally { setSwitching(null); }
+  };
+
   const downloadModel = async (id: string) => {
     setDlLoading(id); setDlError(null);
     try {
@@ -1355,7 +1371,16 @@ function AiModelsSection() {
                         </button>
                       )}
                       {isSwitching && <span className="text-[10px] text-yellow-400 animate-pulse">Switching…</span>}
-                      {m.active && <span className="text-[10px] text-indigo-400 font-medium">Active</span>}
+                      {m.active && !isSwitching && (
+                        <button
+                          onClick={() => deactivateModel(m.id)}
+                          disabled={!!switching}
+                          title="Unload this model from memory — no model will be active for this family until you Activate one again"
+                          className="px-2.5 py-1 text-[10px] font-medium rounded bg-gray-700/70 text-gray-300 border border-gray-600/50 hover:bg-red-900/60 hover:text-red-200 hover:border-red-700/50 disabled:opacity-40 transition-colors"
+                        >
+                          Deactivate
+                        </button>
+                      )}
                     </div>
                   </div>
                 );
@@ -1367,6 +1392,7 @@ function AiModelsSection() {
                 : series === 'Cloth Attribute (PAR)'
                 ? 'PromptPAR (CLIP ViT-L) requires ≥ 2GB free system RAM to activate — if unavailable, activation fails, Cloth Analysis is turned off, and the reason is logged server-side. OpenPAR (ResNet50) is a lighter alternative with no memory gate. See docs/design/Design_AI_Cloth_Analysis.md §Memory Gate.'
                 : 'Required by the corresponding AI Analysis Module below — see docs/design/Design_AI_Model_Catalog.md.'}
+              {' '}Deactivate unloads the model from memory without downloading — Activate again anytime.
             </p>
           </div>
         );

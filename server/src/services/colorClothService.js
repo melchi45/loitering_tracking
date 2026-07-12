@@ -327,9 +327,27 @@ class ColorClothService {
     const ort = require('onnxruntime-node');
     const { createOnnxSession } = require('../utils/onnxOptions');
     // forceCpu — see load() above for why (DirectML GPU device removal on this model).
-    this._parSession  = await createOnnxSession(ort, filePath, 'ColorClothService/PAR', { forceCpu: true });
+    const session = await createOnnxSession(ort, filePath, 'ColorClothService/PAR', { forceCpu: true });
+    this._parSession?.release?.();
+    this._parSession  = session;
     this.parModelPath = filePath;
     this._parReady    = true;
+  }
+
+  /** Deactivate the active PAR (cloth-type) model (model catalog Deactivate button). */
+  unloadPar() {
+    this._parSession?.release?.();
+    this._parSession = null;
+    this._parReady   = false;
+  }
+
+  /** Deactivate the active Human Parsing model (model catalog Deactivate button). */
+  unloadHumanParsing() {
+    this._hpSession?.release?.();
+    this._hpSession   = null;
+    this._hpClassMap  = null;
+    this._hpReady     = false;
+    this._parseCache.clear();
   }
 
   /** Drop a per-track Human Parsing color cache entry (tracker lifecycle hook). */

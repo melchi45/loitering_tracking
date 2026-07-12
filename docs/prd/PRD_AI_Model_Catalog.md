@@ -1,8 +1,8 @@
 ---
 **Document:** PRD_AI_Model_Catalog  
-**Version:** 1.3  
+**Version:** 1.4  
 **Status:** Draft  
-**Date:** 2026-07-12  
+**Date:** 2026-07-13  
 **Parent RFP:** [RFP_AI_Model_Catalog](../rfp/RFP_AI_Model_Catalog.md)  
 **Related SRS:** [SRS_AI_Model_Catalog](../srs/SRS_AI_Model_Catalog.md)  
 **Related Design:** [Design_AI_Model_Catalog](../design/Design_AI_Model_Catalog.md)  
@@ -25,6 +25,7 @@ The LTS-2026 analysis server exposes a full AI model catalog UI via REST APIs �
 | US-04 | System administrator | See download/conversion progress in real time | I know when the model is ready |
 | US-05 | System administrator | Use YOLO12/YOLO26 models | I benefit from the latest attention-based / NMS-free architecture improvements |
 | US-06 | System administrator | See a clear message when a model has no automatable source (e.g. cloth-PAR) | I know to export it manually instead of waiting on a Download button that can never succeed |
+| US-07 | System administrator | Deactivate (unload) an optional model I'm no longer using | I can free memory/VRAM without having to restart the server, and reactivate it later if needed |
 
 ## 3. Supported Model Catalog
 
@@ -121,6 +122,13 @@ Already downloaded (any family):
 - The admin can either free memory and retry, or activate OpenPAR (`openpar-resnet50-pa100k`) instead — there is no automatic fallback between the two
 - OpenPAR is never subject to this gate
 
+### 4.5 Model Deactivate
+
+- `POST /api/analysis/models/deactivate { modelId }` — unloads the active model for that entry's family (releases the ONNX session and resets the family's ready state), leaving no model active until the operator clicks Activate again
+- Available for the 8 non-YOLO families (face-detection, face-recognition, ppe, fire-smoke, cloth-par, human-parsing, appearance-reid, age-estimation) — **not** available for the YOLO detector, since person/object detection is core to the system and must always have an active model; requesting it returns HTTP 400
+- Admin Dashboard shows a **Deactivate** button in place of the static "Active" label for any row where the model is currently active, in the extended-families table only
+- Deactivating does not change the corresponding `analyticsConfig` toggle (e.g. `cloth`, `humanParsing`) — enrichment for that attribute simply returns `null`/absent until a model is active again, same as existing Phase-1 graceful degradation
+
 ## 5. Acceptance Criteria
 
 | AC | Description |
@@ -134,6 +142,8 @@ Already downloaded (any family):
 | AC-07 | Switching to PromptPAR when free system RAM is below the configured floor fails with HTTP 500, logs the reason, and disables Cloth Analysis (`cloth` config → `false`) |
 | AC-08 | Switching to OpenPAR always proceeds regardless of free system RAM (no memory gate applies) |
 | AC-09 | `POST /api/analysis/models/download` with `vit-age-classifier` triggers the `optimum` PT→ONNX conversion path and produces a valid ONNX file, distinct from the `ultralytics`-based conversion used by other families |
+| AC-10 | `POST /api/analysis/models/deactivate` unloads the active model for any of the 8 non-YOLO families, after which `GET /api/analysis/models` shows `active: false` for every entry in that family |
+| AC-11 | `POST /api/analysis/models/deactivate` for the YOLO detector family returns HTTP 400 and does not affect the active detector |
 
 ---
 
@@ -145,3 +155,4 @@ Already downloaded (any family):
 | 1.1 | 2026-07-09 | 전체 모델 파일로 범위 확대 — §3.4 non-detector 패밀리 표 추가, §4 응답 형식(`catalog`/`exists`)·다운로드 전략(direct/PT변환/manualOnly)·이미 다운로드된 경우 단축 응답 반영, US-06·AC-01~06 갱신 |
 | 1.2 | 2026-07-12 | PromptPAR(PA100k) 통합 반영 — `cloth-par` 패밀리에 PromptPAR(직접 배포, 메모리 게이트) + OpenPAR(ResNet50, manualOnly) 2개 모델 명시(§3.4), §4.4 신설(PromptPAR 사전 메모리 체크·게이트 실패 시 Cloth 분석 자동 비활성화·OpenPAR로 수동 전환), AC-07/AC-08 추가 |
 | 1.3 | 2026-07-12 | `age-estimation` 패밀리(Proposed) 추가 — §3.4에 InsightFace GenderAge(직접 ONNX) + ViT Age Classifier(신규 `optimum` 변환 경로) 명시, §4.2/§4.3 갱신, AC-09 추가. 상세는 신규 `PRD_AI_Age_Estimation.md` 참조 |
+| 1.4 | 2026-07-13 | Model Deactivate 기능 추가 — US-07·§4.5 신설(`POST /api/analysis/models/deactivate`, YOLO 탐지기 제외 8개 family 언로드), AC-10/AC-11 추가 |

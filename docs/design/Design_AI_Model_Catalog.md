@@ -1,8 +1,8 @@
 ---
 **Document:** Design_AI_Model_Catalog  
-**Version:** 2.3  
+**Version:** 2.4  
 **Status:** Draft  
-**Date:** 2026-07-12  
+**Date:** 2026-07-13  
 **Parent SRS:** [SRS_AI_Model_Catalog](../srs/SRS_AI_Model_Catalog.md)  
 **Parent TC:** [TC_AI_Model_Catalog](../tc/TC_AI_Model_Catalog.md)  
 **Implementation:** `server/src/routes/analysisApi.js`, `server/src/services/colorClothService.js`, `server/src/scripts/downloadModels.js`  
@@ -303,6 +303,38 @@ POST /api/analysis/models/switch { modelId }
 - Every `reload()`/`reloadDetector()`/`reloadRecognizer()`/`reloadPar()`/`reloadHumanParsing()` method fully loads the new ONNX `InferenceSession` before replacing the service's active session/path — the previous session keeps serving in-flight inference until the swap completes.
 - Families are fully independent: switching the active PPE model does not touch `_detector`, the active face model, etc. — `_activeFileForEntry()` (§6) reads back the correct per-family pointer.
 
+## 5b. Runtime Model Deactivate
+
+`POST /api/analysis/models/deactivate` unloads the active model for a family instead of loading a new one — the family goes back to "no model active" until the operator clicks Activate again. Admin Dashboard → AI Models renders a **Deactivate** button next to any row where `m.active === true`, in the extended (non-YOLO) families table only.
+
+```
+POST /api/analysis/models/deactivate { modelId }
+  │
+  ├─ find entry in ALL_MODELS; 400 if not found
+  │   (modelId only resolves `entry.family` — the unload targets whatever is
+  │    currently loaded for that family, not necessarily this exact model)
+  │
+  └─ switch (entry.family) {
+       case 'human-parsing':    AttributePipeline._color.unloadHumanParsing()
+       case 'appearance-reid':  AppearanceReidService.unload()
+       case 'face-detection':   AttributePipeline._face.unloadDetector()
+       case 'face-recognition': AttributePipeline._face.unloadRecognizer()
+       case 'ppe':              AttributePipeline._ppe.unload()
+       case 'fire-smoke':       FireSmokeService.unload()
+       case 'cloth-par':        AttributePipeline._color.unloadPar()
+       case 'age-estimation':   AgeEstimationService.unload()
+       default (undefined):     400 { error: '...core detection pipeline always requires an active model.' }
+     }
+  └─ return { ok: true, deactivated: entry.label }
+```
+
+- **Intentionally excludes the YOLO detector family** (`entry.family === undefined`) — `_detector` always needs an active model for the core person/object detection pipeline to run at all; there is no "no detector" state. This is the only family without a corresponding `unload()` method or UI button.
+- Each `unload()` method releases the ONNX session (`session.release?.()` — same optional-chained pattern `colorClothService.js` already used for Human Parsing, now applied consistently everywhere) to actually free native memory/VRAM, not just flip a flag, then sets the ready flag to `false` (and, where applicable, `status = 'not_started'`) so `_activeFileForEntry()` (§6) reports no active file and `GET /models` shows `active: false` for every entry in that family.
+- Unlike `/models/switch`, deactivate does not require the target file to exist on disk and does not gate on `AttributePipeline` being loaded — optional chaining (`_attrPipeline?._color?.unloadPar()`) makes it a safe no-op if the pipeline never finished loading (nothing was active anyway).
+- `face-recognition`'s `unloadRecognizer()` only clears the ArcFace session/reference — it does not touch `FaceService._ready`/`_status`, which are owned by the SCRFD detector (`face-detection`), matching the existing asymmetry in `reloadDetector()`/`reloadRecognizer()`.
+- Deactivating does **not** change the corresponding `analyticsConfig` toggle (e.g. `cloth`, `humanParsing`) — the feature flag and the loaded-model state are independent, same as the existing Phase-1 graceful-degradation behavior (enrichment simply returns `null`/absent for that attribute until a model is active again).
+- `colorClothService.js`'s `reloadPar()` was also updated to release the previous `_parSession` before replacing it (a pre-existing minor session leak on hot-swap, fixed alongside adding `unloadPar()`).
+
 ## 6. GET /api/analysis/models Response
 
 ```javascript
@@ -497,3 +529,4 @@ Full design detail — input fallback logic (face-crop preferred, person-crop fa
 | 2.1 | 2026-07-12 | PromptPAR(PA100k) 통합 반영 — `cloth-par` 패밀리가 `openpar-pa100k`(PromptPAR, 직접 배포) + `openpar-resnet50-pa100k`(OpenPAR ResNet50, manualOnly) 2개 항목으로 확장(카탈로그 총 29개), §8 신설(PromptPAR 메모리 게이트: 가용 RAM 부족 시 로그 남기고 Cloth 분석 자동 비활성화), §3b/§4.2c/§6 샘플을 실제 id·파일명으로 정정(구 `openpar-market1501`/`openpar.onnx` placeholder 제거) |
 | 2.2 | 2026-07-12 | `age-estimation` 패밀리 추가(카탈로그 총 31개) — InsightFace GenderAge(직접 ONNX) + ViT Age Classifier(신규 `hfOptimumExport` 변환 전략) 2개 항목, §4.2d 신설(HuggingFace `optimum` 기반 PT→ONNX, non-YOLO 아키텍처 전용), §10 신설, §5 switch 디스패치에 `age-estimation` 케이스 추가, Overview의 잘못된 "§9" cloth-par 참조를 "§8"로 정정 |
 | 2.3 | 2026-07-12 | PromptPAR Download 자동화 반영 — `openpar-pa100k`가 소스 전략 없음(shipped)에서 신규 `pyExport`(§4.2e, `exportPromptPAR.py`)로 전환: Event-AHU/OpenPAR repo clone + ViT-B/16 backbone + Google Drive PA100k 체크포인트(`gdown`) 자동 다운로드 후 CUDA GPU에서 export·검증. §3b 스키마에 `pyExport` 필드 추가, §9에 `PROMPTPAR_REPO_URL`/`_REPO_REF`/`_GDRIVE_FOLDER_ID`/`_CHECKPOINT_FILENAME`/`_CHECKPOINT_GDRIVE_FILE_ID`/`_VIT_BACKBONE_URL` 환경변수 추가 |
+| 2.4 | 2026-07-13 | Runtime Model Deactivate 신설(§5b, `POST /api/analysis/models/deactivate`) — YOLO 탐지기를 제외한 8개 확장 family(face-detection/face-recognition/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid/age-estimation) 각 서비스에 `unload()`/`unloadDetector()`/`unloadRecognizer()`/`unloadPar()`/`unloadHumanParsing()` 추가, Admin Dashboard AI Models에 Deactivate 버튼 추가. `colorClothService.js` `reloadPar()`의 기존 세션 미해제 누수도 함께 수정 |

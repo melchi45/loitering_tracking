@@ -372,7 +372,8 @@ loitering_tracking/
 | DELETE | `/api/analysis/face-trajectories` | 얼굴 궤적 이력 전체 삭제 |
 | GET | `/api/analysis/models` | AI 모델 카탈로그 조회 — YOLO 탐지기 + face/PPE/fire-smoke/cloth-PAR/Human Parsing(Proposed)/Appearance Re-ID(Proposed)/Age Estimation(Proposed) 전체 family 통합, 다운로드 상태·활성 모델 포함 |
 | POST | `/api/analysis/models/switch` | family별 활성 모델 런타임 전환 (body: modelId — YOLO 탐지기 외 face-detection/face-recognition/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid/age-estimation 지원) |
-| POST | `/api/analysis/models/download` | 모델 다운로드/변환 시작 (body: modelId — HuggingFace `.pt`→ONNX 자동 변환(ultralytics export) 포함, non-YOLO HuggingFace 모델(ViT 등)은 `hfOptimumExport`로 `optimum` 기반 변환; `manualOnly` 모델은 409 반환) |
+| POST | `/api/analysis/models/deactivate` | family별 활성 모델 언로드 (body: modelId — ONNX 세션 release + ready 상태 초기화; YOLO 탐지기는 핵심 감지 파이프라인이라 대상 아님, 400 반환) |
+| POST | `/api/analysis/models/download` | 모델 다운로드/변환 시작 (body: modelId — HuggingFace `.pt`→ONNX 자동 변환(ultralytics export) 포함, non-YOLO HuggingFace 모델(ViT 등)은 `hfOptimumExport`로 `optimum` 기반 변환; PromptPAR는 `pyExport`(`exportPromptPAR.py`)로 자동화; `manualOnly` 모델은 409 반환) |
 | POST | `/api/analysis/face-embed` | 얼굴 등록 사진 detect+embed 위임 수신 (streaming 모드가 로컬 얼굴 모델 없을 때 호출, raw JPEG → bbox/score/embedding/thumbnail) |
 | POST | `/api/analysis/face-search-conditions/sync` | streaming 서버의 `faceGalleries`/`faceGalleryFaces` 전체 스냅샷 반영 (embedding 제외, `source:'synced'` 태그로 upsert/delete) |
 | GET | `/api/analysis/face-search-conditions` | 활성 Face Search Condition 상세 조회 (Analysis Server Dashboard 드릴다운용) — `total`/`byType`는 `/api/analysis/metrics`의 `faceSearch` 필드에도 포함 |

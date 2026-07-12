@@ -94,6 +94,20 @@ class FaceService {
     this.arcfacePath = filePath;
   }
 
+  /** Deactivate the active SCRFD face-detection model (model catalog Deactivate button). */
+  unloadDetector() {
+    this._scrfd?.release?.();
+    this._scrfd  = null;
+    this._ready  = false;
+    this._status = 'not_started';
+  }
+
+  /** Deactivate the active ArcFace recognition model (model catalog Deactivate button). */
+  unloadRecognizer() {
+    this._arcface?.release?.();
+    this._arcface = null;
+  }
+
   /**
    * Detect faces in a JPEG frame.
    * @param {Buffer} jpegBuffer

@@ -1719,6 +1719,58 @@ router.post('/models/switch', express.json({ limit: '1kb' }), async (req, res) =
   }
 });
 
+// ── POST /api/analysis/models/deactivate ─────────────────────────────────────
+// Unload the active model for a family, leaving no model active for it until the
+// next Activate. Scoped to the non-YOLO "extended" families only — the YOLO
+// detector family (undefined `family`) always needs an active model for the core
+// detection pipeline to function, so it intentionally has no case below and falls
+// through to the 400 default. Body: { modelId: string } (used only to resolve the
+// entry's family — the unload always targets whatever is currently loaded for
+// that family, not necessarily this specific modelId).
+router.post('/models/deactivate', express.json({ limit: '1kb' }), async (req, res) => {
+  const { modelId } = req.body || {};
+  const entry = ALL_MODELS.find(m => m.id === modelId);
+  if (!entry) return res.status(400).json({ error: 'Unknown modelId' });
+
+  try {
+    switch (entry.family) {
+      case 'human-parsing':
+        _attrPipeline?._color?.unloadHumanParsing();
+        break;
+      case 'appearance-reid':
+        _appearanceReid?.unload();
+        break;
+      case 'face-detection':
+        _attrPipeline?._face?.unloadDetector();
+        break;
+      case 'face-recognition':
+        _attrPipeline?._face?.unloadRecognizer();
+        break;
+      case 'ppe':
+        _attrPipeline?._ppe?.unload();
+        break;
+      case 'fire-smoke':
+        _fireSmokeService?.unload();
+        break;
+      case 'cloth-par':
+        _attrPipeline?._color?.unloadPar();
+        break;
+      case 'age-estimation':
+        _ageEstimation?.unload();
+        break;
+      default: // YOLO detector families (undefined `family`) cannot be deactivated
+        return res.status(400).json({
+          error: 'The YOLO detector cannot be deactivated — the core detection pipeline always requires an active model.',
+        });
+    }
+    console.log(`[AnalysisAPI] Deactivated ${entry.family} model → ${entry.label}`);
+    res.json({ ok: true, deactivated: entry.label });
+  } catch (err) {
+    console.error('[AnalysisAPI] Model deactivate failed:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // ── POST /api/analysis/models/download ───────────────────────────────────────
 // Trigger async download/export of a model. Body: { modelId: string }
 // Responds immediately; progress is observed by polling GET /models.

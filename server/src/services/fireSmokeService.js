@@ -83,6 +83,14 @@ class FireSmokeService {
     this._status   = 'loaded';
   }
 
+  /** Deactivate the active fire/smoke model (model catalog Deactivate button). */
+  unload() {
+    this._session?.release?.();
+    this._session = null;
+    this._ready   = false;
+    this._status  = 'not_started';
+  }
+
   /**
    * Detect fire and smoke in a JPEG frame.
    * @param {Buffer} jpegBuffer

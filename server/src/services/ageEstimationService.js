@@ -69,6 +69,14 @@ class AgeEstimationService {
     await this.load();
   }
 
+  /** Deactivate the active model (model catalog Deactivate button). */
+  unload() {
+    this._session?.release?.();
+    this._session = null;
+    this._ready   = false;
+    this._status  = 'not_started';
+  }
+
   /** Which preprocessing/postprocessing variant applies to the currently active model. */
   _variant() {
     const file = path.basename(this.modelPath || '');

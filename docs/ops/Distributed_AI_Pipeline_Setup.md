@@ -70,7 +70,7 @@ LTS-2026의 Distributed AI Pipeline 기능은 `server/.env`의 `SERVER_MODE` 환
 
 ### 1.4 전체 AI 모델 카탈로그 — Admin Dashboard에서 다운로드/전환
 
-`analysis`/`combined` 서버는 아래 모든 ONNX 모델을 하나의 통합 카탈로그(`GET/POST /api/analysis/models*`)로 관리합니다 — Admin Dashboard → **AI Models** 탭에서 family별로 다운로드·활성화(Activate) 상태를 확인하고 조작할 수 있습니다. 상세 스키마·다운로드 전략은 [Design_AI_Model_Catalog.md](../design/Design_AI_Model_Catalog.md) 참조.
+`analysis`/`combined` 서버는 아래 모든 ONNX 모델을 하나의 통합 카탈로그(`GET/POST /api/analysis/models*`)로 관리합니다 — Admin Dashboard → **AI Models** 탭에서 family별로 다운로드·활성화(Activate)·비활성화(Deactivate) 상태를 확인하고 조작할 수 있습니다. 상세 스키마·다운로드 전략은 [Design_AI_Model_Catalog.md](../design/Design_AI_Model_Catalog.md) 참조.
 
 | Family | 모델 | 배치 경로 | 다운로드 방식 | 상태 |
 |---|---|---|---|---|
@@ -89,6 +89,7 @@ LTS-2026의 Distributed AI Pipeline 기능은 `server/.env`의 `SERVER_MODE` 환
 - PromptPAR는 Admin Dashboard의 **↓ Download** 버튼으로 자동 다운로드+변환할 수 있습니다(`node src/scripts/exportPromptPAR.py`를 서버가 서브프로세스로 실행). **필수 전제조건**: analysis 서버에 CUDA GPU(export 시에만 필요 — 추론은 CPU), `git`, 그리고 `pip install torch torchvision onnx onnxruntime gdown ftfy regex`. 체크포인트는 OpenPAR 저자들의 공유 Google Drive **폴더**(`drive.google.com/drive/folders/1GkpaMjJjRDDRnLABK08uoNsOsKXN-nD5`)에 있어 개별 파일 ID 없이는 폴더 전체(~3.3GB)를 내려받은 뒤 `PA100k_Checkpoint.pth`를 찾습니다 — 개별 파일 ID를 알고 있다면 `PROMPTPAR_CHECKPOINT_GDRIVE_FILE_ID` 환경변수로 지정해 폴더 전체 다운로드를 건너뛸 수 있습니다. 다운로드+변환+검증까지 최대 30분(타임아웃) 소요됩니다. 수동으로 오프라인 실행 후 결과 `.onnx` 파일만 다른 서버의 `server/models/`에 복사해도 됩니다.
 - PromptPAR는 CLIP ViT-L 백본(~1.2GB)을 강제로 CPU에서 실행하므로, Activate(서버 시작 시 자동 로드 포함) 전 가용 시스템 RAM이 `PROMPTPAR_MIN_FREE_MEM_MB`(기본 2048MB) 이상인지 먼저 확인합니다. 부족하면 `[ColorClothService] PromptPAR 수행 불가능: ...` 로그를 남기고 `cloth` 분석 설정을 자동으로 `false`로 전환합니다 — 서버는 크래시하지 않고 계속 실행되며, 런타임 전환 시에는 HTTP 500으로 실패가 Admin Dashboard에 표시됩니다. 메모리를 확보하고 재시도하거나, 메모리 게이트가 없는 OpenPAR로 대신 전환하세요. 자세한 내용은 [Design_AI_Cloth_Analysis.md §11](../design/Design_AI_Cloth_Analysis.md#11-model-choice--memory-gate) 참고.
 - `human-parsing`/`appearance-reid`는 소스 URL 검증 전이라 `downloadModels.js`의 `DIRECT_MODELS`에서 기본 `enabled:false`로 남아 있습니다 — Admin UI Download 버튼으로 개별 다운로드하거나, 검증 후 스크립트에서 `enabled:true`로 전환하세요.
+- 위 표의 8개 family(YOLO 감지기 제외)는 활성화된 뒤 더 이상 사용하지 않을 때 **Deactivate** 버튼으로 메모리에서 언로드할 수 있습니다 — 파일은 `server/models/`에 그대로 남고, 다시 Activate하면 즉시 재사용됩니다. YOLO 감지기는 핵심 사람/사물 감지에 항상 필요하므로 Deactivate 대상에서 제외됩니다(요청 시 HTTP 400). Deactivate는 해당 family의 `analyticsConfig` 토글(예: `cloth`, `humanParsing`)을 변경하지 않습니다 — 토글은 그대로 두고 모델만 내려가므로, 로드된 모델이 없으면 해당 속성은 조용히 `null`로 돌아갑니다(Phase-1 우아한 저하와 동일).
 
 **모델 불필요 항목 — Phase-1.5**: Color Analysis Phase-1의 고정 ROI 8×8 단순 평균을 K-Means 대표색 추출로 교체하는 안(모델 다운로드 불필요)은 아직 미구현입니다. 상세는 [Design_AI_Color_Analysis.md §11](../design/Design_AI_Color_Analysis.md#11-phase-15-proposed--k-means-dominant-color-on-the-existing-fixed-roi-no-model) 참조.
 
@@ -1056,3 +1057,4 @@ curl http://localhost:3443/api/galleries/match-history?limit=5
 | 1.14 | 2026-07-09 | §7.5에 색상 사전 필터/알림 속성 미첨부 운영 참고 추가 — `docs/rfp/ReID_및_색상분석_활용가이드.md` 흡수 반영, 원본 삭제 |
 | 1.15 | 2026-07-12 | PromptPAR(PA100k) 통합 반영 — §1.4 cloth-par 행을 PromptPAR(직접 배포)/OpenPAR(ResNet50, manualOnly) 2행으로 갱신, §5.1에 `PROMPTPAR_MIN_FREE_MEM_MB` 환경변수 추가, PromptPAR 활성화 전 메모리 게이트 동작(가용 RAM 부족 시 로그+`cloth` 자동 비활성화) 운영 안내 추가 |
 | 1.16 | 2026-07-12 | PromptPAR Download 자동화 반영 — §1.4 cloth-par 행을 "직접 배포"에서 `pyExport`(`exportPromptPAR.py`)로 갱신, 전제조건(CUDA GPU·git·Python 패키지)·Google Drive 폴더 다운로드 방식 운영 안내 추가, §5.1에 `PROMPTPAR_REPO_URL`/`_REPO_REF`/`_GDRIVE_FOLDER_ID`/`_CHECKPOINT_FILENAME`/`_CHECKPOINT_GDRIVE_FILE_ID`/`_VIT_BACKBONE_URL` 환경변수 6종 추가 |
+| 1.17 | 2026-07-13 | Model Deactivate 기능 반영 — §1.4에 YOLO 감지기를 제외한 8개 family의 Deactivate(메모리 언로드) 운영 안내 추가, analyticsConfig 토글과 독립적으로 동작함을 명시 |

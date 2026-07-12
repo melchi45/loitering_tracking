@@ -84,6 +84,14 @@ class ProtectiveEquipService {
     this._numClasses = NUM_PPE_CLASSES; // re-inferred on first inference
   }
 
+  /** Deactivate the active PPE model (model catalog Deactivate button). */
+  unload() {
+    this._session?.release?.();
+    this._session = null;
+    this._ready   = false;
+    this._status  = 'not_started';
+  }
+
   /**
    * Detect PPE items in a JPEG frame.
    * @param {Buffer} jpegBuffer

@@ -62,6 +62,7 @@ RTSP/WebRTC 스트림
 |---|---|
 | `GET /api/analysis/models` | 전체 family 카탈로그 조회 (downloaded/active/downloading/converting 상태 포함) |
 | `POST /api/analysis/models/switch { modelId }` | family별 활성 모델 핫 스왑 — `_activeFileForEntry()`가 family에 따라 올바른 서비스(`_attrPipeline._color`, `_appearanceReid` 등)로 라우팅 |
+| `POST /api/analysis/models/deactivate { modelId }` | family별 활성 모델 언로드(`unload()`/`unloadDetector()`/`unloadRecognizer()`/`unloadPar()`/`unloadHumanParsing()`) — ONNX 세션 release + ready 상태 초기화. YOLO 탐지기 family는 대상 아님(400) — 배회 감지 핵심 파이프라인이라 항상 활성 모델 필요 |
 | `POST /api/analysis/models/download { modelId }` | 모델 다운로드 (직접 ONNX 또는 HuggingFace `.pt`→`ultralytics export` 변환); `manualOnly:true` 모델(예: `openpar-resnet50-pa100k`)은 409 반환 — 수동 배치 필요 |
 
 `human-parsing`/`appearance-reid` family는 코드 구현이 완료되어 있으나 모델 파일이 `downloadModels.js`의 `DIRECT_MODELS`에서 기본 `enabled:false`(라이선스 검토 후 수동 활성화) — Admin Dashboard "AI Models" 탭에서 개별 다운로드해야 활성화됨. 상세: `docs/design/Design_AI_AppearanceReID.md` §12.6, `docs/design/Design_AI_Color_Analysis.md` §10.
@@ -886,3 +887,36 @@ _checkPromptParGate(filePath) {
 **회귀 테스트:** `test/api/model_catalog.test.js`(TC-MC-020, family 구성) · `test/api/age_estimation.test.js`(TC-AGE-007~009, `AgeEstimationService` 단위 테스트 — ONNX 세션을 스텁 처리해 실제 모델 파일/서버 불필요, sharp로 합성 JPEG 생성해 크롭 파이프라인까지 검증).
 
 **SDLC 참조:** [RFP_AI_Age_Estimation.md](../../../docs/rfp/RFP_AI_Age_Estimation.md) · [PRD_AI_Age_Estimation.md](../../../docs/prd/PRD_AI_Age_Estimation.md) · [SRS_AI_Age_Estimation.md](../../../docs/srs/SRS_AI_Age_Estimation.md) (FR-AGE-001~026) · [Design_AI_Age_Estimation.md](../../../docs/design/Design_AI_Age_Estimation.md) · [Design_AI_Model_Catalog.md §4.2d/§10](../../../docs/design/Design_AI_Model_Catalog.md) · [TC_AI_Age_Estimation.md](../../../docs/tc/TC_AI_Age_Estimation.md) (TC-AGE-001~011)
+
+## 최근 운영 변경 (2026-07-13)
+
+### 16. AI Models — Runtime Model Deactivate (`POST /api/analysis/models/deactivate`)
+
+**배경:** Admin Dashboard의 AI Models 탭에서 각 family는 Activate만 가능했고, 한번 활성화된 모델을 다시 언로드할 방법이 없었다 — 메모리/VRAM을 회수하려면 서버를 재시작해야 했다. YOLO 탐지기를 제외한 8개 확장 family(face-detection/face-recognition/ppe/fire-smoke/cloth-par ×2/human-parsing ×2/appearance-reid/age-estimation)에 대해 "Active → Deactivate" 버튼을 추가했다.
+
+**서비스별 `unload()` 계열 메서드 (기존 `reload()`와 대칭, 세션 release 패턴은 `colorClothService.js`의 `reloadHumanParsing()`이 이미 쓰던 `session.release?.()`를 모든 서비스에 일관 적용):**
+
+```javascript
+// faceService.js — SCRFD(face-detection)와 ArcFace(face-recognition)는 독립적으로 언로드
+unloadDetector()   { this._scrfd?.release?.();   this._scrfd = null;   this._ready = false; this._status = 'not_started'; }
+unloadRecognizer() { this._arcface?.release?.(); this._arcface = null; }  // _ready/_status는 SCRFD 전용이라 건드리지 않음
+
+// protectiveEquipService.js / fireSmokeService.js / appearanceReidService.js / ageEstimationService.js — 동일 패턴
+unload() { this._session?.release?.(); this._session = null; this._ready = false; this._status = 'not_started'; }
+
+// colorClothService.js — cloth-par와 human-parsing 별도 언로드
+unloadPar()          { this._parSession?.release?.(); this._parSession = null; this._parReady = false; }
+unloadHumanParsing() { this._hpSession?.release?.();  this._hpSession = null;  this._hpClassMap = null; this._hpReady = false; this._parseCache.clear(); }
+```
+
+`reloadPar()`도 이번에 함께 수정 — 기존에는 새 세션으로 교체하기 전 이전 `_parSession`을 release하지 않는 누수가 있었음(`reloadHumanParsing()`은 이미 release하고 있었음); 대칭을 맞춰 수정.
+
+**API (`analysisApi.js`):** `POST /models/switch` 바로 아래에 `POST /models/deactivate` 라우트 신설 — `entry.family`로 동일한 dispatch 패턴을 사용하되, YOLO 탐지기(`family === undefined`)는 `default` 분기에서 400을 반환(핵심 감지 파이프라인은 항상 활성 모델 필요). `_attrPipeline?._color?.unloadPar()`처럼 optional chaining만 사용 — `/models/switch`와 달리 파일 존재 여부나 `AttributePipeline` 로드 여부를 검사하지 않음(아무것도 활성화되지 않은 상태에서 호출해도 안전한 no-op).
+
+**UI (`AdminUsersPage.tsx`):** `AiModelsSection()`에 `deactivateModel(id)` 함수 추가(`switchModel`과 동일 패턴, `/models/deactivate` POST). 확장 family 테이블(YOLO Detection Model 테이블 제외)에서 `m.active`일 때 기존 정적 "Active" 라벨 대신 **Deactivate** 버튼 렌더링.
+
+**analyticsConfig와의 관계:** Deactivate는 `cloth`/`humanParsing` 등 analytics 토글을 전혀 건드리지 않는다 — 토글은 "이 속성을 원한다"는 의도이고, ready 플래그는 "지금 로드되어 있다"는 사실이라 서로 독립적이다. 모델이 없으면 enrichment가 조용히 `null`/absent를 반환하는 기존 Phase-1 우아한 저하 패턴을 그대로 재사용한다.
+
+**회귀 테스트:** `test/api/model_catalog.test.js` Group E(TC-MC-023) — 각 서비스에 스텁 세션(`{ release: spy }`)을 주입해 실제 ONNX 파일이나 서버 없이 `release()` 호출·상태 초기화를 검증하는 유닛 테스트.
+
+**SDLC 참조:** [Design_AI_Model_Catalog.md §5b](../../../docs/design/Design_AI_Model_Catalog.md#5b-runtime-model-deactivate) · [SRS_AI_Model_Catalog.md §3.6](../../../docs/srs/SRS_AI_Model_Catalog.md) (FR-MC-026~030) · [TC_AI_Model_Catalog.md](../../../docs/tc/TC_AI_Model_Catalog.md) (TC-MC-023~025)

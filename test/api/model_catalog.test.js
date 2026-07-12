@@ -5,17 +5,19 @@
  * TC: TC_AI_Model_Catalog
  *   Covers: TC-MC-001, TC-MC-002, TC-MC-002b, TC-MC-007, TC-MC-008,
  *           TC-MC-012, TC-MC-013, TC-MC-017, TC-MC-018, TC-MC-019,
- *           TC-MC-020, TC-MC-021
+ *           TC-MC-020, TC-MC-021, TC-MC-023
  *   Not automated here (see TC_AI_Model_Catalog.md §3): TC-MC-003, TC-MC-005,
- *   TC-MC-006, TC-MC-010, TC-MC-011, TC-MC-014, TC-MC-015, TC-MC-016
+ *   TC-MC-006, TC-MC-010, TC-MC-011, TC-MC-014, TC-MC-015, TC-MC-016,
+ *   TC-MC-024, TC-MC-025
  *
  * Network-dependent tests (TC-MC-004, TC-MC-009) require INTEGRATION_DOWNLOAD=1
  *
- * Group D (TC-MC-018/019, PromptPAR memory gate) is a unit test — it requires
- * server/src/services/colorClothService.js only, NOT a running server.
+ * Group D (TC-MC-018/019, PromptPAR memory gate) and Group E (TC-MC-023,
+ * Deactivate) are unit tests — they require the relevant service file only,
+ * NOT a running server.
  *
  * Prerequisites: Analysis server running (SERVER_MODE=analysis or combined)
- *   for Groups A-C; Group D has no server prerequisite.
+ *   for Groups A-C; Groups D-E have no server prerequisite.
  * Run: node test/api/model_catalog.test.js
  *
  * Set LTS_URL env var to override base URL.
@@ -318,6 +320,102 @@ async function runGroupD() {
   });
 }
 
+// ── TC-MC-023: Deactivate unloads each extended family (unit — no running server) ──
+// Exercises the service classes directly with a stubbed ONNX session (a plain
+// object with a `release()` spy), since a real model file/session isn't needed
+// to verify the unload contract: release the session, null it out, reset ready state.
+
+async function runGroupE() {
+  console.log('\n[Group E] Deactivate — TC-MC-023 (unit)');
+
+  const FaceService = require('../../server/src/services/faceService');
+  const { ProtectiveEquipService } = require('../../server/src/services/protectiveEquipService');
+  const FireSmokeService = require('../../server/src/services/fireSmokeService');
+  const { ColorClothService } = require('../../server/src/services/colorClothService');
+  const { AppearanceReidService } = require('../../server/src/services/appearanceReidService');
+  const { AgeEstimationService } = require('../../server/src/services/ageEstimationService');
+
+  const stubSession = () => {
+    let released = false;
+    return { release: () => { released = true; }, wasReleased: () => released };
+  };
+
+  await test('TC-MC-023a', 'FaceService.unloadDetector() releases SCRFD session and resets ready/status', async () => {
+    const svc = new FaceService();
+    const session = stubSession();
+    svc._scrfd = session; svc._ready = true; svc._status = 'loaded';
+    svc.unloadDetector();
+    assert(session.wasReleased(), 'SCRFD session.release() should have been called');
+    assert(svc._scrfd === null && svc._ready === false && svc._status === 'not_started', 'detector state not reset');
+  });
+
+  await test('TC-MC-023b', 'FaceService.unloadRecognizer() releases ArcFace session without touching detector state', async () => {
+    const svc = new FaceService();
+    const session = stubSession();
+    svc._arcface = session; svc._ready = true; // detector state deliberately left true
+    svc.unloadRecognizer();
+    assert(session.wasReleased(), 'ArcFace session.release() should have been called');
+    assert(svc._arcface === null, 'arcface session not nulled');
+    assert(svc._ready === true, 'unloadRecognizer() must not touch detector _ready state');
+  });
+
+  await test('TC-MC-023c', 'ProtectiveEquipService.unload() releases session and resets ready/status', async () => {
+    const svc = new ProtectiveEquipService();
+    const session = stubSession();
+    svc._session = session; svc._ready = true; svc._status = 'loaded';
+    svc.unload();
+    assert(session.wasReleased(), 'PPE session.release() should have been called');
+    assert(svc._session === null && svc._ready === false && svc._status === 'not_started', 'PPE state not reset');
+  });
+
+  await test('TC-MC-023d', 'FireSmokeService.unload() releases session and resets ready/status', async () => {
+    const svc = new FireSmokeService();
+    const session = stubSession();
+    svc._session = session; svc._ready = true; svc._status = 'loaded';
+    svc.unload();
+    assert(session.wasReleased(), 'Fire/Smoke session.release() should have been called');
+    assert(svc._session === null && svc._ready === false && svc._status === 'not_started', 'Fire/Smoke state not reset');
+  });
+
+  await test('TC-MC-023e', 'ColorClothService.unloadPar() releases the PAR session and resets _parReady', async () => {
+    const svc = new ColorClothService();
+    const session = stubSession();
+    svc._parSession = session; svc._parReady = true;
+    svc.unloadPar();
+    assert(session.wasReleased(), 'PAR session.release() should have been called');
+    assert(svc._parSession === null && svc._parReady === false, 'cloth-par state not reset');
+  });
+
+  await test('TC-MC-023f', 'ColorClothService.unloadHumanParsing() releases the HP session and resets _hpReady + cache', async () => {
+    const svc = new ColorClothService();
+    const session = stubSession();
+    svc._hpSession = session; svc._hpReady = true; svc._hpClassMap = { upper: [1], lower: [2] };
+    svc._parseCache.set('track-1', { ts: Date.now(), color: {} });
+    svc.unloadHumanParsing();
+    assert(session.wasReleased(), 'Human Parsing session.release() should have been called');
+    assert(svc._hpSession === null && svc._hpReady === false && svc._hpClassMap === null, 'human-parsing state not reset');
+    assert(svc._parseCache.size === 0, 'per-track color cache should be cleared on deactivate');
+  });
+
+  await test('TC-MC-023g', 'AppearanceReidService.unload() releases session and resets ready/status', async () => {
+    const svc = new AppearanceReidService();
+    const session = stubSession();
+    svc._session = session; svc._ready = true; svc._status = 'loaded';
+    svc.unload();
+    assert(session.wasReleased(), 'Appearance Re-ID session.release() should have been called');
+    assert(svc._session === null && svc._ready === false && svc._status === 'not_started', 'Appearance Re-ID state not reset');
+  });
+
+  await test('TC-MC-023h', 'AgeEstimationService.unload() releases session and resets ready/status', async () => {
+    const svc = new AgeEstimationService();
+    const session = stubSession();
+    svc._session = session; svc._ready = true; svc._status = 'loaded';
+    svc.unload();
+    assert(session.wasReleased(), 'Age Estimation session.release() should have been called');
+    assert(svc._session === null && svc._ready === false && svc._status === 'not_started', 'Age Estimation state not reset');
+  });
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -328,6 +426,7 @@ async function main() {
   await runGroupB();
   await runGroupC();
   await runGroupD();
+  await runGroupE();
 
   console.log('\n─────────────────────────────');
   console.log(`Result: ${passed} passed, ${failed} failed, ${results.filter(r => r.status === 'SKIP').length} skipped`);

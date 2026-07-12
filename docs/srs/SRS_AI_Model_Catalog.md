@@ -1,8 +1,8 @@
 ---
 **Document:** SRS_AI_Model_Catalog  
-**Version:** 2.3  
+**Version:** 2.4  
 **Status:** Draft  
-**Date:** 2026-07-12  
+**Date:** 2026-07-13  
 **Parent RFP:** [RFP_AI_Model_Catalog](../rfp/RFP_AI_Model_Catalog.md)  
 **Parent PRD:** [PRD_AI_Model_Catalog](../prd/PRD_AI_Model_Catalog.md)  
 **Child Design:** [Design_AI_Model_Catalog](../design/Design_AI_Model_Catalog.md)  
@@ -76,6 +76,16 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | FR-MC-021 | `MODEL_CATALOG` shall contain exactly 20 YOLO detector entries: 5 YOLO26 (n/s/m/l/x), 5 YOLO12 (n/s/m/l/x), 5 YOLO11 (n/s/m/l/x), 5 YOLOv8 (n/s/m/l/x). `EXTENDED_CATALOG` shall additionally contain one entry each for `face-detection`, `face-recognition`, `ppe`, `fire-smoke`, two entries for `cloth-par` (PromptPAR + OpenPAR — see FR-MC-023), two entries for `human-parsing`, one for `appearance-reid`, plus two entries for `age-estimation` (InsightFace GenderAge + ViT Age Classifier — see `SRS_AI_Age_Estimation.md` FR-AGE-001) — 11 entries total, 31 in `ALL_MODELS` overall. |
 | FR-MC-022 | All YOLO detector catalog entries shall produce the identical ONNX output shape `[1, 84, 8400]` compatible with the existing `DetectionService` post-processor. Non-detector entries are consumed by their respective service (`FaceService`, `ProtectiveEquipService`, `FireSmokeService`, `ColorClothService`, `AppearanceReidService`, `AgeEstimationService`) and are not subject to this shape constraint. |
 
+### 3.6 Runtime Model Deactivate
+
+| ID | Requirement |
+|---|---|
+| FR-MC-026 | `POST /api/analysis/models/deactivate` with body `{ modelId }` shall unload the active model for that entry's family, leaving no model active for it until a subsequent `/models/switch` call: `face-detection` calls `AttributePipeline._face.unloadDetector()`; `face-recognition` calls `AttributePipeline._face.unloadRecognizer()`; `ppe` calls `AttributePipeline._ppe.unload()`; `fire-smoke` calls `FireSmokeService.unload()`; `cloth-par` calls `AttributePipeline._color.unloadPar()`; `human-parsing` calls `AttributePipeline._color.unloadHumanParsing()`; `appearance-reid` calls `AppearanceReidService.unload()`; `age-estimation` calls `AgeEstimationService.unload()`. |
+| FR-MC-027 | The deactivate endpoint shall fail with HTTP 400 for the YOLO detector family (`entry.family === undefined`) with an error explaining the core detection pipeline always requires an active model. This is the only family that cannot be deactivated. |
+| FR-MC-028 | Each family's `unload()` (or `unloadDetector()`/`unloadRecognizer()`/`unloadPar()`/`unloadHumanParsing()`) method shall release the underlying ONNX `InferenceSession` (`session.release?.()`) before discarding the reference, and shall reset that family's ready/status state so `GET /api/analysis/models` reports `active: false` for every entry in the family until reactivated. |
+| FR-MC-029 | Deactivate shall not require the target model file to exist on disk (unlike `/models/switch`'s FR-MC-018) and shall not fail if `AttributePipeline` has not finished loading — both cases mean nothing was active, so deactivation is a safe no-op. |
+| FR-MC-030 | Deactivating a family shall not modify that family's corresponding `analyticsConfig` toggle (e.g. `cloth`, `humanParsing`, `face`) — the feature flag and the loaded-model state are independent; enrichment for that attribute simply returns `null`/absent (existing Phase-1 graceful-degradation behavior) until a model is active again. |
+
 ## 4. Non-Functional Requirements
 
 | ID | Requirement |
@@ -103,6 +113,7 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | ONNX not downloaded (switch) | 409 | `{ error: 'Model file not downloaded yet', file }` |
 | `AttributePipeline` not loaded (switch) | 409 | `{ error: 'AttributePipeline not loaded' }` |
 | PromptPAR memory gate failed (switch) | 500 | `{ error: 'PromptPAR 수행 불가능: ...' }` — `cloth` config also set to `false` |
+| YOLO detector deactivate requested | 400 | `{ error: '...core detection pipeline always requires an active model.' }` |
 | Concurrent download | 409 | `{ error: 'Download already in progress' }` |
 | Already downloaded (download) | 200 | `{ ok: true, already: true, message }` |
 | Python not found | 500 | `{ error: 'Python with ultralytics [+ huggingface_hub] not found...' }` |
@@ -123,3 +134,4 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | 2.1 | 2026-07-12 | PromptPAR(PA100k) 통합 반영 — `cloth-par` family가 `openpar-pa100k`(PromptPAR, 직접 배포) + `openpar-resnet50-pa100k`(OpenPAR ResNet50, manualOnly) 2개 항목으로 확장(FR-MC-021 카탈로그 개수 28→29 갱신), PromptPAR 전용 사전 메모리 게이트 요구사항 신설(FR-MC-018c — 가용 RAM 부족 시 HTTP 500 + `cloth` 설정 자동 비활성화), §5 제약사항·§6 오류표 갱신 |
 | 2.2 | 2026-07-12 | `age-estimation` family 추가(FR-MC-021 카탈로그 개수 29→31 갱신) — InsightFace GenderAge(직접 ONNX) + ViT Age Classifier(신규 `hfOptimumExport` 변환 전략, `optimum`+`transformers` 의존) 2개 항목. FR-MC-016/022, §5 제약사항 갱신. 상세 요구사항은 신규 `SRS_AI_Age_Estimation.md`(FR-AGE-001~026) 참조 |
 | 2.3 | 2026-07-12 | PromptPAR Download 자동화 반영 — `openpar-pa100k`가 "직접 배포(다운로드 URL 없음)"에서 신규 `pyExport` 전략(FR-MC-015c)으로 전환: OpenPAR repo clone + Google Drive 체크포인트(`gdown`) + CUDA GPU export를 수행하는 독립 스크립트(`exportPromptPAR.py`) 자동 실행. FR-MC-005c에 `pyExport` 필드 제외 추가, §5·§6 갱신, FR-MC-023~025라는 실존하지 않던 참조를 FR-MC-018c로 정정 |
+| 2.4 | 2026-07-13 | §3.6 신설(FR-MC-026~030) — `POST /api/analysis/models/deactivate`: YOLO 탐지기를 제외한 8개 확장 family의 활성 모델 언로드(ONNX 세션 release + ready 상태 초기화), YOLO 탐지기는 400으로 거부(FR-MC-027), `analyticsConfig` 토글은 변경하지 않음(FR-MC-030). §6 오류표 갱신 |

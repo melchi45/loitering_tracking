@@ -60,6 +60,14 @@ class AppearanceReidService {
     await this.load();
   }
 
+  /** Deactivate the active model (model catalog Deactivate button). */
+  unload() {
+    this._session?.release?.();
+    this._session = null;
+    this._ready   = false;
+    this._status  = 'not_started';
+  }
+
   /**
    * Extract a 256-D L2-normalized appearance embedding for a person crop.
    * @param {Buffer} jpegBuffer
