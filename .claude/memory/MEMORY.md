@@ -4,4 +4,5 @@
 - [Async buttons need 3-way state](feedback_async_button_tristate.md) — separate "attempted" from result data so empty results render correctly
 - [Client max-count options ≤ server buffer size](feedback_client_server_limit_sync.md) — raise server cap whenever client max option is raised
 - [Memory lives in-repo, not externally](feedback_memory_location_project_local.md) — write/read memory under .claude/memory/, not ~/.claude/projects/.../memory/
-- [AI model catalog docs drift from shipped models](feedback_ai_model_catalog_doc_drift.md) — verify server/models/ + analysisApi.js catalog before trusting SRS/RFP/PRD/Design model descriptions; check test/api/model_catalog.test.js for stale hard-coded catalog invariants
+- [AI model catalog docs drift from shipped models](feedback_ai_model_catalog_doc_drift.md) — verify server/models/ + analysisApi.js catalog before trusting SRS/RFP/PRD/Design model descriptions; check test/api/model_catalog.test.js for stale hard-coded catalog invariants; also applies to claimed internal mechanisms (e.g. "sticky-attribute list"), not just filenames
+- [Reuse hfOptimumExport for non-YOLO HF models](feedback_hf_optimum_export_pattern.md) — new PT→ONNX strategy for HuggingFace Transformers models (ViT etc.) that ultralytics export can't handle; don't re-derive a one-off conversion path

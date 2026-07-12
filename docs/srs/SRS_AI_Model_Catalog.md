@@ -1,6 +1,6 @@
 ---
 **Document:** SRS_AI_Model_Catalog  
-**Version:** 2.1  
+**Version:** 2.3  
 **Status:** Draft  
 **Date:** 2026-07-12  
 **Parent RFP:** [RFP_AI_Model_Catalog](../rfp/RFP_AI_Model_Catalog.md)  
@@ -32,7 +32,7 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | FR-MC-004 | `downloading` shall be `true` when `_downloadProgress.status` is `'downloading'` or `'converting'`. |
 | FR-MC-005 | `converting` shall be `true` when `_downloadProgress.status` is `'converting'` (any PT→ONNX conversion phase — YOLO26/YOLO12 GitHub-release or PPE/Fire-Smoke HuggingFace-Hub). |
 | FR-MC-005b | `downloadPercent` shall be the integer 0–100 download progress, or `null` if no download is in progress. `downloadError` shall be the error message string when `status === 'error'`, otherwise `null`. |
-| FR-MC-005c | The `url`, `classMap`, and `hfExport` fields shall never be included in the client-facing catalog response (internal source-resolution detail only). |
+| FR-MC-005c | The `url`, `classMap`, `hfExport`, and `pyExport` fields shall never be included in the client-facing catalog response (internal source-resolution detail only). |
 
 ### 3.2 Model Download — Direct ONNX (YOLOv8, YOLO11, SCRFD, ArcFace, human-parsing, appearance-reid)
 
@@ -54,13 +54,14 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | FR-MC-013 | If no candidate passes the required check, the download shall fail with a descriptive error message naming the missing package(s). |
 | FR-MC-014 | The ultralytics export subprocess shall have a 5-minute timeout (`300_000 ms`). |
 | FR-MC-015 | The `.pt` file shall be deleted after successful ONNX export, even if the ONNX was exported to a path different from `server/models/<file>` (ultralytics may write next to the `.pt`). This applies to the `requiresConversion` path only — the `hfExport` path never writes a `.pt` file to `server/models/` in the first place. |
-| FR-MC-015b | For entries with `manualOnly: true` (cloth-PAR/OpenPAR), `POST /api/analysis/models/download` shall return HTTP 409 with `{ error, docRef }` and shall not attempt any download — there is no automatable source. This check runs before the download-in-progress and already-exists checks. |
+| FR-MC-015b | For entries with `manualOnly: true` (cloth-PAR's OpenPAR alternative), `POST /api/analysis/models/download` shall return HTTP 409 with `{ error, docRef }` and shall not attempt any download — there is no automatable source. This check runs before the download-in-progress and already-exists checks. |
+| FR-MC-015c | For entries with a `pyExport: { script, requiresGpu? }` field (currently only `openpar-pa100k`/PromptPAR), the download handler shall: (1) verify a Python interpreter with `torch`, `torchvision`, `onnx`, `onnxruntime`, and `gdown` importable (`_findPythonForPromptPAR()`), (2) verify `git` is on `PATH`, (3) run `server/src/scripts/<script>` as a subprocess with a 30-minute timeout, passing `--output <filePath>`, (4) parse `Stage N/M` markers from the subprocess's stdout/stderr to update `_downloadProgress.percent` (5–95%), (5) mark `status: 'done'` on success or `status: 'error'` with the subprocess's error on failure. This strategy is distinct from `hfExport`/`hfOptimumExport` — the script owns its entire fetch/convert pipeline rather than a single inline Python one-liner, because the source model requires cloning bespoke non-YOLO model code and fetching a checkpoint from a non-HTTP-friendly host (Google Drive). |
 
 ### 3.4 Runtime Model Switch
 
 | ID | Requirement |
 |---|---|
-| FR-MC-016 | `POST /api/analysis/models/switch` with body `{ modelId }` shall hot-swap the active model for that entry's family: YOLO detector families call `_detector.reload(filePath)` (constructing `_detector` first if absent); `face-detection`/`face-recognition` call `AttributePipeline._face.reloadDetector()`/`.reloadRecognizer()`; `ppe` calls `AttributePipeline._ppe.reload()`; `fire-smoke` calls `FireSmokeService.reload()` (constructing the service first if absent); `cloth-par` calls `AttributePipeline._color.reloadPar()`; `human-parsing` calls `AttributePipeline._color.reloadHumanParsing()`; `appearance-reid` calls `AppearanceReidService.reload()` (constructing the service first if absent). |
+| FR-MC-016 | `POST /api/analysis/models/switch` with body `{ modelId }` shall hot-swap the active model for that entry's family: YOLO detector families call `_detector.reload(filePath)` (constructing `_detector` first if absent); `face-detection`/`face-recognition` call `AttributePipeline._face.reloadDetector()`/`.reloadRecognizer()`; `ppe` calls `AttributePipeline._ppe.reload()`; `fire-smoke` calls `FireSmokeService.reload()` (constructing the service first if absent); `cloth-par` calls `AttributePipeline._color.reloadPar()`; `human-parsing` calls `AttributePipeline._color.reloadHumanParsing()`; `appearance-reid` calls `AppearanceReidService.reload()` (constructing the service first if absent); `age-estimation` calls `AgeEstimationService.reload()` (constructing the service first if absent — see `SRS_AI_Age_Estimation.md` FR-AGE-009). |
 | FR-MC-017 | The switch shall fail with HTTP 400 if `modelId` is not in the catalog. |
 | FR-MC-018 | The switch shall fail with HTTP 409 if the ONNX file does not exist in `server/models/` (`{ error: 'Model file not downloaded yet', file }`). |
 | FR-MC-018b | The switch shall fail with HTTP 409 if the entry's family requires `AttributePipeline` and it has not finished loading (`{ error: 'AttributePipeline not loaded' }`). |
@@ -72,8 +73,8 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 
 | ID | Requirement |
 |---|---|
-| FR-MC-021 | `MODEL_CATALOG` shall contain exactly 20 YOLO detector entries: 5 YOLO26 (n/s/m/l/x), 5 YOLO12 (n/s/m/l/x), 5 YOLO11 (n/s/m/l/x), 5 YOLOv8 (n/s/m/l/x). `EXTENDED_CATALOG` shall additionally contain one entry each for `face-detection`, `face-recognition`, `ppe`, `fire-smoke`, two entries for `cloth-par` (PromptPAR + OpenPAR — see FR-MC-023), two entries for `human-parsing`, plus one for `appearance-reid` — 9 entries total, 29 in `ALL_MODELS` overall. |
-| FR-MC-022 | All YOLO detector catalog entries shall produce the identical ONNX output shape `[1, 84, 8400]` compatible with the existing `DetectionService` post-processor. Non-detector entries are consumed by their respective service (`FaceService`, `ProtectiveEquipService`, `FireSmokeService`, `ColorClothService`, `AppearanceReidService`) and are not subject to this shape constraint. |
+| FR-MC-021 | `MODEL_CATALOG` shall contain exactly 20 YOLO detector entries: 5 YOLO26 (n/s/m/l/x), 5 YOLO12 (n/s/m/l/x), 5 YOLO11 (n/s/m/l/x), 5 YOLOv8 (n/s/m/l/x). `EXTENDED_CATALOG` shall additionally contain one entry each for `face-detection`, `face-recognition`, `ppe`, `fire-smoke`, two entries for `cloth-par` (PromptPAR + OpenPAR — see FR-MC-023), two entries for `human-parsing`, one for `appearance-reid`, plus two entries for `age-estimation` (InsightFace GenderAge + ViT Age Classifier — see `SRS_AI_Age_Estimation.md` FR-AGE-001) — 11 entries total, 31 in `ALL_MODELS` overall. |
+| FR-MC-022 | All YOLO detector catalog entries shall produce the identical ONNX output shape `[1, 84, 8400]` compatible with the existing `DetectionService` post-processor. Non-detector entries are consumed by their respective service (`FaceService`, `ProtectiveEquipService`, `FireSmokeService`, `ColorClothService`, `AppearanceReidService`, `AgeEstimationService`) and are not subject to this shape constraint. |
 
 ## 4. Non-Functional Requirements
 
@@ -88,8 +89,9 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 
 - `requiresConversion: true` entries (YOLO26, YOLO12) require `ultralytics >= 8.3` installed in the Python environment.
 - `hfExport` entries (PPE, Fire & Smoke) require `ultralytics` and `huggingface_hub` installed in the Python environment.
+- `hfOptimumExport` entries (`vit-age-classifier`, age-estimation family) require `optimum[exporters]` and `transformers` installed in the Python environment — a distinct dependency set from `hfExport`, since `optimum` (not `ultralytics`) performs the conversion. See `SRS_AI_Age_Estimation.md` FR-AGE-005~008.
 - System Python (`/usr/bin/python3`) is the recommended fallback — user-local Python builds may lack standard library modules (`_lzma`) causing `import ultralytics` to fail.
-- `cloth-par` has two entries with different source strategies: `openpar-pa100k` (PromptPAR) ships its `.onnx` directly in `server/models/` with no download URL at all (not `manualOnly` — the file is simply already present); `openpar-resnet50-pa100k` (OpenPAR) has no automatable source — `manualOnly: true` is a permanent property of that entry, not a temporary download-failure state. See FR-MC-023~025 for the PromptPAR-specific memory gate.
+- `cloth-par` has two entries with different source strategies: `openpar-pa100k` (PromptPAR) uses `pyExport` (FR-MC-015c) — a standalone script clones the OpenPAR model-code repository and downloads its checkpoint from Google Drive, requiring a CUDA GPU + `git` + `torch`/`onnx`/`gdown` at export time; `openpar-resnet50-pa100k` (OpenPAR) has no automatable source at all — `manualOnly: true` is a permanent property of that entry, not a temporary download-failure state. See FR-MC-018c for the PromptPAR-specific memory gate (a separate, activation-time concern from the download-time `pyExport` strategy).
 - This feature is not available in `SERVER_MODE=streaming`.
 
 ## 6. Error Handling
@@ -104,6 +106,8 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | Concurrent download | 409 | `{ error: 'Download already in progress' }` |
 | Already downloaded (download) | 200 | `{ ok: true, already: true, message }` |
 | Python not found | 500 | `{ error: 'Python with ultralytics [+ huggingface_hub] not found...' }` |
+| Python/git not found (pyExport) | 500 | `{ error: 'Python with torch/torchvision/onnx/onnxruntime/gdown not found...' }` or `{ error: 'git not found on PATH...' }` |
+| No CUDA GPU (pyExport, PromptPAR) | 500 | subprocess exits non-zero with a stderr message naming the GPU requirement; `_downloadProgress.status = 'error'` |
 | Export timeout | 500 | error logged; `_downloadProgress.status = 'error'` |
 
 ---
@@ -117,3 +121,5 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | 1.2 | 2026-06-17 | FR-MC-012 강화 — `import ultralytics` → `cfg/models/12` 디렉토리 존재 확인으로 변경 (ultralytics < 8.3.x YOLO12 지원 불가 대응) |
 | 2.0 | 2026-07-09 | 전체 모델 파일로 범위 확대 — face-detection/face-recognition/ppe/fire-smoke/cloth-par family 및 hfExport 다운로드 전략 추가(FR-MC-005c, 011b, 015b), family별 독립 active 판정 명시(FR-MC-003), switch 실패 코드 400→409 정정(FR-MC-018, 실제 코드와 불일치했던 기존 문서 오류 수정), 다운로드 완료본 재요청 시 `{already:true}` 단축 응답 신규 구현 반영(FR-MC-009 — 이전에는 문서만 있고 코드 미구현), 카탈로그 개수 15→20(감지기)+8(비감지기)=28 갱신(FR-MC-021) |
 | 2.1 | 2026-07-12 | PromptPAR(PA100k) 통합 반영 — `cloth-par` family가 `openpar-pa100k`(PromptPAR, 직접 배포) + `openpar-resnet50-pa100k`(OpenPAR ResNet50, manualOnly) 2개 항목으로 확장(FR-MC-021 카탈로그 개수 28→29 갱신), PromptPAR 전용 사전 메모리 게이트 요구사항 신설(FR-MC-018c — 가용 RAM 부족 시 HTTP 500 + `cloth` 설정 자동 비활성화), §5 제약사항·§6 오류표 갱신 |
+| 2.2 | 2026-07-12 | `age-estimation` family 추가(FR-MC-021 카탈로그 개수 29→31 갱신) — InsightFace GenderAge(직접 ONNX) + ViT Age Classifier(신규 `hfOptimumExport` 변환 전략, `optimum`+`transformers` 의존) 2개 항목. FR-MC-016/022, §5 제약사항 갱신. 상세 요구사항은 신규 `SRS_AI_Age_Estimation.md`(FR-AGE-001~026) 참조 |
+| 2.3 | 2026-07-12 | PromptPAR Download 자동화 반영 — `openpar-pa100k`가 "직접 배포(다운로드 URL 없음)"에서 신규 `pyExport` 전략(FR-MC-015c)으로 전환: OpenPAR repo clone + Google Drive 체크포인트(`gdown`) + CUDA GPU export를 수행하는 독립 스크립트(`exportPromptPAR.py`) 자동 실행. FR-MC-005c에 `pyExport` 필드 제외 추가, §5·§6 갱신, FR-MC-023~025라는 실존하지 않던 참조를 FR-MC-018c로 정정 |

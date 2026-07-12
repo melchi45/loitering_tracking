@@ -205,6 +205,7 @@ class Track {
     this.color        = null; // { upper, lower, upperRgb, lowerRgb } from fast pixel avg
     this.cloth        = null; // { upper, lower, sleeve } from PAR model, or null
     this.accessories  = null; // { hat: bool, mask: bool } from PPE model, or null
+    this.estimatedAge = null; // { value, bucket?, source, modelId } from Age Estimation model (Proposed), or null
   }
 
   predict() {
@@ -411,6 +412,12 @@ class ByteTracker {
   updateAccessories(objectId, accessories) {
     const track = this._tracks.find(t => t.id === objectId);
     if (track && accessories) track.accessories = accessories;
+  }
+
+  /** Store the Age Estimation model's result (Proposed) on the track — mirrors updateColor/updateCloth. */
+  updateEstimatedAge(objectId, estimatedAge) {
+    const track = this._tracks.find(t => t.id === objectId);
+    if (track && estimatedAge) track.estimatedAge = estimatedAge;
   }
 
   /**

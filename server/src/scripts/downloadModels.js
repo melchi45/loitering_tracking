@@ -81,6 +81,17 @@ const DIRECT_MODELS = [
     module:  'CCFR Phase-2 Appearance Re-ID embedding (OSNet, Proposed — see docs/design/Design_AI_AppearanceReID.md §12)',
     enabled: false,
   },
+  // Age Estimation (Proposed, opt-in) — see docs/design/Design_AI_Age_Estimation.md.
+  // Source: InsightFace buffalo_l gender/age model, mirrored unzipped on HuggingFace
+  // (verify URL before enabling — see Design_AI_Age_Estimation.md §11)
+  // Input: 96×96 BGR · Output: [1,3] (gender ×2, age ×1)
+  {
+    file:    'genderage.onnx',
+    url:     'https://huggingface.co/JackCui/facefusion/resolve/main/gender_age.onnx',
+    size:    '~1.3 MB',
+    module:  'Age Estimation — InsightFace GenderAge (Proposed — see docs/design/Design_AI_Age_Estimation.md)',
+    enabled: false,
+  },
 ];
 
 // ─── YOLO12 models (PT download → ultralytics ONNX export, automated) ────────
@@ -123,6 +134,13 @@ const PYTHON_EXEC = _findPython(_pyCandidates, [
 const PYTHON_EXEC_HF = _findPython(_pyCandidates, 'import ultralytics, huggingface_hub');
 if (!PYTHON_EXEC_HF) {
   console.warn('Warning: Python with ultralytics + huggingface_hub not found — PPE/Fire-Smoke auto-export will fail. Run: pip install -U ultralytics huggingface_hub');
+}
+
+// Age Estimation's ViT classifier: exported via HuggingFace `optimum` (non-YOLO
+// architecture — ultralytics export cannot handle it, hence a distinct dependency set).
+const PYTHON_EXEC_OPTIMUM = _findPython(_pyCandidates, 'import optimum, transformers');
+if (!PYTHON_EXEC_OPTIMUM) {
+  console.warn('Warning: Python with optimum + transformers not found — Age Estimation ViT classifier auto-export will fail. Run: pip install -U optimum[exporters] transformers');
 }
 
 // ─── PPE + Fire & Smoke (HuggingFace .pt download → ultralytics ONNX export, automated) ──
@@ -169,6 +187,48 @@ async function exportHfPtToOnnx(m) {
       resolve();
     });
   });
+
+  console.log(`  [OK] ${m.onnxFile}`);
+  return 'converted';
+}
+
+// ─── Age Estimation ViT classifier (HuggingFace checkpoint → optimum ONNX export) ─────
+const HF_OPTIMUM_EXPORT_MODELS = [
+  {
+    id: 'vit-age-classifier', onnxFile: 'vit_age_classifier.onnx',
+    hfRepo: 'nateraw/vit-age-classifier',
+    module: 'Age Estimation — ViT Age Classifier (Proposed)',
+  },
+];
+
+async function exportHfOptimumToOnnx(m) {
+  const { execFile } = require('child_process');
+  const onnxPath = path.join(MODELS_DIR, m.onnxFile);
+
+  if (fs.existsSync(onnxPath)) {
+    console.log(`  [SKIP] ${m.onnxFile} (already exists)`);
+    return 'skipped';
+  }
+  if (!PYTHON_EXEC_OPTIMUM) {
+    console.log(`  [FAIL] ${m.onnxFile}: Python with optimum + transformers not found`);
+    return 'failed';
+  }
+
+  console.log(`  Downloading + converting ${m.onnxFile} via optimum (${m.hfRepo})...`);
+  const tmpDir = path.join(MODELS_DIR, `.${m.id}-export-tmp`);
+  const script = [
+    'from optimum.exporters.onnx import main_export',
+    `main_export(model_name_or_path=${JSON.stringify(m.hfRepo)}, output=${JSON.stringify(tmpDir)}, task="image-classification")`,
+  ].join('; ');
+
+  await new Promise((resolve, reject) => {
+    execFile(PYTHON_EXEC_OPTIMUM, ['-c', script], { timeout: 300_000 }, (err, _out, stderr) => {
+      if (err) { console.error('  export stderr:', stderr); return reject(err); }
+      resolve();
+    });
+  });
+  fs.copyFileSync(path.join(tmpDir, 'model.onnx'), onnxPath);
+  fs.rmSync(tmpDir, { recursive: true, force: true });
 
   console.log(`  [OK] ${m.onnxFile}`);
   return 'converted';
@@ -306,6 +366,8 @@ function printStatus() {
     { file: 'schp_lip.onnx',            module: 'AI-05 Phase-3 Human Parsing (SCHP, Proposed)' },
     { file: 'segformer_clothes.onnx',   module: 'AI-05 Phase-3 Human Parsing alt. (SegFormer, Proposed)' },
     { file: 'appearance_reid_osnet.onnx', module: 'CCFR Phase-2 Appearance Re-ID (OSNet, Proposed)' },
+    { file: 'genderage.onnx',           module: 'Age Estimation — InsightFace GenderAge (Proposed)' },
+    { file: 'vit_age_classifier.onnx',  module: 'Age Estimation — ViT Age Classifier (Proposed)' },
     ...YOLO12_MODELS.map(m => ({ file: m.onnxFile, module: `YOLO12 Detection (${m.id})` })),
   ];
   console.log('\n=== Model Status ===');
@@ -352,6 +414,20 @@ async function main() {
   for (const m of HF_EXPORT_MODELS) {
     try {
       const result = await exportHfPtToOnnx(m);
+      if (result === 'skipped') skipped++;
+      else if (result === 'failed') failed++;
+      else downloaded++;
+    } catch (e) {
+      console.error(`  [FAIL] ${m.id}: ${e.message}`);
+      failed++;
+    }
+  }
+
+  // Age Estimation ViT classifier: automated HuggingFace → optimum ONNX export
+  console.log('\n=== Age Estimation Models (HuggingFace optimum → ONNX auto-export) ===\n');
+  for (const m of HF_OPTIMUM_EXPORT_MODELS) {
+    try {
+      const result = await exportHfOptimumToOnnx(m);
       if (result === 'skipped') skipped++;
       else if (result === 'failed') failed++;
       else downloaded++;

@@ -249,6 +249,7 @@ All modules defined below correspond to completed SDLC chains (RFP → PRD → S
 | Appearance/Body Re-ID 임베딩 모델 + Vector DB 확장 (Qdrant `appearance_embeddings`, 얼굴용 M3와 별도 컬렉션) — ✅ 코드 구현 완료(opt-in, 2026-07-09), 장시간 재등장 조회(kNN)는 미배선 | Phase 12b-3 | 2026-07-09 | [Design_AI_AppearanceReID.md §12](../design/Design_AI_AppearanceReID.md#12-phase-2-개선-제안--실제-re-id-임베딩-모델-도입) |
 | 카메라별 픽셀→실세계 미터 캘리브레이션 (Loitering 가이드 Rule 2 "0.2m/s", "3m" 실측 단위 대응) — 📝 미구현, Proposed | Phase 12b-4 | TBD | [SRS_LTS2026 §6](../srs/SRS_LTS2026_Loitering_Tracking_System.md#6-functional-requirements--loitering-detection) |
 | 알림(Alert) 레코드 속성 첨부 — Loitering/Intrusion 알림에 색상(상의/하의) 첨부, 성별은 범위 외 (ReID·색상분석 가이드 §3 "이벤트 설명" 대응) — 📝 미구현, Proposed | Phase 12b-5 | TBD | [Design_AI_AppearanceReID.md §12.7](../design/Design_AI_AppearanceReID.md#127-reid_및_색상분석_활용가이드md-최종-정합성-확인-및-삭제-전-격차-재검토-2026-07-09) |
+| 연령 예측 (Age Estimation) — InsightFace GenderAge(경량, 직접 ONNX) + ViT Age Classifier(정밀, 신규 `hfOptimumExport` PT→ONNX 변환) 듀얼 모델, Admin Dashboard 선택형, 얼굴crop 우선/사람crop 폴백 — 📝 미구현, Proposed | Phase 12b-6 | TBD | [Design_AI_Age_Estimation.md](../design/Design_AI_Age_Estimation.md) |
 | RTCP Adaptive Streaming (PLI/NACK/REMB) | Phase 12c | Aug 25, 2026 | [M4](../design/Design_RTSP_WebRTC_Architecture.md#milestone-4--rtcp-피드백-처리-nack--pli--remb-p2) |
 | Distributed Cluster Mode (Kafka + GPU Pool) | Phase 12d | Sep 8, 2026 | [M5](../design/Design_RTSP_WebRTC_Architecture.md#milestone-5--분산-클러스터-모드-p3) |
 | PTZ Control (ONVIF) | Phase 13 | Sep 22, 2026 | — |
@@ -516,3 +517,4 @@ The following table maps planned market releases to engineering phases and targe
 | 1.16 | 2026-07-09 | Youngho Kim | §6.4에 Phase 12b-5(알림 레코드 속성 첨부, Proposed, 미구현) 로드맵 행 추가; 원본 가이드 `docs/rfp/ReID_및_색상분석_활용가이드.md` 삭제 완료 — 내용 전체가 Design_AI_AppearanceReID.md §12, SRS_CrossCamera_Face_Tracking.md §14, 관련 RFP/PRD/TC 문서에 반영되었음을 확인 |
 | 1.17 | 2026-07-09 | LTS Engineering Team | §6.3/6.1 Detections Timeline·Detection Snapshot 설명에 화질 개선(640×640/q85) 반영; §7.9 신규 — BR-027~028 crop 화질 및 상세정보 패널 잘림 방지(`object-contain`) 요구사항 추가 |
 | 1.18 | 2026-07-12 | LTS Engineering Team | AI-06 Clothing Analysis 행 갱신 — PromptPAR(PA100k, CLIP ViT-L)/OpenPAR(ResNet50) 2개 admin-selectable 모델 및 PromptPAR 사전 메모리 게이트(가용 RAM 부족 시 `cloth` 자동 비활성화) 반영 |
+| 1.19 | 2026-07-12 | LTS Engineering Team | §6.4에 Phase 12b-6(연령 예측 Age Estimation, Proposed, 미구현) 로드맵 행 신규 추가 — InsightFace GenderAge/ViT Age Classifier 듀얼 모델, 신규 `hfOptimumExport` PT→ONNX 변환 경로. 신규 `RFP/PRD/SRS/Design/TC_AI_Age_Estimation.md` 5종 참조 |

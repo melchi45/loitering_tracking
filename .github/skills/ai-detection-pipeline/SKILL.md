@@ -1,6 +1,6 @@
 ---
 name: ai-detection-pipeline
-description: "LTS-2026 AI 추론 파이프라인 개발 및 디버깅. Use when: YOLOv8 감지 설정, behaviorEngine 배회 점수 조정, attributePipeline 속성 분석(의상·색상·마스크·헬멧), fireSmokeService 화재/연기 감지, 감지 임계값 튜닝, pipelineManager 서비스 추가/수정, AI 모델 교체, 감지 정확도 문제 해결, Human Parsing 기반 정밀 색상 분류(opt-in), Appearance/Body Re-ID(OSNet, opt-in), Cloth-PAR PromptPAR/OpenPAR 모델 선택 및 PromptPAR 사전 메모리 게이트(가용 RAM 부족 시 Cloth 분석 자동 비활성화). Covers: detection.js, behaviorEngine.js, attributePipeline.js, pipelineManager.js, trackerConfig.js, tracking.js, colorClothService.js, fireSmokeService.js, protectiveEquipService.js, appearanceReidService.js, qdrantService.js, kmeansColor.js."
+description: "LTS-2026 AI 추론 파이프라인 개발 및 디버깅. Use when: YOLOv8 감지 설정, behaviorEngine 배회 점수 조정, attributePipeline 속성 분석(의상·색상·마스크·헬멧), fireSmokeService 화재/연기 감지, 감지 임계값 튜닝, pipelineManager 서비스 추가/수정, AI 모델 교체, 감지 정확도 문제 해결, Human Parsing 기반 정밀 색상 분류(opt-in), Appearance/Body Re-ID(OSNet, opt-in), Cloth-PAR PromptPAR/OpenPAR 모델 선택 및 PromptPAR 사전 메모리 게이트(가용 RAM 부족 시 Cloth 분석 자동 비활성화), Age Estimation(연령 예측, InsightFace GenderAge/ViT Age Classifier admin-selectable, opt-in). Covers: detection.js, behaviorEngine.js, attributePipeline.js, pipelineManager.js, trackerConfig.js, tracking.js, colorClothService.js, fireSmokeService.js, protectiveEquipService.js, appearanceReidService.js, ageEstimationService.js, qdrantService.js, kmeansColor.js."
 argument-hint: "추가 또는 수정할 AI 기능 (예: loitering threshold, attribute detection, fire smoke)"
 ---
 
@@ -34,6 +34,7 @@ RTSP/WebRTC 스트림
 | `server/src/services/protectiveEquipService.js` | 안전모·마스크 착용 감지 |
 | `server/src/services/faceService.js` | 얼굴 인식 및 Re-ID 임베딩 |
 | `server/src/services/appearanceReidService.js` | CrossCamera Phase-2 Appearance/Body Re-ID — OSNet 256D 임베딩 추출, opt-in (모델 파일 미배포 시 자동 비활성) |
+| `server/src/services/ageEstimationService.js` | 연령 예측 — InsightFace GenderAge(경량, 직접 ONNX)/ViT Age Classifier(정밀, `hfOptimumExport`) admin-selectable, 얼굴crop 우선·사람crop 폴백, opt-in (`ageEstimation` 토글, Proposed) |
 | `server/src/utils/kmeansColor.js` | K-Means 대표색 클러스터링 — Human Parsing 마스크 픽셀 대표색 추출용, 단위 테스트 완료 |
 
 ## 주요 작업 절차
@@ -51,9 +52,11 @@ RTSP/WebRTC 스트림
 4. `client/src/types/` 에 TypeScript 타입 추가
 5. 대시보드 컴포넌트에서 새 속성 표시
 
-### AI 모델 카탈로그 — 런타임 전환 (YOLO 탐지기 + face/PPE/fire-smoke/cloth-PAR/Human Parsing/Appearance Re-ID)
+### AI 모델 카탈로그 — 런타임 전환 (YOLO 탐지기 + face/PPE/fire-smoke/cloth-PAR/Human Parsing/Appearance Re-ID/Age Estimation)
 
-`analysisApi.js`는 `MODEL_CATALOG`(YOLO 20종) + `EXTENDED_CATALOG`(face-detection/face-recognition/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid, `family` 필드로 구분)를 `ALL_MODELS`로 통합 관리합니다. 서버 재시작 없이 모델 다운로드·전환이 가능합니다.
+`analysisApi.js`는 `MODEL_CATALOG`(YOLO 20종) + `EXTENDED_CATALOG`(face-detection/face-recognition/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid/age-estimation, `family` 필드로 구분)를 `ALL_MODELS`로 통합 관리합니다. 서버 재시작 없이 모델 다운로드·전환이 가능합니다.
+
+`age-estimation` family는 InsightFace GenderAge(직접 ONNX)와 ViT Age Classifier(HuggingFace `optimum` 기반 신규 `hfOptimumExport` 변환 — 기존 `hfExport`는 ultralytics 전용이라 ViT 같은 non-YOLO 아키텍처를 변환할 수 없어 별도 전략 추가) 두 모델을 admin-selectable로 제공합니다. `_findPythonWithOptimum()`이 `import optimum, transformers`를 확인합니다.
 
 | API | 설명 |
 |---|---|
@@ -132,7 +135,7 @@ cd server && node src/scripts/downloadModels.js
 
 - YOLO12 5개 모델 자동 다운로드 + ONNX 변환
 - PPE(`yolov8m_ppe.onnx`)·Fire & Smoke(`yolov8s_fire_smoke.onnx`)도 `HF_EXPORT_MODELS`/`exportHfPtToOnnx()`로 자동 다운로드+변환 (HuggingFace Hub `.pt` → `ultralytics export`, `huggingface_hub` Python 패키지 필요)
-- cloth-PAR는 두 모델이 admin-selectable: `openpar_pa100k.onnx`(PromptPAR, CLIP ViT-L)는 `server/models/`에 직접 배포되어 있고, `openpar_resnet50_pa100k.onnx`(OpenPAR, ResNet50)는 공개 사전학습 ONNX가 없어 자동화 불가 — `PYTHON_EXPORT_INSTRUCTIONS`에 수동 export 절차만 안내
+- cloth-PAR는 두 모델이 admin-selectable: `openpar_pa100k.onnx`(PromptPAR, CLIP ViT-L)는 `pyExport`(`exportPromptPAR.py` — OpenPAR repo clone + Google Drive 체크포인트 + CUDA GPU export, §14 참고)로 자동화되어 있고, `openpar_resnet50_pa100k.onnx`(OpenPAR, ResNet50)는 공개 사전학습 ONNX가 없어 자동화 불가 — `PYTHON_EXPORT_INSTRUCTIONS`에 수동 export 절차만 안내
 - 이미 존재하는 파일은 건너뜀
 
 **SDLC 참조:** [SRS_AI_Model_Catalog](../../../docs/srs/SRS_AI_Model_Catalog.md) · [Design_AI_Model_Catalog](../../../docs/design/Design_AI_Model_Catalog.md) · [TC_AI_Model_Catalog](../../../docs/tc/TC_AI_Model_Catalog.md) · `test/api/model_catalog.test.js`
@@ -217,6 +220,7 @@ cd server && node src/scripts/downloadModels.js
 | SRS | [SRS_AI_Fire_Smoke_Detection](../../../docs/srs/SRS_AI_Fire_Smoke_Detection.md) · [SRS_AI_Cloth_Analysis](../../../docs/srs/SRS_AI_Cloth_Analysis.md) · [SRS_AI_Color_Analysis](../../../docs/srs/SRS_AI_Color_Analysis.md) · [SRS_AI_Mask_Detection](../../../docs/srs/SRS_AI_Mask_Detection.md) · [SRS_AI_Hat_Detection](../../../docs/srs/SRS_AI_Hat_Detection.md) |
 | SRS | [SRS_Distributed_AI_Pipeline](../../../docs/srs/SRS_Distributed_AI_Pipeline.md) — 분산 파이프라인 소프트웨어 요구사항 |
 | SRS | [SRS_AI_Model_Catalog](../../../docs/srs/SRS_AI_Model_Catalog.md) — FR-MC-001~022, YOLO12 PT→ONNX 파이프라인 |
+| RFP/PRD/SRS/Design/TC | [RFP_AI_Age_Estimation](../../../docs/rfp/RFP_AI_Age_Estimation.md) · [PRD_AI_Age_Estimation](../../../docs/prd/PRD_AI_Age_Estimation.md) · [SRS_AI_Age_Estimation](../../../docs/srs/SRS_AI_Age_Estimation.md) · [Design_AI_Age_Estimation](../../../docs/design/Design_AI_Age_Estimation.md) · [TC_AI_Age_Estimation](../../../docs/tc/TC_AI_Age_Estimation.md) — 연령 예측 듀얼 모델, `hfOptimumExport` 신규 변환 경로 |
 | Design | [Design_LTS2026_Loitering_Tracking_System](../../../docs/design/Design_LTS2026_Loitering_Tracking_System.md) · [Design_Object_Tracking](../../../docs/design/Design_Object_Tracking.md) · [Design_AI_Human_Detection](../../../docs/design/Design_AI_Human_Detection.md) |
 | Design | [Design_AI_Fire_Smoke_Detection](../../../docs/design/Design_AI_Fire_Smoke_Detection.md) · [Design_AI_Cloth_Analysis](../../../docs/design/Design_AI_Cloth_Analysis.md) · [Design_AI_Color_Analysis](../../../docs/design/Design_AI_Color_Analysis.md) · [Design_AI_Mask_Detection](../../../docs/design/Design_AI_Mask_Detection.md) · [Design_AI_Hat_Detection](../../../docs/design/Design_AI_Hat_Detection.md) |
 | Design | [Design_Distributed_AI_Pipeline](../../../docs/design/Design_Distributed_AI_Pipeline.md) — AnalysisClient·AnalysisAPI·SERVER_MODE 설계 |
@@ -245,6 +249,7 @@ cd server && node src/scripts/downloadModels.js
 | `routes/analysisApi.js` | `docs/design/Design_Distributed_AI_Pipeline.md`, `docs/srs/SRS_Distributed_AI_Pipeline.md`, `docs/tc/TC_Distributed_AI_Pipeline.md` |
 | `routes/analysisApi.js` (MODEL_CATALOG 변경) | `docs/design/Design_AI_Model_Catalog.md`, `docs/srs/SRS_AI_Model_Catalog.md`, `docs/tc/TC_AI_Model_Catalog.md` |
 | `scripts/downloadModels.js` (YOLO12 추가) | `docs/design/Design_AI_Model_Catalog.md`, `docs/tc/TC_AI_Model_Catalog.md` |
+| `services/ageEstimationService.js` | `docs/design/Design_AI_Age_Estimation.md`, `docs/srs/SRS_AI_Age_Estimation.md`, `docs/tc/TC_AI_Age_Estimation.md`, `docs/design/Design_AI_Model_Catalog.md` §10 |
 
 **공통 규칙**
 - **새 기능 추가** → PRD + SRS + Design + TC 문서 모두 신규 작성 또는 기존 문서에 항목 추가
@@ -835,3 +840,49 @@ _checkPromptParGate(filePath) {
 **회귀 테스트:** `test/api/model_catalog.test.js` Group A(TC-MC-017, catalog 구성)·Group D(TC-MC-018/019, 메모리 게이트 유닛 테스트 — `os.freemem()` monkey-patch, 실제 ONNX 파일/서버 불필요).
 
 **SDLC 참조:** [Design_AI_Cloth_Analysis.md §11](../../../docs/design/Design_AI_Cloth_Analysis.md#11-model-choice--memory-gate) · [Design_AI_Model_Catalog.md §8](../../../docs/design/Design_AI_Model_Catalog.md#8-cloth-par-model-choice--promptpar-memory-gate) · [SRS_AI_Cloth_Analysis.md §12](../../../docs/srs/SRS_AI_Cloth_Analysis.md) (FR-CLT-022~028) · [TC_AI_Model_Catalog.md](../../../docs/tc/TC_AI_Model_Catalog.md) (TC-MC-017~019)
+
+### 15. ageEstimationService.js — 연령 예측 신규 모듈, `hfOptimumExport` PT→ONNX 변환 전략 도입 (2026-07-12)
+
+**배경:** 기존 `ageGroup`(3단계, `colorClothService.js`의 PA100k 부산물)과 별개로, 전용 연령 예측 모델을 Admin Dashboard에서 다운로드·활성화할 수 있어야 한다는 요구가 있었다. 기존 PT→ONNX 변환 파이프라인(`hfExport`)은 전부 `ultralytics.YOLO(pt).export()` 기반이라 ViT 분류기 같은 non-YOLO HuggingFace Transformers 아키텍처는 변환할 수 없었다 — 이를 위해 HuggingFace `optimum` 라이브러리를 사용하는 새 소스 전략(`hfOptimumExport`)을 신설했다.
+
+**구현 (`analysisApi.js` `EXTENDED_CATALOG`):**
+```javascript
+{
+  id: 'insightface-genderage', label: 'InsightFace GenderAge (buffalo_l)',
+  family: 'age-estimation', series: 'Age Estimation',
+  file: 'genderage.onnx', size: 96,
+  url: 'https://huggingface.co/JackCui/facefusion/resolve/main/gender_age.onnx', // 실제 URL 재검증 필요
+  license: 'InsightFace non-commercial research license',
+},
+{
+  id: 'vit-age-classifier', label: 'ViT Age Classifier (nateraw)',
+  family: 'age-estimation', series: 'Age Estimation',
+  file: 'vit_age_classifier.onnx', size: 224,
+  hfOptimumExport: { repo: 'nateraw/vit-age-classifier' },
+  classMap: VIT_AGE_BUCKET_CLASSES,
+},
+```
+
+`/models/download` 핸들러의 신규 `entry.hfOptimumExport` 분기:
+```javascript
+} else if (entry.hfOptimumExport) {
+  const pyExec = _findPythonWithOptimum();  // import optimum, transformers
+  const script = [
+    'from optimum.exporters.onnx import main_export',
+    `main_export(model_name_or_path=${JSON.stringify(entry.hfOptimumExport.repo)}, output=${JSON.stringify(tmpDir)}, task="image-classification")`,
+  ].join('; ');
+  // ... execFile, then copy tmpDir/model.onnx → filePath
+}
+```
+
+**서비스 (`ageEstimationService.js`, `appearanceReidService.js`를 구조 템플릿으로 사용):** `load()/reload()/ready/status` 패턴 동일. `estimateAge(jpegBuffer, bbox, {isFaceCrop})`이 활성 모델 파일명(`genderage.onnx` vs `vit_age_classifier.onnx`)으로 전처리/후처리를 분기 — InsightFace는 96×96 BGR 회귀 출력, ViT는 224×224 RGB ImageNet 정규화 + 9-bucket softmax argmax.
+
+**파이프라인 연동 (`pipelineManager.js`):** 얼굴 bbox 우선(`obj.face?.bbox`), 없으면 person bbox(`obj.bbox`) 폴백. `_getAgeEstimate()`가 objectId별 4초 캐시(`_ageEstimateCache`)로 매 프레임 재추론을 방지 — `_getAppearanceEmbedding()`과 동일 패턴. `tracking.js`의 `Track`에는 `color`/`cloth`/`accessories`와 동일하게 `estimatedAge` 필드 + `updateEstimatedAge()`를 추가했다(주의: 이 필드는 재식별 유사도 스코어러에서 아직 사용되지 않으며, 클라이언트에 실제로 노출되는 값은 `attrObjects`에 매 프레임 부착되는 값이다 — 최초 설계 문서에 "sticky-attribute 목록"이라는 존재하지 않는 개념으로 서술했다가 구현 중 발견하여 정정함, `Design_AI_Age_Estimation.md` §7/§9 참조).
+
+**UI:** `AdminUsersPage.tsx`의 `AiModelsSection()`이 family/series 기준 제네릭 렌더링이므로 `EXTENDED_SERIES_ORDER`/`PROPOSED_SERIES`/`ModelCatalogEntry.family`/`ADMIN_MODULE_GROUPS` 상수 4곳만 갱신 — 별도 컴포넌트 불필요.
+
+**opt-in:** `analyticsConfig.ageEstimation` 기본 `false`. 비활성 시 크롭 추출·추론이 전혀 발생하지 않음.
+
+**회귀 테스트:** `test/api/model_catalog.test.js`(TC-MC-020, family 구성) · `test/api/age_estimation.test.js`(TC-AGE-007~009, `AgeEstimationService` 단위 테스트 — ONNX 세션을 스텁 처리해 실제 모델 파일/서버 불필요, sharp로 합성 JPEG 생성해 크롭 파이프라인까지 검증).
+
+**SDLC 참조:** [RFP_AI_Age_Estimation.md](../../../docs/rfp/RFP_AI_Age_Estimation.md) · [PRD_AI_Age_Estimation.md](../../../docs/prd/PRD_AI_Age_Estimation.md) · [SRS_AI_Age_Estimation.md](../../../docs/srs/SRS_AI_Age_Estimation.md) (FR-AGE-001~026) · [Design_AI_Age_Estimation.md](../../../docs/design/Design_AI_Age_Estimation.md) · [Design_AI_Model_Catalog.md §4.2d/§10](../../../docs/design/Design_AI_Model_Catalog.md) · [TC_AI_Age_Estimation.md](../../../docs/tc/TC_AI_Age_Estimation.md) (TC-AGE-001~011)

@@ -1,6 +1,6 @@
 ---
 **Document:** Design_AI_Model_Catalog  
-**Version:** 2.1  
+**Version:** 2.3  
 **Status:** Draft  
 **Date:** 2026-07-12  
 **Parent SRS:** [SRS_AI_Model_Catalog](../srs/SRS_AI_Model_Catalog.md)  
@@ -12,12 +12,12 @@
 
 ## 1. Overview
 
-`analysisApi.js` maintains two static catalog arrays — `MODEL_CATALOG` (YOLO detector, 20 entries) and `EXTENDED_CATALOG` (every other ONNX model family, 9 entries) — concatenated into `ALL_MODELS`. Each family's "currently active" model is tracked against a different in-memory service (`_detector`, `AttributePipeline._face/_ppe/_color`, `FireSmokeService`, `AppearanceReidService`), resolved centrally by `_activeFileForEntry()`. Operators can query the full catalog, download/export any automatable entry, and hot-swap the active model per family via REST APIs — all surfaced through the Admin Dashboard's AI Models tab. The `cloth-par` family exposes two selectable models (PromptPAR vs. OpenPAR — see §9); PromptPAR carries a pre-activation memory gate that the other families do not.
+`analysisApi.js` maintains two static catalog arrays — `MODEL_CATALOG` (YOLO detector, 20 entries) and `EXTENDED_CATALOG` (every other ONNX model family, 11 entries) — concatenated into `ALL_MODELS`. Each family's "currently active" model is tracked against a different in-memory service (`_detector`, `AttributePipeline._face/_ppe/_color`, `FireSmokeService`, `AppearanceReidService`, `AgeEstimationService`), resolved centrally by `_activeFileForEntry()`. Operators can query the full catalog, download/export any automatable entry, and hot-swap the active model per family via REST APIs — all surfaced through the Admin Dashboard's AI Models tab. The `cloth-par` family exposes two selectable models (PromptPAR vs. OpenPAR — see §8); the new `age-estimation` family similarly exposes two selectable models (InsightFace GenderAge vs. ViT Age Classifier — see §10). PromptPAR carries a pre-activation memory gate that the other families do not.
 
 ## 2. Architecture
 
 ```
-ALL_MODELS = [...MODEL_CATALOG, ...EXTENDED_CATALOG]   (29 entries)
+ALL_MODELS = [...MODEL_CATALOG, ...EXTENDED_CATALOG]   (31 entries)
 
 MODEL_CATALOG (20 entries) — YOLO detector, family: undefined
   ├─ YOLO26 (n/s/m/l/x) — .pt from v8.4.0 → ultralytics export → ONNX
@@ -25,14 +25,15 @@ MODEL_CATALOG (20 entries) — YOLO detector, family: undefined
   ├─ YOLO11 (n/s/m/l/x) — direct ONNX from Ultralytics v8.3.0
   └─ YOLO12 (n/s/m/l/x) — .pt from v8.4.0 → ultralytics export → ONNX
 
-EXTENDED_CATALOG (9 entries) — non-detector families
+EXTENDED_CATALOG (11 entries) — non-detector families
   ├─ family:'face-detection'   — SCRFD 2.5G            — direct ONNX
   ├─ family:'face-recognition' — ArcFace ResNet50       — direct ONNX
   ├─ family:'ppe'              — YOLOv8m PPE            — hfExport (HuggingFace .pt → ultralytics export)
   ├─ family:'fire-smoke'       — YOLOv8s Fire & Smoke   — hfExport (HuggingFace .pt → ultralytics export)
-  ├─ family:'cloth-par'      ×2 — PromptPAR (PA100k, CLIP ViT-L, shipped) + OpenPAR (ResNet50, PA100k, manualOnly) — see §9
+  ├─ family:'cloth-par'      ×2 — PromptPAR (PA100k, CLIP ViT-L, pyExport — §4.2e) + OpenPAR (ResNet50, PA100k, manualOnly) — see §8
   ├─ family:'human-parsing'  ×2 — SCHP LIP-20, SegFormer B2 Clothes — direct ONNX (Proposed)
-  └─ family:'appearance-reid'  — OSNet person Re-ID     — direct ONNX (Proposed)
+  ├─ family:'appearance-reid'  — OSNet person Re-ID     — direct ONNX (Proposed)
+  └─ family:'age-estimation' ×2 — InsightFace GenderAge (direct ONNX) + ViT Age Classifier (hfOptimumExport — new) — see §10 (Proposed)
 
 _downloadProgress: Map<modelId, { status, percent, error }>
   └─ status: 'downloading' | 'converting' | 'done' | 'error'
@@ -46,6 +47,7 @@ Active-model pointers, one per family (resolved by _activeFileForEntry(m, detect
   AttributePipeline._color.parModelPath  (family: 'cloth-par')
   AttributePipeline._color.hpModelPath   (family: 'human-parsing')
   AppearanceReidService.modelPath        (family: 'appearance-reid')
+  AgeEstimationService.modelPath         (family: 'age-estimation')
   └─ all hot-swapped independently by POST /api/analysis/models/switch
 ```
 
@@ -89,23 +91,25 @@ Download URL 패턴: `https://github.com/ultralytics/assets/releases/download/v8
   id:                 string,   // e.g. 'yolov8m-ppe'
   label:              string,   // e.g. 'YOLOv8m PPE (Mask+Helmet)'
   family:             string,   // 'face-detection' | 'face-recognition' | 'ppe' | 'fire-smoke'
-                                 // | 'cloth-par' | 'human-parsing' | 'appearance-reid'
+                                 // | 'cloth-par' | 'human-parsing' | 'appearance-reid' | 'age-estimation'
   series:             string,   // display grouping, e.g. 'PPE Detection'
   file:               string,   // ONNX filename in server/models/
   size?:              number,   // input size, when applicable (e.g. 640)
-  url?:               string,   // direct ONNX download URL (mutually exclusive with hfExport/manualOnly)
-  hfExport?:          { repo: string, file: string },  // huggingface_hub .pt → ultralytics export
+  url?:               string,   // direct ONNX download URL (mutually exclusive with hfExport/hfOptimumExport/pyExport/manualOnly)
+  hfExport?:          { repo: string, file: string },  // huggingface_hub .pt → ultralytics export (YOLO architectures only)
+  hfOptimumExport?:   { repo: string },  // huggingface checkpoint → optimum.exporters.onnx (non-YOLO architectures, e.g. ViT) — §4.2d
+  pyExport?:          { script: string, requiresGpu?: boolean },  // standalone Python script owns its own clone/download/convert pipeline (bespoke non-YOLO/non-HF-standard architectures, e.g. PromptPAR's CLIP+fusion model) — §4.2e
   manualOnly?:        true,     // no automatable source — operator must export manually
   docRef?:            string,   // reference link shown by the UI/API when manualOnly
-  classMap?:          object,   // human-parsing only — model-specific class indices → upper/lower
+  classMap?:          object,   // human-parsing / age-estimation (ViT) only — model-specific class indices
   inputSize?:         number,   // human-parsing only — native square input resolution
   license:            string,
 }
 ```
 
-`url`, `classMap`, and `hfExport` are stripped from the `GET /api/analysis/models` response (`FR-MC-005c`) — they are source-resolution detail, not needed by the client.
+`url`, `classMap`, `hfExport`, `hfOptimumExport`, and `pyExport` are stripped from the `GET /api/analysis/models` response (`FR-MC-005c`) — they are source-resolution detail, not needed by the client.
 
-Exactly one of `url` / `hfExport` / `manualOnly` is set per entry, selecting the download strategy in §4.
+Exactly one of `url` / `hfExport` / `hfOptimumExport` / `pyExport` / `manualOnly` is set per entry, selecting the download strategy in §4.
 
 | family | id | source strategy |
 |---|---|---|
@@ -113,10 +117,12 @@ Exactly one of `url` / `hfExport` / `manualOnly` is set per entry, selecting the
 | `face-recognition` | `arcface-w600k-r50` | `url` (direct ONNX) |
 | `ppe` | `yolov8m-ppe` | `hfExport` (`keremberke/yolov8m-protective-equipment-detection`, `best.pt`) |
 | `fire-smoke` | `yolov8s-fire-smoke` | `hfExport` (`Mehedi-2-96/fire-smoke-detection-yolo`, `fire_smoke_yolov8s_model.pt`) |
-| `cloth-par` | `openpar-pa100k` | none (`.onnx` shipped directly in `server/models/` — no public download URL, see §9) |
+| `cloth-par` | `openpar-pa100k` | `pyExport` (`exportPromptPAR.py` — clones OpenPAR model code, downloads ViT backbone + PA100k checkpoint, exports; requires GPU — see §4.2e, §8) |
 | `cloth-par` | `openpar-resnet50-pa100k` | `manualOnly` (OpenPAR ResNet50 baseline has no public pretrained ONNX) |
 | `human-parsing` | `schp-lip20`, `segformer-clothes` | `url` (direct ONNX) |
 | `appearance-reid` | `osnet-retail-0287` | `url` (direct ONNX) |
+| `age-estimation` | `insightface-genderage` | `url` (direct ONNX — ships pre-built) |
+| `age-estimation` | `vit-age-classifier` | `hfOptimumExport` (`nateraw/vit-age-classifier`) — see §4.2d, §10 |
 
 ## 4. Download Pipeline
 
@@ -203,6 +209,66 @@ Note: `openpar-pa100k` (PromptPAR) is a `cloth-par` sibling entry that is NOT `m
 
 This check runs before the already-downloaded and download-in-progress checks — a `manualOnly` entry always rejects the download request, even if the file happens to already exist (the file's presence in that case came from a manual export, not this endpoint).
 
+### 4.2d HuggingFace `optimum` PT→ONNX Conversion (Age Estimation — ViT, new)
+
+`hfExport` (§4.2b) only works for Ultralytics-compatible architectures (`YOLO(pt).export()`). The ViT Age Classifier is a HuggingFace Transformers image-classification model, not a YOLO detector, so it needs a different conversion tool: **HuggingFace `optimum`**.
+
+```
+POST /api/analysis/models/download { modelId: 'vit-age-classifier' }
+  │
+  ├─ pyExec = _findPythonWithOptimum()
+  │   → verifies `import optimum, transformers` (new helper, sibling to _findPythonWithUltralytics)
+  ├─ _downloadProgress.set(modelId, { status:'converting', percent:50 })
+  │
+  ├─ execFile(pyExec, ['-c', '
+  │     from optimum.exporters.onnx import main_export
+  │     main_export(model_name_or_path="nateraw/vit-age-classifier", output="<tmpDir>", task="image-classification")
+  │   '], timeout: 300_000ms)
+  │
+  ├─ fs.copyFileSync("<tmpDir>/model.onnx", filePath)
+  ├─ fs.rmSync("<tmpDir>", { recursive: true, force: true })
+  └─ _downloadProgress.set(modelId, { status:'done', percent:100 })
+```
+
+This is a genuinely new source strategy (fourth alongside `url` / `hfExport` / `manualOnly`) rather than a reuse of `hfExport`, because `optimum.exporters.onnx.main_export()` and `ultralytics export()` are different tools with different invocation contracts. Future non-YOLO HuggingFace model integrations should reuse `hfOptimumExport` rather than re-deriving a conversion path (see `.claude/memory/feedback_hf_optimum_export_pattern.md`).
+
+### 4.2e Standalone-Script Export (PromptPAR)
+
+Neither `hfExport` (Ultralytics-only) nor `hfOptimumExport` (standard HuggingFace Transformers models) fits PromptPAR: it's bespoke CLIP+fusion research code from `Event-AHU/OpenPAR` with a checkpoint hosted on Google Drive (not GitHub Releases or the HuggingFace Hub), so it needs its own multi-stage pipeline rather than a one-line conversion call. `pyExport` hands the whole thing to a standalone script instead of an inline `-c` snippet:
+
+```
+POST /api/analysis/models/download { modelId: 'openpar-pa100k' }
+  │
+  ├─ pyExec = _findPythonForPromptPAR()
+  │   → verifies `import torch, torchvision, onnx, onnxruntime, gdown` (sibling helper to
+  │     _findPythonWithUltralytics(), different package set — PromptPAR needs no ultralytics)
+  ├─ git --version check (repo clone dependency, not a Python import)
+  ├─ _downloadProgress.set(modelId, { status:'converting', percent:5 })
+  │
+  ├─ execFile(pyExec, [scriptPath, '--output', filePath], { timeout: 30*60_000 })
+  │   → server/src/scripts/exportPromptPAR.py, which internally:
+  │      1. clones Event-AHU/OpenPAR (shallow) for the real PromptPAR model code
+  │      2. downloads the ViT-B/16 backbone (stable GitHub release asset)
+  │      3. downloads the PA100k checkpoint via `gdown` (Google Drive folder or,
+  │         if PROMPTPAR_CHECKPOINT_GDRIVE_FILE_ID is set, a single direct file)
+  │      4. builds CLIP + TransformerClassifier from the cloned code, loads the checkpoint
+  │      5. wraps forward(imgs) so the exported graph takes only an image input (the 26
+  │         attribute text embeddings are CLIP-encoded once and frozen into the graph)
+  │      6. torch.onnx.export(..., input_names=['input'], output_names=['attrs'], opset=11)
+  │      7. verifies ONNX vs PyTorch output (max abs diff), unless --skip-verify
+  │   stdout lines matching `Stage N/7` are parsed to update _downloadProgress.percent (5-95%)
+  │
+  └─ _downloadProgress.set(modelId, { status:'done', percent:100 })
+```
+
+Key differences from every other download strategy:
+- **Requires a CUDA GPU** at export time (`entry.pyExport.requiresGpu: true` in the catalog) — OpenPAR's PromptPAR construction hardcodes `.cuda()` with no CPU path. The script checks `torch.cuda.is_available()` and fails with a clear message rather than crashing partway through. This is an export-time-only requirement; the resulting ONNX still runs on CPU at inference time (`colorClothService.js` `forceCpu: true`).
+- **Much longer timeout** (30 minutes vs. 5 for the other paths) — shallow-clones a repository, downloads a ~1.2GB checkpoint via `gdown`, and runs a GPU export pass.
+- **Coarse (stage-based) progress**, not byte-accurate percentage — there's no single HTTP response with a `content-length` to track; progress is inferred from `Stage N/7` markers the script prints to stdout.
+- **No individual Google Drive file ID published** — the PA100k checkpoint lives inside a shared Drive *folder* (`drive.google.com/drive/folders/1GkpaMjJjRDDRnLABK08uoNsOsKXN-nD5`), not a single direct-download link. By default the script downloads the whole folder via `gdown.download_folder()` and locates `PA100k_Checkpoint.pth` inside it (~3.3GB total for all 3 checkpoints in that folder, since there's no API-free way to fetch just one file's ID from a folder listing). Setting `PROMPTPAR_CHECKPOINT_GDRIVE_FILE_ID` once an operator has the individual file's ID skips this and downloads only that file.
+
+This has been verified against the real `Event-AHU/OpenPAR` repository structure (constructor signature, forward() signature, checkpoint keys, Google Drive folder contents, ViT backbone release URL — all confirmed live as of 2026-07-12) but has **not** been run end-to-end in CI (no GPU in the standard test environment) — treat the first real run on GPU hardware as the actual validation step, not this document.
+
 ### 4.3 Error Handling
 
 ```
@@ -226,7 +292,8 @@ POST /api/analysis/models/switch { modelId }
        case 'face-recognition': AttributePipeline._face.reloadRecognizer(filePath)
        case 'ppe':              AttributePipeline._ppe.reload(filePath)
        case 'fire-smoke':       FireSmokeService.reload(filePath)               (construct if absent)
-       case 'cloth-par':        AttributePipeline._color.reloadPar(filePath)          (memory-gated for PromptPAR — see §9, throws 500 on gate failure)
+       case 'cloth-par':        AttributePipeline._color.reloadPar(filePath)          (memory-gated for PromptPAR — see §8, throws 500 on gate failure)
+       case 'age-estimation':   AgeEstimationService.reload(filePath)          (construct if absent)
        default (undefined):     _detector.reload(filePath)                     (construct if absent)
      }
   └─ return { ok: true, active: entry.label, file: entry.file }
@@ -310,8 +377,8 @@ GET /api/analysis/models → 200
       downloadPercent: null,
       downloadError: null,
     },
-    // ... 5 more extended-catalog entries (face-detection/face-recognition/fire-smoke ×1,
-    //     human-parsing ×2, appearance-reid ×1)
+    // ... 7 more extended-catalog entries (face-detection/face-recognition/fire-smoke ×1,
+    //     human-parsing ×2, appearance-reid ×1, age-estimation ×2)
   ]
 }
 ```
@@ -320,11 +387,13 @@ GET /api/analysis/models → 200
 
 `server/src/scripts/downloadModels.js` provides a CLI tool for pre-downloading models:
 
-- `DIRECT_MODELS` array — direct-ONNX models (YOLOv8n, SCRFD, ArcFace enabled by default; human-parsing/appearance-reid entries disabled by default — Proposed, verify source before enabling)
+- `DIRECT_MODELS` array — direct-ONNX models (YOLOv8n, SCRFD, ArcFace enabled by default; human-parsing/appearance-reid/`genderage.onnx` entries disabled by default — Proposed, verify source before enabling)
 - `YOLO12_MODELS` array — same 5 YOLO12 entries; uses same Python detection logic
 - `exportYolo12ToOnnx(m)` — same GitHub-release PT→ONNX pipeline as the API handler's `requiresConversion` path
 - `HF_EXPORT_MODELS` array — PPE and Fire & Smoke entries
 - `exportHfPtToOnnx(m)` — same huggingface_hub PT→ONNX pipeline as the API handler's `hfExport` path (§4.2b)
+- `HF_OPTIMUM_EXPORT_MODELS` array — ViT Age Classifier entry (new)
+- `exportHfOptimumToOnnx(m)` — same `optimum` PT→ONNX pipeline as the API handler's `hfOptimumExport` path (§4.2d)
 - `PYTHON_EXPORT_INSTRUCTIONS` — printed manual-export instructions for OpenPAR only (the only model with no automatable source)
 
 Usage:
@@ -341,7 +410,7 @@ The `cloth-par` family (AI-06 Cloth Analysis) offers two admin-selectable models
 | PromptPAR (PA100k) | `openpar-pa100k` | CLIP ViT-L + text-prompt fusion (~1.2GB) | Forced CPU (`forceCpu: true` — DirectML triggers `DXGI_ERROR_DEVICE_REMOVED` during inference on this backbone) | **Yes** |
 | OpenPAR (ResNet50, PA100k) | `openpar-resnet50-pa100k` | Plain ResNet50 classifier head | Default execution provider selection | No |
 
-Both are selected the same way as every other family: Admin Dashboard → AI Models → **Cloth Attribute (PAR)** → **Activate** on the desired row (only enabled once the corresponding `.onnx` file exists in `server/models/`).
+Both are selected the same way as every other family: Admin Dashboard → AI Models → **Cloth Attribute (PAR)** → **Activate** on the desired row (only enabled once the corresponding `.onnx` file exists in `server/models/`). PromptPAR's file can now be produced automatically via the **↓ Download** button too (§4.2e, `pyExport`) — requires a CUDA GPU + `git` on the analysis server; OpenPAR remains `manualOnly` (no public pretrained checkpoint exists to automate).
 
 ### 8.1 Why PromptPAR needs a gate
 
@@ -394,8 +463,27 @@ Log line (both call sites), Korean per the project's operational logging convent
 | `PYTHON_EXEC_LINUX` | — | Linux-specific override (may lack `_lzma`) |
 | `PYTHON_EXEC_WINDOWS` | — | Windows-specific override |
 | `PROMPTPAR_MIN_FREE_MEM_MB` | `2048` | PromptPAR memory gate floor (MB free RAM) — see §8 |
+| `PROMPTPAR_REPO_URL` | `https://github.com/Event-AHU/OpenPAR.git` | Repo cloned by `exportPromptPAR.py` (§4.2e) for the CLIP+fusion model code |
+| `PROMPTPAR_REPO_REF` | `main` | Branch/tag to clone |
+| `PROMPTPAR_GDRIVE_FOLDER_ID` | `1GkpaMjJjRDDRnLABK08uoNsOsKXN-nD5` | Shared Drive folder containing the released PA100k/PETA/RAP1 checkpoints |
+| `PROMPTPAR_CHECKPOINT_FILENAME` | `PA100k_Checkpoint.pth` | Filename to locate within the downloaded folder |
+| `PROMPTPAR_CHECKPOINT_GDRIVE_FILE_ID` | (empty) | If set, downloads this single file directly instead of the whole folder |
+| `PROMPTPAR_VIT_BACKBONE_URL` | GitHub release asset (`jx_vit_base_p16_224-80ecf9dd.pth`) | Pretrained ViT-B/16 PromptPAR initializes from |
 
-If none set, auto-detect falls back to `/usr/bin/python3` → `python3` → `python`. `_findPythonWithUltralytics({ checkYolo12, checkHfHub })` (analysisApi.js) and `_findPython(candidates, checkScript)` (downloadModels.js) share this candidate order but vary the verification script (`checkYolo12` for YOLO26/12, `checkHfHub` for PPE/Fire-Smoke).
+If none set, auto-detect falls back to `/usr/bin/python3` → `python3` → `python`. `_findPythonWithUltralytics({ checkYolo12, checkHfHub })`, `_findPythonWithOptimum()`, and `_findPythonForPromptPAR()` (all in analysisApi.js) and `_findPython(candidates, checkScript)` (downloadModels.js) share this candidate order but vary the verification script (`checkYolo12` for YOLO26/12, `checkHfHub` for PPE/Fire-Smoke, `import optimum, transformers` for `_findPythonWithOptimum()`, `import torch, torchvision, onnx, onnxruntime, gdown` for `_findPythonForPromptPAR()`).
+
+## 10. Age Estimation (Proposed)
+
+The `age-estimation` family (2026-07-12) offers two admin-selectable models, independent of the `ageGroup` byproduct attribute already produced by the `cloth-par` family (see `docs/design/Design_AI_Age_Estimation.md` §9 for the distinction):
+
+| Model | Catalog id | Source strategy | Input |
+|---|---|---|---|
+| InsightFace GenderAge (`buffalo_l`) | `insightface-genderage` | `url` (direct ONNX) | 96×96 |
+| ViT Age Classifier (`nateraw`) | `vit-age-classifier` | `hfOptimumExport` (§4.2d) | 224×224 |
+
+Both are selected the same way as every other family: Admin Dashboard → AI Models → **Age Estimation** → **Activate** on the desired row. Neither is memory-gated (unlike PromptPAR, §8) — both are small enough (≤~330MB) that no pre-activation RAM check is warranted.
+
+Full design detail — input fallback logic (face-crop preferred, person-crop fallback), `AgeEstimationService` structure, preprocessing contracts per model, and open verification items — lives in `docs/design/Design_AI_Age_Estimation.md`.
 
 ---
 
@@ -407,3 +495,5 @@ If none set, auto-detect falls back to `/usr/bin/python3` → `python3` → `pyt
 | 1.1 | 2026-06-23 | YOLO26 시리즈(n/s/m/l/x) 추가 — 카탈로그 20개, PT→ONNX 파이프라인 공유 |
 | 2.0 | 2026-07-09 | 전체 모델 파일로 범위 확대 — EXTENDED_CATALOG에 face-detection/face-recognition/ppe/fire-smoke/cloth-par 5개 패밀리 추가(카탈로그 총 28개), hfExport(HuggingFace .pt→ONNX) 및 manualOnly 다운로드 전략 신설(§4.2b, §4.2c), family별 독립 active 판정(`_activeFileForEntry()`)·switch 디스패치 재설계(§5), `{already:true}` 단축 응답 실제 구현 반영, §6 샘플 응답을 실제 `catalog`/`exists` 스키마로 정정 |
 | 2.1 | 2026-07-12 | PromptPAR(PA100k) 통합 반영 — `cloth-par` 패밀리가 `openpar-pa100k`(PromptPAR, 직접 배포) + `openpar-resnet50-pa100k`(OpenPAR ResNet50, manualOnly) 2개 항목으로 확장(카탈로그 총 29개), §8 신설(PromptPAR 메모리 게이트: 가용 RAM 부족 시 로그 남기고 Cloth 분석 자동 비활성화), §3b/§4.2c/§6 샘플을 실제 id·파일명으로 정정(구 `openpar-market1501`/`openpar.onnx` placeholder 제거) |
+| 2.2 | 2026-07-12 | `age-estimation` 패밀리 추가(카탈로그 총 31개) — InsightFace GenderAge(직접 ONNX) + ViT Age Classifier(신규 `hfOptimumExport` 변환 전략) 2개 항목, §4.2d 신설(HuggingFace `optimum` 기반 PT→ONNX, non-YOLO 아키텍처 전용), §10 신설, §5 switch 디스패치에 `age-estimation` 케이스 추가, Overview의 잘못된 "§9" cloth-par 참조를 "§8"로 정정 |
+| 2.3 | 2026-07-12 | PromptPAR Download 자동화 반영 — `openpar-pa100k`가 소스 전략 없음(shipped)에서 신규 `pyExport`(§4.2e, `exportPromptPAR.py`)로 전환: Event-AHU/OpenPAR repo clone + ViT-B/16 backbone + Google Drive PA100k 체크포인트(`gdown`) 자동 다운로드 후 CUDA GPU에서 export·검증. §3b 스키마에 `pyExport` 필드 추가, §9에 `PROMPTPAR_REPO_URL`/`_REPO_REF`/`_GDRIVE_FOLDER_ID`/`_CHECKPOINT_FILENAME`/`_CHECKPOINT_GDRIVE_FILE_ID`/`_VIT_BACKBONE_URL` 환경변수 추가 |

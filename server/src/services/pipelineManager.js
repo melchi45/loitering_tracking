@@ -112,6 +112,7 @@ const AlertService     = require('./alertService');
 const AttributePipeline = require('./attributePipeline');
 const FireSmokeService  = require('./fireSmokeService');
 const { AppearanceReidService, cosineSim } = require('./appearanceReidService');
+const { AgeEstimationService } = require('./ageEstimationService');
 const analyticsConfig  = require('./analyticsConfig');
 const { getSystemMetrics } = require('./systemMetrics');
 
@@ -258,6 +259,7 @@ const CLOTHING_APPEAR_W     = 0.30;     // clothing weight in combined Re-ID con
 // CrossCamera Face Tracking Phase-2 (Proposed) — per-track OSNet embedding throttle,
 // mirrors AI-05 Phase-3's HP_INTERVAL_MS pattern (colorClothService.js).
 const APPEARANCE_EMBED_INTERVAL_MS = 4000;
+const AGE_ESTIMATION_INTERVAL_MS   = 4000; // Age Estimation (Proposed) — throttle re-inference per track
 
 // Maximum number of concurrent camera pipelines (each = 1 capture backend process).
 // Configurable via MAX_PIPELINES env var; 0 = unlimited.
@@ -293,6 +295,9 @@ class PipelineManager {
     this._qdrant          = qdrantService;
     this._appearanceReid  = new AppearanceReidService();
     this._appearanceEmbedCache = new Map(); // objectId -> { ts, embedding }
+    // Age Estimation (Proposed) — see docs/design/Design_AI_Age_Estimation.md.
+    this._ageEstimation   = new AgeEstimationService();
+    this._ageEstimateCache = new Map(); // objectId -> { ts, result }
     this._analysisClient   = null; // Remote analysis client (streaming mode only)
     this._fireAlertCooldown = new Map(); // `${cameraId}:${zoneName}:${cls}` → lastAlertTs
     // Hook called just before a camera is marked offline (stopCamera).
@@ -432,6 +437,13 @@ class PipelineManager {
       if (this._appearanceReid.status === 'not_started') {
         await this._appearanceReid.load().catch((err) => {
           console.warn('[PipelineManager] AppearanceReidService load warn:', err.message);
+        });
+      }
+
+      // Age Estimation (Proposed) — age prediction model
+      if (this._ageEstimation.status === 'not_started') {
+        await this._ageEstimation.load().catch((err) => {
+          console.warn('[PipelineManager] AgeEstimationService load warn:', err.message);
         });
       }
 
@@ -945,6 +957,22 @@ class PipelineManager {
                 );
               }
             }
+
+            // ── Age Estimation (Proposed) ────────────────────────────────────────────
+            // Face crop preferred (higher accuracy); falls back to the person bbox when
+            // no face was detected for this track. Independent of the 'color'/'cloth'
+            // gates above — only requires 'human' detection plus its own toggle.
+            if (analyticsConfig.isEnabled('ageEstimation') && this._ageEstimation.ready) {
+              await Promise.all(attrObjects
+                .filter(o => o.className === 'person')
+                .map(async (o) => {
+                  const bbox = o.face?.bbox || o.bbox;
+                  if (!bbox) return;
+                  const isFaceCrop = !!o.face?.bbox;
+                  const result = await this._getAgeEstimate(jpegBuffer, o.objectId, bbox, isFaceCrop);
+                  if (result) o.estimatedAge = result;
+                }));
+            }
           } catch (err) {
             console.error(`[PipelineManager][${camera.id}] Attribute pipeline error:`, err.message);
           }
@@ -956,6 +984,7 @@ class PipelineManager {
             if (obj.face?.embedding)  tracker.updateAppearance(obj.objectId, obj.face.embedding);
             if (obj.color)            tracker.updateColor(obj.objectId, obj.color);
             if (obj.cloth)            tracker.updateCloth(obj.objectId, obj.cloth);
+            if (obj.estimatedAge)     tracker.updateEstimatedAge(obj.objectId, obj.estimatedAge);
             // Accessories: hat (PPE model) and mask (PPE model)
             const hat  = obj.hat  !== undefined ? obj.hat  : undefined;
             const mask = obj.mask !== undefined ? obj.mask : undefined;
@@ -1094,6 +1123,7 @@ class PipelineManager {
               // objectId and must not outlive the track.
               if (this._attrPipeline) this._attrPipeline.dropTrack(trackKey);
               this._appearanceEmbedCache.delete(trackKey);
+              this._ageEstimateCache.delete(trackKey);
 
               const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
 
@@ -1577,6 +1607,8 @@ class PipelineManager {
       humanParsing:  this._attrPipeline     ? this._attrPipeline.humanParsingStatus : 'not_started',
       // CrossCamera Face Tracking Phase-2 Appearance Re-ID (Proposed)
       appearanceReid: this._appearanceReid  ? this._appearanceReid.status : 'not_started',
+      // Age Estimation (Proposed)
+      ageEstimation: this._ageEstimation    ? this._ageEstimation.status : 'not_started',
     };
   }
 
@@ -2342,6 +2374,23 @@ class PipelineManager {
     const emb = await this._appearanceReid.getEmbedding(jpegBuffer, bbox);
     if (emb) this._appearanceEmbedCache.set(key, { ts: now, embedding: emb });
     return emb;
+  }
+
+  /**
+   * Age Estimation (Proposed) — per-track throttled inference. Reuses a cached
+   * result within AGE_ESTIMATION_INTERVAL_MS instead of re-running the model
+   * every frame (mirrors _getAppearanceEmbedding above).
+   * @returns {Promise<{value:number,bucket?:string,source:'face'|'body',modelId:string}|null>}
+   */
+  async _getAgeEstimate(jpegBuffer, objectId, bbox, isFaceCrop) {
+    const key = String(objectId);
+    const now = Date.now();
+    const cached = this._ageEstimateCache.get(key);
+    if (cached && (now - cached.ts) < AGE_ESTIMATION_INTERVAL_MS) return cached.result;
+
+    const result = await this._ageEstimation.estimateAge(jpegBuffer, bbox, { isFaceCrop });
+    if (result) this._ageEstimateCache.set(key, { ts: now, result });
+    return result;
   }
 
   /**

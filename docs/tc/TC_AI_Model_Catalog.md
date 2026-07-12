@@ -1,6 +1,6 @@
 ---
 **Document:** TC_AI_Model_Catalog  
-**Version:** 2.1  
+**Version:** 2.3  
 **Status:** Draft  
 **Date:** 2026-07-12  
 **Parent SRS:** [SRS_AI_Model_Catalog](../srs/SRS_AI_Model_Catalog.md)  
@@ -33,6 +33,9 @@
 | TC-MC-017 | FR-MC-021 | cloth-par family exposes exactly 2 entries: PromptPAR (`openpar-pa100k`, not manualOnly) and OpenPAR (`openpar-resnet50-pa100k`, manualOnly) |
 | TC-MC-018 | FR-MC-018c | `reloadPar()` rejects PromptPAR and logs `PromptPAR 수행 불가능: ...` when free system RAM is below `PROMPTPAR_MIN_FREE_MEM_MB` |
 | TC-MC-019 | FR-MC-018c | `checkPromptParMemory()` gate check is a no-op for OpenPAR and passes when free RAM is comfortably above the floor |
+| TC-MC-020 | FR-MC-021 | age-estimation family exposes exactly 2 entries: InsightFace GenderAge (`insightface-genderage`, direct `url`) and ViT Age Classifier (`vit-age-classifier`, `hfOptimumExport`) — see `TC_AI_Age_Estimation.md` TC-AGE-001 for full detail |
+| TC-MC-021 | FR-MC-016 | `age-estimation` switch case hot-swaps `AgeEstimationService` independently of every other family — see `TC_AI_Age_Estimation.md` TC-AGE-006 |
+| TC-MC-022 | FR-MC-015c | `openpar-pa100k` download runs `exportPromptPAR.py` via `pyExport`: dependency/GPU/`git` pre-checks fail fast with a clear error; on success the script's `Stage N/7` stdout markers drive `_downloadProgress.percent` |
 
 ## 2. Test Cases
 
@@ -204,7 +207,7 @@
 **Pre-condition:** Analysis server running  
 **Steps:**
 1. `GET /api/analysis/models`
-2. Assert the set of distinct `family` values across `catalog` includes all of: `face-detection`, `face-recognition`, `ppe`, `fire-smoke`, `cloth-par`, `human-parsing`, `appearance-reid`
+2. Assert the set of distinct `family` values across `catalog` includes all of: `face-detection`, `face-recognition`, `ppe`, `fire-smoke`, `cloth-par`, `human-parsing`, `appearance-reid`, `age-estimation`
 3. Assert at least one entry has `manualOnly === true`
 4. Assert no entry ever exposes a raw `url` field in the response (always `undefined`)
 
@@ -310,6 +313,53 @@
 
 ---
 
+### TC-MC-020: age-estimation Family Composition (InsightFace GenderAge + ViT Age Classifier)
+
+**Pre-condition:** Analysis server running  
+**Steps:**
+1. `GET /api/analysis/models`
+2. Filter `catalog` to `family === 'age-estimation'` — assert exactly 2 entries
+3. Assert one entry has `id === 'insightface-genderage'` and no `manualOnly`
+4. Assert the other has `id === 'vit-age-classifier'` and no `manualOnly` (its `hfOptimumExport` field is stripped from the client response, but the download endpoint must still route it correctly — see TC-AGE-004)
+
+**Expected:** PASS  
+**Priority:** P1
+
+---
+
+### TC-MC-021: age-estimation Switch Independence
+
+**Pre-condition:** Both age-estimation models downloaded; a YOLO detector model also downloaded  
+**Steps:**
+1. `POST /api/analysis/models/switch { modelId: 'insightface-genderage' }` → HTTP 200
+2. `GET /api/analysis/models` — assert `insightface-genderage.active === true`, YOLO detector's active entry unchanged
+3. `POST /api/analysis/models/switch { modelId: 'vit-age-classifier' }` → HTTP 200
+4. Assert `vit-age-classifier.active === true` and `insightface-genderage.active === false`
+
+**Expected:** PASS — matches the family-scoped independence already verified for `cloth-par` (TC-MC-015, TC-MC-017)  
+**Priority:** P1
+
+---
+
+### TC-MC-022: PromptPAR pyExport Download Pipeline
+
+**Pre-condition:** `openpar-pa100k`'s file does NOT exist in `server/models/`  
+**Steps (pre-flight failure paths — no GPU/network required):**
+1. With `torch`/`onnx`/`gdown` NOT importable by any candidate interpreter, `POST /api/analysis/models/download { modelId: 'openpar-pa100k' }` → `_downloadProgress` ends in `status: 'error'` with a message naming the missing packages
+2. With those importable but `git` not on `PATH`, same request → `_downloadProgress` ends in `status: 'error'` mentioning `git`
+
+**Steps (full pipeline — GPU + network required, manual/offline only):**
+3. On a CUDA-capable machine with `git`, `torch`, `torchvision`, `onnx`, `onnxruntime`, `gdown` installed: `POST /api/analysis/models/download { modelId: 'openpar-pa100k' }`
+4. Poll `GET /api/analysis/models` — assert `downloading: true`, `downloadPercent` increases in roughly the stage sequence (clone → ViT backbone → checkpoint → build → export → verify)
+5. On completion (up to 30 min), assert `server/models/openpar_pa100k.onnx` exists and `exists: true`
+6. Server log / subprocess stdout contains a `Max abs diff (PyTorch vs ONNX): <N>` line with `N < 1e-2`
+
+**Expected:** PASS  
+**Note:** Steps 3-6 require a GPU + real network access to github.com and drive.google.com — not run in the standard CI test environment; verified by design/code review against the real `Event-AHU/OpenPAR` repository structure as of 2026-07-12, not executed end-to-end. Steps 1-2 (pre-flight checks) can run anywhere.  
+**Priority:** P2 (steps 1-2), P3/manual (steps 3-6)
+
+---
+
 ## 3. Automated Test Coverage
 
 `test/api/model_catalog.test.js` covers:
@@ -321,8 +371,9 @@
 - TC-MC-013 (download request for a `manualOnly` entry → 409 with `docRef`)
 - TC-MC-017 (cloth-par family exposes exactly 2 entries: PromptPAR + OpenPAR)
 - TC-MC-018 / TC-MC-019 (PromptPAR memory gate — unit tests, no running server required; see Group D in the script)
+- TC-MC-020 (age-estimation family exposes exactly 2 entries: InsightFace GenderAge + ViT Age Classifier)
 
-Network-dependent tests (TC-MC-004, TC-MC-009, TC-MC-014) are skipped by default; enable with `INTEGRATION_DOWNLOAD=1` env var. TC-MC-003, TC-MC-005, TC-MC-006, TC-MC-010, TC-MC-011, TC-MC-015, TC-MC-016 are exercised manually / via the Admin Dashboard against a running analysis server (not yet automated).
+Network-dependent tests (TC-MC-004, TC-MC-009, TC-MC-014) are skipped by default; enable with `INTEGRATION_DOWNLOAD=1` env var. TC-MC-003, TC-MC-005, TC-MC-006, TC-MC-010, TC-MC-011, TC-MC-015, TC-MC-016, TC-MC-021 are exercised manually / via the Admin Dashboard against a running analysis server (not yet automated). TC-MC-022's full pipeline (steps 3-6) requires a CUDA GPU + real network access and is manual-only by design; only its pre-flight failure paths (steps 1-2) are candidates for automation.
 
 ---
 
@@ -333,3 +384,5 @@ Network-dependent tests (TC-MC-004, TC-MC-009, TC-MC-014) are skipped by default
 | 1.0 | 2026-06-17 | 초기 작성 — TC-MC-001~011, YOLO12 PT→ONNX, 런타임 전환, 병렬 다운로드 방지 |
 | 2.0 | 2026-07-09 | 전체 모델 파일로 범위 확대 — TC-MC-012~016 신규(비감지기 패밀리 구성·manualOnly 거부·HF export·family별 독립 전환·already 단축응답), TC-MC-001/002/004/008/009 필드명(`catalog`/`exists`) 및 응답코드(400→409) 정정, §3 자동화 커버리지에서 근거 없이 포함되어 있던 TC-MC-005 제거 |
 | 2.1 | 2026-07-12 | PromptPAR(PA100k) 통합 반영 — TC-MC-013 `modelId`를 실제 manualOnly 항목(`openpar-resnet50-pa100k`)으로 정정(구 `openpar-market1501`은 실존한 적 없는 placeholder였음), TC-MC-017~019 신규(cloth-par 2-항목 구성 검증, PromptPAR 메모리 게이트 유닛 테스트) — `test/api/model_catalog.test.js` Group D로 자동화 |
+| 2.2 | 2026-07-12 | `age-estimation` family(Proposed) 추가 — TC-MC-020(패밀리 구성)·TC-MC-021(family 독립 전환) 신규, TC-MC-012 family 목록 갱신, §3 자동화 커버리지에 TC-MC-020 추가. 상세는 신규 `TC_AI_Age_Estimation.md`(TC-AGE-001~011) 참조 |
+| 2.3 | 2026-07-12 | PromptPAR Download 자동화(`pyExport`) 반영 — TC-MC-022 신규(사전조건 실패 경로는 자동화 가능, 전체 파이프라인은 GPU·네트워크 필요로 수동 전용) |

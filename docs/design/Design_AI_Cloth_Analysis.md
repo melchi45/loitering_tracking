@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-AI-04 |
-| **Version** | 2.0 |
+| **Version** | 2.1 |
 | **Status** | Active |
 | **Date** | 2026-07-12 |
 | **Parent SRS** | srs/SRS_AI_Cloth_Analysis.md |
@@ -553,7 +553,7 @@ Two PAR models are selectable for the `cloth-par` family, both exposed identical
 | Accuracy | Higher (CLIP ViT-L + text-prompt fusion) | Lower (plain ResNet50 head) |
 | Execution provider | Forced CPU — DirectML crashes on this backbone during inference (`DXGI_ERROR_DEVICE_REMOVED`) | Default provider selection |
 | Free-RAM requirement to activate | ≥ 2048MB (`PROMPTPAR_MIN_FREE_MEM_MB`) | None |
-| Source | Shipped in `server/models/` | Manual export only (`manualOnly`) |
+| Source | `pyExport` — automated via `server/src/scripts/exportPromptPAR.py` (clones OpenPAR model code, downloads ViT backbone + PA100k checkpoint, exports on a CUDA GPU) — see Design_AI_Model_Catalog.md §4.2e | Manual export only (`manualOnly`) — no public pretrained checkpoint exists to automate |
 
 ### 11.1 Why the gate exists
 
@@ -583,3 +583,4 @@ Full design rationale, code excerpts, and the environment variable reference liv
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for AI Cloth Analysis |
 | 1.1 | 2026-07-09 | Youngho Kim | Added §10 cross-reference clarifying PAR(clothing type) vs proposed Human Parsing(clothing region mask, Color Analysis Phase-3) boundary |
 | 2.0 | 2026-07-12 | LTS Engineering Team | Full rewrite to match the shipped PromptPAR (PA100k, CLIP ViT-L, 26 attributes, 224×224) integration — replaced the stale 12-attribute/128×256 `openpar.onnx` placeholder throughout (§1-§9); added OpenPAR (ResNet50, PA100k) as a second selectable `cloth-par` model and new §11 (PromptPAR memory gate: pre-activation free-RAM check, auto-disable Cloth analysis + Korean log on failure, admin recovery paths) |
+| 2.1 | 2026-07-12 | LTS Engineering Team | §11 Source row updated — PromptPAR download is now automated via `pyExport` (`exportPromptPAR.py`), not a static "shipped" file; see Design_AI_Model_Catalog.md §4.2e for the full pipeline |

@@ -79,13 +79,14 @@ LTS-2026의 Distributed AI Pipeline 기능은 `server/.env`의 `SERVER_MODE` 환
 | `face-recognition` | ArcFace ResNet50 (w600k) | `server/models/arcface_w600k_r50.onnx` | 직접 ONNX | ✅ Done (기본 필수) |
 | `ppe` | YOLOv8m PPE (마스크+안전모) | `server/models/yolov8m_ppe.onnx` | HuggingFace `.pt`→`ultralytics export` (자동) | ✅ Done |
 | `fire-smoke` | YOLOv8s Fire & Smoke | `server/models/yolov8s_fire_smoke.onnx` | HuggingFace `.pt`→`ultralytics export` (자동) | ✅ Done |
-| `cloth-par` | PromptPAR (PA100k, CLIP ViT-L) | `server/models/openpar_pa100k.onnx` | 직접 배포 (`server/models/`에 사전 포함, 별도 다운로드 URL 없음) | ✅ Done — 활성화 전 가용 RAM ≥2GB 사전 체크(미달 시 `cloth` 자동 비활성화, 아래 참고) |
+| `cloth-par` | PromptPAR (PA100k, CLIP ViT-L) | `server/models/openpar_pa100k.onnx` | `pyExport` — `exportPromptPAR.py`가 OpenPAR repo clone + Google Drive 체크포인트(`gdown`) + CUDA GPU export를 자동 수행 (아래 참고) | ✅ Done — 활성화 전 가용 RAM ≥2GB 사전 체크(미달 시 `cloth` 자동 비활성화, 아래 참고) |
 | `cloth-par` | OpenPAR (ResNet50, PA100k) | `server/models/openpar_resnet50_pa100k.onnx` | **수동 export만 가능** — 공개된 사전학습 ONNX 없음 | ✅ Done (수동 배치 필요, 메모리 게이트 미적용) |
 | `human-parsing` | SCHP (LIP-20) 또는 SegFormer clothes | `server/models/schp_lip.onnx` | 직접 ONNX | ✅ 코드 구현 완료, 기본 비활성(opt-in) — [Design_AI_Color_Analysis.md §10](../design/Design_AI_Color_Analysis.md#10-phase-3-proposed-architecture--human-parsing-model-catalog) |
 | `appearance-reid` | OSNet (person Re-ID) | `server/models/appearance_reid_osnet.onnx` | 직접 ONNX | ✅ 코드 구현 완료, 기본 비활성(opt-in) — [Design_AI_AppearanceReID.md §12](../design/Design_AI_AppearanceReID.md#12-phase-2-개선-제안--실제-re-id-임베딩-모델-도입) |
 
 - PPE/Fire & Smoke는 공개된 사전학습 ONNX가 없어 Ultralytics `.pt`가 아닌 **HuggingFace Hub** 저장소에서 `.pt`를 받아 `ultralytics export`로 변환합니다 (`huggingface_hub` Python 패키지 필요) — `npm run download-models` 또는 Admin UI Download 버튼으로 자동 수행됩니다.
 - `cloth-par`는 Admin Dashboard → AI Models → Cloth Attribute (PAR)에서 PromptPAR와 OpenPAR 중 하나를 선택해 Activate합니다. OpenPAR는 공개된 사전학습 체크포인트 자체가 없어 카탈로그의 `manualOnly` 항목으로 등록되어 있습니다 — Download 버튼 대신 "Manual export" 참조 링크가 표시되며, 직접 학습/변환한 ONNX 파일을 `server/models/openpar_resnet50_pa100k.onnx`에 배치하면 즉시 Activate할 수 있습니다.
+- PromptPAR는 Admin Dashboard의 **↓ Download** 버튼으로 자동 다운로드+변환할 수 있습니다(`node src/scripts/exportPromptPAR.py`를 서버가 서브프로세스로 실행). **필수 전제조건**: analysis 서버에 CUDA GPU(export 시에만 필요 — 추론은 CPU), `git`, 그리고 `pip install torch torchvision onnx onnxruntime gdown ftfy regex`. 체크포인트는 OpenPAR 저자들의 공유 Google Drive **폴더**(`drive.google.com/drive/folders/1GkpaMjJjRDDRnLABK08uoNsOsKXN-nD5`)에 있어 개별 파일 ID 없이는 폴더 전체(~3.3GB)를 내려받은 뒤 `PA100k_Checkpoint.pth`를 찾습니다 — 개별 파일 ID를 알고 있다면 `PROMPTPAR_CHECKPOINT_GDRIVE_FILE_ID` 환경변수로 지정해 폴더 전체 다운로드를 건너뛸 수 있습니다. 다운로드+변환+검증까지 최대 30분(타임아웃) 소요됩니다. 수동으로 오프라인 실행 후 결과 `.onnx` 파일만 다른 서버의 `server/models/`에 복사해도 됩니다.
 - PromptPAR는 CLIP ViT-L 백본(~1.2GB)을 강제로 CPU에서 실행하므로, Activate(서버 시작 시 자동 로드 포함) 전 가용 시스템 RAM이 `PROMPTPAR_MIN_FREE_MEM_MB`(기본 2048MB) 이상인지 먼저 확인합니다. 부족하면 `[ColorClothService] PromptPAR 수행 불가능: ...` 로그를 남기고 `cloth` 분석 설정을 자동으로 `false`로 전환합니다 — 서버는 크래시하지 않고 계속 실행되며, 런타임 전환 시에는 HTTP 500으로 실패가 Admin Dashboard에 표시됩니다. 메모리를 확보하고 재시도하거나, 메모리 게이트가 없는 OpenPAR로 대신 전환하세요. 자세한 내용은 [Design_AI_Cloth_Analysis.md §11](../design/Design_AI_Cloth_Analysis.md#11-model-choice--memory-gate) 참고.
 - `human-parsing`/`appearance-reid`는 소스 URL 검증 전이라 `downloadModels.js`의 `DIRECT_MODELS`에서 기본 `enabled:false`로 남아 있습니다 — Admin UI Download 버튼으로 개별 다운로드하거나, 검증 후 스크립트에서 `enabled:true`로 전환하세요.
 
@@ -300,6 +301,12 @@ npm start
 | `QDRANT_ENABLED` | `false` | `combined`, `analysis` | Qdrant 벡터 DB 연동 활성화 (opt-in). `false` 시 Face/Appearance Re-ID는 기존 인메모리 갤러리로만 동작 — 기능 차이 없음 |
 | `QDRANT_URL` | `http://localhost:6333` | `combined`, `analysis` | Qdrant 서버 접속 URL (`QDRANT_ENABLED=true`일 때만 사용) |
 | `PROMPTPAR_MIN_FREE_MEM_MB` | `2048` | `combined`, `analysis` | PromptPAR(cloth-par, CLIP ViT-L) 활성화 전 요구되는 최소 가용 시스템 RAM(MB). 미달 시 로드/전환 거부 + `cloth` 자동 비활성화 — OpenPAR(ResNet50)에는 적용되지 않음 |
+| `PROMPTPAR_REPO_URL` | `https://github.com/Event-AHU/OpenPAR.git` | `combined`, `analysis` | `exportPromptPAR.py`가 clone하는 모델 코드 저장소 |
+| `PROMPTPAR_REPO_REF` | `main` | `combined`, `analysis` | clone할 브랜치/태그 |
+| `PROMPTPAR_GDRIVE_FOLDER_ID` | `1GkpaMjJjRDDRnLABK08uoNsOsKXN-nD5` | `combined`, `analysis` | PA100k/PETA/RAP1 체크포인트가 있는 공유 Drive 폴더 ID |
+| `PROMPTPAR_CHECKPOINT_FILENAME` | `PA100k_Checkpoint.pth` | `combined`, `analysis` | 폴더 다운로드 후 찾을 파일명 |
+| `PROMPTPAR_CHECKPOINT_GDRIVE_FILE_ID` | (없음) | `combined`, `analysis` | 설정 시 폴더 전체 대신 이 파일만 직접 다운로드 (훨씬 빠름) |
+| `PROMPTPAR_VIT_BACKBONE_URL` | GitHub Release 자산 (`jx_vit_base_p16_224-80ecf9dd.pth`) | `combined`, `analysis` | PromptPAR가 초기화에 사용하는 사전학습 ViT-B/16 백본 |
 
 ### 5.2 ANALYSIS_REQUEST_TIMEOUT_MS 권장값
 
@@ -1048,3 +1055,4 @@ curl http://localhost:3443/api/galleries/match-history?limit=5
 | 1.13 | 2026-07-09 | 배회 감지 파라미터 표에 `MIN_DISPLACEMENT_PX`/velocity 픽셀-미터 캘리브레이션 미구현 안내 주석 추가 — `docs/rfp/Loitering_Detection_가이드.md` 흡수 반영, 원본 삭제 |
 | 1.14 | 2026-07-09 | §7.5에 색상 사전 필터/알림 속성 미첨부 운영 참고 추가 — `docs/rfp/ReID_및_색상분석_활용가이드.md` 흡수 반영, 원본 삭제 |
 | 1.15 | 2026-07-12 | PromptPAR(PA100k) 통합 반영 — §1.4 cloth-par 행을 PromptPAR(직접 배포)/OpenPAR(ResNet50, manualOnly) 2행으로 갱신, §5.1에 `PROMPTPAR_MIN_FREE_MEM_MB` 환경변수 추가, PromptPAR 활성화 전 메모리 게이트 동작(가용 RAM 부족 시 로그+`cloth` 자동 비활성화) 운영 안내 추가 |
+| 1.16 | 2026-07-12 | PromptPAR Download 자동화 반영 — §1.4 cloth-par 행을 "직접 배포"에서 `pyExport`(`exportPromptPAR.py`)로 갱신, 전제조건(CUDA GPU·git·Python 패키지)·Google Drive 폴더 다운로드 방식 운영 안내 추가, §5.1에 `PROMPTPAR_REPO_URL`/`_REPO_REF`/`_GDRIVE_FOLDER_ID`/`_CHECKPOINT_FILENAME`/`_CHECKPOINT_GDRIVE_FILE_ID`/`_VIT_BACKBONE_URL` 환경변수 6종 추가 |

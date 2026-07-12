@@ -28,6 +28,7 @@ const BehaviorEngine   = require('../services/behaviorEngine');
 const AttributePipeline = require('../services/attributePipeline');
 const FireSmokeService  = require('../services/fireSmokeService');
 const { AppearanceReidService } = require('../services/appearanceReidService');
+const { AgeEstimationService, VIT_AGE_BUCKET_CLASSES } = require('../services/ageEstimationService');
 const { SCHP_LIP20_CLASS_MAP, SEGFORMER_CLOTHES_CLASS_MAP } = require('../services/colorClothService');
 const analyticsConfig   = require('../services/analyticsConfig');
 const { getSystemMetrics } = require('../services/systemMetrics');
@@ -82,6 +83,11 @@ const MODEL_CATALOG = [
 //   undefined            → plain HTTP(S) ONNX download (default)
 //   requiresConversion   → GitHub .pt release → `ultralytics export` (YOLO26/12, unchanged)
 //   hfExport: {repo,file}→ huggingface_hub .pt download → `ultralytics export` (PPE, Fire/Smoke)
+//   hfOptimumExport: {repo} → HuggingFace checkpoint → `optimum.exporters.onnx` (Age Estimation's
+//                          ViT classifier — non-YOLO architecture; see _findPythonWithOptimum())
+//   pyExport: {script}   → standalone Python script in server/src/scripts/ handles its own
+//                          clone/download/convert pipeline (PromptPAR — bespoke non-YOLO
+//                          architecture, no generic converter applies; see _findPythonForPromptPAR())
 //   manualOnly: true     → no automated source exists; operator must export and place the file manually
 const EXTENDED_CATALOG = [
   // Face detection (SCRFD) — already required by FaceService, now catalog-managed.
@@ -115,15 +121,17 @@ const EXTENDED_CATALOG = [
   // Cloth/pedestrian attribute PAR (AI-06) — PromptPAR (CLIP ViT-L backbone + text-prompt
   // fusion), released checkpoint fine-tuned on PA100k (26 standard attributes: gender, age
   // group, view angle, hat/glasses, bag type, sleeve length, upper/lower style, boots).
-  // No automated download: the released checkpoint lives on Google Drive (~1.3GB) and
-  // export requires cloning github.com/Event-AHU/OpenPAR's model code (CLIP fork + ViT +
-  // fusion classifier) to reconstruct and run the PyTorch model before exporting to ONNX
-  // with the text-attribute embeddings baked in as frozen constants (they don't depend on
-  // the image). Exported+verified against the PyTorch reference (max abs diff 1.4e-5) on
-  // 2026-07-12; the ONNX file (~1.2GB) is shipped directly in server/models/.
+  // Automated via `pyExport` (server/src/scripts/exportPromptPAR.py, 2026-07-12): clones
+  // Event-AHU/OpenPAR's model code, downloads the ViT-B/16 backbone + the PA100k checkpoint
+  // (Google Drive), rebuilds the PyTorch model, and exports to ONNX with the text-attribute
+  // embeddings baked in as frozen constants (they don't depend on the image). Requires a
+  // CUDA GPU + git + torch/onnx/gdown at export time (NOT at inference time — the resulting
+  // ONNX runs on CPU, see colorClothService.js forceCpu). Exported+verified against the
+  // PyTorch reference (max abs diff 1.4e-5) on 2026-07-12.
   {
     id: 'openpar-pa100k', label: 'PromptPAR (PA100k)', family: 'cloth-par', series: 'Cloth Attribute (PAR)',
     file: 'openpar_pa100k.onnx', size: 224,
+    pyExport: { script: 'exportPromptPAR.py', requiresGpu: true },
     docRef: 'https://github.com/Event-AHU/OpenPAR',
     license: 'See OpenPAR repository',
   },
@@ -163,6 +171,20 @@ const EXTENDED_CATALOG = [
     url: 'https://storage.openvinotoolkit.org/repositories/open_model_zoo/2023.0/models_bin/1/person-reidentification-retail-0287/person-reidentification-retail-0267.onnx',
     license: 'Apache-2.0',
   },
+  // Age Estimation (Proposed) — dedicated age prediction, independent of the PA100k
+  // cloth-PAR ageGroup byproduct (see RFP_AI_Age_Estimation.md §9 / Design_AI_Age_Estimation.md §9).
+  {
+    id: 'insightface-genderage', label: 'InsightFace GenderAge (buffalo_l)', family: 'age-estimation', series: 'Age Estimation',
+    file: 'genderage.onnx', size: 96,
+    url: 'https://huggingface.co/JackCui/facefusion/resolve/main/gender_age.onnx', // verified downloadable 2026-07-12 — see Design_AI_Age_Estimation.md §11
+    license: 'InsightFace non-commercial research license (acceptable — non-commercial project)',
+  },
+  {
+    id: 'vit-age-classifier', label: 'ViT Age Classifier (nateraw)', family: 'age-estimation', series: 'Age Estimation',
+    file: 'vit_age_classifier.onnx', size: 224,
+    hfOptimumExport: { repo: 'nateraw/vit-age-classifier' },
+    license: 'See Hugging Face model card', classMap: VIT_AGE_BUCKET_CLASSES,
+  },
 ];
 const ALL_MODELS = [...MODEL_CATALOG, ...EXTENDED_CATALOG];
 
@@ -184,6 +206,8 @@ function _activeFileForEntry(m, detectorActiveFile) {
       return _fireSmokeService?.ready ? path.basename(_fireSmokeService.modelPath) : null;
     case 'cloth-par':
       return _attrPipeline?._color?._parReady ? path.basename(_attrPipeline._color.parModelPath) : null;
+    case 'age-estimation':
+      return _ageEstimation?.ready ? path.basename(_ageEstimation.modelPath) : null;
     default:
       return detectorActiveFile; // YOLO detector families (undefined `family`)
   }
@@ -210,6 +234,48 @@ function _findPythonWithUltralytics({ checkYolo12 = false, checkHfHub = false } 
     parts.push('assert os.path.exists(cfg12), "YOLO12 not supported (ultralytics " + ultralytics.__version__ + ")"');
   }
   const script = parts.join('; ');
+  for (const cand of candidates) {
+    try { execFileSync(cand, ['-c', script], { timeout: 8000 }); return cand; } catch {}
+  }
+  return null;
+}
+
+// Find a working Python interpreter for the HuggingFace `optimum` ONNX exporter
+// (Age Estimation's ViT classifier). Distinct from _findPythonWithUltralytics() —
+// `optimum.exporters.onnx` is a different tool from `ultralytics export()` and does
+// not depend on ultralytics being installed at all.
+function _findPythonWithOptimum() {
+  const { execFileSync } = require('child_process');
+  const candidates = [
+    process.env.PYTHON_EXEC,
+    process.platform === 'win32' ? process.env.PYTHON_EXEC_WINDOWS : process.env.PYTHON_EXEC_LINUX,
+    '/usr/bin/python3',
+    'python3',
+    'python',
+  ].filter(Boolean);
+  const script = 'import optimum, transformers';
+  for (const cand of candidates) {
+    try { execFileSync(cand, ['-c', script], { timeout: 8000 }); return cand; } catch {}
+  }
+  return null;
+}
+
+// Find a working Python interpreter for the PromptPAR `pyExport` script
+// (server/src/scripts/exportPromptPAR.py). Distinct from _findPythonWithUltralytics()
+// above — PromptPAR needs torch/onnx/gdown, not ultralytics, and doesn't share that
+// check. Does NOT verify CUDA availability here (cheap import-only check); the
+// script itself fails fast with a clear message if no GPU is present, since that's
+// a runtime property, not an interpreter property.
+function _findPythonForPromptPAR() {
+  const { execFileSync } = require('child_process');
+  const candidates = [
+    process.env.PYTHON_EXEC,
+    process.platform === 'win32' ? process.env.PYTHON_EXEC_WINDOWS : process.env.PYTHON_EXEC_LINUX,
+    '/usr/bin/python3',
+    'python3',
+    'python',
+  ].filter(Boolean);
+  const script = 'import torch, torchvision, onnx, onnxruntime, gdown';
   for (const cand of candidates) {
     try { execFileSync(cand, ['-c', script], { timeout: 8000 }); return cand; } catch {}
   }
@@ -523,6 +589,7 @@ let _detector         = null;
 let _attrPipeline     = null;
 let _fireSmokeService = null;
 let _appearanceReid   = null; // CrossCamera Face Tracking Phase-2 (Proposed)
+let _ageEstimation    = null; // Age Estimation (Proposed)
 let _servicesReady    = false;
 
 // Single promise guards concurrent callers — all waiters share the same load.
@@ -568,6 +635,14 @@ async function _loadServices() {
   } catch (err) {
     console.warn('[AnalysisAPI] AppearanceReidService load warn:', err.message);
     _appearanceReid = null;
+  }
+  try {
+    _ageEstimation = new AgeEstimationService();
+    await _ageEstimation.load();
+    console.log('[AnalysisAPI] AgeEstimationService loaded (Proposed):', _ageEstimation.status);
+  } catch (err) {
+    console.warn('[AnalysisAPI] AgeEstimationService load warn:', err.message);
+    _ageEstimation = null;
   }
   _servicesReady = true;
 }
@@ -1563,6 +1638,8 @@ router.get('/models', (req, res) => {
       url: undefined,           // don't expose raw model source URL to client
       classMap: undefined,      // internal detail, not needed by the UI
       hfExport: undefined,      // internal detail, not needed by the UI
+      hfOptimumExport: undefined, // internal detail, not needed by the UI
+      pyExport: undefined,      // internal detail, not needed by the UI
       exists,
       active,
       sizeBytes: stat ? stat.size : null,
@@ -1620,6 +1697,11 @@ router.post('/models/switch', express.json({ limit: '1kb' }), async (req, res) =
       case 'cloth-par':
         if (!_attrPipeline) return res.status(409).json({ error: 'AttributePipeline not loaded' });
         await _attrPipeline._color.reloadPar(filePath);
+        break;
+      case 'age-estimation':
+        // Age Estimation (Proposed) — hot-swap the active age model.
+        if (!_ageEstimation) _ageEstimation = new AgeEstimationService();
+        await _ageEstimation.reload(filePath);
         break;
       default: // YOLO detector families (undefined `family`)
         if (!_detector) {
@@ -1770,6 +1852,70 @@ router.post('/models/download', express.json({ limit: '1kb' }), async (req, res)
       if (!pyExec) throw new Error('Python with ultralytics >=8.3 (YOLO12 support) not found. Run: pip install -U ultralytics');
 
       await exportPtToOnnx(ptPath, pyExec);
+    } else if (entry.hfOptimumExport) {
+      // HuggingFace checkpoint → optimum.exporters.onnx (Age Estimation's ViT classifier —
+      // a non-YOLO architecture; `ultralytics export` cannot handle it, hence a distinct
+      // strategy from hfExport above).
+      const pyExec = _findPythonWithOptimum();
+      if (!pyExec) throw new Error('Python with optimum + transformers not found. Run: pip install -U optimum[exporters] transformers');
+
+      _downloadProgress.set(modelId, { status: 'converting', percent: 50, error: null });
+      const { execFile } = require('child_process');
+      const tmpDir = path.join(modelsDir, `.${modelId}-export-tmp`);
+      const script = [
+        'from optimum.exporters.onnx import main_export',
+        `main_export(model_name_or_path=${JSON.stringify(entry.hfOptimumExport.repo)}, output=${JSON.stringify(tmpDir)}, task="image-classification")`,
+      ].join('; ');
+      await new Promise((resolve, reject) => {
+        execFile(pyExec, ['-c', script], { timeout: 300_000 }, (err, stdout, stderr) => {
+          if (err) { console.error('[AnalysisAPI] optimum export stderr:', stderr); return reject(err); }
+          resolve();
+        });
+      });
+      fs.copyFileSync(path.join(tmpDir, 'model.onnx'), filePath);
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    } else if (entry.pyExport) {
+      // Standalone-script export (PromptPAR) — bespoke non-YOLO architecture, no
+      // generic converter applies. Long-running (clone + multi-GB downloads + GPU
+      // export), so this uses a much longer timeout than the other paths and reports
+      // coarse progress by parsing '[PromptPAR Export] Stage N/7' markers from stdout.
+      const pyExec = _findPythonForPromptPAR();
+      if (!pyExec) {
+        throw new Error(
+          'Python with torch/torchvision/onnx/onnxruntime/gdown not found. '
+          + 'Run: pip install torch torchvision onnx onnxruntime gdown ftfy regex'
+        );
+      }
+      try {
+        require('child_process').execFileSync('git', ['--version'], { timeout: 5000 });
+      } catch {
+        throw new Error('git not found on PATH — required to clone the OpenPAR model-code repository.');
+      }
+
+      _downloadProgress.set(modelId, { status: 'converting', percent: 5, error: null });
+      const scriptPath = path.resolve(__dirname, '..', 'scripts', entry.pyExport.script);
+      await new Promise((resolve, reject) => {
+        const { execFile } = require('child_process');
+        const child = execFile(
+          pyExec, [scriptPath, '--output', filePath],
+          { timeout: 30 * 60_000, maxBuffer: 20 * 1024 * 1024 },
+          (err, _stdout, stderr) => {
+            if (err) { console.error(`[AnalysisAPI] ${entry.label} export stderr:`, stderr); return reject(err); }
+            resolve();
+          }
+        );
+        const onOutput = (chunk) => {
+          const text = chunk.toString();
+          console.log(`[${entry.label} export] ${text.trim()}`);
+          const m = text.match(/Stage (\d+)\/(\d+)/);
+          if (m) {
+            const pct = 5 + Math.round((parseInt(m[1], 10) / parseInt(m[2], 10)) * 90);
+            _downloadProgress.set(modelId, { status: 'converting', percent: pct, error: null });
+          }
+        };
+        child.stdout?.on('data', onOutput);
+        child.stderr?.on('data', onOutput);
+      });
     } else {
       await new Promise((resolve, reject) => doDownload(entry.url, filePath, (err) => err ? reject(err) : resolve()));
     }

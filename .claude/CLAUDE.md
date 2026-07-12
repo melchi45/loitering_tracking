@@ -53,8 +53,9 @@ loitering_tracking/
 │   │   ├── mediamtxManager.js      # MediaMTX 경로 등록/해제 (WebRTC WHEP)
 │   │   ├── analysisClient.js       # streaming→analysis HTTP 클라이언트 (회로차단기)
 │   │   ├── fireSmokeService.js     # 화재·연기 감지
-│   │   ├── colorClothService.js    # 색상·의류 분석 — cloth-PAR PromptPAR(PA100k, CLIP ViT-L)/OpenPAR(ResNet50) admin-selectable, PromptPAR 사전 메모리 게이트(가용 RAM 부족 시 로그+Cloth 분석 자동 비활성화); Phase-3 Human Parsing 포함, opt-in — `humanParsing` 토글
+│   │   ├── colorClothService.js    # 색상·의류 분석 — cloth-PAR PromptPAR(PA100k, CLIP ViT-L, Download 자동화 `pyExport` — scripts/exportPromptPAR.py)/OpenPAR(ResNet50, manualOnly) admin-selectable, PromptPAR 사전 메모리 게이트(가용 RAM 부족 시 로그+Cloth 분석 자동 비활성화); Phase-3 Human Parsing 포함, opt-in — `humanParsing` 토글
 │   │   ├── appearanceReidService.js # CrossCamera Phase-2 Appearance/Body Re-ID OSNet 임베딩 추출 (opt-in, 모델 미배포 시 자동 비활성)
+│   │   ├── ageEstimationService.js # 연령 예측 — InsightFace GenderAge(경량)/ViT Age Classifier(정밀, hfOptimumExport) admin-selectable, 얼굴crop 우선·사람crop 폴백 (opt-in, `ageEstimation` 토글, Proposed)
 │   │   ├── qdrantService.js        # Qdrant 벡터 DB 클라이언트 — face_embeddings/appearance_embeddings 컬렉션, 서킷브레이커 (opt-in, `QDRANT_ENABLED=true`)
 │   │   ├── protectiveEquipService.js # 안전모·마스크 감지
 │   │   ├── discoveryService.js     # 카메라 자동 탐색
@@ -369,9 +370,9 @@ loitering_tracking/
 | GET | `/api/analysis/detection-snapshots` | bbox crop 이미지 조회 (query: objectId(필수), cameraId, from, to, limit — cropData base64 JPEG) |
 | GET | `/api/analysis/face-trajectories` | 크로스카메라 얼굴 궤적 DB 조회 (query: faceId, alias, cameraId, from, to, limit — max 500) |
 | DELETE | `/api/analysis/face-trajectories` | 얼굴 궤적 이력 전체 삭제 |
-| GET | `/api/analysis/models` | AI 모델 카탈로그 조회 — YOLO 탐지기 + face/PPE/fire-smoke/cloth-PAR/Human Parsing(Proposed)/Appearance Re-ID(Proposed) 전체 family 통합, 다운로드 상태·활성 모델 포함 |
-| POST | `/api/analysis/models/switch` | family별 활성 모델 런타임 전환 (body: modelId — YOLO 탐지기 외 face-detection/face-recognition/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid 지원) |
-| POST | `/api/analysis/models/download` | 모델 다운로드/변환 시작 (body: modelId — HuggingFace `.pt`→ONNX 자동 변환 포함; `manualOnly` 모델은 409 반환) |
+| GET | `/api/analysis/models` | AI 모델 카탈로그 조회 — YOLO 탐지기 + face/PPE/fire-smoke/cloth-PAR/Human Parsing(Proposed)/Appearance Re-ID(Proposed)/Age Estimation(Proposed) 전체 family 통합, 다운로드 상태·활성 모델 포함 |
+| POST | `/api/analysis/models/switch` | family별 활성 모델 런타임 전환 (body: modelId — YOLO 탐지기 외 face-detection/face-recognition/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid/age-estimation 지원) |
+| POST | `/api/analysis/models/download` | 모델 다운로드/변환 시작 (body: modelId — HuggingFace `.pt`→ONNX 자동 변환(ultralytics export) 포함, non-YOLO HuggingFace 모델(ViT 등)은 `hfOptimumExport`로 `optimum` 기반 변환; `manualOnly` 모델은 409 반환) |
 | POST | `/api/analysis/face-embed` | 얼굴 등록 사진 detect+embed 위임 수신 (streaming 모드가 로컬 얼굴 모델 없을 때 호출, raw JPEG → bbox/score/embedding/thumbnail) |
 | POST | `/api/analysis/face-search-conditions/sync` | streaming 서버의 `faceGalleries`/`faceGalleryFaces` 전체 스냅샷 반영 (embedding 제외, `source:'synced'` 태그로 upsert/delete) |
 | GET | `/api/analysis/face-search-conditions` | 활성 Face Search Condition 상세 조회 (Analysis Server Dashboard 드릴다운용) — `total`/`byType`는 `/api/analysis/metrics`의 `faceSearch` 필드에도 포함 |
@@ -626,7 +627,7 @@ Claude에서 직접 사용 가능한 LTS-2026 MCP 도구 (v1.3 — 35종, 소스
 ### AI / 검색 / 얼굴 갤러리 설정
 | 도구 | 설명 |
 |------|------|
-| `mcp_lts_get_model_catalog` | 전체 AI 모델 카탈로그 조회 — YOLO 탐지기(26/12/11/v8) + 얼굴 감지·인식·PPE·화재연기·의상PAR·(제안)Human Parsing·Appearance Re-ID (벤치마크·다운로드 상태·family별 활성 모델, combined/analysis 모드 전용) |
+| `mcp_lts_get_model_catalog` | 전체 AI 모델 카탈로그 조회 — YOLO 탐지기(26/12/11/v8) + 얼굴 감지·인식·PPE·화재연기·의상PAR·(제안)Human Parsing·Appearance Re-ID·Age Estimation (벤치마크·다운로드 상태·family별 활성 모델, combined/analysis 모드 전용) |
 | `mcp_lts_get_fire_smoke_config` | 화재/연기 감지 confidence·NMS 임계값 조회 (combined/analysis 모드 전용) |
 | `mcp_lts_get_tracker_config` | ByteTrack/Kalman 추적기 파라미터 조회 |
 | `mcp_lts_search_all` | alerts/detections/faces/events/matches 통합 전문 검색 |

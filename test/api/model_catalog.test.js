@@ -4,7 +4,8 @@
  *
  * TC: TC_AI_Model_Catalog
  *   Covers: TC-MC-001, TC-MC-002, TC-MC-002b, TC-MC-007, TC-MC-008,
- *           TC-MC-012, TC-MC-013, TC-MC-017, TC-MC-018, TC-MC-019
+ *           TC-MC-012, TC-MC-013, TC-MC-017, TC-MC-018, TC-MC-019,
+ *           TC-MC-020, TC-MC-021
  *   Not automated here (see TC_AI_Model_Catalog.md §3): TC-MC-003, TC-MC-005,
  *   TC-MC-006, TC-MC-010, TC-MC-011, TC-MC-014, TC-MC-015, TC-MC-016
  *
@@ -129,7 +130,7 @@ async function runGroupA() {
     const { status, body } = await get('/api/analysis/models');
     assertEq(status, 200, 'HTTP status');
     const families = new Set(body.catalog.map(m => m.family).filter(Boolean));
-    const expected = ['face-detection', 'face-recognition', 'ppe', 'fire-smoke', 'cloth-par', 'human-parsing', 'appearance-reid'];
+    const expected = ['face-detection', 'face-recognition', 'ppe', 'fire-smoke', 'cloth-par', 'human-parsing', 'appearance-reid', 'age-estimation'];
     for (const family of expected) {
       assert(families.has(family), `catalog missing family: ${family}`);
     }
@@ -153,6 +154,22 @@ async function runGroupA() {
     assert(openPar, 'expected OpenPAR entry (openpar-resnet50-pa100k)');
     assert(!promptPar.manualOnly, 'PromptPAR should not be manualOnly — shipped directly in server/models/');
     assert(openPar.manualOnly === true, 'OpenPAR should be manualOnly — no public pretrained ONNX release');
+  });
+
+  await test('TC-MC-020', 'age-estimation family exposes InsightFace GenderAge and ViT Age Classifier entries', async () => {
+    const { status, body } = await get('/api/analysis/models');
+    assertEq(status, 200, 'HTTP status');
+    const ageEstimation = body.catalog.filter(m => m.family === 'age-estimation');
+    assertEq(ageEstimation.length, 2, 'age-estimation entry count');
+
+    const insightface = ageEstimation.find(m => m.id === 'insightface-genderage');
+    const vit          = ageEstimation.find(m => m.id === 'vit-age-classifier');
+    assert(insightface, 'expected InsightFace GenderAge entry (insightface-genderage)');
+    assert(vit, 'expected ViT Age Classifier entry (vit-age-classifier)');
+    assert(!insightface.manualOnly, 'InsightFace GenderAge should not be manualOnly — direct ONNX download');
+    assert(!vit.manualOnly, 'ViT Age Classifier should not be manualOnly — automated via hfOptimumExport');
+    assert(insightface.url === undefined, 'internal url field must not be exposed to client');
+    assert(vit.hfOptimumExport === undefined, 'internal hfOptimumExport field must not be exposed to client');
   });
 }
 
