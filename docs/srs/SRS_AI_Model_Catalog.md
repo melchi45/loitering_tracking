@@ -1,8 +1,8 @@
 ---
 **Document:** SRS_AI_Model_Catalog  
-**Version:** 2.0  
+**Version:** 2.1  
 **Status:** Draft  
-**Date:** 2026-07-09  
+**Date:** 2026-07-12  
 **Parent RFP:** [RFP_AI_Model_Catalog](../rfp/RFP_AI_Model_Catalog.md)  
 **Parent PRD:** [PRD_AI_Model_Catalog](../prd/PRD_AI_Model_Catalog.md)  
 **Child Design:** [Design_AI_Model_Catalog](../design/Design_AI_Model_Catalog.md)  
@@ -64,6 +64,7 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | FR-MC-017 | The switch shall fail with HTTP 400 if `modelId` is not in the catalog. |
 | FR-MC-018 | The switch shall fail with HTTP 409 if the ONNX file does not exist in `server/models/` (`{ error: 'Model file not downloaded yet', file }`). |
 | FR-MC-018b | The switch shall fail with HTTP 409 if the entry's family requires `AttributePipeline` and it has not finished loading (`{ error: 'AttributePipeline not loaded' }`). |
+| FR-MC-018c | For the `cloth-par` entry `openpar-pa100k` (PromptPAR) specifically, the switch shall check free system RAM against a configurable floor (default 2048MB, `PROMPTPAR_MIN_FREE_MEM_MB`) before hot-swapping; if insufficient, it shall log the reason, set the `cloth` analytics config flag to `false`, and fail with HTTP 500 `{ error: <message> }` without touching the currently-active session. The sibling entry `openpar-resnet50-pa100k` (OpenPAR) is never subject to this check. |
 | FR-MC-019 | The switch shall succeed synchronously — subsequent inference calls shall use the new model, scoped to that family only. |
 | FR-MC-020 | The response shall include `{ ok: true, active: label, file }` on success. |
 
@@ -71,7 +72,7 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 
 | ID | Requirement |
 |---|---|
-| FR-MC-021 | `MODEL_CATALOG` shall contain exactly 20 YOLO detector entries: 5 YOLO26 (n/s/m/l/x), 5 YOLO12 (n/s/m/l/x), 5 YOLO11 (n/s/m/l/x), 5 YOLOv8 (n/s/m/l/x). `EXTENDED_CATALOG` shall additionally contain one entry each for `face-detection`, `face-recognition`, `ppe`, `fire-smoke`, `cloth-par`, and two entries for `human-parsing` plus one for `appearance-reid` — 8 entries total, 28 in `ALL_MODELS` overall. |
+| FR-MC-021 | `MODEL_CATALOG` shall contain exactly 20 YOLO detector entries: 5 YOLO26 (n/s/m/l/x), 5 YOLO12 (n/s/m/l/x), 5 YOLO11 (n/s/m/l/x), 5 YOLOv8 (n/s/m/l/x). `EXTENDED_CATALOG` shall additionally contain one entry each for `face-detection`, `face-recognition`, `ppe`, `fire-smoke`, two entries for `cloth-par` (PromptPAR + OpenPAR — see FR-MC-023), two entries for `human-parsing`, plus one for `appearance-reid` — 9 entries total, 29 in `ALL_MODELS` overall. |
 | FR-MC-022 | All YOLO detector catalog entries shall produce the identical ONNX output shape `[1, 84, 8400]` compatible with the existing `DetectionService` post-processor. Non-detector entries are consumed by their respective service (`FaceService`, `ProtectiveEquipService`, `FireSmokeService`, `ColorClothService`, `AppearanceReidService`) and are not subject to this shape constraint. |
 
 ## 4. Non-Functional Requirements
@@ -88,7 +89,7 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 - `requiresConversion: true` entries (YOLO26, YOLO12) require `ultralytics >= 8.3` installed in the Python environment.
 - `hfExport` entries (PPE, Fire & Smoke) require `ultralytics` and `huggingface_hub` installed in the Python environment.
 - System Python (`/usr/bin/python3`) is the recommended fallback — user-local Python builds may lack standard library modules (`_lzma`) causing `import ultralytics` to fail.
-- `cloth-par` (OpenPAR) has no automatable source at all — `manualOnly: true` is a permanent property of that catalog entry, not a temporary download-failure state.
+- `cloth-par` has two entries with different source strategies: `openpar-pa100k` (PromptPAR) ships its `.onnx` directly in `server/models/` with no download URL at all (not `manualOnly` — the file is simply already present); `openpar-resnet50-pa100k` (OpenPAR) has no automatable source — `manualOnly: true` is a permanent property of that entry, not a temporary download-failure state. See FR-MC-023~025 for the PromptPAR-specific memory gate.
 - This feature is not available in `SERVER_MODE=streaming`.
 
 ## 6. Error Handling
@@ -99,6 +100,7 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | `manualOnly` entry download requested | 409 | `{ error: '...manual export...', docRef }` |
 | ONNX not downloaded (switch) | 409 | `{ error: 'Model file not downloaded yet', file }` |
 | `AttributePipeline` not loaded (switch) | 409 | `{ error: 'AttributePipeline not loaded' }` |
+| PromptPAR memory gate failed (switch) | 500 | `{ error: 'PromptPAR 수행 불가능: ...' }` — `cloth` config also set to `false` |
 | Concurrent download | 409 | `{ error: 'Download already in progress' }` |
 | Already downloaded (download) | 200 | `{ ok: true, already: true, message }` |
 | Python not found | 500 | `{ error: 'Python with ultralytics [+ huggingface_hub] not found...' }` |
@@ -114,3 +116,4 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | 1.1 | 2026-06-17 | FR-MC-001 응답 키 `downloaded` → `exists`/`catalog` 수정, downloadPercent/downloadError 필드 추가 (FR-MC-005b) |
 | 1.2 | 2026-06-17 | FR-MC-012 강화 — `import ultralytics` → `cfg/models/12` 디렉토리 존재 확인으로 변경 (ultralytics < 8.3.x YOLO12 지원 불가 대응) |
 | 2.0 | 2026-07-09 | 전체 모델 파일로 범위 확대 — face-detection/face-recognition/ppe/fire-smoke/cloth-par family 및 hfExport 다운로드 전략 추가(FR-MC-005c, 011b, 015b), family별 독립 active 판정 명시(FR-MC-003), switch 실패 코드 400→409 정정(FR-MC-018, 실제 코드와 불일치했던 기존 문서 오류 수정), 다운로드 완료본 재요청 시 `{already:true}` 단축 응답 신규 구현 반영(FR-MC-009 — 이전에는 문서만 있고 코드 미구현), 카탈로그 개수 15→20(감지기)+8(비감지기)=28 갱신(FR-MC-021) |
+| 2.1 | 2026-07-12 | PromptPAR(PA100k) 통합 반영 — `cloth-par` family가 `openpar-pa100k`(PromptPAR, 직접 배포) + `openpar-resnet50-pa100k`(OpenPAR ResNet50, manualOnly) 2개 항목으로 확장(FR-MC-021 카탈로그 개수 28→29 갱신), PromptPAR 전용 사전 메모리 게이트 요구사항 신설(FR-MC-018c — 가용 RAM 부족 시 HTTP 500 + `cloth` 설정 자동 비활성화), §5 제약사항·§6 오류표 갱신 |

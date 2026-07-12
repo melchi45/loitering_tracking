@@ -1,8 +1,8 @@
 ---
 **Document:** PRD_AI_Model_Catalog  
-**Version:** 1.1  
+**Version:** 1.2  
 **Status:** Draft  
-**Date:** 2026-07-09  
+**Date:** 2026-07-12  
 **Parent RFP:** [RFP_AI_Model_Catalog](../rfp/RFP_AI_Model_Catalog.md)  
 **Related SRS:** [SRS_AI_Model_Catalog](../srs/SRS_AI_Model_Catalog.md)  
 **Related Design:** [Design_AI_Model_Catalog](../design/Design_AI_Model_Catalog.md)  
@@ -68,7 +68,8 @@ The LTS-2026 analysis server exposes a full AI model catalog UI via REST APIs �
 | `face-recognition` | ArcFace ResNet50 (w600k) | direct ONNX download |
 | `ppe` | YOLOv8m PPE (mask + helmet) | HuggingFace `.pt` → `ultralytics export` |
 | `fire-smoke` | YOLOv8s Fire & Smoke | HuggingFace `.pt` → `ultralytics export` |
-| `cloth-par` | OpenPAR | **manual export only** — no public pretrained ONNX exists |
+| `cloth-par` | PromptPAR (PA100k) | shipped directly in `server/models/` — no automated download source, but the file is already present. Memory-gated: activation requires ≥2GB free system RAM (`PROMPTPAR_MIN_FREE_MEM_MB`), else it's refused, logged, and Cloth Analysis is auto-disabled (see §4.4) |
+| `cloth-par` | OpenPAR (ResNet50, PA100k) | **manual export only** — no public pretrained ONNX exists. Not memory-gated. Admin-selectable alternative to PromptPAR |
 | `human-parsing` (Proposed) | SCHP (LIP-20), SegFormer B2 Clothes | direct ONNX download |
 | `appearance-reid` (Proposed) | OSNet (person Re-ID) | direct ONNX download |
 
@@ -106,6 +107,13 @@ Already downloaded (any family):
 - Switch is synchronous on the hot-path but invisible to camera pipelines (next frame uses new model)
 - Returns `{ ok: true, active: label, file }` on success
 
+### 4.4 PromptPAR Memory Gate
+
+- Switching to (or starting up with) PromptPAR (`openpar-pa100k`) checks free system RAM before loading; below the floor (default 2048MB), the switch fails with HTTP 500 and the reason is logged
+- On gate failure, Cloth Analysis (`cloth` analytics config) is automatically turned off — the admin is not left with a stale "enabled" toggle pointing at a model that never loaded
+- The admin can either free memory and retry, or activate OpenPAR (`openpar-resnet50-pa100k`) instead — there is no automatic fallback between the two
+- OpenPAR is never subject to this gate
+
 ## 5. Acceptance Criteria
 
 | AC | Description |
@@ -116,6 +124,8 @@ Already downloaded (any family):
 | AC-04 | `POST /api/analysis/models/switch` succeeds for any downloaded model, independently per family |
 | AC-05 | Concurrent download request for an in-progress model returns HTTP 409; a download request for a `manualOnly` entry also returns HTTP 409 with a `docRef` |
 | AC-06 | After switch, `GET /api/analysis/models` shows the new model as `active: true` for its family, without affecting other families' active models |
+| AC-07 | Switching to PromptPAR when free system RAM is below the configured floor fails with HTTP 500, logs the reason, and disables Cloth Analysis (`cloth` config → `false`) |
+| AC-08 | Switching to OpenPAR always proceeds regardless of free system RAM (no memory gate applies) |
 
 ---
 
@@ -125,3 +135,4 @@ Already downloaded (any family):
 |---|---|---|
 | 1.0 | 2026-06-17 | 초기 작성 — YOLO12 포함 15종 모델 카탈로그 제품 요구사항 |
 | 1.1 | 2026-07-09 | 전체 모델 파일로 범위 확대 — §3.4 non-detector 패밀리 표 추가, §4 응답 형식(`catalog`/`exists`)·다운로드 전략(direct/PT변환/manualOnly)·이미 다운로드된 경우 단축 응답 반영, US-06·AC-01~06 갱신 |
+| 1.2 | 2026-07-12 | PromptPAR(PA100k) 통합 반영 — `cloth-par` 패밀리에 PromptPAR(직접 배포, 메모리 게이트) + OpenPAR(ResNet50, manualOnly) 2개 모델 명시(§3.4), §4.4 신설(PromptPAR 사전 메모리 체크·게이트 실패 시 Cloth 분석 자동 비활성화·OpenPAR로 수동 전환), AC-07/AC-08 추가 |

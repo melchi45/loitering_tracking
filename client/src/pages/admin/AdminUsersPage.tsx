@@ -107,7 +107,7 @@ const ADMIN_MODULE_GROUPS: AdminModuleGroup[] = [
     items: [
       { id: 'face',  label: 'Face Recognition', desc: 'SCRFD + ArcFace Re-ID',  model: 'scrfd_2.5g.onnx + arcface_w600k_r50.onnx' },
       { id: 'color', label: 'Color Analysis',   desc: 'Upper/lower body color — no model required' },
-      { id: 'cloth', label: 'Cloth Analysis',   desc: 'Clothing type (OpenPAR)', model: 'openpar.onnx' },
+      { id: 'cloth', label: 'Cloth Analysis',   desc: 'Clothing type — PromptPAR or OpenPAR, pick one below', model: 'openpar_pa100k.onnx / openpar_resnet50_pa100k.onnx' },
       { id: 'humanParsing', label: 'Human Parsing (Proposed)', desc: 'Precision color via pixel mask — Phase-3', model: 'schp_lip.onnx / segformer_clothes.onnx' },
       { id: 'mask',  label: 'Mask Detection',   desc: 'PPE mask compliance',    model: 'yolov8m_ppe.onnx' },
       { id: 'hat',   label: 'Helmet Detection', desc: 'PPE safety helmet',      model: 'yolov8m_ppe.onnx' },
@@ -1361,6 +1361,8 @@ function AiModelsSection() {
             <p className="mt-1 text-[10px] text-gray-600">
               {isProposed
                 ? 'Not yet enabled by default — verify the model source before downloading. See docs/design/Design_AI_Color_Analysis.md §10 / Design_AI_AppearanceReID.md §12.'
+                : series === 'Cloth Attribute (PAR)'
+                ? 'PromptPAR (CLIP ViT-L) requires ≥ 2GB free system RAM to activate — if unavailable, activation fails, Cloth Analysis is turned off, and the reason is logged server-side. OpenPAR (ResNet50) is a lighter alternative with no memory gate. See docs/design/Design_AI_Cloth_Analysis.md §Memory Gate.'
                 : 'Required by the corresponding AI Analysis Module below — see docs/design/Design_AI_Model_Catalog.md.'}
             </p>
           </div>

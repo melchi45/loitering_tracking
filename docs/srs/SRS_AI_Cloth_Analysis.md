@@ -4,11 +4,13 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-AI-07-CLT |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
-| **Date** | 2026-05-26 |
+| **Date** | 2026-07-12 |
 | **Parent PRD** | prd/PRD_AI_Cloth_Analysis.md |
 | **Parent RFP** | rfp/RFP_AI_Cloth_Analysis.md |
+
+> **Note (v1.1):** §3–§10 below describe the original Phase-2 design (`openpar.onnx`, 12 attributes, 128×256 input). The shipped implementation replaced this with PromptPAR (PA100k, CLIP ViT-L, 26 attributes, 224×224) plus a second selectable OpenPAR (ResNet50, PA100k) model — see `docs/design/Design_AI_Cloth_Analysis.md` v2.0 for the current, accurate model/schema. §12 (new in this version) adds the model-selection and memory-gate requirements for that shipped pair and is accurate as written.
 
 ---
 
@@ -24,6 +26,7 @@
 9. [Data Requirements](#9-data-requirements)
 10. [Interface Requirements](#10-interface-requirements)
 11. [Constraints & Assumptions](#11-constraints--assumptions)
+12. [Functional Requirements — Model Selection & Memory Gate](#12-functional-requirements--model-selection--memory-gate)
 
 ---
 
@@ -340,8 +343,50 @@ No dedicated REST endpoints for cloth analysis. Cloth data flows exclusively thr
 
 ---
 
+## 12. Functional Requirements — Model Selection & Memory Gate
+
+### FR-CLT-022 — Two Selectable `cloth-par` Models
+
+- The `cloth-par` model catalog family must expose exactly two entries: PromptPAR (`openpar-pa100k`) and OpenPAR (`openpar-resnet50-pa100k`)
+- Both must share the same 26-attribute PA100k output schema so downstream consumers (Socket.IO `detections`, Admin Dashboard) need no per-model branching
+- Only one may be the active model for the family at any time (enforced by the existing per-family active-model invariant — see SRS_AI_Model_Catalog.md)
+
+### FR-CLT-023 — Admin Selection UI
+
+- The Admin Dashboard AI Models tab must list both `cloth-par` entries under a single series ("Cloth Attribute (PAR)") with independent **Activate** actions
+- An entry must only be activatable when its `.onnx` file exists in `server/models/`
+- The entry with `manualOnly: true` (OpenPAR) must show a manual-export link instead of a Download button when its file is absent
+
+### FR-CLT-024 — PromptPAR Pre-Activation Memory Check
+
+- Before loading PromptPAR — at server startup (if the file already exists) and on every runtime hot-swap request — the system must check free system RAM against a minimum floor (default 2048MB, overridable via `PROMPTPAR_MIN_FREE_MEM_MB`)
+- OpenPAR must never be subject to this check
+- The check must run before any ONNX Runtime session is created for PromptPAR
+
+### FR-CLT-025 — Logging on Gate Failure
+
+- When the memory check fails, the system must emit a log entry that (a) identifies PromptPAR by name, (b) states the reason is insufficient memory, (c) reports the free and required MB values, and (d) states that Cloth Analysis is being disabled
+- The reference log format is: `[ColorClothService] PromptPAR 수행 불가능: 가용 메모리 부족 (free=<N>MB < required=<M>MB) — Cloth 분석을 비활성화합니다.`
+
+### FR-CLT-026 — Automatic Cloth Analysis Disable on Gate Failure
+
+- When the memory gate fails, the system must set the `cloth` analytics config flag to `false` (via the existing `/api/analytics/config` persistence layer) so the pipeline stops expecting cloth output
+- This must happen automatically, without operator action, immediately when the gate failure is detected
+
+### FR-CLT-027 — Gate Failure Does Not Crash the Server
+
+- At startup, a memory gate failure must result in `_parReady` remaining `false` and the server continuing to start normally — no exception may propagate out of `ColorClothService.load()`
+- On a runtime hot-swap request, a memory gate failure must result in the switch API responding with an HTTP error (surfaced to the Admin Dashboard) rather than crashing the server process or leaving the service in a partially-initialized state
+
+### FR-CLT-028 — No Automatic Fallback Between Models
+
+- The system must not automatically switch to OpenPAR when PromptPAR's memory gate fails, nor automatically retry PromptPAR later — model selection remains an explicit operator action via the Admin Dashboard
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for AI Cloth Analysis |
+| 1.1 | 2026-07-12 | LTS Engineering Team | Added §12 (FR-CLT-022~028) — dual PromptPAR/OpenPAR model selection and the PromptPAR pre-activation memory gate (auto-disable Cloth analysis + logging on failure); flagged §3-§10 as describing the superseded 12-attribute placeholder design, see Design_AI_Cloth_Analysis.md v2.0 for the current schema |

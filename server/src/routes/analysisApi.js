@@ -127,6 +127,21 @@ const EXTENDED_CATALOG = [
     docRef: 'https://github.com/Event-AHU/OpenPAR',
     license: 'See OpenPAR repository',
   },
+  // Cloth/pedestrian attribute PAR (AI-06) — OpenPAR ResNet50 baseline, same PA100k
+  // 26-attribute taxonomy as PromptPAR above but a plain ResNet50 classifier head
+  // instead of the CLIP ViT-L + text-prompt fusion backbone. Lighter (no ~1.2GB CLIP
+  // weights), runs on the default execution provider (no forceCpu, no DirectML device-
+  // removal issue), and is NOT memory-gated (see colorClothService.js
+  // PROMPTPAR_MIN_FREE_MEM_MB / Design_AI_Cloth_Analysis.md §Memory Gate). Selectable
+  // as an alternative to PromptPAR when free system RAM can't clear that gate. No
+  // public pretrained ONNX release — export via github.com/Event-AHU/OpenPAR's
+  // ResNet50 baseline config, then place the file in server/models/ manually.
+  {
+    id: 'openpar-resnet50-pa100k', label: 'OpenPAR (ResNet50, PA100k)', family: 'cloth-par', series: 'Cloth Attribute (PAR)',
+    file: 'openpar_resnet50_pa100k.onnx', size: 224, manualOnly: true,
+    docRef: 'https://github.com/Event-AHU/OpenPAR',
+    license: 'See OpenPAR repository',
+  },
   // AI-05 Phase-3 Human Parsing (Proposed) — see Design_AI_Color_Analysis.md §10.
   {
     id: 'schp-lip20', label: 'SCHP (LIP-20)', family: 'human-parsing', series: 'Human Parsing',

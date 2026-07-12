@@ -1,8 +1,8 @@
 ---
 **Document:** TC_AI_Model_Catalog  
-**Version:** 2.0  
+**Version:** 2.1  
 **Status:** Draft  
-**Date:** 2026-07-09  
+**Date:** 2026-07-12  
 **Parent SRS:** [SRS_AI_Model_Catalog](../srs/SRS_AI_Model_Catalog.md)  
 **Parent Design:** [Design_AI_Model_Catalog](../design/Design_AI_Model_Catalog.md)  
 **Test Script:** `test/api/model_catalog.test.js`  
@@ -30,6 +30,9 @@
 | TC-MC-014 | FR-MC-011b | PPE/Fire-Smoke download resolves `.pt` via huggingface_hub then converts to ONNX |
 | TC-MC-015 | FR-MC-003, FR-MC-016 | Switching one family's active model does not change another family's active model |
 | TC-MC-016 | FR-MC-009 | Download request for an already-downloaded entry short-circuits with `{ already: true }` |
+| TC-MC-017 | FR-MC-021 | cloth-par family exposes exactly 2 entries: PromptPAR (`openpar-pa100k`, not manualOnly) and OpenPAR (`openpar-resnet50-pa100k`, manualOnly) |
+| TC-MC-018 | FR-MC-018c | `reloadPar()` rejects PromptPAR and logs `PromptPAR 수행 불가능: ...` when free system RAM is below `PROMPTPAR_MIN_FREE_MEM_MB` |
+| TC-MC-019 | FR-MC-018c | `checkPromptParMemory()` gate check is a no-op for OpenPAR and passes when free RAM is comfortably above the floor |
 
 ## 2. Test Cases
 
@@ -212,9 +215,9 @@
 
 ### TC-MC-013: Manual-Only Download Rejected
 
-**Pre-condition:** Catalog contains a `manualOnly` entry (`openpar-market1501`)  
+**Pre-condition:** Catalog contains a `manualOnly` entry (`openpar-resnet50-pa100k`, the OpenPAR ResNet50 cloth-par alternative)  
 **Steps:**
-1. `POST /api/analysis/models/download { modelId: 'openpar-market1501' }`
+1. `POST /api/analysis/models/download { modelId: 'openpar-resnet50-pa100k' }`
 2. Assert HTTP 409
 3. Assert response has `error` and `docRef` fields
 
@@ -267,6 +270,46 @@
 
 ---
 
+### TC-MC-017: cloth-par Family Composition (PromptPAR + OpenPAR)
+
+**Pre-condition:** Analysis server running  
+**Steps:**
+1. `GET /api/analysis/models`
+2. Filter `catalog` to `family === 'cloth-par'` — assert exactly 2 entries
+3. Assert one entry has `id === 'openpar-pa100k'` (PromptPAR) and `manualOnly` is falsy
+4. Assert the other has `id === 'openpar-resnet50-pa100k'` (OpenPAR) and `manualOnly === true`
+
+**Expected:** PASS  
+**Priority:** P1
+
+---
+
+### TC-MC-018: PromptPAR Memory Gate Rejects Activation Below the Floor
+
+**Pre-condition:** None (unit test against `server/src/services/colorClothService.js` — no running server or real ONNX file required, since the gate check runs before any filesystem/ONNX access)  
+**Steps:**
+1. Monkey-patch `os.freemem()` to return 1GB (below the default 2048MB floor)
+2. Call `checkPromptParMemory()` — assert `ok === false`
+3. Call `new ColorClothService().reloadPar('server/models/openpar_pa100k.onnx')` — assert it throws an error whose message contains `PromptPAR`
+4. Assert `_parReady` remains `false` on the service instance after the rejection
+
+**Expected:** PASS  
+**Priority:** P1
+
+---
+
+### TC-MC-019: OpenPAR Is Never Memory-Gated; Gate Passes Above the Floor
+
+**Pre-condition:** None (unit test, same as TC-MC-018)  
+**Steps:**
+1. With `os.freemem()` patched to 1GB, call `_checkPromptParGate('server/models/openpar_resnet50_pa100k.onnx')` — assert it returns `true` (OpenPAR's filename is not in the gated set)
+2. With `os.freemem()` patched to 8GB, call `checkPromptParMemory()` — assert `ok === true`
+
+**Expected:** PASS  
+**Priority:** P2
+
+---
+
 ## 3. Automated Test Coverage
 
 `test/api/model_catalog.test.js` covers:
@@ -276,6 +319,8 @@
 - TC-MC-008 (switch non-downloaded → 409)
 - TC-MC-012 (all non-detector families present; `manualOnly` entries never expose `url`)
 - TC-MC-013 (download request for a `manualOnly` entry → 409 with `docRef`)
+- TC-MC-017 (cloth-par family exposes exactly 2 entries: PromptPAR + OpenPAR)
+- TC-MC-018 / TC-MC-019 (PromptPAR memory gate — unit tests, no running server required; see Group D in the script)
 
 Network-dependent tests (TC-MC-004, TC-MC-009, TC-MC-014) are skipped by default; enable with `INTEGRATION_DOWNLOAD=1` env var. TC-MC-003, TC-MC-005, TC-MC-006, TC-MC-010, TC-MC-011, TC-MC-015, TC-MC-016 are exercised manually / via the Admin Dashboard against a running analysis server (not yet automated).
 
@@ -287,3 +332,4 @@ Network-dependent tests (TC-MC-004, TC-MC-009, TC-MC-014) are skipped by default
 |---|---|---|
 | 1.0 | 2026-06-17 | 초기 작성 — TC-MC-001~011, YOLO12 PT→ONNX, 런타임 전환, 병렬 다운로드 방지 |
 | 2.0 | 2026-07-09 | 전체 모델 파일로 범위 확대 — TC-MC-012~016 신규(비감지기 패밀리 구성·manualOnly 거부·HF export·family별 독립 전환·already 단축응답), TC-MC-001/002/004/008/009 필드명(`catalog`/`exists`) 및 응답코드(400→409) 정정, §3 자동화 커버리지에서 근거 없이 포함되어 있던 TC-MC-005 제거 |
+| 2.1 | 2026-07-12 | PromptPAR(PA100k) 통합 반영 — TC-MC-013 `modelId`를 실제 manualOnly 항목(`openpar-resnet50-pa100k`)으로 정정(구 `openpar-market1501`은 실존한 적 없는 placeholder였음), TC-MC-017~019 신규(cloth-par 2-항목 구성 검증, PromptPAR 메모리 게이트 유닛 테스트) — `test/api/model_catalog.test.js` Group D로 자동화 |

@@ -1,6 +1,6 @@
 ---
 name: ai-detection-pipeline
-description: "LTS-2026 AI 추론 파이프라인 개발 및 디버깅. Use when: YOLOv8 감지 설정, behaviorEngine 배회 점수 조정, attributePipeline 속성 분석(의상·색상·마스크·헬멧), fireSmokeService 화재/연기 감지, 감지 임계값 튜닝, pipelineManager 서비스 추가/수정, AI 모델 교체, 감지 정확도 문제 해결, Human Parsing 기반 정밀 색상 분류(opt-in), Appearance/Body Re-ID(OSNet, opt-in). Covers: detection.js, behaviorEngine.js, attributePipeline.js, pipelineManager.js, trackerConfig.js, tracking.js, colorClothService.js, fireSmokeService.js, protectiveEquipService.js, appearanceReidService.js, qdrantService.js, kmeansColor.js."
+description: "LTS-2026 AI 추론 파이프라인 개발 및 디버깅. Use when: YOLOv8 감지 설정, behaviorEngine 배회 점수 조정, attributePipeline 속성 분석(의상·색상·마스크·헬멧), fireSmokeService 화재/연기 감지, 감지 임계값 튜닝, pipelineManager 서비스 추가/수정, AI 모델 교체, 감지 정확도 문제 해결, Human Parsing 기반 정밀 색상 분류(opt-in), Appearance/Body Re-ID(OSNet, opt-in), Cloth-PAR PromptPAR/OpenPAR 모델 선택 및 PromptPAR 사전 메모리 게이트(가용 RAM 부족 시 Cloth 분석 자동 비활성화). Covers: detection.js, behaviorEngine.js, attributePipeline.js, pipelineManager.js, trackerConfig.js, tracking.js, colorClothService.js, fireSmokeService.js, protectiveEquipService.js, appearanceReidService.js, qdrantService.js, kmeansColor.js."
 argument-hint: "추가 또는 수정할 AI 기능 (예: loitering threshold, attribute detection, fire smoke)"
 ---
 
@@ -59,7 +59,7 @@ RTSP/WebRTC 스트림
 |---|---|
 | `GET /api/analysis/models` | 전체 family 카탈로그 조회 (downloaded/active/downloading/converting 상태 포함) |
 | `POST /api/analysis/models/switch { modelId }` | family별 활성 모델 핫 스왑 — `_activeFileForEntry()`가 family에 따라 올바른 서비스(`_attrPipeline._color`, `_appearanceReid` 등)로 라우팅 |
-| `POST /api/analysis/models/download { modelId }` | 모델 다운로드 (직접 ONNX 또는 HuggingFace `.pt`→`ultralytics export` 변환); `manualOnly:true` 모델(예: `openpar.onnx`)은 409 반환 — 수동 배치 필요 |
+| `POST /api/analysis/models/download { modelId }` | 모델 다운로드 (직접 ONNX 또는 HuggingFace `.pt`→`ultralytics export` 변환); `manualOnly:true` 모델(예: `openpar-resnet50-pa100k`)은 409 반환 — 수동 배치 필요 |
 
 `human-parsing`/`appearance-reid` family는 코드 구현이 완료되어 있으나 모델 파일이 `downloadModels.js`의 `DIRECT_MODELS`에서 기본 `enabled:false`(라이선스 검토 후 수동 활성화) — Admin Dashboard "AI Models" 탭에서 개별 다운로드해야 활성화됨. 상세: `docs/design/Design_AI_AppearanceReID.md` §12.6, `docs/design/Design_AI_Color_Analysis.md` §10.
 
@@ -132,7 +132,7 @@ cd server && node src/scripts/downloadModels.js
 
 - YOLO12 5개 모델 자동 다운로드 + ONNX 변환
 - PPE(`yolov8m_ppe.onnx`)·Fire & Smoke(`yolov8s_fire_smoke.onnx`)도 `HF_EXPORT_MODELS`/`exportHfPtToOnnx()`로 자동 다운로드+변환 (HuggingFace Hub `.pt` → `ultralytics export`, `huggingface_hub` Python 패키지 필요)
-- `openpar.onnx`(cloth-PAR)는 공개 사전학습 ONNX가 없어 자동화 불가 — `PYTHON_EXPORT_INSTRUCTIONS`에 수동 export 절차만 안내
+- cloth-PAR는 두 모델이 admin-selectable: `openpar_pa100k.onnx`(PromptPAR, CLIP ViT-L)는 `server/models/`에 직접 배포되어 있고, `openpar_resnet50_pa100k.onnx`(OpenPAR, ResNet50)는 공개 사전학습 ONNX가 없어 자동화 불가 — `PYTHON_EXPORT_INSTRUCTIONS`에 수동 export 절차만 안내
 - 이미 존재하는 파일은 건너뜀
 
 **SDLC 참조:** [SRS_AI_Model_Catalog](../../../docs/srs/SRS_AI_Model_Catalog.md) · [Design_AI_Model_Catalog](../../../docs/design/Design_AI_Model_Catalog.md) · [TC_AI_Model_Catalog](../../../docs/tc/TC_AI_Model_Catalog.md) · `test/api/model_catalog.test.js`
@@ -789,3 +789,49 @@ const float32 = new Float32Array(3 * numPixels);
 - `client/src/pages/admin/AdminUsersPage.tsx` — `TcResultsPanel` `isStreaming` prop + 필터 + 배너
 
 **SRS:** FR-DAP-028 / **TC:** TC-DAP-013 / **PRD:** AC-DAP-10 / **RFP:** FR-DAP-11
+
+## 최근 운영 변경 (2026-07-12)
+
+### 14. colorClothService.js — PromptPAR 사전 메모리 게이트 + OpenPAR 선택형 활성화
+
+**배경:** PromptPAR(PA100k, CLIP ViT-L 백본, ~1.2GB)는 DirectML에서 추론 중 `DXGI_ERROR_DEVICE_REMOVED`가 발생해 CPU로 강제 실행된다(`forceCpu: true`). CPU 실행은 체크포인트+ONNX Runtime 세션 버퍼가 모두 시스템 RAM을 소비하므로, 가용 RAM이 부족한 상태에서 로드를 시도하면 서버 프로세스 전체가 OOM으로 죽을 위험이 있다. 이를 막기 위해 로드/전환 전에 가용 메모리를 먼저 확인하고, 부족하면 로그를 남기고 Cloth 분석을 자동으로 끄도록 변경했다. 동시에, 메모리 게이트가 없는 대안으로 OpenPAR(ResNet50, 동일 PA100k 26-attribute taxonomy)를 두 번째 `cloth-par` 모델로 추가해 Admin Dashboard에서 선택할 수 있게 했다.
+
+**구현 (`colorClothService.js`):**
+```javascript
+const PROMPTPAR_MIN_FREE_MEM_MB = Number(process.env.PROMPTPAR_MIN_FREE_MEM_MB) || 2048;
+const PROMPTPAR_GATED_FILENAMES = new Set(['openpar_pa100k.onnx']); // OpenPAR 파일명은 미포함 — 게이트 미적용
+
+function checkPromptParMemory() {
+  const freeMB = Math.round(os.freemem() / (1024 * 1024));
+  return { ok: freeMB >= PROMPTPAR_MIN_FREE_MEM_MB, freeMB, requiredMB: PROMPTPAR_MIN_FREE_MEM_MB };
+}
+
+// load() / reloadPar() 양쪽에서 호출
+_checkPromptParGate(filePath) {
+  if (!_isPromptParFile(filePath)) return true;         // OpenPAR 등은 항상 통과
+  const mem = checkPromptParMemory();
+  if (mem.ok) return true;
+  console.warn(`[ColorClothService] PromptPAR 수행 불가능: 가용 메모리 부족 (free=${mem.freeMB}MB < required=${mem.requiredMB}MB) — Cloth 분석을 비활성화합니다.`);
+  require('./analyticsConfig').setConfig({ cloth: false });  // 실패해도 try/catch로 무시
+  return false;
+}
+```
+
+- **서버 시작 시(`load()`):** 게이트 실패 시 조용히 스킵(`_parReady` 유지 `false`) — 서버는 정상 기동
+- **런타임 전환 시(`reloadPar()`, `POST /api/analysis/models/switch`):** 게이트 실패 시 `throw` — `analysisApi.js`의 기존 catch 블록이 HTTP 500으로 변환, Admin Dashboard 에러 배너에 표시
+- OpenPAR(`openpar_resnet50_pa100k.onnx`)는 `PROMPTPAR_GATED_FILENAMES`에 없으므로 게이트가 항상 통과 — 메모리 부족 시 대체 활성화 경로로 사용
+
+**카탈로그 추가 (`analysisApi.js` `EXTENDED_CATALOG`):**
+```javascript
+{ id: 'openpar-resnet50-pa100k', label: 'OpenPAR (ResNet50, PA100k)', family: 'cloth-par',
+  series: 'Cloth Attribute (PAR)', file: 'openpar_resnet50_pa100k.onnx', size: 224,
+  manualOnly: true, docRef: 'https://github.com/Event-AHU/OpenPAR', license: 'See OpenPAR repository' },
+```
+
+**UI:** `AdminUsersPage.tsx`의 `AiModelsSection()`은 family/series 기준으로 이미 제네릭하게 렌더링하므로 별도 UI 구현 없이 두 번째 행이 자동으로 나타남 — Cloth Attribute (PAR) 시리즈 아래 PromptPAR/OpenPAR가 각각 독립된 Activate 버튼과 함께 표시됨. 시리즈 footnote에 ≥2GB RAM 요구사항과 OpenPAR 대안을 안내하는 문구 추가.
+
+**환경변수:** `PROMPTPAR_MIN_FREE_MEM_MB` (기본 `2048`) — `server/.env`에서 재정의 가능.
+
+**회귀 테스트:** `test/api/model_catalog.test.js` Group A(TC-MC-017, catalog 구성)·Group D(TC-MC-018/019, 메모리 게이트 유닛 테스트 — `os.freemem()` monkey-patch, 실제 ONNX 파일/서버 불필요).
+
+**SDLC 참조:** [Design_AI_Cloth_Analysis.md §11](../../../docs/design/Design_AI_Cloth_Analysis.md#11-model-choice--memory-gate) · [Design_AI_Model_Catalog.md §8](../../../docs/design/Design_AI_Model_Catalog.md#8-cloth-par-model-choice--promptpar-memory-gate) · [SRS_AI_Cloth_Analysis.md §12](../../../docs/srs/SRS_AI_Cloth_Analysis.md) (FR-CLT-022~028) · [TC_AI_Model_Catalog.md](../../../docs/tc/TC_AI_Model_Catalog.md) (TC-MC-017~019)

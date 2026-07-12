@@ -562,7 +562,7 @@ tie:         ['tie'],
 
 | Source | Notes |
 |---|---|
-| Event-AHU/OpenPAR | 40+ person attributes including bags and glasses; requires custom ONNX export |
+| Event-AHU/OpenPAR | Shipped 2026-07-12 as two selectable models (PromptPAR/CLIP ViT-L + OpenPAR/ResNet50), 26 PA100k attributes including hat/glasses/bag type — see `docs/design/Design_AI_Cloth_Analysis.md` §3, not the originally-envisioned 40+ attribute set |
 | Glasses classifier (MobileNetV3) | 3-class: `no_glasses` / `glasses` / `sunglasses` from face crop |
 | Fine-tuned YOLOv8n-accessories | 10-class model for all taxonomy items including jewelry, gloves, scarf |
 

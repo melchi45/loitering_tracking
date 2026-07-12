@@ -4,13 +4,17 @@
  *
  * TC: TC_AI_Model_Catalog
  *   Covers: TC-MC-001, TC-MC-002, TC-MC-002b, TC-MC-007, TC-MC-008,
- *           TC-MC-012, TC-MC-013
+ *           TC-MC-012, TC-MC-013, TC-MC-017, TC-MC-018, TC-MC-019
  *   Not automated here (see TC_AI_Model_Catalog.md §3): TC-MC-003, TC-MC-005,
  *   TC-MC-006, TC-MC-010, TC-MC-011, TC-MC-014, TC-MC-015, TC-MC-016
  *
  * Network-dependent tests (TC-MC-004, TC-MC-009) require INTEGRATION_DOWNLOAD=1
  *
+ * Group D (TC-MC-018/019, PromptPAR memory gate) is a unit test — it requires
+ * server/src/services/colorClothService.js only, NOT a running server.
+ *
  * Prerequisites: Analysis server running (SERVER_MODE=analysis or combined)
+ *   for Groups A-C; Group D has no server prerequisite.
  * Run: node test/api/model_catalog.test.js
  *
  * Set LTS_URL env var to override base URL.
@@ -136,6 +140,20 @@ async function runGroupA() {
       assert(m.url === undefined, `manualOnly entry ${m.id} should not expose a url field`);
     }
   });
+
+  await test('TC-MC-017', 'cloth-par family exposes one memory-gated PromptPAR entry and one non-gated OpenPAR alternative', async () => {
+    const { status, body } = await get('/api/analysis/models');
+    assertEq(status, 200, 'HTTP status');
+    const clothPar = body.catalog.filter(m => m.family === 'cloth-par');
+    assertEq(clothPar.length, 2, 'cloth-par entry count');
+
+    const promptPar = clothPar.find(m => m.id === 'openpar-pa100k');
+    const openPar   = clothPar.find(m => m.id === 'openpar-resnet50-pa100k');
+    assert(promptPar, 'expected PromptPAR entry (openpar-pa100k)');
+    assert(openPar, 'expected OpenPAR entry (openpar-resnet50-pa100k)');
+    assert(!promptPar.manualOnly, 'PromptPAR should not be manualOnly — shipped directly in server/models/');
+    assert(openPar.manualOnly === true, 'OpenPAR should be manualOnly — no public pretrained ONNX release');
+  });
 }
 
 // ── TC-MC-007/008: Switch validation ─────────────────────────────────────────
@@ -222,6 +240,67 @@ async function runGroupC() {
   });
 }
 
+// ── TC-MC-018/019: PromptPAR memory gate (unit — no running server required) ────
+// Exercises server/src/services/colorClothService.js directly, since a real
+// ~1.2GB PromptPAR checkpoint is not available in CI. The gate check runs
+// before any filesystem/ONNX access, so a fake path is enough to hit it.
+
+async function runGroupD() {
+  console.log('\n[Group D] PromptPAR Memory Gate — TC-MC-018, TC-MC-019 (unit)');
+
+  const os = require('os');
+  const path = require('path');
+  const { ColorClothService, checkPromptParMemory, PROMPTPAR_MIN_FREE_MEM_MB } =
+    require('../../server/src/services/colorClothService');
+
+  const realFreemem = os.freemem;
+  const FAKE_PROMPTPAR_PATH = path.join('server', 'models', 'openpar_pa100k.onnx');
+  const FAKE_OPENPAR_PATH   = path.join('server', 'models', 'openpar_resnet50_pa100k.onnx');
+
+  await test('TC-MC-018', 'reloadPar() rejects PromptPAR and logs when free RAM is below the gate', async () => {
+    os.freemem = () => 1 * 1024 * 1024 * 1024; // 1GB — below the 2GB default floor
+    try {
+      const mem = checkPromptParMemory();
+      assert(mem.ok === false, `expected gate to fail at 1GB free (required ${PROMPTPAR_MIN_FREE_MEM_MB}MB)`);
+
+      const svc = new ColorClothService();
+      let threw = false;
+      try {
+        await svc.reloadPar(FAKE_PROMPTPAR_PATH);
+      } catch (err) {
+        threw = true;
+        assert(/PromptPAR/.test(err.message), `error message should reference PromptPAR: ${err.message}`);
+      }
+      assert(threw, 'reloadPar() should throw when the memory gate fails');
+      assert(svc._parReady === false, '_parReady must remain false after a gated rejection');
+    } finally {
+      os.freemem = realFreemem;
+    }
+  });
+
+  await test('TC-MC-019', 'checkPromptParMemory() passes and OpenPAR (non-gated) is unaffected by low free RAM', async () => {
+    os.freemem = () => 1 * 1024 * 1024 * 1024; // still 1GB — OpenPAR must not care
+    try {
+      const mem = checkPromptParMemory();
+      assert(mem.ok === false, 'sanity: gate should still read as failing at 1GB for PromptPAR');
+      // OpenPAR's filename isn't in the gated set, so the gate check itself is a no-op
+      // for it (the ONNX load would still be attempted — not asserted here, no real file).
+      const svc = new ColorClothService();
+      assert(svc._checkPromptParGate(FAKE_OPENPAR_PATH) === true, 'OpenPAR path must not be memory-gated');
+    } finally {
+      os.freemem = realFreemem;
+    }
+
+    os.freemem = () => 8 * 1024 * 1024 * 1024; // 8GB — comfortably above the floor
+    try {
+      const mem = checkPromptParMemory();
+      assert(mem.ok === true, 'expected gate to pass at 8GB free');
+    } finally {
+      os.freemem = realFreemem;
+    }
+  });
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -231,6 +310,7 @@ async function main() {
   await runGroupA();
   await runGroupB();
   await runGroupC();
+  await runGroupD();
 
   console.log('\n─────────────────────────────');
   console.log(`Result: ${passed} passed, ${failed} failed, ${results.filter(r => r.status === 'SKIP').length} skipped`);

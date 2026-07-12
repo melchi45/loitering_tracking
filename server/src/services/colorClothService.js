@@ -3,6 +3,7 @@
 const sharp = require('sharp');
 const path  = require('path');
 const fs    = require('fs');
+const os    = require('os');
 const { dominantColor } = require('../utils/kmeansColor');
 
 // AI-05 Phase-3 Human Parsing (Proposed) — per-track throttle interval.
@@ -33,6 +34,33 @@ const PA100K_ATTR_WORDS = [
 // Resolved once from PA100K_ATTR_WORDS so _runPAR() reads by name, not magic index.
 const PA100K_IDX = Object.fromEntries(PA100K_ATTR_WORDS.map((label, i) => [label, i]));
 
+// PromptPAR memory gate — see Design_AI_Cloth_Analysis.md §Memory Gate.
+// PromptPAR's CLIP ViT-L backbone (~1.2GB) is forced onto the CPU execution provider
+// (see load()/reloadPar() below), which needs free RAM well beyond the raw checkpoint
+// size for ONNX Runtime's session buffers/activations. Below this floor, loading it
+// risks an OOM crash of the whole Node process instead of a contained failure — so we
+// check first, and if there isn't enough headroom we log why and disable Cloth analysis
+// instead of attempting the load. Override via PROMPTPAR_MIN_FREE_MEM_MB (server/.env).
+const PROMPTPAR_MIN_FREE_MEM_MB = Number(process.env.PROMPTPAR_MIN_FREE_MEM_MB) || 2048;
+
+// Only the CLIP ViT-L PromptPAR checkpoint is memory-gated. The lighter OpenPAR
+// ResNet50 alternative (catalog id 'openpar-resnet50-pa100k', no CLIP/text-prompt
+// fusion) has no equivalent DirectML/memory constraint and is never gated.
+const PROMPTPAR_GATED_FILENAMES = new Set(['openpar_pa100k.onnx']);
+
+function _isPromptParFile(filePath) {
+  return PROMPTPAR_GATED_FILENAMES.has(path.basename(filePath));
+}
+
+/**
+ * Check whether enough free system RAM currently exists to safely load PromptPAR.
+ * @returns {{ok: boolean, freeMB: number, requiredMB: number}}
+ */
+function checkPromptParMemory() {
+  const freeMB = Math.round(os.freemem() / (1024 * 1024));
+  return { ok: freeMB >= PROMPTPAR_MIN_FREE_MEM_MB, freeMB, requiredMB: PROMPTPAR_MIN_FREE_MEM_MB };
+}
+
 /**
  * Color & Clothing attribute service.
  *
@@ -40,10 +68,15 @@ const PA100K_IDX = Object.fromEntries(PA100K_ATTR_WORDS.map((label, i) => [label
  *   Dominant color extraction via pixel averaging on upper/lower body ROIs.
  *   Maps average RGB to a named color from an 11-color taxonomy.
  *
- * Phase-2 (planned, requires PAR ONNX model):
+ * Phase-2 (PAR ONNX model, admin-selectable — see model catalog 'cloth-par' family):
  *   Pedestrian Attribute Recognition (PAR) for clothing type, sleeve length, etc.
- *   Reference model: https://github.com/Event-AHU/OpenPAR
- *   Export: torch.onnx.export(model, ...) → server/models/openpar.onnx
+ *   Two interchangeable models, both from https://github.com/Event-AHU/OpenPAR:
+ *     - PromptPAR (PA100k, catalog id 'openpar-pa100k'): CLIP ViT-L backbone,
+ *       higher accuracy, forced onto CPU (see load()/reloadPar()), memory-gated
+ *       (PROMPTPAR_MIN_FREE_MEM_MB) — see Design_AI_Cloth_Analysis.md §Memory Gate.
+ *     - OpenPAR (ResNet50, catalog id 'openpar-resnet50-pa100k'): lighter baseline
+ *       classifier, no CLIP backbone, not memory-gated, manual export only.
+ *   Admins pick one in Admin Dashboard → AI Models → Cloth Attribute (PAR) → Activate.
  *
  * AI-05 Color Analysis:  targetClass 'color'
  * AI-06 Cloth Analysis:  targetClass 'cloth'
@@ -157,18 +190,23 @@ class ColorClothService {
     console.log('[ColorClothService] Phase-1 color extraction: ready (no model required)');
 
     if (fs.existsSync(this.parModelPath)) {
-      try {
-        const ort = require('onnxruntime-node');
-        const { createOnnxSession } = require('../utils/onnxOptions');
-        // forceCpu: PromptPAR's CLIP ViT-L backbone (~1.2GB) reliably triggers
-        // DXGI_ERROR_DEVICE_REMOVED on the DirectML execution provider during
-        // inference on this hardware (session creation succeeds, run() doesn't) —
-        // confirmed by reproducing it live. CPU is slower but stable.
-        this._parSession = await createOnnxSession(ort, this.parModelPath, 'ColorClothService/PAR', { forceCpu: true });
-        this._parReady = true;
-        console.log('[ColorClothService] PAR model loaded (Phase-2 cloth analysis active)');
-      } catch (e) {
-        console.warn('[ColorClothService] PAR model load failed:', e.message);
+      if (!this._checkPromptParGate(this.parModelPath)) {
+        // Gated: _checkPromptParGate() already logged the reason and disabled
+        // Cloth analysis. Skip loading — _parReady stays false.
+      } else {
+        try {
+          const ort = require('onnxruntime-node');
+          const { createOnnxSession } = require('../utils/onnxOptions');
+          // forceCpu: PromptPAR's CLIP ViT-L backbone (~1.2GB) reliably triggers
+          // DXGI_ERROR_DEVICE_REMOVED on the DirectML execution provider during
+          // inference on this hardware (session creation succeeds, run() doesn't) —
+          // confirmed by reproducing it live. CPU is slower but stable.
+          this._parSession = await createOnnxSession(ort, this.parModelPath, 'ColorClothService/PAR', { forceCpu: true });
+          this._parReady = true;
+          console.log('[ColorClothService] PAR model loaded (Phase-2 cloth analysis active)');
+        } catch (e) {
+          console.warn('[ColorClothService] PAR model load failed:', e.message);
+        }
       }
     } else {
       console.log('[ColorClothService] openpar.onnx not found — cloth type analysis pending (Phase-2)');
@@ -250,10 +288,42 @@ class ColorClothService {
   get humanParsingStatus() { return this._hpReady ? 'loaded' : 'not_started'; }
 
   /**
+   * Pre-flight memory gate for PromptPAR (see PROMPTPAR_MIN_FREE_MEM_MB above).
+   * Models that aren't gated (e.g. the lighter OpenPAR ResNet50 alternative)
+   * always pass. On failure, logs a "PromptPAR 수행 불가능" reason and turns
+   * Cloth analysis off via analyticsConfig so the pipeline doesn't keep
+   * expecting `cloth` output from a model that was never loaded.
+   * @param {string} filePath
+   * @returns {boolean} true if loading may proceed
+   */
+  _checkPromptParGate(filePath) {
+    if (!_isPromptParFile(filePath)) return true;
+    const mem = checkPromptParMemory();
+    if (mem.ok) return true;
+    console.warn(
+      `[ColorClothService] PromptPAR 수행 불가능: 가용 메모리 부족 (free=${mem.freeMB}MB < required=${mem.requiredMB}MB) — Cloth 분석을 비활성화합니다.`
+    );
+    try {
+      require('./analyticsConfig').setConfig({ cloth: false });
+    } catch (e) {
+      console.warn('[ColorClothService] Cloth 분석 비활성화 실패:', e.message);
+    }
+    return false;
+  }
+
+  /**
    * Activate/switch the active PAR (cloth-type) model (model catalog hot-swap).
+   * Throws if this is the PromptPAR checkpoint and the memory gate fails —
+   * see _checkPromptParGate().
    * @param {string} filePath ONNX model path
    */
   async reloadPar(filePath) {
+    if (!this._checkPromptParGate(filePath)) {
+      const mem = checkPromptParMemory();
+      throw new Error(
+        `PromptPAR 수행 불가능: 가용 메모리 부족 (free=${mem.freeMB}MB < required=${mem.requiredMB}MB) — Cloth 분석이 비활성화되었습니다.`
+      );
+    }
     const ort = require('onnxruntime-node');
     const { createOnnxSession } = require('../utils/onnxOptions');
     // forceCpu — see load() above for why (DirectML GPU device removal on this model).
@@ -549,4 +619,7 @@ class ColorClothService {
   }
 }
 
-module.exports = { ColorClothService, rgbToColorName, SCHP_LIP20_CLASS_MAP, SEGFORMER_CLOTHES_CLASS_MAP, PA100K_ATTR_WORDS };
+module.exports = {
+  ColorClothService, rgbToColorName, SCHP_LIP20_CLASS_MAP, SEGFORMER_CLOTHES_CLASS_MAP, PA100K_ATTR_WORDS,
+  checkPromptParMemory, PROMPTPAR_MIN_FREE_MEM_MB,
+};

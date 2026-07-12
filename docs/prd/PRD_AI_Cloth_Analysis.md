@@ -4,10 +4,12 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-AI-06 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Draft |
-| **Date** | 2026-05-21 |
+| **Date** | 2026-07-12 |
 | **Related RFP** | RFP_AI_Cloth_Analysis.md (LTS-2026-AI-06) |
+
+> **Note (v1.1):** The Phase-2 model that actually shipped is PromptPAR (PA100k, 26 attributes) with OpenPAR (ResNet50, PA100k) as a second, admin-selectable model — not the EfficientNet-B0 multi-task classifier or the hoodie/jacket/uniform taxonomy described in §4/§5/§6/§7 below (those remain aspirational/pending — see §8). See `docs/design/Design_AI_Cloth_Analysis.md` v2.0 for the shipped schema, and §4.5/§8 below for what shipped vs. what's still pending.
 
 ---
 
@@ -91,8 +93,11 @@ Combined with color analysis output: `{ upper: 'hoodie', lower: 'jeans' }` + col
 
 ### 4.5 Phase Status
 
-- **Phase-1 (complete):** `colorClothService._colorReady = true`; `cloth.upper` and `cloth.lower` are `null` (PAR model not yet available).
-- **Phase-2 (pending):** `openpar.onnx` provides 40+ attributes including clothing type and color in a single inference pass.
+- **Phase-1 (complete):** `colorClothService._colorReady = true`; `cloth` is `null` when no PAR model is active.
+- **Phase-2 (shipped, 2026-07-12):** Admin picks one of two PA100k-taxonomy models in Admin Dashboard → AI Models → Cloth Attribute (PAR):
+  - **PromptPAR (PA100k)** — CLIP ViT-L backbone, 26 attributes, higher accuracy, forced CPU, gated behind a pre-activation free-RAM check (default ≥2GB, `PROMPTPAR_MIN_FREE_MEM_MB`). If the gate fails, the system logs the reason and automatically turns Cloth Analysis off rather than risking an out-of-memory crash.
+  - **OpenPAR (ResNet50, PA100k)** — lighter ResNet50 head, same 26-attribute taxonomy, no memory gate, manual export only.
+  - This is a real, shipped 26-attribute classification (gender/age/view-angle/bags/sleeve/style flags/boots — see Design_AI_Cloth_Analysis.md §3.1), not the hoodie/jacket/uniform categorical taxonomy in §4.1 above, and not the EfficientNet-B0 multi-task classifier — those remain unimplemented (§8).
 
 ---
 
@@ -181,21 +186,22 @@ Combined with color analysis output: `{ upper: 'hoodie', lower: 'jeans' }` + col
 |---|---|---|---|---|
 | M1 | Phase-1: colorClothService with color extraction active; cloth fields return null | 2026-05-15 | 2026-05-15 | ✅ Complete |
 | M2 | Phase-2: Source or train EfficientNet-B0 multi-task ONNX clothing classifier | TBD | - | ⏳ Pending |
-| M3 | Phase-2: Integrate OpenPAR ONNX model for combined color+cloth+accessories attributes | TBD | - | ⏳ Pending |
+| M3 | Phase-2: Integrate PromptPAR (PA100k) ONNX model for pedestrian attribute recognition, with OpenPAR (ResNet50) as an admin-selectable alternative and a pre-activation memory gate for PromptPAR | 2026-07-12 | 2026-07-12 | ✅ Complete |
 | M4 | Uniform compliance alert integration | TBD | - | ⏳ Pending |
 
 ### 8.2 TODO
 
-- [ ] Export OpenPAR model to ONNX (`torch.onnx.export` with input `[1, 3, 256, 128]`, opset 11)
-- [ ] Implement `_runPAR()` method in `colorClothService.js` using `openpar.onnx`
-- [ ] Map PAR output attributes to `cloth.upperGarment.type` and `cloth.lowerGarment.type` fields
-- [ ] Implement 10-frame majority vote smoothing per track for garment type stability
-- [ ] Implement `generateDescription(cloth, color)` combining color and cloth outputs
+- [x] Export PromptPAR model to ONNX (`server/src/scripts/exportPAR.py`, input `[1, 3, 224, 224]`, output `attrs[26]`)
+- [x] Implement `_runPAR()` method in `colorClothService.js` using `openpar_pa100k.onnx`
+- [x] Add OpenPAR (ResNet50, PA100k) as a second `cloth-par` catalog entry, selectable in Admin Dashboard → AI Models
+- [x] Add PromptPAR pre-activation memory gate (`PROMPTPAR_MIN_FREE_MEM_MB`) — log + auto-disable Cloth analysis on failure, no automatic fallback to OpenPAR
+- [ ] Map PAR output attributes to a natural-language `description` field (e.g. "female, long sleeve, backpack") — 26-field object exists but no description generator yet
+- [ ] Implement 10-frame majority vote smoothing per track for attribute stability
 - [ ] Extend zone schema with `uniformPolicy` block (required garment types, alertOnViolation)
 - [ ] Add `uniformCompliant` field to loitering alert schema
 - [ ] Implement `GET /api/events?upperCloth=&lowerCloth=&fullOutfit=` search endpoint
-- [ ] Benchmark EfficientNet-B0 vs. OpenPAR on RAP v2 and PA-100K datasets
-- [ ] Add `cloth` attribute display to `FullscreenCameraView.tsx` detection panel
+- [ ] Benchmark EfficientNet-B0 multi-task classifier vs. the shipped PromptPAR/OpenPAR pair on RAP v2
+- [x] `cloth` attribute display in detection panels (see `client/src/components/DetectionsTimelineInline.tsx`, `SearchFullscreen.tsx`, `FullscreenCameraView.tsx`)
 
 ---
 
@@ -204,3 +210,4 @@ Combined with color analysis output: `{ upper: 'hoodie', lower: 'jeans' }` + col
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for AI Cloth Analysis |
+| 1.1 | 2026-07-12 | LTS Engineering Team | Updated §4.5/§8 to reflect the shipped PromptPAR (PA100k) + OpenPAR (ResNet50) model pair and the PromptPAR memory gate (M3 marked complete); flagged §4.1/§5/§6/§7 as describing the still-aspirational EfficientNet-B0/uniform-policy taxonomy, not what shipped |

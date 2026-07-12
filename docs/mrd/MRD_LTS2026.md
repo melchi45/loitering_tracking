@@ -216,7 +216,7 @@ All modules defined below correspond to completed SDLC chains (RFP → PRD → S
 | AI-03 | Face Detection & Recognition | SCRFD-2.5G + ArcFace ResNet-50 | ✅ Phase 2 | `face` |
 | AI-04 | Mask Detection | YOLOv8m PPE ONNX (mask/no_mask) | ✅ Phase 1 | `mask` |
 | AI-05 | Color Analysis | Pixel-averaging HSV, 11 color classes | ✅ Phase 1 | `color` |
-| AI-06 | Clothing Analysis | OpenPAR ONNX (upper/lower garment + sleeve) | ✅ Phase 2 | `cloth` |
+| AI-06 | Clothing Analysis | PromptPAR (PA100k, CLIP ViT-L) or OpenPAR (ResNet50) ONNX, admin-selectable, 26 attributes — PromptPAR memory-gated (auto-disables `cloth` if free RAM insufficient) | ✅ Phase 2 | `cloth` |
 | AI-07 | Hat / Helmet Detection | YOLOv8m PPE ONNX (hardhat/no_hardhat) | ✅ Phase 1 | `hat` |
 | AI-08 | Accessories Detection | YOLOv8n COCO (backpack/umbrella/handbag/tie/suitcase) | ✅ Phase 1 | `accessories` |
 | AI-09 | Fire & Smoke Detection | YOLOv8s Fire/Smoke ONNX (3-class) | ✅ Phase 1 | `fire`, `smoke` |
@@ -515,3 +515,4 @@ The following table maps planned market releases to engineering phases and targe
 | 1.15 | 2026-07-09 | Youngho Kim | 원본 가이드 `docs/rfp/Loitering_Detection_가이드.md` 삭제 완료 — 내용 전체가 SRS §6, §6.4 로드맵 및 관련 RFP/PRD/Design/TC 문서에 반영되었음을 확인 |
 | 1.16 | 2026-07-09 | Youngho Kim | §6.4에 Phase 12b-5(알림 레코드 속성 첨부, Proposed, 미구현) 로드맵 행 추가; 원본 가이드 `docs/rfp/ReID_및_색상분석_활용가이드.md` 삭제 완료 — 내용 전체가 Design_AI_AppearanceReID.md §12, SRS_CrossCamera_Face_Tracking.md §14, 관련 RFP/PRD/TC 문서에 반영되었음을 확인 |
 | 1.17 | 2026-07-09 | LTS Engineering Team | §6.3/6.1 Detections Timeline·Detection Snapshot 설명에 화질 개선(640×640/q85) 반영; §7.9 신규 — BR-027~028 crop 화질 및 상세정보 패널 잘림 방지(`object-contain`) 요구사항 추가 |
+| 1.18 | 2026-07-12 | LTS Engineering Team | AI-06 Clothing Analysis 행 갱신 — PromptPAR(PA100k, CLIP ViT-L)/OpenPAR(ResNet50) 2개 admin-selectable 모델 및 PromptPAR 사전 메모리 게이트(가용 RAM 부족 시 `cloth` 자동 비활성화) 반영 |

@@ -4,11 +4,11 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-AI-04 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
-| **Date** | 2026-05-26 |
+| **Date** | 2026-07-12 |
 | **Parent SRS** | srs/SRS_AI_Cloth_Analysis.md |
-| **Test Scripts** | test/api/ai_detection_modules.test.js (Groups A, B, D, F) |
+| **Test Scripts** | test/api/ai_detection_modules.test.js (Groups A, B, D, F); test/api/model_catalog.test.js (Group D — TC-MC-017~019, model selection & memory gate) |
 
 ---
 
@@ -22,6 +22,7 @@
 7. [Test Group E — Error Handling & Edge Cases](#7-test-group-e--error-handling--edge-cases)
 8. [Test Execution Order](#8-test-execution-order)
 9. [Pass/Fail Criteria](#9-passfail-criteria)
+10. [Test Group F — Model Selection & Memory Gate](#10-test-group-f--model-selection--memory-gate)
 
 ---
 
@@ -309,8 +310,39 @@ Phase 7 — Error Handling (Group E)
 
 ---
 
+## 10. Test Group F — Model Selection & Memory Gate
+
+**Scripts:** `test/api/model_catalog.test.js` (TC-MC-017, TC-MC-018, TC-MC-019 — see `docs/tc/TC_AI_Model_Catalog.md` for full step-by-step detail; not duplicated here to avoid drift between the two documents)
+
+### TC-F-001 — cloth-par Catalog Exposes PromptPAR and OpenPAR
+- **SRS:** FR-CLT-022
+- Equivalent to TC-MC-017. `GET /api/analysis/models` → `catalog` filtered to `family === 'cloth-par'` has exactly 2 entries: `openpar-pa100k` (not `manualOnly`) and `openpar-resnet50-pa100k` (`manualOnly: true`).
+
+### TC-F-002 — PromptPAR Activation Blocked Below the Memory Floor
+- **SRS:** FR-CLT-024, FR-CLT-025, FR-CLT-027
+- Equivalent to TC-MC-018 (unit test against `colorClothService.js`, no running server required). With `os.freemem()` patched below `PROMPTPAR_MIN_FREE_MEM_MB`, `reloadPar()` for the PromptPAR file throws an error containing "PromptPAR"; `_parReady` stays `false`.
+
+### TC-F-003 — Memory Gate Failure Disables Cloth Analysis
+- **SRS:** FR-CLT-026
+- Steps:
+  1. Ensure `cloth` is `true` in `/api/analytics/config`
+  2. Trigger a PromptPAR activation (startup or `POST /api/analysis/models/switch`) under simulated low free RAM
+  3. `GET /api/analytics/config` → assert `cloth === false`
+- **Note:** Requires either mocking `os.freemem()` in-process (see TC-MC-018) or running on hardware genuinely below the floor — not practical as a live-server HTTP test in CI; verified via the `colorClothService.js` unit test's `analyticsConfig.setConfig` call, and manually on constrained hardware.
+
+### TC-F-004 — OpenPAR Is Never Memory-Gated
+- **SRS:** FR-CLT-024
+- Equivalent to TC-MC-019. Activating/loading OpenPAR (`openpar-resnet50-pa100k`) succeeds regardless of free system RAM — no gate check applies to it.
+
+### TC-F-005 — No Automatic Fallback Between Models
+- **SRS:** FR-CLT-028
+- Manual verification: after a PromptPAR memory-gate failure, `GET /api/analysis/models` shows neither `cloth-par` entry as newly `active` unless the operator explicitly activates one — the system does not auto-switch to OpenPAR.
+
+---
+
 ## Document History
 
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for AI Cloth Analysis |
+| 1.1 | 2026-07-12 | LTS Engineering Team | Added §10 (TC-F-001~005) — PromptPAR/OpenPAR model selection and PromptPAR memory gate test cases, cross-referencing the automated TC-MC-017~019 in `test/api/model_catalog.test.js` |

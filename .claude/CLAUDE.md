@@ -53,7 +53,7 @@ loitering_tracking/
 │   │   ├── mediamtxManager.js      # MediaMTX 경로 등록/해제 (WebRTC WHEP)
 │   │   ├── analysisClient.js       # streaming→analysis HTTP 클라이언트 (회로차단기)
 │   │   ├── fireSmokeService.js     # 화재·연기 감지
-│   │   ├── colorClothService.js    # 색상·의류 분석 (Phase-3 Human Parsing 포함, opt-in — `humanParsing` 토글)
+│   │   ├── colorClothService.js    # 색상·의류 분석 — cloth-PAR PromptPAR(PA100k, CLIP ViT-L)/OpenPAR(ResNet50) admin-selectable, PromptPAR 사전 메모리 게이트(가용 RAM 부족 시 로그+Cloth 분석 자동 비활성화); Phase-3 Human Parsing 포함, opt-in — `humanParsing` 토글
 │   │   ├── appearanceReidService.js # CrossCamera Phase-2 Appearance/Body Re-ID OSNet 임베딩 추출 (opt-in, 모델 미배포 시 자동 비활성)
 │   │   ├── qdrantService.js        # Qdrant 벡터 DB 클라이언트 — face_embeddings/appearance_embeddings 컬렉션, 서킷브레이커 (opt-in, `QDRANT_ENABLED=true`)
 │   │   ├── protectiveEquipService.js # 안전모·마스크 감지

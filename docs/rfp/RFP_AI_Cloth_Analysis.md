@@ -8,7 +8,7 @@
 | **Issue Date** | May 15, 2026 |
 | **Proposal Deadline** | June 30, 2026 |
 | **Zone Target Key** | `cloth` |
-| **Status** | **Phase-1 Implemented (color sharing) / Phase-2 PAR Pending** |
+| **Status** | **Phase-1 Implemented (color sharing) / Phase-2 PAR Implemented (PromptPAR + OpenPAR — see Appendix F) — original EfficientNet-B0/uniform-taxonomy scope in §4-§8 still pending** |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -433,6 +433,20 @@ Output: detection.cloth.upper (e.g., 'T-shirt') / detection.cloth.lower (e.g., '
      null in Phase-1 (PAR model required)
 ```
 
+### Appendix F: What Actually Shipped (2026-07-12)
+
+The PAR framework selected in Appendix E (Event-AHU/OpenPAR) shipped as **two** selectable models sharing the PA100k 26-attribute taxonomy — not the 40+ attribute combined clothing+color+hat+bag model originally envisioned, and not the EfficientNet-B0 multi-task classifier of §5:
+
+| | PromptPAR (PA100k) | OpenPAR (ResNet50, PA100k) |
+|---|---|---|
+| Catalog id | `openpar-pa100k` | `openpar-resnet50-pa100k` |
+| Backbone | CLIP ViT-L + text-prompt fusion | Plain ResNet50 head |
+| Attributes | 26 (gender, age, view angle, hat/glasses, bag type, sleeve length, upper/lower style flags, boots) | Same 26 |
+| Selection | Admin Dashboard → AI Models → Cloth Attribute (PAR) → Activate | Same |
+| Special handling | Forced onto CPU (DirectML crashes on this backbone); gated behind a ≥2GB free-RAM pre-activation check — on failure, the system logs the reason and automatically disables Cloth Analysis rather than risk an out-of-memory crash | None — no memory gate |
+
+Full technical detail: `docs/design/Design_AI_Cloth_Analysis.md` §3, §11 and `docs/design/Design_AI_Model_Catalog.md` §8. The uniform-policy, natural-language description generator, and person-search-by-clothing endpoints in §6.2/§7 of this RFP remain unimplemented.
+
 ### Appendix D: Related RFP Documents
 
 | Document | Description |
@@ -459,3 +473,4 @@ Output: detection.cloth.upper (e.g., 'T-shirt') / detection.cloth.lower (e.g., '
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for AI Cloth Analysis |
+| 1.1 | 2026-07-12 | LTS Engineering Team | Updated Status line; added Appendix F documenting the shipped PromptPAR (PA100k)/OpenPAR (ResNet50) model pair and memory gate — the actual Phase-2 delivery differs from the EfficientNet-B0/uniform-taxonomy scope in §4-§8 |
