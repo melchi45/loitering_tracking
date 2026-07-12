@@ -2,6 +2,7 @@
 
 const path = require('path');
 const http = require('http');
+const https = require('https');
 const { spawn } = require('child_process');
 
 try {
@@ -65,11 +66,12 @@ function resolveDirFromBinary(value) {
 }
 
 function resolveByRuntime(runtimeOs, baseKey) {
-  const generic = process.env[baseKey];
-  if (generic && String(generic).trim()) return String(generic).trim();
   const osKey = runtimeOs === 'windows' ? `${baseKey}_WINDOWS` : `${baseKey}_LINUX`;
   const osVal = process.env[osKey];
-  return osVal && String(osVal).trim() ? String(osVal).trim() : '';
+  if (osVal && String(osVal).trim()) return String(osVal).trim();
+  const generic = process.env[baseKey];
+  if (generic && String(generic).trim()) return String(generic).trim();
+  return '';
 }
 
 async function main() {
@@ -118,6 +120,7 @@ async function main() {
 
   let mediamtxChild    = null;
   let ingestDaemonChild = null;
+  let _shuttingDown = false;
 
   if (needsMediaMTX) {
     const mediamtxBin    = resolveByRuntime(runtimeOs, 'MEDIAMTX_BIN') || 'mediamtx';
@@ -173,7 +176,9 @@ async function main() {
       if (ingestBinRaw.endsWith('.py')) {
         // Prefer PYAV_PYTHON_BIN (points to the Python that has PyAV installed)
         // over the generic PYTHON_EXEC which may be a system Python without PyAV.
-        ingestExec = (childEnv.PYAV_PYTHON_BIN || '').trim() || pythonExec;
+        // Resolved OS-first (PYAV_PYTHON_BIN_WINDOWS/_LINUX) so a generic PYAV_PYTHON_BIN
+        // set for the "other" OS doesn't shadow the platform-specific path.
+        ingestExec = resolveByRuntime(runtimeOs, 'PYAV_PYTHON_BIN') || pythonExec;
         // __dirname = server/src/scripts — two levels up reaches server/, where the relative path in .env is anchored
         ingestArgs = [path.resolve(__dirname, '..', '..', ingestBinRaw), '--addr', ingestAddr];
       } else {
@@ -260,12 +265,20 @@ async function main() {
           if (ready) {
             _ingestRestartAttempts = 0;
             console.log(`[Start] ingest-daemon restarted on :${ingestPort} — re-registering cameras`);
-            const serverPort = parseInt(childEnv.PORT || childEnv.HTTP_PORT || '3080', 10);
-            http.request(
+            // Must mirror startIngestDaemon.js/restartIngestDaemon.js: when HTTPS_ENABLED=true
+            // the plain HTTP listener on HTTP_PORT never binds (see index.js ACTIVE_PORT),
+            // so a hardcoded http:// request here always fails with ECONNREFUSED and the
+            // reregister silently never happens after a crash-restart.
+            const httpsEnabled = (childEnv.HTTPS_ENABLED || '').toLowerCase() === 'true';
+            const serverProto  = httpsEnabled ? https : http;
+            const serverPort   = parseInt(httpsEnabled ? (childEnv.HTTPS_PORT || '3443') : (childEnv.HTTP_PORT || '3080'), 10);
+            const sslCtx       = httpsEnabled ? { rejectUnauthorized: false } : {};
+            serverProto.request(
               {
                 hostname: '127.0.0.1', port: serverPort,
                 path: '/api/internal/ingest/reregister',
                 method: 'POST', headers: { 'Content-Length': '0' },
+                ...sslCtx,
               },
               (res) => { console.log(`[Start] ingest reregister: HTTP ${res.statusCode}`); res.resume(); }
             ).on('error', (e) => { console.warn(`[Start] ingest reregister failed: ${e.message}`); }).end();
@@ -340,7 +353,6 @@ async function main() {
     if (ingestDaemonChild) { try { ingestDaemonChild.kill(sig); } catch (_) {} ingestDaemonChild = null; }
   };
 
-  let _shuttingDown = false;
   const shutdown = (sig) => {
     if (_shuttingDown) return;
     _shuttingDown = true;

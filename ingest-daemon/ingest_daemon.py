@@ -64,11 +64,18 @@ log = logging.getLogger("ingest")
 AI_FRAME_INTERVAL  = int(os.environ.get("AI_FRAME_INTERVAL", "3"))
 JPEG_QUALITY       = int(os.environ.get("JPEG_QUALITY", "85"))
 IDR_WAIT_TIMEOUT   = float(os.environ.get("IDR_WAIT_TIMEOUT", "2"))
-# Frame watchdog timeout (seconds).  _Watchdog closes the container from a
-# background thread after this many seconds with no RTP packet.  RTSP keepalive
-# responses (OPTIONS / GET_PARAMETER) do NOT call wd.reset(), so the watchdog
-# correctly detects "keepalives alive but no video" — unlike stimeout which is
-# reset by any socket data including keepalives.
+# Idle timeout (seconds) for the AI / video RTP RTSP sessions, applied as the
+# libav "stimeout" socket I/O option (µs). All ingest loops (AI, video RTP,
+# audio, App RTP) now use stimeout exclusively — a prior per-camera background
+# watchdog thread that called container.close() concurrently with the
+# foreground demux() thread was removed after it was found to crash the whole
+# process (STATUS_HEAP_CORRUPTION on Windows; segfault on Linux), since libav
+# is not thread-safe for that kind of cross-thread close. stimeout fires inside
+# libav's own I/O layer on the same thread that is blocked reading, which is
+# always safe. Trade-off: like any socket-level timeout it is reset by RTSP
+# keepalives (OPTIONS / GET_PARAMETER) even when no video/audio data is
+# flowing, so a "keepalives-only" stall takes longer to detect than the old
+# watchdog — accepted since correctness beats that edge case.
 RTSP_READ_TIMEOUT     = float(os.environ.get("RTSP_READ_TIMEOUT", "5"))
 # App RTP carries sparse ONVIF metadata (events may be minutes apart).
 # Use a much longer idle timeout than video/audio tracks.
@@ -81,80 +88,6 @@ _RTSP_OPTIONS = {
     "flags":          "low_delay",
 }
 
-
-class _Watchdog:
-    """
-    Background thread that closes a PyAV container when no RTP packet arrives
-    within timeout_sec.  Works with PyAV 11.x (no interrupt_callback needed).
-
-    Usage:
-        wd = _Watchdog(RTSP_READ_TIMEOUT, label, stop_event)
-        container = av.open(rtsp_url, options=...)
-        wd.arm(container)
-        try:
-            for pkt in container.demux(...):
-                if pkt.size == 0: continue
-                wd.reset()   # actual RTP data → keep alive
-                ...
-        finally:
-            wd.disarm()
-            container.close()
-
-    When the watchdog fires it closes the container from this background thread,
-    which causes container.demux() in the main thread to raise av.AVError or
-    OSError (Linux: EBADF on the closed socket fd).  The demux loop exits,
-    _*_ingest_once() raises, and _*_loop() reconnects after retry_delay.
-
-    RTSP control traffic (OPTIONS / GET_PARAMETER keep-alives) does NOT call
-    reset(), so the watchdog correctly detects "keep-alives but no video" freeze.
-    """
-
-    __slots__ = ("_timeout", "_label", "_stop_ev", "_last", "_container",
-                 "_disarmed", "_thread")
-
-    def __init__(self, timeout_sec: float, label: str,
-                 stop_event: threading.Event):
-        self._timeout  = timeout_sec
-        self._label    = label
-        self._stop_ev  = stop_event
-        self._last     = time.monotonic()
-        self._container = None
-        self._disarmed  = threading.Event()
-        self._thread    = threading.Thread(
-            target=self._run, daemon=True, name=f"wd-{label}"
-        )
-
-    def arm(self, container) -> None:
-        """Attach container and start watchdog thread."""
-        self._container = container
-        self._last      = time.monotonic()
-        self._thread.start()
-
-    def reset(self) -> None:
-        """Call after each successfully demuxed RTP packet."""
-        self._last = time.monotonic()
-
-    def disarm(self) -> None:
-        """Stop the watchdog thread (call from finally block)."""
-        self._disarmed.set()
-
-    def _run(self) -> None:
-        while not self._disarmed.wait(timeout=0.25):
-            if self._stop_ev.is_set():
-                try:
-                    self._container.close()
-                except Exception:
-                    pass
-                return
-            elapsed = time.monotonic() - self._last
-            if elapsed > self._timeout:
-                log.warning("%s watchdog: no RTP for %.1fs — closing container",
-                            self._label, elapsed)
-                try:
-                    self._container.close()
-                except Exception:
-                    pass
-                return
 
 # Must match VIDEO_SSRC / AUDIO_SSRC / AUDIO_PT in server/src/services/webrtc/mediasoupEngine.js.
 # mediasoup PlainTransport (comedia=true) matches incoming RTP by both SSRC and payload type;
@@ -270,9 +203,13 @@ class CameraSession:
                 retry_delay = min(retry_delay * 1.5, 5.0)
 
     def _ai_ingest_once(self):
-        wd = _Watchdog(RTSP_READ_TIMEOUT, f"[{self.id[:8]}] ai", self._stop)
-        container = av.open(self.rtsp_url, options=_RTSP_OPTIONS)
-        wd.arm(container)
+        # stimeout (socket I/O timeout, µs) instead of _Watchdog — closing the
+        # container from a background thread while demux() runs on the foreground
+        # thread is not thread-safe in libav and can crash the whole process
+        # (observed as STATUS_HEAP_CORRUPTION on Windows). Same fix already
+        # applied to the audio and App RTP paths; see their comments for detail.
+        _ai_opts = {**_RTSP_OPTIONS, "stimeout": str(int(RTSP_READ_TIMEOUT * 1_000_000))}
+        container = av.open(self.rtsp_url, options=_ai_opts)
         try:
             vs = next((s for s in container.streams if s.type == "video"), None)
             if vs is None:
@@ -295,8 +232,6 @@ class CameraSession:
                     break
                 if packet.size == 0:
                     continue
-
-                wd.reset()  # RTP packet arrived → keep watchdog alive
 
                 if not idr_seen:
                     if packet.is_keyframe:
@@ -329,7 +264,6 @@ class CameraSession:
                 except Exception as dec_err:
                     log.debug("[%s] decode: %s", self.id[:8], dec_err)
         finally:
-            wd.disarm()
             try:
                 container.close()
             except Exception:
@@ -417,9 +351,11 @@ class CameraSession:
                 retry_delay = min(retry_delay * 1.5, 5.0)
 
     def _video_rtp_ingest_once(self):
-        wd = _Watchdog(RTSP_READ_TIMEOUT, f"[{self.id[:8]}] vrtp", self._stop)
-        inp = av.open(self.rtsp_url, options=_RTSP_OPTIONS)
-        wd.arm(inp)
+        # stimeout instead of _Watchdog — see _ai_ingest_once() comment; closing
+        # the container from a background thread while demux() runs here is not
+        # thread-safe in libav and can crash the process.
+        _vrtp_opts = {**_RTSP_OPTIONS, "stimeout": str(int(RTSP_READ_TIMEOUT * 1_000_000))}
+        inp = av.open(self.rtsp_url, options=_vrtp_opts)
         try:
             vs = next((s for s in inp.streams if s.type == "video"), None)
             if vs is None:
@@ -444,8 +380,6 @@ class CameraSession:
                         break
                     if pkt.size == 0:
                         continue
-
-                    wd.reset()  # RTP packet arrived → keep watchdog alive
 
                     if not idr_seen:
                         if pkt.is_keyframe:
@@ -473,7 +407,6 @@ class CameraSession:
             finally:
                 out.close()
         finally:
-            wd.disarm()
             try:
                 inp.close()
             except Exception:
