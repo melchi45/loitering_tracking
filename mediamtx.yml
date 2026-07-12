@@ -42,6 +42,15 @@ authInternalUsers:
         path: ""
       - action: api
 
+# ── Server-wide buffering ─────────────────────────────────────────────────────
+# Size of the per-reader outgoing packet queue (default 512). YouTube live
+# ingests occasionally burst after a brief CDN stall (yt-dlp/ffmpeg catching up
+# on segment fetch), which can outrun readers (e.g. ingest-daemon's RTSP pull)
+# fast enough to trigger "reader is too slow, discarding N frames". A larger
+# queue absorbs that burst instead of dropping frames — costs some RAM per
+# reader, not added latency under normal conditions.
+writeQueueSize: 2048
+
 # ── Path defaults ─────────────────────────────────────────────────────────────
 pathDefaults:
   overridePublisher: yes

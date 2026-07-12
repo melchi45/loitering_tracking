@@ -556,6 +556,14 @@ class YouTubeStreamService {
       // causing a restart gap where the stream freezes until yt-dlp relaunches.
       // With -re the pipe fills up, yt-dlp's writes block, keeping both processes alive.
       '-re',
+      // yt-dlp's internal segment fetches from googlevideo CDN aren't perfectly
+      // smooth — brief stalls (CDN jitter, segment re-requests) followed by bursts
+      // once data resumes. FFmpeg's default pipe read queue (8 packets) is too small
+      // to absorb these bursts, causing "Resumed reading at pts ... after a lag of
+      // Xs" warnings and, downstream, MediaMTX readers discarding frames while they
+      // catch up. A larger queue smooths this out without adding real latency (it's
+      // headroom for bursts, not a fixed buffering delay).
+      '-thread_queue_size', '4096',
       '-i', 'pipe:0',
       // Copy H.264 video as-is — no libx264 re-encoding (eliminates >90% CPU usage).
       // yt-dlp format selector already enforces vcodec^=avc so the source is H.264.
