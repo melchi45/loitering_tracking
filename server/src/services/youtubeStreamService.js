@@ -722,8 +722,18 @@ class YouTubeStreamService {
         clearTimeout(entry.startTimer);
         entry.startTimer    = null;
         entry.ffmpegProcess = null;
-        // Ensure yt-dlp also stops when ffmpeg exits
-        if (entry.ytdlpProcess) { entry.ytdlpProcess.kill('SIGTERM'); }
+        // Ensure yt-dlp also stops when ffmpeg exits. This "natural" reconnect
+        // path (googlevideo hiccup, watchdog restart, etc.) happens far more
+        // often than an explicit delete, so it's the dominant source of
+        // orphaned ffmpeg processes if it doesn't sweep the tree the same way
+        // _stopEntry() does — see killProcessTree() comment for why a plain
+        // .kill() never reaches yt-dlp's internal ffmpeg subprocess.
+        if (entry.ytdlpProcess) {
+          const ytdlpPid = entry.ytdlpProcess.pid;
+          entry.ytdlpProcess.kill('SIGTERM');
+          entry.ytdlpProcess = null;
+          killProcessTree(ytdlpPid).catch(() => {});
+        }
 
         if (entry.status === 'stopping' || entry.status === 'removed') return;
 
