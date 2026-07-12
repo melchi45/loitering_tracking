@@ -38,6 +38,7 @@
     "typescript": "^6.0.3"
   },
   "dependencies": {
-    "@qdrant/js-client-rest": "^1.18.0"
+    "@qdrant/js-client-rest": "^1.18.0",
+    "ultralytics": "^1.1.1"
   }
 }
