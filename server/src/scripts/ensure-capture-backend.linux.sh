@@ -56,11 +56,13 @@ resolve_backend() {
 }
 
 resolve_python_bin() {
+  # OS-specific keys take priority over the generic ones — server/.env commonly sets
+  # both a Windows-oriented generic value and a _LINUX override for cross-platform use.
   local candidates=(
-    "$(get_env_value "${ENV_FILE}" "PYAV_PYTHON_BIN")"
     "$(get_env_value "${ENV_FILE}" "PYAV_PYTHON_BIN_LINUX")"
-    "$(get_env_value "${ENV_FILE}" "PYTHON_EXEC")"
+    "$(get_env_value "${ENV_FILE}" "PYAV_PYTHON_BIN")"
     "$(get_env_value "${ENV_FILE}" "PYTHON_EXEC_LINUX")"
+    "$(get_env_value "${ENV_FILE}" "PYTHON_EXEC")"
     "${PYTHON:-}"
     "python3"
     "python"
@@ -177,23 +179,23 @@ ensure_pyav() {
   fi
 
   echo "  Python: ${py}"
-  if ! "${py}" -c "import av, PIL; print('ok')" >/dev/null 2>&1; then
-    echo "  PyAV/Pillow missing. Installing via pip..."
+  if ! "${py}" -c "import av, PIL, numpy; print('ok')" >/dev/null 2>&1; then
+    echo "  PyAV/Pillow/numpy missing. Installing via pip..."
     if command -v pip3 >/dev/null 2>&1; then
       pip3 install --upgrade pip
-      pip3 install av Pillow
+      pip3 install av Pillow numpy
     else
       "${py}" -m pip install --upgrade pip
-      "${py}" -m pip install av Pillow
+      "${py}" -m pip install av Pillow numpy
     fi
   fi
 
-  if ! "${py}" -c "import av, PIL; print('ok')" >/dev/null 2>&1; then
-    echo "Failed to import av/PIL after installation." >&2
+  if ! "${py}" -c "import av, PIL, numpy; print('ok')" >/dev/null 2>&1; then
+    echo "Failed to import av/PIL/numpy after installation." >&2
     exit 1
   fi
 
-  echo "  OK python deps: av, Pillow"
+  echo "  OK python deps: av, Pillow, numpy"
 }
 
 echo ""
@@ -209,8 +211,9 @@ case "${SELECTED}" in
   ffmpeg) ensure_ffmpeg ;;
   gstreamer) ensure_gstreamer ;;
   pyav) ensure_pyav ;;
+  ingest-daemon) ensure_pyav ;;
   *)
-    echo "Unsupported CAPTURE_BACKEND: ${SELECTED} (allowed: ffmpeg, gstreamer, pyav)" >&2
+    echo "Unsupported CAPTURE_BACKEND: ${SELECTED} (allowed: ffmpeg, gstreamer, pyav, ingest-daemon)" >&2
     exit 1
     ;;
 esac

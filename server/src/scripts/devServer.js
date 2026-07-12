@@ -59,11 +59,12 @@ function resolveDirFromBinary(value) {
 }
 
 function resolveByRuntime(runtimeOs, baseKey) {
-  const generic = process.env[baseKey];
-  if (generic && String(generic).trim()) return String(generic).trim();
   const osKey = runtimeOs === 'windows' ? `${baseKey}_WINDOWS` : `${baseKey}_LINUX`;
   const osVal = process.env[osKey];
-  return osVal && String(osVal).trim() ? String(osVal).trim() : '';
+  if (osVal && String(osVal).trim()) return String(osVal).trim();
+  const generic = process.env[baseKey];
+  if (generic && String(generic).trim()) return String(generic).trim();
+  return '';
 }
 
 async function main() {
@@ -158,7 +159,9 @@ async function main() {
     } else {
       let ingestExec, ingestArgs;
       if (ingestBinRaw.endsWith('.py')) {
-        ingestExec = (childEnv.PYAV_PYTHON_BIN || '').trim() || pythonExec;
+        // Resolved OS-first (PYAV_PYTHON_BIN_WINDOWS/_LINUX) so a generic PYAV_PYTHON_BIN
+        // set for the "other" OS doesn't shadow the platform-specific path.
+        ingestExec = resolveByRuntime(runtimeOs, 'PYAV_PYTHON_BIN') || pythonExec;
         ingestArgs = [path.resolve(__dirname, '..', '..', ingestBinRaw), '--addr', ingestAddr];
       } else {
         ingestExec = ingestBinRaw || 'ingest-daemon';

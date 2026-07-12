@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   - Reads CAPTURE_BACKEND from server/.env (unless -Backend is provided).
-  - Valid values: ffmpeg, gstreamer, pyav.
+  - Valid values: ffmpeg, gstreamer, pyav, ingest-daemon (ingest-daemon shares pyav's prerequisites).
   - Checks required executable/dependencies and attempts install when missing.
 
 .EXAMPLE
@@ -71,11 +71,13 @@ function Resolve-Backend {
 }
 
 function Resolve-PythonBin {
+    # OS-specific keys take priority over the generic ones — server/.env commonly sets
+    # both a Linux-oriented generic value and a _WINDOWS override for cross-platform use.
     $candidates = @(
-        (Get-EnvValue $EnvFile "PYAV_PYTHON_BIN"),
         (Get-EnvValue $EnvFile "PYAV_PYTHON_BIN_WINDOWS"),
-        (Get-EnvValue $EnvFile "PYTHON_EXEC"),
+        (Get-EnvValue $EnvFile "PYAV_PYTHON_BIN"),
         (Get-EnvValue $EnvFile "PYTHON_EXEC_WINDOWS"),
+        (Get-EnvValue $EnvFile "PYTHON_EXEC"),
         $env:PYTHON,
         "python"
     )
@@ -224,18 +226,22 @@ function Ensure-Pyav {
 
     Write-Host "  Python: $pythonBin"
 
-    & $pythonBin -c "import av, PIL; print('ok')" 2>$null | Out-Null
+    # These probes are expected to fail (non-zero exit + stderr) when deps are missing.
+    # Under $ErrorActionPreference = "Stop", a native command's stderr output is promoted
+    # to a terminating error even when we only care about $LASTEXITCODE — wrap in try/catch
+    # so the expected failure doesn't abort the whole script.
+    try { & $pythonBin -c "import av, PIL, numpy; print('ok')" 2>$null | Out-Null } catch {}
     if ($LASTEXITCODE -ne 0) {
-        Write-Host "  PyAV/Pillow missing. Installing via pip..."
+        Write-Host "  PyAV/Pillow/numpy missing. Installing via pip..."
         & $pythonBin -m pip install --upgrade pip
-        & $pythonBin -m pip install av Pillow
-        & $pythonBin -c "import av, PIL; print('ok')" | Out-Null
+        & $pythonBin -m pip install av Pillow numpy
+        try { & $pythonBin -c "import av, PIL, numpy; print('ok')" 2>$null | Out-Null } catch {}
         if ($LASTEXITCODE -ne 0) {
-            throw "Failed to import av/PIL after installation. Check Python environment and retry."
+            throw "Failed to import av/PIL/numpy after installation. Check Python environment and retry."
         }
     }
 
-    Write-Host "  OK python deps: av, Pillow"
+    Write-Host "  OK python deps: av, Pillow, numpy"
 }
 
 Write-Host ""
@@ -251,7 +257,8 @@ switch ($selected) {
     "ffmpeg" { Ensure-Ffmpeg }
     "gstreamer" { Ensure-Gstreamer }
     "pyav" { Ensure-Pyav }
-    default { throw "Unsupported CAPTURE_BACKEND: $selected (allowed: ffmpeg, gstreamer, pyav)" }
+    "ingest-daemon" { Ensure-Pyav }
+    default { throw "Unsupported CAPTURE_BACKEND: $selected (allowed: ffmpeg, gstreamer, pyav, ingest-daemon)" }
 }
 
 Write-Host ""

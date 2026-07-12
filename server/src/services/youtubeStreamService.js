@@ -73,22 +73,46 @@ if (!_isAnalysis) {
 }
 
 function findYtDlp() {
-  // 1. Explicit single-path override
-  if (process.env.YTDLP_BIN) return process.env.YTDLP_BIN;
-  // 2. OS-specific override written by setup-env scripts
   const isWindows = process.platform === 'win32';
+  // 1. OS-specific override takes precedence on the matching runtime.
   const osKey = isWindows ? process.env.YTDLP_BIN_WINDOWS : process.env.YTDLP_BIN_LINUX;
   if (osKey) return osKey;
-  const candidates = [
-    '/home/' + (process.env.USER || require('os').userInfo().username) + '/.local/bin/yt-dlp',
-    '/usr/local/bin/yt-dlp',
-    '/usr/bin/yt-dlp',
-    'yt-dlp',
-  ];
+  // 2. Explicit single-path override
+  if (process.env.YTDLP_BIN) return process.env.YTDLP_BIN;
+
+  const candidates = [];
+  if (isWindows) {
+    const localAppData = process.env.LOCALAPPDATA || '';
+    const programFiles = process.env.ProgramFiles || 'C:\\Program Files';
+    const programFilesX86 = process.env['ProgramFiles(x86)'] || 'C:\\Program Files (x86)';
+    candidates.push(
+      path.join(localAppData, 'Microsoft', 'WinGet', 'Packages', 'yt-dlp.yt-dlp_Microsoft.Winget.Source_8wekyb3d8bbwe', 'yt-dlp.exe'),
+      path.join(programFiles, 'yt-dlp', 'yt-dlp.exe'),
+      path.join(programFilesX86, 'yt-dlp', 'yt-dlp.exe'),
+      'yt-dlp.exe',
+      'yt-dlp'
+    );
+  } else {
+    candidates.push(
+      '/home/' + (process.env.USER || require('os').userInfo().username) + '/.local/bin/yt-dlp',
+      '/usr/local/bin/yt-dlp',
+      '/usr/bin/yt-dlp',
+      'yt-dlp'
+    );
+  }
+
   for (const p of candidates) {
     try { execFileSync(p, ['--version'], { stdio: 'pipe', timeout: 3000 }); return p; } catch { /* try next */ }
   }
-  return 'yt-dlp';  // fallback to PATH
+
+  const pathEntries = (process.env.PATH || process.env.Path || '').split(path.delimiter).filter(Boolean);
+  for (const dir of pathEntries) {
+    const binName = isWindows ? 'yt-dlp.exe' : 'yt-dlp';
+    const candidate = path.join(dir, binName);
+    try { execFileSync(candidate, ['--version'], { stdio: 'pipe', timeout: 3000 }); return candidate; } catch { /* try next */ }
+  }
+
+  return isWindows ? 'yt-dlp.exe' : 'yt-dlp';
 }
 const YTDLP_BIN = _isAnalysis ? 'yt-dlp' : findYtDlp();
 if (!_isAnalysis) {
@@ -563,6 +587,15 @@ class YouTubeStreamService {
         '--no-playlist',
         '--format', fmtH264,
         '--merge-output-format', 'mkv',  // mkv is naturally streamable; mp4 needs seeking
+        // Live-only formats (HLS fallback) are always fetched by yt-dlp's internal
+        // ffmpeg downloader, not the native Python one — `--downloader m3u8:native`
+        // does NOT override this for is_live sources (verified empirically). That
+        // internal ffmpeg has no retry of its own: one segment request rejected with
+        // 403 and it gives up, eventually killing the whole input and our RTSP pipe.
+        // Reconnect flags on the input make ffmpeg itself retry instead — verified
+        // empirically to eliminate the 403s entirely over a 60s continuous capture
+        // that previously died within seconds without this.
+        '--downloader-args', 'ffmpeg_i:-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -reconnect_on_http_error 403,404,5xx',
         '-o', '-',           // output binary stream to stdout
         '--no-progress',     // suppress progress bars (keep errors/warnings visible)
         '--newline',         // one status line per update (easier parsing)

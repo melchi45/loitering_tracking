@@ -13,6 +13,7 @@
  */
 
 const path    = require('path');
+const os      = require('os');
 const fs      = require('fs');
 const http    = require('http');
 const https   = require('https');
@@ -37,7 +38,10 @@ try {
 } catch (_) { /* .env not found — use existing env */ }
 
 const DRY_RUN       = process.argv.includes('--dry-run');
-const PYTHON_BIN    = (process.env.PYAV_PYTHON_BIN || '').trim() || 'python3';
+// OS-specific key first (PYAV_PYTHON_BIN_WINDOWS/_LINUX) so a generic PYAV_PYTHON_BIN
+// set for the "other" OS doesn't shadow the platform-specific path.
+const PYAV_OS_KEY   = process.platform === 'win32' ? 'PYAV_PYTHON_BIN_WINDOWS' : 'PYAV_PYTHON_BIN_LINUX';
+const PYTHON_BIN    = (process.env[PYAV_OS_KEY] || '').trim() || (process.env.PYAV_PYTHON_BIN || '').trim() || 'python3';
 const DAEMON_BIN    = (process.env.INGEST_DAEMON_BIN || '../ingest-daemon/ingest_daemon.py').trim();
 const DAEMON_ADDR   = (process.env.INGEST_DAEMON_ADDR || ':7070').trim();
 const DAEMON_URL    = (process.env.INGEST_DAEMON_URL  || 'http://127.0.0.1:7070').replace(/\/$/, '');
@@ -194,7 +198,7 @@ async function reregisterCameras() {
     process.exit(0);
   }
 
-  const DAEMON_LOG = process.env.INGEST_DAEMON_LOG || '/tmp/ingest-daemon.log';
+  const DAEMON_LOG = process.env.INGEST_DAEMON_LOG || path.join(os.tmpdir(), 'ingest-daemon.log');
   console.log(`[ingest:start] daemon 시작 중… (로그: ${DAEMON_LOG})`);
   const logFd = fs.openSync(DAEMON_LOG, 'a');
   const child = spawn(PYTHON_BIN, [DAEMON_PATH, '--addr', DAEMON_ADDR], {
@@ -218,5 +222,5 @@ async function reregisterCameras() {
 
   console.log('[ingest:start] 카메라 재등록 중…');
   await reregisterCameras();
-  console.log(`[ingest:start] 완료. 로그 확인: tail -f ${DAEMON_LOG}`);
+  console.log(`[ingest:start] 완료. 로그 확인: ${DAEMON_LOG}`);
 })();

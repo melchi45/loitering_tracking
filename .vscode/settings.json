@@ -235,7 +235,19 @@
     "Test-Path": true,
     "Get-CimInstance": true,
     "nvcc": true,
-    "Out-File": true
+    "Out-File": true,
+    "/^& 'C:\\\\Program Files\\\\nodejs\\\\node\\.exe' \\.\\\\server\\\\src\\\\scripts\\\\startServer\\.js$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cd c:\\\\workspace\\\\loitering_tracking\\\\server ; & 'C:\\\\Program Files\\\\nodejs\\\\npm\\.cmd' install --include=optional sharp@0\\.33\\.5 --force$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cd c:\\\\workspace\\\\loitering_tracking ; & 'C:\\\\Program Files\\\\nodejs\\\\node\\.exe' \\.\\\\server\\\\src\\\\scripts\\\\startServer\\.js$/": {
+      "approve": true,
+      "matchCommandLine": true
+    }
   },
   "chat.agent.maxRequests": 1000,
   // settings.json

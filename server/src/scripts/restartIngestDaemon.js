@@ -15,6 +15,7 @@
  */
 
 const path    = require('path');
+const os      = require('os');
 const fs      = require('fs');
 const http    = require('http');
 const https   = require('https');
@@ -39,7 +40,10 @@ try {
 } catch (_) { /* .env not found — use existing env */ }
 
 const DRY_RUN       = process.argv.includes('--dry-run');
-const PYTHON_BIN    = (process.env.PYAV_PYTHON_BIN || '').trim() || 'python3';
+// OS-specific key first (PYAV_PYTHON_BIN_WINDOWS/_LINUX) so a generic PYAV_PYTHON_BIN
+// set for the "other" OS doesn't shadow the platform-specific path.
+const PYAV_OS_KEY   = process.platform === 'win32' ? 'PYAV_PYTHON_BIN_WINDOWS' : 'PYAV_PYTHON_BIN_LINUX';
+const PYTHON_BIN    = (process.env[PYAV_OS_KEY] || '').trim() || (process.env.PYAV_PYTHON_BIN || '').trim() || 'python3';
 const DAEMON_BIN    = (process.env.INGEST_DAEMON_BIN || '../ingest-daemon/ingest_daemon.py').trim();
 const DAEMON_ADDR   = (process.env.INGEST_DAEMON_ADDR || ':7070').trim();
 const DAEMON_URL    = (process.env.INGEST_DAEMON_URL  || 'http://127.0.0.1:7070').replace(/\/$/, '');
@@ -71,30 +75,74 @@ console.log(`[ingest:restart] Callback: ${SERVER_PROTO}://127.0.0.1:${SERVER_POR
 if (DRY_RUN) { console.log('[ingest:restart] --dry-run: 실제 실행 없이 종료'); process.exit(0); }
 console.log('[ingest:restart] ─────────────────────────────────────────');
 
-// ── 기존 daemon 종료 ──────────────────────────────────────────────────────────
-console.log('[ingest:restart] 기존 daemon 종료 중…');
-const addrPort = DAEMON_ADDR.replace(':', '');
-try { execSync(`fuser -k ${addrPort}/tcp 2>/dev/null; true`, { shell: true, stdio: 'ignore' }); } catch (_) {}
-try { execSync("pkill -f 'ingest_daemon.py' 2>/dev/null; true", { shell: true, stdio: 'ignore' }); } catch (_) {}
-// 포트가 비워질 때까지 잠깐 대기
-execSync('sleep 0.5', { shell: true, stdio: 'ignore' });
+// ── 기존 daemon 종료 (cross-platform: port 기준) ──────────────────────────────
+// Unix: fuser/pkill로 포트+cmdline 매칭 종료. Windows: fuser/pkill이 없으므로
+// stopServer.js와 동일하게 Get-NetTCPConnection/netstat으로 포트를 점유한 PID를
+// 찾아 taskkill로 종료한다 (getPidsOnWindows/killPids, server/src/scripts/stopServer.js 참조).
+function _getPortPid() {
+  const addrPort = parseInt(DAEMON_ADDR.replace(':', ''), 10);
+  if (process.platform === 'win32') {
+    try {
+      const cmd = `Get-NetTCPConnection -State Listen -LocalPort ${addrPort} -ErrorAction SilentlyContinue | Select-Object -ExpandProperty OwningProcess -Unique`;
+      const out = execSync(`powershell -NoProfile -Command "${cmd}"`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      const pids = out.split(/\r?\n/).map(l => parseInt(l.trim(), 10)).filter(Number.isFinite);
+      if (pids.length) return pids;
+    } catch (_) {}
+    try {
+      const out = execSync('netstat -ano -p tcp', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+      const pids = new Set();
+      for (const line of out.split(/\r?\n/)) {
+        const parts = line.trim().split(/\s+/);
+        if (parts.length < 5 || !/^TCP$/i.test(parts[0])) continue;
+        const m = parts[1].match(/:(\d+)$/);
+        const pid = parseInt(parts[parts.length - 1], 10);
+        if (m && parseInt(m[1], 10) === addrPort && Number.isFinite(pid)) pids.add(pid);
+      }
+      return Array.from(pids);
+    } catch (_) { return []; }
+  }
+  try {
+    const out = execSync(`lsof -ti tcp:${addrPort} -sTCP:LISTEN`, { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
+    return out.split(/\r?\n/).map(l => parseInt(l.trim(), 10)).filter(Number.isFinite);
+  } catch (_) { return []; }
+}
+
+async function killExistingDaemon() {
+  console.log('[ingest:restart] 기존 daemon 종료 중…');
+  const pids = _getPortPid();
+  for (const pid of pids) {
+    try {
+      if (process.platform === 'win32') execSync(`taskkill /PID ${pid} /F`, { stdio: 'ignore' });
+      else process.kill(pid, 'SIGTERM');
+    } catch (_) { /* already dead */ }
+  }
+  if (process.platform !== 'win32') {
+    try { execSync("pkill -f 'ingest_daemon.py'", { stdio: 'ignore' }); } catch (_) {}
+  }
+  // 포트가 비워질 때까지 잠깐 대기 (execSync('sleep ...')은 Windows에 없음)
+  await new Promise((resolve) => setTimeout(resolve, 500));
+}
 
 // ── 새 daemon 시작 ────────────────────────────────────────────────────────────
 // Daemon logs are written directly to a file so the restart script can exit
 // cleanly after camera registration without holding the event loop open.
-const DAEMON_LOG = process.env.INGEST_DAEMON_LOG || '/tmp/ingest-daemon.log';
-console.log(`[ingest:restart] 새 daemon 시작 중… (로그: ${DAEMON_LOG})`);
-const logFd = fs.openSync(DAEMON_LOG, 'a');
-const child = spawn(PYTHON_BIN, [DAEMON_PATH, '--addr', DAEMON_ADDR], {
-  stdio: ['ignore', logFd, logFd],
-  detached: true,
-});
-child.on('error', (e) => { console.error(`[ingest:restart] 시작 실패: ${e.message}`); process.exit(1); });
-child.on('exit', (code) => {
-  if (code != null && code !== 0) console.warn(`[ingest:restart] daemon exited (code=${code})`);
-});
-child.unref();  // 부모 프로세스 종료 후에도 daemon 유지
-fs.closeSync(logFd); // parent no longer needs the FD; daemon keeps it via inheritance
+const DAEMON_LOG = process.env.INGEST_DAEMON_LOG || path.join(os.tmpdir(), 'ingest-daemon.log');
+
+async function startDaemon() {
+  console.log(`[ingest:restart] 새 daemon 시작 중… (로그: ${DAEMON_LOG})`);
+  const logFd = fs.openSync(DAEMON_LOG, 'a');
+  const child = spawn(PYTHON_BIN, [DAEMON_PATH, '--addr', DAEMON_ADDR], {
+    stdio: ['ignore', logFd, logFd],
+    detached: true,
+  });
+  child.on('error', (e) => { console.error(`[ingest:restart] 시작 실패: ${e.message}`); process.exit(1); });
+  child.on('exit', (code) => {
+    if (code != null && code !== 0) console.warn(`[ingest:restart] daemon exited (code=${code})`);
+  });
+  child.unref();  // 부모 프로세스 종료 후에도 daemon 유지
+  fs.closeSync(logFd); // parent no longer needs the FD; daemon keeps it via inheritance
+  return child;
+}
 
 // ── 기동 확인 ─────────────────────────────────────────────────────────────────
 async function waitForHealth(maxMs = 10_000, pollMs = 300) {
@@ -212,6 +260,9 @@ async function reregisterCameras() {
 }
 
 (async () => {
+  await killExistingDaemon();
+  const child = await startDaemon();
+
   console.log('[ingest:restart] daemon 기동 대기 중 (최대 10초)…');
   const ready = await waitForHealth(10_000);
   if (!ready) {
@@ -222,5 +273,5 @@ async function reregisterCameras() {
 
   console.log('[ingest:restart] 카메라 재등록 중…');
   await reregisterCameras();
-  console.log(`[ingest:restart] 완료. 로그 확인: tail -f ${DAEMON_LOG}`);
+  console.log(`[ingest:restart] 완료. 로그 확인: ${DAEMON_LOG}`);
 })();

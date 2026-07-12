@@ -7,6 +7,12 @@ client/dist/
 *.db-shm
 *.db-wal
 
+# Local lockfile (root) — not currently kept in sync across dev machines
+/package-lock.json
+
+# Local face tracking data (runtime-generated, machine-specific)
+storage/face_tracking.json
+
 # ML model binaries (too large for GitHub; use Git LFS or download script)
 server/models/*.onnx
 *.pt
