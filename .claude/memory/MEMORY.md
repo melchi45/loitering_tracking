@@ -1,0 +1,6 @@
+- [.env.* files are docs only](feedback_env_file_scope.md) — never edit/treat .env.example variants as live config, only server/.env
+- [History feeds: no time-based expiry](feedback_history_feed_no_time_prune.md) — cap by count only; time expiry caused a real data-loss bug
+- [History stores need mount-time hydration](feedback_history_store_hydration_pattern.md) — new history-type Zustand stores must fetch+hydrate on mount
+- [Async buttons need 3-way state](feedback_async_button_tristate.md) — separate "attempted" from result data so empty results render correctly
+- [Client max-count options ≤ server buffer size](feedback_client_server_limit_sync.md) — raise server cap whenever client max option is raised
+- [Memory lives in-repo, not externally](feedback_memory_location_project_local.md) — write/read memory under .claude/memory/, not ~/.claude/projects/.../memory/
