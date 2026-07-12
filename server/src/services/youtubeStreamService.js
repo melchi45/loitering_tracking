@@ -14,9 +14,35 @@
  *            stopping → removed
  */
 
-const { spawn }  = require('child_process');
+const { spawn, execFile }  = require('child_process');
 const { v4: uuidv4 } = require('uuid');
 const { validateChannelSlot, nextFreeChannelSlot } = require('./channelSlotService');
+
+// Kill a process and every descendant it spawned. Needed because yt-dlp spawns
+// its own internal ffmpeg subprocess for live-only HLS sources (see the
+// --downloader-args comment in _startStream()) — that grandchild has no
+// Node-side handle, so ChildProcess#kill() on the yt-dlp process only
+// terminates yt-dlp itself and orphans the ffmpeg it spawned. Signals don't
+// cascade to children on Windows at all, and even on POSIX a parent killed
+// with SIGKILL has no chance to clean up after itself — either way the
+// grandchild survives as a zombie unless something walks the tree explicitly.
+function killProcessTree(pid) {
+  if (!pid) return Promise.resolve();
+  if (process.platform === 'win32') {
+    return new Promise((resolve) => {
+      execFile('taskkill', ['/PID', String(pid), '/T', '/F'], () => resolve());
+    });
+  }
+  return new Promise((resolve) => {
+    execFile('pgrep', ['-P', String(pid)], (_err, stdout) => {
+      const children = String(stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
+      Promise.all(children.map((childPid) => killProcessTree(childPid))).then(() => {
+        try { process.kill(pid, 'SIGKILL'); } catch (_) { /* already dead */ }
+        resolve();
+      });
+    });
+  });
+}
 
 // ── YouTube URL validation regex ─────────────────────────────────────────────
 const YOUTUBE_URL_REGEX =
@@ -858,22 +884,29 @@ class YouTubeStreamService {
 
     // Kill yt-dlp first (closing its stdout triggers ffmpeg stdin EOF)
     if (entry.ytdlpProcess) {
+      const ytdlpPid = entry.ytdlpProcess.pid;
       entry.ytdlpProcess.kill('SIGTERM');
       await new Promise((res) => {
         const t = setTimeout(() => { entry.ytdlpProcess && entry.ytdlpProcess.kill('SIGKILL'); res(); }, 3000);
         entry.ytdlpProcess.once('close', () => { clearTimeout(t); res(); });
       });
       entry.ytdlpProcess = null;
+      // Sweep yt-dlp's own subprocess tree (its internal ffmpeg downloader) —
+      // see killProcessTree() comment above for why the .kill() calls above
+      // never reach it.
+      await killProcessTree(ytdlpPid);
     }
 
-    // Kill FFmpeg
+    // Kill FFmpeg (the outer process reading pipe:0 and publishing RTSP)
     if (entry.ffmpegProcess) {
+      const ffmpegPid = entry.ffmpegProcess.pid;
       entry.ffmpegProcess.kill('SIGTERM');
       await new Promise((res) => {
         const t = setTimeout(() => { entry.ffmpegProcess && entry.ffmpegProcess.kill('SIGKILL'); res(); }, 5000);
         entry.ffmpegProcess.once('close', () => { clearTimeout(t); res(); });
       });
       entry.ffmpegProcess = null;
+      await killProcessTree(ffmpegPid);
     }
 
     entry.status = 'removed';
