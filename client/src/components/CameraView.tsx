@@ -273,11 +273,10 @@ function drawOverlay(
     }
 
     if (det.cloth) {
-      const cu = det.cloth.upper  !== 'unknown' ? det.cloth.upper  : null;
-      const cl = det.cloth.lower  !== 'unknown' ? det.cloth.lower  : null;
-      const cs = det.cloth.sleeve !== 'unknown' ? det.cloth.sleeve : null;
-      if (cu || cl) {
-        const parts = [cu && `↑${cu}`, cl && `↓${cl}`].filter(Boolean) as string[];
+      const cl = det.cloth.lower;
+      const cs = det.cloth.sleeve;
+      if (cl || cs) {
+        const parts = [cl && `↓${cl}`].filter(Boolean) as string[];
         const txt = `cloth ${parts.join(' ')}${cs ? ` [${cs}]` : ''}`;
         const tw3 = ctx.measureText(txt).width + 8;
         ctx.fillStyle = 'rgba(0,0,0,0.72)';

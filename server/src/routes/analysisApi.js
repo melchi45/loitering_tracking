@@ -112,11 +112,18 @@ const EXTENDED_CATALOG = [
     hfExport: { repo: 'Mehedi-2-96/fire-smoke-detection-yolo', file: 'fire_smoke_yolov8s_model.pt' },
     license: 'See Hugging Face model card',
   },
-  // Cloth type PAR (AI-06). No public pretrained ONNX exists (OpenPAR requires training
-  // your own checkpoint) — download is not automatable; operator must export manually.
+  // Cloth/pedestrian attribute PAR (AI-06) — PromptPAR (CLIP ViT-L backbone + text-prompt
+  // fusion), released checkpoint fine-tuned on PA100k (26 standard attributes: gender, age
+  // group, view angle, hat/glasses, bag type, sleeve length, upper/lower style, boots).
+  // No automated download: the released checkpoint lives on Google Drive (~1.3GB) and
+  // export requires cloning github.com/Event-AHU/OpenPAR's model code (CLIP fork + ViT +
+  // fusion classifier) to reconstruct and run the PyTorch model before exporting to ONNX
+  // with the text-attribute embeddings baked in as frozen constants (they don't depend on
+  // the image). Exported+verified against the PyTorch reference (max abs diff 1.4e-5) on
+  // 2026-07-12; the ONNX file (~1.2GB) is shipped directly in server/models/.
   {
-    id: 'openpar-market1501', label: 'OpenPAR (manual export)', family: 'cloth-par', series: 'Cloth Attribute (PAR)',
-    file: 'openpar.onnx', manualOnly: true,
+    id: 'openpar-pa100k', label: 'PromptPAR (PA100k)', family: 'cloth-par', series: 'Cloth Attribute (PAR)',
+    file: 'openpar_pa100k.onnx', size: 224,
     docRef: 'https://github.com/Event-AHU/OpenPAR',
     license: 'See OpenPAR repository',
   },
@@ -468,7 +475,7 @@ function _assignClothingIdsAnalysis(cameraId, enrichedObjects, now, oIdToFaceId 
 
   for (const obj of enrichedObjects) {
     if (obj.className !== 'person' || !obj.color?.upperRgb) continue;
-    const feature = { upperRgb: obj.color.upperRgb, lowerRgb: obj.color.lowerRgb ?? null, upper: obj.cloth?.upper ?? null, lower: obj.cloth?.lower ?? null };
+    const feature = { upperRgb: obj.color.upperRgb, lowerRgb: obj.color.lowerRgb ?? null, lower: obj.cloth?.lower ?? null };
     const linkedFaceId = oIdToFaceId.get(String(obj.objectId)) ?? null;
 
     let bestEntry = null, bestScore = CLOTHING_MATCH_THRESH;

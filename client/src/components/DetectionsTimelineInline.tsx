@@ -46,7 +46,7 @@ interface DetectionTrack {
   zoneId?: string | null;
   zoneName?: string | null;
   color?: { upper: string; lower: string } | null;
-  cloth?: { upper: string; lower: string; sleeve?: string } | null;
+  cloth?: { lower: string; sleeve?: string; gender?: string; ageGroup?: string } | null;
   inProgress?: boolean;
 }
 
@@ -858,8 +858,10 @@ export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }
               )}
               {selected.cloth && (
                 <>
-                  {selected.cloth.upper && <DR label="Cloth↑" value={selected.cloth.upper} />}
+                  {selected.cloth.gender && <DR label="Gender" value={selected.cloth.gender} />}
+                  {selected.cloth.ageGroup && <DR label="Age" value={selected.cloth.ageGroup} />}
                   {selected.cloth.lower && <DR label="Cloth↓" value={selected.cloth.lower} />}
+                  {selected.cloth.sleeve && <DR label="Sleeve" value={selected.cloth.sleeve} />}
                 </>
               )}
               <DR label="Camera" value={selected.cameraName} />

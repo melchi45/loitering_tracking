@@ -230,19 +230,22 @@ export function DetectionRow({ det, isCrossCamera }: { det: Detection; isCrossCa
         </div>
       )}
 
-      {/* Cloth type attributes (Phase-2, PAR model) */}
-      {cloth && (cloth.upper || cloth.lower) && (
+      {/* Pedestrian attributes (PromptPAR / PA100k, 26 attributes) */}
+      {cloth && (
         <div className="mt-1 flex items-center gap-1.5 flex-wrap text-[10px] font-mono">
-          <span className="text-violet-500">cloth</span>
-          {cloth.upper && cloth.upper !== 'unknown' && (
-            <span className="text-violet-300">↑{cloth.upper}</span>
-          )}
-          {cloth.lower && cloth.lower !== 'unknown' && (
-            <span className="text-violet-300">↓{cloth.lower}</span>
-          )}
-          {cloth.sleeve && cloth.sleeve !== 'unknown' && (
-            <span className="text-violet-600">[{cloth.sleeve}]</span>
-          )}
+          <span className="text-violet-500">attrs</span>
+          {cloth.gender && <span className="text-violet-300">{cloth.gender}</span>}
+          {cloth.ageGroup && <span className="text-violet-300">{cloth.ageGroup}</span>}
+          {cloth.viewAngle && <span className="text-violet-300">{cloth.viewAngle}</span>}
+          {cloth.lower && <span className="text-violet-300">↓{cloth.lower}</span>}
+          {cloth.sleeve && <span className="text-violet-600">[{cloth.sleeve} sleeve]</span>}
+          {cloth.hat && <span className="text-violet-600">hat</span>}
+          {cloth.glasses && <span className="text-violet-600">glasses</span>}
+          {cloth.handBag && <span className="text-violet-600">hand bag</span>}
+          {cloth.shoulderBag && <span className="text-violet-600">shoulder bag</span>}
+          {cloth.backpack && <span className="text-violet-600">backpack</span>}
+          {cloth.longCoat && <span className="text-violet-600">long coat</span>}
+          {cloth.boots && <span className="text-violet-600">boots</span>}
         </div>
       )}
 

@@ -15,6 +15,24 @@ const SCHP_LIP20_CLASS_MAP = { upper: [5, 6, 7], lower: [9, 10, 12] };
 // Xenova/segformer_b2_clothes 18-class order — see Design_AI_Color_Analysis.md §10.2.
 const SEGFORMER_CLOTHES_CLASS_MAP = { upper: [4, 7], lower: [5, 6] };
 
+// PA100k's standard 26-attribute order, used verbatim as the CLIP text prompts when
+// openpar_pa100k.onnx was exported (server/src/scripts/exportPromptPAR.py) — index
+// position here must match that export exactly, since the model has no label metadata
+// of its own (just a [1,26] logit vector). Grouping per the original PA100k paper:
+// gender(1) / age(3) / view angle(3) / accessories(2) / bags(4) / upper style(6) /
+// lower style(6, includes "long coat") / footwear(1).
+const PA100K_ATTR_WORDS = [
+  'female',
+  'age over 60', 'age 18 to 60', 'age less 18',
+  'front', 'side', 'back',
+  'hat', 'glasses',
+  'hand bag', 'shoulder bag', 'backpack', 'hold objects in front',
+  'short sleeve', 'long sleeve', 'upper stride', 'upper logo', 'upper plaid', 'upper splice',
+  'lower stripe', 'lower pattern', 'long coat', 'trousers', 'shorts', 'skirt and dress', 'boots',
+];
+// Resolved once from PA100K_ATTR_WORDS so _runPAR() reads by name, not magic index.
+const PA100K_IDX = Object.fromEntries(PA100K_ATTR_WORDS.map((label, i) => [label, i]));
+
 /**
  * Color & Clothing attribute service.
  *
@@ -114,9 +132,10 @@ async function avgColor(jpegBuffer, roi, imgW, imgH) {
 
 class ColorClothService {
   constructor(options = {}) {
-    // PAR ONNX model path (Phase-2, optional)
+    // PAR ONNX model path (Phase-2, optional) — PromptPAR fine-tuned on PA100k,
+    // see PA100K_ATTR_WORDS / _runPAR() below.
     this.parModelPath = options.parModelPath ||
-      path.resolve(__dirname, '..', '..', 'models', 'openpar.onnx');
+      path.resolve(__dirname, '..', '..', 'models', 'openpar_pa100k.onnx');
     this._parSession = null;
     this._parReady   = false;
     // Phase-1 color extraction is always available (no model needed)
@@ -141,7 +160,11 @@ class ColorClothService {
       try {
         const ort = require('onnxruntime-node');
         const { createOnnxSession } = require('../utils/onnxOptions');
-        this._parSession = await createOnnxSession(ort, this.parModelPath, 'ColorClothService/PAR');
+        // forceCpu: PromptPAR's CLIP ViT-L backbone (~1.2GB) reliably triggers
+        // DXGI_ERROR_DEVICE_REMOVED on the DirectML execution provider during
+        // inference on this hardware (session creation succeeds, run() doesn't) —
+        // confirmed by reproducing it live. CPU is slower but stable.
+        this._parSession = await createOnnxSession(ort, this.parModelPath, 'ColorClothService/PAR', { forceCpu: true });
         this._parReady = true;
         console.log('[ColorClothService] PAR model loaded (Phase-2 cloth analysis active)');
       } catch (e) {
@@ -233,7 +256,8 @@ class ColorClothService {
   async reloadPar(filePath) {
     const ort = require('onnxruntime-node');
     const { createOnnxSession } = require('../utils/onnxOptions');
-    this._parSession  = await createOnnxSession(ort, filePath, 'ColorClothService/PAR');
+    // forceCpu — see load() above for why (DirectML GPU device removal on this model).
+    this._parSession  = await createOnnxSession(ort, filePath, 'ColorClothService/PAR', { forceCpu: true });
     this.parModelPath = filePath;
     this._parReady    = true;
   }
@@ -453,56 +477,71 @@ class ColorClothService {
       const cw     = Math.max(1, Math.round(w));
       const ch     = Math.max(1, Math.round(h));
 
-      // Resize person crop to 128×256 (W×H) → NCHW [1,3,256,128]
+      // PromptPAR (CLIP ViT-L backbone) expects 224×224 → NCHW [1,3,224,224],
+      // matching PromptPAR/dataset/AttrDataset.py get_transform()'s valid_transform.
+      const SIZE = 224;
       const raw = await sharp(jpegBuffer)
         .extract({ left, top, width: cw, height: ch })
-        .resize(128, 256, { fit: 'fill' })
+        .resize(SIZE, SIZE, { fit: 'fill' })
         .removeAlpha()
         .raw()
         .toBuffer();
 
-      // Normalize with ImageNet mean/std → Float32 NCHW
-      const MEAN = [0.485, 0.456, 0.406];
-      const STD  = [0.229, 0.224, 0.225];
-      const floatData = new Float32Array(3 * 256 * 128);
-      for (let r = 0; r < 256; r++) {
-        for (let c = 0; c < 128; c++) {
-          const pi = (r * 128 + c) * 3;
+      // Normalize with mean=[0.5,0.5,0.5] std=[0.5,0.5,0.5] (NOT ImageNet stats —
+      // PromptPAR's own get_transform() uses this simpler 0.5/0.5 normalization).
+      const floatData = new Float32Array(3 * SIZE * SIZE);
+      for (let r = 0; r < SIZE; r++) {
+        for (let c = 0; c < SIZE; c++) {
+          const pi = (r * SIZE + c) * 3;
           for (let ch2 = 0; ch2 < 3; ch2++) {
-            floatData[ch2 * 256 * 128 + r * 128 + c] =
-              (raw[pi + ch2] / 255 - MEAN[ch2]) / STD[ch2];
+            floatData[ch2 * SIZE * SIZE + r * SIZE + c] = (raw[pi + ch2] / 255 - 0.5) / 0.5;
           }
         }
       }
 
       const ort = require('onnxruntime-node');
-      const tensor = new ort.Tensor('float32', floatData, [1, 3, 256, 128]);
+      const tensor = new ort.Tensor('float32', floatData, [1, 3, SIZE, SIZE]);
       const res    = await this._parSession.run({ input: tensor });
-      const scores = res.attrs.data; // Float32Array[12]
+      const logits = res.attrs.data; // Float32Array[26], raw BatchNorm logits (no sigmoid yet)
 
-      // Index map (matches exportPAR.py ATTR_LABELS)
-      // Upper: 0=tshirt 1=shirt 2=jacket 3=hoodie 4=vest 5=dress
-      // Lower: 6=pants  7=jeans 8=shorts 9=skirt
-      // Sleeve: 10=short 11=long
-      const THRESH = 0.45;
+      const sigmoid = (v) => 1 / (1 + Math.exp(-v));
+      const P = {};
+      for (const label of PA100K_ATTR_WORDS) P[label] = sigmoid(logits[PA100K_IDX[label]]);
 
-      const upperTypes = ['tshirt', 'shirt', 'jacket', 'hoodie', 'vest', 'dress'];
-      let bestUpperIdx = 0;
-      for (let i = 1; i < 6; i++) {
-        if (scores[i] > scores[bestUpperIdx]) bestUpperIdx = i;
-      }
-      const upper = scores[bestUpperIdx] >= THRESH ? upperTypes[bestUpperIdx] : 'unknown';
+      const argmaxLabel = (labels) => labels.reduce((best, l) => (P[l] > P[best] ? l : best), labels[0]);
 
-      const lowerTypes = ['pants', 'jeans', 'shorts', 'skirt'];
-      let bestLowerIdx = 0;
-      for (let i = 1; i < 4; i++) {
-        if (scores[6 + i] > scores[6 + bestLowerIdx]) bestLowerIdx = i;
-      }
-      const lower = scores[6 + bestLowerIdx] >= THRESH ? lowerTypes[bestLowerIdx] : 'unknown';
+      const AGE_LABELS = { 'age over 60': 'over60', 'age 18 to 60': '18to60', 'age less 18': 'less18' };
+      const VIEW_LABELS = { front: 'front', side: 'side', back: 'back' };
+      // No direct PA100k equivalent of the old placeholder's upper-garment TYPE
+      // (tshirt/shirt/jacket/...) — PA100k only has sleeve length + style flags for
+      // upper body, so we don't fabricate an `upper` categorical field here.
+      const LOWER_LABELS = { trousers: 'trousers', shorts: 'shorts', 'skirt and dress': 'skirtAndDress' };
 
-      const sleeve = scores[10] >= scores[11] ? 'short' : 'long';
+      const THRESH = 0.5;
 
-      return { upper, lower, sleeve };
+      return {
+        // Best-effort backward compatibility with the old 12-attribute placeholder.
+        sleeve: P['short sleeve'] >= P['long sleeve'] ? 'short' : 'long',
+        lower:  LOWER_LABELS[argmaxLabel(Object.keys(LOWER_LABELS))],
+        // Full PA100k attribute set.
+        gender:             P['female'] >= THRESH ? 'female' : 'male',
+        ageGroup:           AGE_LABELS[argmaxLabel(Object.keys(AGE_LABELS))],
+        viewAngle:          VIEW_LABELS[argmaxLabel(Object.keys(VIEW_LABELS))],
+        hat:                P['hat']  >= THRESH,
+        glasses:            P['glasses']  >= THRESH,
+        handBag:            P['hand bag']  >= THRESH,
+        shoulderBag:        P['shoulder bag'] >= THRESH,
+        backpack:           P['backpack'] >= THRESH,
+        holdObjectsInFront: P['hold objects in front'] >= THRESH,
+        upperStride:        P['upper stride'] >= THRESH,
+        upperLogo:          P['upper logo'] >= THRESH,
+        upperPlaid:         P['upper plaid'] >= THRESH,
+        upperSplice:        P['upper splice'] >= THRESH,
+        lowerStripe:        P['lower stripe'] >= THRESH,
+        lowerPattern:       P['lower pattern'] >= THRESH,
+        longCoat:           P['long coat'] >= THRESH,
+        boots:              P['boots'] >= THRESH,
+      };
     } catch (err) {
       console.warn('[ColorClothService] _runPAR error:', err.message);
       return null;
@@ -510,4 +549,4 @@ class ColorClothService {
   }
 }
 
-module.exports = { ColorClothService, rgbToColorName, SCHP_LIP20_CLASS_MAP, SEGFORMER_CLOTHES_CLASS_MAP };
+module.exports = { ColorClothService, rgbToColorName, SCHP_LIP20_CLASS_MAP, SEGFORMER_CLOTHES_CLASS_MAP, PA100K_ATTR_WORDS };

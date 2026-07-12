@@ -381,7 +381,12 @@ function DetectionDetail({ r }: { r: SearchResult }) {
   type MaskAttr  = { status?: string; confidence?: number };
   type HatAttr   = { className?: string; confidence?: number; isHelmet?: boolean | null; safetyCompliant?: boolean | null };
   type ColorAttr = { upper?: string; lower?: string; upperRgb?: [number,number,number]; lowerRgb?: [number,number,number] };
-  type ClothAttr = { upper?: string; lower?: string; sleeve?: string };
+  type ClothAttr = {
+    lower?: string; sleeve?: string;
+    gender?: string; ageGroup?: string; viewAngle?: string;
+    hat?: boolean; glasses?: boolean; handBag?: boolean; shoulderBag?: boolean;
+    backpack?: boolean; holdObjectsInFront?: boolean; longCoat?: boolean; boots?: boolean;
+  };
 
   const attrs = r.attributes as Record<string, unknown> | undefined;
   const face  = attrs?.face  as FaceAttr  | undefined;
@@ -523,14 +528,26 @@ function DetectionDetail({ r }: { r: SearchResult }) {
         </table>
       </Section>
 
-      {/* Clothing */}
-      {cloth && (cloth.upper || cloth.lower || cloth.sleeve) && (
-        <Section title="Clothing" defaultOpen>
+      {/* Pedestrian attributes (PromptPAR / PA100k) */}
+      {cloth && (
+        <Section title="Attributes" defaultOpen>
           <table className="w-full border-collapse">
             <tbody>
-              <FieldRow label="Upper Garment" value={cloth.upper} />
+              <FieldRow label="Gender"       value={cloth.gender} />
+              <FieldRow label="Age Group"    value={cloth.ageGroup} />
+              <FieldRow label="View Angle"   value={cloth.viewAngle} />
               <FieldRow label="Lower Garment" value={cloth.lower} />
               <FieldRow label="Sleeve"        value={cloth.sleeve} />
+              <FieldRow label="Accessories"   value={[
+                cloth.hat && 'hat',
+                cloth.glasses && 'glasses',
+                cloth.handBag && 'hand bag',
+                cloth.shoulderBag && 'shoulder bag',
+                cloth.backpack && 'backpack',
+                cloth.holdObjectsInFront && 'holding object',
+                cloth.longCoat && 'long coat',
+                cloth.boots && 'boots',
+              ].filter(Boolean).join(', ') || undefined} />
             </tbody>
           </table>
         </Section>

@@ -2254,7 +2254,6 @@ class PipelineManager {
       const feature = {
         upperRgb:  obj.color.upperRgb,
         lowerRgb:  obj.color.lowerRgb ?? null,
-        upper:     obj.cloth?.upper   ?? null,
         lower:     obj.cloth?.lower   ?? null,
         embedding: objectIdToEmbedding.get(String(obj.objectId)) ?? null,
       };

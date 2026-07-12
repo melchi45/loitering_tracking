@@ -150,9 +150,19 @@ function getOnnxSessionOptions() {
  * @param {object} ort onnxruntime-node module
  * @param {string} modelPath
  * @param {string} logTag
+ * @param {{forceCpu?: boolean}} [opts] forceCpu: skip CUDA/DML entirely for this
+ *   session (e.g. a model too heavy for the DML execution provider to run
+ *   reliably — observed DXGI_ERROR_DEVICE_REMOVED / GPU device removed on
+ *   inference, not session creation, so the normal create()-time fallback
+ *   below never triggers for it).
  * @returns {Promise<any>} InferenceSession
  */
-async function createOnnxSession(ort, modelPath, logTag = 'ONNX') {
+async function createOnnxSession(ort, modelPath, logTag = 'ONNX', opts = {}) {
+  if (opts.forceCpu) {
+    console.log(`[${logTag}] forceCpu requested — using CPU execution provider.`);
+    return ort.InferenceSession.create(modelPath, { executionProviders: ['cpu'], graphOptimizationLevel: 'all' });
+  }
+
   const preferred = getOnnxSessionOptions();
   const providers = preferred.executionProviders || ['cpu'];
   const wantsCuda = providers.includes('cuda');

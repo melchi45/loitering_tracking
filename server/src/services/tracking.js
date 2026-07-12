@@ -470,13 +470,16 @@ class ByteTracker {
   }
 
   /**
-   * PAR cloth-type similarity: exact match on upper/lower clothing type → [0, 1].
-   * 'unknown' values are skipped; if no known fields exist returns 0.5 (neutral).
+   * PAR attribute similarity: exact match on stable identity fields → [0, 1].
+   * PA100k (PromptPAR) has no `upper` categorical clothing type (see
+   * colorClothService.js _runPAR()), so gender/ageGroup/lower/sleeve are used
+   * instead. Fields missing on either side are skipped; if no known fields
+   * exist returns 0.5 (neutral).
    */
   static _clothSim(a, b) {
     let score = 0, count = 0;
-    for (const field of ['upper', 'lower']) {
-      if (a[field] && b[field] && a[field] !== 'unknown' && b[field] !== 'unknown') {
+    for (const field of ['gender', 'ageGroup', 'lower', 'sleeve']) {
+      if (a[field] && b[field]) {
         score += a[field] === b[field] ? 1 : 0;
         count++;
       }

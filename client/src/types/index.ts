@@ -99,13 +99,32 @@ export interface ColorAttribute {
   lowerRgb?: [number, number, number];
 }
 
+// PromptPAR (PA100k, 26 attributes) — see server/src/services/colorClothService.js
+// _runPAR(). No `upper` categorical field: PA100k has no direct equivalent of the
+// old 12-attribute placeholder's upper-garment TYPE (tshirt/shirt/jacket/...), only
+// sleeve length + style flags.
 export interface ClothAttribute {
-  /** e.g. 'tshirt' | 'shirt' | 'jacket' | 'hoodie' | 'vest' | 'dress' | 'unknown' */
-  upper?: string;
-  /** e.g. 'pants' | 'jeans' | 'shorts' | 'skirt' | 'unknown' */
+  /** 'trousers' | 'shorts' | 'skirtAndDress' */
   lower?: string;
-  /** e.g. 'short' | 'long' — sleeve length from PAR model */
+  /** 'short' | 'long' — sleeve length */
   sleeve?: string;
+  gender?: 'female' | 'male';
+  ageGroup?: 'over60' | '18to60' | 'less18';
+  viewAngle?: 'front' | 'side' | 'back';
+  hat?: boolean;
+  glasses?: boolean;
+  handBag?: boolean;
+  shoulderBag?: boolean;
+  backpack?: boolean;
+  holdObjectsInFront?: boolean;
+  upperStride?: boolean;
+  upperLogo?: boolean;
+  upperPlaid?: boolean;
+  upperSplice?: boolean;
+  lowerStripe?: boolean;
+  lowerPattern?: boolean;
+  longCoat?: boolean;
+  boots?: boolean;
 }
 
 export type GalleryType = 'general' | 'vip' | 'blocklist' | 'missing';

@@ -1,0 +1,36 @@
+{
+  "labels": [
+    "female",
+    "age over 60",
+    "age 18 to 60",
+    "age less 18",
+    "front",
+    "side",
+    "back",
+    "hat",
+    "glasses",
+    "hand bag",
+    "shoulder bag",
+    "backpack",
+    "hold objects in front",
+    "short sleeve",
+    "long sleeve",
+    "upper stride",
+    "upper logo",
+    "upper plaid",
+    "upper splice",
+    "lower stripe",
+    "lower pattern",
+    "long coat",
+    "trousers",
+    "shorts",
+    "skirt and dress",
+    "boots"
+  ],
+  "input": [
+    1,
+    3,
+    224,
+    224
+  ]
+}

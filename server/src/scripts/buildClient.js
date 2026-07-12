@@ -7,7 +7,12 @@ const { spawnSync, execSync } = require('child_process');
 // process.execPath may point to the glibc loader on systems where node is
 // installed as a wrapper (e.g. /opt/glibc-2.33 + shell shim).
 // Resolve the actual 'node' binary via PATH instead.
+// Windows-only: `which` (when this script runs under a POSIX shell like
+// git-bash) returns an MSYS-style path (e.g. /c/Program Files/nodejs/node)
+// that Windows' native spawnSync() cannot resolve (ENOENT) — process.execPath
+// is already a valid Windows path there, so skip the `which` lookup entirely.
 const NODE_BIN = (() => {
+  if (process.platform === 'win32') return process.execPath;
   try {
     const p = execSync('which node', { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     if (p) return p;
@@ -76,10 +81,16 @@ function buildClient() {
   }
 
   console.log('[Client Build] Step 1/2: TypeScript compile');
-  if (!runNodeScript(tscBin, [], clientDir)) return false;
+  if (!runNodeScript(tscBin, [], clientDir)) {
+    console.error('[Client Build] TypeScript compile failed.');
+    return false;
+  }
 
   console.log('[Client Build] Step 2/2: Vite build');
-  if (!runNodeScript(viteBin, ['build'], clientDir)) return false;
+  if (!runNodeScript(viteBin, ['build'], clientDir)) {
+    console.error('[Client Build] Vite build failed.');
+    return false;
+  }
 
   return true;
 }
