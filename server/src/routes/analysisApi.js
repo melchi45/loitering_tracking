@@ -308,7 +308,20 @@ async function _findPythonWithOptimum() {
   for (const cand of candidates) {
     if (!_pythonExists(cand)) continue;
     if (!(await _pipInstall(cand, ['-U', 'optimum[exporters]', 'transformers'], 'optimum'))) continue;
-    try { execFileSync(cand, ['-c', script], { timeout: 8000 }); return cand; } catch {}
+    try { execFileSync(cand, ['-c', script], { timeout: 8000 }); return cand; } catch (err) {
+      // pip reporting success but the import still failing points at something
+      // pip install can't fix by retrying — most likely the installed `optimum`
+      // version no longer ships exporters.onnx under the [exporters] extra at
+      // all (HuggingFace has been restructuring this package). Log the actual
+      // installed version so this is diagnosable instead of silently retrying
+      // forever on every download attempt.
+      try {
+        const version = execFileSync(cand, ['-c', 'import optimum; print(optimum.__version__)'], { timeout: 8000 }).toString().trim();
+        console.error(`[AnalysisAPI] optimum: still missing optimum.exporters.onnx after install (installed optimum==${version} via ${cand}) — this optimum version may no longer bundle ONNX export support under the [exporters] extra`);
+      } catch {
+        console.error(`[AnalysisAPI] optimum: still missing optimum.exporters.onnx after install via ${cand}: ${err.message}`);
+      }
+    }
   }
   return null;
 }
