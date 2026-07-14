@@ -55,6 +55,31 @@ const { runOnnxStartupDiagnostics } = require('./utils/onnxOptions');
 const PORT        = parseInt(process.env.HTTP_PORT || '3080', 10);
 const SERVER_MODE = process.env.SERVER_MODE || 'combined';
 
+// Mirrors mongoDbService.js's post-connect reconnect backoff (3s step, 30s
+// ceiling) so a MongoDB that isn't reachable yet at process startup gets the
+// same patience as one that drops out later, instead of an immediate fatal exit.
+const DB_INIT_RETRY_STEP_MS = 3000;
+const DB_INIT_RETRY_MAX_MS  = 30000;
+
+/** Retries initDB() with linear backoff instead of letting a transient
+ *  MongoDB outage at startup kill the whole process on the first attempt. */
+async function _initDBWithRetry() {
+  let attempt = 0;
+  for (;;) {
+    try {
+      return await initDB();
+    } catch (err) {
+      attempt++;
+      const delay = Math.min(DB_INIT_RETRY_STEP_MS * attempt, DB_INIT_RETRY_MAX_MS);
+      console.warn(
+        `[Server] Database init failed (attempt #${attempt}): ${err.message} — ` +
+        `retrying in ${(delay / 1000).toFixed(0)}s`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
 /** Resolve true if `ffmpeg` is executable, false otherwise. */
 function checkFfmpeg() {
   return new Promise((resolve) => {
@@ -99,10 +124,15 @@ async function main() {
   }
 
   // ── Database ────────────────────────────────────────────────────────────
-  // DB_TYPE=mongodb: MongoDB가 도달 불가하면 즉시 process.exit(1).
+  // DB_TYPE=mongodb: MongoDB가 원격이거나(ensureMongoDB가 관리 못 함) 기동 중 잠시
+  // 응답이 없으면 initDB()가 즉시 throw했었다 — mongoDbService.js의 "재연결 대기"
+  // 로그는 성공적으로 연결된 *이후*의 끊김에만 적용되고, 이 최초 연결 시도 자체는
+  // 감싸지 못해 서버 프로세스 전체가 죽는 원인이었다(2026-07-14 사용자 보고).
+  // 같은 선형 백오프(3s→30s 상한)로 최초 연결도 재시도 — MongoDB가 몇 초~수십 초
+  // 늦게 뜨는 정상적인 케이스(동시 재기동 등)를 기동 실패로 취급하지 않는다.
   // lts.json fallback 없음 — 운영자가 DB_TYPE=mongodb를 선택한 이상 MongoDB는 필수.
   await ensureMongoDB();
-  const db = await initDB();
+  const db = await _initDBWithRetry();
   console.log('[Server] Database initialised (mode:', require('./db').getStorageMode(), ')');
 
   // Optional vector DB (Proposed — AI-05 Phase-3 / CrossCamera Face Tracking Phase-2).
