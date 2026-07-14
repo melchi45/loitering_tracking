@@ -33,6 +33,7 @@ const { AgeEstimationService, VIT_AGE_BUCKET_CLASSES } = require('../services/ag
 const { GenderClassificationService, VIT_GENDER_CLASSES } = require('../services/genderClassificationService');
 const { SCHP_LIP20_CLASS_MAP, SEGFORMER_CLOTHES_CLASS_MAP } = require('../services/colorClothService');
 const analyticsConfig   = require('../services/analyticsConfig');
+const activeModelConfig = require('../services/activeModelConfig');
 const { getSystemMetrics } = require('../services/systemMetrics');
 const { getActiveProviderMode } = require('../utils/onnxOptions');
 const snapshotSvc      = require('../services/snapshotService');
@@ -230,6 +231,110 @@ function _activeFileForEntry(m, detectorActiveFile) {
       return _genderClassification?.ready ? path.basename(_genderClassification.modelPath) : null;
     default:
       return detectorActiveFile; // YOLO detector families (undefined `family`)
+  }
+}
+
+/** Thrown by _applyModelSwitch/_applyModelDeactivate to carry an HTTP status. */
+class ModelSwitchError extends Error {
+  constructor(status, message) {
+    super(message);
+    this.status = status;
+  }
+}
+
+// Hot-swap the active model for one catalog entry's family. Shared by the
+// POST /models/switch route handler and _restoreActiveModels() (startup),
+// so a persisted admin selection is applied through the exact same code path
+// as a live switch.
+async function _applyModelSwitch(entry, filePath) {
+  switch (entry.family) {
+    case 'human-parsing':
+      // AI-05 Phase-3 (Proposed) — hot-swap the active Human Parsing model.
+      if (!_attrPipeline) throw new ModelSwitchError(409, 'AttributePipeline not loaded');
+      await _attrPipeline._color.reloadHumanParsing(filePath, entry.classMap, entry.inputSize);
+      break;
+    case 'appearance-reid':
+      // CrossCamera Face Tracking Phase-2 (Proposed) — hot-swap the appearance embedding model.
+      if (!_appearanceReid) _appearanceReid = new AppearanceReidService();
+      await _appearanceReid.reload(filePath);
+      break;
+    case 'face-detection':
+      if (!_attrPipeline) throw new ModelSwitchError(409, 'AttributePipeline not loaded');
+      await _attrPipeline._face.reloadDetector(filePath);
+      break;
+    case 'face-recognition':
+      if (!_attrPipeline) throw new ModelSwitchError(409, 'AttributePipeline not loaded');
+      await _attrPipeline._face.reloadRecognizer(filePath);
+      break;
+    case 'ppe':
+      if (!_attrPipeline) throw new ModelSwitchError(409, 'AttributePipeline not loaded');
+      await _attrPipeline._ppe.reload(filePath);
+      break;
+    case 'fire-smoke':
+      if (!_fireSmokeService) _fireSmokeService = new FireSmokeService();
+      await _fireSmokeService.reload(filePath);
+      break;
+    case 'cloth-par':
+      if (!_attrPipeline) throw new ModelSwitchError(409, 'AttributePipeline not loaded');
+      await _attrPipeline._color.reloadPar(filePath);
+      break;
+    case 'age-estimation':
+      // Age Estimation (Proposed) — hot-swap the active age model.
+      if (!_ageEstimation) _ageEstimation = new AgeEstimationService();
+      await _ageEstimation.reload(filePath);
+      break;
+    case 'gender-classification':
+      // Gender Classification (Proposed) — hot-swap the active gender model.
+      if (!_genderClassification) _genderClassification = new GenderClassificationService();
+      await _genderClassification.reload(filePath);
+      break;
+    default: // YOLO detector families (undefined `family`)
+      if (!_detector) {
+        _detector = new DetectionService({ modelPath: filePath });
+        await _detector.load();
+      } else {
+        await _detector.reload(filePath);
+      }
+  }
+}
+
+// Unload the active model for one catalog entry's family. Shared by the
+// POST /models/deactivate route handler and _restoreActiveModels() (startup
+// replay of a persisted explicit deactivation).
+function _applyModelDeactivate(entry) {
+  switch (entry.family) {
+    case 'human-parsing':
+      _attrPipeline?._color?.unloadHumanParsing();
+      break;
+    case 'appearance-reid':
+      _appearanceReid?.unload();
+      break;
+    case 'face-detection':
+      _attrPipeline?._face?.unloadDetector();
+      break;
+    case 'face-recognition':
+      _attrPipeline?._face?.unloadRecognizer();
+      break;
+    case 'ppe':
+      _attrPipeline?._ppe?.unload();
+      break;
+    case 'fire-smoke':
+      _fireSmokeService?.unload();
+      break;
+    case 'cloth-par':
+      _attrPipeline?._color?.unloadPar();
+      break;
+    case 'age-estimation':
+      _ageEstimation?.unload();
+      break;
+    case 'gender-classification':
+      _genderClassification?.unload();
+      break;
+    default: // YOLO detector families (undefined `family`) cannot be deactivated
+      throw new ModelSwitchError(
+        400,
+        'The YOLO detector cannot be deactivated — the core detection pipeline always requires an active model.'
+      );
   }
 }
 
@@ -761,7 +866,58 @@ async function _loadServices() {
     console.warn('[AnalysisAPI] GenderClassificationService load warn:', err.message);
     _genderClassification = null;
   }
+  try {
+    await _restoreActiveModels();
+  } catch (err) {
+    console.warn('[AnalysisAPI] Restore persisted active models failed:', err.message);
+  }
   _servicesReady = true;
+}
+
+// Replay Admin Dashboard "Active" model selections persisted in the `settings`
+// table (row id 'activeModels', see services/activeModelConfig.js) after every
+// family above has finished loading its hardcoded/on-disk default. Runs the
+// same per-family switch/deactivate logic as the live routes, so a selection
+// made before a restart (e.g. Cloth Attribute → OpenPAR, YOLO Detection →
+// YOLO12n) is restored instead of silently reverting to the built-in default.
+async function _restoreActiveModels() {
+  const persisted = activeModelConfig.getActiveModels();
+  const modelsDir = path.resolve(__dirname, '..', '..', 'models');
+
+  for (const [family, modelId] of Object.entries(persisted)) {
+    const catalogFamily = family === activeModelConfig.DETECTOR_FAMILY_KEY ? undefined : family;
+
+    if (modelId === null) {
+      // Admin explicitly deactivated this family — undo whatever hardcoded
+      // default that family's load() may have auto-loaded from disk.
+      const entry = ALL_MODELS.find(m => m.family === catalogFamily);
+      if (!entry) continue;
+      try {
+        _applyModelDeactivate(entry);
+        console.log(`[AnalysisAPI] Restored persisted deactivation for ${family}`);
+      } catch (err) {
+        // YOLO detector can't be deactivated (ModelSwitchError 400) — ignore, it's a no-op by design.
+      }
+      continue;
+    }
+
+    const entry = ALL_MODELS.find(m => m.id === modelId);
+    if (!entry) {
+      console.warn(`[AnalysisAPI] Persisted active model "${modelId}" for ${family} no longer exists in the catalog — keeping default`);
+      continue;
+    }
+    const filePath = path.join(modelsDir, entry.file);
+    if (!fs.existsSync(filePath)) {
+      console.warn(`[AnalysisAPI] Persisted active model "${modelId}" file missing (${entry.file}) — keeping default`);
+      continue;
+    }
+    try {
+      await _applyModelSwitch(entry, filePath);
+      console.log(`[AnalysisAPI] Restored persisted active model for ${family} → ${entry.label}`);
+    } catch (err) {
+      console.warn(`[AnalysisAPI] Failed to restore persisted active model for ${family}:`, err.message);
+    }
+  }
 }
 
 // Start loading immediately at module load — frames arriving before load completes
@@ -1852,6 +2008,8 @@ router.get('/models', (req, res) => {
 // ── POST /api/analysis/models/switch ─────────────────────────────────────────
 // Hot-swap the active model for its family (YOLO detector, face, PPE, fire/smoke,
 // cloth-PAR, human-parsing, appearance-reid).  Body: { modelId: string }
+// On success, persists the selection to the `settings` table (activeModelConfig)
+// so it survives a server restart — see _restoreActiveModels() above.
 router.post('/models/switch', express.json({ limit: '1kb' }), async (req, res) => {
   const { modelId } = req.body || {};
   const entry = ALL_MODELS.find(m => m.id === modelId);
@@ -1863,60 +2021,13 @@ router.post('/models/switch', express.json({ limit: '1kb' }), async (req, res) =
   }
 
   try {
-    switch (entry.family) {
-      case 'human-parsing':
-        // AI-05 Phase-3 (Proposed) — hot-swap the active Human Parsing model.
-        if (!_attrPipeline) return res.status(409).json({ error: 'AttributePipeline not loaded' });
-        await _attrPipeline._color.reloadHumanParsing(filePath, entry.classMap, entry.inputSize);
-        break;
-      case 'appearance-reid':
-        // CrossCamera Face Tracking Phase-2 (Proposed) — hot-swap the appearance embedding model.
-        if (!_appearanceReid) _appearanceReid = new AppearanceReidService();
-        await _appearanceReid.reload(filePath);
-        break;
-      case 'face-detection':
-        if (!_attrPipeline) return res.status(409).json({ error: 'AttributePipeline not loaded' });
-        await _attrPipeline._face.reloadDetector(filePath);
-        break;
-      case 'face-recognition':
-        if (!_attrPipeline) return res.status(409).json({ error: 'AttributePipeline not loaded' });
-        await _attrPipeline._face.reloadRecognizer(filePath);
-        break;
-      case 'ppe':
-        if (!_attrPipeline) return res.status(409).json({ error: 'AttributePipeline not loaded' });
-        await _attrPipeline._ppe.reload(filePath);
-        break;
-      case 'fire-smoke':
-        if (!_fireSmokeService) _fireSmokeService = new FireSmokeService();
-        await _fireSmokeService.reload(filePath);
-        break;
-      case 'cloth-par':
-        if (!_attrPipeline) return res.status(409).json({ error: 'AttributePipeline not loaded' });
-        await _attrPipeline._color.reloadPar(filePath);
-        break;
-      case 'age-estimation':
-        // Age Estimation (Proposed) — hot-swap the active age model.
-        if (!_ageEstimation) _ageEstimation = new AgeEstimationService();
-        await _ageEstimation.reload(filePath);
-        break;
-      case 'gender-classification':
-        // Gender Classification (Proposed) — hot-swap the active gender model.
-        if (!_genderClassification) _genderClassification = new GenderClassificationService();
-        await _genderClassification.reload(filePath);
-        break;
-      default: // YOLO detector families (undefined `family`)
-        if (!_detector) {
-          _detector = new DetectionService({ modelPath: filePath });
-          await _detector.load();
-        } else {
-          await _detector.reload(filePath);
-        }
-    }
+    await _applyModelSwitch(entry, filePath);
+    activeModelConfig.setActiveModel(entry.family, entry.id);
     console.log(`[AnalysisAPI] Switched ${entry.family || 'detector'} model → ${entry.label}`);
     res.json({ ok: true, active: entry.label, file: entry.file });
   } catch (err) {
     console.error('[AnalysisAPI] Model switch failed:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 
@@ -1924,54 +2035,24 @@ router.post('/models/switch', express.json({ limit: '1kb' }), async (req, res) =
 // Unload the active model for a family, leaving no model active for it until the
 // next Activate. Scoped to the non-YOLO "extended" families only — the YOLO
 // detector family (undefined `family`) always needs an active model for the core
-// detection pipeline to function, so it intentionally has no case below and falls
-// through to the 400 default. Body: { modelId: string } (used only to resolve the
-// entry's family — the unload always targets whatever is currently loaded for
-// that family, not necessarily this specific modelId).
+// detection pipeline to function, so _applyModelDeactivate() throws a 400 for it.
+// Body: { modelId: string } (used only to resolve the entry's family — the unload
+// always targets whatever is currently loaded for that family, not necessarily
+// this specific modelId). On success, persists the deactivation so a restart
+// doesn't silently reload the family's on-disk default — see _restoreActiveModels().
 router.post('/models/deactivate', express.json({ limit: '1kb' }), async (req, res) => {
   const { modelId } = req.body || {};
   const entry = ALL_MODELS.find(m => m.id === modelId);
   if (!entry) return res.status(400).json({ error: 'Unknown modelId' });
 
   try {
-    switch (entry.family) {
-      case 'human-parsing':
-        _attrPipeline?._color?.unloadHumanParsing();
-        break;
-      case 'appearance-reid':
-        _appearanceReid?.unload();
-        break;
-      case 'face-detection':
-        _attrPipeline?._face?.unloadDetector();
-        break;
-      case 'face-recognition':
-        _attrPipeline?._face?.unloadRecognizer();
-        break;
-      case 'ppe':
-        _attrPipeline?._ppe?.unload();
-        break;
-      case 'fire-smoke':
-        _fireSmokeService?.unload();
-        break;
-      case 'cloth-par':
-        _attrPipeline?._color?.unloadPar();
-        break;
-      case 'age-estimation':
-        _ageEstimation?.unload();
-        break;
-      case 'gender-classification':
-        _genderClassification?.unload();
-        break;
-      default: // YOLO detector families (undefined `family`) cannot be deactivated
-        return res.status(400).json({
-          error: 'The YOLO detector cannot be deactivated — the core detection pipeline always requires an active model.',
-        });
-    }
+    _applyModelDeactivate(entry);
+    activeModelConfig.clearActiveModel(entry.family);
     console.log(`[AnalysisAPI] Deactivated ${entry.family} model → ${entry.label}`);
     res.json({ ok: true, deactivated: entry.label });
   } catch (err) {
     console.error('[AnalysisAPI] Model deactivate failed:', err.message);
-    res.status(500).json({ error: err.message });
+    res.status(err.status || 500).json({ error: err.message });
   }
 });
 

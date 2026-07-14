@@ -1,6 +1,6 @@
 ---
 **Document:** SRS_AI_Model_Catalog  
-**Version:** 2.5  
+**Version:** 2.6  
 **Status:** Draft  
 **Date:** 2026-07-14  
 **Parent RFP:** [RFP_AI_Model_Catalog](../rfp/RFP_AI_Model_Catalog.md)  
@@ -86,6 +86,16 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | FR-MC-029 | Deactivate shall not require the target model file to exist on disk (unlike `/models/switch`'s FR-MC-018) and shall not fail if `AttributePipeline` has not finished loading — both cases mean nothing was active, so deactivation is a safe no-op. |
 | FR-MC-030 | Deactivating a family shall not modify that family's corresponding `analyticsConfig` toggle (e.g. `cloth`, `humanParsing`, `face`) — the feature flag and the loaded-model state are independent; enrichment for that attribute simply returns `null`/absent (existing Phase-1 graceful-degradation behavior) until a model is active again. |
 
+### 3.7 Active Model Persistence
+
+| ID | Requirement |
+|---|---|
+| FR-MC-031 | On every successful `POST /api/analysis/models/switch`, the system shall persist `{ family: modelId }` to the `settings` table (row id `activeModels`) via `server/src/services/activeModelConfig.js`, using the DB backend selected by `DB_TYPE` (`json` or `mongodb`). A failed switch (400/409/500) shall not be persisted. |
+| FR-MC-032 | On every successful `POST /api/analysis/models/deactivate`, the system shall persist `{ family: null }` to the same `activeModels` row, distinct from an absent key (never configured). A failed deactivate shall not be persisted. |
+| FR-MC-033 | At startup, after every family's service has finished loading its hardcoded/on-disk default (§5 of the Design doc), the system shall read the persisted `activeModels` map and, for each entry: if the value is a `modelId`, hot-swap that family to the persisted model via the same code path `POST /models/switch` uses; if the value is `null`, unload that family via the same code path `POST /models/deactivate` uses (except the YOLO detector, which is never deactivated). |
+| FR-MC-034 | If a persisted `modelId` no longer exists in `ALL_MODELS`, or its ONNX file no longer exists in `server/models/`, the restore step shall log a warning and leave the family on its already-loaded default — it shall not throw or block server startup. |
+| FR-MC-035 | The persistence mechanism shall require no per-family code beyond what `/models/switch`/`/models/deactivate` already implement for that family — adding a new `EXTENDED_CATALOG` family with a working switch/deactivate case shall automatically gain restart-persistence with no additional code. |
+
 ## 4. Non-Functional Requirements
 
 | ID | Requirement |
@@ -136,3 +146,4 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | 2.3 | 2026-07-12 | PromptPAR Download 자동화 반영 — `openpar-pa100k`가 "직접 배포(다운로드 URL 없음)"에서 신규 `pyExport` 전략(FR-MC-015c)으로 전환: OpenPAR repo clone + Google Drive 체크포인트(`gdown`) + CUDA GPU export를 수행하는 독립 스크립트(`exportPromptPAR.py`) 자동 실행. FR-MC-005c에 `pyExport` 필드 제외 추가, §5·§6 갱신, FR-MC-023~025라는 실존하지 않던 참조를 FR-MC-018c로 정정 |
 | 2.4 | 2026-07-13 | §3.6 신설(FR-MC-026~030) — `POST /api/analysis/models/deactivate`: YOLO 탐지기를 제외한 8개 확장 family의 활성 모델 언로드(ONNX 세션 release + ready 상태 초기화), YOLO 탐지기는 400으로 거부(FR-MC-027), `analyticsConfig` 토글은 변경하지 않음(FR-MC-030). §6 오류표 갱신 |
 | 2.5 | 2026-07-14 | `hfOptimumExport` 의존성 패키지명 정정 — ONNX export 기능이 `optimum[exporters]`에서 별도 PyPI 패키지 `optimum-onnx`로 이전됨(`huggingface/optimum-onnx`, `optimum.exporters.onnx`는 여전히 `optimum.*` 네임스페이스로 설치됨). 프로덕션에서 "pip install 성공했지만 optimum.exporters.onnx는 여전히 없음" 증상으로 확인 |
+| 2.6 | 2026-07-14 | §3.7 신설(FR-MC-031~035) — Active Model Persistence: Admin Dashboard에서 선택한 Active 모델이 서버 재시작 후 초기화되던 문제 해결. `settings` 테이블(row id `activeModels`)에 family→modelId 영속화(`DB_TYPE` json/mongodb 공통), 성공한 switch/deactivate만 기록, 시작 시 자동 복원, family 신규 추가 시 영속화 자체는 코드 변경 불필요 |

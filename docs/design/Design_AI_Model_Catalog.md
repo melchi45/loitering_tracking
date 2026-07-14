@@ -1,18 +1,18 @@
 ---
 **Document:** Design_AI_Model_Catalog  
-**Version:** 2.4  
+**Version:** 2.5  
 **Status:** Draft  
-**Date:** 2026-07-13  
+**Date:** 2026-07-14  
 **Parent SRS:** [SRS_AI_Model_Catalog](../srs/SRS_AI_Model_Catalog.md)  
 **Parent TC:** [TC_AI_Model_Catalog](../tc/TC_AI_Model_Catalog.md)  
-**Implementation:** `server/src/routes/analysisApi.js`, `server/src/services/colorClothService.js`, `server/src/scripts/downloadModels.js`  
+**Implementation:** `server/src/routes/analysisApi.js`, `server/src/services/colorClothService.js`, `server/src/scripts/downloadModels.js`, `server/src/services/activeModelConfig.js` (new, §11)  
 ---
 
 # Design — AI Model Catalog & Runtime Model Switching
 
 ## 1. Overview
 
-`analysisApi.js` maintains two static catalog arrays — `MODEL_CATALOG` (YOLO detector, 20 entries) and `EXTENDED_CATALOG` (every other ONNX model family, 11 entries) — concatenated into `ALL_MODELS`. Each family's "currently active" model is tracked against a different in-memory service (`_detector`, `AttributePipeline._face/_ppe/_color`, `FireSmokeService`, `AppearanceReidService`, `AgeEstimationService`), resolved centrally by `_activeFileForEntry()`. Operators can query the full catalog, download/export any automatable entry, and hot-swap the active model per family via REST APIs — all surfaced through the Admin Dashboard's AI Models tab. The `cloth-par` family exposes two selectable models (PromptPAR vs. OpenPAR — see §8); the new `age-estimation` family similarly exposes two selectable models (InsightFace GenderAge vs. ViT Age Classifier — see §10). PromptPAR carries a pre-activation memory gate that the other families do not.
+`analysisApi.js` maintains two static catalog arrays — `MODEL_CATALOG` (YOLO detector, 20 entries) and `EXTENDED_CATALOG` (every other ONNX model family, including `gender-classification` — see `Design_AI_Gender_Classification.md`) — concatenated into `ALL_MODELS`. Each family's "currently active" model is tracked against a different in-memory service (`_detector`, `AttributePipeline._face/_ppe/_color`, `FireSmokeService`, `AppearanceReidService`, `AgeEstimationService`, `GenderClassificationService`), resolved centrally by `_activeFileForEntry()`. Operators can query the full catalog, download/export any automatable entry, and hot-swap the active model per family via REST APIs — all surfaced through the Admin Dashboard's AI Models tab. The `cloth-par` family exposes two selectable models (PromptPAR vs. OpenPAR — see §8); the `age-estimation` family similarly exposes two selectable models (InsightFace GenderAge vs. ViT Age Classifier — see §10). PromptPAR carries a pre-activation memory gate that the other families do not. As of §11, every family's Active selection survives a server restart via `activeModelConfig.js`.
 
 ## 2. Architecture
 
@@ -517,6 +517,69 @@ Both are selected the same way as every other family: Admin Dashboard → AI Mod
 
 Full design detail — input fallback logic (face-crop preferred, person-crop fallback), `AgeEstimationService` structure, preprocessing contracts per model, and open verification items — lives in `docs/design/Design_AI_Age_Estimation.md`.
 
+## 11. Active Model Persistence (Server Restart Survival)
+
+Before this feature, every "Active" selection shown in Admin Dashboard → AI Models existed only in the live in-memory service objects (`_detector`, `AttributePipeline._face/_ppe/_color`, `FireSmokeService`, `AppearanceReidService`, `AgeEstimationService`, `GenderClassificationService`). `_loadServices()` always constructed each service argument-less, so every server restart silently reverted every family to its hardcoded/`.env`-default model, discarding any operator selection made via `/models/switch` or `/models/deactivate` (e.g. Cloth Attribute → OpenPAR, Human Parsing → SegFormer B2 Clothes, Age Estimation → ViT Age Classifier, Gender Classification → ViT Gender Classifier, YOLO Detection Model → YOLO12n).
+
+### 11.1 Storage
+
+`server/src/services/activeModelConfig.js` persists the selection in the existing generic `settings` table (row id `'activeModels'`) — the same `DB_TYPE`-selected backend (`json` → `storage/lts.json`, `mongodb` → the `settings` collection) already used by `trackerConfig.js`/`analyticsConfig.js`. No new table/collection or `ALL_TABLES` change was needed — `getDB()` resolves to `JsonDatabase` or `MongoDatabase` transparently, and both already implement the generic `findOne`/`insert`/`update` used here.
+
+Row shape: `{ id: 'activeModels', [family]: modelId | null, ... }` — one key per family, using the exact `entry.family` string from `ALL_MODELS`. YOLO detector entries (whose `family` is `undefined`) are stored under the fixed key `'yolo-detector'` (`activeModelConfig.DETECTOR_FAMILY_KEY`).
+
+| Value | Meaning |
+|---|---|
+| key absent | Never configured — family keeps loading its hardcoded/on-disk default at startup, identical to pre-feature behavior |
+| `modelId` string | Restore this exact catalog entry at startup |
+| `null` | Operator explicitly deactivated this family — stay unloaded at startup instead of auto-loading the on-disk default |
+
+```javascript
+// server/src/services/activeModelConfig.js — public API
+getActiveModels()                 // → { [family]: modelId|null, ... } full persisted map
+setActiveModel(family, modelId)   // called by POST /models/switch on success
+clearActiveModel(family)          // called by POST /models/deactivate on success — persists null, not key removal
+```
+
+Because this reuses the generic `settings` table, the persisted map is also directly readable/writable via the existing generic `GET/PUT /api/settings/activeModels` endpoints (`server/src/api/settings.js`) — useful for scripted inspection or manual correction without a dedicated endpoint.
+
+### 11.2 Write Path
+
+The per-family `switch (entry.family) { ... }` dispatch previously inlined in the `POST /models/switch` and `POST /models/deactivate` route handlers was extracted into two shared functions, `_applyModelSwitch(entry, filePath)` (async) and `_applyModelDeactivate(entry)` (sync) — both throw a `ModelSwitchError(status, message)` on failure, preserving the exact HTTP status codes the inline handlers previously returned directly (409 `AttributePipeline not loaded`, 400 `YOLO detector cannot be deactivated`). Each route handler now: (1) calls the shared function, (2) **only on success**, persists via `activeModelConfig.setActiveModel()`/`clearActiveModel()`, (3) responds. A failed switch/deactivate is never persisted, so a bad request can't corrupt the restart-restore state.
+
+### 11.3 Read Path (Startup Restore)
+
+`_loadServices()` still constructs every service exactly as before — each family still auto-loads its hardcoded/on-disk default first (unchanged, so a fresh install with no persisted config keeps working). Immediately after all families finish loading, a new step calls `_restoreActiveModels()`, which reads `activeModelConfig.getActiveModels()` and, for every persisted `[family, modelId]` pair:
+
+- `modelId === null` → looks up any `ALL_MODELS` entry for that family and calls `_applyModelDeactivate(entry)`, undoing whatever hardcoded default the family's `load()` may have auto-loaded from disk. (No-op for the YOLO detector, which can never be deactivated — the restore loop swallows that specific rejection.)
+- `modelId` is a real catalog id → resolves the entry in `ALL_MODELS`, verifies the file still exists on disk, then calls `_applyModelSwitch(entry, filePath)` — the **same function the live switch route uses**, so a restored selection goes through identical validation/session-loading logic (including the PromptPAR memory gate, §8, and human-parsing's `classMap`/`inputSize`).
+- A missing catalog entry (model removed from the catalog since it was persisted) or a missing file on disk is logged as a warning and skipped — the family simply keeps whatever default it already loaded. A restore failure never blocks server startup.
+
+```
+_loadServices()
+  ├─ construct + load() each family's service with its hardcoded/env default (unchanged)
+  └─ _restoreActiveModels()
+       for [family, modelId] of activeModelConfig.getActiveModels():
+         modelId === null  → _applyModelDeactivate(entry-for-family)     // explicit deactivation
+         modelId === <id>  → _applyModelSwitch(entry, resolvedFilePath)  // explicit selection
+       _servicesReady = true
+```
+
+Because the restore loop drives entirely off `entry.family` plus the already-generic `ALL_MODELS`/`_applyModelSwitch`/`_applyModelDeactivate`, **no additional persistence code is required when a new AI model family is added** — a new family only needs the same three things every existing family already requires (an `EXTENDED_CATALOG` entry with a `family` string, a case in `_applyModelSwitch`, a case in `_applyModelDeactivate`), and restart-restore is automatically covered.
+
+### 11.4 Scope
+
+This restores the shared `analysisApi.js` service instances used for `POST /api/analysis/frame` (`SERVER_MODE=analysis`, and streaming-forwarded frames in `SERVER_MODE=combined`) and the Admin Dashboard's AI Models tab. It does **not** cover `pipelineManager.js`'s separate, independently-constructed service instances used for `SERVER_MODE=combined`'s locally-captured cameras — switching a model via `/models/switch` has never affected `pipelineManager`'s own camera-inference services (a pre-existing gap, not introduced by this feature) and that remains open. `SERVER_MODE=analysis` — the reported scenario — has no local cameras and is unaffected by it.
+
+### 11.5 Example
+
+Operator activates YOLO12n (`POST /models/switch { modelId: 'yolo12n' }`) and OpenPAR ResNet50 for Cloth Attribute (`POST /models/switch { modelId: 'openpar-resnet50-pa100k' }`). The `settings` row becomes:
+
+```json
+{ "id": "activeModels", "yolo-detector": "yolo12n", "cloth-par": "openpar-resnet50-pa100k" }
+```
+
+On the next server restart, `_loadServices()` first loads `_detector` from the `YOLO_MODEL`/hardcoded default and `ColorClothService` auto-loads `openpar_pa100k.onnx` (PromptPAR) if present on disk — then `_restoreActiveModels()` immediately reloads `_detector` with `yolo12n.onnx` and calls `AttributePipeline._color.reloadPar()` with `openpar_resnet50_pa100k.onnx`, matching the operator's pre-restart selection.
+
 ---
 
 ## Revision History
@@ -530,3 +593,4 @@ Full design detail — input fallback logic (face-crop preferred, person-crop fa
 | 2.2 | 2026-07-12 | `age-estimation` 패밀리 추가(카탈로그 총 31개) — InsightFace GenderAge(직접 ONNX) + ViT Age Classifier(신규 `hfOptimumExport` 변환 전략) 2개 항목, §4.2d 신설(HuggingFace `optimum` 기반 PT→ONNX, non-YOLO 아키텍처 전용), §10 신설, §5 switch 디스패치에 `age-estimation` 케이스 추가, Overview의 잘못된 "§9" cloth-par 참조를 "§8"로 정정 |
 | 2.3 | 2026-07-12 | PromptPAR Download 자동화 반영 — `openpar-pa100k`가 소스 전략 없음(shipped)에서 신규 `pyExport`(§4.2e, `exportPromptPAR.py`)로 전환: Event-AHU/OpenPAR repo clone + ViT-B/16 backbone + Google Drive PA100k 체크포인트(`gdown`) 자동 다운로드 후 CUDA GPU에서 export·검증. §3b 스키마에 `pyExport` 필드 추가, §9에 `PROMPTPAR_REPO_URL`/`_REPO_REF`/`_GDRIVE_FOLDER_ID`/`_CHECKPOINT_FILENAME`/`_CHECKPOINT_GDRIVE_FILE_ID`/`_VIT_BACKBONE_URL` 환경변수 추가 |
 | 2.4 | 2026-07-13 | Runtime Model Deactivate 신설(§5b, `POST /api/analysis/models/deactivate`) — YOLO 탐지기를 제외한 8개 확장 family(face-detection/face-recognition/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid/age-estimation) 각 서비스에 `unload()`/`unloadDetector()`/`unloadRecognizer()`/`unloadPar()`/`unloadHumanParsing()` 추가, Admin Dashboard AI Models에 Deactivate 버튼 추가. `colorClothService.js` `reloadPar()`의 기존 세션 미해제 누수도 함께 수정 |
+| 2.5 | 2026-07-14 | §11 신설 — Active Model Persistence: 신규 `activeModelConfig.js`가 `settings` 테이블(row id `activeModels`)에 family→modelId 맵을 저장, `DB_TYPE`(json/mongodb) 불문 동일 API. `/models/switch`·`/models/deactivate`의 family별 switch문을 `_applyModelSwitch()`/`_applyModelDeactivate()` 공용 함수로 리팩터링해 성공 시에만 영속화, 신규 `_restoreActiveModels()`가 `_loadServices()` 마지막 단계에서 재생. family 신규 추가 시 영속화 자체는 코드 변경 불필요(제네릭 설계) |

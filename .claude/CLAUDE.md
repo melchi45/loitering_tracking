@@ -70,6 +70,7 @@ loitering_tracking/
 │   │   ├── MsalService.js          # Microsoft MSAL 인증
 │   │   ├── mongoDbService.js       # MongoDB 연결 · 5초 keep-alive 핑 · 재연결 Retry (선형 back-off) · findDirect() 직접 쿼리 (onvif_snapshots 등 비hydration 테이블용)
 │   │   ├── analyticsConfig.js      # 분석 설정
+│   │   ├── activeModelConfig.js    # AI Model Active 선택 영속화 — `settings` 테이블(row id `activeModels`), family→modelId 맵, DB_TYPE(json/mongodb) 공통, 서버 재시작 시 analysisApi.js가 자동 복원
 │   │   ├── missingPersonService.js # 실종자 등록·검색·감지 매칭·상태 관리
 │   │   ├── faceEnrollHelper.js     # 얼굴 등록 사진 detect+embed+썸네일 공용 로직 (로컬/위임 양쪽에서 재사용)
 │   │   ├── faceSearchConditions.js # Face Search Condition 요약/목록/reconcile 적용 (analysis 서버, 무상태)
@@ -372,9 +373,9 @@ loitering_tracking/
 | GET | `/api/analysis/detection-snapshots` | bbox crop 이미지 조회 (query: objectId(필수), cameraId, from, to, limit — cropData base64 JPEG) |
 | GET | `/api/analysis/face-trajectories` | 크로스카메라 얼굴 궤적 DB 조회 (query: faceId, alias, cameraId, from, to, limit — max 500) |
 | DELETE | `/api/analysis/face-trajectories` | 얼굴 궤적 이력 전체 삭제 |
-| GET | `/api/analysis/models` | AI 모델 카탈로그 조회 — YOLO 탐지기 + face/PPE/fire-smoke/cloth-PAR/Human Parsing(Proposed)/Appearance Re-ID(Proposed)/Age Estimation(Proposed) 전체 family 통합, 다운로드 상태·활성 모델 포함 |
-| POST | `/api/analysis/models/switch` | family별 활성 모델 런타임 전환 (body: modelId — YOLO 탐지기 외 face-detection/face-recognition/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid/age-estimation 지원) |
-| POST | `/api/analysis/models/deactivate` | family별 활성 모델 언로드 (body: modelId — ONNX 세션 release + ready 상태 초기화; YOLO 탐지기는 핵심 감지 파이프라인이라 대상 아님, 400 반환) |
+| GET | `/api/analysis/models` | AI 모델 카탈로그 조회 — YOLO 탐지기 + face/PPE/fire-smoke/cloth-PAR/Human Parsing(Proposed)/Appearance Re-ID(Proposed)/Age Estimation(Proposed)/Gender Classification(Proposed) 전체 family 통합, 다운로드 상태·활성 모델 포함 |
+| POST | `/api/analysis/models/switch` | family별 활성 모델 런타임 전환 (body: modelId — YOLO 탐지기 외 face-detection/face-recognition/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid/age-estimation/gender-classification 지원; 성공 시 `activeModelConfig.js`가 `settings` 테이블에 영속화 — 서버 재시작 시 자동 복원, Design_AI_Model_Catalog.md §11) |
+| POST | `/api/analysis/models/deactivate` | family별 활성 모델 언로드 (body: modelId — ONNX 세션 release + ready 상태 초기화; YOLO 탐지기는 핵심 감지 파이프라인이라 대상 아님, 400 반환; 성공 시 영속화되어 재시작 후에도 비활성 상태 유지) |
 | POST | `/api/analysis/models/download` | 모델 다운로드/변환 시작 (body: modelId — HuggingFace `.pt`→ONNX 자동 변환(ultralytics export) 포함, non-YOLO HuggingFace 모델(ViT 등)은 `hfOptimumExport`로 `optimum` 기반 변환; PromptPAR는 `pyExport`(`exportPromptPAR.py`)로 자동화; `manualOnly` 모델은 409 반환) |
 | POST | `/api/analysis/face-embed` | 얼굴 등록 사진 detect+embed 위임 수신 (streaming 모드가 로컬 얼굴 모델 없을 때 호출, raw JPEG → bbox/score/embedding/thumbnail) |
 | POST | `/api/analysis/face-search-conditions/sync` | streaming 서버의 `faceGalleries`/`faceGalleryFaces` 전체 스냅샷 반영 (embedding 제외, `source:'synced'` 태그로 upsert/delete) |

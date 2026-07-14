@@ -1,6 +1,6 @@
 ---
 name: ai-detection-pipeline
-description: "LTS-2026 AI 추론 파이프라인 개발 및 디버깅. Use when: YOLOv8 감지 설정, behaviorEngine 배회 점수 조정, attributePipeline 속성 분석(의상·색상·마스크·헬멧), fireSmokeService 화재/연기 감지, 감지 임계값 튜닝, pipelineManager 서비스 추가/수정, AI 모델 교체, 감지 정확도 문제 해결, Human Parsing 기반 정밀 색상 분류(opt-in), Appearance/Body Re-ID(OSNet, opt-in), Cloth-PAR PromptPAR/OpenPAR 모델 선택 및 PromptPAR 사전 메모리 게이트(가용 RAM 부족 시 Cloth 분석 자동 비활성화), Age Estimation(연령 예측, InsightFace GenderAge/ViT Age Classifier admin-selectable, opt-in), Gender Classification(성별 분류, InsightFace GenderAge/ViT Gender Classifier admin-selectable, opt-in). Covers: detection.js, behaviorEngine.js, attributePipeline.js, pipelineManager.js, trackerConfig.js, tracking.js, colorClothService.js, fireSmokeService.js, protectiveEquipService.js, appearanceReidService.js, ageEstimationService.js, genderClassificationService.js, qdrantService.js, kmeansColor.js."
+description: "LTS-2026 AI 추론 파이프라인 개발 및 디버깅. Use when: YOLOv8 감지 설정, behaviorEngine 배회 점수 조정, attributePipeline 속성 분석(의상·색상·마스크·헬멧), fireSmokeService 화재/연기 감지, 감지 임계값 튜닝, pipelineManager 서비스 추가/수정, AI 모델 교체, 감지 정확도 문제 해결, Human Parsing 기반 정밀 색상 분류(opt-in), Appearance/Body Re-ID(OSNet, opt-in), Cloth-PAR PromptPAR/OpenPAR 모델 선택 및 PromptPAR 사전 메모리 게이트(가용 RAM 부족 시 Cloth 분석 자동 비활성화), Age Estimation(연령 예측, InsightFace GenderAge/ViT Age Classifier admin-selectable, opt-in), Gender Classification(성별 분류, InsightFace GenderAge/ViT Gender Classifier admin-selectable, opt-in), AI Models Active 선택의 서버 재시작 영속화(settings 테이블, DB_TYPE json/mongodb 공통). Covers: detection.js, behaviorEngine.js, attributePipeline.js, pipelineManager.js, trackerConfig.js, tracking.js, colorClothService.js, fireSmokeService.js, protectiveEquipService.js, appearanceReidService.js, ageEstimationService.js, genderClassificationService.js, activeModelConfig.js, qdrantService.js, kmeansColor.js."
 argument-hint: "추가 또는 수정할 AI 기능 (예: loitering threshold, attribute detection, fire smoke)"
 ---
 
@@ -28,6 +28,7 @@ RTSP/WebRTC 스트림
 | `server/src/services/behaviorEngine.js` | 배회 점수(dwell time, movement pattern) |
 | `server/src/services/attributePipeline.js` | 의상·색상·보호장구 속성 분류 |
 | `server/src/services/trackerConfig.js` | 추적기 파라미터(IoU threshold, max age) |
+| `server/src/services/activeModelConfig.js` | AI Models Active 선택 영속화 — `settings` 테이블(row id `activeModels`), family→modelId 맵, 서버 재시작 시 `analysisApi.js`가 자동 복원(§18) |
 | `server/src/services/pipelineManager.js` | 서비스 생명주기 관리 |
 | `server/src/services/colorClothService.js` | 색상 및 의류 분석 — Phase-3 Human Parsing(`_runHumanParsing()`) 포함, opt-in (`humanParsing` 토글 기본 비활성) |
 | `server/src/services/fireSmokeService.js` | 화재·연기 감지 모델 |
@@ -62,8 +63,8 @@ RTSP/WebRTC 스트림
 | API | 설명 |
 |---|---|
 | `GET /api/analysis/models` | 전체 family 카탈로그 조회 (downloaded/active/downloading/converting 상태 포함) |
-| `POST /api/analysis/models/switch { modelId }` | family별 활성 모델 핫 스왑 — `_activeFileForEntry()`가 family에 따라 올바른 서비스(`_attrPipeline._color`, `_appearanceReid` 등)로 라우팅 |
-| `POST /api/analysis/models/deactivate { modelId }` | family별 활성 모델 언로드(`unload()`/`unloadDetector()`/`unloadRecognizer()`/`unloadPar()`/`unloadHumanParsing()`) — ONNX 세션 release + ready 상태 초기화. YOLO 탐지기 family는 대상 아님(400) — 배회 감지 핵심 파이프라인이라 항상 활성 모델 필요 |
+| `POST /api/analysis/models/switch { modelId }` | family별 활성 모델 핫 스왑 — `_activeFileForEntry()`가 family에 따라 올바른 서비스(`_attrPipeline._color`, `_appearanceReid` 등)로 라우팅. 성공 시 `activeModelConfig.js`가 `settings` 테이블에 영속화(§18) — 서버 재시작 후에도 유지됨 |
+| `POST /api/analysis/models/deactivate { modelId }` | family별 활성 모델 언로드(`unload()`/`unloadDetector()`/`unloadRecognizer()`/`unloadPar()`/`unloadHumanParsing()`) — ONNX 세션 release + ready 상태 초기화. YOLO 탐지기 family는 대상 아님(400) — 배회 감지 핵심 파이프라인이라 항상 활성 모델 필요. 성공 시 영속화되어 재시작 후에도 비활성 상태 유지(§18) |
 | `POST /api/analysis/models/download { modelId }` | 모델 다운로드 (직접 ONNX 또는 HuggingFace `.pt`→`ultralytics export` 변환); `manualOnly:true` 모델(예: `openpar-resnet50-pa100k`)은 409 반환 — 수동 배치 필요 |
 
 `human-parsing`/`appearance-reid` family는 코드 구현이 완료되어 있으나 모델 파일이 `downloadModels.js`의 `DIRECT_MODELS`에서 기본 `enabled:false`(라이선스 검토 후 수동 활성화) — Admin Dashboard "AI Models" 탭에서 개별 다운로드해야 활성화됨. 상세: `docs/design/Design_AI_AppearanceReID.md` §12.6, `docs/design/Design_AI_Color_Analysis.md` §10.
@@ -979,3 +980,28 @@ unloadHumanParsing() { this._hpSession?.release?.();  this._hpSession = null;  t
 **회귀 테스트:** `test/api/model_catalog.test.js`(TC-GEN-001, family 구성) · `test/api/gender_classification.test.js`(TC-GEN-007~009, `GenderClassificationService` 단위 테스트; TC-GEN-014a, `getAnalysisMetrics()`의 `services.genderClassification` 진단 필드 — `age_estimation.test.js`의 Group E와 동일한 `Object.create(PipelineManager.prototype)` + `STORAGE_PATH` 스크래치 디렉토리 패턴 재사용).
 
 **SDLC 참조:** [RFP_AI_Gender_Classification.md](../../../docs/rfp/RFP_AI_Gender_Classification.md) · [PRD_AI_Gender_Classification.md](../../../docs/prd/PRD_AI_Gender_Classification.md) · [SRS_AI_Gender_Classification.md](../../../docs/srs/SRS_AI_Gender_Classification.md) (FR-GEN-001~033) · [Design_AI_Gender_Classification.md](../../../docs/design/Design_AI_Gender_Classification.md) (§12 라인 플로우) · [TC_AI_Gender_Classification.md](../../../docs/tc/TC_AI_Gender_Classification.md) (TC-GEN-001~015, TC-GEN-015가 Age Estimation 사고 재발 방지 회귀 가드) · [MRD_AI_Gender_Classification.md](../../../docs/mrd/MRD_AI_Gender_Classification.md) · [Gender_Classification_Guide.md](../../../docs/ops/Gender_Classification_Guide.md)
+
+### 18. activeModelConfig.js — AI Models Active 선택 서버 재시작 영속화 (2026-07-14)
+
+**배경:** Admin Dashboard → AI Models 탭에서 Activate/Deactivate한 모델(예: Cloth Attribute → OpenPAR, Human Parsing → SegFormer B2 Clothes, Age Estimation → ViT Age Classifier, Gender Classification → ViT Gender Classifier, YOLO Detection Model → YOLO12n)이 서버 재시작 시 전부 초기화되던 문제. 원인은 `analysisApi.js`의 `_loadServices()`가 매번 인자 없이 `new DetectionService()`/`new AttributePipeline()`/... 를 호출해 각 서비스가 자신의 하드코딩된(또는 `YOLO_MODEL` env) 기본 모델을 다시 로드했기 때문 — "Active"는 순수 인메모리 상태였고 어디에도 저장되지 않았다.
+
+**저장소:** 신규 `server/src/services/activeModelConfig.js` — `trackerConfig.js`/`analyticsConfig.js`와 동일하게 `settings` 테이블(row id `activeModels`)을 사용, `DB_TYPE`(json/mongodb) 불문 동일 API. **새 테이블/컬렉션·`ALL_TABLES` 변경 불필요** — `settings`는 이미 범용 key-value 저장소였다. Row는 `{ id: 'activeModels', [family]: modelId|null }` — YOLO 탐지기(`family === undefined`)는 고정 키 `DETECTOR_FAMILY_KEY`(`'yolo-detector'`)로 저장. `modelId`는 "이 모델로 복원", `null`은 "명시적으로 Deactivate됨(재시작 시 자동 로드 금지)", 키 자체가 없으면 "한 번도 설정된 적 없음(기존 하드코딩 기본값 유지)" — 세 상태를 구분한다.
+
+```javascript
+// server/src/services/activeModelConfig.js
+getActiveModels()                 // → { [family]: modelId|null, ... }
+setActiveModel(family, modelId)   // POST /models/switch 성공 시 호출
+clearActiveModel(family)          // POST /models/deactivate 성공 시 호출 — null 기록(키 삭제 아님)
+```
+
+**리팩터링 (`analysisApi.js`):** `/models/switch`·`/models/deactivate`에 인라인되어 있던 family별 `switch (entry.family) {...}` 로직을 각각 `_applyModelSwitch(entry, filePath)`(async)·`_applyModelDeactivate(entry)`(sync) 공용 함수로 추출 — 실패 시 `ModelSwitchError(status, message)`를 throw해 기존 HTTP 상태 코드(409 `AttributePipeline not loaded`, 400 `YOLO 탐지기 Deactivate 불가`)를 그대로 보존. 각 라우트 핸들러는 이제 (1) 공용 함수 호출 (2) **성공했을 때만** `activeModelConfig.setActiveModel()`/`clearActiveModel()` 호출 (3) 응답 순서로 동작 — 실패한 요청은 절대 영속화되지 않는다.
+
+**시작 시 복원:** `_loadServices()`가 모든 family를 기존 하드코딩 기본값으로 로드 완료한 **직후**, 신규 `_restoreActiveModels()`가 `activeModelConfig.getActiveModels()`를 읽어 재생한다 — `modelId`면 `_applyModelSwitch()`(라이브 switch와 완전히 동일한 코드 경로, human-parsing의 `classMap`/`inputSize`·PromptPAR 메모리 게이트 포함), `null`이면 `_applyModelDeactivate()`(YOLO 탐지기는 항상 예외로 스킵)를 호출한다. 카탈로그에서 사라진 modelId나 디스크에서 삭제된 파일은 경고 로그만 남기고 스킵 — 복원 실패가 서버 기동을 막지 않는다.
+
+**제네릭 설계 — family 신규 추가 시 영속화 자체는 무료:** 복원 루프가 `entry.family` + 이미 존재하는 `ALL_MODELS`/`_applyModelSwitch`/`_applyModelDeactivate`만으로 동작하므로, 새 AI model family를 추가할 때 필요한 건 기존과 동일하게 `EXTENDED_CATALOG` 항목 + switch/deactivate 케이스 한 줄씩뿐 — 영속화를 위한 추가 코드는 전혀 필요 없다.
+
+**범위 제한:** `analysisApi.js`의 공유 서비스 인스턴스(`SERVER_MODE=analysis`/`combined`가 `POST /api/analysis/frame` 처리에 사용)만 대상. `pipelineManager.js`가 `combined` 모드 로컬 카메라 추론에 쓰는 별도 서비스 인스턴스는 원래부터 `/models/switch`의 영향을 받지 않던 기존 갭이라 이번에도 대상 밖(문서에 명시, 코드 변경 없음) — 보고된 시나리오(`SERVER_MODE=analysis`, 로컬 카메라 없음)에는 영향 없음.
+
+**회귀 테스트:** `test/api/model_catalog.test.js` Group F(TC-MC-026/027) — `DB_TYPE=json` + 스크래치 `STORAGE_PATH`로 격리된 DB에 대해 `activeModelConfig.js`를 직접 호출해 switch/deactivate/미설정 3가지 상태가 `settings` 테이블 raw JSON에 정확히 반영되는지 검증(실제 서버·ONNX 파일 불필요).
+
+**SDLC 참조:** [MRD_AI_Model_Active_Persistence.md](../../../docs/mrd/MRD_AI_Model_Active_Persistence.md) · [RFP_AI_Model_Catalog.md](../../../docs/rfp/RFP_AI_Model_Catalog.md) (FR-RFP-MC-015) · [PRD_AI_Model_Catalog.md](../../../docs/prd/PRD_AI_Model_Catalog.md) (§4.6, AC-12) · [SRS_AI_Model_Catalog.md](../../../docs/srs/SRS_AI_Model_Catalog.md) (§3.7 FR-MC-031~035) · [Design_AI_Model_Catalog.md §11](../../../docs/design/Design_AI_Model_Catalog.md#11-active-model-persistence-server-restart-survival) · [TC_AI_Model_Catalog.md](../../../docs/tc/TC_AI_Model_Catalog.md) (TC-MC-026~030) · [Distributed_AI_Pipeline_Setup.md §1.4](../../../docs/ops/Distributed_AI_Pipeline_Setup.md)

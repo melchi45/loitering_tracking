@@ -1,8 +1,8 @@
 ---
 **Document:** TC_AI_Model_Catalog  
-**Version:** 2.4  
+**Version:** 2.5  
 **Status:** Draft  
-**Date:** 2026-07-13  
+**Date:** 2026-07-14  
 **Parent SRS:** [SRS_AI_Model_Catalog](../srs/SRS_AI_Model_Catalog.md)  
 **Parent Design:** [Design_AI_Model_Catalog](../design/Design_AI_Model_Catalog.md)  
 **Test Script:** `test/api/model_catalog.test.js`  
@@ -39,6 +39,11 @@
 | TC-MC-023 | FR-MC-026, FR-MC-028 | `POST /api/analysis/models/deactivate` unloads the active model for each of the 8 extended families (releases the ONNX session, resets ready/status), and `GET /api/analysis/models` reports `active: false` for every entry in that family afterward |
 | TC-MC-024 | FR-MC-027 | Deactivate request for a YOLO detector entry (`family` undefined) returns HTTP 400 without touching `_detector` |
 | TC-MC-025 | FR-MC-029, FR-MC-030 | Deactivate succeeds as a no-op when nothing is active for a family (no file downloaded / `AttributePipeline` not loaded), and does not modify the corresponding `analyticsConfig` toggle |
+| TC-MC-026 | FR-MC-031 | A successful `/models/switch` persists `{ family: modelId }` to the `settings` table (row id `activeModels`) |
+| TC-MC-027 | FR-MC-032 | A successful `/models/deactivate` persists `{ family: null }`, distinct from an absent key |
+| TC-MC-028 | FR-MC-031, FR-MC-032 | A failed switch/deactivate (400/409/500) does not write anything to the `activeModels` row |
+| TC-MC-029 | FR-MC-033 | `_restoreActiveModels()` replays a persisted `modelId` via the same code path as a live switch, and a persisted `null` via the same code path as a live deactivate (except the YOLO detector) |
+| TC-MC-030 | FR-MC-034 | `_restoreActiveModels()` logs a warning and leaves the family on its default when the persisted `modelId` is missing from `ALL_MODELS` or its file no longer exists on disk — startup does not throw |
 
 ## 2. Test Cases
 
@@ -404,6 +409,76 @@
 
 ---
 
+### TC-MC-026: Successful Switch Persists the Selection
+
+**Pre-condition:** Unit test against `server/src/services/activeModelConfig.js` directly (no running server required) — `DB_TYPE=json` pointed at a scratch `STORAGE_PATH`
+**Steps:**
+1. `initDB()`, then call `activeModelConfig.setActiveModel('cloth-par', 'openpar-resnet50-pa100k')`
+2. Assert `activeModelConfig.getActiveModels()['cloth-par'] === 'openpar-resnet50-pa100k'`
+3. `db.flushNow()`, read the raw `storage/lts.json` file, assert the `settings` row with `id: 'activeModels'` contains `'cloth-par': 'openpar-resnet50-pa100k'`
+
+**Expected:** PASS
+**Priority:** P1
+
+---
+
+### TC-MC-027: Successful Deactivate Persists an Explicit `null`
+
+**Pre-condition:** Same as TC-MC-026
+**Steps:**
+1. `activeModelConfig.setActiveModel('cloth-par', 'openpar-pa100k')`
+2. `activeModelConfig.clearActiveModel('cloth-par')`
+3. Assert `'cloth-par' in activeModelConfig.getActiveModels()` is `true` AND its value is `null` (not simply absent)
+4. Assert a family that was never touched (e.g. `'ppe'`) is absent from the map entirely — confirms `null` (deactivated) and "never configured" are distinguishable
+
+**Expected:** PASS
+**Priority:** P1
+
+---
+
+### TC-MC-028: Failed Switch/Deactivate Does Not Persist
+
+**Pre-condition:** Analysis server running
+**Steps:**
+1. Note current `GET /api/settings/activeModels` value
+2. `POST /api/analysis/models/switch { modelId: '__nonexistent__' }` → assert HTTP 400
+3. `POST /api/analysis/models/switch { modelId: <a valid but not-yet-downloaded model id> }` → assert HTTP 409
+4. `GET /api/settings/activeModels` again — assert the value is byte-for-byte unchanged from step 1
+
+**Expected:** PASS
+**Priority:** P2
+
+---
+
+### TC-MC-029: Startup Restore Replays Switch/Deactivate Through the Same Code Path
+
+**Pre-condition:** Unit test against `server/src/routes/analysisApi.js`'s exported internals (or integration test restarting a real analysis server process) — a `cloth-par` model other than the default is persisted as active, and a `ppe` deactivation (`null`) is persisted
+**Steps:**
+1. Seed the `activeModels` settings row: `{ 'cloth-par': 'openpar-resnet50-pa100k', 'ppe': null }` (with the corresponding `.onnx` files present in `server/models/`)
+2. Start (or restart) the analysis server
+3. `GET /api/analysis/models` — assert `openpar-resnet50-pa100k.active === true` and every `cloth-par` sibling entry's `active === false`
+4. Assert every `ppe` entry's `active === false` (deactivation was replayed, not left at the on-disk default)
+
+**Expected:** PASS
+**Priority:** P1
+**Note:** Full server-restart form requires a real process restart; can be approximated by calling `_loadServices()`'s restore step directly against freshly-constructed service instances in a unit test.
+
+---
+
+### TC-MC-030: Restore Tolerates a Missing Model File or Removed Catalog Entry
+
+**Pre-condition:** Same setup style as TC-MC-029
+**Steps:**
+1. Seed the `activeModels` settings row with a `modelId` whose `.onnx` file has since been deleted from `server/models/`
+2. Start (or restart) the analysis server
+3. Assert startup completes without throwing and `_servicesReady` reaches `true`
+4. Assert a warning was logged naming the missing file, and the family's `GET /api/analysis/models` `active` entry reflects whatever default it already had loaded (not a crash, not a stuck "loading" state)
+
+**Expected:** PASS
+**Priority:** P2
+
+---
+
 ## 3. Automated Test Coverage
 
 `test/api/model_catalog.test.js` covers:
@@ -417,8 +492,9 @@
 - TC-MC-018 / TC-MC-019 (PromptPAR memory gate — unit tests, no running server required; see Group D in the script)
 - TC-MC-020 (age-estimation family exposes exactly 2 entries: InsightFace GenderAge + ViT Age Classifier)
 - TC-MC-023 (Deactivate unloads each of the 8 extended families — unit tests, no running server required; see Group E in the script)
+- TC-MC-026 / TC-MC-027 (`activeModelConfig.js` persists a switch as a `modelId` and a deactivate as an explicit `null` — unit tests against a scratch JSON DB, no running server required; see Group F in the script)
 
-Network-dependent tests (TC-MC-004, TC-MC-009, TC-MC-014) are skipped by default; enable with `INTEGRATION_DOWNLOAD=1` env var. TC-MC-003, TC-MC-005, TC-MC-006, TC-MC-010, TC-MC-011, TC-MC-015, TC-MC-016, TC-MC-021, TC-MC-024, TC-MC-025 are exercised manually / via the Admin Dashboard against a running analysis server (not yet automated). TC-MC-022's full pipeline (steps 3-6) requires a CUDA GPU + real network access and is manual-only by design; only its pre-flight failure paths (steps 1-2) are candidates for automation.
+Network-dependent tests (TC-MC-004, TC-MC-009, TC-MC-014) are skipped by default; enable with `INTEGRATION_DOWNLOAD=1` env var. TC-MC-003, TC-MC-005, TC-MC-006, TC-MC-010, TC-MC-011, TC-MC-015, TC-MC-016, TC-MC-021, TC-MC-024, TC-MC-025, TC-MC-028, TC-MC-029, TC-MC-030 are exercised manually / via the Admin Dashboard (or a full server-restart cycle) against a running analysis server (not yet automated). TC-MC-022's full pipeline (steps 3-6) requires a CUDA GPU + real network access and is manual-only by design; only its pre-flight failure paths (steps 1-2) are candidates for automation.
 
 ---
 
@@ -432,3 +508,4 @@ Network-dependent tests (TC-MC-004, TC-MC-009, TC-MC-014) are skipped by default
 | 2.2 | 2026-07-12 | `age-estimation` family(Proposed) 추가 — TC-MC-020(패밀리 구성)·TC-MC-021(family 독립 전환) 신규, TC-MC-012 family 목록 갱신, §3 자동화 커버리지에 TC-MC-020 추가. 상세는 신규 `TC_AI_Age_Estimation.md`(TC-AGE-001~011) 참조 |
 | 2.3 | 2026-07-12 | PromptPAR Download 자동화(`pyExport`) 반영 — TC-MC-022 신규(사전조건 실패 경로는 자동화 가능, 전체 파이프라인은 GPU·네트워크 필요로 수동 전용) |
 | 2.4 | 2026-07-13 | Runtime Model Deactivate 반영 — TC-MC-023(8개 확장 family 언로드 유닛 테스트, `test/api/model_catalog.test.js` Group E로 자동화)·TC-MC-024(YOLO 탐지기 거부)·TC-MC-025(no-op 안전성 + analyticsConfig 미변경) 신규 |
+| 2.5 | 2026-07-14 | Active Model Persistence 반영 — TC-MC-026~030 신규(성공한 switch/deactivate의 `settings` 영속화·실패 시 미영속화·시작 시 복원·누락 파일/카탈로그 항목에 대한 안전한 폴백). TC-MC-026/027은 `test/api/model_catalog.test.js` Group F로 자동화 |

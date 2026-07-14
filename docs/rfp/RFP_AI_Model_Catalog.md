@@ -1,8 +1,9 @@
 ---
 **Document:** RFP_AI_Model_Catalog  
-**Version:** 1.5  
+**Version:** 1.6  
 **Status:** Draft  
-**Date:** 2026-07-13  
+**Date:** 2026-07-14  
+**Related MRD:** [MRD_AI_Model_Active_Persistence](../mrd/MRD_AI_Model_Active_Persistence.md) (§3.3 FR-RFP-MC-015 scope)  
 **Related SRS:** [SRS_AI_Model_Catalog](../srs/SRS_AI_Model_Catalog.md)  
 **Related PRD:** [PRD_AI_Model_Catalog](../prd/PRD_AI_Model_Catalog.md)  
 **Related Design:** [Design_AI_Model_Catalog](../design/Design_AI_Model_Catalog.md)  
@@ -49,7 +50,8 @@ This RFP covers the **full AI model catalog** (YOLO detector + face + PPE + fire
 | FR-RFP-MC-010 | Operators shall be able to switch the active model for any family at runtime without server restart. |
 | FR-RFP-MC-011 | The model switch shall complete without interrupting ongoing inference or camera streams. |
 | FR-RFP-MC-012 | All subsequent frames shall use the newly activated model immediately after the switch completes, scoped to that model's family only (switching the active PPE model must not affect the active YOLO detector, and vice versa). |
-| FR-RFP-MC-014 | Operators shall be able to deactivate (unload) the active model for any optional AI family — face detection/recognition, PPE, fire & smoke, cloth-PAR, human parsing, appearance Re-ID, age estimation — freeing the underlying model's memory until it is activated again. The core YOLO detector is exempt, since person/object detection is required for the system to function at all. |
+| FR-RFP-MC-014 | Operators shall be able to deactivate (unload) the active model for any optional AI family — face detection/recognition, PPE, fire & smoke, cloth-PAR, human parsing, appearance Re-ID, age estimation, gender classification — freeing the underlying model's memory until it is activated again. The core YOLO detector is exempt, since person/object detection is required for the system to function at all. |
+| FR-RFP-MC-015 | Every Activate/Deactivate selection made through the AI Models tab shall persist across server restarts — an operator shall not need to re-select a model after a restart, redeploy, or crash recovery. Persistence shall use the same storage backend (`DB_TYPE=json`/`mongodb`) already used for other admin-configurable settings, and shall require no per-family engineering work when a new AI model family is added later. |
 
 ## 4. Non-Functional Requirements
 
@@ -69,6 +71,7 @@ This RFP covers the **full AI model catalog** (YOLO detector + face + PPE + fire
 - The age-estimation family's ViT Age Classifier requires a HuggingFace `optimum` PT→ONNX conversion path distinct from the `ultralytics`-based conversion used elsewhere — see `RFP_AI_Age_Estimation.md` for detail. Its InsightFace GenderAge sibling ships pre-built ONNX (no conversion needed).
 - The feature is limited to `SERVER_MODE=analysis` and `SERVER_MODE=combined`.
 - Deactivating a family does not change its `analyticsConfig` enable/disable toggle — the two are independent controls; deactivating only unloads the model, it does not re-enable itself when the operator later flips the toggle back on (an explicit Activate is still required).
+- Active model persistence (FR-RFP-MC-015) reuses the existing generic key-value `settings` storage — no new database table/collection is introduced, and no schema migration is required when a new AI model family is added.
 
 ---
 
@@ -82,3 +85,4 @@ This RFP covers the **full AI model catalog** (YOLO detector + face + PPE + fire
 | 1.3 | 2026-07-12 | `age-estimation` family(Proposed) 추가 반영 — FR-RFP-MC-002 범위 확대, §5 제약사항에 신규 `optimum` 기반 PT→ONNX 변환 경로 명시. 상세는 신규 `RFP_AI_Age_Estimation.md` 참조 |
 | 1.4 | 2026-07-12 | PromptPAR Download 자동화 요구사항 신설(FR-RFP-MC-013) — 비-YOLO 커스텀 아키텍처(Google Drive 체크포인트 등)를 위한 독립 스크립트 기반 export 파이프라인, §5 제약사항 갱신 |
 | 1.5 | 2026-07-13 | Runtime Model Deactivate 요구사항 신설(FR-RFP-MC-014) — YOLO 탐지기를 제외한 8개 선택적 AI family에 대해 활성 모델을 언로드하는 기능, §5에 analyticsConfig 토글과 독립적으로 동작함을 명시 |
+| 1.6 | 2026-07-14 | Active Model Persistence 요구사항 신설(FR-RFP-MC-015) — Admin Dashboard의 Activate/Deactivate 선택이 서버 재시작 후 초기화되던 문제 해결 요구, 기존 `settings` 저장소 재사용·family 신규 추가 시 추가 작업 불요 명시, §5 제약사항 갱신 |

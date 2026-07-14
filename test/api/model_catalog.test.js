@@ -5,19 +5,19 @@
  * TC: TC_AI_Model_Catalog
  *   Covers: TC-MC-001, TC-MC-002, TC-MC-002b, TC-MC-007, TC-MC-008,
  *           TC-MC-012, TC-MC-013, TC-MC-017, TC-MC-018, TC-MC-019,
- *           TC-MC-020, TC-MC-021, TC-MC-023
+ *           TC-MC-020, TC-MC-021, TC-MC-023, TC-MC-026, TC-MC-027
  *   Not automated here (see TC_AI_Model_Catalog.md §3): TC-MC-003, TC-MC-005,
  *   TC-MC-006, TC-MC-010, TC-MC-011, TC-MC-014, TC-MC-015, TC-MC-016,
- *   TC-MC-024, TC-MC-025
+ *   TC-MC-024, TC-MC-025, TC-MC-028, TC-MC-029, TC-MC-030
  *
  * Network-dependent tests (TC-MC-004, TC-MC-009) require INTEGRATION_DOWNLOAD=1
  *
- * Group D (TC-MC-018/019, PromptPAR memory gate) and Group E (TC-MC-023,
- * Deactivate) are unit tests — they require the relevant service file only,
- * NOT a running server.
+ * Group D (TC-MC-018/019, PromptPAR memory gate), Group E (TC-MC-023,
+ * Deactivate), and Group F (TC-MC-026/027, Active Model Persistence) are unit
+ * tests — they require the relevant service file only, NOT a running server.
  *
  * Prerequisites: Analysis server running (SERVER_MODE=analysis or combined)
- *   for Groups A-C; Groups D-E have no server prerequisite.
+ *   for Groups A-C; Groups D-F have no server prerequisite.
  * Run: node test/api/model_catalog.test.js
  *
  * Set LTS_URL env var to override base URL.
@@ -432,6 +432,79 @@ async function runGroupE() {
   });
 }
 
+// ── TC-MC-026/027: Active Model Persistence (unit — no running server) ──────────
+// Exercises server/src/services/activeModelConfig.js directly against a scratch
+// JSON-backend DB (isolated STORAGE_PATH), since a persistence round-trip must
+// not touch the real server's storage/lts.json. Verifies the exact contract
+// _restoreActiveModels() (analysisApi.js) depends on: a switch writes the
+// modelId, a deactivate writes an explicit `null` (not key removal), and the
+// two are distinguishable from a family that was never touched at all.
+
+async function runGroupF() {
+  console.log('\n[Group F] Active Model Persistence — TC-MC-026, TC-MC-027 (unit)');
+
+  const fs = require('fs');
+  const path = require('path');
+  const scratchDir = path.join(require('os').tmpdir(), `lts-test-activemodels-${Date.now()}`);
+
+  const originalDbType = process.env.DB_TYPE;
+  const originalStoragePath = process.env.STORAGE_PATH;
+  process.env.DB_TYPE = 'json';
+  process.env.STORAGE_PATH = scratchDir;
+  fs.mkdirSync(scratchDir, { recursive: true });
+
+  // Force fresh module instances so this scratch DB_TYPE/STORAGE_PATH is honored
+  // even if server/src/db or activeModelConfig was already required elsewhere.
+  delete require.cache[require.resolve('../../server/src/db')];
+  delete require.cache[require.resolve('../../server/src/db/JsonDatabase')];
+  delete require.cache[require.resolve('../../server/src/services/activeModelConfig')];
+
+  try {
+    const { initDB } = require('../../server/src/db');
+    const activeModelConfig = require('../../server/src/services/activeModelConfig');
+    await initDB();
+
+    await test('TC-MC-026', 'A successful switch persists { family: modelId } to the settings table', async () => {
+      activeModelConfig.setActiveModel('cloth-par', 'openpar-resnet50-pa100k');
+      const models = activeModelConfig.getActiveModels();
+      assertEq(models['cloth-par'], 'openpar-resnet50-pa100k', 'persisted modelId');
+
+      // Round-trip through the raw JSON file, mirroring what _restoreActiveModels()
+      // sees on the next process start (a fresh module load, not the in-memory cache).
+      const { getDB } = require('../../server/src/db');
+      getDB().flushNow();
+      const raw = JSON.parse(fs.readFileSync(path.join(scratchDir, 'lts.json'), 'utf8'));
+      const row = raw.settings.find(r => r.id === 'activeModels');
+      assert(row, 'activeModels settings row should exist on disk');
+      assertEq(row['cloth-par'], 'openpar-resnet50-pa100k', 'persisted modelId on disk');
+    });
+
+    await test('TC-MC-027', 'A successful deactivate persists an explicit null, distinct from an unconfigured family', async () => {
+      activeModelConfig.setActiveModel('ppe', 'yolov8m-ppe');
+      activeModelConfig.clearActiveModel('ppe');
+      const models = activeModelConfig.getActiveModels();
+      assert('ppe' in models, 'deactivated family key should still be present');
+      assertEq(models['ppe'], null, 'deactivated family value should be explicit null');
+      assert(!('face-detection' in models), 'a never-configured family should be absent, not null');
+    });
+
+    await test('TC-MC-026b', 'YOLO detector family (undefined catalog family) persists under the fixed DETECTOR_FAMILY_KEY', async () => {
+      activeModelConfig.setActiveModel(undefined, 'yolo12n');
+      const models = activeModelConfig.getActiveModels();
+      assertEq(models[activeModelConfig.DETECTOR_FAMILY_KEY], 'yolo12n', 'detector family key');
+    });
+
+    // Flush the debounced JSON writer synchronously before the scratch dir is
+    // removed below — otherwise its ~2s-delayed async write fires after cleanup
+    // and logs a harmless but noisy ENOENT to stderr.
+    require('../../server/src/db').getDB().flushNow();
+  } finally {
+    if (originalDbType === undefined) delete process.env.DB_TYPE; else process.env.DB_TYPE = originalDbType;
+    if (originalStoragePath === undefined) delete process.env.STORAGE_PATH; else process.env.STORAGE_PATH = originalStoragePath;
+    fs.rmSync(scratchDir, { recursive: true, force: true });
+  }
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -443,6 +516,7 @@ async function main() {
   await runGroupC();
   await runGroupD();
   await runGroupE();
+  await runGroupF();
 
   console.log('\n─────────────────────────────');
   console.log(`Result: ${passed} passed, ${failed} failed, ${results.filter(r => r.status === 'SKIP').length} skipped`);
