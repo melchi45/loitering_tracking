@@ -296,7 +296,12 @@ async function _findPythonWithUltralytics({ checkYolo12 = false, checkHfHub = fa
 async function _findPythonWithOptimum() {
   const { execFileSync } = require('child_process');
   const candidates = _pythonCandidates();
-  const script = 'import optimum, transformers';
+  // Must check the actual submodule used at export time (optimum.exporters.onnx),
+  // not just bare `import optimum` — a plain `pip install optimum` (no [exporters]
+  // extra) satisfies the latter while still lacking the former, which let this
+  // check pass on an environment that then failed with "No module named
+  // 'optimum.exporters.onnx'" at actual export time (2026-07-14).
+  const script = 'import optimum.exporters.onnx, transformers';
   for (const cand of candidates) {
     try { execFileSync(cand, ['-c', script], { timeout: 8000 }); return cand; } catch {}
   }
