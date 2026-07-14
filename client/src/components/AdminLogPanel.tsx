@@ -4,7 +4,7 @@ import { useSocket } from '../hooks/useSocket';
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type LogLevel = 'DEBUG' | 'INFO' | 'WARNING' | 'ERROR' | 'CRITICAL';
-type LogSource = 'server' | 'ingest' | 'mediamtx';
+type LogSource = 'server' | 'ingest' | 'mediamtx' | 'build';
 
 interface LogEntry {
   ts: string;
@@ -243,6 +243,7 @@ export default function AdminLogPanel({ apiFetch, serverMode }: AdminLogPanelPro
     { id: 'server',   label: 'Server',        desc: 'Real-time via Socket.IO' },
     ...(isStreaming ? [{ id: 'ingest' as LogSource, label: 'Ingest Daemon', desc: 'Polled from log file' }] : []),
     { id: 'mediamtx', label: 'MediaMTX',      desc: 'Polled from log file' },
+    { id: 'build',    label: 'ORT CUDA Build', desc: 'Polled from log file' },
   ];
 
   // ── Render ────────────────────────────────────────────────────────────────

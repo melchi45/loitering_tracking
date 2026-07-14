@@ -141,9 +141,9 @@ router.post('/tc-results/run', (req, res) => {
 });
 
 // ── GET /admin/logs/recent ────────────────────────────────────────────────────
-// Query: ?source=server|ingest|mediamtx  &limit=<n>
+// Query: ?source=server|ingest|mediamtx|build  &limit=<n>
 // Returns recent log entries from in-memory buffer (source=server, default)
-// or from the daily log file filtered by prefix (source=ingest|mediamtx).
+// or from the daily log file filtered by prefix (source=ingest|mediamtx|build).
 // Cap (2000) must match LOG_BUFFER_MAX in utils/logger.js — see AdminLogPanel.tsx
 // MAX_LINES_OPTIONS, whose largest value this endpoint must be able to satisfy.
 router.get('/logs/recent', (req, res) => {
@@ -155,9 +155,9 @@ router.get('/logs/recent', (req, res) => {
     return res.json({ logs, level: getLogLevel(), total: logs.length });
   }
 
-  const prefixMap = { ingest: '[Ingest]', mediamtx: '[MediaMTX]' };
+  const prefixMap = { ingest: '[Ingest]', mediamtx: '[MediaMTX]', build: '[OrtBuild]' };
   const prefix = prefixMap[source];
-  if (!prefix) return res.status(400).json({ error: `Unknown source: ${source}. Use server|ingest|mediamtx` });
+  if (!prefix) return res.status(400).json({ error: `Unknown source: ${source}. Use server|ingest|mediamtx|build` });
 
   const logs = tailLogFile({ prefix, limit });
   res.json({ logs, level: getLogLevel(), total: logs.length });

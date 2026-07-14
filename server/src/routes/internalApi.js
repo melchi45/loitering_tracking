@@ -1,7 +1,7 @@
 'use strict';
 
 /**
- * Internal API — consumed only by the ingest daemon (localhost).
+ * Internal API — consumed only by local trusted processes (loopback).
  * Not exposed through authentication middleware.
  *
  * POST /api/internal/frame/:cameraId
@@ -12,13 +12,28 @@
  *   Body: application/json  { pt, timestamp, seq, payload }
  *   Called by ingest-daemon when camera has Application RTP tracks (ONVIF etc.).
  *   Parsed ONVIF events are stored in onvif_events DB table (state-change dedup).
+ *
+ * POST /api/internal/build-log
+ *   Body: application/json  { line?: string, lines?: string[] }
+ *   Called by server/src/scripts/buildOrtWithCuda.js (a standalone CLI process,
+ *   not a child of this server, so it cannot share stdio the way ingest/mediamtx
+ *   do). Relays the ORT CUDA source-build output through the same [prefix]-tagged
+ *   log pipeline as [Ingest]/[MediaMTX], so build progress/errors are viewable
+ *   remotely without a terminal session — GET /admin/logs/recent?source=build.
+ *   Loopback-only: the build always runs on the same machine as this server.
  */
 
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { parseOnvifPayload, parseLogstringPayload } = require('../services/onvifParser');
+const { makeLineRelay } = require('../utils/logger');
 
 const router  = express.Router();
+
+function isLoopback(req) {
+  const ip = req.ip || req.connection?.remoteAddress || '';
+  return ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
+}
 
 let _pipelineManager = null;
 let _io              = null;
@@ -47,6 +62,28 @@ router.post(
 
     if (_pipelineManager && typeof _pipelineManager.onIngestFrame === 'function') {
       _pipelineManager.onIngestFrame(cameraId, jpegBuffer);
+    }
+
+    res.sendStatus(200);
+  }
+);
+
+// ── ORT CUDA source build log relay ───────────────────────────────────────────
+const _buildLogRelay = makeLineRelay('[OrtBuild]', process.stdout);
+
+router.post(
+  '/build-log',
+  express.json({ limit: '256kb' }),
+  (req, res) => {
+    if (!isLoopback(req)) return res.status(403).json({ error: 'localhost only' });
+
+    const { line, lines } = req.body || {};
+    const rawLines = Array.isArray(lines) ? lines : (typeof line === 'string' ? [line] : []);
+    if (rawLines.length === 0) return res.sendStatus(400);
+
+    for (const raw of rawLines.slice(0, 500)) {
+      const text = String(raw).slice(0, 2000);
+      if (text) _buildLogRelay(text + '\n');
     }
 
     res.sendStatus(200);

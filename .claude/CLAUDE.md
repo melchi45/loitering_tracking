@@ -252,7 +252,7 @@ loitering_tracking/
 | GET | `/admin/tc-results` | 최신 서버 시작 시 TC 테스트 실행 결과 (TC번호·SRS·Pass/Fail) |
 | DELETE | `/admin/tc-results` | TC 테스트 결과 전체 삭제 |
 | POST | `/admin/tc-results/run` | TC 테스트 수동 재실행 트리거 (body: { port? }) |
-| GET | `/admin/logs/recent` | 최근 서버 로그 조회 (query: source=server\|ingest\|mediamtx, limit) |
+| GET | `/admin/logs/recent` | 최근 서버 로그 조회 (query: source=server\|ingest\|mediamtx\|build, limit) |
 | PATCH | `/admin/logs/level` | Socket.IO 릴레이 로그 레벨 런타임 변경 (body: { level } — 파일 로깅 불변) |
 
 ### 카메라 (`/api/cameras`)
@@ -329,6 +329,7 @@ loitering_tracking/
 | POST | `/internal/mediamtx` | MediaMTX publish/unpublish 웹훅 (loopback 전용, body: { event, path }) |
 | POST | `/api/internal/frame/:cameraId` | ingest-daemon → AI JPEG 프레임 콜백 (body: image/jpeg binary, ~10 FPS) |
 | POST | `/api/internal/apprtp/:cameraId` | ingest-daemon → ONVIF Application RTP 콜백 (body: { pt, timestamp, seq, payload }) |
+| POST | `/api/internal/build-log` | `buildOrtWithCuda.js`(독립 CLI) → ORT CUDA 소스 빌드 로그 릴레이 (loopback 전용, body: { line?, lines?[] } — `[OrtBuild]` 태그로 `/admin/logs/recent?source=build`에서 조회 가능) |
 
 ### 얼굴 갤러리 (`/api/galleries`)
 
@@ -476,6 +477,8 @@ cd server
 npm run check:gpu             # CUDA/GPU 사용 가능 여부 점검
 npm run download-models       # YOLOv8 ONNX 모델 다운로드 (linux/windows 변형 스크립트 포함)
 npm run build-ort:auto        # onnxruntime CUDA 소스 빌드 자동화 (build-ort:auto:dry — dry-run)
+                               # 빌드 로그를 POST /api/internal/build-log 로 LTS 서버에 자동 전송
+                               # (Admin Dashboard → Logs → "ORT CUDA Build" 실시간 확인, --no-report 로 비활성화)
 npm run discover               # 카메라 ONVIF/UDP 탐색 CLI (discoverCameras.js)
 npm run health                 # /health 헬스체크 CLI (healthCheck.js)
 npm run ice-test                # WebRTC ICE 연결 테스트 (ice-test:headless — 헤드리스)

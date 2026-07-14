@@ -180,6 +180,13 @@ async function runTests() {
     assert(body.total <= 2000, `total (${body.total}) should be clamped to ≤ 2000`);
   });
 
+  await test('TC-LOG-A-011', 'GET /admin/logs/recent source=build returns array', async () => {
+    const res = await adminFetch('/admin/logs/recent?source=build&limit=50');
+    assert(res.ok, `Expected 200, got ${res.status}`);
+    const body = await res.json();
+    assert(Array.isArray(body.logs), 'logs must be array');
+  });
+
   // ── Group B: PATCH /admin/logs/level ─────────────────────────────────────
 
   console.log('\n── PATCH /admin/logs/level ─────────────────────────────────────');
@@ -276,7 +283,51 @@ async function runTests() {
     await adminFetch('/admin/logs/level', { method: 'PATCH', body: JSON.stringify({ level: 'INFO' }) });
   });
 
-  // ── Group D: UI behaviour notes (frontend-only, verified manually) ───────
+  // ── Group D: POST /api/internal/build-log (ORT CUDA build log relay) ────
+  // Loopback-only, unauthenticated by design (see internalApi.js) — called by
+  // server/src/scripts/buildOrtWithCuda.js, a standalone CLI process that
+  // cannot share stdio with this server. Relayed lines are readable back via
+  // GET /admin/logs/recent?source=build (TC-LOG-A-011 above).
+
+  console.log('\n── POST /api/internal/build-log ────────────────────────────────');
+
+  await test('TC-LOG-D-001', 'Loopback POST /api/internal/build-log with lines[] returns 200', async () => {
+    const res = await apiFetch('/api/internal/build-log', {
+      method: 'POST',
+      body: JSON.stringify({ lines: [`TC-LOG-D-001 marker ${Date.now()}`, 'ERROR: simulated build failure'] }),
+    });
+    assert(res.ok, `Expected 200, got ${res.status}`);
+  });
+
+  await test('TC-LOG-D-002', 'Reported line appears via GET /admin/logs/recent?source=build', async () => {
+    const marker = `TC-LOG-D-002 marker ${Date.now()}`;
+    const postRes = await apiFetch('/api/internal/build-log', {
+      method: 'POST',
+      body: JSON.stringify({ line: marker }),
+    });
+    assert(postRes.ok, `Expected 200, got ${postRes.status}`);
+
+    // Log file write is synchronous but a short retry loop avoids flakiness
+    // from request/response timing across the two round trips.
+    let found = false;
+    for (let i = 0; i < 5 && !found; i++) {
+      if (i > 0) await new Promise(r => setTimeout(r, 200));
+      const res = await adminFetch('/admin/logs/recent?source=build&limit=50');
+      const body = await res.json();
+      found = (body.logs || []).some(e => e.msg && e.msg.includes(marker));
+    }
+    assert(found, 'Expected the posted line to appear in source=build log tail');
+  });
+
+  await test('TC-LOG-D-003', 'POST /api/internal/build-log with no line/lines returns 400', async () => {
+    const res = await apiFetch('/api/internal/build-log', {
+      method: 'POST',
+      body: JSON.stringify({}),
+    });
+    assert(res.status === 400, `Expected 400, got ${res.status}`);
+  });
+
+  // ── Group E: UI behaviour notes (frontend-only, verified manually) ───────
   //
   // TC-LOG-021: Toolbar visible during auto-scroll — FR-LOG-015
   //   Manual: confirm toolbar/search bar do not scroll out of view while entries arrive.
@@ -302,7 +353,7 @@ async function runTests() {
   // TC-LOG-028: Download respects search filter — FR-LOG-016
   //   Manual: search active → download exports only matching lines.
   //
-  // ── Group E: Max Lines setting (TC-LOG-029~033) ─────────────────────────
+  // ── Group F: Max Lines setting (TC-LOG-029~033) ─────────────────────────
   //
   // TC-LOG-029: Max Lines dropdown present — FR-LOG-017
   //   Manual: toolbar shows "Max Lines" dropdown; options 100/200/500/1000/2000; default 500.

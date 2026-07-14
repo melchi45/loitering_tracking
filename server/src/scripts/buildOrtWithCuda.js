@@ -19,17 +19,145 @@
  *   --skip-install        server 프로젝트 install 건너뜀
  *   --insecure-tls        CMAKE_TLS_VERIFY=0 (기업 프록시 환경용, Windows 전용)
  *   --dry-run             감지 결과 출력 후 실제 빌드 없이 종료
+ *   --no-report           빌드 로그를 LTS 서버로 전송하지 않음 (기본: 전송)
+ *
+ * 원격 로그 확인:
+ *   이 스크립트는 자체 프로세스로 실행되어 서버 콘솔과 stdio 를 공유하지 않으므로,
+ *   각 출력 라인을 best-effort 로 POST /api/internal/build-log 에 전송합니다.
+ *   같은 머신에서 LTS 서버(combined/analysis)가 실행 중이면 Admin Dashboard →
+ *   Logs → "ORT CUDA Build" 탭(GET /admin/logs/recent?source=build)에서 실시간에
+ *   가깝게 진행 상황·오류를 확인할 수 있습니다. 대상 URL은
+ *   BUILD_LOG_REPORT_URL 환경변수로 재정의 가능(기본: server/.env 의
+ *   HTTPS_ENABLED/HTTP_PORT/HTTPS_PORT 로 로컬 서버 주소를 유도).
  */
 
 require('dotenv').config({ path: require('path').resolve(__dirname, '../../.env') });
 
-const { execFileSync, spawnSync } = require('child_process');
+const { execFileSync, spawn } = require('child_process');
+const http   = require('http');
+const https  = require('https');
 const path   = require('path');
 const { getProviderDiagnostics } = require('../utils/providerDiagnostics');
 
 const IS_WIN   = process.platform === 'win32';
 const IS_LINUX = process.platform === 'linux';
 const SCRIPT_DIR = __dirname;
+
+// ── 원격 로그 전송 (best-effort) ─────────────────────────────────────────────
+
+let _reportEnabled = true;
+let _reportUrl      = '';
+let _reportQueue    = [];
+let _reportTimer    = null;
+let _reportWarned   = false;
+
+function _resolveReportUrl() {
+  if (process.env.BUILD_LOG_REPORT_URL) return process.env.BUILD_LOG_REPORT_URL;
+  const httpsEnabled = process.env.HTTPS_ENABLED === 'true';
+  const proto = httpsEnabled ? 'https' : 'http';
+  const port  = httpsEnabled
+    ? parseInt(process.env.HTTPS_PORT || '3443', 10)
+    : parseInt(process.env.HTTP_PORT  || '3080', 10);
+  return `${proto}://127.0.0.1:${port}/api/internal/build-log`;
+}
+
+function _flushReportQueue() {
+  if (_reportQueue.length === 0) return;
+  const lines = _reportQueue.splice(0, _reportQueue.length);
+  let body;
+  try {
+    body = JSON.stringify({ lines });
+  } catch {
+    return;
+  }
+  try {
+    const url    = new URL(_reportUrl);
+    const client = url.protocol === 'https:' ? https : http;
+    const req = client.request({
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      rejectUnauthorized: false, // internal loopback call — self-signed certs are expected
+      timeout: 3000,
+    }, (res) => { res.resume(); });
+    req.on('error', () => {
+      if (!_reportWarned) {
+        _reportWarned = true;
+        process.stderr.write('[buildOrtWithCuda] LTS 서버로 빌드 로그 전송 실패 — 로컬 콘솔에만 기록됩니다 (서버 미기동 시 정상).\n');
+      }
+    });
+    req.on('timeout', () => req.destroy());
+    req.write(body);
+    req.end();
+  } catch (_) { /* best-effort — never let log relay break the build */ }
+}
+
+function _reportLine(text) {
+  if (!_reportEnabled) return;
+  _reportQueue.push(String(text).slice(0, 2000));
+  if (_reportQueue.length >= 50) { _flushReportQueue(); return; }
+  if (!_reportTimer) {
+    _reportTimer = setTimeout(() => { _reportTimer = null; _flushReportQueue(); }, 500);
+    _reportTimer.unref?.();
+  }
+}
+
+/** Patches console.log/warn/error to also relay every line to the LTS server. */
+function installReportingConsole() {
+  const origLog   = console.log;
+  const origWarn  = console.warn;
+  const origError = console.error;
+  console.log   = (...a) => { origLog(...a);   _reportLine(a.map(String).join(' ')); };
+  console.warn  = (...a) => { origWarn(...a);  _reportLine('[WARN] '  + a.map(String).join(' ')); };
+  console.error = (...a) => { origError(...a); _reportLine('[ERROR] ' + a.map(String).join(' ')); };
+}
+
+/** Exits the process after giving the report queue a brief chance to flush. */
+function exitWithFlush(code) {
+  _flushReportQueue();
+  setTimeout(() => process.exit(code), 150);
+}
+
+/**
+ * Runs a command with stdio piped (not 'inherit') so each output line can be
+ * echoed locally AND relayed to the LTS server. Mirrors utils/logger.js's
+ * makeLineRelay buffering approach.
+ */
+function runStreamed(cmd, args, opts = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, { ...opts, stdio: ['inherit', 'pipe', 'pipe'] });
+
+    const relay = (stream, isErr) => {
+      let buf = '';
+      stream.on('data', (chunk) => {
+        buf += chunk.toString();
+        const parts = buf.split('\n');
+        buf = parts.pop();
+        for (const line of parts) {
+          (isErr ? process.stderr : process.stdout).write(line + '\n');
+          _reportLine(line);
+        }
+      });
+      stream.on('end', () => {
+        if (buf) {
+          (isErr ? process.stderr : process.stdout).write(buf + '\n');
+          _reportLine(buf);
+        }
+      });
+    };
+    relay(child.stdout, false);
+    relay(child.stderr, true);
+
+    child.on('close', (code) => resolve(code ?? 1));
+    child.on('error', (err) => {
+      process.stderr.write(`${err.message}\n`);
+      _reportLine(`[ERROR] ${err.message}`);
+      resolve(1);
+    });
+  });
+}
 
 // ── CLI 파싱 ─────────────────────────────────────────────────────────────────
 
@@ -52,6 +180,7 @@ function parseCli() {
     skipInstall:    args.includes('--skip-install'),
     insecureTls:    args.includes('--insecure-tls'),
     dryRun:         args.includes('--dry-run'),
+    noReport:       args.includes('--no-report'),
   };
 }
 
@@ -135,6 +264,14 @@ function detectCudaArch() {
 async function main() {
   const opts = parseCli();
 
+  _reportEnabled = !opts.noReport;
+  _reportUrl     = _resolveReportUrl();
+  if (_reportEnabled) {
+    installReportingConsole();
+    console.log(`[buildOrtWithCuda] 빌드 로그를 LTS 서버로 전송합니다: ${_reportUrl} (--no-report 로 비활성화)`);
+    console.log('[buildOrtWithCuda] Admin Dashboard → Logs → "ORT CUDA Build" 에서 진행 상황을 확인하세요.');
+  }
+
   console.log('');
   console.log('══════════════════════════════════════════════════════════════');
   console.log('  LTS-2026  ORT CUDA 소스 빌드 자동 실행기');
@@ -149,7 +286,8 @@ async function main() {
   if (!diag.gpu.available) {
     console.error('[ERROR] NVIDIA GPU 미감지. NVIDIA 드라이버 설치 후 재시도하세요.');
     console.error(`        상세: ${diag.gpu.reason}`);
-    process.exit(1);
+    exitWithFlush(1);
+    return;
   }
   for (const g of diag.gpu.gpus) {
     console.log(`  ✅ GPU       : ${g.name}  (Driver ${g.driver}, VRAM ${g.memory})`);
@@ -162,7 +300,8 @@ async function main() {
       console.error('  설치 방법:');
       diag.cudaToolkit.installCmds.forEach(l => console.error('  ' + l));
     }
-    process.exit(1);
+    exitWithFlush(1);
+    return;
   }
   console.log(`  ✅ CUDA      : v${diag.cudaToolkit.version}  (${diag.cudaToolkit.path})`);
 
@@ -181,7 +320,8 @@ async function main() {
 
   if (!cudaHome) {
     console.error('[ERROR] CUDA_HOME 을 유도할 수 없습니다. nvcc 경로를 확인하세요.');
-    process.exit(1);
+    exitWithFlush(1);
+    return;
   }
 
   if (cudaArch) {
@@ -202,7 +342,8 @@ async function main() {
   if (opts.dryRun) {
     console.log('[DRY-RUN] --dry-run 모드 — 실제 빌드를 실행하지 않습니다.');
     console.log('          위 파라미터로 실제 빌드하려면 --dry-run 옵션을 제거하세요.');
-    process.exit(0);
+    exitWithFlush(0);
+    return;
   }
 
   console.log('[3/3] 빌드 스크립트 실행 중...');
@@ -226,8 +367,8 @@ async function main() {
     if (opts.skipInstall) psArgs.push('-SkipProjectInstall');
     if (opts.insecureTls) psArgs.push('-AllowInsecureTlsForFetch');
 
-    const result = spawnSync('powershell.exe', psArgs, { stdio: 'inherit' });
-    process.exit(result.status ?? 1);
+    const code = await runStreamed('powershell.exe', psArgs, {});
+    exitWithFlush(code);
 
   // ── Linux ─────────────────────────────────────────────────────────────────
   } else if (IS_LINUX) {
@@ -245,17 +386,17 @@ async function main() {
       SKIP_PROJECT_INSTALL:    opts.skipInstall  ? '1' : '0',
     };
 
-    const result = spawnSync('bash', [sh], { stdio: 'inherit', env });
-    process.exit(result.status ?? 1);
+    const code = await runStreamed('bash', [sh], { env });
+    exitWithFlush(code);
 
   } else {
     console.error(`[ERROR] 지원되지 않는 플랫폼: ${process.platform}`);
     console.error('        Windows(PowerShell) 또는 Linux(bash) 에서 실행하세요.');
-    process.exit(1);
+    exitWithFlush(1);
   }
 }
 
 main().catch(err => {
   console.error('[buildOrtWithCuda] 오류:', err.message);
-  process.exit(1);
+  exitWithFlush(1);
 });

@@ -2,8 +2,8 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Real-Time Server Log Viewer  
-**Version:** 1.3  
-**Date:** 2026-06-29  
+**Version:** 1.4  
+**Date:** 2026-07-14  
 **SRS Reference:** SRS_Admin_Log_Viewer.md
 
 ---
@@ -176,7 +176,7 @@
 **Steps:**
 1. Open Server Logs panel
 
-**Expected:** Source tabs show only `Server` and `MediaMTX`; `Ingest Daemon` tab is absent
+**Expected:** Source tabs show only `Server`, `MediaMTX`, and `ORT CUDA Build`; `Ingest Daemon` tab is absent
 
 ---
 
@@ -420,6 +420,48 @@
 
 ---
 
+### TC-LOG-037: `source=build` tab shows ORT CUDA build log
+
+**SRS:** FR-LOG-004, FR-LOG-008  
+**Precondition:** Log file for today exists  
+**Steps:**
+1. Switch source to `ORT CUDA Build`
+
+**Expected:** `[OrtBuild]` tagged log lines appear (if any were relayed today); display updates every ~2 s, same polling behavior as `Ingest Daemon`/`MediaMTX`. Automated coverage: `TC-LOG-A-011`.
+
+---
+
+### TC-LOG-038: `POST /api/internal/build-log` accepts a batch of lines from the ORT CUDA build script
+
+**SRS:** FR-LOG-004  
+**Precondition:** LTS server running (any mode) on the same machine as the build  
+**Steps:**
+1. `POST /api/internal/build-log` with body `{ lines: ["...", "..."] }` from `server/src/scripts/buildOrtWithCuda.js` (default behavior; disable with `--no-report`)
+
+**Expected:** `200` response; each line is level-detected (ERROR/WARNING/DEBUG/INFO keyword rules, same as `[Ingest]`/`[MediaMTX]`), tagged `[OrtBuild]`, and written to the daily log file — readable via `GET /admin/logs/recent?source=build`. Automated coverage: `TC-LOG-D-001`, `TC-LOG-D-002`.
+
+---
+
+### TC-LOG-039: `POST /api/internal/build-log` rejects non-loopback callers
+
+**SRS:** FR-LOG-004  
+**Steps:**
+1. Call `POST /api/internal/build-log` from a non-localhost source address
+
+**Expected:** `403` response — the build-log relay is loopback-only, matching the existing `/api/internal/ingest/reregister` guard pattern, since the build always runs on the same host as the server it reports to.
+
+---
+
+### TC-LOG-040: `POST /api/internal/build-log` rejects an empty body
+
+**SRS:** FR-LOG-004  
+**Steps:**
+1. `POST /api/internal/build-log` with body `{}` (no `line` or `lines`)
+
+**Expected:** `400` response. Automated coverage: `TC-LOG-D-003`.
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
@@ -428,3 +470,4 @@
 | 1.1 | 2026-06-30 | TC-LOG-021~028 추가 (고정 툴바 + 텍스트 검색) |
 | 1.2 | 2026-06-30 | TC-LOG-029~033 추가 (Max Lines 설정) |
 | 1.3 | 2026-07-02 | TC-LOG-004 buffer 500→2000 갱신, TC-LOG-034~036 추가 (Max Lines 증가 시 backfill, 실시간 스트림 stale closure 회귀 테스트, 서버 limit 상한 회귀 테스트) — "표시 lines ≠ Max Lines" 버그 수정 검증 |
+| 1.4 | 2026-07-14 | TC-LOG-037~040 추가 — `POST /api/internal/build-log` (ORT CUDA 소스 빌드 로그 원격 릴레이, `source=build` 탭) |
