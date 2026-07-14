@@ -390,6 +390,9 @@ function DetectionDetail({ r }: { r: SearchResult }) {
   // Dedicated Age Estimation (InsightFace/ViT Age Classifier) — distinct from
   // ClothAttr.ageGroup's coarse 3-bucket PromptPAR/PA100k attribute.
   type EstimatedAgeAttr = { value?: number; bucket?: string; source?: string; modelId?: string };
+  // Dedicated Gender Classification (InsightFace/ViT Gender Classifier) — distinct
+  // from ClothAttr.gender's PromptPAR/PA100k byproduct attribute.
+  type EstimatedGenderAttr = { value?: string; confidence?: number; source?: string; modelId?: string };
 
   const attrs = r.attributes as Record<string, unknown> | undefined;
   const face  = attrs?.face  as FaceAttr  | undefined;
@@ -398,6 +401,7 @@ function DetectionDetail({ r }: { r: SearchResult }) {
   const color = attrs?.color as ColorAttr | undefined;
   const cloth = attrs?.cloth as ClothAttr | undefined;
   const estimatedAge = attrs?.estimatedAge as EstimatedAgeAttr | undefined;
+  const estimatedGender = attrs?.estimatedGender as EstimatedGenderAttr | undefined;
 
   const risk   = riskLabel(r.riskScore);
   const faceId = face?.faceId;
@@ -537,7 +541,7 @@ function DetectionDetail({ r }: { r: SearchResult }) {
         <Section title="Attributes" defaultOpen>
           <table className="w-full border-collapse">
             <tbody>
-              <FieldRow label="Gender"       value={cloth.gender} />
+              <FieldRow label="Gender (PAR)" value={cloth.gender} />
               <FieldRow label="Age Group (PAR)" value={cloth.ageGroup} />
               <FieldRow label="View Angle"   value={cloth.viewAngle} />
               <FieldRow label="Lower Garment" value={cloth.lower} />
@@ -566,6 +570,20 @@ function DetectionDetail({ r }: { r: SearchResult }) {
               <FieldRow label="Estimated Age" value={`~${Math.round(estimatedAge.value)}${estimatedAge.bucket ? ` (${estimatedAge.bucket})` : ''}`} />
               <FieldRow label="Source"        value={estimatedAge.source} />
               <FieldRow label="Model"         value={estimatedAge.modelId} />
+            </tbody>
+          </table>
+        </Section>
+      )}
+
+      {/* Dedicated Gender Classification (InsightFace/ViT Gender Classifier) — distinct
+          from the "Gender (PAR)" row above (PromptPAR/PA100k byproduct attribute). */}
+      {estimatedGender?.value != null && (
+        <Section title="Gender Classification" defaultOpen>
+          <table className="w-full border-collapse">
+            <tbody>
+              <FieldRow label="Estimated Gender" value={`${estimatedGender.value}${estimatedGender.confidence != null ? ` (${Math.round(estimatedGender.confidence * 100)}%)` : ''}`} />
+              <FieldRow label="Source"           value={estimatedGender.source} />
+              <FieldRow label="Model"            value={estimatedGender.modelId} />
             </tbody>
           </table>
         </Section>

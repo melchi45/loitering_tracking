@@ -1,6 +1,6 @@
 ---
 **Document:** TC_AI_Age_Estimation  
-**Version:** 1.4  
+**Version:** 1.5  
 **Status:** Draft  
 **Date:** 2026-07-14  
 **Parent SRS:** [SRS_AI_Age_Estimation](../srs/SRS_AI_Age_Estimation.md)  
@@ -29,6 +29,7 @@
 | TC-AGE-013 | FR-AGE-029 | `estimatedAge` renders in all 4 client locations, distinct from `cloth.ageGroup` |
 | TC-AGE-014 | FR-AGE-030~032 | `services.ageEstimation` diagnostic field present in `/api/analysis/metrics`; streaming-mode passthrough verified structurally (object spread, no field remap) |
 | TC-AGE-015 | FR-AGE-033 | `analysisApi.js`'s `POST /frame` handler actually invokes `AgeEstimationService.estimateAge()` for streaming-delegated frames |
+| TC-AGE-016 | FR-AGE-034 | `analysisApi.js`'s own `detectionTracks` persistence code (3 sites: `_trackMeta` create/update, 30s active-flush, track-completion flush) carries `estimatedAge`/`estimatedGender` through — independent of, and in addition to, TC-AGE-015's estimation-call check |
 
 ## 2. Test Cases
 
@@ -175,6 +176,20 @@
 
 **Expected:** `estimatedAge` is present in the `/frame` response's `tracked` array whenever `ageEstimation` is enabled and a model is ready — matching `pipelineManager.js`'s local-loop behavior exactly, closing the gap this TC guards against regressing.
 
+### TC-AGE-016: `analysisApi.js`'s Own `detectionTracks` Persistence Carries `estimatedAge`/`estimatedGender` (2026-07-14 regression guard, root cause 2)
+
+**Background:** After TC-AGE-015's fix landed, a user reported that the Fullscreen Camera View's Detections timeline (`DetectionsTimelineInline.tsx`) still showed no age when selecting a `person` track. Investigation found that `analysisApi.js` maintains its **own** `detectionTracks` persistence code — a separate copy from `pipelineManager.js`'s (already-correct, per FR-AGE-027) equivalent — spread across three sites: (1) the `ctx._trackMeta` create/update block that runs per processed frame, (2) the 30-second active-flush `fields` object for long-running in-view tracks, and (3) the `_completedFields` object built when a track ends. `estimatedAge`/`estimatedGender` were computed correctly by TC-AGE-015's fix and attached to `enrichedObjects`, and appeared correctly in live Socket.IO overlays, but none of these three persistence sites carried the two fields through — only `color`/`cloth` were. In `SERVER_MODE=streaming`, `analysisProxy.js` forwards `GET /api/analysis/detection-tracks` straight to the remote analysis server, so this is the exact code path backing what the Detections timeline displays.
+
+**Automated (unit, source-inspection):** `test/api/age_estimation.test.js` Group F (`TC-AGE-016a/b/c`) reads `server/src/routes/analysisApi.js`'s source, isolates each of the three code sections by anchor comment, and asserts each one references `estimatedAge`/`estimatedGender` (`meta.estimatedAge`, `obj.estimatedAge ?? null`, `existing.estimatedAge = obj.estimatedAge`, etc., as appropriate to that site). This runs without a live server or model file and fails loudly if any of the three sites regresses (e.g., a future refactor that rebuilds one of these object literals from scratch and drops the two fields again).
+
+**Manual / full-server verification:**
+1. On a `SERVER_MODE=streaming` deployment with `ageEstimation` enabled and a model loaded on the remote analysis server, let a person walk through a camera's view for several seconds (long enough to trigger the 30s active-flush) and then leave frame (triggering the completion flush)
+2. `GET /api/analysis/detection-tracks?cameraId=<id>&limit=20` → find the track for that person
+3. Assert the record has a non-null `estimatedAge` (and `estimatedGender` if that toggle is also on) matching what was shown live in `FullscreenCameraView.tsx`'s `DetectionRow` during the walk-through
+4. Open the Fullscreen Camera View → Detections tab → select that person's bar → confirm the detail panel (`DetectionsTimelineInline.tsx`) renders an "Age (Est.)" row
+
+**Expected:** `estimatedAge`/`estimatedGender` survive all three `analysisApi.js` persistence sites and reach `GET /api/analysis/detection-tracks`, so the Detections timeline's person-detail panel shows age/gender exactly as the live overlay does — independent of whether the deployment is `combined`/`analysis` (backed by `pipelineManager.js`, FR-AGE-027) or `streaming` (backed by the remote `analysisApi.js`, FR-AGE-034).
+
 ---
 
 ## Revision History
@@ -186,3 +201,4 @@
 | 1.2 | 2026-07-14 | TC-AGE-004/005 정정 — `optimum[exporters]`가 `optimum-onnx`로 대체됨을 반영, TC-AGE-005에 자동 설치 재시도 동작 추가 |
 | 1.3 | 2026-07-14 | TC-AGE-012~014 신규 — `detectionTracks`/`detectionSnapshots` 영속화, 클라이언트 4곳 표시, `services.ageEstimation` 진단 필드 + streaming 모드 패스스루 구조 검증 |
 | 1.4 | 2026-07-14 | **TC-AGE-015 신규 (실제 근본 원인 회귀 방지)** — `analysisApi.js`의 `POST /frame` 핸들러가 Age Estimation을 전혀 호출하지 않던 실제 프로덕션 결함을 실시간 진단 로그로 확정, 수정 후 회귀 가드 테스트케이스 추가 |
+| 1.5 | 2026-07-14 | **TC-AGE-016 신규 (근본 원인 2 회귀 방지)** — Fullscreen Detections 타임라인 나이 미표시 재보고를 조사한 결과 `analysisApi.js` 자체의 `detectionTracks` 영속화 코드(3곳)에 `estimatedAge`/`estimatedGender`가 누락되어 있었음을 확인. `test/api/age_estimation.test.js` Group F에 소스 검사 기반 자동 회귀 테스트 추가(서버 기동 불필요) |

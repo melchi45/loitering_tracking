@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | Document ID | OPS-AGE-001 |
-| Version | 1.1 |
+| Version | 1.2 |
 | Status | Active |
 | Date | 2026-07-14 |
 | Related Design | design/Design_AI_Age_Estimation.md |
@@ -92,8 +92,20 @@ print('total:', len(tracks), '| with estimatedAge:', sum(1 for t in tracks if t.
 ```
 
 `total`은 0보다 큰데 `with estimatedAge`가 0이면:
-- `streaming` 모드: Step 3.5(코드 버전)을 가장 먼저 의심 — `services.ageEstimation === 'loaded'`이어도 2026-07-14 이전 코드면 100% 0건이 나옴
+- `streaming` 모드: Step 3.5(코드 버전)를 가장 먼저 의심 — `services.ageEstimation === 'loaded'`이어도 2026-07-14 이전 코드면 100% 0건이 나옴. **단, Step 3.5를 통과(즉 `_ageEstimation.estimateAge` 호출 코드가 존재)해도 여전히 0건이면 Step 4.5로 진행**
 - `combined`/`analysis` 모드: `pipelineManager.js`가 오래된 버전일 가능성 — `git log -1 --format='%H %ci' -- server/src/services/pipelineManager.js`로 커밋 시점 확인 후 재배포
+
+### Step 4.5 — (2026-07-14 근본 원인 2, Fullscreen Detections 타임라인 재보고) `analysisApi.js` 자체 영속화 코드의 필드 누락 확인
+
+Step 3.5(추론 호출 코드 존재)와 Step 3(모델 `loaded`)를 모두 통과했는데도 `GET /api/analysis/detection-tracks`에 `estimatedAge`가 0건이면, `analysisApi.js`가 `pipelineManager.js`와 **별개로 자체 보유한** `detectionTracks` 저장 코드(3곳: `ctx._trackMeta` 갱신, 30초 주기 active-flush, 트랙 종료 flush)에 `estimatedAge`/`estimatedGender` 필드 자체가 빠져 있을 가능성이 매우 높다 — 실제로 2026-07-14 발생한 사례(§5 참고).
+
+```bash
+# 원격 analysis 서버(SSH 접근 가능한 경우)에서 직접 확인 — 3곳 모두에 존재해야 함
+grep -n "estimatedAge" server/src/routes/analysisApi.js
+# 최소 6개 매치(각 필드가 3곳 × 2필드) 이상 나와야 정상. 매치가 부족하면 git pull 후 재시작 필요.
+```
+
+이 단계는 Step 3.5와 증상이 비슷하지만(둘 다 "streaming 모드에서 0건") **서로 다른 코드 결함**이다 — Step 3.5는 "추론 자체를 안 함", Step 4.5는 "추론은 하는데 저장을 안 함"이다. 자동 회귀 테스트: `node test/api/age_estimation.test.js`의 Group F(TC-AGE-016)가 이 3곳을 소스 검사로 확인한다.
 
 ## 5. 실사례 (2026-07-14)
 
@@ -103,6 +115,14 @@ print('total:', len(tracks), '| with estimatedAge:', sum(1 for t in tracks if t.
 
 **실제 근본 원인(재조사 후 확정):** `pipelineManager.js`의 `_processRemoteResult()`에 임시 진단 로그를 추가해 실제 운영 트래픽으로 확인한 결과, 원격에서 돌아온 `tracked` person 객체의 키가 `objectId,bbox,confidence,state,className,firstSeenAt`뿐 — `color`/`cloth`/`face`/`estimatedAge` 전부 없었다(하지만 `color`/`cloth` 분석은 활성화되어 있었고 DB엔 정상 저장되고 있었다는 점이 단서). 코드를 직접 읽어보니 `analysisApi.js`의 `POST /frame` 핸들러는 `_attrPipeline.enrich()`로 face/color/cloth는 처리하면서도 **Age Estimation 호출 자체가 코드에 없었다** — `_ageEstimation`은 모델 카탈로그 switch/download 엔드포인트에서만 쓰이고 있었다. 즉 Step 3.5가 실제 원인이었고, "재배포/재시작하면 해결될 것"이라는 1차 진단은 틀렸다 — 코드 자체를 고쳐야 했다(`analysisApi.js`에 Age Estimation 추론 블록 신규 추가, `FR-AGE-033`). `remoteTracked`/`allDetections`의 스프레드 전달 경로 자체는 무결함이었으나,애초에 부착되는 필드가 없었으니 "통과 경로가 멀쩡하다"는 사실 자체가 무의미했다.
 
+## 6. 실사례 2 — Fullscreen Detections 타임라인 나이 미표시 재보고 (2026-07-14)
+
+§5 수정(FR-AGE-033) 배포 후에도 사용자가 "Fullscreen Camera View의 Detections 타임라인에서 person을 선택하면 정보는 보이는데 나이가 없다"고 재보고. 라이브 화면(`CameraView.tsx`/`FullscreenCameraView.tsx`의 `DetectionRow`)에는 나이가 정상 표시되고 있어 §4의 Step 1~3.5는 전부 정상(토글 ON, 모델 `loaded`, `/frame` 핸들러가 `estimateAge()`를 실제로 호출)임을 먼저 확인 — 즉 estimation 자체는 문제가 없었다.
+
+Step 4(DB 영속화 확인)로 좁혀 들어가자 `GET /api/analysis/detection-tracks`의 `estimatedAge` 보유 건수가 여전히 0이었다. 코드를 다시 읽어보니 §4.5에서 설명한 대로, `analysisApi.js`가 `pipelineManager.js`와 **완전히 별개로** 유지하는 자체 `detectionTracks` 저장 코드(3곳)에는 `estimatedAge`/`estimatedGender`가 애초에 필드 목록에 없었다 — `color`/`cloth`만 있었다. FR-AGE-033은 "추론을 호출하는가"만 고쳤을 뿐 "저장 코드가 그 결과를 담는가"는 별개 문제였고, 이번 결함이 바로 그것이었다.
+
+**교훈:** `pipelineManager.js`와 `analysisApi.js`는 겉보기엔 같은 일(프레임 처리 → detectionTracks 저장)을 하는 것처럼 보이지만 실제로는 **완전히 독립된 코드 사본**이다. 한쪽에 새 속성(`estimatedAge`, `estimatedGender` 등)을 추가하는 수정을 했다면, 반드시 반대쪽도 같은 속성이 있는지 `grep`으로 대조 확인해야 한다 — 이 프로젝트에서 Age Estimation 기능 하나에서만 이미 두 번(FR-AGE-033, FR-AGE-034) 반복된 패턴이다. 수정: `analysisApi.js`의 3개 지점 모두에 `estimatedAge`/`estimatedGender` 추가(FR-AGE-034, TC-AGE-016).
+
 ---
 
 ## Revision History
@@ -111,3 +131,4 @@ print('total:', len(tracks), '| with estimatedAge:', sum(1 for t in tracks if t.
 |---|---|---|
 | 1.0 | 2026-07-14 | 초기 작성 — 활성화 절차, 라인 플로우 요약, 4단계 진단 절차(토글→서버모드→모델상태→DB영속화), 2026-07-14 실사례 기록 |
 | 1.1 | 2026-07-14 | **실제 근본 원인 확정** — Step 3.5 신규(streaming 모드의 `/frame` 핸들러 코드 버전 확인), §5 실사례를 1차(불완전한) 진단과 실제 근본 원인으로 구분해 재작성. `analysisApi.js`에 Age Estimation 추론 블록이 아예 없었던 구조적 결함(FR-AGE-033) 반영 |
+| 1.2 | 2026-07-14 | **근본 원인 2 신규** — Step 4.5 추가(`analysisApi.js` 자체 `detectionTracks` 영속화 코드의 필드 누락 확인), §6 실사례 2 신규(Fullscreen Detections 타임라인 나이 미표시 재보고 → FR-AGE-034/TC-AGE-016으로 수정) |

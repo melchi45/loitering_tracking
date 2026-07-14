@@ -132,7 +132,7 @@ async function runGroupA() {
     const { status, body } = await get('/api/analysis/models');
     assertEq(status, 200, 'HTTP status');
     const families = new Set(body.catalog.map(m => m.family).filter(Boolean));
-    const expected = ['face-detection', 'face-recognition', 'ppe', 'fire-smoke', 'cloth-par', 'human-parsing', 'appearance-reid', 'age-estimation'];
+    const expected = ['face-detection', 'face-recognition', 'ppe', 'fire-smoke', 'cloth-par', 'human-parsing', 'appearance-reid', 'age-estimation', 'gender-classification'];
     for (const family of expected) {
       assert(families.has(family), `catalog missing family: ${family}`);
     }
@@ -170,6 +170,22 @@ async function runGroupA() {
     assert(vit, 'expected ViT Age Classifier entry (vit-age-classifier)');
     assert(!insightface.manualOnly, 'InsightFace GenderAge should not be manualOnly — direct ONNX download');
     assert(!vit.manualOnly, 'ViT Age Classifier should not be manualOnly — automated via hfOptimumExport');
+    assert(insightface.url === undefined, 'internal url field must not be exposed to client');
+    assert(vit.hfOptimumExport === undefined, 'internal hfOptimumExport field must not be exposed to client');
+  });
+
+  await test('TC-GEN-001', 'gender-classification family exposes InsightFace GenderAge and ViT Gender Classifier entries', async () => {
+    const { status, body } = await get('/api/analysis/models');
+    assertEq(status, 200, 'HTTP status');
+    const genderClassification = body.catalog.filter(m => m.family === 'gender-classification');
+    assertEq(genderClassification.length, 2, 'gender-classification entry count');
+
+    const insightface = genderClassification.find(m => m.id === 'insightface-genderage-gender');
+    const vit          = genderClassification.find(m => m.id === 'vit-gender-classifier');
+    assert(insightface, 'expected InsightFace GenderAge entry (insightface-genderage-gender)');
+    assert(vit, 'expected ViT Gender Classifier entry (vit-gender-classifier)');
+    assert(!insightface.manualOnly, 'InsightFace GenderAge should not be manualOnly — direct ONNX download');
+    assert(!vit.manualOnly, 'ViT Gender Classifier should not be manualOnly — automated via hfOptimumExport');
     assert(insightface.url === undefined, 'internal url field must not be exposed to client');
     assert(vit.hfOptimumExport === undefined, 'internal hfOptimumExport field must not be exposed to client');
   });

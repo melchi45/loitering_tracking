@@ -82,11 +82,11 @@ interface ModelCatalogEntry {
   // No public pretrained ONNX exists — operator must export manually (e.g. openpar.onnx)
   manualOnly?: boolean;
   docRef?:     string;
-  // Non-detector model families. human-parsing / appearance-reid / age-estimation remain
-  // Proposed (AI-05 Phase-3 / CrossCamera Phase-2 / Age Estimation) — the rest are
-  // production model files.
+  // Non-detector model families. human-parsing / appearance-reid / age-estimation /
+  // gender-classification remain Proposed (AI-05 Phase-3 / CrossCamera Phase-2 /
+  // Age Estimation / Gender Classification) — the rest are production model files.
   family?:  'human-parsing' | 'appearance-reid' | 'face-detection' | 'face-recognition'
-          | 'ppe' | 'fire-smoke' | 'cloth-par' | 'age-estimation';
+          | 'ppe' | 'fire-smoke' | 'cloth-par' | 'age-estimation' | 'gender-classification';
   license?: string;
 }
 
@@ -111,6 +111,7 @@ const ADMIN_MODULE_GROUPS: AdminModuleGroup[] = [
       { id: 'cloth', label: 'Cloth Analysis',   desc: 'Clothing type — PromptPAR or OpenPAR, pick one below', model: 'openpar_pa100k.onnx / openpar_resnet50_pa100k.onnx' },
       { id: 'humanParsing', label: 'Human Parsing (Proposed)', desc: 'Precision color via pixel mask — Phase-3', model: 'schp_lip.onnx / segformer_clothes.onnx' },
       { id: 'ageEstimation', label: 'Age Estimation (Proposed)', desc: 'Estimate person age — InsightFace GenderAge or ViT Age Classifier, pick one below', model: 'genderage.onnx / vit_age_classifier.onnx' },
+      { id: 'genderClassification', label: 'Gender Classification (Proposed)', desc: 'Classify person gender — InsightFace GenderAge or ViT Gender Classifier, pick one below', model: 'genderage.onnx / vit_gender_classifier.onnx' },
       { id: 'mask',  label: 'Mask Detection',   desc: 'PPE mask compliance',    model: 'yolov8m_ppe.onnx' },
       { id: 'hat',   label: 'Helmet Detection', desc: 'PPE safety helmet',      model: 'yolov8m_ppe.onnx' },
     ],
@@ -126,14 +127,14 @@ const ADMIN_MODULE_GROUPS: AdminModuleGroup[] = [
 ];
 
 // Non-detector model families rendered below the YOLO Detection Model table.
-// human-parsing / appearance-reid / age-estimation remain Proposed (AI-05 Phase-3 /
-// CrossCamera Phase-2 / Age Estimation).
+// human-parsing / appearance-reid / age-estimation / gender-classification remain
+// Proposed (AI-05 Phase-3 / CrossCamera Phase-2 / Age Estimation / Gender Classification).
 const EXTENDED_SERIES_ORDER = [
   'Face Detection', 'Face Recognition', 'PPE Detection',
   'Fire & Smoke Detection', 'Cloth Attribute (PAR)',
-  'Human Parsing', 'Appearance Re-ID', 'Age Estimation',
+  'Human Parsing', 'Appearance Re-ID', 'Age Estimation', 'Gender Classification',
 ] as const;
-const PROPOSED_SERIES = new Set<string>(['Human Parsing', 'Appearance Re-ID', 'Age Estimation']);
+const PROPOSED_SERIES = new Set<string>(['Human Parsing', 'Appearance Re-ID', 'Age Estimation', 'Gender Classification']);
 
 // ── Badges ───────────────────────────────────────────────────────────────────
 

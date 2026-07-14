@@ -47,6 +47,9 @@ const DEFAULT_CONFIG = {
   // Age Estimation (Proposed) — see docs/design/Design_AI_Age_Estimation.md.
   // Opt-in (default false): dedicated age model, independent of the ageGroup PA100k byproduct.
   ageEstimation: false,
+  // Gender Classification (Proposed) — see docs/design/Design_AI_Gender_Classification.md.
+  // Opt-in (default false): dedicated gender model, independent of the gender PA100k byproduct.
+  genderClassification: false,
   // Hazard detection
   fire:        false,
   smoke:       false,
@@ -302,7 +305,7 @@ function isEnabled(moduleId) {
 }
 
 // Attribute modules that need person detections from YOLO to function
-const PERSON_ATTR_MODULES = ['mask', 'hat', 'color', 'cloth', 'face', 'humanParsing', 'ageEstimation'];
+const PERSON_ATTR_MODULES = ['mask', 'hat', 'color', 'cloth', 'face', 'humanParsing', 'ageEstimation', 'genderClassification'];
 
 function _anyPersonAttrEnabled() {
   const cfg = _getOrInit();

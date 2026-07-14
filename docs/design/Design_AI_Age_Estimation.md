@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-AI-AGE-01 |
-| **Version** | 1.7 |
+| **Version** | 1.8 |
 | **Status** | Proposed (opt-in) |
 | **Date** | 2026-07-14 |
 | **Parent SRS** | [SRS_AI_Age_Estimation](../srs/SRS_AI_Age_Estimation.md) |
@@ -324,14 +324,18 @@ flowchart LR
     H2 --> P1["pipelineManager: ctx._trackMeta 갱신\n→ detectionTracks DB (3개 flush 분기)"]
     H2 --> P2["snapshotService.saveSnapshot()\n→ detectionSnapshots.attributes.estimatedAge"]
     H2 --> P3["Socket.IO 'detections' emit\n(실시간, DB 왕복 없음)"]
+    F2 -.->|"analysisProxy.js: GET /api/analysis/detection-tracks\n(streaming 모드는 이 경로를 그대로 프록시)"| P1B["analysisApi.js: ctx._trackMeta 갱신\n→ **원격** analysis 서버 자신의 detectionTracks DB\n(P1과 완전히 별개의 코드/DB, §12.2)"]
 
     P3 --> U1["CameraView.tsx\n캔버스 오버레이 (청록색 'age ~NN')"]
     P3 --> U2["FullscreenCameraView.tsx\nDetectionRow 실시간 목록"]
-    P1 --> U3["DetectionsTimelineInline.tsx\n'Age (Est.)' 상세 패널"]
+    P1 --> U3["DetectionsTimelineInline.tsx\n'Age (Est.)' 상세 패널\n(combined/analysis 모드: 로컬 P1 조회)"]
+    P1B --> U3
     P2 --> U4["SearchFullscreen.tsx\n'Age Estimation' 검색 결과 섹션"]
 ```
 
 > **중요 — 2026-07-14 근본 원인 확정**: 위 다이어그램의 `AM` 서브그래프(`analysisApi.js`의 `POST /frame` HTTP 핸들러)는 `pipelineManager.js`의 로컬 카메라 루프(`LOCAL` 서브그래프)와 **완전히 별개로 구현된 코드**다. `color`/`cloth`/`face`는 두 경로 모두에 존재하지만(`_attrPipeline.enrich()` 공용 호출), **Age Estimation(G1~G4)은 2026-07-14까지 `AM` 경로에는 전혀 구현되어 있지 않았다** — `_ageEstimation` 인스턴스는 모델 카탈로그(switch/download/deactivate)용으로만 쓰였을 뿐, 실제 프레임 처리 중 `estimateAge()`를 호출하는 코드가 없었다. 즉 **`SERVER_MODE=streaming` 배포에서는 토글·모델·연결 상태와 무관하게 `estimatedAge`가 100% 나타날 수 없는 구조적 결함**이었다(단순 미배포/재시작 문제가 아니었음). 2026-07-14 `analysisApi.js`에 G1~G4를 신규 추가해 수정 완료 — §12.1 참고.
+>
+> **추가 확정 (2026-07-14, 2차) — `analysisApi.js`는 영속화(P1) 코드도 `pipelineManager.js`와 별개로 자체 보유한다**: `SERVER_MODE=streaming` 배포에서 클라이언트가 호출하는 `GET /api/analysis/detection-tracks`는 로컬 `analysisProxy.js`가 **원격 analysis 서버**로 그대로 프록시한다 — 즉 `DetectionsTimelineInline.tsx`가 실제로 읽는 `detectionTracks` 레코드는 (로컬 `pipelineManager.js`가 아니라) **원격 서버의 `analysisApi.js`가 직접 `db.insert('detectionTracks', ...)`한 것**이다. `analysisApi.js`는 `ctx._trackMeta`(신규/갱신), 30초 주기 active-flush, 트랙 종료 시 완료 flush — 이렇게 **자체적으로 3곳**에서 `detectionTracks` 레코드를 구성하는데, G1~G4(§12.1 원 표)가 `o.estimatedAge`/`o.estimatedGender`를 부착한 뒤에도 이 3곳의 필드 목록에 `estimatedAge`/`estimatedGender`가 **누락**되어 있었다 — `color`/`cloth`만 옮겨 담고 있었다(`pipelineManager.js`의 동일 로직은 v1.5에서 이미 이 두 필드를 추가했었으나, `analysisApi.js`의 것은 완전히 별도 코드 사본이라 그 수정이 반영되지 않았음). 결과적으로 estimation 자체(G1~G4)는 정상 동작해도 **이력(Detections 타임라인)에는 절대 나타나지 않는** 2차 구조적 결함 — §12.2 참고, FR-AGE-034/TC-AGE-016으로 수정.
 
 ### 12.1 진단 포인트 (2026-07-14 운영 조사에서 확정, 근본 원인 발견 후 갱신)
 
@@ -339,11 +343,20 @@ flowchart LR
 |---|---|---|
 | G1 (게이트) | `estimatedAge`가 어디에도 없음 — `color`/`cloth`는 정상 | `GET /api/analytics/config` → `ageEstimation` 값 확인 |
 | G1 (모델 미로드) | 게이트는 통과하나 `estimateAge()`가 항상 null | 해당 서버(분석 서버 본인 기준)의 `GET /api/analysis/metrics` → `services.ageEstimation`(`pipelineManager.js` `getAnalysisMetrics()` 필드, `not_started`/`missing`/`loaded`/`failed`) |
-| **G1~G4 전체 미구현 (2026-07-14 근본 원인)** | 토글 ON + 모델 `loaded` + streaming↔analysis 연결 정상인데도 **모든** 카메라에서 `estimatedAge`가 0건 | `analysisApi.js`의 `POST /frame` 핸들러 코드에 `_ageEstimation.estimateAge(...)` 호출이 존재하는지 직접 확인(`grep -n "_ageEstimation.estimateAge" server/src/routes/analysisApi.js`) — 없다면 이 문서의 2026-07-14 이전 커밋을 배포 중인 것 |
+| **G1~G4 전체 미구현 (2026-07-14 근본 원인 1)** | 토글 ON + 모델 `loaded` + streaming↔analysis 연결 정상인데도 **모든** 카메라에서 `estimatedAge`가 0건 | `analysisApi.js`의 `POST /frame` 핸들러 코드에 `_ageEstimation.estimateAge(...)` 호출이 존재하는지 직접 확인(`grep -n "_ageEstimation.estimateAge" server/src/routes/analysisApi.js`) — 없다면 이 문서의 2026-07-14 이전 커밋을 배포 중인 것 |
 | G6→H1 (streaming 전달) | 원격 분석 서버는 정상 부착했는데 streaming 서버 쪽 `detectionTracks`에 여전히 없음 | `remoteTracked`는 스프레드(`[...remoteTracked, ...]`)로 전달되므로 필드 매핑 손실은 구조적으로 불가능 — G1~G4가 원격에서 실제로 실행됐는지가 먼저 확인 대상 |
-| P1 (영속화) | 실시간 화면(P3)엔 보이는데 이력(Detections 탭/검색)엔 없음 | `ctx._trackMeta` 3개 flush 분기 중 하나가 최신 커밋 이전 버전일 가능성 — `git log -- server/src/services/pipelineManager.js` 확인 |
+| P1 (영속화, combined/analysis 모드) | 실시간 화면(P3)엔 보이는데 이력(Detections 탭/검색)엔 없음 | `pipelineManager.js`의 `ctx._trackMeta` 3개 flush 분기 중 하나가 최신 커밋 이전 버전일 가능성 — `git log -- server/src/services/pipelineManager.js` 확인 |
+| **P1B (영속화, streaming 모드 — 2026-07-14 근본 원인 2, §12.2)** | G1~G4는 정상(estimation 자체는 됨)인데 `GET /api/analysis/detection-tracks`(원격 analysis 서버 응답)에 `estimatedAge`가 여전히 0건 | 원격 analysis 서버에서 `grep -n "estimatedAge" server/src/routes/analysisApi.js`로 `_trackMeta`/`fields`/`_completedFields` 3곳 모두에 `estimatedAge`/`estimatedGender`가 있는지 직접 확인 — `analysisApi.js`는 `pipelineManager.js`와 완전히 별개 코드이므로 후자의 수정이 자동 반영되지 않음 |
 
-**실사례 (2026-07-14, 근본 원인 확정)**: 로컬 streaming 서버의 `GET /api/analysis/detection-tracks` 200건 중 `estimatedAge` 보유 0건, 동일 레코드의 `color`/`cloth`는 정상 — 처음엔 원격 분석 서버의 코드 미배포/모델 미로드로 추정했으나, 실시간 진단 로그(`_processRemoteResult()`에 임시 추가, `remoteTracked` person 객체의 실제 키를 출력)로 재확인한 결과 `sampleKeys=objectId,bbox,confidence,state,className,firstSeenAt` — **`color`/`cloth`/`face`/`estimatedAge` 전부 원본 응답에 없음**이 확인됨. `analysisApi.js`의 `POST /frame` 핸들러 코드를 직접 읽어 `_ageEstimation`이 모델 카탈로그 엔드포인트에서만 쓰이고 프레임 처리 루프(`_attrPipeline.enrich()` 호출부 근처)에는 전혀 연동되어 있지 않음을 코드로 확정 — `pipelineManager.js`의 로컬 카메라 루프에만 구현되고 `analysisApi.js`의 HTTP 프레임 처리 경로엔 이식되지 않았던 것이 **진짜** 근본 원인. 2026-07-14 `analysisApi.js`에 동일한 face/body 폴백 + 4초 캐시 로직을 추가해 해결(§7 코드와 동일 패턴, 별도 모듈-레벨 `_ageEstimateCache`/`AGE_ESTIMATION_INTERVAL_MS` 사용 — `analysisApi.js`는 클래스 인스턴스가 아니므로 `this` 기반 캐시 재사용 불가).
+**실사례 (2026-07-14, 근본 원인 1 확정)**: 로컬 streaming 서버의 `GET /api/analysis/detection-tracks` 200건 중 `estimatedAge` 보유 0건, 동일 레코드의 `color`/`cloth`는 정상 — 처음엔 원격 분석 서버의 코드 미배포/모델 미로드로 추정했으나, 실시간 진단 로그(`_processRemoteResult()`에 임시 추가, `remoteTracked` person 객체의 실제 키를 출력)로 재확인한 결과 `sampleKeys=objectId,bbox,confidence,state,className,firstSeenAt` — **`color`/`cloth`/`face`/`estimatedAge` 전부 원본 응답에 없음**이 확인됨. `analysisApi.js`의 `POST /frame` 핸들러 코드를 직접 읽어 `_ageEstimation`이 모델 카탈로그 엔드포인트에서만 쓰이고 프레임 처리 루프(`_attrPipeline.enrich()` 호출부 근처)에는 전혀 연동되어 있지 않음을 코드로 확정 — `pipelineManager.js`의 로컬 카메라 루프에만 구현되고 `analysisApi.js`의 HTTP 프레임 처리 경로엔 이식되지 않았던 것이 근본 원인 1. 2026-07-14 `analysisApi.js`에 동일한 face/body 폴백 + 4초 캐시 로직을 추가해 해결(§7 코드와 동일 패턴, 별도 모듈-레벨 `_ageEstimateCache`/`AGE_ESTIMATION_INTERVAL_MS` 사용 — `analysisApi.js`는 클래스 인스턴스가 아니므로 `this` 기반 캐시 재사용 불가).
+
+### 12.2 근본 원인 2 — `analysisApi.js` 자체 영속화 코드의 필드 누락 (2026-07-14, Fullscreen Detections 타임라인 재보고)
+
+근본 원인 1 수정(G1~G4 신규 추가) 이후에도 사용자가 Fullscreen Camera View의 **Detections 타임라인에서 person을 선택했을 때 나이 정보가 표시되지 않는다**고 재보고함. `estimatedAge`/`estimatedGender`는 §12.1의 G1~G4 코드로 `enrichedObjects` 배열의 각 `person` 객체에 정상적으로 부착되고 있었음(라이브 소켓 오버레이인 `CameraView.tsx`/`FullscreenCameraView.tsx`의 `DetectionRow`에는 실제로 나타남 — P3 경로는 정상). 그러나 **Detections 타임라인(`DetectionsTimelineInline.tsx`)이 조회하는 `GET /api/analysis/detection-tracks`는 `detectionTracks` DB 테이블에서 읽는데**, `analysisApi.js` 자신이 이 테이블에 쓰는 코드(파일 내 3곳 — ①`ctx._trackMeta` 신규/갱신 블록, ②30초 주기 active-flush의 `fields` 객체, ③트랙 종료 시 `_completedFields` 객체)는 `pipelineManager.js`의 동일 로직(§12.1 "P1")과는 **완전히 별개로 유지보수되는 코드 사본**이며, `color`/`cloth`/`face`/`zoneId` 등은 옮겨 담으면서 `estimatedAge`/`estimatedGender` 두 필드만 빠져 있었다. `pipelineManager.js` 쪽은 v1.5에서 이 두 필드를 이미 추가했지만, `analysisApi.js`는 별도 파일·별도 함수라 그 수정이 자동으로 적용되지 않았다.
+
+이는 §7에서 이미 경고한 "진입점 2곳, 독립 구현" 패턴이 estimation 호출(G1~G4, 근본 원인 1)뿐 아니라 **영속화 코드 자체**에도 그대로 반복된 사례다. `SERVER_MODE=streaming` 배포에서 클라이언트가 `GET /api/analysis/detection-tracks`를 호출하면 `analysisProxy.js`가 이를 원격 analysis 서버로 그대로 프록시하므로, 사용자가 실제로 보는 타임라인 데이터는 (로컬 `pipelineManager.js`가 아니라) **원격 `analysisApi.js`가 직접 쓴 레코드**다 — 따라서 이 배포 형태에서는 근본 원인 1을 고쳐도 근본 원인 2를 함께 고치지 않으면 타임라인에 나이가 절대 나타나지 않는다.
+
+**수정**: `analysisApi.js`의 3개 지점 모두에 `pipelineManager.js`와 동일한 패턴으로 `estimatedAge`/`estimatedGender`를 추가(§FR-AGE-034/TC-AGE-016). 부수적으로 `pipelineManager.js`의 완료-flush 블록(`_completedFields`)에 있던 `estimatedGender` 중복 키(오타로 두 번 선언됨, 기능적 영향은 없으나 코드 품질 저하)도 함께 정리.
 
 ---
 
@@ -359,3 +372,4 @@ flowchart LR
 | 1.5 | 2026-07-14 | **UI 미표시 갭 발견 및 수정** — `estimatedAge`가 `pipelineManager.js`에서 생성되고 실시간 `detections` 소켓 이벤트에는 포함되지만, 클라이언트 어디에도 렌더링되지 않고 `detectionTracks`/`detectionSnapshots` DB에도 저장되지 않고 있었음(사용자 보고로 발견). 수정: (1) `pipelineManager.js`의 `ctx._trackMeta` 3곳 + `snapshotService.js`의 `attributes` 객체에 `estimatedAge` 추가 → `detectionTracks`/`detectionSnapshots`(검색) 양쪽에 영속화, (2) `CameraView.tsx` 라이브 캔버스 오버레이, `FullscreenCameraView.tsx`의 `DetectionRow`, `DetectionsTimelineInline.tsx`의 상세 패널, `SearchFullscreen.tsx`의 검색 결과 상세에 각각 표시 추가 — `cloth.ageGroup`(PromptPAR 3단계 버킷)과 시각적으로 구분되도록 별도 라벨("Age (Est.)"/"Age Estimation") 사용 |
 | 1.6 | 2026-07-14 | §12 신규 — 프레임→화면 전체 경로를 라인 플로우(Mermaid `flowchart LR`)로 문서화, streaming/analysis 서버 분리 구간(`analysisClient.analyzeFrame()` HTTP 왕복)과 3개 소비처(DB 영속화·스냅샷·Socket.IO 실시간)를 명시. §12.1에 실제 운영 조사(2026-07-14, Streaming 서버에서 `estimatedAge` 0/200 관측) 기반 진단 포인트 표 추가 — `getAnalysisMetrics()`의 `services.ageEstimation` 신규 필드(`pipelineManager.js` 커밋 `7f3c89e`) 반영 |
 | 1.7 | 2026-07-14 | **실제 근본 원인 확정 및 수정** — v1.6의 "원격 서버 코드 미배포/모델 미로드" 추정은 불완전했음. `pipelineManager.js`에 임시 진단 로그를 추가해 실시간 확인한 결과, `analysisApi.js`의 `POST /frame` 핸들러(SERVER_MODE=streaming이 위임하는 실제 처리 경로)에는 Age Estimation(G1~G4)이 애초에 전혀 구현되어 있지 않았음이 코드로 확정됨(`_ageEstimation`은 모델 카탈로그 엔드포인트 전용으로만 쓰였음) — `pipelineManager.js`의 로컬 카메라 루프에만 구현되고 HTTP 프레임 위임 경로엔 이식되지 않았던 구조적 결함. `analysisApi.js`에 동일 face/body 폴백 + 4초 캐시(모듈-레벨 `_ageEstimateCache`/`AGE_ESTIMATION_INTERVAL_MS`) 로직을 신규 추가해 해결. §7에 "진입점 2곳, 독립 구현" 경고 추가, §12 다이어그램을 LOCAL/AM 두 서브그래프로 재작성, §12.1 표에 이 근본 원인 행 추가 |
+| 1.8 | 2026-07-14 | **근본 원인 2 신규(§12.2) — Fullscreen Detections 타임라인 나이 미표시 재보고 대응** — v1.7로 estimation 호출(G1~G4)은 고쳐졌지만, `analysisApi.js`가 `pipelineManager.js`와 별개로 자체 보유한 `detectionTracks` 영속화 코드(`ctx._trackMeta` 갱신, 30초 active-flush, 트랙 종료 flush — 3곳)에는 `estimatedAge`/`estimatedGender`가 여전히 옮겨 담기지 않고 있었음을 확인. `SERVER_MODE=streaming`에서는 `analysisProxy.js`가 `GET /api/analysis/detection-tracks`를 원격 analysis 서버로 그대로 프록시하므로, `DetectionsTimelineInline.tsx`가 실제로 읽는 레코드는 이 (누락된) 원격 영속화 코드의 산출물이었음 — estimation 자체는 정상이어도 이력에는 절대 나타날 수 없는 2차 구조적 결함. `analysisApi.js`의 3개 지점 모두에 필드를 추가해 수정(FR-AGE-034/TC-AGE-016). §12 다이어그램에 `P1B` 노드(원격 `analysisApi.js` 자체 영속화, streaming 모드 전용) 추가. 부수 정리: `pipelineManager.js` 완료-flush 블록의 `estimatedGender` 중복 키 제거 |

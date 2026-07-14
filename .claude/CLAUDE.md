@@ -56,6 +56,7 @@ loitering_tracking/
 │   │   ├── colorClothService.js    # 색상·의류 분석 — cloth-PAR PromptPAR(PA100k, CLIP ViT-L, Download 자동화 `pyExport` — scripts/exportPromptPAR.py)/OpenPAR(ResNet50, manualOnly) admin-selectable, PromptPAR 사전 메모리 게이트(가용 RAM 부족 시 로그+Cloth 분석 자동 비활성화); Phase-3 Human Parsing 포함, opt-in — `humanParsing` 토글
 │   │   ├── appearanceReidService.js # CrossCamera Phase-2 Appearance/Body Re-ID OSNet 임베딩 추출 (opt-in, 모델 미배포 시 자동 비활성)
 │   │   ├── ageEstimationService.js # 연령 예측 — InsightFace GenderAge(경량)/ViT Age Classifier(정밀, hfOptimumExport) admin-selectable, 얼굴crop 우선·사람crop 폴백 (opt-in, `ageEstimation` 토글, Proposed)
+│   │   ├── genderClassificationService.js # 성별 분류 — InsightFace GenderAge(Age Estimation과 genderage.onnx 파일 공유, 별도 세션)/ViT Gender Classifier(정밀, hfOptimumExport) admin-selectable, 얼굴crop 우선·사람crop 폴백 (opt-in, `genderClassification` 토글, Proposed) — pipelineManager.js·analysisApi.js 양쪽 진입점 최초 구현부터 연동
 │   │   ├── qdrantService.js        # Qdrant 벡터 DB 클라이언트 — face_embeddings/appearance_embeddings 컬렉션, 서킷브레이커 (opt-in, `QDRANT_ENABLED=true`)
 │   │   ├── protectiveEquipService.js # 안전모·마스크 감지
 │   │   ├── discoveryService.js     # 카메라 자동 탐색

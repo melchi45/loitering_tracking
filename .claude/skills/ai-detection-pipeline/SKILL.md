@@ -1,6 +1,6 @@
 ---
 name: ai-detection-pipeline
-description: "LTS-2026 AI 추론 파이프라인 개발 및 디버깅. Use when: YOLOv8 감지 설정, behaviorEngine 배회 점수 조정, attributePipeline 속성 분석(의상·색상·마스크·헬멧), fireSmokeService 화재/연기 감지, 감지 임계값 튜닝, pipelineManager 서비스 추가/수정, AI 모델 교체, 감지 정확도 문제 해결, Human Parsing 기반 정밀 색상 분류(opt-in), Appearance/Body Re-ID(OSNet, opt-in), Cloth-PAR PromptPAR/OpenPAR 모델 선택 및 PromptPAR 사전 메모리 게이트(가용 RAM 부족 시 Cloth 분석 자동 비활성화), Age Estimation(연령 예측, InsightFace GenderAge/ViT Age Classifier admin-selectable, opt-in). Covers: detection.js, behaviorEngine.js, attributePipeline.js, pipelineManager.js, trackerConfig.js, tracking.js, colorClothService.js, fireSmokeService.js, protectiveEquipService.js, appearanceReidService.js, ageEstimationService.js, qdrantService.js, kmeansColor.js."
+description: "LTS-2026 AI 추론 파이프라인 개발 및 디버깅. Use when: YOLOv8 감지 설정, behaviorEngine 배회 점수 조정, attributePipeline 속성 분석(의상·색상·마스크·헬멧), fireSmokeService 화재/연기 감지, 감지 임계값 튜닝, pipelineManager 서비스 추가/수정, AI 모델 교체, 감지 정확도 문제 해결, Human Parsing 기반 정밀 색상 분류(opt-in), Appearance/Body Re-ID(OSNet, opt-in), Cloth-PAR PromptPAR/OpenPAR 모델 선택 및 PromptPAR 사전 메모리 게이트(가용 RAM 부족 시 Cloth 분석 자동 비활성화), Age Estimation(연령 예측, InsightFace GenderAge/ViT Age Classifier admin-selectable, opt-in), Gender Classification(성별 분류, InsightFace GenderAge/ViT Gender Classifier admin-selectable, opt-in). Covers: detection.js, behaviorEngine.js, attributePipeline.js, pipelineManager.js, trackerConfig.js, tracking.js, colorClothService.js, fireSmokeService.js, protectiveEquipService.js, appearanceReidService.js, ageEstimationService.js, genderClassificationService.js, qdrantService.js, kmeansColor.js."
 argument-hint: "추가 또는 수정할 AI 기능 (예: loitering threshold, attribute detection, fire smoke)"
 ---
 
@@ -35,6 +35,7 @@ RTSP/WebRTC 스트림
 | `server/src/services/faceService.js` | 얼굴 인식 및 Re-ID 임베딩 |
 | `server/src/services/appearanceReidService.js` | CrossCamera Phase-2 Appearance/Body Re-ID — OSNet 256D 임베딩 추출, opt-in (모델 파일 미배포 시 자동 비활성) |
 | `server/src/services/ageEstimationService.js` | 연령 예측 — InsightFace GenderAge(경량, 직접 ONNX)/ViT Age Classifier(정밀, `hfOptimumExport`) admin-selectable, 얼굴crop 우선·사람crop 폴백, opt-in (`ageEstimation` 토글, Proposed) |
+| `server/src/services/genderClassificationService.js` | 성별 분류 — InsightFace GenderAge(Age Estimation과 동일 `genderage.onnx` 파일 공유, 별도 세션)/ViT Gender Classifier(정밀, `hfOptimumExport`) admin-selectable, 얼굴crop 우선·사람crop 폴백, opt-in (`genderClassification` 토글, Proposed) — `pipelineManager.js`와 `analysisApi.js` 양쪽 진입점에 최초 구현부터 연동(§17) |
 | `server/src/utils/kmeansColor.js` | K-Means 대표색 클러스터링 — Human Parsing 마스크 픽셀 대표색 추출용, 단위 테스트 완료 |
 
 ## 주요 작업 절차
@@ -52,7 +53,7 @@ RTSP/WebRTC 스트림
 4. `client/src/types/` 에 TypeScript 타입 추가
 5. 대시보드 컴포넌트에서 새 속성 표시
 
-### AI 모델 카탈로그 — 런타임 전환 (YOLO 탐지기 + face/PPE/fire-smoke/cloth-PAR/Human Parsing/Appearance Re-ID/Age Estimation)
+### AI 모델 카탈로그 — 런타임 전환 (YOLO 탐지기 + face/PPE/fire-smoke/cloth-PAR/Human Parsing/Appearance Re-ID/Age Estimation/Gender Classification)
 
 `analysisApi.js`는 `MODEL_CATALOG`(YOLO 20종) + `EXTENDED_CATALOG`(face-detection/face-recognition/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid/age-estimation, `family` 필드로 구분)를 `ALL_MODELS`로 통합 관리합니다. 서버 재시작 없이 모델 다운로드·전환이 가능합니다.
 
@@ -259,6 +260,7 @@ cd server && node src/scripts/downloadModels.js
 | `routes/analysisApi.js` (MODEL_CATALOG 변경) | `docs/design/Design_AI_Model_Catalog.md`, `docs/srs/SRS_AI_Model_Catalog.md`, `docs/tc/TC_AI_Model_Catalog.md` |
 | `scripts/downloadModels.js` (YOLO12 추가) | `docs/design/Design_AI_Model_Catalog.md`, `docs/tc/TC_AI_Model_Catalog.md` |
 | `services/ageEstimationService.js` | `docs/design/Design_AI_Age_Estimation.md`, `docs/srs/SRS_AI_Age_Estimation.md`, `docs/tc/TC_AI_Age_Estimation.md`, `docs/design/Design_AI_Model_Catalog.md` §10 |
+| `services/genderClassificationService.js` | `docs/design/Design_AI_Gender_Classification.md`, `docs/srs/SRS_AI_Gender_Classification.md`, `docs/tc/TC_AI_Gender_Classification.md`, `docs/mrd/MRD_AI_Gender_Classification.md`, `docs/ops/Gender_Classification_Guide.md` |
 
 **공통 규칙**
 - **새 기능 추가** → PRD + SRS + Design + TC 문서 모두 신규 작성 또는 기존 문서에 항목 추가
@@ -932,3 +934,48 @@ unloadHumanParsing() { this._hpSession?.release?.();  this._hpSession = null;  t
 **회귀 테스트:** `test/api/model_catalog.test.js` Group E(TC-MC-023) — 각 서비스에 스텁 세션(`{ release: spy }`)을 주입해 실제 ONNX 파일이나 서버 없이 `release()` 호출·상태 초기화를 검증하는 유닛 테스트.
 
 **SDLC 참조:** [Design_AI_Model_Catalog.md §5b](../../../docs/design/Design_AI_Model_Catalog.md#5b-runtime-model-deactivate) · [SRS_AI_Model_Catalog.md §3.6](../../../docs/srs/SRS_AI_Model_Catalog.md) (FR-MC-026~030) · [TC_AI_Model_Catalog.md](../../../docs/tc/TC_AI_Model_Catalog.md) (TC-MC-023~025)
+
+### 17. genderClassificationService.js — 성별 분류 신규 모듈, Age Estimation의 스트리밍 갭을 최초 구현부터 회피 (2026-07-14)
+
+**배경:** `cloth.gender`(PA100k byproduct)와 독립적인 전용 성별 분류 모듈. Age Estimation과 완전히 동일한 구조로 설계하되, Age Estimation이 2026-07-12~07-14에 겪은 사고(§16 이전 섹션들 참고 — `analysisApi.js`의 `POST /frame` 핸들러에 추론 호출이 아예 없었던 구조적 결함)를 **최초 구현부터 피하기 위해 두 진입점(`pipelineManager.js` 로컬 루프 + `analysisApi.js` `/frame` 핸들러)을 동시에 작성**했다.
+
+**모델 카탈로그 (`analysisApi.js`):**
+
+```javascript
+{
+  id: 'insightface-genderage-gender', label: 'InsightFace GenderAge (buffalo_l)',
+  family: 'gender-classification', series: 'Gender Classification',
+  file: 'genderage.onnx', size: 96, // Age Estimation의 insightface-genderage와 동일 파일
+  url: 'https://huggingface.co/JackCui/facefusion/resolve/main/gender_age.onnx',
+  license: 'InsightFace non-commercial research license (acceptable — non-commercial project)',
+},
+{
+  id: 'vit-gender-classifier', label: 'ViT Gender Classifier (rizvandwiki)',
+  family: 'gender-classification', series: 'Gender Classification',
+  file: 'vit_gender_classifier.onnx', size: 224,
+  hfOptimumExport: { repo: 'rizvandwiki/gender-classification-2' }, // 검증된 실존 HF 모델, 99.1% eval accuracy
+  license: 'See Hugging Face model card', classMap: VIT_GENDER_CLASSES,
+},
+```
+
+`vit-gender-classifier`의 `hfOptimumExport` 변환은 **새 로직이 아니라** Age Estimation의 ViT Age Classifier가 이미 검증한 제네릭 `/models/download` 분기(family를 구분하지 않음, `task="image-classification"`)를 그대로 재사용한다.
+
+**서비스 (`genderClassificationService.js`, `ageEstimationService.js`를 구조 템플릿으로 사용):** `load()/reload()/unload()/ready/status` 패턴 동일. `classifyGender(jpegBuffer, bbox, {isFaceCrop})`이 활성 모델 파일명(`genderage.onnx` vs `vit_gender_classifier.onnx`)으로 전처리/후처리를 분기 — 두 변형 모두 2-class softmax(`{value:'male'|'female', confidence}`), Age Estimation의 회귀/버킷 분기보다 단순함. InsightFace 변형은 `output[0:2]`(gender 채널)를 argmax — `output[2]`(age 채널, Age Estimation이 사용)는 이 서비스에서 읽지 않는다. **중요:** `insightface-genderage-gender`는 Age Estimation의 `insightface-genderage`와 **동일한 `genderage.onnx` 파일**을 가리키지만, 두 서비스는 세션을 공유하지 않고 각자 독립적으로 로드한다(의도된 설계 — 서비스 간 결합도 최소화).
+
+**두 진입점 동시 구현 (핵심 설계 결정):**
+1. `pipelineManager.js` 로컬 카메라 루프 — Age Estimation 블록 바로 뒤에 동일 패턴(`this._genderClassifyCache`, `GENDER_CLASSIFICATION_INTERVAL_MS=4000`)으로 추가.
+2. `analysisApi.js`의 `POST /frame` 핸들러 — `_attrPipeline.enrich()` 호출 직후, Age Estimation 블록 바로 뒤에 **모듈-레벨** 캐시(`_genderClassifyCache` Map, `analysisApi.js`는 클래스 인스턴스가 아니므로 `this.*` 대신 모듈 스코프)로 동일 로직 추가.
+
+두 곳 모두 `o.face?.bbox || o.bbox` face-우선/body-폴백 패턴, 4초 캐시, `estimatedGender` 필드명 통일.
+
+**영속화:** `pipelineManager.js`의 `ctx._trackMeta` 전 지점(신규/기존 트랙, 3개 flush 분기) + `snapshotService.js`의 `attributes`에 `estimatedGender` 추가 — `detectionTracks`/`detectionSnapshots` 양쪽 영속화. `tracking.js`의 `Track`에 `estimatedGender` 필드 + `updateEstimatedGender()` 메서드(`updateEstimatedAge()`와 동일 패턴).
+
+**진단 필드:** `pipelineManager.js`의 `getServiceStatus()`/`getAnalysisMetrics()` **및** `analysisApi.js`의 독립 `/metrics` 폴백 응답(pipelineManager 미등록 시) 양쪽의 `services` 객체에 `genderClassification` 키 추가 — Age Estimation은 전자만 먼저 고쳐졌었으나(2026-07-14), 이번엔 두 응답 형태를 동시에 반영.
+
+**UI:** `AdminUsersPage.tsx`의 `AiModelsSection()`이 family/series 기준 제네릭 렌더링이므로 `EXTENDED_SERIES_ORDER`/`PROPOSED_SERIES`/`ModelCatalogEntry.family`/`ADMIN_MODULE_GROUPS` 상수 4곳만 갱신. 클라이언트 4곳(`CameraView.tsx` 캔버스 오버레이·fuchsia색, `FullscreenCameraView.tsx` DetectionRow, `DetectionsTimelineInline.tsx` 상세 패널, `SearchFullscreen.tsx` 검색 결과)에 표시 — `cloth.gender`(PAR)와 라벨로 구분("Gender (PAR)" vs "Gender (Est.)"/"Gender Classification").
+
+**opt-in:** `analyticsConfig.genderClassification` 기본 `false`. 비활성 시 크롭 추출·추론이 전혀 발생하지 않음.
+
+**회귀 테스트:** `test/api/model_catalog.test.js`(TC-GEN-001, family 구성) · `test/api/gender_classification.test.js`(TC-GEN-007~009, `GenderClassificationService` 단위 테스트; TC-GEN-014a, `getAnalysisMetrics()`의 `services.genderClassification` 진단 필드 — `age_estimation.test.js`의 Group E와 동일한 `Object.create(PipelineManager.prototype)` + `STORAGE_PATH` 스크래치 디렉토리 패턴 재사용).
+
+**SDLC 참조:** [RFP_AI_Gender_Classification.md](../../../docs/rfp/RFP_AI_Gender_Classification.md) · [PRD_AI_Gender_Classification.md](../../../docs/prd/PRD_AI_Gender_Classification.md) · [SRS_AI_Gender_Classification.md](../../../docs/srs/SRS_AI_Gender_Classification.md) (FR-GEN-001~033) · [Design_AI_Gender_Classification.md](../../../docs/design/Design_AI_Gender_Classification.md) (§12 라인 플로우) · [TC_AI_Gender_Classification.md](../../../docs/tc/TC_AI_Gender_Classification.md) (TC-GEN-001~015, TC-GEN-015가 Age Estimation 사고 재발 방지 회귀 가드) · [MRD_AI_Gender_Classification.md](../../../docs/mrd/MRD_AI_Gender_Classification.md) · [Gender_Classification_Guide.md](../../../docs/ops/Gender_Classification_Guide.md)

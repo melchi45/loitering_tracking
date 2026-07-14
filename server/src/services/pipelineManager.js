@@ -113,6 +113,7 @@ const AttributePipeline = require('./attributePipeline');
 const FireSmokeService  = require('./fireSmokeService');
 const { AppearanceReidService, cosineSim } = require('./appearanceReidService');
 const { AgeEstimationService } = require('./ageEstimationService');
+const { GenderClassificationService } = require('./genderClassificationService');
 const analyticsConfig  = require('./analyticsConfig');
 const { getSystemMetrics } = require('./systemMetrics');
 
@@ -260,6 +261,7 @@ const CLOTHING_APPEAR_W     = 0.30;     // clothing weight in combined Re-ID con
 // mirrors AI-05 Phase-3's HP_INTERVAL_MS pattern (colorClothService.js).
 const APPEARANCE_EMBED_INTERVAL_MS = 4000;
 const AGE_ESTIMATION_INTERVAL_MS   = 4000; // Age Estimation (Proposed) — throttle re-inference per track
+const GENDER_CLASSIFICATION_INTERVAL_MS = 4000; // Gender Classification (Proposed) — throttle re-inference per track
 
 // Maximum number of concurrent camera pipelines (each = 1 capture backend process).
 // Configurable via MAX_PIPELINES env var; 0 = unlimited.
@@ -298,6 +300,9 @@ class PipelineManager {
     // Age Estimation (Proposed) — see docs/design/Design_AI_Age_Estimation.md.
     this._ageEstimation   = new AgeEstimationService();
     this._ageEstimateCache = new Map(); // objectId -> { ts, result }
+    // Gender Classification (Proposed) — see docs/design/Design_AI_Gender_Classification.md.
+    this._genderClassification = new GenderClassificationService();
+    this._genderClassifyCache  = new Map(); // objectId -> { ts, result }
     this._analysisClient   = null; // Remote analysis client (streaming mode only)
     this._fireAlertCooldown = new Map(); // `${cameraId}:${zoneName}:${cls}` → lastAlertTs
     // Hook called just before a camera is marked offline (stopCamera).
@@ -444,6 +449,13 @@ class PipelineManager {
       if (this._ageEstimation.status === 'not_started') {
         await this._ageEstimation.load().catch((err) => {
           console.warn('[PipelineManager] AgeEstimationService load warn:', err.message);
+        });
+      }
+
+      // Gender Classification (Proposed) — gender prediction model
+      if (this._genderClassification.status === 'not_started') {
+        await this._genderClassification.load().catch((err) => {
+          console.warn('[PipelineManager] GenderClassificationService load warn:', err.message);
         });
       }
 
@@ -973,6 +985,25 @@ class PipelineManager {
                   if (result) o.estimatedAge = result;
                 }));
             }
+
+            // ── Gender Classification (Proposed) ────────────────────────────────────
+            // Same face-preferred/body-fallback pattern as Age Estimation immediately
+            // above. Wired into both this local-camera loop AND analysisApi.js's
+            // POST /frame handler from day one — Age Estimation shipped only in this
+            // loop first and needed a follow-up fix once streaming-mode deployments
+            // never saw the field (see Design_AI_Age_Estimation.md §12.1); this module
+            // avoids repeating that gap.
+            if (analyticsConfig.isEnabled('genderClassification') && this._genderClassification.ready) {
+              await Promise.all(attrObjects
+                .filter(o => o.className === 'person')
+                .map(async (o) => {
+                  const bbox = o.face?.bbox || o.bbox;
+                  if (!bbox) return;
+                  const isFaceCrop = !!o.face?.bbox;
+                  const result = await this._getGenderClassification(jpegBuffer, o.objectId, bbox, isFaceCrop);
+                  if (result) o.estimatedGender = result;
+                }));
+            }
           } catch (err) {
             console.error(`[PipelineManager][${camera.id}] Attribute pipeline error:`, err.message);
           }
@@ -985,6 +1016,7 @@ class PipelineManager {
             if (obj.color)            tracker.updateColor(obj.objectId, obj.color);
             if (obj.cloth)            tracker.updateCloth(obj.objectId, obj.cloth);
             if (obj.estimatedAge)     tracker.updateEstimatedAge(obj.objectId, obj.estimatedAge);
+            if (obj.estimatedGender)  tracker.updateEstimatedGender(obj.objectId, obj.estimatedGender);
             // Accessories: hat (PPE model) and mask (PPE model)
             const hat  = obj.hat  !== undefined ? obj.hat  : undefined;
             const mask = obj.mask !== undefined ? obj.mask : undefined;
@@ -1090,6 +1122,7 @@ class PipelineManager {
               if (obj.color)       existing.color       = obj.color;
               if (obj.cloth)       existing.cloth       = obj.cloth;
               if (obj.estimatedAge) existing.estimatedAge = obj.estimatedAge;
+              if (obj.estimatedGender) existing.estimatedGender = obj.estimatedGender;
               existing.confidence = Math.max(existing.confidence, obj.confidence ?? 0);
             } else {
               ctx._trackMeta.set(id, {
@@ -1106,6 +1139,7 @@ class PipelineManager {
                 color:        obj.color       ?? null,
                 cloth:        obj.cloth       ?? null,
                 estimatedAge: obj.estimatedAge ?? null,
+                estimatedGender: obj.estimatedGender ?? null,
               });
             }
           }
@@ -1126,6 +1160,7 @@ class PipelineManager {
               if (this._attrPipeline) this._attrPipeline.dropTrack(trackKey);
               this._appearanceEmbedCache.delete(trackKey);
               this._ageEstimateCache.delete(trackKey);
+              this._genderClassifyCache.delete(trackKey);
 
               const dwellMs = meta.lastSeenAt - meta.firstSeenAt;
 
@@ -1150,7 +1185,8 @@ class PipelineManager {
                 zoneName:    meta.zoneName,
                 color:       meta.color,
                 cloth:       meta.cloth,
-                estimatedAge: meta.estimatedAge,
+                estimatedAge:    meta.estimatedAge,
+                estimatedGender: meta.estimatedGender,
                 inProgress:  false,
               };
               const _existing = this._db.findOne('detectionTracks', { objectId: trackKey, cameraId: camera.id });
@@ -1382,6 +1418,7 @@ class PipelineManager {
             color:       meta.color,
             cloth:       meta.cloth,
             estimatedAge: meta.estimatedAge,
+            estimatedGender: meta.estimatedGender,
             inProgress:  true,
           };
           const _ex = this._db.findOne('detectionTracks', { objectId: trackKey, cameraId: camera.id });
@@ -1418,6 +1455,7 @@ class PipelineManager {
             color:       meta.color,
             cloth:       meta.cloth,
             estimatedAge: meta.estimatedAge,
+            estimatedGender: meta.estimatedGender,
             inProgress:  false,
           };
           const _ex = this._db.findOne('detectionTracks', { objectId: trackKey, cameraId: camera.id });
@@ -1614,6 +1652,8 @@ class PipelineManager {
       appearanceReid: this._appearanceReid  ? this._appearanceReid.status : 'not_started',
       // Age Estimation (Proposed)
       ageEstimation: this._ageEstimation    ? this._ageEstimation.status : 'not_started',
+      // Gender Classification (Proposed)
+      genderClassification: this._genderClassification ? this._genderClassification.status : 'not_started',
     };
   }
 
@@ -1712,6 +1752,7 @@ class PipelineManager {
         attrPipeline:     this._attrPipeline?.anyReady ? 'ready' : 'not-ready',
         fireSmokeService: this._fireSmokeService  ? 'loaded'    : 'not-loaded',
         ageEstimation:    this._ageEstimation     ? this._ageEstimation.status : 'not_started',
+        genderClassification: this._genderClassification ? this._genderClassification.status : 'not_started',
       },
       modules: { enabled: enabledModules, count: enabledModules.length },
       requests: {
@@ -2396,6 +2437,23 @@ class PipelineManager {
 
     const result = await this._ageEstimation.estimateAge(jpegBuffer, bbox, { isFaceCrop });
     if (result) this._ageEstimateCache.set(key, { ts: now, result });
+    return result;
+  }
+
+  /**
+   * Gender Classification (Proposed) — per-track throttled inference. Reuses a
+   * cached result within GENDER_CLASSIFICATION_INTERVAL_MS instead of re-running
+   * the model every frame (mirrors _getAgeEstimate above).
+   * @returns {Promise<{value:'male'|'female',confidence:number,source:'face'|'body',modelId:string}|null>}
+   */
+  async _getGenderClassification(jpegBuffer, objectId, bbox, isFaceCrop) {
+    const key = String(objectId);
+    const now = Date.now();
+    const cached = this._genderClassifyCache.get(key);
+    if (cached && (now - cached.ts) < GENDER_CLASSIFICATION_INTERVAL_MS) return cached.result;
+
+    const result = await this._genderClassification.classifyGender(jpegBuffer, bbox, { isFaceCrop });
+    if (result) this._genderClassifyCache.set(key, { ts: now, result });
     return result;
   }
 

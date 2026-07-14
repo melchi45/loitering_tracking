@@ -50,6 +50,9 @@ interface DetectionTrack {
   // Dedicated Age Estimation (InsightFace/ViT Age Classifier) — distinct from
   // cloth.ageGroup's coarse 3-bucket PromptPAR/PA100k attribute.
   estimatedAge?: { value: number; bucket?: string; source: string; modelId: string } | null;
+  // Dedicated Gender Classification (InsightFace/ViT Gender Classifier) — distinct
+  // from cloth.gender's PromptPAR/PA100k byproduct attribute.
+  estimatedGender?: { value: string; confidence: number; source: string; modelId: string } | null;
   inProgress?: boolean;
 }
 
@@ -861,7 +864,7 @@ export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }
               )}
               {selected.cloth && (
                 <>
-                  {selected.cloth.gender && <DR label="Gender" value={selected.cloth.gender} />}
+                  {selected.cloth.gender && <DR label="Gender (PAR)" value={selected.cloth.gender} />}
                   {selected.cloth.ageGroup && <DR label="Age Group (PAR)" value={selected.cloth.ageGroup} />}
                   {selected.cloth.lower && <DR label="Cloth↓" value={selected.cloth.lower} />}
                   {selected.cloth.sleeve && <DR label="Sleeve" value={selected.cloth.sleeve} />}
@@ -871,6 +874,12 @@ export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }
                 <DR
                   label="Age (Est.)"
                   value={`~${Math.round(selected.estimatedAge.value)}${selected.estimatedAge.bucket ? ` (${selected.estimatedAge.bucket})` : ''}`}
+                />
+              )}
+              {selected.estimatedGender?.value != null && (
+                <DR
+                  label="Gender (Est.)"
+                  value={`${selected.estimatedGender.value} (${Math.round(selected.estimatedGender.confidence * 100)}%)`}
                 />
               )}
               <DR label="Camera" value={selected.cameraName} />

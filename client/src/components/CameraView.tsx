@@ -297,6 +297,18 @@ function drawOverlay(
       ctx.fillRect(x, belowY, tw4, 16);
       ctx.fillStyle = '#5eead4'; // teal-300 — distinct from color/cloth text colors
       ctx.fillText(txt, x + 4, belowY + 11);
+      belowY += 16;
+    }
+
+    // Dedicated Gender Classification (InsightFace/ViT Gender Classifier) — distinct
+    // from det.cloth.gender's PAR byproduct attribute drawn above.
+    if (det.estimatedGender?.value != null) {
+      const txt = `gender ${det.estimatedGender.value}`;
+      const tw5 = ctx.measureText(txt).width + 8;
+      ctx.fillStyle = 'rgba(0,0,0,0.72)';
+      ctx.fillRect(x, belowY, tw5, 16);
+      ctx.fillStyle = '#f0abfc'; // fuchsia-300 — distinct from age's teal
+      ctx.fillText(txt, x + 4, belowY + 11);
     }
 
   }

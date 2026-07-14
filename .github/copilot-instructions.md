@@ -42,7 +42,8 @@ loitering_tracking/
 │   │   ├── mediamtxManager.js  # MediaMTX 경로 등록/해제 (WebRTC WHEP)
 │   │   ├── analysisClient.js   # streaming→analysis HTTP 클라이언트
 │   │   ├── fireSmokeService.js # 화재/연기 감지
-│   │   └── ageEstimationService.js # 연령 예측 — InsightFace GenderAge/ViT Age Classifier admin-selectable (opt-in, Proposed)
+│   │   ├── ageEstimationService.js # 연령 예측 — InsightFace GenderAge/ViT Age Classifier admin-selectable (opt-in, Proposed)
+│   │   └── genderClassificationService.js # 성별 분류 — InsightFace GenderAge/ViT Gender Classifier admin-selectable (opt-in, Proposed)
 │   ├── api/               # Express API 라우터
 │   ├── routes/            # 인증/관리자/분석 라우터
 │   │   ├── analysisApi.js      # AI 분석 API (analysis/combined 모드)

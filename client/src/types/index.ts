@@ -219,6 +219,17 @@ export interface EstimatedAge {
   modelId:  string;           // 'insightface-genderage' | 'vit-age-classifier'
 }
 
+// Dedicated Gender Classification feature (InsightFace GenderAge / ViT Gender
+// Classifier — server/src/services/genderClassificationService.js), distinct
+// from ClothAttribute.gender (a PromptPAR/PA100k byproduct attribute). This is
+// the finer-grained, admin-selectable model's own prediction.
+export interface EstimatedGender {
+  value:      'male' | 'female';
+  confidence: number;         // softmax probability of the winning class (0-1)
+  source:     'face' | 'body';
+  modelId:    string;         // 'insightface-genderage-gender' | 'vit-gender-classifier'
+}
+
 export interface Detection {
   objectId:      string | number;  // string UUID from ByteTracker, or numeric for synthetic detections
   confidence:    number;
@@ -246,6 +257,7 @@ export interface Detection {
   color?: ColorAttribute;
   cloth?: ClothAttribute;
   estimatedAge?: EstimatedAge | null;
+  estimatedGender?: EstimatedGender | null;
 }
 
 export interface DetectionFrame {

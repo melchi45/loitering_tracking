@@ -35,7 +35,7 @@ const MASK_COLOR: Record<string, string> = {
 
 export function DetectionRow({ det, isCrossCamera }: { det: Detection; isCrossCamera?: boolean }) {
   const { objectId, className, confidence, dwellTime, isLoitering, bbox, face, mask, hat, color, cloth,
-          faceId, matchScore, estimatedAge,
+          faceId, matchScore, estimatedAge, estimatedGender,
           riskScore, revisitCount, velocity, circularScore } = det;
 
   // Look up canonical alias from the global person registry
@@ -237,6 +237,16 @@ export function DetectionRow({ det, isCrossCamera }: { det: Detection; isCrossCa
           <span className="text-teal-500">age</span>
           <span className="text-teal-300 font-semibold">~{Math.round(estimatedAge.value)}</span>
           {estimatedAge.bucket && <span className="text-teal-600">({estimatedAge.bucket})</span>}
+        </div>
+      )}
+
+      {/* Dedicated Gender Classification (InsightFace/ViT Gender Classifier) — distinct
+          from the "attrs" gender below (PromptPAR/PA100k byproduct attribute). */}
+      {estimatedGender?.value != null && (
+        <div className="mt-1 flex items-center gap-1.5 text-[10px] font-mono">
+          <span className="text-fuchsia-500">gender</span>
+          <span className="text-fuchsia-300 font-semibold">{estimatedGender.value}</span>
+          <span className="text-fuchsia-600">({Math.round(estimatedGender.confidence * 100)}%)</span>
         </div>
       )}
 

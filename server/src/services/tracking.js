@@ -206,6 +206,7 @@ class Track {
     this.cloth        = null; // { upper, lower, sleeve } from PAR model, or null
     this.accessories  = null; // { hat: bool, mask: bool } from PPE model, or null
     this.estimatedAge = null; // { value, bucket?, source, modelId } from Age Estimation model (Proposed), or null
+    this.estimatedGender = null; // { value, confidence, source, modelId } from Gender Classification model (Proposed), or null
   }
 
   predict() {
@@ -418,6 +419,12 @@ class ByteTracker {
   updateEstimatedAge(objectId, estimatedAge) {
     const track = this._tracks.find(t => t.id === objectId);
     if (track && estimatedAge) track.estimatedAge = estimatedAge;
+  }
+
+  /** Store the Gender Classification model's result (Proposed) on the track — mirrors updateEstimatedAge. */
+  updateEstimatedGender(objectId, estimatedGender) {
+    const track = this._tracks.find(t => t.id === objectId);
+    if (track && estimatedGender) track.estimatedGender = estimatedGender;
   }
 
   /**

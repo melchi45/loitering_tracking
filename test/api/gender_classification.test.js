@@ -1,23 +1,23 @@
 'use strict';
 /**
- * AI Age Estimation Tests
+ * AI Gender Classification Tests
  *
- * TC: TC_AI_Age_Estimation
- *   Covers: TC-AGE-007, TC-AGE-008, TC-AGE-009, TC-AGE-014 (partial), TC-AGE-016 (unit — no running server required)
- *   Not automated here (see TC_AI_Age_Estimation.md §2): TC-AGE-001~006, TC-AGE-010~013, TC-AGE-015
+ * TC: TC_AI_Gender_Classification
+ *   Covers: TC-GEN-007, TC-GEN-008, TC-GEN-009, TC-GEN-014 (partial), TC-GEN-016 (unit — no running server required)
+ *   Not automated here (see TC_AI_Gender_Classification.md §2): TC-GEN-001~006, TC-GEN-010~013, TC-GEN-015
  *   (catalog/download/switch/toggle/persistence/display behavior — require a running
  *   analysis server and/or downloaded model files; exercised manually via the Admin
  *   Dashboard and live camera).
  *
- * Exercises server/src/services/ageEstimationService.js directly — no server
+ * Exercises server/src/services/genderClassificationService.js directly — no server
  * prerequisite, no real ONNX model file (the ONNX session is stubbed).
- * Run: node test/api/age_estimation.test.js
+ * Run: node test/api/gender_classification.test.js
  */
 
 const fs   = require('fs');
 const path = require('path');
-const { AgeEstimationService, VIT_AGE_BUCKET_CLASSES, VIT_AGE_BUCKET_MIDPOINT } =
-  require('../../server/src/services/ageEstimationService');
+const { GenderClassificationService, VIT_GENDER_CLASSES } =
+  require('../../server/src/services/genderClassificationService');
 const PipelineManager = require('../../server/src/services/pipelineManager');
 
 let passed = 0;
@@ -52,10 +52,10 @@ async function makeFixtureJpeg(width = 64, height = 64) {
 }
 
 async function runGroupA() {
-  console.log('\n[Group A] Graceful load — TC-AGE-007');
+  console.log('\n[Group A] Graceful load — TC-GEN-007');
 
-  await test('TC-AGE-007', 'load() sets status="missing" when the model file does not exist, without throwing', async () => {
-    const svc = new AgeEstimationService({ modelPath: require('path').join(__dirname, '__nonexistent_age_model__.onnx') });
+  await test('TC-GEN-007', 'load() sets status="missing" when the model file does not exist, without throwing', async () => {
+    const svc = new GenderClassificationService({ modelPath: require('path').join(__dirname, '__nonexistent_gender_model__.onnx') });
     await svc.load();
     assert(svc.status === 'missing', `expected status 'missing', got '${svc.status}'`);
     assert(svc.ready === false, 'ready must be false when model is missing');
@@ -63,10 +63,10 @@ async function runGroupA() {
 }
 
 async function runGroupB() {
-  console.log('\n[Group B] Model switching — TC-AGE-006 (unit-level)');
+  console.log('\n[Group B] Model switching — TC-GEN-006 (unit-level)');
 
-  await test('TC-AGE-006b', 'reload() updates modelPath and re-runs load() against the new path', async () => {
-    const svc = new AgeEstimationService({ modelPath: require('path').join(__dirname, '__nonexistent_a__.onnx') });
+  await test('TC-GEN-006b', 'reload() updates modelPath and re-runs load() against the new path', async () => {
+    const svc = new GenderClassificationService({ modelPath: require('path').join(__dirname, '__nonexistent_a__.onnx') });
     await svc.load();
     assert(svc.status === 'missing', 'sanity: initial load should report missing');
 
@@ -78,31 +78,32 @@ async function runGroupB() {
 }
 
 async function runGroupC() {
-  console.log('\n[Group C] Output normalization — TC-AGE-008');
+  console.log('\n[Group C] Output normalization — TC-GEN-008');
 
-  await test('TC-AGE-008a', 'InsightFace variant: estimateAge() normalizes to {value, source, modelId}, no bucket', async () => {
-    const svc = new AgeEstimationService({ modelPath: '/fake/models/genderage.onnx' });
+  await test('TC-GEN-008a', 'InsightFace variant: classifyGender() normalizes to {value, confidence, source, modelId}', async () => {
+    const svc = new GenderClassificationService({ modelPath: '/fake/models/genderage.onnx' });
     svc._session = {
       inputNames: ['input'],
       outputNames: ['output'],
-      run: async () => ({ output: { data: [0.1, 0.9, 0.25] } }), // age channel = 0.25 → 25
+      // gender logits [female, male] favor male, age channel (ignored here) = 0.25
+      run: async () => ({ output: { data: [0.1, 0.9, 0.25] } }),
     };
     svc._ready = true;
     svc._status = 'loaded';
 
     const jpeg = await makeFixtureJpeg();
-    const result = await svc.estimateAge(jpeg, { x: 0, y: 0, width: 32, height: 32 }, { isFaceCrop: true });
+    const result = await svc.classifyGender(jpeg, { x: 0, y: 0, width: 32, height: 32 }, { isFaceCrop: true });
     assert(result, 'expected a result object');
-    assert(result.value === 25, `expected value=25, got ${result.value}`);
-    assert(result.bucket === undefined, 'InsightFace result should not carry a bucket field');
+    assert(result.value === 'male', `expected value='male', got '${result.value}'`);
+    assert(result.confidence > 0.5, `expected confidence > 0.5 for the dominant class, got ${result.confidence}`);
     assert(result.source === 'face', `expected source='face', got '${result.source}'`);
-    assert(result.modelId === 'insightface-genderage', `expected modelId='insightface-genderage', got '${result.modelId}'`);
+    assert(result.modelId === 'insightface-genderage-gender', `expected modelId='insightface-genderage-gender', got '${result.modelId}'`);
   });
 
-  await test('TC-AGE-008b', 'ViT variant: estimateAge() argmaxes the 9-bucket softmax and maps to the documented midpoint', async () => {
-    const svc = new AgeEstimationService({ modelPath: '/fake/models/vit_age_classifier.onnx' });
-    const logits = new Array(VIT_AGE_BUCKET_CLASSES.length).fill(0);
-    const targetIndex = VIT_AGE_BUCKET_CLASSES.indexOf('20-29');
+  await test('TC-GEN-008b', 'ViT variant: classifyGender() argmaxes the 2-class softmax', async () => {
+    const svc = new GenderClassificationService({ modelPath: '/fake/models/vit_gender_classifier.onnx' });
+    const logits = new Array(VIT_GENDER_CLASSES.length).fill(0);
+    const targetIndex = VIT_GENDER_CLASSES.indexOf('female');
     logits[targetIndex] = 10; // dominant class
     svc._session = {
       inputNames: ['pixel_values'],
@@ -113,66 +114,67 @@ async function runGroupC() {
     svc._status = 'loaded';
 
     const jpeg = await makeFixtureJpeg(224, 224);
-    const result = await svc.estimateAge(jpeg, { x: 0, y: 0, width: 100, height: 100 }, { isFaceCrop: false });
+    const result = await svc.classifyGender(jpeg, { x: 0, y: 0, width: 100, height: 100 }, { isFaceCrop: false });
     assert(result, 'expected a result object');
-    assert(result.bucket === '20-29', `expected bucket='20-29', got '${result.bucket}'`);
-    assert(result.value === VIT_AGE_BUCKET_MIDPOINT['20-29'], `expected value=${VIT_AGE_BUCKET_MIDPOINT['20-29']}, got ${result.value}`);
+    assert(result.value === 'female', `expected value='female', got '${result.value}'`);
+    assert(result.confidence > 0.9, `expected high confidence for the dominant class, got ${result.confidence}`);
     assert(result.source === 'body', `expected source='body', got '${result.source}'`);
-    assert(result.modelId === 'vit-age-classifier', `expected modelId='vit-age-classifier', got '${result.modelId}'`);
+    assert(result.modelId === 'vit-gender-classifier', `expected modelId='vit-gender-classifier', got '${result.modelId}'`);
   });
 }
 
 async function runGroupD() {
-  console.log('\n[Group D] Fallback / graceful no-op — TC-AGE-009');
+  console.log('\n[Group D] Fallback / graceful no-op — TC-GEN-009');
 
-  await test('TC-AGE-009', 'estimateAge() returns null (no throw) when the service is not ready or bbox is missing', async () => {
-    const svc = new AgeEstimationService({ modelPath: '/fake/models/genderage.onnx' });
+  await test('TC-GEN-009', 'classifyGender() returns null (no throw) when the service is not ready or bbox is missing', async () => {
+    const svc = new GenderClassificationService({ modelPath: '/fake/models/genderage.onnx' });
     // Not ready (no load() / stubbed session) — must return null, not throw.
     const jpeg = await makeFixtureJpeg();
-    const r1 = await svc.estimateAge(jpeg, { x: 0, y: 0, width: 32, height: 32 }, { isFaceCrop: true });
+    const r1 = await svc.classifyGender(jpeg, { x: 0, y: 0, width: 32, height: 32 }, { isFaceCrop: true });
     assert(r1 === null, 'expected null when service is not ready');
 
     svc._ready = true;
     svc._status = 'loaded';
-    const r2 = await svc.estimateAge(jpeg, null, { isFaceCrop: false });
+    const r2 = await svc.classifyGender(jpeg, null, { isFaceCrop: false });
     assert(r2 === null, 'expected null when bbox is missing, even if ready');
   });
 }
 
 async function runGroupE() {
-  console.log('\n[Group E] Metrics diagnostic field — TC-AGE-014');
+  console.log('\n[Group E] Metrics diagnostic field — TC-GEN-014');
 
-  await test('TC-AGE-014a', 'getAnalysisMetrics().services includes an ageEstimation key (was silently omitted before 2026-07-14)', async () => {
+  await test('TC-GEN-014a', 'getAnalysisMetrics().services includes a genderClassification key', async () => {
     // getAnalysisMetrics() reads analyticsConfig.getConfig(), which touches the
     // global DB singleton — point it at a scratch dir so this stays a no-server-
     // required unit test rather than polluting storage/lts.json.
     const os = require('os');
-    process.env.STORAGE_PATH = fs.mkdtempSync(path.join(os.tmpdir(), 'lts-age-test-'));
+    process.env.STORAGE_PATH = fs.mkdtempSync(path.join(os.tmpdir(), 'lts-gender-test-'));
     const { initDB } = require('../../server/src/db');
     await initDB();
 
     // Call the real method against a minimal fake instance (prototype chain intact,
     // so other prototype methods like _getLoadedModels() still resolve) — a full
     // constructor call pulls in capture/WebRTC engines out of scope for this
-    // unit-level file; see TC_AI_Age_Estimation.md TC-AGE-014 for the full-server check.
+    // unit-level file; see TC_AI_Gender_Classification.md TC-GEN-014 for the full-server check.
     const fakeThis = Object.assign(Object.create(PipelineManager.prototype), {
       _pipelines: new Map(),
       _detector: null,
       _attrPipeline: null,
       _fireSmokeService: null,
-      _ageEstimation: new AgeEstimationService(),
+      _ageEstimation: null,
+      _genderClassification: new GenderClassificationService(),
       _db: { all() { return []; } },
     });
     const metrics = fakeThis.getAnalysisMetrics();
-    assert(Object.prototype.hasOwnProperty.call(metrics.services, 'ageEstimation'),
-      'services object must have an ageEstimation key, even before any model is loaded');
-    assert(metrics.services.ageEstimation === 'not_started',
-      `expected 'not_started' for a freshly constructed service, got '${metrics.services.ageEstimation}'`);
+    assert(Object.prototype.hasOwnProperty.call(metrics.services, 'genderClassification'),
+      'services object must have a genderClassification key, even before any model is loaded');
+    assert(metrics.services.genderClassification === 'not_started',
+      `expected 'not_started' for a freshly constructed service, got '${metrics.services.genderClassification}'`);
   });
 }
 
 async function runGroupF() {
-  console.log('\n[Group F] analysisApi.js detectionTracks persistence — TC-AGE-016');
+  console.log('\n[Group F] analysisApi.js detectionTracks persistence — TC-GEN-016');
 
   const analysisApiSrc = fs.readFileSync(
     path.join(__dirname, '../../server/src/routes/analysisApi.js'), 'utf8');
@@ -185,33 +187,27 @@ async function runGroupF() {
     return analysisApiSrc.slice(start, end);
   }
 
-  await test('TC-AGE-016a', '30s active-flush fields object carries estimatedAge/estimatedGender through to detectionTracks',
+  await test('TC-GEN-016a', '30s active-flush fields object carries estimatedGender through to detectionTracks',
     async () => {
       const activeFlush = section(
         '// Active track flush: upsert long-running in-frame tracks every 30s',
         '// ── POST /api/analysis/frame');
-      assert(/estimatedAge/.test(activeFlush),
-        'active-flush fields object omits estimatedAge — in-progress tracks in the Detections timeline will show no age (Design doc §12.2)');
       assert(/estimatedGender/.test(activeFlush),
-        'active-flush fields object omits estimatedGender');
+        'active-flush fields object omits estimatedGender — in-progress tracks in the Detections timeline will show no gender (mirrors Age Estimation Design doc §12.2)');
     });
 
-  await test('TC-AGE-016b', 'per-frame _trackMeta create/update block carries estimatedAge/estimatedGender (mirrors color/cloth)',
+  await test('TC-GEN-016b', 'per-frame _trackMeta create/update block carries estimatedGender (mirrors color/cloth/estimatedAge)',
     async () => {
       const trackMetaBlock = section(
         '// ── Track lifecycle: update _trackMeta + flush removed tracks to DB',
         'if (fireSmoke.length > 0) _persistFireSmoke(');
-      assert(/existing\.estimatedAge\s*=\s*obj\.estimatedAge/.test(trackMetaBlock),
-        '_trackMeta update branch does not propagate obj.estimatedAge onto the existing meta entry');
       assert(/existing\.estimatedGender\s*=\s*obj\.estimatedGender/.test(trackMetaBlock),
         '_trackMeta update branch does not propagate obj.estimatedGender onto the existing meta entry');
-      assert(/estimatedAge:\s*obj\.estimatedAge\s*\?\?\s*null/.test(trackMetaBlock),
-        '_trackMeta creation branch does not seed estimatedAge for a newly-seen track');
       assert(/estimatedGender:\s*obj\.estimatedGender\s*\?\?\s*null/.test(trackMetaBlock),
         '_trackMeta creation branch does not seed estimatedGender for a newly-seen track');
     });
 
-  await test('TC-AGE-016c', 'track-completion _completedFields object carries estimatedAge/estimatedGender into the persisted detectionTracks row',
+  await test('TC-GEN-016c', 'track-completion _completedFields object carries estimatedGender into the persisted detectionTracks row',
     async () => {
       const trackMetaBlock = section(
         '// ── Track lifecycle: update _trackMeta + flush removed tracks to DB',
@@ -219,17 +215,15 @@ async function runGroupF() {
       const completedFieldsStart = trackMetaBlock.indexOf('_completedFields = {');
       assert(completedFieldsStart !== -1, '_completedFields object literal not found');
       const completedFields = trackMetaBlock.slice(completedFieldsStart, trackMetaBlock.indexOf('};', completedFieldsStart));
-      assert(/estimatedAge:\s*meta\.estimatedAge/.test(completedFields),
-        '_completedFields omits estimatedAge — a track that ends (leaves frame) will persist to detectionTracks with no age, even though it was attached live (Design doc §12.2 root cause 2)');
       assert(/estimatedGender:\s*meta\.estimatedGender/.test(completedFields),
-        '_completedFields omits estimatedGender');
+        '_completedFields omits estimatedGender — a track that ends (leaves frame) will persist to detectionTracks with no gender');
     });
 }
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
-  console.log('=== TC_AI_Age_Estimation ===');
+  console.log('=== TC_AI_Gender_Classification ===');
 
   await runGroupA();
   await runGroupB();

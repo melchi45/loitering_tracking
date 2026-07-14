@@ -29,6 +29,7 @@ const AttributePipeline = require('../services/attributePipeline');
 const FireSmokeService  = require('../services/fireSmokeService');
 const { AppearanceReidService } = require('../services/appearanceReidService');
 const { AgeEstimationService, VIT_AGE_BUCKET_CLASSES } = require('../services/ageEstimationService');
+const { GenderClassificationService, VIT_GENDER_CLASSES } = require('../services/genderClassificationService');
 const { SCHP_LIP20_CLASS_MAP, SEGFORMER_CLOTHES_CLASS_MAP } = require('../services/colorClothService');
 const analyticsConfig   = require('../services/analyticsConfig');
 const { getSystemMetrics } = require('../services/systemMetrics');
@@ -186,6 +187,21 @@ const EXTENDED_CATALOG = [
     hfOptimumExport: { repo: 'nateraw/vit-age-classifier' },
     license: 'See Hugging Face model card', classMap: VIT_AGE_BUCKET_CLASSES,
   },
+  // Gender Classification (Proposed) — dedicated gender prediction, independent of the
+  // PA100k cloth-PAR `gender` byproduct (see RFP_AI_Gender_Classification.md §9 /
+  // Design_AI_Gender_Classification.md §9).
+  {
+    id: 'insightface-genderage-gender', label: 'InsightFace GenderAge (buffalo_l)', family: 'gender-classification', series: 'Gender Classification',
+    file: 'genderage.onnx', size: 96,
+    url: 'https://huggingface.co/JackCui/facefusion/resolve/main/gender_age.onnx', // same file as age-estimation's insightface-genderage entry
+    license: 'InsightFace non-commercial research license (acceptable — non-commercial project)',
+  },
+  {
+    id: 'vit-gender-classifier', label: 'ViT Gender Classifier (rizvandwiki)', family: 'gender-classification', series: 'Gender Classification',
+    file: 'vit_gender_classifier.onnx', size: 224,
+    hfOptimumExport: { repo: 'rizvandwiki/gender-classification-2' },
+    license: 'See Hugging Face model card', classMap: VIT_GENDER_CLASSES,
+  },
 ];
 const ALL_MODELS = [...MODEL_CATALOG, ...EXTENDED_CATALOG];
 
@@ -209,6 +225,8 @@ function _activeFileForEntry(m, detectorActiveFile) {
       return _attrPipeline?._color?._parReady ? path.basename(_attrPipeline._color.parModelPath) : null;
     case 'age-estimation':
       return _ageEstimation?.ready ? path.basename(_ageEstimation.modelPath) : null;
+    case 'gender-classification':
+      return _genderClassification?.ready ? path.basename(_genderClassification.modelPath) : null;
     default:
       return detectorActiveFile; // YOLO detector families (undefined `family`)
   }
@@ -668,6 +686,7 @@ let _attrPipeline     = null;
 let _fireSmokeService = null;
 let _appearanceReid   = null; // CrossCamera Face Tracking Phase-2 (Proposed)
 let _ageEstimation    = null; // Age Estimation (Proposed)
+let _genderClassification = null; // Gender Classification (Proposed)
 let _servicesReady    = false;
 
 // Age Estimation (Proposed) — throttle re-inference per track, mirroring
@@ -675,6 +694,11 @@ let _servicesReady    = false;
 // locally-captured-camera loop (see Design_AI_Age_Estimation.md §12).
 const AGE_ESTIMATION_INTERVAL_MS = 4000;
 const _ageEstimateCache = new Map(); // objectId -> { ts, result }
+
+// Gender Classification (Proposed) — same per-track throttle pattern as Age
+// Estimation (see Design_AI_Gender_Classification.md §12).
+const GENDER_CLASSIFICATION_INTERVAL_MS = 4000;
+const _genderClassifyCache = new Map(); // objectId -> { ts, result }
 
 // Single promise guards concurrent callers — all waiters share the same load.
 let _loadPromise = null;
@@ -727,6 +751,14 @@ async function _loadServices() {
   } catch (err) {
     console.warn('[AnalysisAPI] AgeEstimationService load warn:', err.message);
     _ageEstimation = null;
+  }
+  try {
+    _genderClassification = new GenderClassificationService();
+    await _genderClassification.load();
+    console.log('[AnalysisAPI] GenderClassificationService loaded (Proposed):', _genderClassification.status);
+  } catch (err) {
+    console.warn('[AnalysisAPI] GenderClassificationService load warn:', err.message);
+    _genderClassification = null;
   }
   _servicesReady = true;
 }
@@ -905,6 +937,8 @@ setInterval(() => {
         zoneName:    meta.zoneName,
         color:       meta.color,
         cloth:       meta.cloth,
+        estimatedAge:    meta.estimatedAge,
+        estimatedGender: meta.estimatedGender,
         inProgress:  true,
       };
       const _ex = _db.findOne('detectionTracks', { objectId: trackKey, cameraId: camId });
@@ -1081,6 +1115,37 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
             }
           } catch (err) {
             console.warn('[AnalysisAPI] Age Estimation warn:', err.message);
+          }
+        }));
+    }
+
+    // 4.45 Gender Classification (Proposed) — same face/body fallback + throttle
+    // pattern as Age Estimation immediately above. Wired into both this handler
+    // AND pipelineManager.js's local-camera loop from day one (Age Estimation
+    // shipped only in the latter first and needed a follow-up fix — see
+    // Design_AI_Age_Estimation.md §12.1 — this module avoids repeating that gap).
+    if (analyticsConfig.isEnabled('genderClassification') && _genderClassification?.ready) {
+      const _genderNow = Date.now();
+      await Promise.all(enrichedObjects
+        .filter(o => o.className === 'person')
+        .map(async (o) => {
+          const bbox = o.face?.bbox || o.bbox;
+          if (!bbox) return;
+          const isFaceCrop = !!o.face?.bbox;
+          const cacheKey = String(o.objectId);
+          const cached = _genderClassifyCache.get(cacheKey);
+          if (cached && (_genderNow - cached.ts) < GENDER_CLASSIFICATION_INTERVAL_MS) {
+            o.estimatedGender = cached.result;
+            return;
+          }
+          try {
+            const result = await _genderClassification.classifyGender(jpegBuffer, bbox, { isFaceCrop });
+            if (result) {
+              o.estimatedGender = result;
+              _genderClassifyCache.set(cacheKey, { ts: _genderNow, result });
+            }
+          } catch (err) {
+            console.warn('[AnalysisAPI] Gender Classification warn:', err.message);
           }
         }));
     }
@@ -1283,6 +1348,8 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
           if (obj.zoneName)    existing.zoneName    = obj.zoneName;
           if (obj.color)       existing.color       = obj.color;
           if (obj.cloth)       existing.cloth       = obj.cloth;
+          if (obj.estimatedAge)    existing.estimatedAge    = obj.estimatedAge;
+          if (obj.estimatedGender) existing.estimatedGender = obj.estimatedGender;
           existing.confidence = Math.max(existing.confidence, obj.confidence ?? 0);
         } else {
           ctx._trackMeta.set(id, {
@@ -1298,6 +1365,8 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
             zoneName:     obj.zoneName    ?? null,
             color:        obj.color       ?? null,
             cloth:        obj.cloth       ?? null,
+            estimatedAge:    obj.estimatedAge    ?? null,
+            estimatedGender: obj.estimatedGender ?? null,
           });
         }
       }
@@ -1328,6 +1397,8 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
           zoneName:    meta.zoneName,
           color:       meta.color,
           cloth:       meta.cloth,
+          estimatedAge:    meta.estimatedAge,
+          estimatedGender: meta.estimatedGender,
           inProgress:  false,
         };
         const _ex = db.findOne('detectionTracks', { objectId: trackKey, cameraId });
@@ -1485,9 +1556,11 @@ router.get('/metrics', (req, res) => {
     uptimeSec: Math.round(process.uptime()),
     activeCameras: _cameraContexts.size,
     services: {
-      detector:         _detector ? 'loaded' : (_loadPromise ? 'loading' : 'not-loaded'),
-      attrPipeline:     _attrPipeline?.anyReady ? 'ready' : 'not-ready',
-      fireSmokeService: _fireSmokeService ? 'loaded' : 'not-loaded',
+      detector:            _detector ? 'loaded' : (_loadPromise ? 'loading' : 'not-loaded'),
+      attrPipeline:        _attrPipeline?.anyReady ? 'ready' : 'not-ready',
+      fireSmokeService:    _fireSmokeService ? 'loaded' : 'not-loaded',
+      ageEstimation:       _ageEstimation ? _ageEstimation.status : 'not_started',
+      genderClassification: _genderClassification ? _genderClassification.status : 'not_started',
     },
     modules: {
       enabled: enabledModules,
@@ -1821,6 +1894,11 @@ router.post('/models/switch', express.json({ limit: '1kb' }), async (req, res) =
         if (!_ageEstimation) _ageEstimation = new AgeEstimationService();
         await _ageEstimation.reload(filePath);
         break;
+      case 'gender-classification':
+        // Gender Classification (Proposed) — hot-swap the active gender model.
+        if (!_genderClassification) _genderClassification = new GenderClassificationService();
+        await _genderClassification.reload(filePath);
+        break;
       default: // YOLO detector families (undefined `family`)
         if (!_detector) {
           _detector = new DetectionService({ modelPath: filePath });
@@ -1875,6 +1953,9 @@ router.post('/models/deactivate', express.json({ limit: '1kb' }), async (req, re
         break;
       case 'age-estimation':
         _ageEstimation?.unload();
+        break;
+      case 'gender-classification':
+        _genderClassification?.unload();
         break;
       default: // YOLO detector families (undefined `family`) cannot be deactivated
         return res.status(400).json({
