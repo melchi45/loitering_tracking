@@ -110,6 +110,8 @@ gcc -O2 -fPIC -shared \
 
 **HF_TOKEN (gated HuggingFace 저장소)**: `insightface-genderage`(buffalo_l)처럼 플레인 다운로드 URL이 HTTP 401을 반환하기 시작하면(저장소가 gated로 전환됨), `server/.env`에 `HF_TOKEN`을 설정하세요 — `doDownload()`가 `*.huggingface.co` 호스트에 한해 `Authorization: Bearer` 헤더를 자동 첨부합니다. `hfExport`/`hfOptimumExport` 경로(Python `huggingface_hub`/`optimum`)는 별도 코드 변경 없이 동일 환경변수를 자동으로 읽습니다.
 
+**PromptPAR용 Windows CUDA 설치 자동화 (`setup-cuda.windows.ps1`, 2026-07-14)**: PromptPAR export(`exportPromptPAR.py`)는 OpenPAR 모델 코드가 `.cuda()`를 하드코딩해 CPU 폴백이 없음 — NVIDIA GPU가 있는 Windows 머신에서 `powershell -ExecutionPolicy Bypass -File server/src/scripts/setup-cuda.windows.ps1`(관리자 권한 필요)를 실행하면 nvidia-smi로 드라이버 확인 → CUDA Toolkit network installer 자동 다운로드·설치(기본 12.4.1, 드라이버는 이미 있다고 가정하고 기본적으로 건드리지 않음, `-IncludeDriver`로 opt-in) → 매칭되는 CUDA 지원 PyTorch wheel 설치 → `torch.cuda.is_available()` 검증까지 자동화합니다. GPU가 없는 머신에서는 애초에 동작하지 않으므로(CUDA는 NVIDIA 하드웨어 필수), 그 경우 GPU 머신에서 한 번 export한 `openpar_pa100k.onnx`를 대상 서버 `server/models/`에 복사하거나 `openpar-resnet50-pa100k`(manualOnly) 대안을 사용.
+
 #### YOLO26 지원 모델 (mAP COCO val2017 50-95, 2026 출시 — NMS-free 엔드투엔드)
 
 | ID | mAP | CPU (ms) | T4 (ms) | Params |
