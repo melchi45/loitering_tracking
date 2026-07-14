@@ -47,6 +47,16 @@ Event-AHU/OpenPAR repository as of 2026-07):
                                        set it once you know the individual file's Drive ID)
   PROMPTPAR_VIT_BACKBONE_URL          default: https://github.com/huggingface/pytorch-image-models/
                                        releases/download/v0.1-vitjx/jx_vit_base_p16_224-80ecf9dd.pth
+  PROMPTPAR_INSECURE_SSL              default: 0 — set to 1 only if Stage 4's drive.google.com
+                                       download fails with "SSLCertVerificationError: self-signed
+                                       certificate in certificate chain". That error means a
+                                       corporate TLS-inspecting proxy is re-signing HTTPS traffic
+                                       with its own root CA, which Python's certifi bundle doesn't
+                                       trust — it is not a bug in this script or gdown. The correct
+                                       fix is adding that corporate root CA to REQUESTS_CA_BUNDLE;
+                                       this flag is the pragmatic escape hatch when that isn't
+                                       practical, and only disables verification for the Google
+                                       Drive checkpoint download, not the whole process.
 
 Called automatically by POST /api/analysis/models/download { modelId: 'openpar-pa100k' }
 via the `pyExport` catalog source strategy in server/src/routes/analysisApi.js — this
@@ -87,6 +97,7 @@ VIT_BACKBONE_URL       = os.environ.get(
     'https://github.com/huggingface/pytorch-image-models/releases/download/'
     'v0.1-vitjx/jx_vit_base_p16_224-80ecf9dd.pth',
 )
+INSECURE_SSL           = os.environ.get('PROMPTPAR_INSECURE_SSL', '').strip().lower() in ('1', 'true')
 
 TOTAL_STAGES = 7
 
@@ -193,18 +204,38 @@ try:
     os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_path = os.path.join(checkpoint_dir, CHECKPOINT_FILENAME)
 
+    if INSECURE_SSL:
+        print('[PromptPAR Export] PROMPTPAR_INSECURE_SSL=1 — skipping TLS certificate '
+              'verification for the Google Drive download only.', flush=True)
+
     if not os.path.exists(checkpoint_path):
-        if CHECKPOINT_FILE_ID:
-            # Fast path: caller supplied the individual file's Drive ID directly.
-            gdown.download(id=CHECKPOINT_FILE_ID, output=checkpoint_path, quiet=False)
-        else:
-            # Slow path: the checkpoint is published inside a shared Drive *folder*
-            # (drive.google.com/drive/folders/<id>), not as a single direct-download
-            # link, so there is no individual file ID to target without either
-            # (a) the Google Drive API + credentials, or (b) downloading the whole
-            # folder and picking the file out. gdown's folder download handles the
-            # confirm-token/virus-scan dance for every file in the folder.
-            gdown.download_folder(id=GDRIVE_FOLDER_ID, output=checkpoint_dir, quiet=False, use_cookies=False)
+        try:
+            if CHECKPOINT_FILE_ID:
+                # Fast path: caller supplied the individual file's Drive ID directly.
+                gdown.download(id=CHECKPOINT_FILE_ID, output=checkpoint_path, quiet=False, verify=not INSECURE_SSL)
+            else:
+                # Slow path: the checkpoint is published inside a shared Drive *folder*
+                # (drive.google.com/drive/folders/<id>), not as a single direct-download
+                # link, so there is no individual file ID to target without either
+                # (a) the Google Drive API + credentials, or (b) downloading the whole
+                # folder and picking the file out. gdown's folder download handles the
+                # confirm-token/virus-scan dance for every file in the folder.
+                gdown.download_folder(id=GDRIVE_FOLDER_ID, output=checkpoint_dir, quiet=False,
+                                       use_cookies=False, verify=not INSECURE_SSL)
+        except Exception as exc:
+            if 'CERTIFICATE_VERIFY_FAILED' in str(exc) and not INSECURE_SSL:
+                die(
+                    f'Google Drive download failed: {exc}',
+                    'this is a TLS certificate verification failure, not a bug in this script — '
+                    '"self-signed certificate in certificate chain" means a corporate TLS-inspecting '
+                    'proxy is re-signing HTTPS traffic with its own root CA that Python\'s certifi '
+                    'bundle does not trust. Correct fix: add that root CA to REQUESTS_CA_BUNDLE. '
+                    'Pragmatic workaround: re-run with PROMPTPAR_INSECURE_SSL=1 (disables verification '
+                    'for this Google Drive download only).'
+                )
+            raise
+
+        if not CHECKPOINT_FILE_ID:
             if not os.path.exists(checkpoint_path):
                 found = None
                 for root, _dirs, files in os.walk(checkpoint_dir):
