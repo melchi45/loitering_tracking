@@ -239,7 +239,14 @@ if (-not $nvcc) {
 # --- Step 6: install CUDA-matched PyTorch and verify -------------------------
 Write-Host "[6/7] Installing CUDA-enabled PyTorch (cu$($cudaShort.Replace('_',''))) via $PythonExe..."
 $torchIndex = "https://download.pytorch.org/whl/cu$($cudaShort.Replace('_',''))"
-& $PythonExe -m pip install --upgrade torch torchvision --index-url $torchIndex
+# --force-reinstall --no-cache-dir: a plain `pip install torch` (CPU wheel, from
+# PyPI's default index) may already be present — e.g. analysisApi.js's
+# auto-pip-install feature installs a bare `torch` with no --index-url the first
+# time a model download needs it. Plain --upgrade against a different index can
+# leave that CPU build in place if pip considers the locally installed version
+# to already satisfy the requirement, silently producing exactly the
+# "CUDA available: False" result reported after the first run of this script.
+& $PythonExe -m pip install --force-reinstall --no-cache-dir torch torchvision --index-url $torchIndex
 if ($LASTEXITCODE -ne 0) {
     Write-Error "pip install of CUDA-enabled torch failed against index $torchIndex — that exact cuXXX wheel variant may not be published for this CUDA version. Check https://pytorch.org/get-started/locally/ for the currently published index URL and re-run with a matching -CudaVersion."
     exit 1
@@ -247,7 +254,7 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host ""
 Write-Host "Verifying torch.cuda.is_available()..."
-$verify = & $PythonExe -c "import torch; print('CUDA available:', torch.cuda.is_available()); print('Device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')"
+$verify = & $PythonExe -c "import torch; print('torch version:', torch.__version__); print('CUDA available:', torch.cuda.is_available()); print('Device:', torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'none')"
 Write-Host $verify
 
 if ($verify -match "CUDA available: True") {
@@ -257,6 +264,13 @@ if ($verify -match "CUDA available: True") {
     Write-Host "  GPU-accelerated analysis step) can now run on this machine."
     Write-Host "================================================================"
 } else {
-    Write-Error "torch reports CUDA still unavailable. Common causes: driver/CUDA version mismatch (retry with -CudaVersion matching this driver's max, reported in Step 1), or a stale PowerShell session — open a new one and re-run Steps 5-6 manually."
+    # torch.__version__ has no "+cuXXX" suffix on a CPU-only build — a quick,
+    # visible confirmation of whether Step 6's install actually landed a CUDA
+    # wheel at all, versus a genuine driver/hardware-level problem.
+    if ($verify -notmatch '\+cu\d') {
+        Write-Error "torch version above has no '+cuXXX' suffix — a CPU-only build is still installed despite --force-reinstall. Check the pip output further above for errors, and confirm $torchIndex actually serves a build for this Python version (https://pytorch.org/get-started/locally/)."
+    } else {
+        Write-Error "torch reports a CUDA build installed but CUDA is still unavailable — likely a driver/CUDA version mismatch (this driver's max-supported CUDA was reported in Step 1) or the GPU is not visible to this user session. Try a new PowerShell window, or re-run with -CudaVersion matching the driver's reported max."
+    }
     exit 1
 }
