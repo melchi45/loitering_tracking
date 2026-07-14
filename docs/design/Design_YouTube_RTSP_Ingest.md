@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-YT-01 |
-| **Version** | 1.2 |
+| **Version** | 1.4 |
 | **Status** | Active |
 | **Date** | 2026-06-18 |
 | **Parent SRS** | srs/SRS_YouTube_RTSP_Ingest.md |
@@ -687,6 +687,49 @@ ffmpeg.on('close', (code, signal) => {
 - MediaMTX webhook endpoint (`/internal/mediamtx`) only accepts requests from `127.0.0.1`.
 - RTSP URL is `rtsp://127.0.0.1:8554/yt/<id>` — not exposed to LAN.
 
+### 12.4 HLS Keep-Alive Reconnect Failure — Visible Frame Corruption (2026-07-14)
+
+**증상:** 장시간(수십 분) 캡처 중인 YouTube 라이브 스트림에서 I-frame 이후 P-frame이 누락/손상된 것처럼 화면에 매크로블록 노이즈가 나타났다가 다음 키프레임에서 정상화되는 현상이 보고됨.
+
+**근본 원인:** yt-dlp 내부 ffmpeg(HLS 데먹서)가 다음 세그먼트를 요청할 때 기존 HTTP keep-alive(지속 연결)를 재사용하다 실패하는 경우, 로그에 다음과 같이 기록된다:
+
+```
+[hls @ 0x...] keepalive request failed for 'https://rr...googlevideo.com/videoplayback/...'
+```
+
+이 오류는 HTTP 상태 코드를 동반하지 않는 TCP/TLS 레벨 연결 실패이므로, 기존 `-reconnect_on_http_error 403,404,5xx` 플래그로는 감지·재접속되지 않는다. 바깥쪽 ffmpeg(`_buildFFmpegArgsPipe()`, §5)는 `-c:v copy`로 재인코딩 없이 그대로 통과시키므로, 이 순간 유실/손상된 세그먼트 경계의 프레임이 다음 I-frame이 나올 때까지 시각적 노이즈로 남는다.
+
+**수정:** `_startStream()`의 yt-dlp `--downloader-args`에 두 플래그 추가 (`server/src/services/youtubeStreamService.js`):
+
+```
+-reconnect_on_network_error 1   # TCP/TLS 연결 실패 시 재접속 (상태 코드 없는 오류 포함)
+-http_persistent 0               # 세그먼트마다 새 연결 사용 — keep-alive 재사용 실패 자체를 원천 차단
+```
+
+`ffmpeg -h protocol=https` / `-h demuxer=hls`로 현재 빌드(ffmpeg 4.4.4)가 두 옵션을 모두 지원함을 확인했다. `-http_persistent 0`은 TLS 핸드셰이크 오버헤드가 세그먼트마다 추가되지만, 이 오류 클래스 자체를 없애는 근본적인 수정이다.
+
+**추가 관찰 (같은 날, §12.4 적용 후에도 노이즈 재발 보고):** §12.4는 필요했지만 충분하지 않았다 — 재시작 후 실시간 로그를 계속 관찰한 결과, 훨씬 더 심각한 별개의 실패 모드를 확인했다: 재생 URL 자체가 만료되면 모든 세그먼트 요청이 영구적으로 `HTTP error 403 Forbidden`을 반환하며, 세그먼트 번호만 계속 증가하면서 단 하나도 성공하지 못하는 상태가 무한 반복됐다. `-reconnect_on_http_error 403`이 프로세스를 죽지 않게 유지하지만, 죽은 URL에 재시도해봐야 영원히 실패하므로 새 영상 데이터가 전혀 들어오지 않는 상태가 지속된다 — 상세 원인과 수정은 §12.5 참고.
+
+### 12.5 재생 URL 만료 — 연속 403 감지 후 강제 재시작 (2026-07-14, 근본 원인)
+
+**발견 경위:** 이 정확한 상황을 감지하기 위한 정규식(`HTTP_403_RE`, `URL_EXPIRED_RE`, `server/src/services/youtubeStreamService.js` 상단)이 이미 코드에 존재했으나, 실제로 어디에서도 호출되지 않는 죽은 코드였다 — 감지 로직만 작성되고 실제 스트림 관리 로직에 연결된 적이 없었다.
+
+**수정:** `_startStream()`의 yt-dlp stderr 핸들러에 연속 403 카운터(`_checkForExpiredUrl()`)를 추가했다:
+
+```javascript
+const CONSECUTIVE_403_THRESHOLD = 3;      // 임계 횟수
+const CONSECUTIVE_403_WINDOW_MS = 15000;  // 15초 슬라이딩 윈도우
+
+// yt-dlp stderr 라인이 HTTP_403_RE에 매치될 때마다 호출
+// 윈도우 내 누적 횟수가 임계값 이상이면: ffProc/ytProc를 SIGTERM으로 강제 종료
+// → 기존 ffProc.on('close') → _scheduleRestart(entry, false) 경로가 그대로 재사용됨
+// → _startStream()이 다시 호출되어 완전히 새로운 yt-dlp 프로세스(= 새로 서명된 URL)로 복구
+```
+
+일시적인 403 1회는 기존 `-reconnect_on_http_error`로 충분히 처리되므로 그대로 재시도하게 두고, **짧은 시간 내 반복되는 403만** URL 만료로 판단해 강제 재시작을 트리거한다 — 재시도 자체를 막는 게 아니라, "재시도로는 절대 회복 불가능한 상태"를 구분해서 다른 경로(완전 재시작)로 전환하는 것이 핵심이다.
+
+**검증 상태:** 코드 반영 후 서버 재시작·3개 채널 정상 기동까지 확인. 이 실패 모드는 자연 발생까지 시간이 걸리는 문제(직전 관측: 재시작 후 약 20분 뒤 발생)라, `forcing full restart` 로그 메시지가 실제로 트리거되는 것까지는 아직 실시간으로 재확인하지 못함 — 사용자 관찰 결과를 기다리는 중.
+
 ---
 
 ## Document History
@@ -696,4 +739,6 @@ ffmpeg.on('close', (code, signal) => {
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for YouTube RTSP Ingest |
 | 1.1 | 2026-06-17 | LTS Engineering Team | FFmpeg 파이프라인 최적화: libx264 → -c:v copy, HLS 폴백 포맷 셀렉터 추가, webrtcEnabled 기본값 추가 |
 | 1.2 | 2026-06-18 | LTS Engineering Team | YouTube 채널 UI에 WebRTC 토글 추가: Add/Edit 폼 모두 webrtcEnabled 필드 지원, API 명세 업데이트 |
+| 1.3 | 2026-07-14 | LTS Engineering Team | §12.4 신규 — HLS keep-alive 재접속 실패로 인한 I-frame 이후 노이즈 근본 원인 확정 및 수정(`-reconnect_on_network_error 1 -http_persistent 0` 추가), 실 운영 로그로 확인 |
+| 1.4 | 2026-07-14 | LTS Engineering Team | §12.5 신규 — §12.4 적용 후에도 노이즈 재발 보고를 계기로 재조사, 재생 URL 만료 시 무한 403 루프에 빠지는 더 심각한 실제 근본 원인 확정. 기존에 작성만 되고 연결되지 않았던 `HTTP_403_RE`/`URL_EXPIRED_RE` 죽은 코드를 실제 연속-403 감지+강제 재시작 로직(`_checkForExpiredUrl()`)으로 연결 |
 | 1.3 | 2026-06-26 | LTS Engineering Team | §5.1 YouTube 이중 경로 파이프라인 다이어그램 추가 (ASCII + Mermaid, 코드 라인 참조 포함) |

@@ -156,6 +156,17 @@ const RTSP_OUTPUT_RE = RTSP_LIVE_RE;  // kept for compatibility
 // Detect URL expiry on ytdlp side
 const URL_EXPIRED_RE = /HTTP Error 403|Sign in to confirm|age.*restricted/i;
 
+// A single 403 is transient and already handled by -reconnect_on_http_error (the
+// segment retries automatically). But when the resolved playback URL itself has
+// expired/been invalidated by YouTube, EVERY subsequent segment request 403s
+// forever — reconnect flags keep the process alive but it never produces new
+// video data again, which is exactly the "noise until restart" symptom this
+// guards against (2026-07-14). N consecutive 403s within a short window can only
+// mean the URL is dead, not a one-off blip — only re-invoking yt-dlp (which
+// re-resolves a fresh signed URL) can recover from this, not more reconnects.
+const CONSECUTIVE_403_THRESHOLD  = 3;
+const CONSECUTIVE_403_WINDOW_MS  = 15000;
+
 class YouTubeStreamService {
   /**
    * @param {import('../db').db} db
@@ -629,7 +640,19 @@ class YouTubeStreamService {
         // Reconnect flags on the input make ffmpeg itself retry instead — verified
         // empirically to eliminate the 403s entirely over a 60s continuous capture
         // that previously died within seconds without this.
-        '--downloader-args', 'ffmpeg_i:-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -reconnect_on_http_error 403,404,5xx',
+        //
+        // -reconnect_on_network_error / -http_persistent 0 (2026-07-14): production
+        // logs showed recurring "[hls] keepalive request failed for
+        // https://...googlevideo.com/videoplayback/..." on long-lived captures — a
+        // TCP/TLS-level failure reusing a persistent connection for the next segment,
+        // NOT accompanied by an HTTP status code, so -reconnect_on_http_error above
+        // never catches it. The outer ffmpeg does -c:v copy (no re-encode), so any
+        // frame(s) lost/truncated at that segment boundary pass straight through as
+        // visible macroblock noise until the next I-frame. -http_persistent 0 removes
+        // the failure mode entirely (every segment gets a fresh connection, no
+        // keep-alive reuse to fail); -reconnect_on_network_error 1 is a safety net for
+        // any other connect-time TCP/TLS error.
+        '--downloader-args', 'ffmpeg_i:-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -reconnect_on_http_error 403,404,5xx -reconnect_on_network_error 1 -http_persistent 0',
         '-o', '-',           // output binary stream to stdout
         '--no-progress',     // suppress progress bars (keep errors/warnings visible)
         '--newline',         // one status line per update (easier parsing)
@@ -656,6 +679,30 @@ class YouTubeStreamService {
       entry.ffmpegProcess = ffProc;
 
       let started = false;
+      const _403Timestamps = [];
+      let _forcingRestart = false;
+
+      // Persistent 403s mean the resolved playback URL is dead — kill both
+      // processes so the existing ffProc 'close' → _scheduleRestart() path
+      // re-spawns yt-dlp from scratch (fresh URL resolution). Reconnect flags
+      // alone cannot recover from this since they retry the same dead URL forever.
+      const _checkForExpiredUrl = () => {
+        if (_forcingRestart) return;
+        const now = Date.now();
+        _403Timestamps.push(now);
+        while (_403Timestamps.length && now - _403Timestamps[0] > CONSECUTIVE_403_WINDOW_MS) {
+          _403Timestamps.shift();
+        }
+        if (_403Timestamps.length < CONSECUTIVE_403_THRESHOLD) return;
+        _forcingRestart = true;
+        console.warn(
+          `[YouTubeStream] ${entry.id}: ${_403Timestamps.length} consecutive HTTP 403s within ` +
+          `${CONSECUTIVE_403_WINDOW_MS / 1000}s — playback URL expired, forcing full restart ` +
+          `(re-resolving a fresh URL) instead of continuing to reconnect against a dead one`
+        );
+        ffProc.kill('SIGTERM');
+        ytProc.kill('SIGTERM');
+      };
 
       // ── Buffer FFmpeg stderr line-by-line to avoid chunk-boundary mismatches ──
       // Split on \r\n, \r (ffmpeg progress), or \n to handle all line endings.
@@ -700,6 +747,7 @@ class YouTubeStreamService {
           const msg = line.trim();
           if (!msg) continue;
           if (entry.status === 'stopping' || entry.status === 'removed') break;
+          if (HTTP_403_RE.test(msg)) _checkForExpiredUrl();
           if (/^ERROR:/i.test(msg) || /\b(error|failed|failure)\b/i.test(msg)) {
             console.error(`[YouTubeStream] yt-dlp[${entry.id}]: ${msg.slice(0, 300)}`);
           } else {
