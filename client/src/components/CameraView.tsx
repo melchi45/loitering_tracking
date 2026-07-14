@@ -283,7 +283,20 @@ function drawOverlay(
         ctx.fillRect(x, belowY, tw3, 16);
         ctx.fillStyle = '#a78bfa'; // violet-400 — distinct from gray color text
         ctx.fillText(txt, x + 4, belowY + 11);
+        belowY += 16;
       }
+    }
+
+    // Dedicated Age Estimation (InsightFace/ViT Age Classifier) — distinct from
+    // det.cloth.ageGroup's coarse 3-bucket PAR attribute drawn above.
+    if (det.estimatedAge?.value != null) {
+      const age = Math.round(det.estimatedAge.value);
+      const txt = `age ~${age}${det.estimatedAge.bucket ? ` (${det.estimatedAge.bucket})` : ''}`;
+      const tw4 = ctx.measureText(txt).width + 8;
+      ctx.fillStyle = 'rgba(0,0,0,0.72)';
+      ctx.fillRect(x, belowY, tw4, 16);
+      ctx.fillStyle = '#5eead4'; // teal-300 — distinct from color/cloth text colors
+      ctx.fillText(txt, x + 4, belowY + 11);
     }
 
   }

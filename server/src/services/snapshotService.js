@@ -135,6 +135,7 @@ async function saveSnapshot(db, camera, det, cropBuf, cropWidth, cropHeight, fra
   };
   if (det.hat    !== undefined) attributes.hat  = det.hat;
   if (det.mask   !== undefined) attributes.mask = det.mask;
+  if (det.estimatedAge)         attributes.estimatedAge = det.estimatedAge;
 
   const record = {
     id:          uuidv4(),

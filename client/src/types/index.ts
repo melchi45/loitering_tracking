@@ -208,6 +208,17 @@ export interface PersonTrajectory {
   segments:        PersonSegment[];
 }
 
+// Dedicated Age Estimation feature (InsightFace GenderAge / ViT Age Classifier —
+// server/src/services/ageEstimationService.js), distinct from ClothAttribute.ageGroup
+// (a coarse 3-bucket PromptPAR/PA100k attribute). This is the finer-grained,
+// admin-selectable model's own numeric/bucketed prediction.
+export interface EstimatedAge {
+  value:    number;           // predicted age (regression value, or bucket midpoint)
+  bucket?:  string;           // present for bucket-classifier models (e.g. ViT Age Classifier)
+  source:   'face' | 'body';  // which crop the estimate was made from
+  modelId:  string;           // 'insightface-genderage' | 'vit-age-classifier'
+}
+
 export interface Detection {
   objectId:      string | number;  // string UUID from ByteTracker, or numeric for synthetic detections
   confidence:    number;
@@ -234,6 +245,7 @@ export interface Detection {
   hat?:   HatAttribute;
   color?: ColorAttribute;
   cloth?: ClothAttribute;
+  estimatedAge?: EstimatedAge | null;
 }
 
 export interface DetectionFrame {

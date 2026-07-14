@@ -387,6 +387,9 @@ function DetectionDetail({ r }: { r: SearchResult }) {
     hat?: boolean; glasses?: boolean; handBag?: boolean; shoulderBag?: boolean;
     backpack?: boolean; holdObjectsInFront?: boolean; longCoat?: boolean; boots?: boolean;
   };
+  // Dedicated Age Estimation (InsightFace/ViT Age Classifier) — distinct from
+  // ClothAttr.ageGroup's coarse 3-bucket PromptPAR/PA100k attribute.
+  type EstimatedAgeAttr = { value?: number; bucket?: string; source?: string; modelId?: string };
 
   const attrs = r.attributes as Record<string, unknown> | undefined;
   const face  = attrs?.face  as FaceAttr  | undefined;
@@ -394,6 +397,7 @@ function DetectionDetail({ r }: { r: SearchResult }) {
   const hat   = attrs?.hat   as HatAttr   | undefined;
   const color = attrs?.color as ColorAttr | undefined;
   const cloth = attrs?.cloth as ClothAttr | undefined;
+  const estimatedAge = attrs?.estimatedAge as EstimatedAgeAttr | undefined;
 
   const risk   = riskLabel(r.riskScore);
   const faceId = face?.faceId;
@@ -534,7 +538,7 @@ function DetectionDetail({ r }: { r: SearchResult }) {
           <table className="w-full border-collapse">
             <tbody>
               <FieldRow label="Gender"       value={cloth.gender} />
-              <FieldRow label="Age Group"    value={cloth.ageGroup} />
+              <FieldRow label="Age Group (PAR)" value={cloth.ageGroup} />
               <FieldRow label="View Angle"   value={cloth.viewAngle} />
               <FieldRow label="Lower Garment" value={cloth.lower} />
               <FieldRow label="Sleeve"        value={cloth.sleeve} />
@@ -548,6 +552,20 @@ function DetectionDetail({ r }: { r: SearchResult }) {
                 cloth.longCoat && 'long coat',
                 cloth.boots && 'boots',
               ].filter(Boolean).join(', ') || undefined} />
+            </tbody>
+          </table>
+        </Section>
+      )}
+
+      {/* Dedicated Age Estimation (InsightFace/ViT Age Classifier) — distinct from
+          the "Age Group (PAR)" row above (coarse PromptPAR/PA100k attribute). */}
+      {estimatedAge?.value != null && (
+        <Section title="Age Estimation" defaultOpen>
+          <table className="w-full border-collapse">
+            <tbody>
+              <FieldRow label="Estimated Age" value={`~${Math.round(estimatedAge.value)}${estimatedAge.bucket ? ` (${estimatedAge.bucket})` : ''}`} />
+              <FieldRow label="Source"        value={estimatedAge.source} />
+              <FieldRow label="Model"         value={estimatedAge.modelId} />
             </tbody>
           </table>
         </Section>

@@ -47,6 +47,9 @@ interface DetectionTrack {
   zoneName?: string | null;
   color?: { upper: string; lower: string } | null;
   cloth?: { lower: string; sleeve?: string; gender?: string; ageGroup?: string } | null;
+  // Dedicated Age Estimation (InsightFace/ViT Age Classifier) — distinct from
+  // cloth.ageGroup's coarse 3-bucket PromptPAR/PA100k attribute.
+  estimatedAge?: { value: number; bucket?: string; source: string; modelId: string } | null;
   inProgress?: boolean;
 }
 
@@ -859,10 +862,16 @@ export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }
               {selected.cloth && (
                 <>
                   {selected.cloth.gender && <DR label="Gender" value={selected.cloth.gender} />}
-                  {selected.cloth.ageGroup && <DR label="Age" value={selected.cloth.ageGroup} />}
+                  {selected.cloth.ageGroup && <DR label="Age Group (PAR)" value={selected.cloth.ageGroup} />}
                   {selected.cloth.lower && <DR label="Cloth↓" value={selected.cloth.lower} />}
                   {selected.cloth.sleeve && <DR label="Sleeve" value={selected.cloth.sleeve} />}
                 </>
+              )}
+              {selected.estimatedAge?.value != null && (
+                <DR
+                  label="Age (Est.)"
+                  value={`~${Math.round(selected.estimatedAge.value)}${selected.estimatedAge.bucket ? ` (${selected.estimatedAge.bucket})` : ''}`}
+                />
               )}
               <DR label="Camera" value={selected.cameraName} />
             </div>

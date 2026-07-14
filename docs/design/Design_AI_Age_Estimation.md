@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-AI-AGE-01 |
-| **Version** | 1.4 |
+| **Version** | 1.5 |
 | **Status** | Proposed (opt-in) |
 | **Date** | 2026-07-14 |
 | **Parent SRS** | [SRS_AI_Age_Estimation](../srs/SRS_AI_Age_Estimation.md) |
@@ -271,3 +271,4 @@ export interface EstimatedAge {
 | 1.2 | 2026-07-12 | §11 갱신 — 실 서버 기동 테스트로 `insightface-genderage`의 HuggingFace 미러 URL이 실제로 다운로드·활성화(`active:true`)됨을 확인(1,322,532 bytes). ONNX 출력 텐서의 정확한 나이 스케일·채널 계약은 여전히 미검증(알려진 나이 샘플 얼굴 end-to-end 검증 필요)으로 명시 |
 | 1.3 | 2026-07-14 | §10/§11 갱신 — `insightface-genderage` 다운로드 URL이 HTTP 401로 전환됨을 반영, `HF_TOKEN` 환경변수 지원 추가(`analysisApi.js` `doDownload()`가 `*.huggingface.co` 호스트에 한해 `Authorization: Bearer` 헤더 첨부; `huggingface_hub` 기반 Python 경로는 기존부터 자동 지원). 또한 `_findPythonWithUltralytics`/`_findPythonWithOptimum`/`_findPythonForPromptPAR`가 필요 패키지 누락 시 자동 `pip install` 후 재시도하도록 변경(비동기 실행으로 이벤트 루프 비차단) |
 | 1.4 | 2026-07-14 | §5 코드 스니펫 정정 — ONNX export 기능이 `optimum[exporters]`에서 별도 패키지 `optimum-onnx`로 이전됨을 반영(base `optimum` extra는 더 이상 `optimum.exporters.onnx`를 제공하지 않음, 실제 프로덕션에서 "pip install 성공 + optimum.exporters.onnx는 여전히 없음"으로 재현됨). `_findPythonWithOptimum()`의 자동 설치 패키지명·`await` 누락도 함께 정정 |
+| 1.5 | 2026-07-14 | **UI 미표시 갭 발견 및 수정** — `estimatedAge`가 `pipelineManager.js`에서 생성되고 실시간 `detections` 소켓 이벤트에는 포함되지만, 클라이언트 어디에도 렌더링되지 않고 `detectionTracks`/`detectionSnapshots` DB에도 저장되지 않고 있었음(사용자 보고로 발견). 수정: (1) `pipelineManager.js`의 `ctx._trackMeta` 3곳 + `snapshotService.js`의 `attributes` 객체에 `estimatedAge` 추가 → `detectionTracks`/`detectionSnapshots`(검색) 양쪽에 영속화, (2) `CameraView.tsx` 라이브 캔버스 오버레이, `FullscreenCameraView.tsx`의 `DetectionRow`, `DetectionsTimelineInline.tsx`의 상세 패널, `SearchFullscreen.tsx`의 검색 결과 상세에 각각 표시 추가 — `cloth.ageGroup`(PromptPAR 3단계 버킷)과 시각적으로 구분되도록 별도 라벨("Age (Est.)"/"Age Estimation") 사용 |

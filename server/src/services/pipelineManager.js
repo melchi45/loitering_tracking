@@ -1089,6 +1089,7 @@ class PipelineManager {
               if (obj.zoneName)    existing.zoneName    = obj.zoneName;
               if (obj.color)       existing.color       = obj.color;
               if (obj.cloth)       existing.cloth       = obj.cloth;
+              if (obj.estimatedAge) existing.estimatedAge = obj.estimatedAge;
               existing.confidence = Math.max(existing.confidence, obj.confidence ?? 0);
             } else {
               ctx._trackMeta.set(id, {
@@ -1104,6 +1105,7 @@ class PipelineManager {
                 zoneName:     obj.zoneName    ?? null,
                 color:        obj.color       ?? null,
                 cloth:        obj.cloth       ?? null,
+                estimatedAge: obj.estimatedAge ?? null,
               });
             }
           }
@@ -1148,6 +1150,7 @@ class PipelineManager {
                 zoneName:    meta.zoneName,
                 color:       meta.color,
                 cloth:       meta.cloth,
+                estimatedAge: meta.estimatedAge,
                 inProgress:  false,
               };
               const _existing = this._db.findOne('detectionTracks', { objectId: trackKey, cameraId: camera.id });
@@ -1378,6 +1381,7 @@ class PipelineManager {
             zoneName:    meta.zoneName,
             color:       meta.color,
             cloth:       meta.cloth,
+            estimatedAge: meta.estimatedAge,
             inProgress:  true,
           };
           const _ex = this._db.findOne('detectionTracks', { objectId: trackKey, cameraId: camera.id });
@@ -1413,6 +1417,7 @@ class PipelineManager {
             zoneName:    meta.zoneName,
             color:       meta.color,
             cloth:       meta.cloth,
+            estimatedAge: meta.estimatedAge,
             inProgress:  false,
           };
           const _ex = this._db.findOne('detectionTracks', { objectId: trackKey, cameraId: camera.id });
