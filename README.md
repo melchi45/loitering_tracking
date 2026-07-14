@@ -17,7 +17,7 @@
 4. [IP Camera Discovery (UDP Broadcast)](#4-ip-camera-discovery-udp-broadcast)
 5. [RTSP Video Ingestion & Frame Capture](#5-rtsp-video-ingestion--frame-capture)
 6. [AI Models & Inference Pipeline](#6-ai-models--inference-pipeline)
-7. [Per-Channel AI Module Selection](#7-per-channel-ai-module-selection)
+7. [Per-Channel AI Module Selection](#7-per-channel-ai-module-selection) — [GPU Provider Setup](docs/ops/GPU_Provider_Setup.md)
 8. [Loitering Detection Logic](#8-loitering-detection-logic)
 9. [React Web UI](#9-react-web-ui)
 10. [Submodules](#10-submodules)
@@ -1391,6 +1391,14 @@ Requires a CUDA-enabled build of `onnxruntime-node`. If CUDA is unavailable at r
 ```powershell
 nvidia-smi
 ```
+
+- **Automated CUDA Toolkit install**: `server/src/scripts/setup-cuda.windows.ps1` downloads and silently installs the CUDA Toolkit (default 12.4.1), then installs a matching CUDA-enabled PyTorch build and verifies `torch.cuda.is_available()` — written for the PromptPAR (cloth-PAR) export step, which requires a real GPU with no CPU fallback. Run in an elevated PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File server/src/scripts/setup-cuda.windows.ps1
+```
+
+  Full details, flags, and troubleshooting: [GPU Provider Setup §2.2](docs/ops/GPU_Provider_Setup.md#22-windows).
 
 - Run server with CUDA enabled:
 

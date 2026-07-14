@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | Document ID | OPS-GPU-001 |
-| Version | 1.0 |
+| Version | 1.1 |
 | Status | Active |
-| Date | 2026-06-26 |
+| Date | 2026-07-14 |
 | Related Design | design/Design_AI_CUDA_Acceleration.md |
 | Related SRS | srs/SRS_AI_CUDA_Acceleration.md |
 
@@ -40,6 +40,27 @@ nvidia-smi
 ```
 
 ### 2.2 Windows
+
+**자동 설치 (권장)** — `server/src/scripts/setup-cuda.windows.ps1` (2026-07-14 추가):
+
+PromptPAR export(`exportPromptPAR.py`, cloth-PAR — OpenPAR 모델 코드가 `.cuda()`를 하드코딩해 CPU 폴백 없음) 등 GPU가 반드시 필요한 analysis 워크로드를 위해, NVIDIA GPU가 이미 장착된 Windows 머신에서 CUDA Toolkit 설치부터 CUDA 지원 PyTorch 설치·검증까지 한 번에 자동화합니다.
+
+```powershell
+# 관리자 권한 PowerShell에서 실행
+cd loitering_tracking
+powershell -ExecutionPolicy Bypass -File server/src/scripts/setup-cuda.windows.ps1
+```
+
+- `nvidia-smi`로 GPU·드라이버 확인 → 지원하지 않는 드라이버면 경고 후 확인
+- CUDA Toolkit network installer 자동 다운로드·설치 (기본 `12.4.1`, `-CudaVersion`으로 변경 가능)
+- 드라이버는 이미 설치되어 있다고 가정하고 **기본적으로 건드리지 않음** — 드라이버까지 설치기가 관리하게 하려면 `-IncludeDriver` 명시적으로 전달
+- 설치 후 `nvcc`/`CUDA_PATH` 확인, 이어서 매칭되는 CUDA 지원 PyTorch(`--index-url .../whl/cuXXX`) 설치
+- 마지막에 `torch.cuda.is_available()`이 `True`인지 검증까지 완료
+- 재부팅이 필요하면(exit code `3010`) 재부팅 후 스크립트 재실행
+
+GPU가 없는 Windows 머신에서는 이 스크립트도, CUDA 자체도 도움이 되지 않습니다 — 그 경우 GPU 머신에서 한 번 export한 `openpar_pa100k.onnx`를 대상 서버 `server/models/`에 복사하거나, 카탈로그의 `openpar-resnet50-pa100k`(manualOnly) 대안을 사용하세요.
+
+**수동 설치**:
 
 1. https://developer.nvidia.com/cuda-downloads 에서 CUDA 12.x 설치 프로그램 다운로드
 2. 실행 후 "Express (권장)" 선택하여 설치
@@ -234,3 +255,4 @@ nvidia-smi --query-gpu=utilization.gpu,memory.used,memory.total --format=csv -l 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-06-26 | 초기 작성 — CUDA/cuDNN 설치, DirectML 설정, 배치 추론 설정, GPU 모니터링 가이드 |
+| 1.1 | 2026-07-14 | §2.2 Windows에 `setup-cuda.windows.ps1` 자동 설치 스크립트 안내 추가 — PromptPAR export 등 GPU 필수 워크로드 대상, nvidia-smi 확인부터 CUDA Toolkit·CUDA 지원 PyTorch 설치·검증까지 자동화 |
