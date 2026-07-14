@@ -684,21 +684,39 @@ async function main() {
   const ACTIVE_PROTO = httpsEnabled ? 'https' : 'http';
 
   // Optional: HTTP → HTTPS redirect on the plain HTTP port
+  // Neither this redirect listener nor the main listener below previously had
+  // an 'error' handler — net.Server's default behavior for an unhandled
+  // 'error' event is to throw, so an EADDRINUSE (e.g. a previous instance of
+  // this same server still bound to the port) crashed the whole process with
+  // a raw, unhelpful stack trace instead of a clear message (2026-07-14).
   if (httpsEnabled && process.env.HTTP_REDIRECT === 'true') {
     const redirectApp = express();
     redirectApp.use((req, res) => {
       res.redirect(301, `https://${req.hostname}:${ACTIVE_PORT}${req.url}`);
     });
-    http.createServer(redirectApp).listen(PORT, () => {
+    const redirectServer = http.createServer(redirectApp);
+    redirectServer.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`[Server] HTTP→HTTPS redirect port ${PORT} is already in use — ` +
+          `is another instance of this server already running? Redirect listener disabled, continuing without it.`);
+      } else {
+        console.error(`[Server] HTTP→HTTPS redirect listener error: ${err.message}`);
+      }
+    });
+    redirectServer.listen(PORT, () => {
       console.log(`[Server] HTTP→HTTPS redirect listening on port ${PORT}`);
     });
   }
 
   await new Promise((resolve, reject) => {
-    httpServer.listen(ACTIVE_PORT, (err) => {
-      if (err) return reject(err);
-      resolve();
+    httpServer.once('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        reject(new Error(`Port ${ACTIVE_PORT} is already in use — is another instance of this server already running? Stop it first (npm run stop) or change ${httpsEnabled ? 'HTTPS_PORT' : 'HTTP_PORT'} in server/.env.`));
+      } else {
+        reject(err);
+      }
     });
+    httpServer.listen(ACTIVE_PORT, () => resolve());
   });
 
   console.log(`[Server] Loitering Tracking System backend listening on port ${ACTIVE_PORT}`);
