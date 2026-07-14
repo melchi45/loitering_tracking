@@ -1,8 +1,8 @@
 ---
 **Document:** SRS_AI_Age_Estimation  
-**Version:** 1.1  
+**Version:** 1.2  
 **Status:** Draft  
-**Date:** 2026-07-12  
+**Date:** 2026-07-14  
 **Parent RFP:** [RFP_AI_Age_Estimation](../rfp/RFP_AI_Age_Estimation.md)  
 **Parent PRD:** [PRD_AI_Age_Estimation](../prd/PRD_AI_Age_Estimation.md)  
 **Child Design:** [Design_AI_Age_Estimation](../design/Design_AI_Age_Estimation.md)  
@@ -36,8 +36,8 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 |---|---|
 | FR-AGE-004 | `insightface-genderage` shall download via the existing plain HTTP(S) `doDownload()` path (a `url` field, no `hfExport`/`requiresConversion`/`manualOnly`) — it ships as ONNX already. |
 | FR-AGE-005 | `vit-age-classifier` shall carry a new `hfOptimumExport: { repo: 'nateraw/vit-age-classifier' }` field instead of `url`/`hfExport`/`manualOnly`. |
-| FR-AGE-006 | The `/models/download` handler shall add a new branch: when `entry.hfOptimumExport` is present, it shall (1) resolve a Python interpreter via a new `_findPythonWithOptimum()` helper (checks `import optimum, transformers`), (2) run `optimum.exporters.onnx.main_export(model_name_or_path=<repo>, output=<tmp dir>, task="image-classification")` via subprocess, (3) copy the resulting `<tmp dir>/model.onnx` to `server/models/<file>`, (4) remove the temporary directory. |
-| FR-AGE-007 | If no Python interpreter satisfies the `optimum`/`transformers` check, the download shall fail with an error message naming the missing packages (`pip install -U optimum[exporters] transformers`). |
+| FR-AGE-006 | The `/models/download` handler shall add a new branch: when `entry.hfOptimumExport` is present, it shall (1) resolve a Python interpreter via a new `_findPythonWithOptimum()` helper (checks `import optimum.exporters.onnx, transformers`), (2) run `optimum.exporters.onnx.main_export(model_name_or_path=<repo>, output=<tmp dir>, task="image-classification")` via subprocess, (3) copy the resulting `<tmp dir>/model.onnx` to `server/models/<file>`, (4) remove the temporary directory. |
+| FR-AGE-007 | If no Python interpreter satisfies the `optimum.exporters.onnx`/`transformers` check, the download shall fail with an error message naming the missing packages (`pip install -U optimum-onnx transformers`). Auto-installs into the first runnable candidate before failing (2026-07-14). |
 | FR-AGE-008 | The `hfOptimumExport` subprocess shall have the same 5-minute timeout (`300_000 ms`) as the existing `hfExport`/`requiresConversion` paths. |
 
 ### 3.3 Runtime Model Switch
@@ -99,3 +99,4 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 |---|---|---|
 | 1.0 | 2026-07-12 | 초기 작성 — Age Estimation SRS, FR-AGE-001~026 |
 | 1.1 | 2026-07-12 | FR-AGE-021 정정 — 존재하지 않는 "sticky-attribute 목록" 대신 실제 코드 패턴(Track 필드 + `updateEstimatedAge()`, `color`/`cloth`/`accessories`와 동일 구조)으로 서술 수정 |
+| 1.2 | 2026-07-14 | FR-AGE-006/007 정정 — ONNX export 기능이 `optimum[exporters]`(base `optimum` extra, 실제로는 더 이상 `optimum.exporters.onnx` 미제공)에서 별도 패키지 `optimum-onnx`로 이전됨을 반영(`huggingface/optimum-onnx`). 검증 스크립트도 `import optimum` 대신 `import optimum.exporters.onnx`로 정정 |

@@ -1,8 +1,8 @@
 ---
 **Document:** SRS_AI_Model_Catalog  
-**Version:** 2.4  
+**Version:** 2.5  
 **Status:** Draft  
-**Date:** 2026-07-13  
+**Date:** 2026-07-14  
 **Parent RFP:** [RFP_AI_Model_Catalog](../rfp/RFP_AI_Model_Catalog.md)  
 **Parent PRD:** [PRD_AI_Model_Catalog](../prd/PRD_AI_Model_Catalog.md)  
 **Child Design:** [Design_AI_Model_Catalog](../design/Design_AI_Model_Catalog.md)  
@@ -99,7 +99,7 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 
 - `requiresConversion: true` entries (YOLO26, YOLO12) require `ultralytics >= 8.3` installed in the Python environment.
 - `hfExport` entries (PPE, Fire & Smoke) require `ultralytics` and `huggingface_hub` installed in the Python environment.
-- `hfOptimumExport` entries (`vit-age-classifier`, age-estimation family) require `optimum[exporters]` and `transformers` installed in the Python environment — a distinct dependency set from `hfExport`, since `optimum` (not `ultralytics`) performs the conversion. See `SRS_AI_Age_Estimation.md` FR-AGE-005~008.
+- `hfOptimumExport` entries (`vit-age-classifier`, age-estimation family) require `optimum-onnx` (installs the `optimum.exporters.onnx` submodule into the `optimum.*` namespace — the older `optimum[exporters]` extra no longer provides it, see `huggingface/optimum-onnx`) and `transformers` installed in the Python environment — a distinct dependency set from `hfExport`, since `optimum` (not `ultralytics`) performs the conversion. See `SRS_AI_Age_Estimation.md` FR-AGE-005~008.
 - System Python (`/usr/bin/python3`) is the recommended fallback — user-local Python builds may lack standard library modules (`_lzma`) causing `import ultralytics` to fail.
 - `cloth-par` has two entries with different source strategies: `openpar-pa100k` (PromptPAR) uses `pyExport` (FR-MC-015c) — a standalone script clones the OpenPAR model-code repository and downloads its checkpoint from Google Drive, requiring a CUDA GPU + `git` + `torch`/`onnx`/`gdown` at export time; `openpar-resnet50-pa100k` (OpenPAR) has no automatable source at all — `manualOnly: true` is a permanent property of that entry, not a temporary download-failure state. See FR-MC-018c for the PromptPAR-specific memory gate (a separate, activation-time concern from the download-time `pyExport` strategy).
 - This feature is not available in `SERVER_MODE=streaming`.
@@ -135,3 +135,4 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | 2.2 | 2026-07-12 | `age-estimation` family 추가(FR-MC-021 카탈로그 개수 29→31 갱신) — InsightFace GenderAge(직접 ONNX) + ViT Age Classifier(신규 `hfOptimumExport` 변환 전략, `optimum`+`transformers` 의존) 2개 항목. FR-MC-016/022, §5 제약사항 갱신. 상세 요구사항은 신규 `SRS_AI_Age_Estimation.md`(FR-AGE-001~026) 참조 |
 | 2.3 | 2026-07-12 | PromptPAR Download 자동화 반영 — `openpar-pa100k`가 "직접 배포(다운로드 URL 없음)"에서 신규 `pyExport` 전략(FR-MC-015c)으로 전환: OpenPAR repo clone + Google Drive 체크포인트(`gdown`) + CUDA GPU export를 수행하는 독립 스크립트(`exportPromptPAR.py`) 자동 실행. FR-MC-005c에 `pyExport` 필드 제외 추가, §5·§6 갱신, FR-MC-023~025라는 실존하지 않던 참조를 FR-MC-018c로 정정 |
 | 2.4 | 2026-07-13 | §3.6 신설(FR-MC-026~030) — `POST /api/analysis/models/deactivate`: YOLO 탐지기를 제외한 8개 확장 family의 활성 모델 언로드(ONNX 세션 release + ready 상태 초기화), YOLO 탐지기는 400으로 거부(FR-MC-027), `analyticsConfig` 토글은 변경하지 않음(FR-MC-030). §6 오류표 갱신 |
+| 2.5 | 2026-07-14 | `hfOptimumExport` 의존성 패키지명 정정 — ONNX export 기능이 `optimum[exporters]`에서 별도 PyPI 패키지 `optimum-onnx`로 이전됨(`huggingface/optimum-onnx`, `optimum.exporters.onnx`는 여전히 `optimum.*` 네임스페이스로 설치됨). 프로덕션에서 "pip install 성공했지만 optimum.exporters.onnx는 여전히 없음" 증상으로 확인 |

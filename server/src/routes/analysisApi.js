@@ -294,12 +294,21 @@ async function _findPythonWithUltralytics({ checkYolo12 = false, checkHfHub = fa
 // (Age Estimation's ViT classifier). Distinct from _findPythonWithUltralytics() —
 // `optimum.exporters.onnx` is a different tool from `ultralytics export()` and does
 // not depend on ultralytics being installed at all.
+//
+// The ONNX export submodule moved out of the base `optimum` package into a
+// separate PyPI package, `optimum-onnx` (which still installs into the
+// `optimum.*` namespace, so the import path below is unchanged) — the old
+// `optimum[exporters]` extra no longer provides it. `pip install optimum[exporters]`
+// still succeeds (it's a valid extras name on the base package) but leaves
+// optimum.exporters.onnx missing, which is exactly what let the pre-2026-07-14
+// version of this function's own auto-install step "succeed" while the retry
+// import check kept failing. See https://github.com/huggingface/optimum-onnx.
 async function _findPythonWithOptimum() {
   const { execFileSync } = require('child_process');
   const candidates = _pythonCandidates();
   // Must check the actual submodule used at export time (optimum.exporters.onnx),
-  // not just bare `import optimum` — a plain `pip install optimum` (no [exporters]
-  // extra) satisfies the latter while still lacking the former, which let this
+  // not just bare `import optimum` — a plain `pip install optimum` (no optimum-onnx
+  // installed) satisfies the latter while still lacking the former, which let this
   // check pass on an environment that then failed with "No module named
   // 'optimum.exporters.onnx'" at actual export time (2026-07-14).
   const script = 'import optimum.exporters.onnx, transformers';
@@ -308,7 +317,7 @@ async function _findPythonWithOptimum() {
   }
   for (const cand of candidates) {
     if (!_pythonExists(cand)) continue;
-    if (!(await _pipInstall(cand, ['-U', 'optimum[exporters]', 'transformers'], 'optimum'))) continue;
+    if (!(await _pipInstall(cand, ['-U', 'optimum-onnx', 'transformers'], 'optimum'))) continue;
     try { execFileSync(cand, ['-c', script], { timeout: 8000 }); return cand; } catch (err) {
       // pip reporting success but the import still failing points at something
       // pip install can't fix by retrying — most likely the installed `optimum`
@@ -1994,7 +2003,7 @@ router.post('/models/download', express.json({ limit: '1kb' }), async (req, res)
       // a non-YOLO architecture; `ultralytics export` cannot handle it, hence a distinct
       // strategy from hfExport above).
       const pyExec = await _findPythonWithOptimum();
-      if (!pyExec) throw new Error('Python with optimum + transformers not found. Run: pip install -U optimum[exporters] transformers');
+      if (!pyExec) throw new Error('Python with optimum + transformers not found. Run: pip install -U optimum-onnx transformers');
 
       _downloadProgress.set(modelId, { status: 'converting', percent: 50, error: null });
       const { execFile } = require('child_process');

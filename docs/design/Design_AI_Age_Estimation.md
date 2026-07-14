@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-AI-AGE-01 |
-| **Version** | 1.3 |
+| **Version** | 1.4 |
 | **Status** | Proposed (opt-in) |
 | **Date** | 2026-07-14 |
 | **Parent SRS** | [SRS_AI_Age_Estimation](../srs/SRS_AI_Age_Estimation.md) |
@@ -139,8 +139,8 @@ case 'age-estimation':
 
 ```javascript
 } else if (entry.hfOptimumExport) {
-  const pyExec = _findPythonWithOptimum();
-  if (!pyExec) throw new Error('Python with optimum + transformers not found. Run: pip install -U optimum[exporters] transformers');
+  const pyExec = await _findPythonWithOptimum();
+  if (!pyExec) throw new Error('Python with optimum + transformers not found. Run: pip install -U optimum-onnx transformers');
 
   _downloadProgress.set(modelId, { status: 'converting', percent: 50, error: null });
   const tmpDir = path.join(modelsDir, `.${modelId}-export-tmp`);
@@ -270,3 +270,4 @@ export interface EstimatedAge {
 | 1.1 | 2026-07-12 | 구현 중 발견된 오류 정정 — §7/§9 "sticky-attribute 목록" 서술이 실제 코드와 불일치함을 확인(그런 공용 목록은 존재하지 않으며, `gender`/`ageGroup`/`lower`/`sleeve`는 `cloth` 객체 내부 필드로 `Track._clothSim()` 재식별 스코어러에서만 사용됨). `estimatedAge`는 `color`/`cloth`/`accessories`와 동일한 per-attribute 패턴(Track 필드 + `updateEstimatedAge()`)으로 정정 반영 |
 | 1.2 | 2026-07-12 | §11 갱신 — 실 서버 기동 테스트로 `insightface-genderage`의 HuggingFace 미러 URL이 실제로 다운로드·활성화(`active:true`)됨을 확인(1,322,532 bytes). ONNX 출력 텐서의 정확한 나이 스케일·채널 계약은 여전히 미검증(알려진 나이 샘플 얼굴 end-to-end 검증 필요)으로 명시 |
 | 1.3 | 2026-07-14 | §10/§11 갱신 — `insightface-genderage` 다운로드 URL이 HTTP 401로 전환됨을 반영, `HF_TOKEN` 환경변수 지원 추가(`analysisApi.js` `doDownload()`가 `*.huggingface.co` 호스트에 한해 `Authorization: Bearer` 헤더 첨부; `huggingface_hub` 기반 Python 경로는 기존부터 자동 지원). 또한 `_findPythonWithUltralytics`/`_findPythonWithOptimum`/`_findPythonForPromptPAR`가 필요 패키지 누락 시 자동 `pip install` 후 재시도하도록 변경(비동기 실행으로 이벤트 루프 비차단) |
+| 1.4 | 2026-07-14 | §5 코드 스니펫 정정 — ONNX export 기능이 `optimum[exporters]`에서 별도 패키지 `optimum-onnx`로 이전됨을 반영(base `optimum` extra는 더 이상 `optimum.exporters.onnx`를 제공하지 않음, 실제 프로덕션에서 "pip install 성공 + optimum.exporters.onnx는 여전히 없음"으로 재현됨). `_findPythonWithOptimum()`의 자동 설치 패키지명·`await` 누락도 함께 정정 |

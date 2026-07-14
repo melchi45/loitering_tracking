@@ -138,9 +138,14 @@ if (!PYTHON_EXEC_HF) {
 
 // Age Estimation's ViT classifier: exported via HuggingFace `optimum` (non-YOLO
 // architecture — ultralytics export cannot handle it, hence a distinct dependency set).
-const PYTHON_EXEC_OPTIMUM = _findPython(_pyCandidates, 'import optimum, transformers');
+// Checks the actual submodule used at export time, not just bare `import optimum` —
+// the ONNX export functionality moved to a separate PyPI package (`optimum-onnx`,
+// still installs into the optimum.* namespace) as of recent optimum releases;
+// `optimum[exporters]` no longer provides it even though that extras name still
+// installs without error. See https://github.com/huggingface/optimum-onnx.
+const PYTHON_EXEC_OPTIMUM = _findPython(_pyCandidates, 'import optimum.exporters.onnx, transformers');
 if (!PYTHON_EXEC_OPTIMUM) {
-  console.warn('Warning: Python with optimum + transformers not found — Age Estimation ViT classifier auto-export will fail. Run: pip install -U optimum[exporters] transformers');
+  console.warn('Warning: Python with optimum.exporters.onnx + transformers not found — Age Estimation ViT classifier auto-export will fail. Run: pip install -U optimum-onnx transformers');
 }
 
 // ─── PPE + Fire & Smoke (HuggingFace .pt download → ultralytics ONNX export, automated) ──

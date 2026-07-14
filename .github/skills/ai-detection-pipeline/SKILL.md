@@ -106,7 +106,9 @@ gcc -O2 -fPIC -shared \
   -o ~/.local/opt/python3.11/lib/python3.11/lib-dynload/_lzma.cpython-311-x86_64-linux-gnu.so
 ```
 
-**필요 패키지 자동 설치 (2026-07-14)**: `_findPythonWithUltralytics`/`_findPythonWithOptimum`/`_findPythonForPromptPAR`(`analysisApi.js`)는 후보 인터프리터 중 필요 패키지(`ultralytics`/`huggingface_hub`/`optimum[exporters]`+`transformers`/`torch`+`torchvision`+`onnx`+`onnxruntime`+`gdown`+`ftfy`+`regex`)를 가진 것을 찾지 못하면, 실행 가능한 첫 인터프리터에 `pip install`을 자동 실행한 뒤 재검사합니다. 설치는 `execFile`(비동기)로 실행되어 서버 이벤트 루프를 막지 않습니다 — torch/torchvision 설치가 수 분 걸려도 다른 카메라·API 요청에는 영향 없습니다. 그래도 실패하면 기존과 동일한 안내 에러를 반환합니다.
+**필요 패키지 자동 설치 (2026-07-14)**: `_findPythonWithUltralytics`/`_findPythonWithOptimum`/`_findPythonForPromptPAR`(`analysisApi.js`)는 후보 인터프리터 중 필요 패키지(`ultralytics`/`huggingface_hub`/`optimum-onnx`+`transformers`/`torch`+`torchvision`+`onnx`+`onnxruntime`+`gdown`+`ftfy`+`regex`)를 가진 것을 찾지 못하면, 실행 가능한 첫 인터프리터에 `pip install`을 자동 실행한 뒤 재검사합니다. 설치는 `execFile`(비동기)로 실행되어 서버 이벤트 루프를 막지 않습니다 — torch/torchvision 설치가 수 분 걸려도 다른 카메라·API 요청에는 영향 없습니다. 그래도 실패하면 기존과 동일한 안내 에러를 반환합니다.
+
+**`optimum[exporters]` → `optimum-onnx` 패키지 분리 (2026-07-14)**: HuggingFace가 ONNX export 기능(`optimum.exporters.onnx`)을 base `optimum` 패키지에서 별도 PyPI 패키지 `optimum-onnx`로 분리했습니다(`optimum.*` 네임스페이스로는 그대로 설치됨, import 경로 불변 — `huggingface/optimum-onnx`). `pip install optimum[exporters]`는 여전히 에러 없이 성공하지만 `optimum.exporters.onnx` 서브모듈은 설치되지 않아, "pip install 성공 + optimum.exporters.onnx는 여전히 없음"이라는 혼란스러운 증상으로 프로덕션에서 재현됨 — 검증 스크립트는 `import optimum`이 아닌 `import optimum.exporters.onnx`를 확인해야 하고, 설치 명령은 `pip install -U optimum-onnx transformers`를 사용해야 합니다.
 
 **HF_TOKEN (gated HuggingFace 저장소)**: `insightface-genderage`(buffalo_l)처럼 플레인 다운로드 URL이 HTTP 401을 반환하기 시작하면(저장소가 gated로 전환됨), `server/.env`에 `HF_TOKEN`을 설정하세요 — `doDownload()`가 `*.huggingface.co` 호스트에 한해 `Authorization: Bearer` 헤더를 자동 첨부합니다. `hfExport`/`hfOptimumExport` 경로(Python `huggingface_hub`/`optimum`)는 별도 코드 변경 없이 동일 환경변수를 자동으로 읽습니다.
 

@@ -1,8 +1,8 @@
 ---
 **Document:** TC_AI_Age_Estimation  
-**Version:** 1.1  
+**Version:** 1.2  
 **Status:** Draft  
-**Date:** 2026-07-12  
+**Date:** 2026-07-14  
 **Parent SRS:** [SRS_AI_Age_Estimation](../srs/SRS_AI_Age_Estimation.md)  
 **Parent Design:** [Design_AI_Age_Estimation](../design/Design_AI_Age_Estimation.md)  
 **Test Script:** `test/api/age_estimation.test.js`, `test/api/model_catalog.test.js`  
@@ -61,7 +61,7 @@
 
 ### TC-AGE-004: `hfOptimumExport` Conversion Path
 
-**Pre-condition:** Python environment with `optimum[exporters]` + `transformers` installed
+**Pre-condition:** Python environment with `optimum-onnx` + `transformers` installed (installs `optimum.exporters.onnx` into the `optimum.*` namespace — the older `optimum[exporters]` extra no longer provides it)
 **Steps:**
 1. Ensure `vit_age_classifier.onnx` absent
 2. `POST /api/analysis/models/download { modelId: 'vit-age-classifier' }`
@@ -74,7 +74,7 @@
 **Steps:**
 1. In an environment without `optimum`, trigger download for `vit-age-classifier`
 
-**Expected:** Download status becomes `'error'` with message mentioning `pip install -U optimum[exporters] transformers`.
+**Expected:** Download status becomes `'error'` with message mentioning `pip install -U optimum-onnx transformers` (after an automatic install attempt into the first runnable interpreter, per `_findPythonWithOptimum()`, 2026-07-14).
 
 ### TC-AGE-006: Runtime Switch
 
@@ -138,3 +138,4 @@
 |---|---|---|
 | 1.0 | 2026-07-12 | 초기 작성 — TC-AGE-001~011 |
 | 1.1 | 2026-07-12 | TC-AGE-010 정정 — 실제 코드 패턴(Track 필드 + updater 메서드)으로 서술 수정 |
+| 1.2 | 2026-07-14 | TC-AGE-004/005 정정 — `optimum[exporters]`가 `optimum-onnx`로 대체됨을 반영, TC-AGE-005에 자동 설치 재시도 동작 추가 |
