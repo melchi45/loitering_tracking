@@ -198,17 +198,41 @@ try:
         torch.hub.download_url_to_file(VIT_BACKBONE_URL, vit_backbone_path)
     print(f'[PromptPAR Export] ViT backbone: {vit_backbone_path}', flush=True)
 
-    # ── Stage 4: download the PA100k PromptPAR checkpoint ──────────────────────
+    # ── Stage 4: get the PA100k PromptPAR checkpoint ────────────────────────────
     stage(4, 'downloading PA100k PromptPAR checkpoint (Google Drive)')
     checkpoint_dir = os.path.join(work_dir, 'checkpoints')
     os.makedirs(checkpoint_dir, exist_ok=True)
     checkpoint_path = os.path.join(checkpoint_dir, CHECKPOINT_FILENAME)
 
-    if INSECURE_SSL:
-        print('[PromptPAR Export] PROMPTPAR_INSECURE_SSL=1 — skipping TLS certificate '
-              'verification for the Google Drive download only.', flush=True)
+    # Manual-placement escape hatch: if drive.google.com is unreachable at all
+    # (corporate firewall blocking the host outright, not just a TLS/cert issue —
+    # PROMPTPAR_INSECURE_SSL only helps the latter), let the operator download the
+    # checkpoint themselves in a browser and drop it in server/models/ instead of
+    # work_dir — work_dir is a fresh temp directory every run, so anything placed
+    # there would just be deleted before the operator could reuse it. Checked
+    # first, unconditionally, so it also just works as a faster path even without
+    # any failure (no network round-trip at all).
+    manual_checkpoint_path = os.path.join(MODELS_DIR, CHECKPOINT_FILENAME)
+    drive_url = (f'https://drive.google.com/uc?id={CHECKPOINT_FILE_ID}' if CHECKPOINT_FILE_ID
+                 else f'https://drive.google.com/drive/folders/{GDRIVE_FOLDER_ID}')
 
-    if not os.path.exists(checkpoint_path):
+    if os.path.exists(manual_checkpoint_path):
+        print(f'[PromptPAR Export] Found manually-placed checkpoint at {manual_checkpoint_path} '
+              '— skipping Google Drive download.', flush=True)
+        checkpoint_path = manual_checkpoint_path
+    elif not os.path.exists(checkpoint_path):
+        if INSECURE_SSL:
+            print('[PromptPAR Export] PROMPTPAR_INSECURE_SSL=1 — skipping TLS certificate '
+                  'verification for the Google Drive download only.', flush=True)
+
+        manual_hint = (
+            f'Cannot reach Google Drive from this machine (network/firewall/SSL issue). To proceed manually instead:\n'
+            f'  1. Open this URL in a browser (on any machine with internet access): {drive_url}\n'
+            f'  2. Download the file named "{CHECKPOINT_FILENAME}"\n'
+            f'  3. Copy it to: {manual_checkpoint_path}\n'
+            f'  4. Re-run this export — it will detect the file there and skip the download entirely.'
+        )
+
         try:
             if CHECKPOINT_FILE_ID:
                 # Fast path: caller supplied the individual file's Drive ID directly.
@@ -229,11 +253,10 @@ try:
                     'this is a TLS certificate verification failure, not a bug in this script — '
                     '"self-signed certificate in certificate chain" means a corporate TLS-inspecting '
                     'proxy is re-signing HTTPS traffic with its own root CA that Python\'s certifi '
-                    'bundle does not trust. Correct fix: add that root CA to REQUESTS_CA_BUNDLE. '
-                    'Pragmatic workaround: re-run with PROMPTPAR_INSECURE_SSL=1 (disables verification '
-                    'for this Google Drive download only).'
+                    'bundle does not trust. Set PROMPTPAR_INSECURE_SSL=1 to work around it (disables '
+                    'verification for this download only), or use the manual path instead:\n' + manual_hint
                 )
-            raise
+            die(f'Google Drive download failed: {exc}', manual_hint)
 
         if not CHECKPOINT_FILE_ID:
             if not os.path.exists(checkpoint_path):
@@ -246,9 +269,9 @@ try:
                     die(
                         f'{CHECKPOINT_FILENAME} not found after downloading the shared folder',
                         'the folder contents may have changed — browse '
-                        f'https://drive.google.com/drive/folders/{GDRIVE_FOLDER_ID} manually, '
-                        'grab the PA100k checkpoint\'s file ID from its share link, and set '
-                        'PROMPTPAR_CHECKPOINT_GDRIVE_FILE_ID to skip folder enumeration entirely.'
+                        f'{drive_url} manually, grab the PA100k checkpoint\'s file ID from its '
+                        'share link, and set PROMPTPAR_CHECKPOINT_GDRIVE_FILE_ID to skip folder '
+                        f'enumeration entirely. Or place the file directly at {manual_checkpoint_path}.'
                     )
                 checkpoint_path = found
     print(f'[PromptPAR Export] Checkpoint: {checkpoint_path}', flush=True)
