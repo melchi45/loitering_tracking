@@ -107,7 +107,31 @@ type MetricsResponse = {
     lastFrameAt: string | null;
   }>;
   system?: SystemMetrics;
+  onnxProvider?: {
+    mode: string | null; // 'cuda' | 'dml' | 'dev' | 'prod' | 'cpu(cuda-disabled)' | null
+    cudaRequested: boolean;
+    cudaDisabled: boolean;
+    dmlDisabled: boolean;
+    platform: string;
+  };
 };
+
+function getProviderBadge(onnxProvider: MetricsResponse['onnxProvider']): { label: string; colorClass: string } | null {
+  if (!onnxProvider) return null;
+  switch (onnxProvider.mode) {
+    case 'cuda':
+      return { label: 'CUDA', colorClass: 'bg-green-500/20 text-green-400 border-green-500/40' };
+    case 'dml':
+      return { label: 'DirectML', colorClass: 'bg-sky-500/20 text-sky-400 border-sky-500/40' };
+    case 'cpu(cuda-disabled)':
+      return { label: 'CPU (CUDA unavailable)', colorClass: 'bg-rose-500/20 text-rose-400 border-rose-500/40' };
+    case 'dev':
+    case 'prod':
+      return { label: 'CPU', colorClass: 'bg-slate-500/20 text-slate-400 border-slate-500/40' };
+    default:
+      return null; // no model loaded yet — mode not yet known
+  }
+}
 
 function formatBytes(bytes: number) {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
@@ -391,9 +415,19 @@ export default function AnalysisServerDashboard({
               {metrics.system.gpu && metrics.system.gpu.length > 0 ? (
                 metrics.system.gpu.map(gpu => (
                   <div key={gpu.index} className="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-4">
-                    <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">
-                      GPU {gpu.index}
-                    </p>
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">
+                        GPU {gpu.index}
+                      </p>
+                      {gpu.index === 0 && (() => {
+                        const badge = getProviderBadge(metrics.onnxProvider);
+                        return badge ? (
+                          <span className={`rounded-full border px-2 py-0.5 text-[10px] font-semibold ${badge.colorClass}`}>
+                            {badge.label}
+                          </span>
+                        ) : null;
+                      })()}
+                    </div>
                     <div className="mt-2 space-y-2">
                       <div>
                         <div className="flex items-center justify-between mb-1">

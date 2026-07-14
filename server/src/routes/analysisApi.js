@@ -32,6 +32,7 @@ const { AgeEstimationService, VIT_AGE_BUCKET_CLASSES } = require('../services/ag
 const { SCHP_LIP20_CLASS_MAP, SEGFORMER_CLOTHES_CLASS_MAP } = require('../services/colorClothService');
 const analyticsConfig   = require('../services/analyticsConfig');
 const { getSystemMetrics } = require('../services/systemMetrics');
+const { getActiveProviderMode } = require('../utils/onnxOptions');
 const snapshotSvc      = require('../services/snapshotService');
 const { extractFaceForEnrollment } = require('../services/faceEnrollHelper');
 const faceSearchConditions = require('../services/faceSearchConditions');
@@ -1468,6 +1469,7 @@ router.get('/metrics', (req, res) => {
     cameras,
     models: _getLoadedModels(),
     system: getSystemMetrics(),
+    onnxProvider: getActiveProviderMode(),
     faceSearch: faceSearchConditions.summarize(req.app.get('db')),
   });
 });

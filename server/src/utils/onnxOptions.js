@@ -6,6 +6,7 @@ let _cudaDisabledForRuntime = false;
 let _cudaDisableReasonLogged = false;
 let _dmlDisabledForRuntime = false;
 let _dmlDisableReasonLogged = false;
+let _lastModeTag = null; // last computed provider mode — see getActiveProviderMode()
 
 function _isTrue(v) {
   return v === '1' || v === 'true';
@@ -129,6 +130,7 @@ function getOnnxSessionOptions() {
   console.log(
     `[onnxOptions] mode=${modeTag}  threads=${threads}  cores=${numCores}  providers=${JSON.stringify(providers)}`
   );
+  _lastModeTag = modeTag;
 
   return {
     executionProviders:     providers,
@@ -224,4 +226,23 @@ async function createOnnxSession(ort, modelPath, logTag = 'ONNX', opts = {}) {
   }
 }
 
-module.exports = { getOnnxSessionOptions, createOnnxSession, runOnnxStartupDiagnostics };
+/**
+ * Reports which ONNX execution provider is actually in effect right now, for
+ * display purposes (Analysis Dashboard GPU card — "CUDA" vs "DirectML" vs "CPU").
+ *
+ * `mode` reflects the last provider mode getOnnxSessionOptions() computed —
+ * that function runs on every model session creation, so this is accurate as
+ * soon as at least one model has loaded. Before that (or if no model has
+ * loaded yet) `mode` is null.
+ */
+function getActiveProviderMode() {
+  return {
+    mode:          _lastModeTag,                 // 'cuda' | 'dml' | 'dev' | 'prod' | 'cpu(cuda-disabled)' | null
+    cudaRequested: _isTrue(process.env.ONNX_CUDA),
+    cudaDisabled:  _cudaDisabledForRuntime,
+    dmlDisabled:   _dmlDisabledForRuntime,
+    platform:      process.platform,
+  };
+}
+
+module.exports = { getOnnxSessionOptions, createOnnxSession, runOnnxStartupDiagnostics, getActiveProviderMode };
