@@ -25,6 +25,7 @@ const router        = express.Router();
 const DetectionService = require('../services/detection');
 const { ByteTracker }  = require('../services/tracking');
 const BehaviorEngine   = require('../services/behaviorEngine');
+const ZoneManager       = require('../services/zoneManager');
 const AttributePipeline = require('../services/attributePipeline');
 const FireSmokeService  = require('../services/fireSmokeService');
 const { AppearanceReidService } = require('../services/appearanceReidService');
@@ -876,10 +877,14 @@ function _getOrCreateContext(cameraId, zonesArray, cameraName) {
   }
 
   // Build a lightweight zone manager shim from the passed zone array.
-  // The BehaviorEngine only calls zoneManager.getActiveZones(cameraId).
+  // The BehaviorEngine calls zoneManager.getActiveZones(cameraId) and
+  // zoneManager.isPointInZone(px, py, zone) — isPointInZone is a pure
+  // point-in-polygon check with no instance state, so it's safe to
+  // delegate to ZoneManager's prototype method directly.
   const zoneShim = {
     _zones: zonesArray || [],
     getActiveZones(_cameraId) { return this._zones; },
+    isPointInZone: ZoneManager.prototype.isPointInZone,
   };
 
   const ctx = {
