@@ -1711,6 +1711,7 @@ class PipelineManager {
         detector:         this._detector         ? 'loaded'    : 'not-loaded',
         attrPipeline:     this._attrPipeline?.anyReady ? 'ready' : 'not-ready',
         fireSmokeService: this._fireSmokeService  ? 'loaded'    : 'not-loaded',
+        ageEstimation:    this._ageEstimation     ? this._ageEstimation.status : 'not_started',
       },
       modules: { enabled: enabledModules, count: enabledModules.length },
       requests: {
