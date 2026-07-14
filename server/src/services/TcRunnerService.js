@@ -55,7 +55,7 @@ const SUITES = [
   { file: 'test/api/ai_detection_modules.test.js',          srs: 'FR-AI-MOD-001~010', label: 'AI Detection Modules', analysisOnly: true },
   { file: 'test/api/analytics_config.test.js',              srs: 'FR-ANA-CFG-001~010', label: 'Analytics Config Toggle', analysisOnly: true },
   { file: 'test/api/model_catalog.test.js',                 srs: 'FR-MC-001~022', label: 'AI Model Catalog (all families)', analysisOnly: true },
-  { file: 'test/api/age_estimation.test.js',                srs: 'FR-AGE-001~026', label: 'AI Age Estimation (unit)', analysisOnly: true },
+  { file: 'test/api/age_estimation.test.js',                srs: 'FR-AGE-001~032', label: 'AI Age Estimation (unit)', analysisOnly: true },
   // Tracking / Zones / Alerts
   { file: 'test/api/object_tracking.test.js',               srs: 'FR-TRK-001~030', label: 'Object Tracking  A+B+G' },
   { file: 'test/api/sidebar_alerts_zones.test.js',          srs: 'FR-ZONE-001, FR-ALERT-001', label: 'Alerts & Zones  B+D' },

@@ -1,6 +1,6 @@
 ---
 **Document:** PRD_AI_Age_Estimation  
-**Version:** 1.1  
+**Version:** 1.2  
 **Status:** Draft  
 **Date:** 2026-07-12  
 **Parent RFP:** [RFP_AI_Age_Estimation](../rfp/RFP_AI_Age_Estimation.md)  
@@ -48,7 +48,9 @@ Add a dedicated, opt-in Age Estimation AI module that predicts a numeric age for
 | Input | Face crop preferred, person-bbox fallback |
 | Config | `analyticsConfig.ageEstimation` toggle, default `false` |
 | Persistence | `tracking.js` `Track` gains an `estimatedAge` field + `updateEstimatedAge()`, mirroring the existing `color`/`cloth`/`accessories` pattern |
-| UI | `ADMIN_MODULE_GROUPS`, `EXTENDED_SERIES_ORDER`, `PROPOSED_SERIES`, `ModelCatalogEntry.family` union updated — no new component |
+| UI | `ADMIN_MODULE_GROUPS`, `EXTENDED_SERIES_ORDER`, `PROPOSED_SERIES`, `ModelCatalogEntry.family` union updated — no new component (Admin catalog only) |
+| Operator-facing display (added 2026-07-14) | `estimatedAge` rendered in 4 locations — live Camera View overlay, Fullscreen detection list, Detections timeline detail, search result detail — and persisted to `detectionTracks`/`detectionSnapshots`. See `Design_AI_Age_Estimation.md` §12 (Line Flow) |
+| Diagnostics (added 2026-07-14) | `GET /api/analysis/metrics` exposes `services.ageEstimation` so operators can tell whether a remote analysis server actually loaded a model, without reading server logs |
 
 ## 6. Rollout
 
@@ -59,6 +61,7 @@ Ships as **Proposed / opt-in**, same convention as Human Parsing and Appearance 
 - Both catalog entries download/convert successfully in a clean environment with the documented Python dependencies installed
 - Toggling `ageEstimation` on with no model downloaded does not error or degrade other analytics
 - Face-crop and body-crop fallback paths both produce a normalized `{value, source}` result in manual testing
+- **US-04 closed 2026-07-14**: an estimated age is now visible on tracked persons and search results in all 4 client locations (was generated server-side and sent over Socket.IO since v1.0, but never rendered or persisted anywhere until this date — see Design doc §12 Line Flow)
 
 ---
 
@@ -68,3 +71,4 @@ Ships as **Proposed / opt-in**, same convention as Human Parsing and Appearance 
 |---|---|---|
 | 1.0 | 2026-07-12 | 초기 작성 — Age Estimation PRD |
 | 1.1 | 2026-07-12 | §5 Persistence 행 정정 — 실제 코드 패턴(Track 필드 + updater 메서드)으로 서술 수정 |
+| 1.2 | 2026-07-14 | §5에 Operator-facing display/Diagnostics 행 추가, §7 US-04 closed 표기 — `estimatedAge`가 v1.0부터 생성만 되고 화면/DB 어디에도 도달하지 않던 갭을 발견·수정 (Design doc §12 Line Flow 참고) |

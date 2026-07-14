@@ -3,18 +3,22 @@
  * AI Age Estimation Tests
  *
  * TC: TC_AI_Age_Estimation
- *   Covers: TC-AGE-007, TC-AGE-008, TC-AGE-009 (unit — no running server required)
- *   Not automated here (see TC_AI_Age_Estimation.md §2): TC-AGE-001~006, TC-AGE-010, TC-AGE-011
- *   (catalog/download/switch/toggle behavior — require a running analysis server
- *   and/or downloaded model files; exercised manually via the Admin Dashboard).
+ *   Covers: TC-AGE-007, TC-AGE-008, TC-AGE-009, TC-AGE-014 (partial) (unit — no running server required)
+ *   Not automated here (see TC_AI_Age_Estimation.md §2): TC-AGE-001~006, TC-AGE-010~013
+ *   (catalog/download/switch/toggle/persistence/display behavior — require a running
+ *   analysis server and/or downloaded model files; exercised manually via the Admin
+ *   Dashboard and live camera).
  *
  * Exercises server/src/services/ageEstimationService.js directly — no server
  * prerequisite, no real ONNX model file (the ONNX session is stubbed).
  * Run: node test/api/age_estimation.test.js
  */
 
+const fs   = require('fs');
+const path = require('path');
 const { AgeEstimationService, VIT_AGE_BUCKET_CLASSES, VIT_AGE_BUCKET_MIDPOINT } =
   require('../../server/src/services/ageEstimationService');
+const PipelineManager = require('../../server/src/services/pipelineManager');
 
 let passed = 0;
 let failed = 0;
@@ -135,6 +139,38 @@ async function runGroupD() {
   });
 }
 
+async function runGroupE() {
+  console.log('\n[Group E] Metrics diagnostic field — TC-AGE-014');
+
+  await test('TC-AGE-014a', 'getAnalysisMetrics().services includes an ageEstimation key (was silently omitted before 2026-07-14)', async () => {
+    // getAnalysisMetrics() reads analyticsConfig.getConfig(), which touches the
+    // global DB singleton — point it at a scratch dir so this stays a no-server-
+    // required unit test rather than polluting storage/lts.json.
+    const os = require('os');
+    process.env.STORAGE_PATH = fs.mkdtempSync(path.join(os.tmpdir(), 'lts-age-test-'));
+    const { initDB } = require('../../server/src/db');
+    await initDB();
+
+    // Call the real method against a minimal fake instance (prototype chain intact,
+    // so other prototype methods like _getLoadedModels() still resolve) — a full
+    // constructor call pulls in capture/WebRTC engines out of scope for this
+    // unit-level file; see TC_AI_Age_Estimation.md TC-AGE-014 for the full-server check.
+    const fakeThis = Object.assign(Object.create(PipelineManager.prototype), {
+      _pipelines: new Map(),
+      _detector: null,
+      _attrPipeline: null,
+      _fireSmokeService: null,
+      _ageEstimation: new AgeEstimationService(),
+      _db: { all() { return []; } },
+    });
+    const metrics = fakeThis.getAnalysisMetrics();
+    assert(Object.prototype.hasOwnProperty.call(metrics.services, 'ageEstimation'),
+      'services object must have an ageEstimation key, even before any model is loaded');
+    assert(metrics.services.ageEstimation === 'not_started',
+      `expected 'not_started' for a freshly constructed service, got '${metrics.services.ageEstimation}'`);
+  });
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -144,6 +180,7 @@ async function main() {
   await runGroupB();
   await runGroupC();
   await runGroupD();
+  await runGroupE();
 
   console.log('\n─────────────────────────────');
   console.log(`Result: ${passed} passed, ${failed} failed`);

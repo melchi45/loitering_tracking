@@ -8,7 +8,7 @@
 | **Issue Date** | 2026-07-12 |
 | **Zone Target Key** | `ageEstimation` |
 | **Status** | **Proposed (opt-in) — model catalog family scaffolded, dual-model selectable** |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -166,6 +166,10 @@ Both may be active simultaneously; UI/reporting should label them distinctly to 
 
 The exact HuggingFace mirror URL for InsightFace GenderAge and the precise ONNX input/output tensor contract (output channel order, age scale factor) are **not verified against a live model file at RFP time** — they must be confirmed against `session.inputNames`/`outputNames`/shape once the model is downloaded, before trusting numeric output in production. See `docs/design/Design_AI_Age_Estimation.md` §Verification.
 
+### Appendix C: Addendum — UI Display Was Never Implemented Until 2026-07-14
+
+The original RFP scope (§6.3) covered persistence parity with `color`/`cloth` at the `tracking.js` level, but the inference result (`estimatedAge`) was never actually wired into `detectionTracks`/`detectionSnapshots` DB persistence, nor rendered anywhere in the client — a gap that went unnoticed because the toggle defaults to off and the feature was never end-to-end verified against a live UI. Fixed 2026-07-14; see `docs/design/Design_AI_Age_Estimation.md` §12 (Line Flow) for the full frame-to-screen data path, including the `SERVER_MODE=streaming` split and the `services.ageEstimation` diagnostic field added to `/api/analysis/metrics`.
+
 ---
 
 > **END OF DOCUMENT — LTS-2026-AI-10**
@@ -178,3 +182,4 @@ The exact HuggingFace mirror URL for InsightFace GenderAge and the precise ONNX 
 |---|---|---|
 | 1.0 | 2026-07-12 | 초기 작성 — Age Estimation AI 모듈 RFP, 듀얼 모델(InsightFace GenderAge / ViT Age Classifier) 제안 |
 | 1.1 | 2026-07-12 | §6.3 정정 — 존재하지 않는 "sticky-attribute 목록" 대신 실제 코드 패턴(`color`/`cloth`/`accessories`와 동일한 Track 필드 + updater 메서드)으로 서술 수정 |
+| 1.2 | 2026-07-14 | Appendix C 신규 — UI 표시가 실제로는 구현되지 않았던 갭과 2026-07-14 수정 사항을 addendum으로 기록 (원본 RFP 재작성 없이 추가만) |

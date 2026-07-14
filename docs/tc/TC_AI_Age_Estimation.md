@@ -1,6 +1,6 @@
 ---
 **Document:** TC_AI_Age_Estimation  
-**Version:** 1.2  
+**Version:** 1.3  
 **Status:** Draft  
 **Date:** 2026-07-14  
 **Parent SRS:** [SRS_AI_Age_Estimation](../srs/SRS_AI_Age_Estimation.md)  
@@ -25,6 +25,9 @@
 | TC-AGE-009 | FR-AGE-016~018 | Face-crop-first, body-crop-fallback, silent skip when neither available |
 | TC-AGE-010 | FR-AGE-019~022 | `ageEstimation` toggle default false; zero cost when disabled; sticky propagation in tracking.js |
 | TC-AGE-011 | FR-AGE-023~026 | Admin Dashboard type union/series/module-group updated; no bespoke UI needed |
+| TC-AGE-012 | FR-AGE-027, FR-AGE-028 | `estimatedAge` persists to `detectionTracks` and `detectionSnapshots` |
+| TC-AGE-013 | FR-AGE-029 | `estimatedAge` renders in all 4 client locations, distinct from `cloth.ageGroup` |
+| TC-AGE-014 | FR-AGE-030~032 | `services.ageEstimation` diagnostic field present in `/api/analysis/metrics`; streaming-mode passthrough verified structurally (object spread, no field remap) |
 
 ## 2. Test Cases
 
@@ -130,6 +133,35 @@
 
 **Expected:** Matches the cloth-par precedent (MEMORY.md `feedback_ai_model_catalog_doc_drift.md`).
 
+### TC-AGE-012: Persistence to `detectionTracks` / `detectionSnapshots`
+
+**Steps:**
+1. Enable `ageEstimation`, download+activate a model, run a live camera with a person present
+2. `GET /api/analysis/detection-tracks?cameraId=<id>` → inspect the resulting track for the current session
+3. `GET /api/snapshots?cameraId=<id>` → open a snapshot's `attributes`
+
+**Expected:** Both responses include `estimatedAge: {value, bucket?, source, modelId}` for tracks/snapshots captured while the person was tracked and the model was ready. Absent when the model was not ready at capture time (no error, field simply omitted).
+
+### TC-AGE-013: Client Display (4 locations)
+
+**Steps:**
+1. With `estimatedAge` flowing (per TC-AGE-012), open the live Camera Grid view → confirm a teal `age ~NN` label renders under the bbox in `CameraView.tsx`'s canvas overlay
+2. Open Fullscreen Camera View → confirm the live detection list (`DetectionRow`) shows the same value
+3. Open the Detections tab → select the track → confirm the detail panel shows both "Age Group (PAR)" (if `cloth.ageGroup` present) and "Age (Est.)" as visually distinct rows
+4. Run a search matching the person → open the result detail → confirm an "Age Estimation" section appears with Estimated Age / Source / Model fields
+
+**Expected:** All 4 locations render only when `estimatedAge.value != null`; no location conflates `estimatedAge` with `cloth.ageGroup`.
+
+### TC-AGE-014: Diagnostic Field & Streaming Passthrough
+
+**Steps:**
+1. `GET /api/analysis/metrics` (on any `SERVER_MODE=analysis`/`combined` instance, or the proxied response on a `streaming` instance) → inspect `services` object
+2. Assert `services.ageEstimation` is present with one of `'not_started' | 'missing' | 'loaded' | 'failed'` (not silently absent, as it was prior to 2026-07-14)
+3. Code inspection (`server/src/services/pipelineManager.js` `_processRemoteResult()`): confirm `remoteTracked = result.tracked` and `allDetections = [...remoteTracked, ...]` use spread/direct-reference only — no `.map()` reconstructing a fixed field list that would silently drop `estimatedAge`
+4. On a `streaming` instance where the remote analysis server has `services.ageEstimation === 'loaded'`, confirm `detectionTracks` on the streaming instance itself shows non-zero `estimatedAge` coverage (see Design doc §12.1 for the inverse — all-zero — diagnostic case)
+
+**Expected:** The diagnostic field distinguishes "toggle off," "model not loaded on the server actually running inference," and "working" without needing to read server logs.
+
 ---
 
 ## Revision History
@@ -139,3 +171,4 @@
 | 1.0 | 2026-07-12 | 초기 작성 — TC-AGE-001~011 |
 | 1.1 | 2026-07-12 | TC-AGE-010 정정 — 실제 코드 패턴(Track 필드 + updater 메서드)으로 서술 수정 |
 | 1.2 | 2026-07-14 | TC-AGE-004/005 정정 — `optimum[exporters]`가 `optimum-onnx`로 대체됨을 반영, TC-AGE-005에 자동 설치 재시도 동작 추가 |
+| 1.3 | 2026-07-14 | TC-AGE-012~014 신규 — `detectionTracks`/`detectionSnapshots` 영속화, 클라이언트 4곳 표시, `services.ageEstimation` 진단 필드 + streaming 모드 패스스루 구조 검증 |

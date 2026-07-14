@@ -1,6 +1,6 @@
 ---
 **Document:** SRS_AI_Age_Estimation  
-**Version:** 1.2  
+**Version:** 1.3  
 **Status:** Draft  
 **Date:** 2026-07-14  
 **Parent RFP:** [RFP_AI_Age_Estimation](../rfp/RFP_AI_Age_Estimation.md)  
@@ -18,7 +18,9 @@ This SRS specifies the software requirements for the Age Estimation AI module: i
 
 ## 2. Scope
 
-Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable to `SERVER_MODE=streaming` (delegates inference to the remote analysis server, same as all other attribute modules).
+Model catalog, download/conversion, and inference (§3.1-3.6) are applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined` only — `SERVER_MODE=streaming` delegates inference to the remote analysis server, same as all other attribute modules, and never loads `AgeEstimationService` itself.
+
+**Correction (2026-07-14):** UI display and local persistence (§3.8) ARE applicable to `SERVER_MODE=streaming` — `CameraView.tsx`, `FullscreenCameraView.tsx`, `DetectionsTimelineInline.tsx`, and `SearchFullscreen.tsx` are shared client components used identically regardless of server mode, and `pipelineManager.js`'s `_processRemoteResult()` (streaming mode's remote-result handler) persists `estimatedAge` to the local `detectionTracks`/`detectionSnapshots` tables exactly like the local-inference path does. Only the model/inference itself is out of scope for streaming mode — display and persistence are not.
 
 ## 3. Functional Requirements
 
@@ -83,6 +85,17 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | FR-AGE-025 | `ADMIN_MODULE_GROUPS`'s `attributes` group shall include an `ageEstimation` item describing both selectable models. |
 | FR-AGE-026 | No new React component shall be required — the existing generic `AiModelsSection()` catalog table shall render both `age-estimation` entries with independent Activate/Download controls without code changes beyond the constants above. |
 
+### 3.8 UI Display, Persistence & Diagnostics (2026-07-14)
+
+| ID | Requirement |
+|---|---|
+| FR-AGE-027 | `pipelineManager.js` shall carry `estimatedAge` through all three `ctx._trackMeta` update sites (new-track creation, existing-track update, and each of the three `detectionTracks` flush branches: completed/active/stale) so that a track's most recent `estimatedAge` reaches the `detectionTracks` DB table, mirroring the existing `cloth`/`color` persistence pattern. |
+| FR-AGE-028 | `snapshotService.js`'s `saveSnapshot()` shall include `det.estimatedAge` in the persisted `attributes` object (when present), so `estimatedAge` reaches `detectionSnapshots` and is retrievable via `/api/search` and `/api/snapshots`. |
+| FR-AGE-029 | The client shall render `estimatedAge` in exactly four locations when `estimatedAge.value != null`: (1) `CameraView.tsx`'s live canvas overlay, (2) `FullscreenCameraView.tsx`'s live `DetectionRow`, (3) `DetectionsTimelineInline.tsx`'s track detail panel, (4) `SearchFullscreen.tsx`'s search result detail panel. Each rendering shall be visually and label-distinct from the existing `cloth.ageGroup` PA100k byproduct (labeled "Age Group (PAR)") to avoid operator confusion between the two independent signals. |
+| FR-AGE-030 | In `SERVER_MODE=streaming`, the `estimatedAge` field computed by the remote analysis server shall pass through to the local `detections` Socket.IO event and local DB persistence unmodified — the streaming server's `_processRemoteResult()` shall consume `result.tracked` (and downstream `allDetections`) via object spread only, never a field-enumerated remap that could silently drop unlisted attributes. |
+| FR-AGE-031 | `pipelineManager.js`'s `getAnalysisMetrics()` (the function backing `GET /api/analysis/metrics`) shall include an `ageEstimation` key in its `services` object, reporting `AgeEstimationService.status` (`'not_started' \| 'missing' \| 'loaded' \| 'failed'`), mirroring the field already present in `getServiceStatus()`. Prior to this requirement, `services` silently omitted the key entirely (neither `null` nor an error value), making it impossible to distinguish "toggle off," "model not loaded," and "working correctly but streaming server has stale code" from the metrics endpoint alone. |
+| FR-AGE-032 | (Operational) When `estimatedAge` is absent from all recent `detectionTracks` on a `SERVER_MODE=streaming` instance despite `analyticsConfig.ageEstimation === true` locally, this shall be diagnosed by checking `services.ageEstimation` on the **remote** analysis server's own `/api/analysis/metrics` response (not the streaming server's) — see Design doc §12.1 for the full diagnostic decision table. |
+
 ## 4. Non-Functional Requirements
 
 | ID | Requirement |
@@ -100,3 +113,4 @@ Applicable to `SERVER_MODE=analysis` and `SERVER_MODE=combined`. Not applicable 
 | 1.0 | 2026-07-12 | 초기 작성 — Age Estimation SRS, FR-AGE-001~026 |
 | 1.1 | 2026-07-12 | FR-AGE-021 정정 — 존재하지 않는 "sticky-attribute 목록" 대신 실제 코드 패턴(Track 필드 + `updateEstimatedAge()`, `color`/`cloth`/`accessories`와 동일 구조)으로 서술 수정 |
 | 1.2 | 2026-07-14 | FR-AGE-006/007 정정 — ONNX export 기능이 `optimum[exporters]`(base `optimum` extra, 실제로는 더 이상 `optimum.exporters.onnx` 미제공)에서 별도 패키지 `optimum-onnx`로 이전됨을 반영(`huggingface/optimum-onnx`). 검증 스크립트도 `import optimum` 대신 `import optimum.exporters.onnx`로 정정 |
+| 1.3 | 2026-07-14 | §2 Scope 정정 — UI 표시·로컬 영속화는 `SERVER_MODE=streaming`에도 적용됨을 명시(모델 추론만 원격 위임). §3.8 신규 — FR-AGE-027~032: `detectionTracks`/`detectionSnapshots` 영속화, 클라이언트 4곳 표시, streaming 모드 필드 통과 보장, `getAnalysisMetrics()`의 `services.ageEstimation` 진단 필드 |

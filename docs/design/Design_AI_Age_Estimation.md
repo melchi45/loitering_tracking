@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-AI-AGE-01 |
-| **Version** | 1.5 |
+| **Version** | 1.6 |
 | **Status** | Proposed (opt-in) |
 | **Date** | 2026-07-14 |
 | **Parent SRS** | [SRS_AI_Age_Estimation](../srs/SRS_AI_Age_Estimation.md) |
@@ -25,6 +25,7 @@
 9. [데이터 모델](#9-데이터-모델)
 10. [오류 처리 및 한계](#10-오류-처리-및-한계)
 11. [검증 (Verification)](#11-검증-verification)
+12. [라인 플로우 — 프레임에서 화면까지](#12-라인-플로우--프레임에서-화면까지)
 
 ---
 
@@ -253,12 +254,59 @@ export interface EstimatedAge {
 | 두 모델의 `value` 스케일 차이 (회귀 vs. bucket 중앙값) | UI/검색에는 항상 `source`와 `modelId`를 함께 노출해 혼동 방지 |
 | `insightface-genderage` 다운로드 URL이 HTTP 401 반환 (2026-07-14 관측 — 2026-07-12엔 정상 다운로드됨) | 저장소가 gated로 바뀌었거나 익명 접근이 제한된 것으로 추정. `server/.env`에 `HF_TOKEN`(https://huggingface.co/settings/tokens) 설정 시 `*.huggingface.co` 호스트에 한해 `Authorization: Bearer` 헤더가 자동 첨부됨(analysisApi.js `doDownload()`) |
 | `torch`/`optimum`/`gdown` 등 Python 패키지 미설치로 모델 변환 실패 | 2026-07-14부터 자동 해결 — 최초 감지 실패 시 `_pipInstall()`이 해당 인터프리터에 필요 패키지를 자동 설치 후 재시도(비동기 실행이라 서버 이벤트 루프를 막지 않음). 그래도 실패하면 기존과 동일한 안내 에러 메시지 반환 |
+| `SERVER_MODE=streaming`에서 `estimatedAge`가 화면/DB 어디에도 나타나지 않음 (2026-07-14 관측) | `getServiceStatus()`엔 있었으나 `getAnalysisMetrics()`(`/api/analysis/metrics`가 실제로 노출하는 함수)의 `services` 객체엔 `ageEstimation` 키가 누락되어 있어 원격 분석 서버의 모델 로드 여부를 진단할 방법이 없었음 — `services.ageEstimation` 필드 추가로 수정(§12.1 참고) |
 
 ## 11. 검증 (Verification)
 
 - ~~`insightface-genderage`의 정확한 HuggingFace 미러 URL~~ — **검증 완료(2026-07-12)**: `POST /api/analysis/models/download`로 실제 다운로드해 `server/models/genderage.onnx`(1,322,532 bytes)가 정상 생성됨을 확인했고, 이어서 `POST /api/analysis/models/switch`로 활성화(`active: true`)까지 성공했다. **(2026-07-14 추가)** 같은 URL이 이후 HTTP 401을 반환하기 시작함이 사용자 보고로 확인됨 — 위 §10 표 및 HF_TOKEN 지원 참고, 재검증 필요.
 - ONNX 세션의 `session.inputNames`/`outputNames`/shape를 실제로 로드해 §6.1 표의 전처리 계약을 재확인 — **미검증으로 남음**: 모델 로드 자체는 성공했으나, 실제 얼굴 이미지로 추론해 나온 `value`가 실제 나이와 부합하는지(출력 채널 순서·스케일 팩터 가정이 맞는지)는 아직 검증되지 않았다. 프로덕션 반영 전 알려진 나이의 샘플 얼굴로 end-to-end 정확도 확인 필요.
 - `optimum.exporters.onnx.main_export(..., task="image-classification")`가 `nateraw/vit-age-classifier` 체크포인트에 대해 실제로 `model.onnx`를 생성하는지 확인 (모델 카드의 `task` 이름이 다를 경우 조정) — 미검증 (Python `optimum`/`transformers` 환경이 없는 개발 환경에서 테스트됨)
+
+## 12. 라인 플로우 — 프레임에서 화면까지
+
+프레임 1장이 들어와 `o.estimatedAge`가 결정되고, 그 값이 DB·화면까지 도달하는 전체 경로를 단일 라인(Line Flow)으로 표현한다. 분기(모델 종류, face/body 폴백)는 노드 하나로 접고 세부는 §6.1/§7을 참조한다.
+
+```mermaid
+flowchart LR
+    subgraph SM["SERVER_MODE=streaming (로컬)"]
+        F1["카메라 프레임\n(JPEG)"] --> F2["analysisClient.analyzeFrame()\nHTTPS POST"]
+    end
+
+    subgraph AM["SERVER_MODE=analysis · combined (원격 or 로컬)"]
+        F2 --> G1{"ageEstimation 토글 ON\n+ 모델 ready?"}
+        G1 -- "아니오" --> SKIP["estimatedAge 미부착\n(파이프라인 계속)"]
+        G1 -- "예" --> G2["person별 crop 선택\nface bbox 우선 → 없으면 body bbox"]
+        G2 --> G3["AgeEstimationService.estimateAge()\n(InsightFace 96×96 | ViT 224×224)"]
+        G3 --> G4["{value, bucket?, source, modelId}\no.estimatedAge에 부착"]
+        G4 --> G5["behaviorEngine.update()\n{...obj} 스프레드로 enrichedObjects까지 전파"]
+        G5 --> G6["POST /frame 응답\ntracked: enrichedObjects"]
+    end
+
+    G6 --> H1["streaming: analysisClient 결과 그대로 수신\n(remoteTracked = result.tracked, 필드 매핑 없음)"]
+    G6 -.-> H1
+    G5 -.->|"combined: 동일 프로세스\n네트워크 홉 없음"| H2["allDetections 배열"]
+    H1 --> H2
+
+    H2 --> P1["pipelineManager: ctx._trackMeta 갱신\n→ detectionTracks DB (3개 flush 분기)"]
+    H2 --> P2["snapshotService.saveSnapshot()\n→ detectionSnapshots.attributes.estimatedAge"]
+    H2 --> P3["Socket.IO 'detections' emit\n(실시간, DB 왕복 없음)"]
+
+    P3 --> U1["CameraView.tsx\n캔버스 오버레이 (청록색 'age ~NN')"]
+    P3 --> U2["FullscreenCameraView.tsx\nDetectionRow 실시간 목록"]
+    P1 --> U3["DetectionsTimelineInline.tsx\n'Age (Est.)' 상세 패널"]
+    P2 --> U4["SearchFullscreen.tsx\n'Age Estimation' 검색 결과 섹션"]
+```
+
+### 12.1 진단 포인트 (2026-07-14 운영 조사에서 확정)
+
+| 단계 | 실패 시 증상 | 확인 방법 |
+|---|---|---|
+| G1 (게이트) | `estimatedAge`가 어디에도 없음 — `color`/`cloth`는 정상 | `GET /api/analytics/config` → `ageEstimation` 값 확인 |
+| G1 (모델 미로드) | 게이트는 통과하나 `estimateAge()`가 항상 null | 해당 서버(분석 서버 본인 기준)의 `GET /api/analysis/metrics` → `services.ageEstimation`(`pipelineManager.js` `getAnalysisMetrics()` 신규 필드, `not_started`/`missing`/`loaded`/`failed`) |
+| G6→H1 (streaming 전달) | 원격 분석 서버는 정상 로드했는데 streaming 서버 쪽 `detectionTracks`에 여전히 없음 | `remoteTracked`는 스프레드(`[...remoteTracked, ...]`)로 전달되므로 필드 매핑 손실은 구조적으로 불가능 — 원인은 거의 항상 G1/G3이 원격 서버에서 실패 중임(코드 미배포·모델 미로드) |
+| P1 (영속화) | 실시간 화면(P3)엔 보이는데 이력(Detections 탭/검색)엔 없음 | `ctx._trackMeta` 3개 flush 분기 중 하나가 최신 커밋 이전 버전일 가능성 — `git log -- server/src/services/pipelineManager.js` 확인 |
+
+**실사례**: 2026-07-14 조사에서 로컬 streaming 서버의 `GET /api/analysis/detection-tracks` 200건 중 `estimatedAge` 보유 0건, 동일 레코드의 `color`/`cloth`는 정상 — G1/G3이 **원격** 분석 서버(`192.168.214.254`)에서 실패 중임을 특정. G6→H1 스프레드 경로 자체는 코드 추적으로 무결함이 확인되어, 원인 후보에서 배제됨 (§12.1 표 참고).
 
 ---
 
@@ -272,3 +320,4 @@ export interface EstimatedAge {
 | 1.3 | 2026-07-14 | §10/§11 갱신 — `insightface-genderage` 다운로드 URL이 HTTP 401로 전환됨을 반영, `HF_TOKEN` 환경변수 지원 추가(`analysisApi.js` `doDownload()`가 `*.huggingface.co` 호스트에 한해 `Authorization: Bearer` 헤더 첨부; `huggingface_hub` 기반 Python 경로는 기존부터 자동 지원). 또한 `_findPythonWithUltralytics`/`_findPythonWithOptimum`/`_findPythonForPromptPAR`가 필요 패키지 누락 시 자동 `pip install` 후 재시도하도록 변경(비동기 실행으로 이벤트 루프 비차단) |
 | 1.4 | 2026-07-14 | §5 코드 스니펫 정정 — ONNX export 기능이 `optimum[exporters]`에서 별도 패키지 `optimum-onnx`로 이전됨을 반영(base `optimum` extra는 더 이상 `optimum.exporters.onnx`를 제공하지 않음, 실제 프로덕션에서 "pip install 성공 + optimum.exporters.onnx는 여전히 없음"으로 재현됨). `_findPythonWithOptimum()`의 자동 설치 패키지명·`await` 누락도 함께 정정 |
 | 1.5 | 2026-07-14 | **UI 미표시 갭 발견 및 수정** — `estimatedAge`가 `pipelineManager.js`에서 생성되고 실시간 `detections` 소켓 이벤트에는 포함되지만, 클라이언트 어디에도 렌더링되지 않고 `detectionTracks`/`detectionSnapshots` DB에도 저장되지 않고 있었음(사용자 보고로 발견). 수정: (1) `pipelineManager.js`의 `ctx._trackMeta` 3곳 + `snapshotService.js`의 `attributes` 객체에 `estimatedAge` 추가 → `detectionTracks`/`detectionSnapshots`(검색) 양쪽에 영속화, (2) `CameraView.tsx` 라이브 캔버스 오버레이, `FullscreenCameraView.tsx`의 `DetectionRow`, `DetectionsTimelineInline.tsx`의 상세 패널, `SearchFullscreen.tsx`의 검색 결과 상세에 각각 표시 추가 — `cloth.ageGroup`(PromptPAR 3단계 버킷)과 시각적으로 구분되도록 별도 라벨("Age (Est.)"/"Age Estimation") 사용 |
+| 1.6 | 2026-07-14 | §12 신규 — 프레임→화면 전체 경로를 라인 플로우(Mermaid `flowchart LR`)로 문서화, streaming/analysis 서버 분리 구간(`analysisClient.analyzeFrame()` HTTP 왕복)과 3개 소비처(DB 영속화·스냅샷·Socket.IO 실시간)를 명시. §12.1에 실제 운영 조사(2026-07-14, Streaming 서버에서 `estimatedAge` 0/200 관측) 기반 진단 포인트 표 추가 — `getAnalysisMetrics()`의 `services.ageEstimation` 신규 필드(`pipelineManager.js` 커밋 `7f3c89e`) 반영 |
