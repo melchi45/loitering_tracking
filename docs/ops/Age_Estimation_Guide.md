@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | Document ID | OPS-AGE-001 |
-| Version | 1.0 |
+| Version | 1.1 |
 | Status | Active |
 | Date | 2026-07-14 |
 | Related Design | design/Design_AI_Age_Estimation.md |
@@ -67,8 +67,20 @@ import json,sys; d=json.load(sys.stdin); print(d.get('services',{}).get('ageEsti
 | `not_started` | 카메라가 아직 한 번도 시작되지 않아 서비스가 lazy-load되지 않음 | 카메라 스트림을 시작한 뒤 재확인 |
 | `missing` | 모델 파일이 `server/models/`에 없음 | Admin Dashboard에서 Download 실행 |
 | `failed` | 모델 파일은 있으나 ONNX 세션 로드 실패 | 서버 콘솔의 `[AgeEstimationService] Model load failed: ...` 로그 확인 |
-| `loaded` | 정상 — 이 단계는 원인이 아님, Step 4로 |
+| `loaded` | 모델은 정상 — 하지만 **`streaming` 모드라면 Step 3.5도 반드시 확인** (2026-07-14 근본 원인) |
 | (필드 자체가 없음) | `pipelineManager.js`가 커밋 `7f3c89e`(2026-07-14) 이전 버전 — `git pull` 후 서버 재시작 |
+
+### Step 3.5 — (streaming 모드 전용, 2026-07-14 근본 원인) `/frame` 핸들러에 실제로 추론 코드가 있는지 확인
+
+`services.ageEstimation === 'loaded'`인데도 여전히 0건이면, 원격 analysis 서버가 **2026-07-14 이전 코드**를 실행 중일 가능성이 매우 높다 — `analysisApi.js`의 `POST /frame` 핸들러는 그 날짜 이전에는 Age Estimation을 아예 호출하지 않았다(`_ageEstimation`은 모델 카탈로그 switch/download 전용으로만 쓰였음). 토글·모델 로드·연결 상태가 전부 정상이어도 이 코드가 없으면 100% 안 나온다.
+
+```bash
+# 원격 analysis 서버(SSH 접근 가능한 경우)에서 직접 확인
+grep -n "_ageEstimation.estimateAge" server/src/routes/analysisApi.js
+# 매치가 없으면 → git pull && (재시작) 필요
+```
+
+SSH 접근이 없다면: `git log -1 --format='%H %ci'`로 원격 서버가 배포한 커밋 해시를 별도 경로(배포 스크립트 로그, 버전 API 등)로 확인하고, 이 문서의 §Revision History 1.1 이후 커밋이 포함됐는지 대조한다.
 
 ### Step 4 — DB 영속화 확인 (실시간엔 보이는데 이력엔 없는 경우)
 
@@ -80,12 +92,16 @@ print('total:', len(tracks), '| with estimatedAge:', sum(1 for t in tracks if t.
 ```
 
 `total`은 0보다 큰데 `with estimatedAge`가 0이면:
-- `streaming` 모드: Step 2-3을 원격 analysis 서버에서 다시 확인 — `services.ageEstimation !== 'loaded'`일 가능성이 가장 높음 (원격 서버가 최신 코드를 pull/재시작하지 않았거나 모델이 아직 로드되지 않음)
+- `streaming` 모드: Step 3.5(코드 버전)을 가장 먼저 의심 — `services.ageEstimation === 'loaded'`이어도 2026-07-14 이전 코드면 100% 0건이 나옴
 - `combined`/`analysis` 모드: `pipelineManager.js`가 오래된 버전일 가능성 — `git log -1 --format='%H %ci' -- server/src/services/pipelineManager.js`로 커밋 시점 확인 후 재배포
 
 ## 5. 실사례 (2026-07-14)
 
-로컬 `streaming` 서버에서 `ageEstimation: true`(로컬 토글 정상), 원격 analysis 서버(`192.168.214.254:3443`)와의 연결도 정상(`circuitOpen: false`)이었으나, `detectionTracks` 200건 중 `estimatedAge` 보유 0건으로 관측됨. Step 2에서 `serverMode: streaming` 확인 → Step 3을 원격 서버에서 실행해야 함이 판명 → 원인은 원격 analysis 서버가 아직 최신 코드(퍼시스턴스/진단 필드 포함)를 pull·재시작하지 않았거나, 모델이 로드되지 않은 상태로 좁혀짐. 코드 추적으로 `remoteTracked`/`allDetections`의 스프레드 전달 경로 자체는 무결함을 확인해 "필드 유실 버그" 가능성은 배제.
+로컬 `streaming` 서버에서 `ageEstimation: true`(로컬 토글 정상), 원격 analysis 서버(`192.168.214.254:3443`)와의 연결도 정상(`circuitOpen: false`)이었으나, `detectionTracks` 200건 중 `estimatedAge` 보유 0건으로 관측됨.
+
+**1차 진단(불완전했음):** Step 2에서 `serverMode: streaming` 확인 → 원격 서버의 코드 미배포/모델 미로드로 추정.
+
+**실제 근본 원인(재조사 후 확정):** `pipelineManager.js`의 `_processRemoteResult()`에 임시 진단 로그를 추가해 실제 운영 트래픽으로 확인한 결과, 원격에서 돌아온 `tracked` person 객체의 키가 `objectId,bbox,confidence,state,className,firstSeenAt`뿐 — `color`/`cloth`/`face`/`estimatedAge` 전부 없었다(하지만 `color`/`cloth` 분석은 활성화되어 있었고 DB엔 정상 저장되고 있었다는 점이 단서). 코드를 직접 읽어보니 `analysisApi.js`의 `POST /frame` 핸들러는 `_attrPipeline.enrich()`로 face/color/cloth는 처리하면서도 **Age Estimation 호출 자체가 코드에 없었다** — `_ageEstimation`은 모델 카탈로그 switch/download 엔드포인트에서만 쓰이고 있었다. 즉 Step 3.5가 실제 원인이었고, "재배포/재시작하면 해결될 것"이라는 1차 진단은 틀렸다 — 코드 자체를 고쳐야 했다(`analysisApi.js`에 Age Estimation 추론 블록 신규 추가, `FR-AGE-033`). `remoteTracked`/`allDetections`의 스프레드 전달 경로 자체는 무결함이었으나,애초에 부착되는 필드가 없었으니 "통과 경로가 멀쩡하다"는 사실 자체가 무의미했다.
 
 ---
 
@@ -94,3 +110,4 @@ print('total:', len(tracks), '| with estimatedAge:', sum(1 for t in tracks if t.
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-14 | 초기 작성 — 활성화 절차, 라인 플로우 요약, 4단계 진단 절차(토글→서버모드→모델상태→DB영속화), 2026-07-14 실사례 기록 |
+| 1.1 | 2026-07-14 | **실제 근본 원인 확정** — Step 3.5 신규(streaming 모드의 `/frame` 핸들러 코드 버전 확인), §5 실사례를 1차(불완전한) 진단과 실제 근본 원인으로 구분해 재작성. `analysisApi.js`에 Age Estimation 추론 블록이 아예 없었던 구조적 결함(FR-AGE-033) 반영 |

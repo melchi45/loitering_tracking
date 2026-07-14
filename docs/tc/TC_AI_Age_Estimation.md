@@ -1,6 +1,6 @@
 ---
 **Document:** TC_AI_Age_Estimation  
-**Version:** 1.3  
+**Version:** 1.4  
 **Status:** Draft  
 **Date:** 2026-07-14  
 **Parent SRS:** [SRS_AI_Age_Estimation](../srs/SRS_AI_Age_Estimation.md)  
@@ -28,6 +28,7 @@
 | TC-AGE-012 | FR-AGE-027, FR-AGE-028 | `estimatedAge` persists to `detectionTracks` and `detectionSnapshots` |
 | TC-AGE-013 | FR-AGE-029 | `estimatedAge` renders in all 4 client locations, distinct from `cloth.ageGroup` |
 | TC-AGE-014 | FR-AGE-030~032 | `services.ageEstimation` diagnostic field present in `/api/analysis/metrics`; streaming-mode passthrough verified structurally (object spread, no field remap) |
+| TC-AGE-015 | FR-AGE-033 | `analysisApi.js`'s `POST /frame` handler actually invokes `AgeEstimationService.estimateAge()` for streaming-delegated frames |
 
 ## 2. Test Cases
 
@@ -162,6 +163,18 @@
 
 **Expected:** The diagnostic field distinguishes "toggle off," "model not loaded on the server actually running inference," and "working" without needing to read server logs.
 
+### TC-AGE-015: `analysisApi.js` `/frame` Handler Actually Calls `estimateAge()` (2026-07-14 regression guard)
+
+**Background:** Prior to 2026-07-14, `analysisApi.js`'s `POST /frame` handler never called `AgeEstimationService.estimateAge()` at all — `_ageEstimation` was only referenced by the model-catalog switch/download/deactivate endpoints. This meant `estimatedAge` could never appear for any `SERVER_MODE=streaming` deployment, independent of toggle state, model-load state, or connection health — a structural gap, not a config/deployment issue. Confirmed via a temporary diagnostic log in `pipelineManager.js`'s `_processRemoteResult()` showing `remoteTracked` person objects with only `objectId,bbox,confidence,state,className,firstSeenAt` keys (no `color`/`cloth`/`face`/`estimatedAge`) despite `color`/`cloth` analytics being enabled — proving the remote response itself never carried any enrichment for that request, tracing back to a missing call in the handler.
+
+**Steps:**
+1. Static check: `grep -n "_ageEstimation.estimateAge" server/src/routes/analysisApi.js` → must return a match inside the `POST /frame` handler (not only inside `/models/switch`/`/models/download`/`/models/deactivate`)
+2. With `ageEstimation` enabled and a model loaded on an `analysis`/`combined`-mode server, `POST /api/analysis/frame` (or via a live `streaming` client) with a frame containing a person
+3. Inspect the JSON response's `tracked` array → assert at least one `person` entry has `estimatedAge: {value, source, modelId}` (bucket present only for the ViT model)
+4. Confirm the module-level `_ageEstimateCache` throttles re-inference: two requests for the same `objectId` within `AGE_ESTIMATION_INTERVAL_MS` (4000ms) shall not both invoke `estimateAge()` (verify via call count on a spy, or via the identical `value` returned within the window)
+
+**Expected:** `estimatedAge` is present in the `/frame` response's `tracked` array whenever `ageEstimation` is enabled and a model is ready — matching `pipelineManager.js`'s local-loop behavior exactly, closing the gap this TC guards against regressing.
+
 ---
 
 ## Revision History
@@ -172,3 +185,4 @@
 | 1.1 | 2026-07-12 | TC-AGE-010 정정 — 실제 코드 패턴(Track 필드 + updater 메서드)으로 서술 수정 |
 | 1.2 | 2026-07-14 | TC-AGE-004/005 정정 — `optimum[exporters]`가 `optimum-onnx`로 대체됨을 반영, TC-AGE-005에 자동 설치 재시도 동작 추가 |
 | 1.3 | 2026-07-14 | TC-AGE-012~014 신규 — `detectionTracks`/`detectionSnapshots` 영속화, 클라이언트 4곳 표시, `services.ageEstimation` 진단 필드 + streaming 모드 패스스루 구조 검증 |
+| 1.4 | 2026-07-14 | **TC-AGE-015 신규 (실제 근본 원인 회귀 방지)** — `analysisApi.js`의 `POST /frame` 핸들러가 Age Estimation을 전혀 호출하지 않던 실제 프로덕션 결함을 실시간 진단 로그로 확정, 수정 후 회귀 가드 테스트케이스 추가 |

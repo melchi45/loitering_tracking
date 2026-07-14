@@ -670,6 +670,12 @@ let _appearanceReid   = null; // CrossCamera Face Tracking Phase-2 (Proposed)
 let _ageEstimation    = null; // Age Estimation (Proposed)
 let _servicesReady    = false;
 
+// Age Estimation (Proposed) — throttle re-inference per track, mirroring
+// pipelineManager.js's AGE_ESTIMATION_INTERVAL_MS/_ageEstimateCache for the
+// locally-captured-camera loop (see Design_AI_Age_Estimation.md §12).
+const AGE_ESTIMATION_INTERVAL_MS = 4000;
+const _ageEstimateCache = new Map(); // objectId -> { ts, result }
+
 // Single promise guards concurrent callers — all waiters share the same load.
 let _loadPromise = null;
 
@@ -1044,6 +1050,39 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
       } catch (err) {
         console.warn(`[AnalysisAPI] Attribute enrichment warn:`, err.message);
       }
+    }
+
+    // 4.4 Age Estimation (Proposed) — face crop preferred, person bbox fallback.
+    // Independent of the 'color'/'cloth' gates above — only requires 'human' detection
+    // plus its own toggle. This handler is the entry point for SERVER_MODE=streaming's
+    // delegated frames; it previously never called AgeEstimationService at all (the
+    // service was only wired into pipelineManager.js's locally-captured-camera loop),
+    // so estimatedAge silently never appeared for any streaming-mode deployment —
+    // see Design_AI_Age_Estimation.md §12.1 (2026-07-14 root cause).
+    if (analyticsConfig.isEnabled('ageEstimation') && _ageEstimation?.ready) {
+      const _ageNow = Date.now();
+      await Promise.all(enrichedObjects
+        .filter(o => o.className === 'person')
+        .map(async (o) => {
+          const bbox = o.face?.bbox || o.bbox;
+          if (!bbox) return;
+          const isFaceCrop = !!o.face?.bbox;
+          const cacheKey = String(o.objectId);
+          const cached = _ageEstimateCache.get(cacheKey);
+          if (cached && (_ageNow - cached.ts) < AGE_ESTIMATION_INTERVAL_MS) {
+            o.estimatedAge = cached.result;
+            return;
+          }
+          try {
+            const result = await _ageEstimation.estimateAge(jpegBuffer, bbox, { isFaceCrop });
+            if (result) {
+              o.estimatedAge = result;
+              _ageEstimateCache.set(cacheKey, { ts: _ageNow, result });
+            }
+          } catch (err) {
+            console.warn('[AnalysisAPI] Age Estimation warn:', err.message);
+          }
+        }));
     }
 
     // 4.5 Face Re-ID + Person Trajectory (analysis mode — uses module-level gallery state)

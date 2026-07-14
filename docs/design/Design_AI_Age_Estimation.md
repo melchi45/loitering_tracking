@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-AI-AGE-01 |
-| **Version** | 1.6 |
+| **Version** | 1.7 |
 | **Status** | Proposed (opt-in) |
 | **Date** | 2026-07-14 |
 | **Parent SRS** | [SRS_AI_Age_Estimation](../srs/SRS_AI_Age_Estimation.md) |
@@ -200,7 +200,11 @@ const VIT_AGE_BUCKET_CLASSES = ['0-2','3-9','10-19','20-29','30-39','40-49','50-
 
 ## 7. 입력 소스 폴백 로직
 
-**파일:** `server/src/services/pipelineManager.js` 감지 루프
+> **주의 (2026-07-14 확정):** 이 로직은 프레임 처리 진입점이 **두 곳**이며, 각각 독립적으로 구현되어 있다 — 하나를 고치면 자동으로 둘 다 고쳐지지 않는다.
+> 1. `pipelineManager.js`의 로컬 카메라 루프 — `combined` 모드, 또는 `analysis` 모드에 ingest-daemon 카메라가 직접 붙어있는 경우
+> 2. `analysisApi.js`의 `POST /frame` HTTP 핸들러 — `SERVER_MODE=streaming` 서버가 위임한 프레임을 처리하는 경로 (2026-07-14 이전에는 이 경로에 Age Estimation이 아예 구현되어 있지 않았다 — §12.1 참고)
+
+**파일 1 — `server/src/services/pipelineManager.js` 감지 루프**
 
 ```
 For each person object in attrObjects (매 프레임, enrich() 이후):
@@ -218,7 +222,33 @@ For each person object in attrObjects (매 프레임, enrich() 이후):
        → 동시에 tracker.updateEstimatedAge(obj.objectId, obj.estimatedAge)로 track.estimatedAge에도 기록 (§6.1의 코드 정정 참고)
 ```
 
-`tracking.js`의 `Track` 클래스에 `estimatedAge` 필드와 `ByteTracker.updateEstimatedAge(objectId, estimatedAge)` 메서드를 추가 — 기존 `color`/`cloth`/`accessories`와 동일한 per-attribute 패턴(`updateColor`/`updateCloth`/`updateAccessories`)을 그대로 따른다.
+**파일 2 — `server/src/routes/analysisApi.js`의 `POST /frame` 핸들러 (2026-07-14 신규 추가)**
+
+동일한 face-우선/body-폴백 로직을 독립적으로 재구현 — 클래스 인스턴스가 아니라 모듈-레벨 함수이므로 `this._ageEstimateCache` 대신 모듈-레벨 `_ageEstimateCache`(Map)와 `AGE_ESTIMATION_INTERVAL_MS`(4000, `pipelineManager.js`와 동일 값) 상수를 사용한다. `_attrPipeline.enrich()` 호출(face/color/cloth 부여) **직후**, Face Re-ID 블록 **이전**에 위치해야 `obj.face?.bbox`를 참조할 수 있다.
+
+```javascript
+// 4.4 Age Estimation (Proposed)
+if (analyticsConfig.isEnabled('ageEstimation') && _ageEstimation?.ready) {
+  const _ageNow = Date.now();
+  await Promise.all(enrichedObjects
+    .filter(o => o.className === 'person')
+    .map(async (o) => {
+      const bbox = o.face?.bbox || o.bbox;
+      if (!bbox) return;
+      const isFaceCrop = !!o.face?.bbox;
+      const cacheKey = String(o.objectId);
+      const cached = _ageEstimateCache.get(cacheKey);
+      if (cached && (_ageNow - cached.ts) < AGE_ESTIMATION_INTERVAL_MS) {
+        o.estimatedAge = cached.result;
+        return;
+      }
+      const result = await _ageEstimation.estimateAge(jpegBuffer, bbox, { isFaceCrop });
+      if (result) { o.estimatedAge = result; _ageEstimateCache.set(cacheKey, { ts: _ageNow, result }); }
+    }));
+}
+```
+
+`tracking.js`의 `Track` 클래스에 `estimatedAge` 필드와 `ByteTracker.updateEstimatedAge(objectId, estimatedAge)` 메서드를 추가 — 기존 `color`/`cloth`/`accessories`와 동일한 per-attribute 패턴(`updateColor`/`updateCloth`/`updateAccessories`)을 그대로 따른다. (이 Track 필드는 `pipelineManager.js` 로컬 루프 경로에서만 갱신되며, `analysisApi.js` 경로는 자체 트래커 인스턴스를 별도로 가지므로 무관하다.)
 
 > **구현 중 발견 — 문서 정정**: 최초 설계 시 "`gender`/`ageGroup`/`lower`/`sleeve`를 관리하는 공용 sticky-attribute 목록에 추가"라고 서술했으나, 실제 코드를 확인한 결과 그런 공용 목록은 존재하지 않는다. 해당 4개 필드는 `cloth` 객체 내부에 중첩된 필드이며, `Track._clothSim()`(재식별 유사도 스코어러)에서만 읽힌다 — Track 필드 자체가 프레임 간 값을 화면에 "지속"시키는 메커니즘이 아니라, ByteTrack 재연결(Re-ID) 시 매칭 비용 함수가 참고하는 내부 메모리일 뿐이다. `color`/`cloth`/`accessories`와 마찬가지로 `estimatedAge`도 현재는 어떤 유사도 스코어러에서도 사용되지 않는다 — 기존 per-attribute 패턴과의 일관성을 위해 필드만 추가했으며, 향후 재식별 스코어링에 활용할 여지를 남겨둔 것이다. 클라이언트/스냅샷에 실제로 노출되는 `estimatedAge` 값은 `pipelineManager.js`가 매 프레임 `attrObjects`에 직접 부착하는 값(4초 캐시, §7)이며, `behaviorEngine.update()`의 스프레드(`{...obj}`)를 통해 `enrichedObjects`로 그대로 전파된다.
 
@@ -268,23 +298,27 @@ export interface EstimatedAge {
 
 ```mermaid
 flowchart LR
-    subgraph SM["SERVER_MODE=streaming (로컬)"]
-        F1["카메라 프레임\n(JPEG)"] --> F2["analysisClient.analyzeFrame()\nHTTPS POST"]
+    subgraph LOCAL["로컬 캡처 카메라 (combined 모드, 또는 analysis 모드 자체 ingest-daemon 카메라)"]
+        F0["카메라 프레임\n(JPEG)"] --> L1{"ageEstimation 토글 ON\n+ 모델 ready?"}
+        L1 -- "예" --> L2["pipelineManager.js\n메인 카메라 루프에서 처리\n(§7 코드 위치)"]
     end
 
-    subgraph AM["SERVER_MODE=analysis · combined (원격 or 로컬)"]
+    subgraph SM["SERVER_MODE=streaming (로컬)"]
+        F1["카메라 프레임\n(JPEG)"] --> F2["analysisClient.analyzeFrame()\nHTTPS POST /api/analysis/frame"]
+    end
+
+    subgraph AM["analysisApi.js POST /frame 핸들러\n(analysis · combined 모드, 원격 or 로컬)"]
         F2 --> G1{"ageEstimation 토글 ON\n+ 모델 ready?"}
         G1 -- "아니오" --> SKIP["estimatedAge 미부착\n(파이프라인 계속)"]
         G1 -- "예" --> G2["person별 crop 선택\nface bbox 우선 → 없으면 body bbox"]
         G2 --> G3["AgeEstimationService.estimateAge()\n(InsightFace 96×96 | ViT 224×224)"]
         G3 --> G4["{value, bucket?, source, modelId}\no.estimatedAge에 부착"]
-        G4 --> G5["behaviorEngine.update()\n{...obj} 스프레드로 enrichedObjects까지 전파"]
+        G4 --> G5["behaviorEngine.update() 또는\n동등 스프레드로 enrichedObjects까지 전파"]
         G5 --> G6["POST /frame 응답\ntracked: enrichedObjects"]
     end
 
     G6 --> H1["streaming: analysisClient 결과 그대로 수신\n(remoteTracked = result.tracked, 필드 매핑 없음)"]
-    G6 -.-> H1
-    G5 -.->|"combined: 동일 프로세스\n네트워크 홉 없음"| H2["allDetections 배열"]
+    L2 -.->|"combined: 동일 프로세스\n네트워크 홉 없음"| H2["allDetections 배열"]
     H1 --> H2
 
     H2 --> P1["pipelineManager: ctx._trackMeta 갱신\n→ detectionTracks DB (3개 flush 분기)"]
@@ -297,16 +331,19 @@ flowchart LR
     P2 --> U4["SearchFullscreen.tsx\n'Age Estimation' 검색 결과 섹션"]
 ```
 
-### 12.1 진단 포인트 (2026-07-14 운영 조사에서 확정)
+> **중요 — 2026-07-14 근본 원인 확정**: 위 다이어그램의 `AM` 서브그래프(`analysisApi.js`의 `POST /frame` HTTP 핸들러)는 `pipelineManager.js`의 로컬 카메라 루프(`LOCAL` 서브그래프)와 **완전히 별개로 구현된 코드**다. `color`/`cloth`/`face`는 두 경로 모두에 존재하지만(`_attrPipeline.enrich()` 공용 호출), **Age Estimation(G1~G4)은 2026-07-14까지 `AM` 경로에는 전혀 구현되어 있지 않았다** — `_ageEstimation` 인스턴스는 모델 카탈로그(switch/download/deactivate)용으로만 쓰였을 뿐, 실제 프레임 처리 중 `estimateAge()`를 호출하는 코드가 없었다. 즉 **`SERVER_MODE=streaming` 배포에서는 토글·모델·연결 상태와 무관하게 `estimatedAge`가 100% 나타날 수 없는 구조적 결함**이었다(단순 미배포/재시작 문제가 아니었음). 2026-07-14 `analysisApi.js`에 G1~G4를 신규 추가해 수정 완료 — §12.1 참고.
+
+### 12.1 진단 포인트 (2026-07-14 운영 조사에서 확정, 근본 원인 발견 후 갱신)
 
 | 단계 | 실패 시 증상 | 확인 방법 |
 |---|---|---|
 | G1 (게이트) | `estimatedAge`가 어디에도 없음 — `color`/`cloth`는 정상 | `GET /api/analytics/config` → `ageEstimation` 값 확인 |
-| G1 (모델 미로드) | 게이트는 통과하나 `estimateAge()`가 항상 null | 해당 서버(분석 서버 본인 기준)의 `GET /api/analysis/metrics` → `services.ageEstimation`(`pipelineManager.js` `getAnalysisMetrics()` 신규 필드, `not_started`/`missing`/`loaded`/`failed`) |
-| G6→H1 (streaming 전달) | 원격 분석 서버는 정상 로드했는데 streaming 서버 쪽 `detectionTracks`에 여전히 없음 | `remoteTracked`는 스프레드(`[...remoteTracked, ...]`)로 전달되므로 필드 매핑 손실은 구조적으로 불가능 — 원인은 거의 항상 G1/G3이 원격 서버에서 실패 중임(코드 미배포·모델 미로드) |
+| G1 (모델 미로드) | 게이트는 통과하나 `estimateAge()`가 항상 null | 해당 서버(분석 서버 본인 기준)의 `GET /api/analysis/metrics` → `services.ageEstimation`(`pipelineManager.js` `getAnalysisMetrics()` 필드, `not_started`/`missing`/`loaded`/`failed`) |
+| **G1~G4 전체 미구현 (2026-07-14 근본 원인)** | 토글 ON + 모델 `loaded` + streaming↔analysis 연결 정상인데도 **모든** 카메라에서 `estimatedAge`가 0건 | `analysisApi.js`의 `POST /frame` 핸들러 코드에 `_ageEstimation.estimateAge(...)` 호출이 존재하는지 직접 확인(`grep -n "_ageEstimation.estimateAge" server/src/routes/analysisApi.js`) — 없다면 이 문서의 2026-07-14 이전 커밋을 배포 중인 것 |
+| G6→H1 (streaming 전달) | 원격 분석 서버는 정상 부착했는데 streaming 서버 쪽 `detectionTracks`에 여전히 없음 | `remoteTracked`는 스프레드(`[...remoteTracked, ...]`)로 전달되므로 필드 매핑 손실은 구조적으로 불가능 — G1~G4가 원격에서 실제로 실행됐는지가 먼저 확인 대상 |
 | P1 (영속화) | 실시간 화면(P3)엔 보이는데 이력(Detections 탭/검색)엔 없음 | `ctx._trackMeta` 3개 flush 분기 중 하나가 최신 커밋 이전 버전일 가능성 — `git log -- server/src/services/pipelineManager.js` 확인 |
 
-**실사례**: 2026-07-14 조사에서 로컬 streaming 서버의 `GET /api/analysis/detection-tracks` 200건 중 `estimatedAge` 보유 0건, 동일 레코드의 `color`/`cloth`는 정상 — G1/G3이 **원격** 분석 서버(`192.168.214.254`)에서 실패 중임을 특정. G6→H1 스프레드 경로 자체는 코드 추적으로 무결함이 확인되어, 원인 후보에서 배제됨 (§12.1 표 참고).
+**실사례 (2026-07-14, 근본 원인 확정)**: 로컬 streaming 서버의 `GET /api/analysis/detection-tracks` 200건 중 `estimatedAge` 보유 0건, 동일 레코드의 `color`/`cloth`는 정상 — 처음엔 원격 분석 서버의 코드 미배포/모델 미로드로 추정했으나, 실시간 진단 로그(`_processRemoteResult()`에 임시 추가, `remoteTracked` person 객체의 실제 키를 출력)로 재확인한 결과 `sampleKeys=objectId,bbox,confidence,state,className,firstSeenAt` — **`color`/`cloth`/`face`/`estimatedAge` 전부 원본 응답에 없음**이 확인됨. `analysisApi.js`의 `POST /frame` 핸들러 코드를 직접 읽어 `_ageEstimation`이 모델 카탈로그 엔드포인트에서만 쓰이고 프레임 처리 루프(`_attrPipeline.enrich()` 호출부 근처)에는 전혀 연동되어 있지 않음을 코드로 확정 — `pipelineManager.js`의 로컬 카메라 루프에만 구현되고 `analysisApi.js`의 HTTP 프레임 처리 경로엔 이식되지 않았던 것이 **진짜** 근본 원인. 2026-07-14 `analysisApi.js`에 동일한 face/body 폴백 + 4초 캐시 로직을 추가해 해결(§7 코드와 동일 패턴, 별도 모듈-레벨 `_ageEstimateCache`/`AGE_ESTIMATION_INTERVAL_MS` 사용 — `analysisApi.js`는 클래스 인스턴스가 아니므로 `this` 기반 캐시 재사용 불가).
 
 ---
 
@@ -321,3 +358,4 @@ flowchart LR
 | 1.4 | 2026-07-14 | §5 코드 스니펫 정정 — ONNX export 기능이 `optimum[exporters]`에서 별도 패키지 `optimum-onnx`로 이전됨을 반영(base `optimum` extra는 더 이상 `optimum.exporters.onnx`를 제공하지 않음, 실제 프로덕션에서 "pip install 성공 + optimum.exporters.onnx는 여전히 없음"으로 재현됨). `_findPythonWithOptimum()`의 자동 설치 패키지명·`await` 누락도 함께 정정 |
 | 1.5 | 2026-07-14 | **UI 미표시 갭 발견 및 수정** — `estimatedAge`가 `pipelineManager.js`에서 생성되고 실시간 `detections` 소켓 이벤트에는 포함되지만, 클라이언트 어디에도 렌더링되지 않고 `detectionTracks`/`detectionSnapshots` DB에도 저장되지 않고 있었음(사용자 보고로 발견). 수정: (1) `pipelineManager.js`의 `ctx._trackMeta` 3곳 + `snapshotService.js`의 `attributes` 객체에 `estimatedAge` 추가 → `detectionTracks`/`detectionSnapshots`(검색) 양쪽에 영속화, (2) `CameraView.tsx` 라이브 캔버스 오버레이, `FullscreenCameraView.tsx`의 `DetectionRow`, `DetectionsTimelineInline.tsx`의 상세 패널, `SearchFullscreen.tsx`의 검색 결과 상세에 각각 표시 추가 — `cloth.ageGroup`(PromptPAR 3단계 버킷)과 시각적으로 구분되도록 별도 라벨("Age (Est.)"/"Age Estimation") 사용 |
 | 1.6 | 2026-07-14 | §12 신규 — 프레임→화면 전체 경로를 라인 플로우(Mermaid `flowchart LR`)로 문서화, streaming/analysis 서버 분리 구간(`analysisClient.analyzeFrame()` HTTP 왕복)과 3개 소비처(DB 영속화·스냅샷·Socket.IO 실시간)를 명시. §12.1에 실제 운영 조사(2026-07-14, Streaming 서버에서 `estimatedAge` 0/200 관측) 기반 진단 포인트 표 추가 — `getAnalysisMetrics()`의 `services.ageEstimation` 신규 필드(`pipelineManager.js` 커밋 `7f3c89e`) 반영 |
+| 1.7 | 2026-07-14 | **실제 근본 원인 확정 및 수정** — v1.6의 "원격 서버 코드 미배포/모델 미로드" 추정은 불완전했음. `pipelineManager.js`에 임시 진단 로그를 추가해 실시간 확인한 결과, `analysisApi.js`의 `POST /frame` 핸들러(SERVER_MODE=streaming이 위임하는 실제 처리 경로)에는 Age Estimation(G1~G4)이 애초에 전혀 구현되어 있지 않았음이 코드로 확정됨(`_ageEstimation`은 모델 카탈로그 엔드포인트 전용으로만 쓰였음) — `pipelineManager.js`의 로컬 카메라 루프에만 구현되고 HTTP 프레임 위임 경로엔 이식되지 않았던 구조적 결함. `analysisApi.js`에 동일 face/body 폴백 + 4초 캐시(모듈-레벨 `_ageEstimateCache`/`AGE_ESTIMATION_INTERVAL_MS`) 로직을 신규 추가해 해결. §7에 "진입점 2곳, 독립 구현" 경고 추가, §12 다이어그램을 LOCAL/AM 두 서브그래프로 재작성, §12.1 표에 이 근본 원인 행 추가 |

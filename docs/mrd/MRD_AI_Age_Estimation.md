@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Age Estimation end-to-end visibility (frame → model → DB → screen) across `combined`/`analysis`/`streaming` deployments
-**Version:** 1.0
+**Version:** 1.1
 **Date:** 2026-07-14
 **Author:** LTS Engineering Team
 
@@ -13,6 +13,8 @@
 The Age Estimation AI module (`AgeEstimationService`, InsightFace GenderAge / ViT Age Classifier) has computed a per-person `estimatedAge` value since 2026-07-12 and sent it over the live `detections` Socket.IO event — but it was never persisted to `detectionTracks`/`detectionSnapshots` and never rendered anywhere in the client, so operators enabling the toggle saw no observable effect and had no way to tell whether the feature was working, misconfigured, or simply not yet displayed. Fixed 2026-07-14, together with a second gap discovered while verifying the fix: in `SERVER_MODE=streaming` deployments (camera capture and AI inference on separate servers), there was no way to tell from the streaming server's own dashboard whether the *remote* analysis server had actually loaded an age model — the `/api/analysis/metrics` diagnostic endpoint silently omitted the field entirely.
 
 This MRD covers both the display/persistence gap and the cross-server diagnosability gap, since both block the same operational outcome: an administrator being able to confirm "Age Estimation is enabled, a model is loaded, and it is visibly working" without reading server logs.
+
+**Addendum (2026-07-14, same day, after live verification):** The diagnostic field alone was not sufficient to explain a real customer report of "still not displaying." Live diagnostic logging added to the running `streaming`-mode server revealed a third, more severe gap: `server/src/routes/analysisApi.js`'s `POST /frame` handler — the actual code path that processes frames delegated by a `streaming`-mode server — **never called `AgeEstimationService.estimateAge()` at all**. The service was wired only into the model-catalog switch/download/deactivate endpoints and into a *separate* local-camera processing loop in `pipelineManager.js` (used by `combined` mode or an `analysis`-mode server with its own directly-attached cameras). This meant `estimatedAge` could never appear for **any** `SERVER_MODE=streaming` deployment — independent of toggle state, model-load state, or connection health — a structural implementation gap, not a configuration or deployment-freshness issue as first suspected. Fixed same day (`analysisApi.js`, FR-AGE-033).
 
 ---
 
@@ -69,3 +71,4 @@ This MRD covers both the display/persistence gap and the cross-server diagnosabi
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-14 | 초기 작성 — Age Estimation UI 표시/영속화 갭 및 streaming/analysis 서버 간 진단 가능성 갭 기록 |
+| 1.1 | 2026-07-14 | Addendum — 라이브 진단 로그로 확인된 세 번째(실제 근본) 갭 기록: `analysisApi.js`의 `POST /frame` 핸들러가 Age Estimation을 전혀 호출하지 않던 구조적 결함(FR-AGE-033) |
