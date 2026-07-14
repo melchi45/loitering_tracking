@@ -19,6 +19,20 @@ import sys
 import os
 import argparse
 
+# On Windows, stdout/stderr default to the system's ANSI codepage (e.g. cp949 on
+# Korean-locale Windows) rather than UTF-8 when piped to a parent process (as
+# Node.js's execFile does when this is invoked from analysisApi.js) instead of a
+# real console. This script's messages use em-dashes/checkmarks/box-drawing
+# characters that codepage can't encode at all, crashing with
+# UnicodeEncodeError before the export even starts (same bug hit exportPromptPAR.py
+# in production, 2026-07-14). Force UTF-8 regardless of the inherited console
+# codepage; best-effort since reconfigure() needs Python 3.7+.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 # ── Argument parsing ──────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser()
 parser.add_argument(

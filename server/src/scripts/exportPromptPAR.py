@@ -70,6 +70,19 @@ import subprocess
 import sys
 import tempfile
 
+# On Windows, stdout/stderr default to the system's ANSI codepage (e.g. cp949 on
+# Korean-locale Windows) rather than UTF-8 when piped to a parent process (as
+# Node.js's execFile does here) instead of a real console. This script's own
+# messages use plain punctuation like em-dashes (—), which cp949 cannot encode
+# at all, crashing with UnicodeEncodeError before the actual work even starts —
+# reported in production (2026-07-14). Force UTF-8 regardless of the inherited
+# console codepage; best-effort since reconfigure() needs Python 3.7+.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding='utf-8', errors='replace')
+    except Exception:
+        pass
+
 # ── Argument parsing ──────────────────────────────────────────────────────────
 parser = argparse.ArgumentParser()
 parser.add_argument('--output', default=None,
