@@ -246,9 +246,25 @@ $torchIndex = "https://download.pytorch.org/whl/cu$($cudaShort.Replace('_',''))"
 # leave that CPU build in place if pip considers the locally installed version
 # to already satisfy the requirement, silently producing exactly the
 # "CUDA available: False" result reported after the first run of this script.
-& $PythonExe -m pip install --force-reinstall --no-cache-dir torch torchvision --index-url $torchIndex
+#
+# The CUDA wheel is ~1.3GB+ — large enough that a single flaky-network
+# IncompleteRead/ProtocolError mid-download is common and NOT a sign the wheel
+# doesn't exist (reported after the first retry attempt: read 1.2GB of 1.3GB
+# then the connection broke). Retry a few times with backoff before giving up;
+# --retries/--timeout are pip's own per-request tuning, the outer loop here
+# covers a fully broken stream that those alone don't recover from.
+$maxAttempts = 3
+for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+    if ($attempt -gt 1) {
+        $delay = 10 * $attempt
+        Write-Warning "pip install attempt $($attempt - 1)/$maxAttempts failed (see output above) — likely a network hiccup on this ~1.3GB+ download, not a missing wheel. Retrying in ${delay}s..."
+        Start-Sleep -Seconds $delay
+    }
+    & $PythonExe -m pip install --force-reinstall --no-cache-dir --timeout 120 --retries 5 torch torchvision --index-url $torchIndex
+    if ($LASTEXITCODE -eq 0) { break }
+}
 if ($LASTEXITCODE -ne 0) {
-    Write-Error "pip install of CUDA-enabled torch failed against index $torchIndex — that exact cuXXX wheel variant may not be published for this CUDA version. Check https://pytorch.org/get-started/locally/ for the currently published index URL and re-run with a matching -CudaVersion."
+    Write-Error "pip install of CUDA-enabled torch failed after $maxAttempts attempts against index $torchIndex. If every attempt showed IncompleteRead/ProtocolError, this is a network reliability issue (unstable connection, corporate proxy, etc), not a missing wheel — try again on a more stable connection. If the error instead says 'no matching distribution', that cuXXX variant may not be published for this CUDA version: check https://pytorch.org/get-started/locally/ and re-run with a matching -CudaVersion."
     exit 1
 }
 
