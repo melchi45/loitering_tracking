@@ -735,11 +735,21 @@ class Handler(BaseHTTPRequestHandler):
 
     def _json(self, status: int, body: dict):
         data = json.dumps(body).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            # Client (usually Node, e.g. during its own shutdown) closed the
+            # socket before we could write the response — harmless, the request
+            # already did its job (e.g. do_DELETE already removed the camera).
+            # http.server's default per-request exception handling already
+            # keeps the daemon itself running when this isn't caught, but it
+            # logs a full traceback for what is routine race noise during a
+            # coordinated shutdown — not worth alarming about.
+            log.debug("[%s] client disconnected before response was sent", self.path)
 
     def do_GET(self):
         p = urlparse(self.path).path
