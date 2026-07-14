@@ -213,19 +213,61 @@ function _activeFileForEntry(m, detectorActiveFile) {
   }
 }
 
-// Find a working Python interpreter for `ultralytics` export subprocesses.
-// checkYolo12=true additionally verifies the `cfg/models/12` package directory exists
-// (ultralytics < 8.3 lacks YOLO12 architecture support — a plain `import ultralytics` is insufficient).
-// checkHfHub=true additionally verifies `huggingface_hub` is importable (PPE/Fire-Smoke hfExport path).
-function _findPythonWithUltralytics({ checkYolo12 = false, checkHfHub = false } = {}) {
-  const { execFileSync } = require('child_process');
-  const candidates = [
+function _pythonCandidates() {
+  return [
     process.env.PYTHON_EXEC,
     process.platform === 'win32' ? process.env.PYTHON_EXEC_WINDOWS : process.env.PYTHON_EXEC_LINUX,
     '/usr/bin/python3',
     'python3',
     'python',
   ].filter(Boolean);
+}
+
+// Cheap existence/runnability check — distinct from the "has the right packages"
+// import check below. Used to decide which candidate is even worth pip-installing
+// into (no point trying to pip install via a Python that isn't there at all).
+function _pythonExists(cand) {
+  try {
+    require('child_process').execFileSync(cand, ['--version'], { timeout: 3000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Installs missing packages into a candidate interpreter. Deliberately async
+// (execFile, not execFileSync) — a torch/torchvision install can take several
+// minutes, and a synchronous call of that length would block Node's single
+// event loop entirely (every camera, every API request) for the duration.
+async function _pipInstall(pyExec, packages, label) {
+  const { execFile } = require('child_process');
+  console.warn(`[AnalysisAPI] ${label}: missing Python package(s), auto-installing via ${pyExec}: ${packages.join(' ')}`);
+  return new Promise((resolve) => {
+    execFile(
+      pyExec, ['-m', 'pip', 'install', '--disable-pip-version-check', ...packages],
+      { timeout: 15 * 60_000 },
+      (err, stdout, stderr) => {
+        if (err) {
+          console.error(`[AnalysisAPI] ${label}: pip install failed: ${(stderr || err.message).slice(0, 500)}`);
+          resolve(false);
+        } else {
+          console.log(`[AnalysisAPI] ${label}: pip install succeeded (${packages.join(' ')})`);
+          resolve(true);
+        }
+      }
+    );
+  });
+}
+
+// Find a working Python interpreter for `ultralytics` export subprocesses.
+// checkYolo12=true additionally verifies the `cfg/models/12` package directory exists
+// (ultralytics < 8.3 lacks YOLO12 architecture support — a plain `import ultralytics` is insufficient).
+// checkHfHub=true additionally verifies `huggingface_hub` is importable (PPE/Fire-Smoke hfExport path).
+// If no candidate already has the required packages, auto-installs them into the
+// first runnable candidate and retries once before giving up.
+async function _findPythonWithUltralytics({ checkYolo12 = false, checkHfHub = false } = {}) {
+  const { execFileSync } = require('child_process');
+  const candidates = _pythonCandidates();
   const parts = ['import ultralytics'];
   if (checkHfHub) parts.push('import huggingface_hub');
   if (checkYolo12) {
@@ -237,6 +279,13 @@ function _findPythonWithUltralytics({ checkYolo12 = false, checkHfHub = false } 
   for (const cand of candidates) {
     try { execFileSync(cand, ['-c', script], { timeout: 8000 }); return cand; } catch {}
   }
+  const packages = ['-U', 'ultralytics'];
+  if (checkHfHub) packages.push('huggingface_hub');
+  for (const cand of candidates) {
+    if (!_pythonExists(cand)) continue;
+    if (!(await _pipInstall(cand, packages, 'ultralytics'))) continue;
+    try { execFileSync(cand, ['-c', script], { timeout: 8000 }); return cand; } catch {}
+  }
   return null;
 }
 
@@ -244,17 +293,16 @@ function _findPythonWithUltralytics({ checkYolo12 = false, checkHfHub = false } 
 // (Age Estimation's ViT classifier). Distinct from _findPythonWithUltralytics() —
 // `optimum.exporters.onnx` is a different tool from `ultralytics export()` and does
 // not depend on ultralytics being installed at all.
-function _findPythonWithOptimum() {
+async function _findPythonWithOptimum() {
   const { execFileSync } = require('child_process');
-  const candidates = [
-    process.env.PYTHON_EXEC,
-    process.platform === 'win32' ? process.env.PYTHON_EXEC_WINDOWS : process.env.PYTHON_EXEC_LINUX,
-    '/usr/bin/python3',
-    'python3',
-    'python',
-  ].filter(Boolean);
+  const candidates = _pythonCandidates();
   const script = 'import optimum, transformers';
   for (const cand of candidates) {
+    try { execFileSync(cand, ['-c', script], { timeout: 8000 }); return cand; } catch {}
+  }
+  for (const cand of candidates) {
+    if (!_pythonExists(cand)) continue;
+    if (!(await _pipInstall(cand, ['-U', 'optimum[exporters]', 'transformers'], 'optimum'))) continue;
     try { execFileSync(cand, ['-c', script], { timeout: 8000 }); return cand; } catch {}
   }
   return null;
@@ -266,17 +314,19 @@ function _findPythonWithOptimum() {
 // check. Does NOT verify CUDA availability here (cheap import-only check); the
 // script itself fails fast with a clear message if no GPU is present, since that's
 // a runtime property, not an interpreter property.
-function _findPythonForPromptPAR() {
+async function _findPythonForPromptPAR() {
   const { execFileSync } = require('child_process');
-  const candidates = [
-    process.env.PYTHON_EXEC,
-    process.platform === 'win32' ? process.env.PYTHON_EXEC_WINDOWS : process.env.PYTHON_EXEC_LINUX,
-    '/usr/bin/python3',
-    'python3',
-    'python',
-  ].filter(Boolean);
+  const candidates = _pythonCandidates();
   const script = 'import torch, torchvision, onnx, onnxruntime, gdown';
   for (const cand of candidates) {
+    try { execFileSync(cand, ['-c', script], { timeout: 8000 }); return cand; } catch {}
+  }
+  // ftfy/regex aren't import-checked here (not needed until the export script's
+  // own tokenizer step runs) but are installed alongside so that later stage
+  // doesn't hit its own separate missing-package failure.
+  for (const cand of candidates) {
+    if (!_pythonExists(cand)) continue;
+    if (!(await _pipInstall(cand, ['torch', 'torchvision', 'onnx', 'onnxruntime', 'gdown', 'ftfy', 'regex'], 'PromptPAR'))) continue;
     try { execFileSync(cand, ['-c', script], { timeout: 8000 }); return cand; } catch {}
   }
   return null;
@@ -1802,13 +1852,28 @@ router.post('/models/download', express.json({ limit: '1kb' }), async (req, res)
   _downloadProgress.set(modelId, { status: 'downloading', percent: 0, error: null });
   res.json({ ok: true, message: `Download started for ${entry.label}` });
 
-  // Async download with redirect support
+  // Async download with redirect support.
+  // Gated/private HuggingFace repos (e.g. InsightFace GenderAge/buffalo_l started
+  // returning HTTP 401 on its plain resolve/main URL) need an Authorization header —
+  // this plain HTTPS path had none, unlike the huggingface_hub Python calls elsewhere
+  // in this file, which already pick up HF_TOKEN automatically from the inherited
+  // process environment. Only attached for *.huggingface.co hosts so a redirect to
+  // an unrelated CDN never receives the token.
+  const HF_TOKEN = process.env.HF_TOKEN || process.env.HUGGINGFACE_TOKEN || '';
   const doDownload = (url, destPath, cb) => {
     const proto = url.startsWith('https') ? https : http;
     const tmpPath = destPath + '.tmp';
     const file = fs.createWriteStream(tmpPath);
 
-    const req2 = proto.get(url, { rejectUnauthorized: false }, (response) => {
+    let reqHeaders;
+    try {
+      const host = new URL(url).hostname;
+      if (HF_TOKEN && (host === 'huggingface.co' || host.endsWith('.huggingface.co'))) {
+        reqHeaders = { Authorization: `Bearer ${HF_TOKEN}` };
+      }
+    } catch { /* malformed URL — let proto.get surface its own error */ }
+
+    const req2 = proto.get(url, { rejectUnauthorized: false, headers: reqHeaders }, (response) => {
       if (response.statusCode === 301 || response.statusCode === 302) {
         file.destroy();
         fs.unlink(tmpPath, () => {});
@@ -1869,7 +1934,7 @@ router.post('/models/download', express.json({ limit: '1kb' }), async (req, res)
 
     if (entry.hfExport) {
       // huggingface_hub .pt download → ultralytics export (PPE, Fire & Smoke)
-      const pyExec = _findPythonWithUltralytics({ checkHfHub: true });
+      const pyExec = await _findPythonWithUltralytics({ checkHfHub: true });
       if (!pyExec) throw new Error('Python with ultralytics + huggingface_hub not found. Run: pip install -U ultralytics huggingface_hub');
 
       _downloadProgress.set(modelId, { status: 'converting', percent: 50, error: null });
@@ -1900,7 +1965,7 @@ router.post('/models/download', express.json({ limit: '1kb' }), async (req, res)
       // Resolve Python with ultralytics that supports YOLO12 (cfg/models/12 directory).
       // ultralytics < 8.3.x uses 'v12' or missing dir and cannot export YOLO12 weights.
       // Check must verify YOLO12 support explicitly, not just 'import ultralytics'.
-      const pyExec = _findPythonWithUltralytics({ checkYolo12: true });
+      const pyExec = await _findPythonWithUltralytics({ checkYolo12: true });
       if (!pyExec) throw new Error('Python with ultralytics >=8.3 (YOLO12 support) not found. Run: pip install -U ultralytics');
 
       await exportPtToOnnx(ptPath, pyExec);
@@ -1908,7 +1973,7 @@ router.post('/models/download', express.json({ limit: '1kb' }), async (req, res)
       // HuggingFace checkpoint → optimum.exporters.onnx (Age Estimation's ViT classifier —
       // a non-YOLO architecture; `ultralytics export` cannot handle it, hence a distinct
       // strategy from hfExport above).
-      const pyExec = _findPythonWithOptimum();
+      const pyExec = await _findPythonWithOptimum();
       if (!pyExec) throw new Error('Python with optimum + transformers not found. Run: pip install -U optimum[exporters] transformers');
 
       _downloadProgress.set(modelId, { status: 'converting', percent: 50, error: null });
@@ -1931,7 +1996,7 @@ router.post('/models/download', express.json({ limit: '1kb' }), async (req, res)
       // generic converter applies. Long-running (clone + multi-GB downloads + GPU
       // export), so this uses a much longer timeout than the other paths and reports
       // coarse progress by parsing '[PromptPAR Export] Stage N/7' markers from stdout.
-      const pyExec = _findPythonForPromptPAR();
+      const pyExec = await _findPythonForPromptPAR();
       if (!pyExec) {
         throw new Error(
           'Python with torch/torchvision/onnx/onnxruntime/gdown not found. '

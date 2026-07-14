@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-AI-AGE-01 |
-| **Version** | 1.2 |
+| **Version** | 1.3 |
 | **Status** | Proposed (opt-in) |
-| **Date** | 2026-07-12 |
+| **Date** | 2026-07-14 |
 | **Parent SRS** | [SRS_AI_Age_Estimation](../srs/SRS_AI_Age_Estimation.md) |
 | **Related** | [Design_AI_Model_Catalog](Design_AI_Model_Catalog.md), [Design_AI_Cloth_Analysis](Design_AI_Cloth_Analysis.md) |
 
@@ -251,10 +251,12 @@ export interface EstimatedAge {
 | `analyticsConfig.ageEstimation === false` (기본값) | 크롭 추출·추론 자체가 발생하지 않음 — 성능 영향 0 |
 | InsightFace 정확한 출력 텐서 계약 미검증 | §11 참조 — 프로덕션 반영 전 실제 모델로 검증 필요 |
 | 두 모델의 `value` 스케일 차이 (회귀 vs. bucket 중앙값) | UI/검색에는 항상 `source`와 `modelId`를 함께 노출해 혼동 방지 |
+| `insightface-genderage` 다운로드 URL이 HTTP 401 반환 (2026-07-14 관측 — 2026-07-12엔 정상 다운로드됨) | 저장소가 gated로 바뀌었거나 익명 접근이 제한된 것으로 추정. `server/.env`에 `HF_TOKEN`(https://huggingface.co/settings/tokens) 설정 시 `*.huggingface.co` 호스트에 한해 `Authorization: Bearer` 헤더가 자동 첨부됨(analysisApi.js `doDownload()`) |
+| `torch`/`optimum`/`gdown` 등 Python 패키지 미설치로 모델 변환 실패 | 2026-07-14부터 자동 해결 — 최초 감지 실패 시 `_pipInstall()`이 해당 인터프리터에 필요 패키지를 자동 설치 후 재시도(비동기 실행이라 서버 이벤트 루프를 막지 않음). 그래도 실패하면 기존과 동일한 안내 에러 메시지 반환 |
 
 ## 11. 검증 (Verification)
 
-- ~~`insightface-genderage`의 정확한 HuggingFace 미러 URL~~ — **검증 완료(2026-07-12)**: `POST /api/analysis/models/download`로 실제 다운로드해 `server/models/genderage.onnx`(1,322,532 bytes)가 정상 생성됨을 확인했고, 이어서 `POST /api/analysis/models/switch`로 활성화(`active: true`)까지 성공했다.
+- ~~`insightface-genderage`의 정확한 HuggingFace 미러 URL~~ — **검증 완료(2026-07-12)**: `POST /api/analysis/models/download`로 실제 다운로드해 `server/models/genderage.onnx`(1,322,532 bytes)가 정상 생성됨을 확인했고, 이어서 `POST /api/analysis/models/switch`로 활성화(`active: true`)까지 성공했다. **(2026-07-14 추가)** 같은 URL이 이후 HTTP 401을 반환하기 시작함이 사용자 보고로 확인됨 — 위 §10 표 및 HF_TOKEN 지원 참고, 재검증 필요.
 - ONNX 세션의 `session.inputNames`/`outputNames`/shape를 실제로 로드해 §6.1 표의 전처리 계약을 재확인 — **미검증으로 남음**: 모델 로드 자체는 성공했으나, 실제 얼굴 이미지로 추론해 나온 `value`가 실제 나이와 부합하는지(출력 채널 순서·스케일 팩터 가정이 맞는지)는 아직 검증되지 않았다. 프로덕션 반영 전 알려진 나이의 샘플 얼굴로 end-to-end 정확도 확인 필요.
 - `optimum.exporters.onnx.main_export(..., task="image-classification")`가 `nateraw/vit-age-classifier` 체크포인트에 대해 실제로 `model.onnx`를 생성하는지 확인 (모델 카드의 `task` 이름이 다를 경우 조정) — 미검증 (Python `optimum`/`transformers` 환경이 없는 개발 환경에서 테스트됨)
 
@@ -267,3 +269,4 @@ export interface EstimatedAge {
 | 1.0 | 2026-07-12 | 초기 작성 — Age Estimation 설계, `hfOptimumExport` PT→ONNX 변환 신규 도입 |
 | 1.1 | 2026-07-12 | 구현 중 발견된 오류 정정 — §7/§9 "sticky-attribute 목록" 서술이 실제 코드와 불일치함을 확인(그런 공용 목록은 존재하지 않으며, `gender`/`ageGroup`/`lower`/`sleeve`는 `cloth` 객체 내부 필드로 `Track._clothSim()` 재식별 스코어러에서만 사용됨). `estimatedAge`는 `color`/`cloth`/`accessories`와 동일한 per-attribute 패턴(Track 필드 + `updateEstimatedAge()`)으로 정정 반영 |
 | 1.2 | 2026-07-12 | §11 갱신 — 실 서버 기동 테스트로 `insightface-genderage`의 HuggingFace 미러 URL이 실제로 다운로드·활성화(`active:true`)됨을 확인(1,322,532 bytes). ONNX 출력 텐서의 정확한 나이 스케일·채널 계약은 여전히 미검증(알려진 나이 샘플 얼굴 end-to-end 검증 필요)으로 명시 |
+| 1.3 | 2026-07-14 | §10/§11 갱신 — `insightface-genderage` 다운로드 URL이 HTTP 401로 전환됨을 반영, `HF_TOKEN` 환경변수 지원 추가(`analysisApi.js` `doDownload()`가 `*.huggingface.co` 호스트에 한해 `Authorization: Bearer` 헤더 첨부; `huggingface_hub` 기반 Python 경로는 기존부터 자동 지원). 또한 `_findPythonWithUltralytics`/`_findPythonWithOptimum`/`_findPythonForPromptPAR`가 필요 패키지 누락 시 자동 `pip install` 후 재시도하도록 변경(비동기 실행으로 이벤트 루프 비차단) |
