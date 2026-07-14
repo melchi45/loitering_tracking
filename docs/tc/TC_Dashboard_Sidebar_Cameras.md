@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-UI-CAM-01 |
-| **Version** | 1.0 |
+| **Version** | 1.2 |
 | **Status** | Active |
-| **Date** | 2026-05-27 |
+| **Date** | 2026-07-14 |
 | **Parent SRS** | srs/SRS_Dashboard_Sidebar_Cameras.md |
 | **Test Scripts** | test/api/sidebar_cameras.test.js |
 
@@ -67,6 +67,7 @@
 | FR-UI-CAM-032 | TC-D-003 |
 | FR-UI-CAM-033 | TC-D-004 |
 | FR-UI-CAM-004 | TC-A-004 |
+| FR-UI-CAM-003 | TC-A-005 |
 | FR-UI-CAM-040 | TC-E-001 |
 | FR-UI-CAM-041 | TC-E-002 |
 | FR-UI-CAM-042 | TC-E-003 |
@@ -101,8 +102,9 @@
 - **Expected:** "Added(N)" and "Found(N)" sub-tabs visible; N reflects counts
 - **Acceptance:** Both sub-tabs present; counts correct
 
-### TC-A-003 — Auto-Switch to Found on First Result
-- **Input:** `discovery:result` Socket.IO event received (first one)
+### TC-A-003 — Auto-Switch to Found on First Result (zero cameras registered)
+- **SRS:** FR-UI-CAM-003
+- **Input:** No cameras registered (`cameras.length === 0`); `discovery:result` Socket.IO event received (first one)
 - **Expected:** Sidebar switches to Found sub-tab automatically
 - **Acceptance:** One-time auto-switch occurs; subsequent results don't re-switch
 
@@ -113,6 +115,14 @@
 - **Acceptance:** Added tab becomes active within one render cycle; newly registered camera is visible in the list; no manual tab click required
 - **Test script:** `test/api/sidebar_cameras.test.js` — TC-A-004 (Phase-3 UI/E2E; REST API layer skipped)
 - **Cross-ref:** Design_Dashboard_Sidebar_Cameras.md §9.4
+
+### TC-A-005 — No Auto-Switch to Found Once Cameras Are Registered
+- **SRS:** FR-UI-CAM-003
+- **Input:** At least one camera already registered (`cameras.length >= 1`); user is on the Added tab; a `discovery:result` event arrives. Repeat with "Clean" clicked first (which resets `autoSwitched` to `false` and re-triggers `discovery:rescan`), then another `discovery:result` arrives.
+- **Expected:** In both cases, the panel remains on the Added sub-tab; the Found tab's count badge updates in the background only
+- **Acceptance:** `setSubTab('found')` is never invoked while `cameras.length >= 1`, regardless of `autoSwitched` state; regression guard against the panel repeatedly stealing focus from Added
+- **Test script:** `test/api/sidebar_cameras.test.js` — TC-A-005 (Phase-3 UI/E2E; REST API layer skipped)
+- **Cross-ref:** Design_Dashboard_Sidebar_Cameras.md §9.5
 
 ---
 
@@ -293,3 +303,4 @@ Clean up: delete test cameras after Group B, C, F.
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for Dashboard Sidebar Cameras |
 | 1.1 | 2026-06-16 | LTS Engineering Team | TC-A-004 추가 — Found→Added 자동 전환 테스트 케이스; SRS Traceability FR-UI-CAM-004 → TC-A-004 추가 |
+| 1.2 | 2026-07-14 | LTS Engineering Team | TC-A-003 조건 명시(등록 카메라 0대일 때만); TC-A-005 신규 추가 — 카메라 등록 후에는 Clean 이후에도 Found로 자동 전환되지 않음을 검증; SRS Traceability FR-UI-CAM-003 → TC-A-005 추가 |

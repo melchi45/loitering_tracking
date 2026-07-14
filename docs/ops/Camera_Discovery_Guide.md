@@ -2,8 +2,8 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Automatic IP Camera Discovery (WiseNet UDP + ONVIF) & RTSP URL Resolution
-**Version:** 1.6
-**Date:** 2026-07-03
+**Version:** 1.7
+**Date:** 2026-07-14
 
 ---
 
@@ -114,6 +114,7 @@ ONVIF URL (Ch2)    not detected
 | Camera added but stream never connects, despite discovery reporting success | Saved `rtspUrl` uses a stale port (see §3's known discrepancy) | Re-detect the camera and compare the confirmed SUNAPI URL row's port against the saved `rtspUrl` |
 | MaxChannel/RTSP port keeps flip-flopping between requests to the same IP, with no code change | **Two physical devices sharing the same IP** (LAN misconfiguration, not a code defect) — observed live: 192.168.214.37 answered UDP discovery as two distinct devices (different `chMac`, different `chDeviceName`) | Run a UDP discovery capture and check for more than one `chMac` reporting the same `chIP`; cross-check with `arp -n <ip>` / `ip neigh show <ip>` to see which device the OS currently resolves that IP to — HTTP-based queries (SUNAPI CGI, ONVIF) go to whichever device wins that resolution, which can change between requests. Fix by assigning the conflicting device a unique IP; this cannot be safely worked around in software |
 | Found panel shows no "Type" (Camera/Encoder/Recorder/...) for a device | Device's UDP response is a short/legacy packet with no Device Type field at all (not detectable via ONVIF/SUNAPI either — UDP-only field) | Expected for many real cameras on this network (verified: a 262-byte response has no room for this field) — not a bug; "Type" simply doesn't render when absent, same convention as other optional Found-panel fields |
+| Dashboard sidebar's **Found** sub-tab keeps jumping to the front on the Streaming server, pulling focus away from **Added** while an operator is actively adding/editing cameras | Every `discovery:result` event re-evaluated the one-shot `autoSwitched` flag without checking whether cameras were already registered — clicking "Clean" (resets `autoSwitched`) mid-session and a new device answering the rescan reproduced this reliably | Fixed 2026-07-14: `CameraList.tsx`'s discovery handler now also requires `cameras.length === 0` before switching to Found; once any camera is Added, the tab stays pinned regardless of scan/Clean activity. See `docs/design/Design_Dashboard_Sidebar_Cameras.md` §5.2/§9.5, `docs/srs/SRS_Dashboard_Sidebar_Cameras.md` FR-UI-CAM-003. If it recurs, confirm the deployed client build includes this fix (`git log -- client/src/components/CameraList.tsx`) |
 
 Diagnostic script (no running server/DB required — queries a real camera directly):
 ```bash
@@ -147,3 +148,4 @@ Response includes `maxChannel`, `protocol`, merged `profiles`, plus (2026-07-02)
 | 1.4 | 2026-07-03 | §1a "Request opcode note" 갱신 — 요청 옵코드를 `nMode=1`에서 스펙 문서화값 `nMode=6`(`DEF_REQ_SCAN_EX`)으로 전환(`request.js`의 `UdpRequest`), 과거 `nMode=1` 패킷은 주석 처리로 롤백 경로 보존, `'scanExtConfirmed'` 이벤트로 옵코드 6→12 왕복 검증 안내 추가 |
 | 1.5 | 2026-07-03 | §1a 구현 경로 표 갱신 — 서브모듈/인라인 폴백 이중 구조를 서브모듈+npm `optionalDependencies`(`wisenet-chrome-ip-installer`)로 교체, 인라인 폴백(`UDPDiscoveryFallback`) 완전 제거 안내; `reserved2`/`reserved3` 오프셋(334바이트) 안내 추가; §3에 RTSP 포트 필드 버그(`nTcpPort`/`nPort`는 RTSP 포트 아님, 항상 554로 고정) 및 192.168.214.32 불일치 근본 원인 규명 반영; §3 Digest Auth 감지 보강(콤바인드 `WWW-Authenticate` 헤더 대응) 안내 추가 |
 | 1.6 | 2026-07-03 | §1a 정정 — `server/`가 서브모듈 경로와 npm 패키지를 우선순위로 시도한다는 서술을 npm 패키지(`wisenet-chrome-ip-installer`) **단일** 의존성으로 정정(서브모듈은 그 패키지의 소스일 뿐, `server/`의 별도 설치 경로 아님); `require()`가 `getUDPDiscovery()` 실제 호출 시점까지 지연되도록 수정된 내용 반영 — 즉시 require하던 버전이 `SERVER_MODE=analysis`(discovery 미사용) 서버를 패키지 미설치 시 기동 실패시키던 회귀 수정 |
+| 1.7 | 2026-07-14 | §5 트러블슈팅에 1행 추가 — Streaming 서버 Dashboard의 Cameras 사이드바에서 카메라가 이미 등록된 상태에도 Found 탭이 반복적으로 활성화되던 버그와 수정 내역(`cameras.length === 0`일 때만 자동 전환) 안내 |

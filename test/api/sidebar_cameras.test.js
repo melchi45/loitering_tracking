@@ -95,10 +95,16 @@ function runGroupA_notes() {
   console.log('[Group A] Camera Panel Header & Sub-Tabs — Phase-3 (UI/E2E)\n');
   skip('TC-A-001', 'Sub-tab "Added Cameras" visible and selected by default', 'Phase-3 frontend test');
   skip('TC-A-002', 'Sub-tab "Found Cameras" tab is accessible', 'Phase-3 frontend test');
+  // TC-A-003 (FR-UI-CAM-003): Auto-switch to Found on first discovery:result, only
+  // while cameras.length === 0. Requires React component + socket event simulation.
+  skip('TC-A-003', 'Found tab auto-switches on first discovery:result when zero cameras registered', 'Phase-3 frontend test — requires React component + socket event simulation');
   // TC-A-004 (FR-UI-CAM-004): Found→Added auto-switch on camera registration
   // Full verification requires React component rendering with found-tab state active.
   // REST-level proxy: confirm POST /api/cameras increases count (foundational precondition).
   skip('TC-A-004', 'Found tab auto-switches to Added when camera count increases', 'Phase-3 frontend test — requires React component + tab state simulation');
+  // TC-A-005 (FR-UI-CAM-003): regression guard — once >=1 camera is registered, no
+  // discovery:result event (even after "Clean" resets autoSwitched) switches to Found.
+  skip('TC-A-005', 'Found tab never auto-switches once a camera is registered, even after Clean resets autoSwitched', 'Phase-3 frontend test — requires React component + socket event simulation');
 }
 
 // ── Group B — Added Cameras REST API ─────────────────────────────────────────

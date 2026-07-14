@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-UI-CAM-01 |
-| **Version** | 1.0 |
+| **Version** | 1.2 |
 | **Status** | Active |
-| **Date** | 2026-05-26 |
+| **Date** | 2026-07-14 |
 | **Parent PRD** | prd/PRD_Dashboard_Sidebar_Cameras.md |
 | **Parent RFP** | rfp/RFP_Dashboard_Sidebar_Cameras.md |
 | **Child Design** | design/Design_Dashboard_Sidebar_Cameras.md |
@@ -99,7 +99,9 @@ A blue animated ping dot (`w-1.5 h-1.5 bg-blue-400 animate-ping`) shall appear i
 
 ### FR-UI-CAM-003 — Auto Tab Switch on Discovery
 
-When the first `discovery:result` Socket.IO event is received, the panel shall automatically switch to the Found tab. This auto-switch shall occur only once per discovery session (controlled by `autoSwitched` flag).
+When the first `discovery:result` Socket.IO event is received, the panel shall automatically switch to the Found tab. This auto-switch shall occur only once per discovery session (controlled by `autoSwitched` flag), **and only while zero cameras are registered** (`cameras.length === 0` at the moment the event arrives).
+
+Once at least one camera is registered, the panel shall remain pinned to whatever tab the operator currently has selected: no `discovery:result` event shall auto-switch it to Found, regardless of the `autoSwitched` flag's value — including after "Clean" (FR-UI-CAM-030) resets `autoSwitched` to `false` and triggers a new scan. This prevents Found-tab activity from repeatedly stealing focus from an operator working in the Added tab.
 
 ### FR-UI-CAM-004 — Auto Tab Switch Back to Added on Camera Registration
 
@@ -315,7 +317,7 @@ The "Close" button shall call `DiscoveryStore.select(null)`, hiding the overlay.
 |---|---|---|
 | `cameras` | S→C | `CameraStore.setCameras()` |
 | `camera:status` | S→C | `CameraStore.updateCameraStatus()` |
-| `discovery:result` | S→C | `DiscoveryStore.addOrUpdate()` + auto tab switch |
+| `discovery:result` | S→C | `DiscoveryStore.addOrUpdate()` + auto tab switch (only if `cameras.length === 0`, see FR-UI-CAM-003) |
 | `discovery:scanning` | S→C | `DiscoveryStore.setScanning()` |
 | `discovery:cleared` | S→C | `DiscoveryStore.clearFound()` |
 | `discovery:rescan` | C→S | Request scan reset and restart |
@@ -354,3 +356,4 @@ interface CameraAddRequest {
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for Dashboard Sidebar Cameras |
 | 1.1 | 2026-06-16 | LTS Engineering Team | FR-UI-CAM-004 추가 — Found 탭 활성 상태에서 카메라 등록 시 Added 탭 자동 전환 요구사항 |
+| 1.2 | 2026-07-14 | LTS Engineering Team | FR-UI-CAM-003 수정 — 등록된 카메라가 1대 이상이면 어떤 discovery:result 이벤트도 Found 탭으로 자동 전환하지 않도록 조건 추가(Clean으로 autoSwitched가 리셋된 이후에도 적용); §9.2 이벤트 표 갱신 |

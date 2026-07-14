@@ -213,12 +213,18 @@ export default function CameraList() {
     prevCamerasLen.current = cameras.length;
   }, [cameras.length, tab]);
 
+  // Latest cameras.length, kept fresh every render so the discovery handler below
+  // never auto-switches to Found once any camera is registered — even after "Clean"
+  // resets autoSwitched (FR-UI-CAM-003).
+  const hasAddedCamerasRef = useRef(cameras.length > 0);
+  hasAddedCamerasRef.current = cameras.length > 0;
+
   // Listen for server-pushed discovery events
   useEffect(() => {
     const handleResult = (data: { device: DiscoveredCamera }) => {
       if (!data?.device) return;
       addOrUpdate(data.device);
-      if (!autoSwitched) {
+      if (!autoSwitched && !hasAddedCamerasRef.current) {
         setTab('found');
         setAutoSwitched(true);
       }

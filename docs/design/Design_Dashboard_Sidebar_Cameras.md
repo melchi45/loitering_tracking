@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UI-CAM-01 |
-| **Version** | 1.0 |
+| **Version** | 1.2 |
 | **Status** | Active |
-| **Date** | 2026-05-26 |
+| **Date** | 2026-07-14 |
 | **Parent SRS** | srs/SRS_Dashboard_Sidebar_Cameras.md |
 
 ---
@@ -168,8 +168,9 @@ interface DiscoveryStore {
 | State | Type | Purpose |
 |---|---|---|
 | `subTab` | `'added' \| 'found'` | Active sub-tab |
-| `autoSwitched` | `boolean` | One-time auto-switch to Found tab flag |
+| `autoSwitched` | `boolean` | One-time auto-switch to Found tab flag (per discovery session) |
 | `prevCamerasLen` | `React.MutableRefObject<number>` | Previous camera count for Found→Added auto-switch |
+| `hasAddedCamerasRef` | `React.MutableRefObject<boolean>` | Render-synced latest `cameras.length > 0`; gates Added→Found auto-switch so it never fires once any camera is registered (FR-UI-CAM-003) |
 | `searchQuery` | `string` | Found tab search input value |
 | `reconnectingId` | `string \| null` | Camera showing "Reconnecting…" indicator |
 
@@ -221,9 +222,17 @@ socket.on('camera:status', (data: { id: string; status: Camera['status'] }) => {
 ### 5.2 Discovery Events
 
 ```typescript
+// hasAddedCamerasRef is kept in sync every render (not inside an effect), so the
+// handler always reads the latest cameras.length without re-subscribing the socket.
+const hasAddedCamerasRef = useRef(cameras.length > 0);
+hasAddedCamerasRef.current = cameras.length > 0;
+
 socket.on('discovery:result', (device: DiscoveredCamera) => {
   discoveryStore.addOrUpdate(device);
-  if (!autoSwitched) {
+  // Only nudge onboarding users (zero cameras registered) into the Found tab.
+  // Once any camera exists, discovery activity must never steal focus from Added —
+  // this also covers the case where "Clean" already reset autoSwitched to false.
+  if (!autoSwitched && !hasAddedCamerasRef.current) {
     setSubTab('found');
     setAutoSwitched(true);
   }
@@ -425,15 +434,29 @@ User fills Name + RTSP URL → clicks "Save"
   → modal closes
 ```
 
-### 9.2 Discovery Auto-Switch
+### 9.2 Discovery Auto-Switch (first-run onboarding, zero cameras registered)
 
 ```
 Server starts ONVIF/UDP scan
   → discovery:scanning (true) → DiscoveryStore.setScanning(true)
   → [ping dot appears in Found tab label]
   → discovery:result (device) → DiscoveryStore.addOrUpdate(device)
-  → [autoSwitched === false] → setSubTab('found'); setAutoSwitched(true)
+  → [autoSwitched === false && hasAddedCamerasRef.current === false]
+      → setSubTab('found'); setAutoSwitched(true)
   → discovery:scanning (false) → DiscoveryStore.setScanning(false)
+```
+
+### 9.5 Discovery Stays on Added (cameras already registered)
+
+```
+Operator already has ≥1 camera in Added; currently viewing Added tab
+User clicks "Clean" in Found tab (or scan restarts for any reason)
+  → DiscoveryStore.clearFound(); setAutoSwitched(false)   ← one-shot guard reset
+  → discovery:rescan emitted → server restarts scan
+  → discovery:result (device) → DiscoveryStore.addOrUpdate(device)
+  → [autoSwitched === false, but hasAddedCamerasRef.current === true]
+      → auto-switch guard short-circuits; setSubTab is NOT called
+  [Operator remains on Added — Found tab count updates in the background only]
 ```
 
 ### 9.4 Found → Added Auto-Switch on Camera Add
@@ -485,3 +508,4 @@ User changes RTSP URL → clicks "Save & Reconnect"
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Dashboard Sidebar Cameras |
 | 1.1 | 2026-06-16 | LTS Engineering Team | §4.3 Found→Added 자동 전환 규칙 및 코드 스니펫 추가, §9.4 시퀀스 다이어그램 추가 |
+| 1.2 | 2026-07-14 | LTS Engineering Team | §4.3에 `hasAddedCamerasRef` 추가, §5.2 discovery:result 핸들러에 "등록된 카메라 0대일 때만 Found로 자동 전환" 가드 추가, §9.2 갱신 및 §9.5 신규 추가(카메라 등록된 상태에서는 Clean 이후에도 Added 유지) — Streaming 서버 Dashboard에서 Found 패널이 반복적으로 포커스를 뺏어가던 버그 수정 |

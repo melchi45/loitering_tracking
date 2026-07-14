@@ -4,10 +4,10 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-011 |
-| **Version** | 1.0 |
+| **Version** | 1.2 |
 | **Status** | Draft |
-| **Date** | 2026-05-21 |
-| **Related RFP** | RFP_Dashboard_Sidebar_Cameras.md (LTS-2026-011 v1.3) |
+| **Date** | 2026-07-14 |
+| **Related RFP** | RFP_Dashboard_Sidebar_Cameras.md (LTS-2026-011 v1.2) |
 
 ---
 
@@ -72,7 +72,7 @@ Two sub-tabs: **Added (N)** and **Found (N)**, where N is the respective count. 
 
 A blue animated ping dot (`w-1.5 h-1.5 bg-blue-400 animate-ping`) appears inside the Found tab label while scanning.
 
-**Auto tab switch on discovery**: When the first `discovery:result` Socket.IO event is received, the panel automatically switches to the Found tab (one-time, controlled by `autoSwitched` flag).
+**Auto tab switch on discovery**: When the first `discovery:result` Socket.IO event is received, the panel automatically switches to the Found tab (one-time, controlled by `autoSwitched` flag) — but only while the operator has **zero** registered cameras. As soon as one camera exists in the Added list, the panel stays pinned to Added and no discovery event (including after "Clean" resets `autoSwitched`) switches it away again.
 
 **Auto tab switch back to Added on registration**: When a camera is registered (cameras count increases) while the Found tab is active, the panel automatically switches back to the Added tab so the operator can immediately see the newly added camera. Implemented via `useRef`/`useEffect` watching `cameras.length` in `CameraList.tsx`.
 
@@ -274,8 +274,9 @@ bg-gray-800 border-gray-700 hover:bg-gray-700 hover:border-gray-600
 4. YouTube channel addition shows progress ("Starting stream… Xs") while the server prepares the stream; the Modal closes automatically when `live` status is confirmed.
 5. The AI toggle button immediately reflects the new state (`text-green-400` when on, `text-gray-600` when off) after `POST /api/cameras/{id}/ai/toggle` responds successfully.
 6. The reconnect button shows a 2-second "Reconnecting…" pulsing indicator after click.
-7. The Found tab auto-switches when the first `discovery:result` event is received, and does not auto-switch again for subsequent events.
+7. The Found tab auto-switches when the first `discovery:result` event is received while zero cameras are registered, and does not auto-switch again for subsequent events.
 7a. When a camera is registered while on the Found tab, the panel automatically switches back to the Added tab.
+7b. Once at least one camera is registered, no `discovery:result` event ever auto-switches the panel to Found — including after "Clean" resets the scan and the `autoSwitched` flag.
 8. The search bar in the Found tab correctly filters devices by text fields (Model, IP, MAC, etc.) and by virtual category keywords (`onvif`, `sunapi`, `hanwha`); matched field names appear as yellow badges.
 9. Clicking a discovered device shows the `DiscoveredCameraPanel` overlay with its details and "Add as camera" pre-fills the Camera Add Modal.
 10. The Camera Edit Modal pre-populates all fields with current values; "Save & Reconnect" calls both `PUT /api/cameras/{id}` and `POST /api/cameras/{id}/stream/reconnect` sequentially.
@@ -315,3 +316,4 @@ bg-gray-800 border-gray-700 hover:bg-gray-700 hover:border-gray-600
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for Dashboard Sidebar Cameras |
 | 1.1 | 2026-06-16 | LTS Engineering Team | §4.2 Sub-Tab 섹션에 Found→Added 자동 전환 요구사항 추가; §5 검증 항목 7a 추가 |
+| 1.2 | 2026-07-14 | LTS Engineering Team | §4.2 정정 — 등록된 카메라가 있으면(cameras.length > 0) Found 자동 전환을 금지; §5 검증 항목 7 수정, 7b 추가 (Found 패널이 반복적으로 포커스를 뺏어가던 버그 수정) |

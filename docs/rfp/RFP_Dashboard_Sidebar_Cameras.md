@@ -1,8 +1,8 @@
 # RFP: Dashboard Sidebar — Cameras Panel
 
 **Document No.**: LTS-2026-011  
-**Version**: 1.3  
-**Date**: 2026-05-20  
+**Version**: 1.2  
+**Date**: 2026-07-14  
 **Classification**: Technical Requirements Specification (RFP)  
 **Status**: Written based on Phase-1 implementation  
 **Related RFPs**: LTS-2026-010 (Dashboard Layout), LTS-2026-001 (Loitering Tracking System)
@@ -119,7 +119,9 @@ CSS: w-1.5 h-1.5 rounded-full bg-blue-400 animate-ping
 
 ### 4.3 Auto Tab Switch on Discovery
 
-When the first discovered device (`discovery:result` event) is received from the server, **automatically switches to the Found tab** (limited to once via `autoSwitched` flag).
+When the first discovered device (`discovery:result` event) is received from the server, **automatically switches to the Found tab** (limited to once via `autoSwitched` flag) — but **only when the operator has no registered cameras yet** (`cameras.length === 0`). Once at least one camera exists in the Added list, the panel stays pinned to Added: neither the first nor any subsequent `discovery:result` event auto-switches away from it, regardless of the `autoSwitched` flag's state (including after it has been reset by "Clean," §6.1).
+
+This condition exists specifically so that Found-tab activity — new devices appearing, or an operator clicking "Clean" to restart a scan — never yanks focus away from an Added list the operator is actively working in.
 
 ### 4.4 Auto Tab Switch Back to Added on Camera Registration
 
@@ -612,3 +614,4 @@ Displayed as an overlay above the Camera Grid when a device from the Found tab i
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for Dashboard Sidebar Cameras |
 | 1.1 | 2026-06-16 | LTS Engineering Team | §4.4 추가 — Found 탭에서 카메라 등록 시 Added 탭 자동 전환 요구사항; §12.1 구현 완료 항목 추가 |
+| 1.2 | 2026-07-14 | LTS Engineering Team | §4.3 정정 — 등록된 카메라가 이미 있는 경우(`cameras.length > 0`) Found 탭 자동 전환을 금지하도록 조건 추가 (Streaming 서버 Dashboard에서 Found 패널이 반복적으로 포커스를 뺏어가던 버그 수정) |
