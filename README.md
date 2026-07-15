@@ -1309,22 +1309,60 @@ Label format: `person #3  94%` (className + objectId + confidence)
 ### 7.5 Installed AI Model File Status
 
 > Verification environment: **onnxruntime-node 1.26.0** (Node.js, 2026-05-18)  
-> Python onnxruntime 1.14.1 does not support `yolov8n.onnx` (ONNX IR v9) — works only with Node.js runtime
+> Python onnxruntime 1.14.1 does not support `yolov8n.onnx` (ONNX IR v9) — works only with Node.js runtime  
+> Full catalog source of truth: `MODEL_CATALOG` / `EXTENDED_CATALOG` in [`analysisApi.js`](server/src/routes/analysisApi.js), managed via Admin Dashboard → **AI Models** tab (`GET/POST /api/analysis/models*`, see [§6. AI Models & Inference Pipeline](#6-ai-models--inference-pipeline) and `docs/design/Design_AI_Model_Catalog.md`).
+
+#### 7.5.1 Core pipeline models (always active)
 
 | File | Size | Node.js Load | Responsible AI module | Source |
 |---|---:|:---:|---|---|
-| `yolov8n.onnx` | 13 MB | ✅ Working | AI-01 Human · AI-02 Vehicle · AI-08 Accessories · All indoor objects | Ultralytics YOLOv8n COCO (ONNX IR v9) |
+| `yolov8n.onnx` | 13 MB | ✅ Working | AI-01 Human · AI-02 Vehicle · AI-08 Accessories · All indoor objects (default detector) | Ultralytics YOLOv8n COCO (ONNX IR v9) |
 | `scrfd_2.5g.onnx` | 3.2 MB | ✅ Working | AI-03 Face Detection | JackCui/facefusion @ HuggingFace |
 | `arcface_w600k_r50.onnx` | 249 MB | ✅ Working | AI-03 Face Re-ID | FoivosPar/Arc2Face @ HuggingFace |
 | `yolov8m_ppe.onnx` | 99 MB | ✅ Working | AI-04 Mask Detection · AI-07 Helmet Detection | keremberke/yolov8m-protective-equipment-detection |
 | `yolov8s_fire_smoke.onnx` | 43 MB | ✅ Working | AI-09 Fire & Smoke Detection (3-class) | Abonia1/YOLOv8-Fire-and-Smoke-Detection @ GitHub |
 | `openpar.onnx` | 94 MB | ✅ Working | AI-06 Cloth Analysis Phase-2 (Clothing type: tshirt/shirt/jacket/hoodie/vest/dress + pants/jeans/shorts/skirt + sleeve) | Event-AHU/OpenPAR |
 
-**Total models**: 6 installed · Total approximately 501 MB
+#### 7.5.2 Detector alternatives (installed, admin-selectable)
+
+Downloaded and hot-swappable with `yolov8n.onnx` for the same modules (AI-01/02/08) via Admin Dashboard → AI Models → **switch** — no server restart required.
+
+| File | Size | Node.js Load | Series (mAP<sup>val</sup>) | Source |
+|---|---:|:---:|---|---|
+| `yolo11n.onnx` | 10 MB | ✅ Working | YOLO11n (39.5) | Ultralytics YOLO11 @ GitHub |
+| `yolo11s.onnx` | 36 MB | ✅ Working | YOLO11s (47.0) | Ultralytics YOLO11 @ GitHub |
+| `yolo11m.onnx` | 77 MB | ✅ Working | YOLO11m (51.5) | Ultralytics YOLO11 @ GitHub |
+| `yolo11l.onnx` | 97 MB | ✅ Working | YOLO11l (53.4) | Ultralytics YOLO11 @ GitHub |
+| `yolo11x.onnx` | 218 MB | ✅ Working | YOLO11x (54.7) | Ultralytics YOLO11 @ GitHub |
+| `yolov8s.onnx` | 43 MB | ✅ Working | YOLOv8s (44.9) | Ultralytics YOLOv8 @ GitHub |
+| `yolov8m.onnx` | 99 MB | ✅ Working | YOLOv8m (50.2) | Ultralytics YOLOv8 @ GitHub |
+| `yolov8l.onnx` | 167 MB | ✅ Working | YOLOv8l (52.9) | Ultralytics YOLOv8 @ GitHub |
+| `yolov8x.onnx` | 260 MB | ✅ Working | YOLOv8x (53.9) | Ultralytics YOLOv8 @ GitHub |
+
+> `.pt` files alongside each `.onnx` above (e.g. `yolo11n.pt`) are the Ultralytics export intermediates kept for re-export; they are not loaded by the inference pipeline.
+
+**Total installed**: 15 ONNX model files · ≈1.5 GB (excluding `.pt` intermediates)
+
+#### 7.5.3 Catalog-registered, not yet downloaded (download via Admin Dashboard → AI Models)
+
+| Catalog ID(s) | Family | Conversion path | Status |
+|---|---|---|:---:|
+| `yolo26n/s/m/l/x` | Detector (YOLO26, NMS-free) | `requiresConversion` — GitHub `.pt` → `ultralytics export` | ⬜ Not downloaded |
+| `yolo12n/s/m/l/x` | Detector (YOLO12, attention-based) | `requiresConversion` — GitHub `.pt` → `ultralytics export` | ⬜ Not downloaded |
+| `openpar-pa100k` (PromptPAR) | AI-06 Cloth Attribute (PAR) | `pyExport` — `exportPromptPAR.py` (requires GPU) | ⬜ Not downloaded |
+| `openpar-resnet50-pa100k` | AI-06 Cloth Attribute (PAR), OpenPAR ResNet50 baseline | `manualOnly` — no automated export, place file manually | 🔒 Manual export only |
+| `schp-lip20` | AI-05 Phase-3 Human Parsing (Proposed) | Direct ONNX URL @ HuggingFace | ⬜ Not downloaded |
+| `segformer-clothes` | AI-05 Phase-3 Human Parsing (Proposed) | Direct ONNX URL @ HuggingFace | ⬜ Not downloaded |
+| `osnet-retail-0287` | CrossCamera Phase-2 Appearance Re-ID (Proposed) | Direct ONNX URL @ OpenVINO Model Zoo | ⬜ Not downloaded |
+| `insightface-genderage` | Age Estimation · Gender Classification (Proposed, shared `genderage.onnx`) | Direct ONNX URL @ HuggingFace | ⬜ Not downloaded |
+| `vit-age-classifier` | Age Estimation (Proposed) | `hfOptimumExport` — `optimum.exporters.onnx` | ⬜ Not downloaded |
+| `vit-gender-classifier` | Gender Classification (Proposed) | `hfOptimumExport` — `optimum.exporters.onnx` | ⬜ Not downloaded |
 
 ```
 server/models/                       Size    Status  Module
-├── yolov8n.onnx                     13 MB  ✅     Human/Vehicle/Indoor/Accessories (COCO 80-class)
+├── yolov8n.onnx                     13 MB  ✅     Human/Vehicle/Indoor/Accessories (COCO 80-class, default detector)
+├── yolo11n/s/m/l/x.onnx      10–218 MB  ✅     Detector alternatives (Ultralytics YOLO11, admin-selectable)
+├── yolov8s/m/l/x.onnx        43–260 MB  ✅     Detector alternatives (Ultralytics YOLOv8, admin-selectable)
 ├── scrfd_2.5g.onnx                 3.2 MB  ✅     Face detection SCRFD-2.5G (AI-03)
 ├── arcface_w600k_r50.onnx          249 MB  ✅     Face Re-ID ArcFace ResNet50 (AI-03)
 ├── yolov8m_ppe.onnx                 99 MB  ✅     Mask/Helmet YOLOv8m PPE (AI-04/07)
@@ -1333,6 +1371,11 @@ server/models/                       Size    Status  Module
 └── openpar.onnx                     94 MB  ✅     Clothing type PAR (AI-06 Phase-2)
                                               Source: Event-AHU/OpenPAR
                                               Classes: tshirt/shirt/jacket/hoodie/vest/dress + pants/jeans/shorts/skirt + sleeve short/long
+
+  Not yet downloaded (catalog-registered, see 7.5.3): yolo26*.onnx, yolo12*.onnx,
+  openpar_pa100k.onnx, openpar_resnet50_pa100k.onnx, schp_lip.onnx,
+  segformer_clothes.onnx, appearance_reid_osnet.onnx, genderage.onnx,
+  vit_age_classifier.onnx, vit_gender_classifier.onnx
 ```
 
 For detailed spec for each AI module, refer to [`RFP_AI_Human_Detection.md`](docs/RFP_AI_Human_Detection.md) through [`RFP_AI_Fire_Smoke_Detection.md`](docs/RFP_AI_Fire_Smoke_Detection.md).
