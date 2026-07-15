@@ -195,6 +195,81 @@ function faceGalleryRouter(db, pipelineManager, getFaceService, analysisClient =
     }
   });
 
+  // PUT /api/galleries/:id/faces/:faceId  — rename, reassign gallery/type, and/or replace photo
+  router.put('/:id/faces/:faceId', upload.single('photo'), multerErrorHandler, async (req, res) => {
+    try {
+      const face = db.findOne('faceGalleryFaces', { id: req.params.faceId, galleryId: req.params.id });
+      if (!face) return res.status(404).json({ success: false, error: 'Face not found' });
+
+      const { name, galleryId } = req.body;
+      const updates = {};
+
+      if (name !== undefined) {
+        if (!name.trim()) return res.status(400).json({ success: false, error: 'name cannot be empty' });
+        updates.name = name.trim();
+      }
+
+      if (galleryId !== undefined && galleryId !== face.galleryId) {
+        const targetGallery = db.findOne('faceGalleries', { id: galleryId });
+        if (!targetGallery) return res.status(400).json({ success: false, error: 'Target gallery not found' });
+        updates.galleryId = galleryId;
+      }
+
+      if (req.file) {
+        const faceService = typeof getFaceService === 'function' ? getFaceService() : getFaceService;
+        let extracted;
+        if (faceService && faceService.ready) {
+          try {
+            extracted = await extractFaceForEnrollment(faceService, req.file.buffer);
+          } catch (err) {
+            const status = /No face detected/.test(err.message) || /Could not extract/.test(err.message) ? 422 : 500;
+            return res.status(status).json({ success: false, error: err.message });
+          }
+        } else if (analysisClient) {
+          const jpegBuf = await sharp(req.file.buffer).jpeg({ quality: 95 }).toBuffer();
+          const delegated = await analysisClient.extractFaceEmbedding(jpegBuf);
+          if (!delegated || !delegated.success) {
+            const status = delegated && delegated.status ? delegated.status : 503;
+            const error = (delegated && delegated.error) || 'Face service not available — models not loaded';
+            return res.status(status).json({ success: false, error });
+          }
+          extracted = delegated;
+        } else {
+          return res.status(503).json({ success: false, error: 'Face service not available — models not loaded' });
+        }
+        updates.embedding = extracted.embedding;
+        updates.thumbnail = extracted.thumbnail;
+        updates.bbox      = extracted.bbox;
+        updates.score     = extracted.score;
+      }
+
+      if (Object.keys(updates).length === 0) {
+        return res.status(400).json({ success: false, error: 'No fields to update' });
+      }
+
+      db.update('faceGalleryFaces', face.id, updates);
+      const updated = db.findOne('faceGalleryFaces', { id: face.id });
+
+      AuditService.log({
+        event:   'face_updated',
+        actorId: req.user?.sub,
+        email:   req.user?.email,
+        ip:      clientIp(req),
+        detail:  { galleryId: updated.galleryId, faceId: face.id, name: updated.name, fieldsChanged: Object.keys(updates) },
+      });
+
+      if (pipelineManager && typeof pipelineManager.reloadPersistentGallery === 'function') {
+        pipelineManager.reloadPersistentGallery();
+      }
+      syncIfStreaming();
+
+      res.json({ success: true, data: { ...updated, embedding: undefined } });
+    } catch (err) {
+      console.error('[FaceGallery] update error:', err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // DELETE /api/galleries/:id/faces/:faceId  — GDPR right-to-erasure
   router.delete('/:id/faces/:faceId', (req, res) => {
     try {

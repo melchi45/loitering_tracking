@@ -48,6 +48,12 @@ export default function FaceSearchConditionPanel({ onClose }: Props) {
   const [file, setFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editName, setEditName] = useState('');
+  const [editType, setEditType] = useState<GalleryType>('general');
+  const [editFile, setEditFile] = useState<File | null>(null);
+  const [editSubmitting, setEditSubmitting] = useState(false);
+
   const load = useCallback(async () => {
     try {
       const res = await fetch('/api/analysis/face-search-conditions');
@@ -83,6 +89,45 @@ export default function FaceSearchConditionPanel({ onClose }: Props) {
       setError(err instanceof Error ? err.message : 'Failed to add condition');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const startEdit = (f: ConditionFace) => {
+    setEditingId(f.id);
+    setEditName(f.name);
+    setEditType(f.galleryType);
+    setEditFile(null);
+  };
+
+  const cancelEdit = () => setEditingId(null);
+
+  const handleSaveEdit = async (f: ConditionFace) => {
+    setEditSubmitting(true);
+    try {
+      const form = new FormData();
+      if (editName.trim() && editName.trim() !== f.name) form.append('name', editName.trim());
+      if (editType !== f.galleryType) form.append('galleryId', await findOrCreateGallery(editType));
+      if (editFile) form.append('photo', editFile);
+
+      const res = await fetch(`/api/galleries/${f.galleryId}/faces/${f.id}`, { method: 'PUT', body: form });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setEditingId(null);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to update condition');
+    } finally {
+      setEditSubmitting(false);
+    }
+  };
+
+  const handleDelete = async (f: ConditionFace) => {
+    try {
+      const res = await fetch(`/api/galleries/${f.galleryId}/faces/${f.id}`, { method: 'DELETE' });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete condition');
     }
   };
 
@@ -160,8 +205,67 @@ export default function FaceSearchConditionPanel({ onClose }: Props) {
                 </span>
               </div>
               <div className="grid grid-cols-4 gap-2">
-                {faces.map((f) => (
-                  <div key={f.id} className={`flex flex-col items-center gap-1 bg-gray-800 rounded-lg p-1.5 border-l-2 ${meta.rowClass}`}>
+                {faces.map((f) => editingId === f.id ? (
+                  <div key={f.id} className={`col-span-4 flex items-center gap-1.5 bg-gray-800 rounded-lg p-2 border-l-2 flex-wrap ${meta.rowClass}`}>
+                    {f.thumbnail ? (
+                      <img src={f.thumbnail} alt={f.name} className="w-10 h-10 rounded object-cover flex-shrink-0" />
+                    ) : (
+                      <div className="w-10 h-10 rounded bg-gray-700 flex items-center justify-center text-gray-500 flex-shrink-0">?</div>
+                    )}
+                    <select
+                      value={editType}
+                      onChange={(e) => setEditType(e.target.value as GalleryType)}
+                      className="bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px] text-gray-200"
+                    >
+                      {GALLERY_TYPE_ORDER.map((gt) => (
+                        <option key={gt} value={gt}>{GALLERY_TYPE_META[gt].icon} {gt}</option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      value={editName}
+                      onChange={(e) => setEditName(e.target.value)}
+                      className="flex-1 min-w-[80px] bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px] text-gray-200"
+                    />
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp"
+                      onChange={(e) => setEditFile(e.target.files?.[0] ?? null)}
+                      className="text-[10px] text-gray-400 max-w-[110px]"
+                    />
+                    <button
+                      onClick={() => handleSaveEdit(f)}
+                      disabled={editSubmitting}
+                      className="px-2 py-1 bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-600 rounded text-[11px] font-semibold"
+                    >
+                      {editSubmitting ? 'Saving…' : 'Save'}
+                    </button>
+                    <button
+                      onClick={cancelEdit}
+                      disabled={editSubmitting}
+                      className="px-2 py-1 bg-gray-700 hover:bg-gray-600 rounded text-[11px] text-gray-300"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                ) : (
+                  <div key={f.id} className={`relative group flex flex-col items-center gap-1 bg-gray-800 rounded-lg p-1.5 border-l-2 ${meta.rowClass}`}>
+                    <div className="absolute top-0.5 right-0.5 flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={() => startEdit(f)}
+                        title="Edit"
+                        className="w-4 h-4 flex items-center justify-center rounded bg-gray-900/80 text-gray-300 hover:text-white text-[9px]"
+                      >
+                        ✎
+                      </button>
+                      <button
+                        onClick={() => handleDelete(f)}
+                        title="Delete"
+                        className="w-4 h-4 flex items-center justify-center rounded bg-gray-900/80 text-gray-400 hover:text-rose-400 text-[9px]"
+                      >
+                        ✕
+                      </button>
+                    </div>
                     {f.thumbnail ? (
                       <img src={f.thumbnail} alt={f.name} className="w-12 h-12 rounded object-cover" />
                     ) : (

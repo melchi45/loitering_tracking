@@ -73,7 +73,7 @@ loitering_tracking/
 │   │   ├── activeModelConfig.js    # AI Model Active 선택 영속화 — `settings` 테이블(row id `activeModels`), family→modelId 맵, DB_TYPE(json/mongodb) 공통, 서버 재시작 시 analysisApi.js가 자동 복원
 │   │   ├── missingPersonService.js # 실종자 등록·검색·감지 매칭·상태 관리
 │   │   ├── faceEnrollHelper.js     # 얼굴 등록 사진 detect+embed+썸네일 공용 로직 (로컬/위임 양쪽에서 재사용)
-│   │   ├── faceSearchConditions.js # Face Search Condition 요약/목록/reconcile 적용 (analysis 서버, 무상태)
+│   │   ├── faceSearchConditions.js # Face Search Condition 요약/목록/reconcile 적용 (streaming·analysis 양쪽 동일 함수, 무상태) — `source:'local'` 행 재태깅 금지 불변식(공유 MongoDB 배포 데이터 손실 버그 수정, 2026-07-15)
 │   │   ├── faceSearchSync.js       # streaming→analysis 갤러리/얼굴 스냅샷 push+5s poll (streaming 서버 전용)
 │   │   ├── systemMetrics.js        # CPU·메모리·GPU·디스크 I/O 수집 (admin/system)
 │   │   ├── TcRunnerService.js      # TC-ID 단위 테스트 실행기 (admin/tc-results)
@@ -88,7 +88,7 @@ loitering_tracking/
 │   │   ├── missingPersons.js       # /api/missing-persons — 실종자 등록·검색·감지·통계
 │   │   ├── youtubeStreams.js       # /api/youtube-streams — YouTube 가상 카메라 CRUD
 │   │   ├── internal.js             # /internal/mediamtx — MediaMTX publish/unpublish 웹훅 (loopback 전용)
-│   │   ├── faceGallery.js          # /api/galleries — 갤러리·얼굴 등록(multer+sharp)·크로스카메라 통계
+│   │   ├── faceGallery.js          # /api/galleries — 갤러리·얼굴 등록(multer+sharp)·수정(PUT, 재임베딩 지원)·크로스카메라 통계
 │   │   ├── snapshots.js            # /api/snapshots — 감지 스냅샷 조회/삭제
 │   │   ├── search.js               # /api/search — alerts/detections/faces/events/matches 통합 검색
 │   │   └── stats.js                # /api/stats(/items,/hourly) — 대시보드 통계
@@ -131,7 +131,7 @@ loitering_tracking/
 │   │   ├── AnalysisServerDashboard.tsx # analysis 모드 메인 대시보드
 │   │   ├── AnalysisLivePanel.tsx   # 실시간 감지 피드 오버레이 (analysis 모드)
 │   │   ├── AnalysisDetectionPanel.tsx  # 이벤트 히스토리 오버레이 (배회/화재/연기)
-│   │   ├── FaceSearchConditionPanel.tsx # Face Search Condition 상세·추가 오버레이 (Analysis Server Dashboard 전용)
+│   │   ├── FaceSearchConditionPanel.tsx # Face Search Condition 상세·추가·수정·삭제 오버레이 (Analysis Server Dashboard 전용)
 │   │   ├── AnalysisEventsTab.tsx   # Detections 탭 — 이벤트 히스토리 (analysis 모드)
 │   │   ├── OnvifTimelineOverlay.tsx # ONVIF 이벤트 타임라인 오버레이 (줌/팬/상세/Raw XML)
 │   │   ├── DetectionsTimelineInline.tsx # 감지 트랙 Gantt 타임라인 (FullscreenCameraView Detections 탭)
@@ -341,6 +341,7 @@ loitering_tracking/
 | DELETE | `/api/galleries/:id` | 갤러리 삭제 (소속 얼굴 전체 삭제 포함) |
 | GET | `/api/galleries/:id/faces` | 등록 얼굴 목록 조회 (embedding 제외) |
 | POST | `/api/galleries/:id/faces` | 얼굴 등록 (multipart: photo — 감지→임베딩 추출→64×64 썸네일 생성) |
+| PUT | `/api/galleries/:id/faces/:faceId` | 얼굴 정보 수정 (multipart, 전 필드 optional: name?, galleryId?(재배정), photo?(재임베딩) — POST와 동일 로컬/위임 이중 경로 재사용) |
 | DELETE | `/api/galleries/:id/faces/:faceId` | 얼굴 삭제 (GDPR 삭제권) |
 | GET | `/api/galleries/cross-camera-stats` | 크로스카메라 Re-ID 통계 |
 | GET | `/api/galleries/trajectories` | 인물 이동 궤적 조회 (query: maxAgeMs) |

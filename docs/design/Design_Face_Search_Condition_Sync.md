@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-FSC-01 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Active |
 | **Date** | 2026-07-08 |
 | **Author** | LTS-2026 Engineering |
@@ -17,6 +17,7 @@
 2. [Enrollment Delegation](#2-enrollment-delegation)
 3. [Face Search Condition Mirror](#3-face-search-condition-mirror)
 4. [Reconcile Algorithm](#4-reconcile-algorithm)
+   - [4.1 Shared-Store Corruption Bug (Fixed 2026-07-15)](#41-shared-store-corruption-bug-fixed-2026-07-15)
 5. [Dashboard UI](#5-dashboard-ui)
 6. [File Change Summary](#6-file-change-summary)
 
@@ -143,9 +144,13 @@ incomingGalleryIds = new Set(snapshot.galleries.map(g => g.id))
 incomingFaceIds    = new Set(snapshot.faces.map(f => f.id))
 
 for each g in snapshot.galleries:
+    existing = db.findOne('faceGalleries', { id: g.id })
+    if existing && existing.source === 'local': continue   // v1.2 guard — see §4.1
     upsert faceGalleries row { ...g, source: 'synced' }
 
 for each f in snapshot.faces:
+    existing = db.findOne('faceGalleryFaces', { id: f.id })
+    if existing && existing.source === 'local': continue   // v1.2 guard — see §4.1
     upsert faceGalleryFaces row { ...f, source: 'synced' }   // embedding present only on the analysis→streaming leg
 
 for each existing row in db.all('faceGalleries') where row.source === 'synced':
@@ -156,6 +161,23 @@ for each existing row in db.all('faceGalleryFaces') where row.source === 'synced
 
 // rows with source === 'local' (or missing source) are never touched by this loop
 ```
+
+### 4.1 Shared-Store Corruption Bug (Fixed 2026-07-15)
+
+v1.0/v1.1 upserted every incoming row unconditionally, without checking whether a row with the same `id` already existed with `source: 'local'`. This is harmless when streaming and analysis have independent stores (the only case originally considered): the first upsert simply inserts a new mirrored row on the receiving side, since no row with that `id` exists there yet.
+
+It silently corrupts data when streaming and analysis are configured with `DB_TYPE=mongodb` pointing at the **same shared `MONGODB_URI`** — a supported central-DB deployment (`docs/ops/Distributed_AI_Pipeline_Setup.md`). In that topology, `db.findOne`/`db.update`/`db.delete` on "the analysis server's db" and "the streaming server's db" operate on the exact same physical MongoDB documents. Traced sequence, starting from a face `X` enrolled locally on either server (`source:'local'`):
+
+1. The enrolling side's next `pushReconcile()` round trip includes `X` in its outbound `exportLocal()` snapshot (since `X.source === 'local'`, it isn't filtered out).
+2. The **receiving** side's `applyReconcile()` runs `db.findOne('faceGalleryFaces', {id: X})` against the shared store and finds `X` — same physical row, `source` still `'local'`. Pre-fix, it unconditionally upserts `{...X, source:'synced'}`, flipping `X.source` to `'synced'` **in place**.
+3. That same handler's response is built from `exportLocal(db)`, which now excludes `X` (its `source` was just flipped).
+4. The **originating** side applies that response via `applyReconcile()` — also against the same shared store. `X` (now tagged `'synced'`) is absent from the response's `incomingFaceIds` → the delete-sweep at the bottom of the algorithm removes it. `X` is gone, within a single reconcile round trip of being created.
+
+This affected both directions symmetrically: entries added on the streaming dashboard's Face Gallery panel (Missing/VIP/General/Blocklist) and entries added directly on the Analysis Server Dashboard's "Add condition" form (§5) were both silently deleted shortly after creation whenever the two servers shared one MongoDB instance — reported as "gallery entries never survive a restart."
+
+**Fix:** the guard shown above — `if existing && existing.source === 'local': continue` — in both upsert loops. A row that already exists locally with `source:'local'` is authoritative and is never re-tagged, regardless of whether it also appears in an incoming snapshot (which, in the shared-store case, it always trivially does, since it's the same document). This closes the corruption path with no change to the documented independent-store behavior (verified by re-tracing that case: the guard only ever triggers when `db.findOne` finds a pre-existing `'local'` row, which cannot happen on an independent store for a row that originated on the *other* side).
+
+`TC-FSC-B-004` (see `docs/tc/TC_Face_Search_Condition_Sync.md`) did not catch this pre-fix because it only asserted the row still *existed* after one round trip (it does — the deletion happens on the round trip *after* the source flip, not the same one) and never inspected the `source` field. Both gaps are corrected in TC-FSC-B-004 v1.2 and a new `TC-FSC-B-006`.
 
 `exportLocal(db)` is the mirror-image read used to build what gets sent out on either leg:
 
@@ -185,11 +207,20 @@ AnalysisServerDashboard.tsx
 FaceSearchConditionPanel.tsx (new)
   ├─ fetch GET /api/analysis/face-search-conditions on mount
   ├─ group by gallery type using client/src/utils/galleryTypeMeta.ts (GALLERY_TYPE_META/GALLERY_TYPE_ORDER, extracted from FaceGalleryTab.tsx)
-  └─ "Add condition" form: name + type select + photo file input
-       submit → (create gallery of that type if none exists) → POST /api/galleries
-              → POST /api/galleries/:id/faces
-              (both same-origin — analysis server already has a ready local face service)
+  ├─ "Add condition" form: name + type select + photo file input
+  │    submit → (create gallery of that type if none exists) → POST /api/galleries
+  │           → POST /api/galleries/:id/faces
+  │           (both same-origin — analysis server already has a ready local face service)
+  └─ per-face card controls (v1.2, added 2026-07-15):
+       ├─ Edit (✎) → inline edit row: name input + type select + optional replacement photo + Save/Cancel
+       │    Save → PUT /api/galleries/:galleryId/faces/:faceId (multipart; name/galleryId/photo all optional —
+       │           only changed fields are sent; galleryId is resolved via the same
+       │           findOrCreateGallery(type) helper the add-form already uses)
+       └─ Delete (✕) → DELETE /api/galleries/:galleryId/faces/:faceId (no confirm(), matching
+            FaceGalleryTab.tsx's existing deleteFace() precedent for the same action)
 ```
+
+Both new controls call the existing `PUT`/`DELETE` routes on `/api/galleries` (`server/src/api/faceGallery.js`), which are mounted unconditionally in every `SERVER_MODE` — no `analysisApi.js` or routing change was needed to make them reachable from the Analysis Server Dashboard.
 
 ### 5.2 Shared Metadata Extraction
 
@@ -213,6 +244,9 @@ FaceSearchConditionPanel.tsx (new)
 | `server/src/index.js` | Modified | Dedicated `AnalysisClient` wiring, `startAutoSync(db, pipelineManager)` call |
 | `client/src/components/FaceGalleryTab.tsx` | Modified | Import shared metadata instead of local copy |
 | `client/src/components/AnalysisServerDashboard.tsx` | Modified | StatCard + overlay wiring, `faceSearch` in `MetricsResponse` |
+| `server/src/services/faceSearchConditions.js` | Modified (v1.2) | `applyReconcile()` — skip upsert when a matching row already exists locally with `source:'local'` (§4.1 fix) |
+| `server/src/api/faceGallery.js` | Modified (v1.2) | New `PUT /:id/faces/:faceId` — rename, reassign gallery/type, and/or replace photo (re-embed via the same dual local/delegated path as `POST /:id/faces`) |
+| `client/src/components/FaceSearchConditionPanel.tsx` | Modified (v1.2) | Per-face Edit/Delete controls (§5.1) |
 
 ---
 
@@ -222,3 +256,4 @@ FaceSearchConditionPanel.tsx (new)
 |---|---|---|
 | 1.0 | 2026-07-08 | 초기 작성 — 얼굴 등록 위임 + 얼굴 검색 조건 미러링(push+poll) 설계 |
 | 1.1 | 2026-07-08 | §3.3/§4 양방향 동기화로 개편 — analysis 서버에서 직접 등록한 조건이 streaming으로 반영되지 않던 문제 수정. 동일 HTTP 왕복의 응답 바디에 analysis의 `source:'local'` 조건(임베딩 포함)을 실어 보내고, streaming이 이를 `applyReconcile()` + `reloadPersistentGallery()`로 즉시 매칭 가능하게 반영. `exportLocal()` 신규 추가 |
+| 1.2 | 2026-07-15 | §4.1 신규 — streaming/analysis가 동일 MongoDB(`MONGODB_URI` 공유)를 사용하는 배포에서 `applyReconcile()`이 로컬 행을 'synced'로 잘못 재태깅해 다음 왕복에서 삭제되던 버그 수정 (등록 직후 갤러리 항목이 사라지던 원인). §5 Dashboard UI에 Face ID Edit/Delete 컨트롤 추가 (`PUT /api/galleries/:id/faces/:faceId` 신규) |

@@ -8,7 +8,7 @@
 | **Issue Date** | 2026-07-08 |
 | **Proposal Deadline** | 2026-07-08 |
 | **Zone Target Key** | (none — server-to-server feature, not a zone/targetClasses filter) |
-| **Status** | **Active — Fix + Feature in implementation** |
+| **Status** | **Active — Shared-DB reconcile fix + Edit/Delete UI shipped 2026-07-15** |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -76,10 +76,18 @@ Live per-frame face matching against named galleries is **not** re-implemented o
 | Requirement | Specification |
 |---|---|
 | Storage | Reuses existing `faceGalleries` / `faceGalleryFaces` tables — no new DB table |
-| Origin tagging | New `source: 'local' \| 'synced'` field distinguishes locally-added rows from streaming-mirrored rows; reconcile only ever touches `'synced'` rows |
+| Origin tagging | New `source: 'local' \| 'synced'` field distinguishes locally-added rows from streaming-mirrored rows; reconcile only ever touches `'synced'` rows — **(2026-07-15 fix)** the reconcile upsert previously re-tagged a `'local'` row to `'synced'` whenever streaming and analysis shared one MongoDB instance (same physical row, matching `id`), making it eligible for deletion on the next round trip; the upsert now skips any row that already exists locally with `source:'local'`, see `Design_Face_Search_Condition_Sync.md` §4.1 |
 | Push | Streaming server POSTs a full snapshot (galleries + faces, embeddings excluded) to the analysis server on every gallery/face mutation, fire-and-forget |
 | Poll | Streaming server also re-sends the same full snapshot on a 5-second interval, independent of mutations, as a self-healing safety net |
 | Read | `GET /api/analysis/face-search-conditions` (detail list), `faceSearch` field added to `GET /api/analysis/metrics` (dashboard count) |
+
+### 3.3 Edit / Delete Condition (2026-07-15 addition)
+
+| Requirement | Specification |
+|---|---|
+| Edit | `PUT /api/galleries/:id/faces/:faceId` — rename, reassign gallery/type, and/or replace the enrolled photo (re-embed via the same dual local/delegated extraction path as the existing enroll endpoint) |
+| Delete | Existing `DELETE /api/galleries/:id/faces/:faceId`, now wired into `FaceSearchConditionPanel.tsx` (previously enroll-only) |
+| Reachability | `/api/galleries` is mounted unconditionally in every `SERVER_MODE` — no new routing or `analysisProxy.js` change needed for either control to work from the Analysis Server Dashboard |
 
 ---
 
@@ -191,3 +199,4 @@ _assignFaceIds(detectedFaces)
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-07-08 | LTS Engineering Team | Initial release — enrollment delegation fix + face search condition sync feature |
+| 1.1 | 2026-07-15 | LTS Engineering Team | §3.2 — fixed reconcile corruption of local rows under a shared-MongoDB deployment. Added §3.3 — Edit/Delete Condition from the Analysis Server Dashboard |

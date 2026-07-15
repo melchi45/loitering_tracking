@@ -159,6 +159,7 @@ loitering_tracking/
 | POST | `/api/analysis/face-embed` | 얼굴 등록 사진 detect+embed 위임 수신 (streaming 모드 전용 호출, raw JPEG) |
 | POST | `/api/analysis/face-search-conditions/sync` | streaming 서버의 갤러리/얼굴 전체 스냅샷 반영 (push+5s poll) |
 | GET | `/api/analysis/face-search-conditions` | Face Search Condition 상세 조회 (Analysis Server Dashboard) |
+| PUT | `/api/galleries/:id/faces/:faceId` | 얼굴 정보 수정 (name?/galleryId?/photo? — 모든 SERVER_MODE에서 동작, Analysis Server Dashboard 포함) |
 | GET | `/api/galleries/match-history` | 얼굴 매칭 이력 조회 (query: limit, cameraId?, galleryType?, from?, to? — cameraName 포함) |
 | GET | `/api/client-logs` | 브라우저 콘솔 로그 조회 |
 | DELETE | `/api/client-logs` | 콘솔 로그 전체 삭제 |

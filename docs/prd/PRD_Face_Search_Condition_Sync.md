@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-FSC-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-07-08 |
 | **Related RFP** | RFP_Face_Search_Condition_Sync.md (LTS-2026-FSC-01) |
@@ -86,7 +86,7 @@ Errors mirror the existing local path: `422` no face detected, `422` no embeddin
 
 - `source: 'local' | 'synced'` field added to `faceGalleries` and `faceGalleryFaces` records (undefined/missing treated as `'local'` for pre-existing rows).
 - `faceSearchSync.pushReconcile(db)` (streaming-side only): reads current galleries + faces (embeddings excluded), POSTs the full snapshot to the analysis server. Called (a) immediately after every gallery/face create/delete mutation, and (b) on a `setInterval(5000)`.
-- `POST /api/analysis/face-search-conditions/sync` (analysis server): applies the incoming snapshot — upserts every `synced`-tagged row, deletes any existing `synced` row absent from the snapshot. Never touches `local`-tagged rows.
+- `POST /api/analysis/face-search-conditions/sync` (analysis server): applies the incoming snapshot — upserts every `synced`-tagged row, deletes any existing `synced` row absent from the snapshot. Never touches `local`-tagged rows — **(2026-07-15 fix)** this guarantee did not actually hold when streaming and analysis shared one MongoDB instance (`DB_TYPE=mongodb` with a common `MONGODB_URI`): the upsert step re-tagged a matching local row to `'synced'` in place, making it eligible for deletion on the following round trip. `applyReconcile()` now skips the upsert entirely when a matching row already exists with `source:'local'`. See `Design_Face_Search_Condition_Sync.md` §4.1.
 - `GET /api/analysis/face-search-conditions`: returns `{ total, byType: {missing,vip,blocklist,general}, faces: [...] }` for the dashboard detail view.
 - `GET /api/analysis/metrics` gains a `faceSearch: { total, byType }` field for the dashboard's existing 2-second poll.
 
@@ -95,6 +95,7 @@ Errors mirror the existing local path: `422` no face detected, `422` no embeddin
 - New `StatCard` "Active Face Search" (existing `onClick`/`clickHint` pattern) showing `faceSearch.total`.
 - Clicking it opens `FaceSearchConditionPanel` (new component, same full-screen overlay pattern as `AnalysisDetectionPanel`/`AnalysisLivePanel`), listing conditions grouped by gallery type using the shared `galleryTypeMeta` metadata (extracted from `FaceGalleryTab.tsx` into `client/src/utils/galleryTypeMeta.ts`).
 - The panel includes an inline "add condition" form (name, type, photo) that creates a gallery-of-that-type if none exists, then enrolls the photo — both same-origin calls to the analysis server's own `/api/galleries` (already functional there since analysis mode loads local models).
+- **(2026-07-15 addition)** Each listed face also has Edit and Delete controls: Edit switches the card to an inline form (rename, reassign gallery/type, optionally replace the photo) that saves via a new `PUT /api/galleries/:id/faces/:faceId`; Delete calls the existing `DELETE /api/galleries/:id/faces/:faceId`. Both give the Analysis Server Dashboard the same add/edit/delete capability over Face ID entries that the streaming dashboard's `FaceGalleryTab` already has.
 
 ### 4.4 Cross-Process Staleness Fix
 
@@ -166,11 +167,13 @@ Errors mirror the existing local path: `422` no face detected, `422` no embeddin
 | AC-03 | `/face-embed` error parity | No-face and no-embedding cases return the same `422` shape as the existing local path |
 | AC-04 | Push propagation | Enrolling a face on the streaming server causes `GET /api/analysis/face-search-conditions` on the analysis server to reflect it within the push round-trip (no need to wait for the 5s poll) |
 | AC-05 | Poll self-heal | A `synced` row manually removed from the analysis server's DB (simulating a missed push) is restored within one 5-second reconcile cycle |
-| AC-06 | Local rows preserved | A condition added directly via the analysis server's own `/api/galleries` (tagged `source: 'local'`) is never deleted or overwritten by an incoming reconcile snapshot |
+| AC-06 | Local rows preserved | A condition added directly via the analysis server's own `/api/galleries` (tagged `source: 'local'`) is never deleted or overwritten by an incoming reconcile snapshot — **including when streaming and analysis share one MongoDB instance** (the gap fixed 2026-07-15; previously this held only for independent-store deployments) |
 | AC-07 | Dashboard count | `AnalysisServerDashboard.tsx`'s "Active Face Search" StatCard shows `faceSearch.total` from `/api/analysis/metrics` |
 | AC-08 | Dashboard detail + add | Clicking the count opens a panel listing conditions by type; submitting the add-condition form results in a new enrolled face visible in the same panel after refresh |
 | AC-09 | No duplicate live-matching events | `face_match`/`missing_person_match` emission rate and payload shape on the streaming server are unaffected by this feature |
 | AC-10 | Cross-process staleness bound | A gallery/face row written to a shared MongoDB by a different process is reflected in `pipelineManager._persistentGallery` within 10 seconds, without an unrelated local mutation |
+| AC-11 | Edit condition | `PUT /api/galleries/:id/faces/:faceId` renames, reassigns gallery/type, and/or replaces the photo of an existing enrolled face; changes are visible on the next `GET` and survive a reconcile round trip |
+| AC-12 | Delete condition from Analysis Server Dashboard | The Delete control in `FaceSearchConditionPanel.tsx` removes the face via the existing `DELETE` endpoint and the panel reflects the removal without a manual refresh |
 
 ---
 
@@ -184,6 +187,7 @@ Errors mirror the existing local path: `422` no face detected, `422` no embeddin
 | M2 | Face search condition mirror (push + poll, `source` tagging) | 2026-07-08 | ⏳ In progress |
 | M3 | Analysis Server Dashboard StatCard + detail panel + add-condition form | 2026-07-08 | ⏳ In progress |
 | M4 | TC suite + SUITES registration | 2026-07-08 | ⏳ In progress |
+| M5 | Shared-MongoDB reconcile corruption fix (AC-06 gap) + Edit/Delete condition UI (AC-11/12) | 2026-07-15 | ✅ Done |
 
 ### 8.2 TODO
 
@@ -208,3 +212,4 @@ Errors mirror the existing local path: `422` no face detected, `422` no embeddin
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-07-08 | LTS Engineering Team | Initial release — PRD for Face Search Condition Sync |
+| 1.1 | 2026-07-15 | LTS Engineering Team | Fixed AC-06 gap — `applyReconcile()` corrupted/deleted local rows when streaming and analysis shared one MongoDB. Added AC-11/12 and M5 — Edit/Delete condition controls in the Analysis Server Dashboard |

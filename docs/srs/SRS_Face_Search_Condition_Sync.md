@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-FSC-01 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Active |
 | **Date** | 2026-07-08 |
 | **Parent PRD** | prd/PRD_Face_Search_Condition_Sync.md |
@@ -121,6 +121,13 @@ pipelineManager._assignFaceIds() vs. local _persistentGallery
 - Rows written by `applyReconcile()` are tagged `'synced'`.
 - Records without a `source` field (pre-existing before this feature) are treated as `'local'` by all reconcile logic.
 
+### FR-FSC-017 — Local-Row Immutability Under Reconcile (Shared-Store Deployments)
+
+- `applyReconcile()` MUST NOT upsert (and therefore must never re-tag) a gallery/face row whose `id` already exists locally with `source === 'local'`, regardless of whether that same `id` also appears in the incoming snapshot.
+- This is the guard that makes `FR-FSC-032` (Reconcile Idempotency) hold even when streaming and analysis are configured with `DB_TYPE=mongodb` pointing at the same shared `MONGODB_URI` — a supported deployment (`docs/ops/Distributed_AI_Pipeline_Setup.md`) in which `db.findOne`/`update`/`delete` calls made "on the other server's db" operate on the exact same physical documents.
+- Without this guard (pre-2026-07-15), a locally-created row could have its `source` flipped to `'synced'` by the very next reconcile round trip triggered from the other side, making it eligible for deletion by the delete-sweep on the round trip after that — silently destroying gallery/face data shortly after creation. See `Design_Face_Search_Condition_Sync.md` §4.1 for the full traced sequence.
+- Verified by `TC-FSC-B-006`.
+
 ### FR-FSC-011 — Push on Mutation
 
 - After each of the 4 mutation handlers in `faceGallery.js` (create gallery, delete gallery, enroll face, delete face) commits locally, if `process.env.SERVER_MODE === 'streaming'`, `faceSearchSync.pushReconcile(db, pipelineManager)` is invoked fire-and-forget (does not block or fail the HTTP response).
@@ -176,6 +183,28 @@ pipelineManager._assignFaceIds() vs. local _persistentGallery
 - On submit: if no gallery of the selected type exists (checked against the fetched list), `POST /api/galleries` creates one first; then `POST /api/galleries/:id/faces` enrolls the photo.
 - Both calls target the current origin (the analysis server itself) — no cross-server proxying, since analysis mode always has a locally-ready face service.
 - On success, the panel's list refreshes to include the new condition.
+
+### FR-FSC-023 — Edit Condition From Detail Panel
+
+- Each face card in `FaceSearchConditionPanel.tsx` has an Edit control. Activating it switches that card to an inline edit form: name (pre-filled), gallery-type select (pre-filled, using the same `GALLERY_TYPE_META`/`GALLERY_TYPE_ORDER` as the add-form), and an optional replacement-photo file input.
+- Saving calls `PUT /api/galleries/:galleryId/faces/:faceId` (FR-FSC-025) with only the fields that changed: `name` if edited, `galleryId` (resolved via the same find-or-create-by-type helper the add-form uses) if the type changed, and `photo` if a replacement file was chosen.
+- On success, the panel reloads via the existing `GET /api/analysis/face-search-conditions` fetch. On failure, the existing error banner displays the response's `error` message.
+
+### FR-FSC-024 — Delete Condition From Detail Panel
+
+- Each face card has a Delete control that calls `DELETE /api/galleries/:galleryId/faces/:faceId` directly, with no confirmation dialog — consistent with `FaceGalleryTab.tsx`'s existing `deleteFace()`, which also has none (only its gallery-level delete confirms).
+- On success, the panel reloads the same way as FR-FSC-023.
+
+### FR-FSC-025 — `PUT /api/galleries/:id/faces/:faceId` Contract
+
+- Request: `multipart/form-data` with all fields optional — `name` (string), `galleryId` (string, must reference an existing gallery or `400`), `photo` (image file).
+- If `name` is provided but empty/whitespace-only: `400`.
+- If `galleryId` is provided but does not resolve to an existing gallery: `400 { success: false, error: 'Target gallery not found' }`.
+- If `photo` is provided: re-runs the same dual local/delegated extraction path as `POST /:id/faces` (local `extractFaceForEnrollment` when the face service is ready, else `analysisClient.extractFaceEmbedding()` when available, else `503`) and updates `embedding`/`thumbnail`/`bbox`/`score`. Same `422`/`500` error-status mapping as the POST handler for detection failures.
+- If none of `name`/`galleryId`/`photo` are provided: `400 { success: false, error: 'No fields to update' }`.
+- On success: `200 { success: true, data: { ...updatedFace, embedding: undefined } }` (embedding never exposed, matching every other face response in this API).
+- Triggers `AuditService.log({ event: 'face_updated', ... })`, `pipelineManager.reloadPersistentGallery()`, and `syncIfStreaming()` — the identical post-mutation side effects as the existing POST/DELETE handlers.
+- Mounted on the same unconditional `/api/galleries` router (`server/src/index.js`) — reachable in every `SERVER_MODE`, including `analysis`, with no additional routing change.
 
 ---
 
@@ -242,6 +271,7 @@ Appended to the existing schemas documented in `SRS_AI_Face_Recognition.md` §10
 | FR-FSC-014 | POST | `/api/analysis/face-search-conditions/sync` | analysis | Apply a full gallery/face reconcile snapshot |
 | FR-FSC-015 | GET | `/api/analysis/face-search-conditions` | analysis | List active conditions grouped by gallery type |
 | FR-FSC-016 | GET | `/api/analysis/metrics` | analysis | Existing endpoint, `faceSearch` field added |
+| FR-FSC-025 | PUT | `/api/galleries/:id/faces/:faceId` | streaming, analysis, combined | Rename, reassign gallery/type, and/or replace photo for an enrolled face |
 
 ### 8.2 Socket.IO Events
 
@@ -267,3 +297,4 @@ None added or changed — `face_match`, `missing_person_match`, `face:reidentifi
 |---|---|---|---|
 | 1.0 | 2026-07-08 | LTS Engineering Team | Initial release — SRS for Face Search Condition Sync |
 | 1.1 | 2026-07-08 | LTS Engineering Team | Made FR-FSC-013/014 bidirectional — a condition registered directly on the analysis server's dashboard is now pulled back into the streaming server (with embedding) via the same sync HTTP response, fixing the originally-reported "added on analysis, not visible on streaming" gap. Replaced C-03 with the resulting delete-authority asymmetry constraint |
+| 1.2 | 2026-07-15 | LTS Engineering Team | Added FR-FSC-017 (local-row immutability guard, fixes shared-MongoDB reconcile data loss) and FR-FSC-023/024/025 (Edit/Delete Condition From Detail Panel + `PUT /api/galleries/:id/faces/:faceId` contract) |

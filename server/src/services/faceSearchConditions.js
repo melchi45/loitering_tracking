@@ -81,6 +81,16 @@ function exportLocal(db) {
  * direction — the tag means "synced in from elsewhere" regardless of which physical side).
  * Upserts every entry tagged 'synced'; deletes any existing 'synced' row absent from the
  * snapshot. Rows tagged 'local' (or missing a source field) are never touched.
+ *
+ * Invariant: a row that already exists locally with source:'local' is NEVER upserted, even
+ * if its id appears in the incoming snapshot. This matters when streaming and analysis share
+ * the same physical database (DB_TYPE=mongodb with one central MONGODB_URI — a supported
+ * deployment, see docs/ops/Distributed_AI_Pipeline_Setup.md): an incoming row with the same
+ * id in that case IS the same physical document, not a separate copy to mirror. Without this
+ * guard, upserting it here would flip its source to 'synced' in place; the next round trip's
+ * exportLocal() on the origin side would then exclude it (since it's no longer 'local'), and
+ * the following delete-sweep below would remove it entirely — silently destroying a row that
+ * was never actually stale. See Design_Face_Search_Condition_Sync.md §4.1.
  */
 function applyReconcile(db, snapshot) {
   const galleries = Array.isArray(snapshot?.galleries) ? snapshot.galleries : [];
@@ -90,14 +100,18 @@ function applyReconcile(db, snapshot) {
   const incomingFaceIds    = new Set(faces.map((f) => f.id));
 
   for (const g of galleries) {
+    const existing = db.findOne('faceGalleries', { id: g.id });
+    if (existing && existing.source === 'local') continue; // local row is authoritative — never downgrade
     const row = { ...g, source: 'synced' };
-    if (db.findOne('faceGalleries', { id: g.id })) db.update('faceGalleries', g.id, row);
+    if (existing) db.update('faceGalleries', g.id, row);
     else db.insert('faceGalleries', row);
   }
 
   for (const f of faces) {
+    const existing = db.findOne('faceGalleryFaces', { id: f.id });
+    if (existing && existing.source === 'local') continue; // local row is authoritative — never downgrade
     const row = { ...f, source: 'synced' };
-    if (db.findOne('faceGalleryFaces', { id: f.id })) db.update('faceGalleryFaces', f.id, row);
+    if (existing) db.update('faceGalleryFaces', f.id, row);
     else db.insert('faceGalleryFaces', row);
   }
 
