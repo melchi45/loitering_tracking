@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | Document ID | OPS-AGE-001 |
-| Version | 1.2 |
+| Version | 1.4 |
 | Status | Active |
 | Date | 2026-07-14 |
 | Related Design | design/Design_AI_Age_Estimation.md |
@@ -123,6 +123,37 @@ Step 4(DB 영속화 확인)로 좁혀 들어가자 `GET /api/analysis/detection-
 
 **교훈:** `pipelineManager.js`와 `analysisApi.js`는 겉보기엔 같은 일(프레임 처리 → detectionTracks 저장)을 하는 것처럼 보이지만 실제로는 **완전히 독립된 코드 사본**이다. 한쪽에 새 속성(`estimatedAge`, `estimatedGender` 등)을 추가하는 수정을 했다면, 반드시 반대쪽도 같은 속성이 있는지 `grep`으로 대조 확인해야 한다 — 이 프로젝트에서 Age Estimation 기능 하나에서만 이미 두 번(FR-AGE-033, FR-AGE-034) 반복된 패턴이다. 수정: `analysisApi.js`의 3개 지점 모두에 `estimatedAge`/`estimatedGender` 추가(FR-AGE-034, TC-AGE-016).
 
+## 7. 정확도 문제 — 진단 및 개선 예정 (Planned, 2026-07-14, Design doc §13)
+
+값이 화면과 이력에 정상적으로 도달하더라도(§4~§6의 모든 갭이 해결된 상태), **값 자체가 부정확**할 수 있다 — 2026-07-14 실사용 관측: InsightFace 나이가 거의 항상 ~35, ViT 나이가 거의 항상 `20-29` 버킷으로 나온다는 보고.
+
+### 7.1 즉시 확인 가능한 완화 조치 (코드 수정 전, 지금 바로 확인 가능)
+
+```bash
+curl -sk "https://<host>:3443/api/analysis/detection-tracks?limit=200&class=person" | python3 -c "
+import json,sys
+d=json.load(sys.stdin); tracks=d.get('tracks',[])
+withAge=[t for t in tracks if t.get('estimatedAge')]
+bodySourced=[t for t in withAge if t['estimatedAge'].get('source')=='body']
+print('tracks with estimatedAge:', len(withAge), '| body-sourced (face 미검출로 폴백):', len(bodySourced))
+"
+```
+
+`body-sourced` 비율이 높다면(예: 절반 이상), Design doc §13.2 항목 E(얼굴 전용 모델에 전신 crop 입력)가 정확도 저하의 큰 요인일 가능성이 높다 — 카메라 각도·해상도를 조정해 얼굴 검출률을 높이는 것만으로도 (근본 수정 전) 체감 정확도가 개선될 수 있다.
+
+### 7.2 근본 원인 및 수정 현황 (2026-07-15 갱신)
+
+HuggingFace `preprocessor_config.json` 실측과 `deepinsight/insightface` 공식 소스 대조로 3개 전처리 버그가 확인됨(ViT 정규화 상수 오류, InsightFace 채널 순서 반전, InsightFace 표준편차 오류) — 상세 근거는 `Design_AI_Age_Estimation.md` §13 참고.
+
+| Phase | 내용 | 상태 |
+|---|---|:---:|
+| Phase 1 | 위 3개 전처리 버그 코드 수정(`ageEstimationService.js`) | ✅ 완료 — `test/api/age_estimation.test.js` 11/11 통과(TC-AGE-017) |
+| Phase 2 | `genderage.onnx` 그래프 내장 정규화 여부 실측 진단 | 🔲 미착수 |
+| Phase 3 | 5점 랜드마크 얼굴 정렬, body-crop 신뢰도 표시 | 🔲 미착수 |
+| Phase 4 | 참조 이미지 정확도 검증 세트 | 🔲 미착수 |
+
+**⚠️ 중요 — 이 서버(`SERVER_MODE=streaming`)에서 Phase 1 수정이 로컬 코드에는 반영되었으나, 실제 추론은 원격 analysis 서버(`192.168.214.254`)에서 수행되므로 그쪽에도 재배포해야 실제 효과가 나타난다** — §3.5/§4.5와 동일한 배포 확인 절차(원격 서버의 `git log`/커밋 해시 확인)를 이번 수정에도 적용할 것.
+
 ---
 
 ## Revision History
@@ -132,3 +163,5 @@ Step 4(DB 영속화 확인)로 좁혀 들어가자 `GET /api/analysis/detection-
 | 1.0 | 2026-07-14 | 초기 작성 — 활성화 절차, 라인 플로우 요약, 4단계 진단 절차(토글→서버모드→모델상태→DB영속화), 2026-07-14 실사례 기록 |
 | 1.1 | 2026-07-14 | **실제 근본 원인 확정** — Step 3.5 신규(streaming 모드의 `/frame` 핸들러 코드 버전 확인), §5 실사례를 1차(불완전한) 진단과 실제 근본 원인으로 구분해 재작성. `analysisApi.js`에 Age Estimation 추론 블록이 아예 없었던 구조적 결함(FR-AGE-033) 반영 |
 | 1.2 | 2026-07-14 | **근본 원인 2 신규** — Step 4.5 추가(`analysisApi.js` 자체 `detectionTracks` 영속화 코드의 필드 누락 확인), §6 실사례 2 신규(Fullscreen Detections 타임라인 나이 미표시 재보고 → FR-AGE-034/TC-AGE-016으로 수정) |
+| 1.3 | 2026-07-14 | **§7 신규 — 정확도 문제 진단 및 개선 예정** — 나이가 대부분 ~35/`20-29`로 수렴하는 실사용 관측 보고. 즉시 확인 가능한 완화 조치(body-crop 폴백 비율 확인)와 근본 원인 요약(Design doc §13 참고) 추가 — 코드 수정은 후속 |
+| 1.4 | 2026-07-15 | §7.2 갱신 — Phase 1 코드 수정 완료(TC-AGE-017 통과) 및 원격 analysis 서버 재배포 필요성 명시. Phase 2~4는 여전히 미착수 |

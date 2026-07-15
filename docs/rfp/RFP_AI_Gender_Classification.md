@@ -8,7 +8,7 @@
 | **Issue Date** | 2026-07-14 |
 | **Zone Target Key** | `genderClassification` |
 | **Status** | **Proposed (opt-in) — model catalog family scaffolded, dual-model selectable** |
-| **Version** | 1.0 |
+| **Version** | 1.2 |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -166,6 +166,12 @@ Both may be active simultaneously; UI/reporting label them distinctly ("Gender (
 
 The InsightFace GenderAge model's exact gender channel convention (`output[0]`=female, `output[1]`=male per the upstream `insightface` project's own `genderage.py`) has **not been verified against a live model file at RFP time** — must be confirmed once the model is downloaded, before trusting numeric output in production. See `docs/design/Design_AI_Gender_Classification.md` §Verification.
 
+### Appendix C: Addendum — Appendix B's Verification Caveat Confirmed as an Actual Bug (2026-07-14)
+
+Production observation: a real, roughly-50:50 gender split in camera traffic is classified as majority female by both candidate models. Direct comparison against `deepinsight/insightface`'s own `model_zoo/attribute.py` source (not just the channel-order convention Appendix B already flagged, but also the actual normalization constants and image channel order used) and the real HuggingFace `preprocessor_config.json` for `rizvandwiki/gender-classification-2` confirmed concrete preprocessing bugs shared with Age Estimation (reversed channel order, wrong normalization constants — see `RFP_AI_Age_Estimation.md` Appendix D and `docs/design/Design_AI_Gender_Classification.md` §13 for the full analysis). The systematic, one-sided nature of the bias (rather than random noise) is itself evidence pointing at a deterministic preprocessing bug like reversed RGB/BGR channel order, rather than an inherent model accuracy limit.
+
+**Status (2026-07-15):** Phase 1 is implemented and passing 11/11 unit tests. **Phase 2–4 (graph diagnostic, landmark alignment, confidence thresholding, reference-image validation) remain unimplemented.**
+
 ---
 
 > **END OF DOCUMENT — LTS-2026-AI-11**
@@ -177,3 +183,5 @@ The InsightFace GenderAge model's exact gender channel convention (`output[0]`=f
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-14 | 초기 작성 — Gender Classification AI 모듈 RFP, 듀얼 모델(InsightFace GenderAge 공유 파일 / ViT Gender Classifier) 제안, Age Estimation 2026-07-14 사고에서 배운 "양쪽 진입점 동시 구현" 요구사항(§6.3) 포함 |
+| 1.1 | 2026-07-14 | Appendix C 신규 — Appendix B의 미검증 경고가 실제 프로덕션 버그(성비 50:50인데 대부분 여성으로 분류)로 확인됨을 기록. 근거와 개선 계획은 Design doc §13 참고 — 이번 개정은 계획 기록만, 구현은 후속 |
+| 1.2 | 2026-07-15 | Appendix C에 구현 현황 추가 — Phase 1 완료(11/11 테스트 통과), Phase 2~4는 미구현임을 명시 |

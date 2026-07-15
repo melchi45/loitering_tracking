@@ -1,6 +1,6 @@
 ---
 **Document:** TC_AI_Gender_Classification  
-**Version:** 1.1  
+**Version:** 1.3  
 **Status:** Draft  
 **Date:** 2026-07-14  
 **Parent SRS:** [SRS_AI_Gender_Classification](../srs/SRS_AI_Gender_Classification.md)  
@@ -30,6 +30,10 @@
 | TC-GEN-014 | FR-GEN-032 | `services.genderClassification` diagnostic field present in `/api/analysis/metrics` (both the pipelineManager-backed and standalone-analysis-mode response shapes) |
 | TC-GEN-015 | FR-GEN-027, FR-GEN-028 | **(Regression guard)** Both `pipelineManager.js`'s local loop AND `analysisApi.js`'s `POST /frame` handler actually call `GenderClassificationService` — the exact gap Age Estimation shipped with on 2026-07-12 |
 | TC-GEN-016 | FR-GEN-034 | `analysisApi.js`'s own `detectionTracks` persistence code (3 sites) carries `estimatedGender` through — independent of, and in addition to, TC-GEN-015's estimation-call check |
+| TC-GEN-017 | FR-GEN-035, FR-GEN-036 | ✅ **Implemented & passing (2026-07-15)** — ViT variant uses `image_mean=image_std=[0.5,0.5,0.5]`; InsightFace variant feeds RGB channel order and `input_std=128.0` — unit-level assertions pass (11/11); same fix class as TC-AGE-017, independently applied to `genderClassificationService.js` |
+| TC-GEN-018 | FR-GEN-037 | (Planned) Shares TC-AGE-018's graph-introspection diagnostic (same `genderage.onnx` file) |
+| TC-GEN-019 | FR-GEN-038 | (Planned) Shares TC-AGE-019's landmark-alignment behavior, applied to `classifyGender()` |
+| TC-GEN-020 | FR-GEN-039 | (Planned) A confidence threshold policy exists so low-confidence (near-50/50) gender predictions are distinguishable from confident ones, rather than being displayed identically |
 
 ## 2. Test Cases
 
@@ -183,6 +187,22 @@
 
 **Expected:** `estimatedGender` survives all three `analysisApi.js` persistence sites and reaches `GET /api/analysis/detection-tracks`, independent of TC-GEN-015's (already-passing) call-site check.
 
+### TC-GEN-017: Corrected Preprocessing (✅ Implemented & passing 2026-07-15) / TC-GEN-018~019: Graph Diagnostic, Landmark Alignment (still Planned — Design doc §13)
+
+**Background:** Production observation (2026-07-14) showed real camera traffic with a roughly 50:50 gender split being classified as majority-female by both the InsightFace and ViT variants. Root-cause investigation (shared with Age Estimation, since `insightface-genderage-gender` reads the same `genderage.onnx` file and both ViT models share the same HuggingFace processor bug pattern) found: (1) `rizvandwiki/gender-classification-2`'s actual `preprocessor_config.json` specifies `image_mean=image_std=[0.5,0.5,0.5]`, not the ImageNet statistics the code uses; (2) `deepinsight/insightface`'s reference implementation feeds RGB with `input_std=128.0`, while the code feeds BGR with `input_std=127.5` — of the two, the channel-order inversion is the most likely single cause of a *systematic, one-sided* bias (rather than random noise), since it consistently miscolors every input the same way.
+
+**TC-GEN-017 steps (implemented 2026-07-15, `test/api/gender_classification.test.js` Group G):** Identical structure to TC-AGE-017, applied to `genderClassificationService.js`: unit tests asserting RGB channel placement and the corrected normalization constants for both variants, using the same solid-color JPEG fixture and stubbed-session approach. **Result:** `node test/api/gender_classification.test.js` — 11/11 passed, including `TC-GEN-017a`/`TC-GEN-017b`.
+
+**TC-GEN-018/019 (🔲 still not implemented):** (b) a conditional graph-introspection check against the shared `genderage.onnx` (Phase 2); (c) landmark-based alignment when `landmarks` is supplied (Phase 3).
+
+**Expected:** Tensor construction matches verified reference conventions (confirmed). With real model files redeployed to the remote analysis server and a small reference set with a known, balanced gender split, the classifier should no longer report majority-female — this live-accuracy check is not yet performed (requires redeployment to `192.168.214.254`).
+
+### TC-GEN-020: Confidence Threshold for Uncertain Predictions (Planned)
+
+**Steps:** Once a confidence-threshold policy (FR-GEN-039) is implemented, feed the service inputs engineered to produce near-50/50 softmax output and confirm the result is either omitted or flagged as low-confidence, distinct from a high-confidence prediction, at whichever layer (service or client) the implementation chooses to enforce the threshold.
+
+**Expected:** A near-coin-flip prediction is never displayed with the same visual certainty as a confident one.
+
 ---
 
 ## Revision History
@@ -191,3 +211,5 @@
 |---|---|---|
 | 1.0 | 2026-07-14 | 초기 작성 — TC-GEN-001~015. TC-GEN-015는 Age Estimation의 2026-07-14 사고(양쪽 진입점 미구현)를 재발 방지하기 위한 회귀 가드로 신규 설계 |
 | 1.1 | 2026-07-14 | **TC-GEN-016 신규** — Age Estimation의 TC-AGE-016 조사 중 `analysisApi.js` 자체 `detectionTracks` 영속화 코드가 `estimatedGender`도 누락하고 있었음을 발견(호출 자체는 TC-GEN-015로 이미 보장됨). `test/api/gender_classification.test.js` Group F에 소스 검사 기반 자동 회귀 테스트 추가 |
+| 1.2 | 2026-07-14 | **TC-GEN-017~020 신규 (Planned) — 정확도 개선 계획** — 실제 성비 50:50에 가까운데도 대부분 여성으로 분류되는 실사용 관측을 근거로 FR-GEN-035~039에 대응하는 테스트케이스 설계. 구현 전 계획 단계 — Design doc §13 참고 |
+| 1.3 | 2026-07-15 | **TC-GEN-017 구현 완료 및 통과 표기** — `test/api/gender_classification.test.js` Group G 추가, 11/11 통과 확인. TC-GEN-018~020(Phase 2~3)는 여전히 미착수 |

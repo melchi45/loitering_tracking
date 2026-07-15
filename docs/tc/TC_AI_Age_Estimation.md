@@ -1,6 +1,6 @@
 ---
 **Document:** TC_AI_Age_Estimation  
-**Version:** 1.5  
+**Version:** 1.7  
 **Status:** Draft  
 **Date:** 2026-07-14  
 **Parent SRS:** [SRS_AI_Age_Estimation](../srs/SRS_AI_Age_Estimation.md)  
@@ -30,6 +30,10 @@
 | TC-AGE-014 | FR-AGE-030~032 | `services.ageEstimation` diagnostic field present in `/api/analysis/metrics`; streaming-mode passthrough verified structurally (object spread, no field remap) |
 | TC-AGE-015 | FR-AGE-033 | `analysisApi.js`'s `POST /frame` handler actually invokes `AgeEstimationService.estimateAge()` for streaming-delegated frames |
 | TC-AGE-016 | FR-AGE-034 | `analysisApi.js`'s own `detectionTracks` persistence code (3 sites: `_trackMeta` create/update, 30s active-flush, track-completion flush) carries `estimatedAge`/`estimatedGender` through — independent of, and in addition to, TC-AGE-015's estimation-call check |
+| TC-AGE-017 | FR-AGE-035, FR-AGE-036 | ✅ **Implemented & passing (2026-07-15)** — ViT variant uses `image_mean=image_std=[0.5,0.5,0.5]`; InsightFace variant feeds RGB channel order and `input_std=128.0` — unit-level assertions on the tensor construction pass (11/11); the conditional model-file-gated reference-image check remains skipped (no local model file) |
+| TC-AGE-018 | FR-AGE-037 | (Planned) Graph-introspection diagnostic correctly detects baked-in vs external normalization on the actual `genderage.onnx` file, when present |
+| TC-AGE-019 | FR-AGE-038 | (Planned) `estimateAge()` performs similarity-transform alignment when `landmarks` is supplied, and falls back to the existing bbox-crop behavior when it is not |
+| TC-AGE-020 | FR-AGE-039 | (Planned) Body-sourced (`source: 'body'`) estimates remain distinguishable from face-sourced ones through the full pipeline to the client |
 
 ## 2. Test Cases
 
@@ -190,6 +194,36 @@
 
 **Expected:** `estimatedAge`/`estimatedGender` survive all three `analysisApi.js` persistence sites and reach `GET /api/analysis/detection-tracks`, so the Detections timeline's person-detail panel shows age/gender exactly as the live overlay does — independent of whether the deployment is `combined`/`analysis` (backed by `pipelineManager.js`, FR-AGE-027) or `streaming` (backed by the remote `analysisApi.js`, FR-AGE-034).
 
+### TC-AGE-017: Corrected Preprocessing Constants (✅ Implemented & passing 2026-07-15 — accuracy remediation, Design doc §13)
+
+**Background:** Production observation (2026-07-14) showed InsightFace ages clustering near ~35 and ViT ages clustering in the `20-29` bucket almost universally — the classic signature of a model receiving out-of-distribution input. `WebFetch` against the actual HuggingFace `preprocessor_config.json` for `nateraw/vit-age-classifier` confirmed `image_mean=image_std=[0.5,0.5,0.5]`, not the ImageNet statistics the code currently uses; `deepinsight/insightface`'s `model_zoo/attribute.py` source confirmed the reference implementation feeds RGB (via `swapRB=True` on a BGR-sourced image) with `input_std=128.0`, while the current code feeds BGR with `input_std=127.5`.
+
+**Steps (implemented 2026-07-15, `test/api/age_estimation.test.js` Group G):**
+1. ✅ Unit: construct a small synthetic crop with known, distinct R/G/B channel values (a solid-color JPEG fixture, R=120/G=100/B=90) and assert the float32 tensor `estimateAge()` builds internally places the R channel value at the tensor's first channel-plane offset for both variants (i.e. RGB order, not BGR) — implemented by stubbing `session.run` to capture the input tensor.
+2. ✅ Unit: for the ViT variant, assert the normalized value matches `(px/255 - 0.5) / 0.5` (not the ImageNet-normalized value).
+3. ✅ Unit: for the InsightFace variant's non-baked-in-graph branch, assert pixel values normalize via `(px - 127.5) / 128.0` (not `/127.5`) — tolerance widened to 0.02 to absorb JPEG re-encoding quantization drift on the fixture, while still far tighter than the ~0.13-0.23 error a real channel-order/divisor bug would produce.
+4. 🔲 **Not yet run** — Conditional/integration (skipped when `server/models/genderage.onnx`/`vit_age_classifier.onnx` are absent, as in this repo's dev environment, which is also `SERVER_MODE=streaming` — the actual model files live only on the remote analysis server `192.168.214.254`): run `estimateAge()` against 3-5 reference face images with roughly known ages and confirm predictions fall within a reasonable band (e.g. ±10 years) rather than clustering on a single value regardless of input. This step still requires the Phase 1 fix to be **redeployed to the remote analysis server** before it can be exercised against real inference.
+
+**Result:** `node test/api/age_estimation.test.js` — 11/11 passed, including `TC-AGE-017a`/`TC-AGE-017b`. Tensor construction matches the verified reference conventions for both variants. Step 4 (live accuracy against real faces) remains unverified until the fix is redeployed to the remote analysis server.
+
+### TC-AGE-018: Graph Normalization Auto-Detection (Planned)
+
+**Steps:** When `server/models/genderage.onnx` is present, load it via the `onnx` package (or equivalent), scan the first ~8 graph nodes for `Sub`/`Mul` operations near the input, and assert the diagnostic reports whether normalization is baked in — mirroring `deepinsight/insightface`'s own auto-detection logic. Skipped (not failed) when the model file is absent.
+
+**Expected:** The diagnostic's baked-in/external determination is available to `AgeEstimationService` (or a shared diagnostic utility) so FR-AGE-036's mean/std choice can be validated against the actual file rather than assumed.
+
+### TC-AGE-019: Landmark-Based Face Alignment (Planned)
+
+**Steps:** With a synthetic face crop and a known 5-point `landmarks` array, call `estimateAge()` with `landmarks` supplied and confirm the crop passed to `sharp` (or the resulting tensor) reflects a centered, scale-normalized alignment (`scale = input_size / (max(w,h) * 1.5)`) rather than a direct bbox stretch. Without `landmarks`, confirm the existing bbox-crop behavior is unchanged (backward compatible).
+
+**Expected:** Alignment is applied only when landmarks are available; body-crop fallback (no landmarks) behavior is unaffected.
+
+### TC-AGE-020: Body-Crop Source Distinguishability (Planned)
+
+**Steps:** Confirm `source: 'body'` (already returned by `estimateAge()` when `isFaceCrop=false`) survives all persistence sites (FR-AGE-027/034) and is exposed to the client, so a future UI/analytics change can visually distinguish or filter out body-sourced (inherently less reliable) age estimates.
+
+**Expected:** `source` is never dropped between the service, `detectionTracks`, `detectionSnapshots`, and the client display layer.
+
 ---
 
 ## Revision History
@@ -202,3 +236,5 @@
 | 1.3 | 2026-07-14 | TC-AGE-012~014 신규 — `detectionTracks`/`detectionSnapshots` 영속화, 클라이언트 4곳 표시, `services.ageEstimation` 진단 필드 + streaming 모드 패스스루 구조 검증 |
 | 1.4 | 2026-07-14 | **TC-AGE-015 신규 (실제 근본 원인 회귀 방지)** — `analysisApi.js`의 `POST /frame` 핸들러가 Age Estimation을 전혀 호출하지 않던 실제 프로덕션 결함을 실시간 진단 로그로 확정, 수정 후 회귀 가드 테스트케이스 추가 |
 | 1.5 | 2026-07-14 | **TC-AGE-016 신규 (근본 원인 2 회귀 방지)** — Fullscreen Detections 타임라인 나이 미표시 재보고를 조사한 결과 `analysisApi.js` 자체의 `detectionTracks` 영속화 코드(3곳)에 `estimatedAge`/`estimatedGender`가 누락되어 있었음을 확인. `test/api/age_estimation.test.js` Group F에 소스 검사 기반 자동 회귀 테스트 추가(서버 기동 불필요) |
+| 1.6 | 2026-07-14 | **TC-AGE-017~020 신규 (Planned) — 정확도 개선 계획** — 나이가 대부분 ~35/`20-29`로 수렴하는 실사용 관측을 근거로 FR-AGE-035~039에 대응하는 테스트케이스 설계(정규화 상수·채널 순서 수정, 그래프 내장 정규화 진단, 랜드마크 정렬, body-crop 구분). 구현 전 계획 단계 — Design doc §13 참고 |
+| 1.7 | 2026-07-15 | **TC-AGE-017 구현 완료 및 통과 표기** — `test/api/age_estimation.test.js` Group G 추가, 11/11 통과 확인(JPEG 재인코딩 오차 흡수를 위해 허용 오차 0.02로 조정). TC-AGE-018~020(Phase 2~3)는 여전히 미착수 |

@@ -27,11 +27,14 @@ const VIT_SIZE = 224;
  *   - InsightFace GenderAge (genderage.onnx)      — 96×96, regression age output
  *   - ViT Age Classifier (vit_age_classifier.onnx) — 224×224, 9-bucket softmax
  *
- * NOTE: InsightFace's exact output tensor layout (channel order, age scale factor)
- * has NOT been verified end-to-end against the actual model output in this
- * environment (model download was not run here) — verify once the model file is
- * in place, before relying on its numeric output in production. See
- * Design_AI_Age_Estimation.md §11.
+ * NOTE (2026-07-14): preprocessing was found to have concrete bugs (ViT normalization
+ * constants, InsightFace channel order + normalization divisor) after production
+ * observation showed ages collapsing to a near-constant value — see
+ * Design_AI_Age_Estimation.md §13. Fixed against verified reference sources
+ * (HuggingFace preprocessor_config.json, deepinsight/insightface source), but whether
+ * the actual downloaded genderage.onnx has normalization baked into its graph (which
+ * would change the InsightFace input_mean/input_std contract entirely) remains
+ * unverified — see §13.3/FR-AGE-037.
  */
 class AgeEstimationService {
   constructor(options = {}) {
@@ -113,20 +116,31 @@ class AgeEstimationService {
       const f32 = new Float32Array(3 * n);
 
       if (variant === 'vit') {
-        // ImageNet normalization, RGB channel order, planar NCHW.
-        const mean = [0.485, 0.456, 0.406];
-        const std  = [0.229, 0.224, 0.225];
+        // ViTImageProcessor normalization for nateraw/vit-age-classifier — verified
+        // against the model's actual published preprocessor_config.json (2026-07-14):
+        // image_mean=image_std=[0.5,0.5,0.5], NOT ImageNet statistics. RGB channel
+        // order, planar NCHW (do_center_crop is absent from the config, so a direct
+        // resize to size×size, as sharp already does, matches the reference behavior).
+        const mean = [0.5, 0.5, 0.5];
+        const std  = [0.5, 0.5, 0.5];
         for (let i = 0; i < n; i++) {
           f32[i]         = (crop[i * 3]     / 255 - mean[0]) / std[0]; // R
           f32[i + n]     = (crop[i * 3 + 1] / 255 - mean[1]) / std[1]; // G
           f32[i + 2 * n] = (crop[i * 3 + 2] / 255 - mean[2]) / std[2]; // B
         }
       } else {
-        // InsightFace convention — BGR channel order, [-1, 1] normalization.
+        // InsightFace convention, verified against deepinsight/insightface's
+        // model_zoo/attribute.py (2026-07-14): cv2.dnn.blobFromImage(..., swapRB=True)
+        // on a BGR-sourced image feeds RGB to the graph (not BGR), and the "no
+        // baked-in graph normalization" default is input_mean=127.5, input_std=128.0
+        // (not 127.5). NOTE: if the actual downloaded genderage.onnx has normalization
+        // baked into its graph (Sub/Mul nodes near the input), the correct contract is
+        // input_mean=0.0/input_std=1.0 (raw pixel values) instead — unverified without
+        // inspecting the real model file, see Design_AI_Age_Estimation.md §13.3.
         for (let i = 0; i < n; i++) {
-          f32[i]         = (crop[i * 3 + 2] - 127.5) / 127.5; // B
-          f32[i + n]     = (crop[i * 3 + 1] - 127.5) / 127.5; // G
-          f32[i + 2 * n] = (crop[i * 3]     - 127.5) / 127.5; // R
+          f32[i]         = (crop[i * 3]     - 127.5) / 128.0; // R
+          f32[i + n]     = (crop[i * 3 + 1] - 127.5) / 128.0; // G
+          f32[i + 2 * n] = (crop[i * 3 + 2] - 127.5) / 128.0; // B
         }
       }
 

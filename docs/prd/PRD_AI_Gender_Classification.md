@@ -1,6 +1,6 @@
 ---
 **Document:** PRD_AI_Gender_Classification  
-**Version:** 1.0  
+**Version:** 1.2  
 **Status:** Draft  
 **Date:** 2026-07-14  
 **Parent RFP:** [RFP_AI_Gender_Classification](../rfp/RFP_AI_Gender_Classification.md)  
@@ -64,6 +64,8 @@ Ships as **Proposed / opt-in**, same convention as Age Estimation: default-disab
 - Toggling `genderClassification` on with no model downloaded does not error or degrade other analytics
 - Face-crop and body-crop fallback paths both produce a normalized `{value, confidence, source}` result in manual testing
 - Gender is visible on tracked persons and search results in **both** `combined`/`analysis` mode (local inference) and `SERVER_MODE=streaming` deployments (remote-delegated inference) from the first release — no follow-up fix required, unlike Age Estimation
+- **US-04 reopened 2026-07-14 (accuracy)**: production observation showed a roughly 50:50 real gender split classified as majority female by both models, failing "I can describe or filter persons more precisely." Root-caused as sharing Age Estimation's confirmed preprocessing bugs (same `genderage.onnx` file, independently duplicated preprocessing code) — see `Design_AI_Gender_Classification.md` §13
+- **US-04 partially re-closed 2026-07-15**: Phase 1 is implemented and unit-tested (11/11 passing). **Phase 2–4 (graph diagnostic, landmark alignment, confidence thresholding, reference-image validation) remain unimplemented** — US-04 stays open until real-world balanced-gender accuracy is confirmed
 
 ---
 
@@ -72,3 +74,5 @@ Ships as **Proposed / opt-in**, same convention as Age Estimation: default-disab
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-14 | 초기 작성 — Gender Classification PRD, Age Estimation 2026-07-14 사고 교훈(양쪽 진입점 동시 구현) 반영 |
+| 1.1 | 2026-07-14 | §7 US-04 재오픈(정확도) — 실제 성비 50:50에 가까운데도 대부분 여성으로 분류되는 실사용 관측을 기록, 개선 계획은 Design doc §13 참고. 구현은 후속 |
+| 1.2 | 2026-07-15 | §7 Phase 1 구현 완료 반영 — 11/11 테스트 통과. Phase 2~4 미착수로 US-04는 계속 open 상태 유지 |

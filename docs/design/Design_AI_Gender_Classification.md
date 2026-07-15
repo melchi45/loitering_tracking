@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-AI-GEN-01 |
-| **Version** | 1.1 |
+| **Version** | 1.3 |
 | **Status** | Proposed (opt-in) |
 | **Date** | 2026-07-14 |
 | **Parent SRS** | [SRS_AI_Gender_Classification](../srs/SRS_AI_Gender_Classification.md) |
@@ -244,7 +244,7 @@ export interface EstimatedGender {
 
 ## 11. 검증 (Verification)
 
-- InsightFace `output[0:2]`의 정확한 gender 채널 순서(0=female, 1=male 관례)가 실제 모델 출력과 일치하는지 — **미검증**: 모델 로드 자체는 예상되나, 실제 얼굴 이미지로 추론해 나온 예측이 실제 성별과 부합하는지는 알려진 샘플로 검증 필요.
+- InsightFace `output[0:2]`의 정확한 gender 채널 순서(0=female, 1=male 관례)가 실제 모델 출력과 일치하는지 — **미검증 위험이 현실화됨(2026-07-14)**: 실사용 관측 결과 실제 성비가 50:50에 가까움에도 대부분 여성으로 분류되는 문제가 보고됨 — 근본 원인 분석 및 개선 계획은 §13 참고.
 - `rizvandwiki/gender-classification-2`가 `optimum.exporters.onnx.main_export(..., task="image-classification")`으로 실제 변환되는지 확인 — Age Estimation의 ViT Age Classifier로 이미 검증된 동일 메커니즘이므로 **낮은 리스크**로 평가되나, 이 특정 체크포인트로는 아직 미검증.
 - 두 진입점(로컬 루프·`/frame` 핸들러) 모두에서 `estimatedGender`가 실제로 부착되는지 라이브 트래픽으로 확인 — Age Estimation의 §12.1 사고 재발 방지를 위해 **배포 후 필수 확인 항목**.
 
@@ -301,6 +301,40 @@ Age Estimation의 §12.1 진단 표와 동일한 절차가 적용된다 — 단,
 
 > **참고 (2026-07-14)**: Age Estimation의 Fullscreen Detections 타임라인 나이 미표시 재조사(`Design_AI_Age_Estimation.md` §12.2) 과정에서, `analysisApi.js`의 자체 `detectionTracks` 영속화 코드(3곳)가 `estimatedGender`도 함께 누락하고 있었음이 부수적으로 발견됨 — G1~G4(추론 호출)는 §7 설계대로 최초 구현부터 정상 존재했지만, **영속화 코드는 estimation 호출과 별개의 코드 사본**이라 `color`/`cloth`만 있고 `estimatedAge`/`estimatedGender` 둘 다 빠져 있었다. 두 필드를 함께 추가해 수정(FR-GEN-034/TC-GEN-016) — Age Estimation 쪽과 동일 커밋.
 
+## 13. 정확도 문제 — 근본 원인 분석 및 개선 계획 (2026-07-14, 실사용 관측)
+
+Age Estimation과 같은 날, 같은 사용자 보고로 발견됨: **실제 카메라에 잡히는 성비가 50:50에 가까운데도 Gender Classification이 대부분을 여성(female)으로 분류**한다. 조사 결과 원인은 `Design_AI_Age_Estimation.md` §13과 대부분 겹친다 — `insightface-genderage-gender`가 Age Estimation의 `insightface-genderage`와 **동일한 `genderage.onnx` 파일**을 읽고, 두 서비스가 전처리 코드를 독립적으로 복붙해 보유하고 있기 때문이다(§6 "Age Estimation과의 중요한 차이" 참고 — 세션은 분리되지만 전처리 로직은 원래 같은 패턴이어야 하는데 각자 따로 작성되어 있었음).
+
+### 13.1 확인된 원인 (`Design_AI_Age_Estimation.md` §13.1과 공유)
+
+| # | 원인 | Gender Classification에 미치는 영향 |
+|---|---|---|
+| A | ViT Gender Classifier의 정규화 상수 오류(ImageNet 대신 실제로는 `mean=std=[0.5,0.5,0.5]`) | `rizvandwiki/gender-classification-2`의 `preprocessor_config.json` 실측으로 확인(2026-07-14) — Age의 ViT 모델과 동일한 버그가 `genderClassificationService.js`에도 독립적으로 존재 |
+| B | InsightFace 채널 순서 반전(BGR로 공급 중, 실제로는 RGB여야 함) | `output[0:2]`(gender 로짓)가 잘못된 색공간의 입력을 보고 계산되므로, 두 클래스 로짓이 실제 얼굴 특징과 무관하게 한쪽으로 치우칠 수 있음 — **50:50 실제 분포에서 한쪽으로 쏠리는 관측과 정확히 부합하는 가장 유력한 원인** |
+| C | InsightFace 정규화 표준편차 오류(÷127.5 대신 ÷128.0) | B와 함께 입력 분포를 추가로 왜곡 |
+
+### 13.2 Gender Classification 고유의 추가 위험 요인
+
+| # | 원인 | 설명 |
+|---|---|---|
+| H | **신뢰도(confidence) 임계값 미적용** | 현재 `classifyGender()`는 `softmax` 결과에서 단순 `argmax`만 반환하며, 확신도가 낮은(예: 0.51 vs 0.49) 예측도 그대로 "male"/"female"로 확정해 화면에 표시한다. B/C가 수정되어도 얼굴 각도·조명·해상도에 따라 항상 일부는 경계선 근처 예측이 나올 수밖에 없는데, 현재 UI(`FullscreenCameraView.tsx`, `DetectionsTimelineInline.tsx`, `SearchFullscreen.tsx`)는 `confidence`를 함께 보여주긴 하지만 필터링하지는 않는다 — 낮은 신뢰도 예측을 구분 표시(예: "불확실" 배지)하거나 임계값 미만은 값 자체를 표시하지 않는 정책 검토 필요 |
+| D, E, F | 얼굴 정렬 미구현, body-crop 폴백, 리사이즈 커널 불일치 | `Design_AI_Age_Estimation.md` §13.2와 동일 — 별도 반복 서술하지 않음 |
+| G | 그래프 내장 정규화 여부 미확인 | `Design_AI_Age_Estimation.md` §13.3과 동일(같은 `genderage.onnx` 파일) |
+
+### 13.3 개선 계획
+
+Age Estimation §13.4의 Phase 1~4와 **완전히 동일한 일정으로 병행 진행**(같은 `genderage.onnx` 파일, 같은 ViT 전처리 패턴이므로 따로 계획을 분리할 이유가 없음). Gender Classification 고유 항목만 추가:
+
+| Phase | 추가 내용 | 상태 |
+|---|---|:---:|
+| Phase 1 | A/B/C 수정을 `genderClassificationService.js`에도 동일하게 반영(파일이 다르므로 별도 수정 필요 — FR-AGE-034/FR-GEN-034에서 이미 반복 확인된 "두 코드 사본" 패턴과 동일) | ✅ **완료 (2026-07-15)** — TC-GEN-017 유닛 테스트 통과(11/11) |
+| Phase 2 | Age Estimation과 동일한 `genderage.onnx` 그래프 실측 진단(공용 진단이므로 별도 구현 불필요, TC-AGE-018 결과 재사용) | 🔲 **미착수** |
+| Phase 3 | H(신뢰도 임계값) 도입 검토 — 예: `confidence < 0.6`이면 클라이언트에서 "판정 불가"로 표시하거나 애초에 `estimatedGender`를 부착하지 않는 옵션을 관리자 설정으로 노출 | 🔲 **미착수** — TC-GEN-020 |
+| Phase 3 (공용화) | `Design_AI_Age_Estimation.md` §13.4에서 제안한 공용 전처리 유틸(`server/src/utils/facePreprocess.js`)이 도입되면 `genderClassificationService.js`도 함께 마이그레이션 — 이번처럼 "한쪽 파일만 고치고 한쪽은 놓치는" 패턴을 구조적으로 차단 | 🔲 **미착수** — TC-GEN-019 |
+| Phase 4 | Age Estimation의 참조 이미지 검증 하네스(TC-GEN-017 조건부 통합 단계)를 성별 레이블에도 동일하게 적용 | 🔲 **미착수** — 모델 파일·참조 이미지 부재로 스킵 상태 |
+
+> **참고 (2026-07-15 갱신)**: Phase 1(A/B/C)은 `genderClassificationService.js`에 실제로 반영 완료되었고, 유닛 테스트(`test/api/gender_classification.test.js`)가 11/11 통과함을 확인했다. 다만 이 저장소는 `SERVER_MODE=streaming`이라 실제 추론은 원격 analysis 서버(`192.168.214.254`)에서 수행되므로, 실사용 효과를 보려면 재배포가 필요하다. Phase 2~4는 아직 착수하지 않았다.
+
 ---
 
 ## Revision History
@@ -309,3 +343,5 @@ Age Estimation의 §12.1 진단 표와 동일한 절차가 적용된다 — 단,
 |---|---|---|
 | 1.0 | 2026-07-14 | 초기 작성 — Gender Classification 설계, Age Estimation의 `hfOptimumExport`/진단 필드/영속화 패턴 재사용. §7/§12에 "두 진입점 최초 구현부터 동시 작성" 설계 결정과 Age Estimation 2026-07-14 사고(§12.1 참고) 명시적 반영 |
 | 1.1 | 2026-07-14 | §12.1에 P1B 행 신규 — Age Estimation 근본 원인 2(`Design_AI_Age_Estimation.md` §12.2) 조사 중 `analysisApi.js`의 자체 `detectionTracks` 영속화 코드(3곳)가 `estimatedGender`도 누락하고 있었음을 발견(estimation 호출 G1~G4는 정상이었음). FR-GEN-034/TC-GEN-016으로 수정 |
+| 1.2 | 2026-07-14 | **§13 신규 — 정확도 문제 근본 원인 분석 및 개선 계획** — 실제 성비 50:50에 가까운데도 대부분 여성으로 분류되는 문제를 조사, `Design_AI_Age_Estimation.md` §13과 원인을 공유(동일 `genderage.onnx` 파일, 독립 전처리 코드 사본)함을 확인하고 Gender 고유의 신뢰도 임계값 미적용(H) 항목 추가. Phase 1~4 계획을 Age Estimation과 병행 진행하도록 수립(FR-GEN-035~038 예정) — 이번 개정은 계획만 반영, 구현은 후속 |
+| 1.3 | 2026-07-15 | **§13.3 갱신 — Phase 1 구현 완료 반영** — A/B/C 수정이 `genderClassificationService.js`에 실제로 반영되고 TC-GEN-017 유닛 테스트가 통과함을 확인. Phase 2~4는 여전히 미착수, 원격 analysis 서버 재배포 필요성 재강조 |

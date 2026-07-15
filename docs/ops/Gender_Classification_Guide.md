@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | Document ID | OPS-GEN-001 |
-| Version | 1.1 |
+| Version | 1.3 |
 | Status | Active |
 | Date | 2026-07-14 |
 | Related Design | design/Design_AI_Gender_Classification.md |
@@ -105,6 +105,25 @@ grep -n "estimatedGender" server/src/routes/analysisApi.js
 # 최소 6개 매치(3곳 × estimatedAge/estimatedGender 쌍 중 estimatedGender만 세면 3개) 이상이어야 정상
 ```
 
+## 6. 정확도 문제 — 진단 및 개선 예정 (Planned, 2026-07-14, Design doc §13)
+
+값이 화면·이력에 정상 도달해도(§4~§5 모두 정상), **실제 성비가 50:50에 가까운데도 대부분 여성으로 분류**되는 문제가 2026-07-14 보고됨(Age Estimation의 나이 편중과 같은 날 동일 사용자 보고, 원인도 대부분 공유 — `Age_Estimation_Guide.md` §7 참고).
+
+### 즉시 확인 가능한 완화 조치
+
+Age Estimation §7.1과 동일한 방법으로 body-crop 폴백 비율을 확인한다(`estimatedGender`가 실린 트랙 중 `source: 'body'` 비율). 얼굴 검출률이 낮으면 전신 crop이 얼굴 전용 모델에 입력되어 왜곡된 결과가 나올 가능성이 높다.
+
+### 근본 원인 및 수정 현황 (2026-07-15 갱신)
+
+HuggingFace `preprocessor_config.json` 실측(`rizvandwiki/gender-classification-2` 확인)과 `deepinsight/insightface` 소스 대조 결과: ViT 정규화 상수 오류, InsightFace 채널 순서 반전(가장 유력한 단일 원인 — 색공간이 일관되게 뒤바뀌면 무작위 노이즈가 아니라 한쪽으로 쏠리는 편향이 나타남), 표준편차 오류가 확인됨. 상세 근거는 `Design_AI_Gender_Classification.md` §13 및 `Design_AI_Age_Estimation.md` §13 참고(같은 `genderage.onnx` 파일을 공유하므로 원인·수정이 대부분 겹침).
+
+| Phase | 내용 | 상태 |
+|---|---|:---:|
+| Phase 1 | 위 전처리 버그 코드 수정(`genderClassificationService.js`) | ✅ 완료 — `test/api/gender_classification.test.js` 11/11 통과(TC-GEN-017) |
+| Phase 2~4 | 그래프 진단·랜드마크 정렬·신뢰도 임계값·검증 세트 | 🔲 미착수 |
+
+**⚠️ 중요 — 이 서버(`SERVER_MODE=streaming`)에서 Phase 1 수정이 로컬 코드에는 반영되었으나, 실제 추론은 원격 analysis 서버(`192.168.214.254`)에서 수행되므로 그쪽에도 재배포해야 실제 효과가 나타난다.**
+
 ---
 
 ## Revision History
@@ -113,3 +132,5 @@ grep -n "estimatedGender" server/src/routes/analysisApi.js
 |---|---|---|
 | 1.0 | 2026-07-14 | 초기 작성 — 활성화 절차, 라인 플로우 요약, 두 진입점 배포 후 검증 절차(§4, Age Estimation 사고 재발 방지), 4단계 진단 절차 |
 | 1.1 | 2026-07-14 | §5 진단 절차에 "2026-07-14 추가 확인" 신규 — `analysisApi.js` 자체 `detectionTracks` 영속화 코드가 `estimatedGender`를 누락하고 있던 실제 결함(Age Estimation 근본 원인 2와 동일 패턴, FR-GEN-034/TC-GEN-016) 발견 및 수정 반영 |
+| 1.2 | 2026-07-14 | **§6 신규 — 정확도 문제 진단 및 개선 예정** — 실제 성비 50:50에 가까운데도 대부분 여성으로 분류되는 실사용 관측 보고. Age Estimation과 원인을 공유함을 확인, 개선 계획은 Design doc §13 참고 — 코드 수정은 후속 |
+| 1.3 | 2026-07-15 | §6 갱신 — Phase 1 코드 수정 완료(TC-GEN-017 통과) 및 원격 analysis 서버 재배포 필요성 명시. Phase 2~4는 여전히 미착수 |

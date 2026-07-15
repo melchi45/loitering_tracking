@@ -3,8 +3,8 @@
  * AI Gender Classification Tests
  *
  * TC: TC_AI_Gender_Classification
- *   Covers: TC-GEN-007, TC-GEN-008, TC-GEN-009, TC-GEN-014 (partial), TC-GEN-016 (unit — no running server required)
- *   Not automated here (see TC_AI_Gender_Classification.md §2): TC-GEN-001~006, TC-GEN-010~013, TC-GEN-015
+ *   Covers: TC-GEN-007, TC-GEN-008, TC-GEN-009, TC-GEN-014 (partial), TC-GEN-016, TC-GEN-017 (partial — unit-level only, no live model file) (unit — no running server required)
+ *   Not automated here (see TC_AI_Gender_Classification.md §2): TC-GEN-001~006, TC-GEN-010~013, TC-GEN-015, TC-GEN-018~020
  *   (catalog/download/switch/toggle/persistence/display behavior — require a running
  *   analysis server and/or downloaded model files; exercised manually via the Admin
  *   Dashboard and live camera).
@@ -220,6 +220,63 @@ async function runGroupF() {
     });
 }
 
+async function runGroupG() {
+  console.log('\n[Group G] Corrected preprocessing constants — TC-GEN-017 (accuracy remediation, Design doc §13)');
+
+  // Fixture is a solid-color crop with 3 distinct channel values (R=120, G=100, B=90)
+  // so channel-order bugs (feeding BGR instead of RGB) are directly observable in the
+  // tensor the service builds — a channel-order bug would put 90 where 120 is expected.
+  // This is the most likely single cause of the observed majority-female bias, since a
+  // reversed color channel miscolors every input the same systematic way.
+
+  await test('TC-GEN-017a', 'InsightFace variant feeds RGB order (not BGR) with input_std=128.0 (not 127.5)', async () => {
+    const svc = new GenderClassificationService({ modelPath: '/fake/models/genderage.onnx' });
+    let capturedTensor = null;
+    svc._session = {
+      inputNames: ['input'], outputNames: ['output'],
+      run: async (feeds) => { capturedTensor = feeds.input; return { output: { data: [0, 0, 0.25] } }; },
+    };
+    svc._ready = true; svc._status = 'loaded';
+
+    const jpeg = await makeFixtureJpeg(32, 32); // R=120, G=100, B=90
+    await svc.classifyGender(jpeg, { x: 0, y: 0, width: 32, height: 32 }, { isFaceCrop: true });
+
+    assert(capturedTensor, 'expected the session to have been called with a tensor');
+    const n = 96 * 96; // INSIGHTFACE_SIZE
+    // Tolerance is loose enough to absorb JPEG quantization drift (the fixture is a
+    // solid color re-encoded as JPEG, so a channel value can land ±1-2/255 off) but
+    // far tighter than the ~0.13-0.23 error a real channel-order/divisor bug produces.
+    const TOL = 0.02;
+    const expectR = (120 - 127.5) / 128.0;
+    const expectG = (100 - 127.5) / 128.0;
+    const expectB = (90  - 127.5) / 128.0;
+    assert(Math.abs(capturedTensor.data[0] - expectR) < TOL,
+      `channel-plane 0 (should be R) expected ~${expectR}, got ${capturedTensor.data[0]} — RGB/BGR order or divisor regressed`);
+    assert(Math.abs(capturedTensor.data[n] - expectG) < TOL,
+      `channel-plane 1 (should be G) expected ~${expectG}, got ${capturedTensor.data[n]}`);
+    assert(Math.abs(capturedTensor.data[2 * n] - expectB) < TOL,
+      `channel-plane 2 (should be B) expected ~${expectB}, got ${capturedTensor.data[2 * n]} — if this equals the R value instead, channel order reverted to BGR`);
+  });
+
+  await test('TC-GEN-017b', 'ViT variant uses image_mean=image_std=[0.5,0.5,0.5] (not ImageNet statistics)', async () => {
+    const svc = new GenderClassificationService({ modelPath: '/fake/models/vit_gender_classifier.onnx' });
+    let capturedTensor = null;
+    svc._session = {
+      inputNames: ['pixel_values'], outputNames: ['logits'],
+      run: async (feeds) => { capturedTensor = feeds.pixel_values; return { logits: { data: [0, 0] } }; },
+    };
+    svc._ready = true; svc._status = 'loaded';
+
+    const jpeg = await makeFixtureJpeg(224, 224); // R=120, G=100, B=90
+    await svc.classifyGender(jpeg, { x: 0, y: 0, width: 100, height: 100 }, { isFaceCrop: false });
+
+    assert(capturedTensor, 'expected the session to have been called with a tensor');
+    const expectR = (120 / 255 - 0.5) / 0.5;
+    assert(Math.abs(capturedTensor.data[0] - expectR) < 0.02,
+      `expected ViT normalization (px/255-0.5)/0.5 = ${expectR}, got ${capturedTensor.data[0]} — ImageNet statistics may have regressed back in`);
+  });
+}
+
 // ── Main ──────────────────────────────────────────────────────────────────────
 
 async function main() {
@@ -231,6 +288,7 @@ async function main() {
   await runGroupD();
   await runGroupE();
   await runGroupF();
+  await runGroupG();
 
   console.log('\n─────────────────────────────');
   console.log(`Result: ${passed} passed, ${failed} failed`);

@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-AI-AGE-01 |
-| **Version** | 1.8 |
+| **Version** | 1.10 |
 | **Status** | Proposed (opt-in) |
 | **Date** | 2026-07-14 |
 | **Parent SRS** | [SRS_AI_Age_Estimation](../srs/SRS_AI_Age_Estimation.md) |
@@ -289,7 +289,7 @@ export interface EstimatedAge {
 ## 11. 검증 (Verification)
 
 - ~~`insightface-genderage`의 정확한 HuggingFace 미러 URL~~ — **검증 완료(2026-07-12)**: `POST /api/analysis/models/download`로 실제 다운로드해 `server/models/genderage.onnx`(1,322,532 bytes)가 정상 생성됨을 확인했고, 이어서 `POST /api/analysis/models/switch`로 활성화(`active: true`)까지 성공했다. **(2026-07-14 추가)** 같은 URL이 이후 HTTP 401을 반환하기 시작함이 사용자 보고로 확인됨 — 위 §10 표 및 HF_TOKEN 지원 참고, 재검증 필요.
-- ONNX 세션의 `session.inputNames`/`outputNames`/shape를 실제로 로드해 §6.1 표의 전처리 계약을 재확인 — **미검증으로 남음**: 모델 로드 자체는 성공했으나, 실제 얼굴 이미지로 추론해 나온 `value`가 실제 나이와 부합하는지(출력 채널 순서·스케일 팩터 가정이 맞는지)는 아직 검증되지 않았다. 프로덕션 반영 전 알려진 나이의 샘플 얼굴로 end-to-end 정확도 확인 필요.
+- ONNX 세션의 `session.inputNames`/`outputNames`/shape를 실제로 로드해 §6.1 표의 전처리 계약을 재확인 — **미검증 위험이 현실화됨(2026-07-14)**: 실사용 관측 결과 나이가 대부분 ~35(InsightFace)/`20-29`(ViT)로 수렴하는 정확도 문제가 실제로 보고됨 — 근본 원인 분석 및 개선 계획은 §13 참고.
 - `optimum.exporters.onnx.main_export(..., task="image-classification")`가 `nateraw/vit-age-classifier` 체크포인트에 대해 실제로 `model.onnx`를 생성하는지 확인 (모델 카드의 `task` 이름이 다를 경우 조정) — 미검증 (Python `optimum`/`transformers` 환경이 없는 개발 환경에서 테스트됨)
 
 ## 12. 라인 플로우 — 프레임에서 화면까지
@@ -358,6 +358,43 @@ flowchart LR
 
 **수정**: `analysisApi.js`의 3개 지점 모두에 `pipelineManager.js`와 동일한 패턴으로 `estimatedAge`/`estimatedGender`를 추가(§FR-AGE-034/TC-AGE-016). 부수적으로 `pipelineManager.js`의 완료-flush 블록(`_completedFields`)에 있던 `estimatedGender` 중복 키(오타로 두 번 선언됨, 기능적 영향은 없으나 코드 품질 저하)도 함께 정리.
 
+## 13. 정확도 문제 — 근본 원인 분석 및 개선 계획 (2026-07-14, 실사용 관측)
+
+§11에서 "미검증"으로 남겨두었던 위험이 실제로 현실화됨: 배포 후 관측 결과 **InsightFace GenderAge는 나이를 거의 항상 ~35로, ViT Age Classifier는 거의 항상 `20-29` 버킷으로 예측**한다는 사용자 보고를 받았다(Gender Classification도 동시에 실제 성비가 50:50에 가까움에도 대부분 여성으로 분류되는 동일 성격의 문제를 보고받음 — `Design_AI_Gender_Classification.md` §13 참고, 원인이 대부분 겹친다). 이 절은 코드를 다시 읽고, 실제 다운로드 가능한 HuggingFace `preprocessor_config.json`과 `deepinsight/insightface` 공식 소스를 직접 대조해 **확인된(evidence-based)** 원인과, 모델 파일 자체의 실측 없이는 결론지을 수 없어 **후속 검증이 필요한** 원인을 구분해 기록한다. "대부분 같은 값으로 수렴"하는 증상은 전형적으로 **모델에 분포 밖(out-of-distribution) 입력이 들어갈 때 나타나는 붕괴(collapse) 패턴**과 일치하며, 아래 원인들은 모두 이 가설과 부합한다.
+
+### 13.1 확인된 원인 (코드 대 1차 자료 대조로 확정)
+
+| # | 원인 | 근거 | 영향 모델 |
+|---|---|---|---|
+| A | **ViT 두 모델 모두 정규화 상수가 틀림** — 현재 코드는 ImageNet 평균/표준편차(`mean=[0.485,0.456,0.406]`, `std=[0.229,0.224,0.225]`)를 사용하나, 실제 HuggingFace `preprocessor_config.json`(두 리포 모두 확인: `nateraw/vit-age-classifier`, `rizvandwiki/gender-classification-2`)은 `image_mean=[0.5,0.5,0.5]`, `image_std=[0.5,0.5,0.5]` | `WebFetch`로 두 리포의 `preprocessor_config.json`을 직접 조회해 실제 값을 확인(2026-07-14) | ViT Age Classifier, ViT Gender Classifier |
+| B | **InsightFace 채널 순서가 반대** — 현재 코드는 `crop`(RGB)을 텐서에 담을 때 BGR로 뒤집어 넣는데(주석: "BGR channel order"), `deepinsight/insightface`의 실제 `model_zoo/attribute.py`는 `cv2.dnn.blobFromImage(..., swapRB=True)`를 사용한다 — 소스 이미지가 cv2 기본값인 BGR이므로 `swapRB=True`는 이를 **RGB로 변환해 그래프에 공급**한다는 뜻. 즉 실제로는 RGB를 공급해야 하는데 우리는 BGR을 공급 중 | GitHub `deepinsight/insightface` `python-package/insightface/model_zoo/attribute.py` 원문 확인(2026-07-14) | InsightFace GenderAge (Age + Gender 둘 다 — 같은 전처리 버그가 `ageEstimationService.js`/`genderClassificationService.js` 양쪽에 각각 별도로 존재) |
+| C | **InsightFace 정규화 표준편차 값이 틀림** — 현재 코드는 `(px - 127.5) / 127.5`(÷127.5)를 쓰나, `attribute.py`의 "그래프에 정규화가 내장되어 있지 않은 경우"의 기본값은 `input_mean=127.5`, `input_std=128.0`(÷128.0) | 위와 동일 소스 | InsightFace GenderAge (Age + Gender 둘 다) |
+
+### 13.2 구조적 위험 요인 (확인됨, 근본 원인일 가능성 높음 — 별도 구현 필요)
+
+| # | 원인 | 설명 |
+|---|---|---|
+| D | **얼굴 정렬(face alignment) 방식 자체가 다름** | `deepinsight/insightface`의 실제 파이프라인은 5점 랜드마크로 유사변환(similarity transform) 정렬을 수행한다(`face_align.transform(img, center, input_size, scale, rotate=0)`, `scale = input_size / (max(w,h) * 1.5)`) — 즉 얼굴 중심을 맞추고 일정 마진을 두고 정렬한 정사각형 crop을 모델에 넣는다. 현재 `ageEstimationService.js`/`genderClassificationService.js`는 **bbox를 그대로 잘라 정사각형으로 늘려버릴 뿐**(`sharp().extract(bbox).resize(size,size,{fit:'fill'})`), 정렬·마진·종횡비 보정이 전혀 없다. `faceService.js`(SCRFD)는 이미 5점 랜드마크(`landmarks` 필드, `_postprocess()` 약 202~264줄)를 추출하고 있으므로 재사용 가능 — 현재는 이 정보가 age/gender 서비스에 전달조차 되지 않는다(bbox만 전달됨) |
+| E | **얼굴 전용 모델에 사람(body) crop을 입력** | `estimateAge()`/`classifyGender()`는 얼굴이 검출되지 않으면 사람(body) bbox로 폴백한다(`isFaceCrop=false`). 두 모델 모두 얼굴 이미지로 학습된 것이므로, 전신 crop은 완전히 분포 밖(OOD) 입력이다 — "항상 같은 값 근처로 수렴"하는 증상과 정확히 일치하는 전형적 실패 모드. 원인 A~C를 모두 고쳐도 body-crop 비중이 크면 정확도는 여전히 낮게 유지될 것 |
+| F | **리사이즈 커널 불일치 (경미)** | HuggingFace `preprocessor_config.json`의 `resample: 2`는 bilinear를 의미하나, `sharp`의 기본 리사이즈 커널은 `lanczos3`다. `insightface`의 정렬 warp(`cv2.warpAffine`)도 기본적으로 bilinear를 사용한다. 단독으로는 큰 영향이 아니지만 A~E와 함께 정밀도 오차를 누적시킴 |
+
+### 13.3 후속 검증 필요 (모델 파일 실측 없이는 결론 불가)
+
+| # | 항목 | 이유 |
+|---|---|---|
+| G | `genderage.onnx`의 그래프에 정규화가 이미 내장(baked-in)되어 있는지 | `attribute.py`는 ONNX 그래프의 첫 8개 노드에서 `Sub`/`Mul` 연산을 자동 탐지해 `input_mean=0.0, input_std=1.0`(원본 픽셀 그대로) vs `input_mean=127.5, input_std=128.0`을 **그래프 구조에 따라 분기**한다. 이 저장소의 서버에는 실제 `genderage.onnx` 파일이 없어(원격 analysis 서버에만 존재, `192.168.214.254`) 그래프를 직접 열어볼 수 없었다 — C 항목의 수정은 "그래프에 내장 정규화가 없는 경우"를 가정한 것이며, 실제로는 반대일 수 있다 |
+
+### 13.4 개선 계획 (Phase 1~4)
+
+| Phase | 내용 | 대상 | 상태 |
+|---|---|---|:---:|
+| **Phase 1 (즉시 수정)** | A, B, C를 코드에 반영 — ViT는 `image_mean`/`image_std`를 `[0.5,0.5,0.5]`로, InsightFace는 채널 순서를 RGB로, 표준편차를 128.0으로 수정 | `ageEstimationService.js`, `genderClassificationService.js` 양쪽 (동일 버그가 두 파일에 각각 독립 존재 — FR-AGE-034/FR-GEN-034에서 이미 반복 확인된 "두 코드 사본" 패턴) | ✅ **완료 (2026-07-15)** — TC-AGE-017/TC-GEN-017 유닛 테스트 통과(각 11/11) |
+| **Phase 2 (그래프 실측 진단)** | G 항목을 해결하기 위해, `genderage.onnx`를 실제로 로드해 그래프의 입력 근처 노드를 검사하는 진단 스크립트/유닛 테스트 추가(ONNX 세션의 `inputNames`뿐 아니라, 가능하면 `onnx` 패키지로 그래프 노드 순회) — 모델이 없는 개발 환경에서는 "모델 있으면 실행, 없으면 스킵" 형태의 조건부 테스트로 작성 | `ageEstimationService.js`/`genderClassificationService.js`, 신규 진단 유틸 | 🔲 **미착수** — TC-AGE-018 |
+| **Phase 3 (구조적 개선)** | D의 5점 랜드마크 기반 정렬 구현(`landmarks`가 전달된 경우 유사변환 정렬, 없으면 현재 bbox-crop 방식으로 폴백) — `estimateAge()`/`classifyGender()` 시그니처에 선택적 `landmarks` 파라미터 추가, 호출부(`analysisApi.js`, `pipelineManager.js`)에서 `obj.face.landmarks` 전달. E는 body-crop 폴백 시 결과에 낮은 신뢰도 플래그를 추가하거나(예: `reliability: 'low'`), 운영자가 Admin에서 body-crop 폴백 자체를 끌 수 있는 옵션 검토. F는 `sharp`의 `kernel: 'linear'` 옵션으로 정합 | 양쪽 서비스 + 호출부 3곳(`analysisApi.js`, `pipelineManager.js`) + 공용 전처리 유틸 추출 검토(`server/src/utils/facePreprocess.js` 신설 — 현재 두 서비스가 거의 동일한 전처리 블록을 독립적으로 복붙하고 있어 이번 버그처럼 "한쪽만 고치고 한쪽은 놓치는" 사고가 반복되고 있음) | 🔲 **미착수** — TC-AGE-019/020 |
+| **Phase 4 (검증 하네스)** | 알려진 나이대·성별 레이블이 있는 소규모 참조 이미지 세트(공개 라이선스 얼굴 샘플, 예: 공개 도메인/CC0 얼굴 데이터셋에서 5~10장 선별)로 "수정 전/후" 정확도를 수치로 비교하는 회귀 테스트 추가 — 모델 파일과 참조 이미지가 없는 CI 환경에서는 스킵되는 조건부 통합 테스트로 작성(TC-AGE-017/TC-GEN-017의 "Conditional/integration" 단계로 편입) | `test/api/age_estimation.test.js`, `test/api/gender_classification.test.js` | 🔲 **미착수** — 모델 파일·참조 이미지 부재로 스킵 상태 |
+
+> **참고 (2026-07-15 갱신)**: Phase 1(A/B/C)은 `ageEstimationService.js`/`genderClassificationService.js`에 실제로 반영 완료되었고, 각 서비스의 유닛 테스트(`test/api/age_estimation.test.js`/`test/api/gender_classification.test.js`)가 11/11 통과함을 확인했다. 단, 이 저장소는 `SERVER_MODE=streaming`이라 실제 추론은 원격 analysis 서버(`192.168.214.254`)에서 수행되므로, **이 수정이 실제 효과를 내려면 원격 서버에 재배포가 필요하다**(§12.1/§12.2와 동일한 배포 이슈 패턴). Phase 2~4는 아직 착수하지 않았다 — `Design_AI_Gender_Classification.md` §13에도 동일 계획을 요약하고, 성별 쏠림 특유의 추가 요인(신뢰도 임계값 미적용)을 덧붙여 기록한다.
+
 ---
 
 ## Revision History
@@ -373,3 +410,5 @@ flowchart LR
 | 1.6 | 2026-07-14 | §12 신규 — 프레임→화면 전체 경로를 라인 플로우(Mermaid `flowchart LR`)로 문서화, streaming/analysis 서버 분리 구간(`analysisClient.analyzeFrame()` HTTP 왕복)과 3개 소비처(DB 영속화·스냅샷·Socket.IO 실시간)를 명시. §12.1에 실제 운영 조사(2026-07-14, Streaming 서버에서 `estimatedAge` 0/200 관측) 기반 진단 포인트 표 추가 — `getAnalysisMetrics()`의 `services.ageEstimation` 신규 필드(`pipelineManager.js` 커밋 `7f3c89e`) 반영 |
 | 1.7 | 2026-07-14 | **실제 근본 원인 확정 및 수정** — v1.6의 "원격 서버 코드 미배포/모델 미로드" 추정은 불완전했음. `pipelineManager.js`에 임시 진단 로그를 추가해 실시간 확인한 결과, `analysisApi.js`의 `POST /frame` 핸들러(SERVER_MODE=streaming이 위임하는 실제 처리 경로)에는 Age Estimation(G1~G4)이 애초에 전혀 구현되어 있지 않았음이 코드로 확정됨(`_ageEstimation`은 모델 카탈로그 엔드포인트 전용으로만 쓰였음) — `pipelineManager.js`의 로컬 카메라 루프에만 구현되고 HTTP 프레임 위임 경로엔 이식되지 않았던 구조적 결함. `analysisApi.js`에 동일 face/body 폴백 + 4초 캐시(모듈-레벨 `_ageEstimateCache`/`AGE_ESTIMATION_INTERVAL_MS`) 로직을 신규 추가해 해결. §7에 "진입점 2곳, 독립 구현" 경고 추가, §12 다이어그램을 LOCAL/AM 두 서브그래프로 재작성, §12.1 표에 이 근본 원인 행 추가 |
 | 1.8 | 2026-07-14 | **근본 원인 2 신규(§12.2) — Fullscreen Detections 타임라인 나이 미표시 재보고 대응** — v1.7로 estimation 호출(G1~G4)은 고쳐졌지만, `analysisApi.js`가 `pipelineManager.js`와 별개로 자체 보유한 `detectionTracks` 영속화 코드(`ctx._trackMeta` 갱신, 30초 active-flush, 트랙 종료 flush — 3곳)에는 `estimatedAge`/`estimatedGender`가 여전히 옮겨 담기지 않고 있었음을 확인. `SERVER_MODE=streaming`에서는 `analysisProxy.js`가 `GET /api/analysis/detection-tracks`를 원격 analysis 서버로 그대로 프록시하므로, `DetectionsTimelineInline.tsx`가 실제로 읽는 레코드는 이 (누락된) 원격 영속화 코드의 산출물이었음 — estimation 자체는 정상이어도 이력에는 절대 나타날 수 없는 2차 구조적 결함. `analysisApi.js`의 3개 지점 모두에 필드를 추가해 수정(FR-AGE-034/TC-AGE-016). §12 다이어그램에 `P1B` 노드(원격 `analysisApi.js` 자체 영속화, streaming 모드 전용) 추가. 부수 정리: `pipelineManager.js` 완료-flush 블록의 `estimatedGender` 중복 키 제거 |
+| 1.9 | 2026-07-14 | **§13 신규 — 정확도 문제 근본 원인 분석 및 개선 계획** — 실사용 관측(InsightFace 나이 대부분 ~35, ViT 나이 대부분 `20-29` 버킷)을 조사, HuggingFace `preprocessor_config.json` 실측과 `deepinsight/insightface` 공식 소스 대조로 확인된 3개 전처리 버그(ViT 정규화 상수 오류, InsightFace 채널 순서 반전, InsightFace 표준편차 값 오류)와 구조적 위험 요인 2개(5점 랜드마크 정렬 미구현, 얼굴 아닌 body crop 입력) 기록. Phase 1~4 개선 계획 수립(FR-AGE-035~038 예정) — 이번 개정은 계획만 반영, 구현은 후속 |
+| 1.10 | 2026-07-15 | **§13.4 갱신 — Phase 1 구현 완료 반영** — A/B/C 수정이 `ageEstimationService.js`/`genderClassificationService.js`에 실제로 반영되고 TC-AGE-017/TC-GEN-017 유닛 테스트가 통과함을 확인. Phase 2~4(그래프 진단·랜드마크 정렬·검증 하네스)는 여전히 미착수 상태임을 명시, `SERVER_MODE=streaming` 환경에서는 원격 analysis 서버 재배포가 별도로 필요함을 재강조 |

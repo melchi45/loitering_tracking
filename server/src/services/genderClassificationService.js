@@ -23,11 +23,16 @@ const VIT_SIZE = 224;
  *     instead. Each service opens its own independent ONNX session on the file.)
  *   - ViT Gender Classifier (vit_gender_classifier.onnx) — 224×224, 2-class softmax
  *
- * NOTE: InsightFace's exact gender channel convention (class 0 = female, class 1 =
- * male, per the upstream insightface project's own genderage.py) has NOT been
- * verified end-to-end against the actual model output in this environment — verify
- * once the model file is in place, before relying on its output in production. See
- * Design_AI_Gender_Classification.md §11.
+ * NOTE (2026-07-14): preprocessing was found to have concrete bugs (ViT normalization
+ * constants, InsightFace channel order + normalization divisor) after production
+ * observation showed a near-50/50 real gender split being classified as majority
+ * female — see Design_AI_Gender_Classification.md §13. Fixed against verified
+ * reference sources (HuggingFace preprocessor_config.json, deepinsight/insightface
+ * source), but whether the actual downloaded genderage.onnx has normalization baked
+ * into its graph (which would change the InsightFace input_mean/input_std contract
+ * entirely) remains unverified — see §13/FR-GEN-037. The output-side gender channel
+ * convention (class 0 = female, class 1 = male) was confirmed correct against the
+ * same reference source and is unchanged.
  */
 class GenderClassificationService {
   constructor(options = {}) {
@@ -109,20 +114,29 @@ class GenderClassificationService {
       const f32 = new Float32Array(3 * n);
 
       if (variant === 'vit') {
-        // ImageNet normalization, RGB channel order, planar NCHW.
-        const mean = [0.485, 0.456, 0.406];
-        const std  = [0.229, 0.224, 0.225];
+        // ViTImageProcessor normalization for rizvandwiki/gender-classification-2 —
+        // verified against the model's actual published preprocessor_config.json
+        // (2026-07-14): image_mean=image_std=[0.5,0.5,0.5], NOT ImageNet statistics.
+        // RGB channel order, planar NCHW.
+        const mean = [0.5, 0.5, 0.5];
+        const std  = [0.5, 0.5, 0.5];
         for (let i = 0; i < n; i++) {
           f32[i]         = (crop[i * 3]     / 255 - mean[0]) / std[0]; // R
           f32[i + n]     = (crop[i * 3 + 1] / 255 - mean[1]) / std[1]; // G
           f32[i + 2 * n] = (crop[i * 3 + 2] / 255 - mean[2]) / std[2]; // B
         }
       } else {
-        // InsightFace convention — BGR channel order, [-1, 1] normalization.
+        // InsightFace convention, verified against deepinsight/insightface's
+        // model_zoo/attribute.py (2026-07-14): cv2.dnn.blobFromImage(..., swapRB=True)
+        // on a BGR-sourced image feeds RGB to the graph (not BGR), and the "no
+        // baked-in graph normalization" default is input_mean=127.5, input_std=128.0
+        // (not 127.5). Same fix as ageEstimationService.js's independent copy of this
+        // block (both read the same genderage.onnx) — see
+        // Design_AI_Gender_Classification.md §13.
         for (let i = 0; i < n; i++) {
-          f32[i]         = (crop[i * 3 + 2] - 127.5) / 127.5; // B
-          f32[i + n]     = (crop[i * 3 + 1] - 127.5) / 127.5; // G
-          f32[i + 2 * n] = (crop[i * 3]     - 127.5) / 127.5; // R
+          f32[i]         = (crop[i * 3]     - 127.5) / 128.0; // R
+          f32[i + n]     = (crop[i * 3 + 1] - 127.5) / 128.0; // G
+          f32[i + 2 * n] = (crop[i * 3 + 2] - 127.5) / 128.0; // B
         }
       }
 

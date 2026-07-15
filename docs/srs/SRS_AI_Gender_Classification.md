@@ -1,6 +1,6 @@
 ---
 **Document:** SRS_AI_Gender_Classification  
-**Version:** 1.1  
+**Version:** 1.3  
 **Status:** Draft  
 **Date:** 2026-07-14  
 **Parent RFP:** [RFP_AI_Gender_Classification](../rfp/RFP_AI_Gender_Classification.md)  
@@ -98,13 +98,23 @@ UI display and local persistence (§3.8) are applicable to all server modes — 
 | FR-GEN-033 | (Operational) When `estimatedGender` is absent from all recent `detectionTracks` on a `SERVER_MODE=streaming` instance despite `analyticsConfig.genderClassification === true` locally, the diagnostic procedure shall first verify (via code inspection or the `services.genderClassification` field on the remote analysis server) that the remote server is running code containing FR-GEN-027 — unlike Age Estimation, this should never be the root cause if FR-GEN-027 shipped in the initial release, but the check remains documented for completeness (see Design doc §12.1). |
 | FR-GEN-034 | **(Corrects a gap discovered 2026-07-14 while investigating Age Estimation's FR-AGE-034)** `server/src/routes/analysisApi.js` maintains its own `detectionTracks` persistence code (`ctx._trackMeta` create/update, the 30-second active-flush `fields` object, and the track-completion `_completedFields` object) that is a **separate copy** from `pipelineManager.js`'s equivalent (FR-GEN-029) — not a shared function. Although FR-GEN-027 correctly wired the `classifyGender()` **call** into this handler from the initial release, all three persistence sites still omitted `estimatedGender` (and `estimatedAge`) — only `color`/`cloth` were carried through. All three sites shall carry `obj.estimatedGender`/`meta.estimatedGender` through to the persisted `detectionTracks` record. This is the same class of gap as FR-AGE-034 (calling the estimator correctly does not guarantee the separate persistence code copies it), except here it existed from the initial release rather than being introduced later. |
 
+### 3.9 정확도 개선 (Accuracy Remediation — Planned, 2026-07-14, see Design doc §13, shared with Age Estimation)
+
+| ID | Requirement |
+|---|---|
+| FR-GEN-035 | ✅ **Implemented (2026-07-15)** **(Corrects a confirmed preprocessing bug)** The ViT variant (`vit-gender-classifier`) shall normalize input pixels using `image_mean=[0.5,0.5,0.5]`, `image_std=[0.5,0.5,0.5]` — verified against the actual `preprocessor_config.json` published for `rizvandwiki/gender-classification-2` on HuggingFace — instead of the ImageNet statistics the current implementation uses. This is the same bug class as Age Estimation's FR-AGE-035, independently present in `genderClassificationService.js`'s own copy of the preprocessing code. |
+| FR-GEN-036 | ✅ **Implemented (2026-07-15)** **(Corrects a confirmed preprocessing bug, most likely root cause of the observed female-majority bias)** The InsightFace variant (`insightface-genderage-gender`) shall feed the ONNX tensor in RGB channel order (matching `deepinsight/insightface`'s reference implementation) instead of BGR, and shall use `input_std=128.0` (not `127.5`) for the "no baked-in graph normalization" branch — identical fix to Age Estimation's FR-AGE-036, applied to `genderClassificationService.js`'s independent copy of the same preprocessing block reading the same `genderage.onnx` file. |
+| FR-GEN-037 | 🔲 **Not yet implemented (Phase 2, shared with Age Estimation)** The graph-introspection diagnostic defined in Age Estimation's FR-AGE-037 (determining whether `genderage.onnx` has baked-in normalization) applies identically here, since both services read the same model file — one diagnostic suffices for both. |
+| FR-GEN-038 | 🔲 **Not yet implemented (Phase 3)** `classifyGender()` shall accept an optional 5-point `landmarks` array and perform the same similarity-transform face alignment as Age Estimation's FR-AGE-038, instead of the current naive bbox-stretch-to-square. |
+| FR-GEN-039 | 🔲 **Not yet implemented (Phase 3)** **(Gender-specific)** Because a near-50/50 binary classification is inherently prone to low-confidence "coin-flip" predictions even after FR-GEN-035/036 are fixed, the client and/or service layer shall support a confidence threshold below which `estimatedGender` is either not attached at all or is rendered with a distinct "uncertain" indicator, rather than being displayed identically to a high-confidence prediction. The specific threshold value and enforcement point (service-side vs. client-side) are left to the implementation phase — see Design doc §13.2 item H. |
+
 ## 4. Non-Functional Requirements
 
 | ID | Requirement |
 |---|---|
 | NFR-GEN-001 | Gender classification inference shall not block the main detection loop for more than the per-model latency budget in RFP §7 (10ms InsightFace / 80ms ViT, CPU). |
 | NFR-GEN-002 | A missing or failed-to-load model shall never crash `pipelineManager.js` or `analysisApi.js` — all service methods degrade to `null`/no-op. |
-| NFR-GEN-003 | The InsightFace gender channel convention (`output[0]`=female, `output[1]`=male) shall be verified against the actual downloaded ONNX model before being trusted in production output — see Design doc Verification section. |
+| NFR-GEN-003 | The InsightFace gender channel convention (`output[0]`=female, `output[1]`=male) shall be verified against the actual downloaded ONNX model before being trusted in production output — see Design doc Verification section. **(2026-07-14) This risk materialized in production** (near-50/50 real gender distribution classified as majority-female) — see §3.9 FR-GEN-035~039 and Design doc §13 for the confirmed root causes and remediation plan. |
 
 ---
 
@@ -114,3 +124,5 @@ UI display and local persistence (§3.8) are applicable to all server modes — 
 |---|---|---|
 | 1.0 | 2026-07-14 | 초기 작성 — Gender Classification SRS, FR-GEN-001~033. Age Estimation의 2026-07-14 스트리밍 모드 갭(양쪽 진입점 미구현) 사고를 반영해 FR-GEN-027/028을 "동시 구현 필수(ship-blocking)"로 명시 — Age Estimation처럼 한쪽만 먼저 구현 후 후속 수정하는 것을 방지 |
 | 1.1 | 2026-07-14 | **FR-GEN-034 신규** — Age Estimation의 FR-AGE-034 조사 중 `analysisApi.js`의 자체 `detectionTracks` 영속화 코드(3곳)가 `estimatedGender`도 함께 누락하고 있었음을 발견(FR-GEN-027의 호출 자체는 정상이었음 — 호출과 영속화는 별개 코드). 3곳 모두 필드 추가로 수정 |
+| 1.2 | 2026-07-14 | **§3.9 신규 — 정확도 개선 계획, FR-GEN-035~039** — 실제 성비 50:50에 가까운데도 대부분 여성으로 분류되는 문제 보고를 조사, Age Estimation의 FR-AGE-035~038과 원인을 공유함을 확인(동일 `genderage.onnx`, 독립 전처리 코드 사본)하고 Gender 고유의 신뢰도 임계값 요구사항(FR-GEN-039) 추가 — 이번 개정은 계획만 반영, 구현은 후속 |
+| 1.3 | 2026-07-15 | **FR-GEN-035/036 구현 완료 표기** — `genderClassificationService.js`에 실제 반영, TC-GEN-017 유닛 테스트 통과 확인. FR-GEN-037~039(Phase 2~3)는 여전히 미착수로 명시 |
