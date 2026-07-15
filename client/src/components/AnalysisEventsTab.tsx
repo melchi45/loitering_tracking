@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { RotateCw, Search } from 'lucide-react';
 import { useI18n, BCP47_LOCALE } from '../i18n';
 import type { Translations } from '../i18n/translations/en';
 
@@ -245,7 +246,7 @@ export default function AnalysisEventsTab() {
           title={t.evtRefresh}
           className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800/60 text-gray-400 hover:text-gray-200 border border-gray-700 transition-colors"
         >
-          ↻
+          <RotateCw className="w-3 h-3" />
         </button>
         {events.length > 0 && (
           <button
@@ -286,7 +287,7 @@ export default function AnalysisEventsTab() {
 
         {!loading && events.length === 0 && (
           <div className="flex flex-col items-center justify-center h-32 text-center px-4">
-            <span className="text-2xl mb-1">🔍</span>
+            <Search className="w-6 h-6 mb-1" />
             <p className="text-xs text-gray-400">{t.evtNoEvents}</p>
             <p className="text-[10px] text-gray-600 mt-0.5">
               {typeFilter

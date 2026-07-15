@@ -1,3 +1,4 @@
+import { X } from 'lucide-react';
 import { DashboardDetectionPanel } from './DashboardDetectionPanel';
 import { useI18n } from '../i18n';
 
@@ -22,7 +23,7 @@ export default function AnalysisLivePanel({ onClose }: Props) {
           title={t.settingsClose}
           className="absolute top-2 right-2 z-10 w-7 h-7 flex items-center justify-center rounded-full bg-gray-800/90 hover:bg-gray-700 text-gray-400 hover:text-white transition-colors shadow"
         >
-          ✕
+          <X className="w-3.5 h-3.5" />
         </button>
       )}
       <DashboardDetectionPanel />

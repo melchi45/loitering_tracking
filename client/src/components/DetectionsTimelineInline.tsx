@@ -24,6 +24,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RotateCcw, X, AlertTriangle, ChevronLeft, ChevronRight, Search } from 'lucide-react';
 import type { FaceMatchEvent } from '../types';
 import { GALLERY_TYPE_META } from '../utils/galleryTypeMeta';
 
@@ -428,7 +429,7 @@ export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }
         )}
         {loading ? <Spinner /> : (
           <button onClick={() => setFetchKey(k => k + 1)}
-                  className="text-gray-500 hover:text-gray-300 transition-colors" title="Refresh">↺</button>
+                  className="text-gray-500 hover:text-gray-300 transition-colors" title="Refresh"><RotateCcw className="w-3 h-3" /></button>
         )}
         <span className="text-gray-600">{visibleTracks.length}/{tracks.length}</span>
       </div>
@@ -450,7 +451,7 @@ export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }
                              text-white rounded text-[9px] font-bold transition-colors">Apply</button>
           {customApplied && (
             <button onClick={() => { setCustomApplied(null); setCustomStart(''); setCustomEnd(''); }}
-                    className="text-gray-500 hover:text-gray-300 text-[9px]" title="Clear">✕</button>
+                    className="text-gray-500 hover:text-gray-300" title="Clear"><X className="w-2.5 h-2.5" /></button>
           )}
         </div>
       )}
@@ -553,9 +554,9 @@ export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }
 
               {matches.length > 0 && (
                 <div className="flex" style={{ height: ROW_H, borderBottom: '1px solid rgba(55,65,81,0.4)' }}>
-                  <div className="flex-shrink-0 flex items-center px-2 border-r border-gray-700/50 text-[9px] font-bold text-gray-400"
+                  <div className="flex-shrink-0 flex items-center gap-1 px-2 border-r border-gray-700/50 text-[9px] font-bold text-gray-400"
                        style={{ width: LABEL_W }}>
-                    🔍 Face Matches
+                    <Search className="w-2.5 h-2.5" /> Face Matches
                   </div>
                   <div className="flex-1 relative overflow-hidden" style={{ height: ROW_H }}>
                     {matches.map((m) => {
@@ -600,7 +601,7 @@ export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }
                     <p className="text-[9px] text-gray-500">{new Date(selectedMatch.timestamp).toLocaleString()}</p>
                   </div>
                   <button onClick={() => setSelectedMatch(null)}
-                          className="text-gray-500 hover:text-white text-xs flex-shrink-0">✕</button>
+                          className="text-gray-500 hover:text-white flex-shrink-0"><X className="w-3 h-3" /></button>
                 </div>
               )}
 
@@ -634,9 +635,9 @@ export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }
                         setZoomedSnap(null);
                       }}
                     >
-                      <span className="text-[9px] font-bold truncate leading-tight"
+                      <span className="text-[9px] font-bold truncate leading-tight inline-flex items-center gap-0.5"
                             style={{ color }}>
-                        {track.isLoitering ? '⚠ ' : ''}{track.className}
+                        {track.isLoitering && <AlertTriangle className="w-2.5 h-2.5 flex-shrink-0" />}{track.className}
                       </span>
                       <span className="text-[8px] text-gray-600 font-mono truncate leading-tight">
                         #{String(track.objectId).slice(-6)}
@@ -724,7 +725,7 @@ export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }
                             <img src={snap.cropData} alt={snap.className}
                                  className="w-full h-full object-cover" />
                             {snap.isLoitering && (
-                              <span className="absolute top-0 right-0 bg-red-600/90 text-white text-[5px] px-px leading-tight">⚠</span>
+                              <span className="absolute top-0 right-0 bg-red-600/90 text-white p-px leading-none flex"><AlertTriangle className="w-1.5 h-1.5" /></span>
                             )}
                           </div>
                         );
@@ -770,15 +771,15 @@ export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }
               <div className="flex items-center gap-1 min-w-0">
                 <span className="w-2 h-2 rounded-full flex-shrink-0"
                       style={{ backgroundColor: classColor(selected) }} />
-                <span className="font-bold text-white text-[10px] uppercase truncate">
-                  {selected.isLoitering ? '⚠ ' : ''}{selected.className}
+                <span className="font-bold text-white text-[10px] uppercase truncate inline-flex items-center gap-0.5">
+                  {selected.isLoitering && <AlertTriangle className="w-2.5 h-2.5 flex-shrink-0" />}{selected.className}
                 </span>
                 {detailSnaps.length > 0 && (
                   <span className="text-[8px] text-gray-400 ml-1">({detailSnaps.length} crops)</span>
                 )}
               </div>
               <button onClick={() => { setSelected(null); setZoomedSnap(null); }}
-                      className="text-gray-500 hover:text-white flex-shrink-0 ml-1 text-[11px]">✕</button>
+                      className="text-gray-500 hover:text-white flex-shrink-0 ml-1"><X className="w-3 h-3" /></button>
             </div>
 
             {/* Zoomed snapshot — box follows the crop's own aspect ratio (object-contain,
@@ -795,14 +796,14 @@ export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }
                          maxHeight: 260,
                        }} />
                   {zoomedSnap.isLoitering && (
-                    <span className="absolute top-1 right-1 bg-red-600 text-white text-[7px] px-1 rounded">⚠ loitering</span>
+                    <span className="absolute top-1 right-1 bg-red-600 text-white text-[7px] px-1 rounded inline-flex items-center gap-0.5"><AlertTriangle className="w-2 h-2" /> loitering</span>
                   )}
                   <span className="absolute bottom-0 left-0 right-0 text-[7px] text-gray-200
                                    bg-black/70 px-1 py-0.5 text-center">
                     {new Date(zoomedSnap.timestamp).toLocaleTimeString('en', { hour12: false })}
                   </span>
                   <button onClick={() => setZoomedSnap(null)}
-                          className="absolute top-1 left-1 text-gray-400 hover:text-white bg-black/50 rounded px-1 text-[8px]">✕</button>
+                          className="absolute top-1 left-1 text-gray-400 hover:text-white bg-black/50 rounded px-1"><X className="w-2 h-2" /></button>
                 </div>
               </div>
             )}
@@ -824,7 +825,7 @@ export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }
                       <img src={s.cropData} alt={s.className}
                            className="w-full h-full object-contain" />
                       {s.isLoitering && (
-                        <span className="absolute top-0 right-0 bg-red-600 text-white text-[5px] px-0.5">⚠</span>
+                        <span className="absolute top-0 right-0 bg-red-600 text-white p-px leading-none flex"><AlertTriangle className="w-1.5 h-1.5" /></span>
                       )}
                       <span className="absolute bottom-0 left-0 right-0 text-[5px] text-gray-300
                                        bg-black/70 px-0.5 text-center leading-tight truncate">
@@ -893,15 +894,15 @@ export default function DetectionsTimelineInline({ cameraId, initialFocusMatch }
         <div className="flex items-center gap-1 px-2 py-0.5 border-t border-gray-700/40
                         bg-gray-900/40 flex-shrink-0">
           <button onClick={() => shiftPan(-0.1 / zoom)}
-                  className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded text-[9px]">◀</button>
+                  className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded"><ChevronLeft className="w-2.5 h-2.5" /></button>
           <div className="flex-1 h-1 bg-gray-700 rounded-full relative">
             <div className="absolute h-full bg-emerald-500 rounded-full"
                  style={{ left: `${pan * zoom * 100}%`, width: `${(1 / zoom) * 100}%` }} />
           </div>
           <button onClick={() => shiftPan(0.1 / zoom)}
-                  className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded text-[9px]">▶</button>
+                  className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded"><ChevronRight className="w-2.5 h-2.5" /></button>
           <button onClick={() => { setZoom(1); setPan(0); }}
-                  className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-500 rounded text-[9px]">✕</button>
+                  className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-500 rounded"><X className="w-2.5 h-2.5" /></button>
         </div>
       )}
     </div>

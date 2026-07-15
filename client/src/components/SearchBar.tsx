@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { Loader2, Search, X, Maximize2 } from 'lucide-react';
 import { useSearch, type SearchResult } from '../hooks/useSearch';
 
 // ── Type badge ──────────────────────────────────────────────────────────────
@@ -197,14 +198,9 @@ export function SearchBar({ onNavigate, onFullscreen }: SearchBarProps) {
           : 'bg-gray-700/60 border-gray-600 hover:border-gray-500'
       }`}>
         {loading ? (
-          <svg className="w-3.5 h-3.5 text-blue-400 animate-spin flex-shrink-0" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-          </svg>
+          <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin flex-shrink-0" />
         ) : (
-          <svg className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-          </svg>
+          <Search className="w-3.5 h-3.5 text-gray-400 flex-shrink-0" />
         )}
         <input
           ref={inputRef}
@@ -218,9 +214,9 @@ export function SearchBar({ onNavigate, onFullscreen }: SearchBarProps) {
         {query && (
           <button
             onClick={() => { setQuery(''); setOpen(false); clear(); inputRef.current?.focus(); }}
-            className="text-gray-500 hover:text-gray-300 flex-shrink-0 text-[10px]"
+            className="text-gray-500 hover:text-gray-300 flex-shrink-0"
           >
-            ✕
+            <X className="w-3 h-3" />
           </button>
         )}
         {/* Fullscreen expand button */}
@@ -230,9 +226,7 @@ export function SearchBar({ onNavigate, onFullscreen }: SearchBarProps) {
             title="Open full-screen search"
             className="text-gray-500 hover:text-gray-300 flex-shrink-0 ml-0.5"
           >
-            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-5h-4m4 0v4m0-4l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
-            </svg>
+            <Maximize2 className="w-3.5 h-3.5" />
           </button>
         )}
       </div>

@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'; // eslint-disable-line
+import { Flame, Settings } from 'lucide-react';
 import { useI18n } from '../i18n';
 
 interface AttrItem  { id: string; label: string; labelKo: string; model?: string; pending?: boolean; installHint?: string; }
@@ -614,7 +615,7 @@ export default function VideoAnalyticsTab() {
               onClick={() => setFireSmokeOpen(prev => !prev)}
               className="flex items-center justify-between w-full text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1.5 hover:text-gray-400"
             >
-              <span>🔥 Fire / Smoke Sensitivity</span>
+              <span className="inline-flex items-center gap-1"><Flame className="w-3 h-3" /> Fire / Smoke Sensitivity</span>
               <span className="text-[10px]">{fireSmokeOpen ? '▲' : '▼'}</span>
             </button>
 
@@ -683,7 +684,7 @@ export default function VideoAnalyticsTab() {
             onClick={() => setKalmanOpen(prev => !prev)}
             className="flex items-center justify-between w-full text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1.5 hover:text-gray-400"
           >
-            <span>⚙ Tracker / Kalman Settings</span>
+            <span className="inline-flex items-center gap-1"><Settings className="w-3 h-3" /> Tracker / Kalman Settings</span>
             <span className="text-[10px]">{kalmanOpen ? '▲' : '▼'}</span>
           </button>
 

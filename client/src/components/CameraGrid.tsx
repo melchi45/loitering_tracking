@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import { AlertTriangle } from 'lucide-react';
 import { useCameraStore } from '../stores/cameraStore';
 import CameraView from './CameraView';
 import type { Camera } from '../types';
@@ -182,7 +183,7 @@ function CameraCell({ camera, idx, compact, isSelected, onDoubleClick, onSelect 
       {/* YouTube error overlay */}
       {camera.type === 'youtube' && camera.status === 'error' && (
         <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center z-20 gap-1">
-          <span className="text-red-400 text-[10px] font-bold">⚠ Error</span>
+          <span className="text-red-400 text-[10px] font-bold inline-flex items-center gap-0.5"><AlertTriangle className="w-2.5 h-2.5" /> Error</span>
           {!compact && (
             <button
               onClick={async (e) => {

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { RotateCw, User, Shirt, Square, ArrowRight } from 'lucide-react';
 import { useCamera } from '../hooks/useCamera';
 import { useCrossCameraStore } from '../stores/crossCameraStore';
 import { useClothingReIdStore } from '../stores/clothingReIdStore';
@@ -214,7 +215,7 @@ export function DetectionRow({ det, isCrossCamera }: { det: Detection; isCrossCa
             </span>
           )}
           {circularScore != null && circularScore > 0.4 && (
-            <span className="text-orange-400 font-bold">↻ circular</span>
+            <span className="text-orange-400 font-bold inline-flex items-center gap-0.5"><RotateCw className="w-2.5 h-2.5" /> circular</span>
           )}
         </div>
       )}
@@ -563,11 +564,11 @@ export function DetectionPanel({ cameraId }: { cameraId: string }) {
               {/* Face Re-ID events */}
               {localEvents.slice(0, 4).map((ev, i) => (
                 <div key={`f-${i}`} className="flex items-center gap-1 text-[9px] font-mono text-gray-400">
-                  <span className="text-blue-400" title="Face Re-ID">👤</span>
+                  <span className="text-blue-400" title="Face Re-ID"><User className="w-2.5 h-2.5" /></span>
                   <span className="text-blue-300 font-bold">[{ev.faceId}]</span>
                   {ev.alias && <span className="text-teal-300 font-bold">{ev.alias}</span>}
                   <span className="text-gray-200" title={ev.prevCameraId}>{camName(ev.prevCameraId)}</span>
-                  <span>→</span>
+                  <ArrowRight className="w-2.5 h-2.5 text-gray-500" />
                   <span className="text-gray-200" title={ev.newCameraId}>{camName(ev.newCameraId)}</span>
                   <span className="text-gray-500 ml-auto">{(ev.similarity * 100).toFixed(0)}%</span>
                 </div>
@@ -577,11 +578,11 @@ export function DetectionPanel({ cameraId }: { cameraId: string }) {
                 const combined = combinedConfidence(ev.similarity, ev.faceId);
                 return (
                   <div key={`c-${i}`} className="flex items-center gap-1 text-[9px] font-mono text-gray-400">
-                    <span className="text-orange-400" title="Appearance Re-ID">👕</span>
+                    <span className="text-orange-400" title="Appearance Re-ID"><Shirt className="w-2.5 h-2.5" /></span>
                     <span className="text-orange-300 font-bold">[{ev.clothingId}]</span>
                     {ev.faceId && <span className="text-blue-500 text-[8px]">{ev.faceId}</span>}
                     <span className="text-gray-200" title={ev.prevCameraId}>{camName(ev.prevCameraId)}</span>
-                    <span>→</span>
+                    <ArrowRight className="w-2.5 h-2.5 text-gray-500" />
                     <span className="text-gray-200" title={ev.newCameraId}>{camName(ev.newCameraId)}</span>
                     <span className="ml-auto text-gray-500">
                       {combined != null
@@ -769,7 +770,7 @@ export function DetectionPanel({ cameraId }: { cameraId: string }) {
               <span className="bg-red-700/70 text-red-100 rounded px-1">NO HELMET</span>
               <span className="bg-gray-600/70 text-gray-200 rounded px-1">MASK? / HAT?</span>
               <span className="text-gray-500 text-[7px]">gray = AI uncertain</span>
-              <span className="text-blue-400">⬚ face bbox</span>
+              <span className="text-blue-400 inline-flex items-center gap-0.5"><Square className="w-2 h-2" /> face bbox</span>
               <span className="text-gray-400">↑↓ color</span>
             </div>
           </div>

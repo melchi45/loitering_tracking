@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
+import { Compass, RefreshCw, ChevronRight, ArrowRight, Check, X } from 'lucide-react';
 import type { SearchResult } from '../hooks/useSearch';
 import type { PersonTrajectory, CrossCameraReIdEvent } from '../types';
 import { useCameraStore } from '../stores/cameraStore';
@@ -109,10 +110,7 @@ function Section({
       >
         {icon && <span className="text-gray-400 flex-shrink-0 w-3.5 h-3.5">{icon}</span>}
         <span className="text-[11px] font-semibold text-gray-300 uppercase tracking-wide flex-1">{title}</span>
-        <svg className={`w-3.5 h-3.5 text-gray-500 transition-transform flex-shrink-0 ${open ? 'rotate-90' : ''}`}
-          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-        </svg>
+        <ChevronRight className={`w-3.5 h-3.5 text-gray-500 transition-transform flex-shrink-0 ${open ? 'rotate-90' : ''}`} />
       </button>
       {open && <div className="px-3 py-2.5 bg-gray-900/60">{children}</div>}
     </div>
@@ -285,7 +283,7 @@ function PersonTrailSection({
   const persons = usePersonTrajectoryStore(s => s.persons);
   if (!faceId) {
     return (
-      <Section title="Person Trail" defaultOpen={false} icon="🧭">
+      <Section title="Person Trail" defaultOpen={false} icon={<Compass className="w-3.5 h-3.5" />}>
         <p className="text-[10px] text-gray-500 italic">No face ID — person trail not available for unmatched objects</p>
       </Section>
     );
@@ -293,14 +291,14 @@ function PersonTrailSection({
   const person: PersonTrajectory | undefined = persons.get(faceId);
   if (!person) {
     return (
-      <Section title="Person Trail" defaultOpen={false} icon="🧭">
+      <Section title="Person Trail" defaultOpen={false} icon={<Compass className="w-3.5 h-3.5" />}>
         <p className="text-[10px] text-gray-500 italic">Person {shortId(faceId)} not found in active sessions</p>
       </Section>
     );
   }
   const durationSec = (person.lastSeenAt - person.firstSeenAt) / 1000;
   return (
-    <Section title={`Person Trail — ${person.alias}`} defaultOpen icon="🧭">
+    <Section title={`Person Trail — ${person.alias}`} defaultOpen icon={<Compass className="w-3.5 h-3.5" />}>
       <table className="w-full border-collapse mb-3">
         <tbody>
           <FieldRow label="Alias"      value={<span className="font-bold text-blue-300">{person.alias}</span>} />
@@ -322,7 +320,7 @@ function PersonTrailSection({
               <span className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${isActive ? 'bg-blue-400 animate-pulse' : 'bg-gray-600'}`} />
               <span className="text-gray-300 font-medium flex-1 truncate">{name}</span>
               <span className="text-gray-500 flex-shrink-0">{fmtTime(seg.entryTime)}</span>
-              <span className="text-gray-600 flex-shrink-0">→</span>
+              <ArrowRight className="w-2.5 h-2.5 text-gray-600 flex-shrink-0" />
               <span className="text-gray-500 flex-shrink-0">{seg.exitTime ? fmtTime(seg.exitTime) : <span className="text-blue-400">now</span>}</span>
               {dur != null && <span className="text-gray-600 flex-shrink-0">({dur}s)</span>}
             </div>
@@ -344,7 +342,7 @@ function CrossCameraSection({
   if (!faceId) return null;
   const related = events.filter((e: CrossCameraReIdEvent) => e.faceId === faceId);
   return (
-    <Section title="Cross-Camera Re-ID" defaultOpen={related.length > 0} icon="🔄">
+    <Section title="Cross-Camera Re-ID" defaultOpen={related.length > 0} icon={<RefreshCw className="w-3.5 h-3.5" />}>
       {related.length === 0 ? (
         <p className="text-[10px] text-gray-500 italic">No recent cross-camera transitions for this person</p>
       ) : (
@@ -518,8 +516,8 @@ function DetectionDetail({ r }: { r: SearchResult }) {
           )}
           <div className="flex items-center justify-between">
             <span className="text-[10px] text-gray-500 w-28">Loitering</span>
-            <span className={`text-[10px] font-bold ${r.isLoitering ? 'text-red-400' : 'text-gray-500'}`}>
-              {r.isLoitering ? '✓ YES' : 'NO'}
+            <span className={`text-[10px] font-bold inline-flex items-center gap-0.5 ${r.isLoitering ? 'text-red-400' : 'text-gray-500'}`}>
+              {r.isLoitering ? <><Check className="w-2.5 h-2.5" /> YES</> : 'NO'}
             </span>
           </div>
         </div>
@@ -632,19 +630,19 @@ function DetectionDetail({ r }: { r: SearchResult }) {
             <tbody>
               {mask?.status && (
                 <FieldRow label="Mask" value={
-                  <span className={mask.status === 'mask_correct' ? 'text-green-400' : mask.status === 'no_mask' ? 'text-red-400' : 'text-yellow-400'}>
+                  <span className={`inline-flex items-center gap-0.5 ${mask.status === 'mask_correct' ? 'text-green-400' : mask.status === 'no_mask' ? 'text-red-400' : 'text-yellow-400'}`}>
                     {mask.status.replace(/_/g, ' ')}
-                    {mask.status === 'mask_correct' ? ' ✓' : mask.status === 'no_mask' ? ' ✗' : ''}
+                    {mask.status === 'mask_correct' ? <Check className="w-2.5 h-2.5" /> : mask.status === 'no_mask' ? <X className="w-2.5 h-2.5" /> : ''}
                     {mask.confidence != null && ` (${pct(mask.confidence)})`}
                   </span>
                 } />
               )}
               {hat?.className && (
                 <FieldRow label="Hat" value={
-                  <span className={hat.isHelmet === true ? 'text-green-400' : hat.isHelmet === false ? 'text-red-400' : 'text-gray-300'}>
+                  <span className={`inline-flex items-center gap-0.5 ${hat.isHelmet === true ? 'text-green-400' : hat.isHelmet === false ? 'text-red-400' : 'text-gray-300'}`}>
                     {hat.className}
-                    {hat.isHelmet === true  ? ' ✓ (safety compliant)' : ''}
-                    {hat.isHelmet === false ? ' ✗ (non-compliant)' : ''}
+                    {hat.isHelmet === true  ? <><Check className="w-2.5 h-2.5" /> (safety compliant)</> : ''}
+                    {hat.isHelmet === false ? <><X className="w-2.5 h-2.5" /> (non-compliant)</> : ''}
                     {hat.confidence != null && ` (${pct(hat.confidence)})`}
                   </span>
                 } />
@@ -1080,7 +1078,7 @@ export function SearchFullscreen({ initialQuery = '', onClose }: SearchFullscree
               className="flex-1 bg-transparent text-sm text-gray-200 placeholder-gray-500 outline-none"
             />
             {query && (
-              <button onClick={() => { setQuery(''); setResults([]); setTotal(0); }} className="text-gray-500 hover:text-gray-300 text-xs">✕</button>
+              <button onClick={() => { setQuery(''); setResults([]); setTotal(0); }} className="text-gray-500 hover:text-gray-300"><X className="w-3.5 h-3.5" /></button>
             )}
           </div>
 

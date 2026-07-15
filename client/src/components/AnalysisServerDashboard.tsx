@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { ChevronRight } from 'lucide-react';
 import AnalysisDetectionPanel from './AnalysisDetectionPanel';
 import AnalysisLivePanel from './AnalysisLivePanel';
 import FaceSearchConditionPanel from './FaceSearchConditionPanel';
@@ -625,7 +626,7 @@ export default function AnalysisServerDashboard({
                     <span className="text-sm text-slate-400">{label}</span>
                     <div className="flex items-center gap-2">
                       <span className={`text-lg font-semibold ${valueClass}`}>{value}</span>
-                      {showHist && <span className="text-[10px] text-slate-600">→</span>}
+                      {showHist && <ChevronRight className="w-3 h-3 text-slate-600" />}
                     </div>
                   </div>
                 );
@@ -647,7 +648,7 @@ export default function AnalysisServerDashboard({
                       <span className="text-sm text-slate-400">{label}</span>
                       <div className="flex items-center gap-2">
                         <span className={`text-lg font-semibold ${valueClass}`}>{value}</span>
-                        <span className="text-[10px] text-slate-600">→</span>
+                        <ChevronRight className="w-3 h-3 text-slate-600" />
                       </div>
                     </div>
                   ))}

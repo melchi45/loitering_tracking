@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback } from 'react';
+import { Search, X, Archive, Pencil } from 'lucide-react';
 import { useI18n } from '../i18n';
 import type { GalleryType } from '../types';
 import { GALLERY_TYPE_META, GALLERY_TYPE_ORDER } from '../utils/galleryTypeMeta';
@@ -139,13 +140,13 @@ export default function FaceSearchConditionPanel({ onClose }: Props) {
   return (
     <div className="flex flex-col h-full bg-gray-950 text-white overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2.5 border-b border-gray-800 flex-shrink-0">
-        <span className="text-base">🔍</span>
+        <Search className="w-4 h-4" />
         <h3 className="text-sm font-semibold flex-1">Active Face Search Conditions</h3>
         <span className="text-xs text-gray-400">{data?.total ?? 0} total</span>
         {onClose && (
           <button onClick={onClose} title={String(t.settingsClose)}
             className="w-6 h-6 flex items-center justify-center rounded hover:bg-gray-800 text-gray-400 hover:text-white">
-            ✕
+            <X className="w-3.5 h-3.5" />
           </button>
         )}
       </div>
@@ -158,7 +159,7 @@ export default function FaceSearchConditionPanel({ onClose }: Props) {
           className="bg-gray-800 border border-gray-700 rounded px-2 py-1 text-[11px] text-gray-200"
         >
           {GALLERY_TYPE_ORDER.map((gt) => (
-            <option key={gt} value={gt}>{GALLERY_TYPE_META[gt].icon} {gt}</option>
+            <option key={gt} value={gt}>{gt}</option>
           ))}
         </select>
         <input
@@ -190,7 +191,7 @@ export default function FaceSearchConditionPanel({ onClose }: Props) {
       <div className="flex-1 overflow-y-auto px-3 py-2 space-y-4">
         {facesByType.every((g) => g.faces.length === 0) ? (
           <div className="flex flex-col items-center justify-center h-40 text-center px-4 text-gray-600">
-            <span className="text-xl">🗃</span>
+            <Archive className="w-6 h-6" />
             <span className="text-[11px] mt-1">No active face search conditions</span>
           </div>
         ) : facesByType.map(({ type: gt, faces }) => {
@@ -199,7 +200,7 @@ export default function FaceSearchConditionPanel({ onClose }: Props) {
           return (
             <div key={gt}>
               <div className="flex items-center gap-1.5 mb-1.5">
-                <span>{meta.icon}</span>
+                <meta.icon className="w-3 h-3" />
                 <span className={`text-[10px] font-bold uppercase rounded-full px-1.5 py-0.5 ${meta.badgeClass}`}>
                   {gt} ({faces.length})
                 </span>
@@ -218,7 +219,7 @@ export default function FaceSearchConditionPanel({ onClose }: Props) {
                       className="bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-[11px] text-gray-200"
                     >
                       {GALLERY_TYPE_ORDER.map((gt) => (
-                        <option key={gt} value={gt}>{GALLERY_TYPE_META[gt].icon} {gt}</option>
+                        <option key={gt} value={gt}>{gt}</option>
                       ))}
                     </select>
                     <input
@@ -254,16 +255,16 @@ export default function FaceSearchConditionPanel({ onClose }: Props) {
                       <button
                         onClick={() => startEdit(f)}
                         title="Edit"
-                        className="w-4 h-4 flex items-center justify-center rounded bg-gray-900/80 text-gray-300 hover:text-white text-[9px]"
+                        className="w-4 h-4 flex items-center justify-center rounded bg-gray-900/80 text-gray-300 hover:text-white"
                       >
-                        ✎
+                        <Pencil className="w-2.5 h-2.5" />
                       </button>
                       <button
                         onClick={() => handleDelete(f)}
                         title="Delete"
-                        className="w-4 h-4 flex items-center justify-center rounded bg-gray-900/80 text-gray-400 hover:text-rose-400 text-[9px]"
+                        className="w-4 h-4 flex items-center justify-center rounded bg-gray-900/80 text-gray-400 hover:text-rose-400"
                       >
-                        ✕
+                        <X className="w-2.5 h-2.5" />
                       </button>
                     </div>
                     {f.thumbnail ? (

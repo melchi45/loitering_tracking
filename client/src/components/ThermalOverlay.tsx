@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Thermometer } from 'lucide-react';
 import { getSocket } from '../hooks/useSocket';
 
 interface ThermalReading {
@@ -182,8 +183,8 @@ export default function ThermalOverlay({ cameraId, frameWidth, frameHeight, sens
               className="bg-black/70 backdrop-blur-sm border border-orange-500/40 rounded-md px-3 py-1 text-[11px] font-mono leading-tight"
             >
               <div className="flex items-center gap-2">
-                <span className="text-orange-300 font-semibold">
-                  🌡 {r.areaName || r.itemId || 'Full'}
+                <span className="text-orange-300 font-semibold inline-flex items-center gap-1">
+                  <Thermometer className="w-3 h-3" /> {r.areaName || r.itemId || 'Full'}
                 </span>
                 {r.maxTemp !== null && (
                   <span className="flex items-center gap-0.5">
@@ -275,7 +276,7 @@ export default function ThermalOverlay({ cameraId, frameWidth, frameHeight, sens
                 className="bg-black/75 rounded-md px-2.5 py-1.5 backdrop-blur-sm border border-white/10 text-[11px] font-mono leading-tight"
               >
                 <div className="flex items-center gap-1 text-orange-300 font-semibold mb-1">
-                  <span>🌡</span>
+                  <Thermometer className="w-3 h-3" />
                   <span>{r.areaName || r.itemId || `Area ${i + 1}`}</span>
                 </div>
                 <div className="flex flex-wrap gap-x-3 gap-y-0.5">

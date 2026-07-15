@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { Search, Check } from 'lucide-react';
 import { useCameraStore } from '../stores/cameraStore';
 import type { DiscoveredCamera, OnvifProfile, ProbeChannelsResult, NvrProfile } from '../types';
 import { channelRtspUrl, defaultSunapiRtspUrl } from '../utils/channelRtsp';
@@ -293,7 +294,7 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
                   title="Re-query this IP for SUNAPI/ONVIF channels — use if the scan result looks stale or incomplete"
                   className="px-1.5 py-0.5 text-[10px] rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-gray-200 transition-colors"
                 >
-                  {redetecting ? 'Detecting…' : '🔍 Re-detect'}
+                  {redetecting ? 'Detecting…' : <span className="inline-flex items-center gap-1"><Search className="w-2.5 h-2.5" /> Re-detect</span>}
                 </button>
               </div>
               {redetectError && <p className="text-[9px] text-red-400 mt-0.5">{redetectError}</p>}
@@ -384,7 +385,7 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
                     }`}
                   >
                     <div className="flex items-center gap-1">
-                      {isSelected && <span className="text-purple-400">✓</span>}
+                      {isSelected && <Check className="w-3 h-3 text-purple-400" />}
                       <span className="truncate">{label}</span>
                     </div>
                     {p.rtspUrl && (
@@ -434,8 +435,8 @@ export default function DiscoveredCameraPanel({ camera, onClose }: Props) {
       <div className="px-4 py-3 border-t border-gray-700 flex-shrink-0 space-y-2">
         {error && <p className="text-[11px] text-red-400">{error}</p>}
         {added ? (
-          <div className="text-center text-xs text-green-400 font-semibold py-1">
-            ✓ Added to camera list
+          <div className="text-center text-xs text-green-400 font-semibold py-1 inline-flex items-center gap-1 justify-center w-full">
+            <Check className="w-3.5 h-3.5" /> Added to camera list
           </div>
         ) : (
           <button

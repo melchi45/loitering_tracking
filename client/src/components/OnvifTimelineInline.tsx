@@ -20,6 +20,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { RotateCcw, X, ArrowRight, ChevronLeft, ChevronRight } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { useOnvifEventStore, type OnvifEvent, type OnvifEventType, type OnvifSeverity } from '../stores/onvifEventStore';
 import { parseOnvifXml } from '../utils/onvifParser';
@@ -360,7 +361,7 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                 title="Zoom out">−</button>
         {loading ? <Spinner /> : (
           <button onClick={() => setFetchKey(k => k + 1)}
-                  className="text-gray-500 hover:text-gray-300 transition-colors" title="Refresh">↺</button>
+                  className="text-gray-500 hover:text-gray-300 transition-colors" title="Refresh"><RotateCcw className="w-3 h-3" /></button>
         )}
         <span className="text-gray-600">{visibleCount}/{totalCount}</span>
       </div>
@@ -388,7 +389,7 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                        text-white rounded text-[9px] font-bold transition-colors">Apply</button>
           {customApplied && (
             <button onClick={() => { setCustomApplied(null); setCustomStart(''); setCustomEnd(''); }}
-                    className="text-gray-500 hover:text-gray-300 text-[9px]" title="Clear">✕</button>
+                    className="text-gray-500 hover:text-gray-300" title="Clear"><X className="w-2.5 h-2.5" /></button>
           )}
         </div>
       )}
@@ -650,8 +651,9 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                               title={`${iv.topicLabel}${iv.inProgress ? ' (in progress)' : ''} — ${dur}`}
                             >
                               <span style={{ padding: '0 4px', fontSize: 7, fontWeight: 700, color: '#fff',
-                                             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                                {iv.inProgress ? '↦ ' : ''}{iv.topicLabel} {dur}
+                                             whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                                             display: 'inline-flex', alignItems: 'center', gap: 2 }}>
+                                {iv.inProgress && <ArrowRight style={{ width: 6, height: 6, flexShrink: 0 }} />}{iv.topicLabel} {dur}
                               </span>
                             </div>
 
@@ -721,7 +723,7 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                 </span>
               </div>
               <button onClick={() => { setSelected(null); setZoomedSnap(null); }}
-                      className="text-gray-500 hover:text-white flex-shrink-0 ml-1 text-[11px]">✕</button>
+                      className="text-gray-500 hover:text-white flex-shrink-0 ml-1"><X className="w-3 h-3" /></button>
             </div>
 
             {zoomedSnap && (
@@ -734,7 +736,7 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
                     Frame at event start
                   </span>
                   <button onClick={() => setZoomedSnap(null)}
-                          className="absolute top-1 left-1 text-gray-400 hover:text-white bg-black/50 rounded px-1 text-[8px]">✕</button>
+                          className="absolute top-1 left-1 text-gray-400 hover:text-white bg-black/50 rounded px-1"><X className="w-2 h-2" /></button>
                 </div>
               </div>
             )}
@@ -813,15 +815,15 @@ export default function OnvifTimelineInline({ cameraId }: Props) {
         <div className="flex items-center gap-1 px-2 py-0.5 border-t border-gray-700/40
                         bg-gray-900/40 flex-shrink-0">
           <button onClick={() => shiftPan(-0.1 / zoom)}
-                  className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded text-[9px]">◀</button>
+                  className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded"><ChevronLeft className="w-2.5 h-2.5" /></button>
           <div className="flex-1 h-1 bg-gray-700 rounded-full relative">
             <div className="absolute h-full bg-indigo-500 rounded-full"
                  style={{ left: `${pan * zoom * 100}%`, width: `${(1 / zoom) * 100}%` }} />
           </div>
           <button onClick={() => shiftPan(0.1 / zoom)}
-                  className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded text-[9px]">▶</button>
+                  className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-400 rounded"><ChevronRight className="w-2.5 h-2.5" /></button>
           <button onClick={() => { setZoom(1); setPan(0); }}
-                  className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-500 rounded text-[9px]">✕</button>
+                  className="px-1.5 py-0.5 bg-gray-800 hover:bg-gray-700 text-gray-500 rounded"><X className="w-2.5 h-2.5" /></button>
         </div>
       )}
     </div>

@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react';
+import { AlertTriangle, Search, SlidersHorizontal, CheckCircle2, Clock, X } from 'lucide-react';
 import { useAlertStore } from '../stores/alertStore';
 import { useCameraStore } from '../stores/cameraStore';
 import { useI18n } from '../i18n';
@@ -93,12 +94,7 @@ function AlertRow({ alert, cameraName }: { alert: Alert; cameraName: string }) {
     }`}>
       {/* Row 1: icon + camera + type badge + relative time */}
       <div className="flex items-center gap-1.5 px-2 pt-1.5 pb-0.5">
-        <svg xmlns="http://www.w3.org/2000/svg"
-          className={`w-3.5 h-3.5 flex-shrink-0 ${alert.acknowledged ? 'text-gray-500' : 'text-red-400'}`}
-          fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-            d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-        </svg>
+        <AlertTriangle className={`w-3.5 h-3.5 flex-shrink-0 ${alert.acknowledged ? 'text-gray-500' : 'text-red-400'}`} />
         <span className="font-semibold text-white truncate flex-1 text-[11px]">{cameraName}</span>
         <span className={`flex-shrink-0 text-[8px] font-bold px-1.5 py-0.5 rounded ${typeBadgeClass}`}>{type}</span>
       </div>
@@ -117,7 +113,7 @@ function AlertRow({ alert, cameraName }: { alert: Alert; cameraName: string }) {
       {/* Row 3: dwell + absolute time + ack */}
       <div className="flex items-center justify-between px-2 pb-1.5 pt-0.5">
         <div className="flex items-center gap-2 min-w-0">
-          <span className="text-yellow-400 flex-shrink-0">⏱ {alert.dwellTime.toFixed(1)}s</span>
+          <span className="text-yellow-400 flex-shrink-0 inline-flex items-center gap-0.5"><Clock className="w-3 h-3" /> {alert.dwellTime.toFixed(1)}s</span>
           <span
             className="text-gray-500 text-[10px] truncate"
             title={formatDateTime(alert.timestamp)}
@@ -282,11 +278,7 @@ export default function AlertPanel() {
       <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-gray-700 flex-shrink-0">
         {/* Search */}
         <div className="relative flex-1 min-w-0">
-          <svg className="absolute left-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500 pointer-events-none"
-            fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-              d="M21 21l-4.35-4.35M17 11A6 6 0 1 1 5 11a6 6 0 0 1 12 0z" />
-          </svg>
+          <Search className="absolute left-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-gray-500 pointer-events-none" />
           <input
             type="text"
             value={search}
@@ -297,8 +289,8 @@ export default function AlertPanel() {
           {search && (
             <button
               onClick={() => setSearch('')}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 text-xs leading-none"
-            >×</button>
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-500 hover:text-gray-300 leading-none"
+            ><X className="w-3 h-3" /></button>
           )}
         </div>
 
@@ -312,10 +304,7 @@ export default function AlertPanel() {
           }`}
           title="Filters"
         >
-          <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
-              d="M3 4h18M7 8h10M11 12h2M9 16h6" />
-          </svg>
+          <SlidersHorizontal className="w-3 h-3" />
           {activeFilterCount > 0 && (
             <span className="text-[9px] font-bold bg-blue-600 text-white rounded-full w-3.5 h-3.5 flex items-center justify-center">
               {activeFilterCount}
@@ -416,9 +405,9 @@ export default function AlertPanel() {
           {activeFilterCount > 0 && (
             <button
               onClick={clearFilters}
-              className="text-[10px] text-red-400 hover:text-red-300 transition-colors"
+              className="text-[10px] text-red-400 hover:text-red-300 transition-colors inline-flex items-center gap-0.5"
             >
-              ✕ Clear all filters
+              <X className="w-2.5 h-2.5" /> Clear all filters
             </button>
           )}
         </div>
@@ -440,11 +429,7 @@ export default function AlertPanel() {
       <div className="flex-1 overflow-y-auto px-2 py-1.5 space-y-1.5">
         {filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-gray-600 text-xs gap-2">
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-8 h-8 opacity-40"
-              fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
-                d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-            </svg>
+            <CheckCircle2 className="w-8 h-8 opacity-40" />
             <span>
               {alerts.length > 0 ? 'No alerts match current filters' : t.noAlerts}
             </span>

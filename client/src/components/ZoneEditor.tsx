@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { X } from 'lucide-react';
 import { useI18n } from '../i18n';
 import type { Zone } from '../types';
 
@@ -708,7 +709,7 @@ export default function ZoneEditor({
                           <span className="ml-1 text-blue-500">{z.targetClasses.map(c => c[0].toUpperCase()).join('')}</span>
                         )}
                       </span>
-                      <button onClick={(e) => { e.stopPropagation(); handleDeleteZone(z.id); }} className="text-gray-600 hover:text-red-400 text-[10px] flex-shrink-0 ml-0.5">✕</button>
+                      <button onClick={(e) => { e.stopPropagation(); handleDeleteZone(z.id); }} className="text-gray-600 hover:text-red-400 flex-shrink-0 ml-0.5"><X className="w-3 h-3" /></button>
                     </div>
                   ))}
                 </div>
@@ -859,7 +860,7 @@ export default function ZoneEditor({
                       <span className="ml-1 text-blue-500">{z.targetClasses.map(c => c[0].toUpperCase()).join('')}</span>
                     )}
                   </span>
-                  <button onClick={(e) => { e.stopPropagation(); handleDeleteZone(z.id); }} className="text-gray-600 hover:text-red-400 text-[10px] flex-shrink-0 ml-0.5">✕</button>
+                  <button onClick={(e) => { e.stopPropagation(); handleDeleteZone(z.id); }} className="text-gray-600 hover:text-red-400 flex-shrink-0 ml-0.5"><X className="w-3 h-3" /></button>
                 </div>
               ))}
             </div>

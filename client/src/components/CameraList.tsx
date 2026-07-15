@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Pencil, RotateCcw, X, Search, AlertTriangle, Hourglass } from 'lucide-react';
 import { useSocket } from '../hooks/useSocket';
 import { useCameraStore } from '../stores/cameraStore';
 import { useDiscoveryStore } from '../stores/discoveryStore';
@@ -538,17 +539,17 @@ export default function CameraList() {
                     <div className="flex gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
                       <button
                         onClick={(e) => { e.stopPropagation(); setEditCamera(cam); }}
-                        className="text-gray-500 hover:text-blue-400 text-xs px-1"
+                        className="text-gray-500 hover:text-blue-400 px-1"
                         title="Edit"
                       >
-                        ✎
+                        <Pencil className="w-3 h-3" />
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); handleReconnect(cam.id); }}
-                        className="text-gray-500 hover:text-yellow-400 text-xs px-1"
+                        className="text-gray-500 hover:text-yellow-400 px-1"
                         title="Reconnect"
                       >
-                        ↺
+                        <RotateCcw className="w-3 h-3" />
                       </button>
                       <button
                         onClick={(e) => handleAiToggle(e, cam)}
@@ -563,10 +564,10 @@ export default function CameraList() {
                       </button>
                       <button
                         onClick={(e) => { e.stopPropagation(); handleRemoveCamera(cam.id); }}
-                        className="text-gray-500 hover:text-red-400 text-xs px-1"
+                        className="text-gray-500 hover:text-red-400 px-1"
                         title="Remove"
                       >
-                        ✕
+                        <X className="w-3 h-3" />
                       </button>
                     </div>
                   </div>
@@ -838,7 +839,7 @@ export default function CameraList() {
                         disabled={detecting || !form.rtspUrl.trim()}
                         className="px-2 py-1 text-[10px] rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-gray-200 transition-colors"
                       >
-                        {detecting ? 'Detecting…' : '🔍 Detect Channels'}
+                        {detecting ? 'Detecting…' : <span className="inline-flex items-center gap-1"><Search className="w-2.5 h-2.5" /> Detect Channels</span>}
                       </button>
                     </div>
                     {detectError && <p className="text-[10px] text-red-400">{detectError}</p>}
@@ -941,15 +942,16 @@ export default function CameraList() {
             {addSourceType === 'youtube' && (
               <div className="p-4">
                 {/* ToS warning */}
-                <div className="mb-3 text-[10px] text-yellow-500 bg-yellow-900/20 border border-yellow-700/40 rounded px-2 py-1.5">
-                  ⚠ Streaming YouTube content may violate YouTube's Terms of Service (Section 5.B).
-                  Only use with your own channel videos or videos with appropriate licensing.
+                <div className="mb-3 text-[10px] text-yellow-500 bg-yellow-900/20 border border-yellow-700/40 rounded px-2 py-1.5 flex items-start gap-1">
+                  <AlertTriangle className="w-3 h-3 flex-shrink-0 mt-0.5" />
+                  <span>Streaming YouTube content may violate YouTube's Terms of Service (Section 5.B).
+                  Only use with your own channel videos or videos with appropriate licensing.</span>
                 </div>
 
                 {ytStarting ? (
                   /* Loading state */
                   <div className="py-6 text-center space-y-3">
-                    <div className="text-2xl animate-pulse">⏳</div>
+                    <Hourglass className="w-6 h-6 mx-auto animate-pulse" />
                     <p className="text-xs text-gray-300">Resolving YouTube URL…</p>
                     <p className="text-[11px] text-gray-500">Elapsed: {ytElapsed}s / 30s</p>
                     <div className="w-full bg-gray-700 rounded-full h-1.5 overflow-hidden">

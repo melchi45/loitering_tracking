@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { X, User, Camera, Eye, Hourglass, MousePointerClick, Archive, Siren, Star, Ban, Zap, Search, type LucideIcon } from 'lucide-react';
 import { useI18n } from '../i18n';
 import type { FaceGallery, EnrolledFace, FaceMatchEvent, GalleryType } from '../types';
 import { GALLERY_TYPE_META, GALLERY_TYPE_ORDER } from '../utils/galleryTypeMeta';
@@ -15,10 +16,10 @@ function pct(v: number) { return `${(v * 100).toFixed(1)}%`; }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function EmptyState({ icon, text }: { icon: string; text: string }) {
+function EmptyState({ icon: Icon, text }: { icon: LucideIcon; text: string }) {
   return (
     <div className="flex flex-col items-center justify-center h-20 gap-1 text-gray-600">
-      <span className="text-xl">{icon}</span>
+      <Icon className="w-5 h-5" />
       <span className="text-[10px]">{text}</span>
     </div>
   );
@@ -36,10 +37,10 @@ function GalleryBadge({ count, type }: { count: number; type: GalleryType }) {
 // ── TypePill ──────────────────────────────────────────────────────────────────
 
 function TypePill({ type, t }: { type: GalleryType; t: ReturnType<typeof useI18n>['t'] }) {
-  const { icon, badgeClass } = GALLERY_TYPE_META[type];
+  const { icon: Icon, badgeClass } = GALLERY_TYPE_META[type];
   return (
     <span className={`inline-flex items-center gap-0.5 text-[8px] font-bold rounded px-1 py-0.5 ${badgeClass}`}>
-      {icon} {t[GALLERY_TYPE_META[type].labelKey] as string}
+      <Icon className="w-2.5 h-2.5" /> {t[GALLERY_TYPE_META[type].labelKey] as string}
     </span>
   );
 }
@@ -52,14 +53,14 @@ function FaceCard({ face, onDelete }: { face: EnrolledFace; onDelete: (id: strin
       {face.thumbnail ? (
         <img src={face.thumbnail} alt={face.name} className="w-12 h-12 rounded object-cover border border-gray-700" />
       ) : (
-        <div className="w-12 h-12 rounded bg-gray-700 flex items-center justify-center text-gray-500 text-xl">👤</div>
+        <div className="w-12 h-12 rounded bg-gray-700 flex items-center justify-center text-gray-500"><User className="w-5 h-5" /></div>
       )}
       <span className="text-[9px] text-gray-300 font-medium truncate w-full text-center max-w-[56px]">{face.name}</span>
       <button
         onClick={() => onDelete(face.id)}
-        className="absolute top-0.5 right-0.5 hidden group-hover:flex items-center justify-center w-4 h-4 rounded-full bg-red-700 hover:bg-red-600 text-white text-[9px] transition-colors"
+        className="absolute top-0.5 right-0.5 hidden group-hover:flex items-center justify-center w-4 h-4 rounded-full bg-red-700 hover:bg-red-600 text-white transition-colors"
         title="Delete"
-      >✕</button>
+      ><X className="w-2.5 h-2.5" /></button>
     </div>
   );
 }
@@ -120,7 +121,7 @@ function UploadArea({ galleryId, onEnrolled, t }: UploadAreaProps) {
           onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])} />
         {preview
           ? <img src={preview} alt="preview" className="mx-auto h-20 rounded object-contain" />
-          : <div className="py-3"><div className="text-2xl mb-1">📷</div><p className="text-[10px] text-gray-400">{t.faceUploadHint}</p></div>
+          : <div className="py-3"><Camera className="w-6 h-6 mx-auto mb-1 text-gray-500" /><p className="text-[10px] text-gray-400">{t.faceUploadHint}</p></div>
         }
       </div>
       <input type="text" placeholder={t.faceNamePlaceholder} value={name}
@@ -143,7 +144,7 @@ function MatchLog({ events, t, onSelect }: {
   onSelect?: (cameraId: string, faceId: string, timestamp: number) => void;
 }) {
   const cameras = useCameraStore(s => s.cameras);
-  if (!events.length) return <EmptyState icon="👁" text={String(t.faceNoMatches)} />;
+  if (!events.length) return <EmptyState icon={Eye} text={String(t.faceNoMatches)} />;
   return (
     <div className="flex-1 min-h-0 overflow-y-auto space-y-1 pr-0.5">
       {events.map((ev, i) => {
@@ -155,7 +156,7 @@ function MatchLog({ events, t, onSelect }: {
                    : isVip     ? 'bg-yellow-950/50 border-yellow-700/50'
                    : isBlock   ? 'bg-orange-950/50 border-orange-700/50'
                    : 'bg-gray-800/60 border-gray-700/40';
-        const icon = isMissing ? '🚨' : isVip ? '⭐' : isBlock ? '🚫' : '⚡';
+        const Icon = isMissing ? Siren : isVip ? Star : isBlock ? Ban : Zap;
         return (
           <div key={i}
                className={`flex items-center gap-2 border rounded px-2 py-1 ${bg} ${onSelect ? 'cursor-pointer hover:brightness-125' : ''}`}
@@ -165,12 +166,12 @@ function MatchLog({ events, t, onSelect }: {
             {/* Enrolled gallery photo */}
             {ev.thumbnail
               ? <img src={ev.thumbnail} alt={ev.identity} title="Enrolled" className="w-7 h-7 rounded object-cover flex-shrink-0" />
-              : <span className="w-7 h-7 flex items-center justify-center text-sm flex-shrink-0">👤</span>
+              : <span className="w-7 h-7 flex items-center justify-center flex-shrink-0"><User className="w-3.5 h-3.5" /></span>
             }
             {/* Live crop from frame (v1.1) */}
             {ev.liveCropData
               ? <img src={ev.liveCropData} alt="live" title="Live" className="w-7 h-7 rounded object-cover flex-shrink-0 ring-1 ring-blue-500" />
-              : <span className="w-7 h-7 flex items-center justify-center text-xs text-gray-600 flex-shrink-0">👤</span>
+              : <span className="w-7 h-7 flex items-center justify-center text-gray-600 flex-shrink-0"><User className="w-3 h-3" /></span>
             }
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-1 flex-wrap">
@@ -184,7 +185,7 @@ function MatchLog({ events, t, onSelect }: {
               </div>
               <div className="text-[9px] text-gray-500 truncate">{cameraLabel} · {formatTime(ev.timestamp)}</div>
             </div>
-            <span className="text-lg flex-shrink-0">{icon}</span>
+            <Icon className="w-4 h-4 flex-shrink-0" />
           </div>
         );
       })}
@@ -204,7 +205,7 @@ interface GallerySectionProps {
 }
 
 function GallerySection({ type, galleries, selectedId, onSelect, onDelete, t }: GallerySectionProps) {
-  const { icon, rowClass } = GALLERY_TYPE_META[type];
+  const { icon: Icon, rowClass } = GALLERY_TYPE_META[type];
   const list = galleries.filter(g => (g.type || 'general') === type);
   if (!list.length) return null;
 
@@ -214,7 +215,7 @@ function GallerySection({ type, galleries, selectedId, onSelect, onDelete, t }: 
     <div className="mb-0.5">
       {/* Section header */}
       <div className={`flex items-center gap-1 px-3 py-0.5 ${isMissing ? 'bg-red-950/40' : 'bg-gray-850'}`}>
-        <span className="text-[9px]">{icon}</span>
+        <Icon className="w-2.5 h-2.5" />
         <span className={`text-[8px] uppercase tracking-wide font-bold ${isMissing ? 'text-red-400' : 'text-gray-500'}`}>
           {t[GALLERY_TYPE_META[type].labelKey] as string}
           {isMissing && <span className="ml-1 text-red-500 animate-pulse">●</span>}
@@ -234,9 +235,9 @@ function GallerySection({ type, galleries, selectedId, onSelect, onDelete, t }: 
           <GalleryBadge count={g.faceCount} type={g.type || 'general'} />
           <button
             onClick={(e) => { e.stopPropagation(); onDelete(g.id); }}
-            className="text-gray-600 hover:text-red-400 text-[10px] ml-1 transition-colors"
+            className="text-gray-600 hover:text-red-400 ml-1 transition-colors"
             title={String(t.faceDeleteGallery)}
-          >✕</button>
+          ><X className="w-3 h-3" /></button>
         </button>
       ))}
     </div>
@@ -366,7 +367,7 @@ export default function FaceGalleryTab({ onFocusMatch }: FaceGalleryTabProps) {
       {/* ── Missing person alert banner ── */}
       {latestMissing && (
         <div className="flex-shrink-0 flex items-center gap-2 px-3 py-1.5 bg-red-800/80 border-b border-red-700 animate-pulse">
-          <span className="text-base">🚨</span>
+          <Siren className="w-4 h-4 flex-shrink-0" />
           <div className="flex-1 min-w-0">
             <span className="font-bold text-red-100 text-[10px]">{String(t.missingPersonAlert)}: </span>
             <span className="text-red-200 text-[10px] font-semibold">{latestMissing.identity}</span>
@@ -382,8 +383,8 @@ export default function FaceGalleryTab({ onFocusMatch }: FaceGalleryTabProps) {
           <div className="flex items-center gap-2">
             <span className="font-semibold text-sm text-gray-100">{t.tabFaceGallery}</span>
             {missingCount > 0 && (
-              <span className="text-[9px] bg-red-700 text-red-100 rounded-full px-1.5 py-0.5 font-bold animate-pulse">
-                🔍 {missingCount}
+              <span className="inline-flex items-center gap-0.5 text-[9px] bg-red-700 text-red-100 rounded-full px-1.5 py-0.5 font-bold animate-pulse">
+                <Search className="w-2.5 h-2.5" /> {missingCount}
               </span>
             )}
           </div>
@@ -396,24 +397,27 @@ export default function FaceGalleryTab({ onFocusMatch }: FaceGalleryTabProps) {
           <div className="relative flex-shrink-0">
             <button
               onClick={() => setShowTypeMenu(v => !v)}
-              className="h-full px-2 bg-gray-700 border border-gray-600 rounded text-base hover:bg-gray-600 transition-colors"
+              className="h-full px-2 bg-gray-700 border border-gray-600 rounded hover:bg-gray-600 transition-colors"
               title={String(t.faceSelectType)}
             >
-              {GALLERY_TYPE_META[newGallType].icon}
+              {(() => { const Icon = GALLERY_TYPE_META[newGallType].icon; return <Icon className="w-4 h-4" />; })()}
             </button>
             {showTypeMenu && (
               <div className="absolute top-full left-0 mt-1 z-50 bg-gray-800 border border-gray-700 rounded-lg shadow-xl overflow-hidden min-w-[130px]">
-                {GALLERY_TYPE_ORDER.map(type => (
-                  <button
-                    key={type}
-                    onClick={() => { setNewGallType(type); setShowTypeMenu(false); }}
-                    className={`w-full flex items-center gap-2 px-2 py-1.5 text-left text-[10px] hover:bg-gray-700 transition-colors ${newGallType === type ? 'bg-gray-700' : ''}`}
-                  >
-                    <span>{GALLERY_TYPE_META[type].icon}</span>
-                    <span className="font-medium">{t[GALLERY_TYPE_META[type].labelKey] as string}</span>
-                    {type === 'missing' && <span className="ml-auto text-[8px] text-red-400">●</span>}
-                  </button>
-                ))}
+                {GALLERY_TYPE_ORDER.map(type => {
+                  const Icon = GALLERY_TYPE_META[type].icon;
+                  return (
+                    <button
+                      key={type}
+                      onClick={() => { setNewGallType(type); setShowTypeMenu(false); }}
+                      className={`w-full flex items-center gap-2 px-2 py-1.5 text-left text-[10px] hover:bg-gray-700 transition-colors ${newGallType === type ? 'bg-gray-700' : ''}`}
+                    >
+                      <Icon className="w-3.5 h-3.5" />
+                      <span className="font-medium">{t[GALLERY_TYPE_META[type].labelKey] as string}</span>
+                      {type === 'missing' && <span className="ml-auto text-[8px] text-red-400">●</span>}
+                    </button>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -437,7 +441,7 @@ export default function FaceGalleryTab({ onFocusMatch }: FaceGalleryTabProps) {
       {/* ── Gallery list — grouped by type ── */}
       <div className="flex-shrink-0 border-b border-gray-800 max-h-36 overflow-y-auto">
         {galleries.length === 0
-          ? <EmptyState icon="🗃" text={String(t.faceNoGalleries)} />
+          ? <EmptyState icon={Archive} text={String(t.faceNoGalleries)} />
           : GALLERY_TYPE_ORDER.map(type => (
               <GallerySection
                 key={type}
@@ -456,7 +460,7 @@ export default function FaceGalleryTab({ onFocusMatch }: FaceGalleryTabProps) {
       <div className="flex-1 min-h-0 flex flex-col px-3 py-2 gap-3">
         <div className="overflow-y-auto space-y-3">
           {!selectedGallery
-            ? <EmptyState icon="👆" text={String(t.faceSelectGallery)} />
+            ? <EmptyState icon={MousePointerClick} text={String(t.faceSelectGallery)} />
             : (
               <>
                 {/* Gallery type badge */}
@@ -478,9 +482,9 @@ export default function FaceGalleryTab({ onFocusMatch }: FaceGalleryTabProps) {
                 <div>
                   <p className="text-[9px] text-gray-500 uppercase tracking-wide font-bold mb-1.5">{t.faceEnrolled} ({faces.length})</p>
                   {loadingFaces
-                    ? <EmptyState icon="⏳" text="Loading…" />
+                    ? <EmptyState icon={Hourglass} text="Loading…" />
                     : faces.length === 0
-                      ? <EmptyState icon="👤" text={String(t.faceNoFaces)} />
+                      ? <EmptyState icon={User} text={String(t.faceNoFaces)} />
                       : (
                         <div className="grid grid-cols-4 gap-1.5">
                           {faces.map(f => <FaceCard key={f.id} face={f} onDelete={deleteFace} />)}

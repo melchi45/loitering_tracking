@@ -10,6 +10,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useRef, useState, WheelEvent } from 'react';
+import { ChevronLeft, ChevronRight, X, ArrowRight } from 'lucide-react';
 import { useI18n } from '../i18n';
 import { useOnvifEventStore, type OnvifEvent, type OnvifEventType, type OnvifSeverity } from '../stores/onvifEventStore';
 import { parseOnvifXml } from '../utils/onvifParser';
@@ -456,8 +457,9 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
                             title={`${iv.topicLabel}${iv.inProgress ? ' (in progress)' : ''} — ${dur}`}
                           >
                             <span style={{ padding: '0 6px', fontSize: 10, fontWeight: 700, color: '#fff',
-                                           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                              {iv.inProgress ? '↦ ' : ''}{iv.topicLabel} {dur}
+                                           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
+                                           display: 'inline-flex', alignItems: 'center', gap: 3 }}>
+                              {iv.inProgress && <ArrowRight style={{ width: 8, height: 8, flexShrink: 0 }} />}{iv.topicLabel} {dur}
                             </span>
                           </div>
 
@@ -526,7 +528,7 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
                 <span className="font-semibold text-white text-sm truncate">{selected.topicLabel}</span>
               </div>
               <button onClick={() => setSelected(null)}
-                      className="text-gray-400 hover:text-white flex-shrink-0 ml-2">✕</button>
+                      className="text-gray-400 hover:text-white flex-shrink-0 ml-2"><X className="w-4 h-4" /></button>
             </div>
 
             {/* Parsed / Raw XML toggle */}
@@ -595,16 +597,16 @@ export default function OnvifTimelineOverlay({ cameraId, onClose }: Props) {
       {zoomLevel > 1 && (
         <div className="flex items-center justify-center gap-3 py-2 bg-gray-900 border-t border-gray-700 flex-shrink-0">
           <button onClick={() => shiftPan(-0.15 / zoomLevel)}
-                  className="px-3 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded">
-            ← Older
+                  className="px-3 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded inline-flex items-center gap-1">
+            <ChevronLeft className="w-3 h-3" /> Older
           </button>
           <div className="flex-1 max-w-xs h-1.5 bg-gray-700 rounded-full relative">
             <div className="absolute h-full bg-blue-500 rounded-full"
                  style={{ left: `${panFraction * zoomLevel * 100}%`, width: `${(1 / zoomLevel) * 100}%` }} />
           </div>
           <button onClick={() => shiftPan(0.15 / zoomLevel)}
-                  className="px-3 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded">
-            Newer →
+                  className="px-3 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-300 rounded inline-flex items-center gap-1">
+            Newer <ChevronRight className="w-3 h-3" />
           </button>
           <button onClick={() => { setZoomLevel(1); setPan(0); }}
                   className="px-3 py-1 text-xs bg-gray-800 hover:bg-gray-700 text-gray-400 rounded">

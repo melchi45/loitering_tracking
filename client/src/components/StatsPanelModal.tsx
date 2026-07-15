@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
+import { Radio, Clock, Camera, AlertTriangle, ScanFace, Video, Map, Database, RotateCcw, CornerDownLeft, type LucideIcon } from 'lucide-react';
 import { getWebRTCSnapshotAsync, type WebRTCPCSummary } from '../clientLogger';
 import { useCameraStore } from '../stores/cameraStore';
 
@@ -320,8 +321,8 @@ function BreadcrumbNav({ drill, selectedDate, onNavigate }: {
 
 // ── Overview Card ─────────────────────────────────────────────────────────────
 
-function OverviewCard({ title, icon, drillable, onDoubleClick, children }: {
-  title: string; icon: string; drillable?: boolean;
+function OverviewCard({ title, icon: Icon, drillable, onDoubleClick, children }: {
+  title: string; icon: LucideIcon; drillable?: boolean;
   onDoubleClick?: () => void; children: React.ReactNode;
 }) {
   return (
@@ -334,9 +335,9 @@ function OverviewCard({ title, icon, drillable, onDoubleClick, children }: {
     >
       <div className="flex items-center justify-between">
         <h3 className="text-xs font-bold uppercase tracking-widest text-gray-400 flex items-center gap-1.5">
-          <span>{icon}</span>{title}
+          <Icon className="w-3.5 h-3.5" />{title}
         </h3>
-        {drillable && <span className="text-[9px] text-gray-600">↵ double-click to explore</span>}
+        {drillable && <span className="text-[9px] text-gray-600 inline-flex items-center gap-0.5"><CornerDownLeft className="w-2.5 h-2.5" /> double-click to explore</span>}
       </div>
       {children}
     </div>
@@ -391,7 +392,7 @@ function WebRTCStatsCard({ refreshTick }: { refreshTick: number }) {
     : null;
 
   return (
-    <OverviewCard title="WebRTC" icon="📡">
+    <OverviewCard title="WebRTC" icon={Radio}>
       {loading ? (
         <p className="text-[10px] text-gray-500 animate-pulse">Collecting stats…</p>
       ) : sessions.length === 0 ? (
@@ -491,7 +492,7 @@ function OverviewGrid({ state, hourlyState, selectedDate, onDrillIn, refreshTick
     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4 p-6">
 
       {/* Hourly Breakdown */}
-      <OverviewCard title="Hourly Breakdown" icon="🕐" drillable onDoubleClick={() => onDrillIn('hourly')}>
+      <OverviewCard title="Hourly Breakdown" icon={Clock} drillable onDoubleClick={() => onDrillIn('hourly')}>
         {hourlyState.status === 'ok' ? (
           <>
             <div className="flex gap-2 flex-wrap">
@@ -513,7 +514,7 @@ function OverviewGrid({ state, hourlyState, selectedDate, onDrillIn, refreshTick
       </OverviewCard>
 
       {/* Detections */}
-      <OverviewCard title="Detections" icon="📸" drillable onDoubleClick={() => onDrillIn('detections')}>
+      <OverviewCard title="Detections" icon={Camera} drillable onDoubleClick={() => onDrillIn('detections')}>
         <div className="flex gap-2 flex-wrap">
           <StatChip label="Total"     value={events.total}     color="text-white" />
           <StatChip label="Today"     value={events.today}     color="text-blue-400" />
@@ -525,7 +526,7 @@ function OverviewGrid({ state, hourlyState, selectedDate, onDrillIn, refreshTick
       </OverviewCard>
 
       {/* Alerts */}
-      <OverviewCard title="Alerts" icon="⚠️" drillable onDoubleClick={() => onDrillIn('alerts')}>
+      <OverviewCard title="Alerts" icon={AlertTriangle} drillable onDoubleClick={() => onDrillIn('alerts')}>
         <div className="flex gap-2 flex-wrap">
           <StatChip label="Total"  value={alerts.total} color="text-white" />
           <StatChip label="Unread" value={alerts.unacknowledged}
@@ -541,7 +542,7 @@ function OverviewGrid({ state, hourlyState, selectedDate, onDrillIn, refreshTick
       </OverviewCard>
 
       {/* Face ID */}
-      <OverviewCard title="Face ID" icon="🪪" drillable onDoubleClick={() => onDrillIn('faceId')}>
+      <OverviewCard title="Face ID" icon={ScanFace} drillable onDoubleClick={() => onDrillIn('faceId')}>
         <div className="flex gap-2 flex-wrap">
           <StatChip label="Galleries" value={faces.galleries} color="text-purple-400" />
           <StatChip label="Enrolled"  value={faces.enrolled}  color="text-white" />
@@ -550,7 +551,7 @@ function OverviewGrid({ state, hourlyState, selectedDate, onDrillIn, refreshTick
       </OverviewCard>
 
       {/* Cameras (static) */}
-      <OverviewCard title="Cameras" icon="📹">
+      <OverviewCard title="Cameras" icon={Video}>
         <div className="flex gap-2 flex-wrap">
           <StatChip label="Total"     value={cameras.total}              color="text-white" />
           <StatChip label="Streaming" value={cameras.byStatus.streaming} color="text-green-400" />
@@ -573,7 +574,7 @@ function OverviewGrid({ state, hourlyState, selectedDate, onDrillIn, refreshTick
       </OverviewCard>
 
       {/* Zones (static) */}
-      <OverviewCard title="Zones" icon="🗺">
+      <OverviewCard title="Zones" icon={Map}>
         <div className="flex gap-2 flex-wrap">
           <StatChip label="Total"   value={zones.total}          color="text-white" />
           <StatChip label="Monitor" value={zones.byType.MONITOR} color="text-blue-400" />
@@ -593,7 +594,7 @@ function OverviewGrid({ state, hourlyState, selectedDate, onDrillIn, refreshTick
       </OverviewCard>
 
       {/* Storage (static, spans full row on xl) */}
-      <OverviewCard title="Storage" icon="🗄">
+      <OverviewCard title="Storage" icon={Database}>
         <div className="flex items-center gap-2">
           <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase ${
             storage.mode === 'mongodb'
@@ -629,8 +630,8 @@ function SectionDrillView({ section, hourlyState, selectedDate, setSelectedDate,
           className="bg-gray-800 border border-gray-600 rounded px-3 py-1 text-sm text-gray-200 focus:outline-none focus:border-blue-500" />
         {hourlyState.status === 'loading' && <span className="text-xs text-gray-500 animate-pulse">Loading…</span>}
         <button onClick={() => fetchHourly(selectedDate)}
-          className="ml-auto px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-xs text-gray-300 transition-colors">
-          ↺ Refresh
+          className="ml-auto px-3 py-1 rounded bg-gray-700 hover:bg-gray-600 text-xs text-gray-300 transition-colors inline-flex items-center gap-1">
+          <RotateCcw className="w-3 h-3" /> Refresh
         </button>
       </div>
 

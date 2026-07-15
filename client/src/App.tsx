@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
+import { Bot, Eye, Camera, Bell, Map, ScanFace, Video, X, AlertTriangle, type LucideIcon } from 'lucide-react';
 import { useSocket } from './hooks/useSocket';
 import { useCameraStore } from './stores/cameraStore';
 import { useAlertStore } from './stores/alertStore';
@@ -509,7 +510,7 @@ function SettingsModal({ onClose, serverMode }: { onClose: () => void; serverMod
             {/* Banner: remove unreachable servers */}
             {iceFailedUrls.length > 0 && (
               <div className="bg-yellow-900/40 border border-yellow-700/60 rounded-lg px-3 py-2 mb-2 text-[10px] text-yellow-300">
-                <div className="font-semibold mb-1">⚠ {iceFailedUrls.length}개 서버가 연결 불가 (15초 지연 발생)</div>
+                <div className="font-semibold mb-1 inline-flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> {iceFailedUrls.length}개 서버가 연결 불가 (15초 지연 발생)</div>
                 {iceFailedUrls.map(u => <div key={u} className="font-mono text-yellow-400/80">{u}</div>)}
                 <button
                   onClick={() => {
@@ -872,16 +873,16 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
   const ANALYSIS_TABS: SidebarTab[] = ['analytics', 'detections'];
   const TAB_ITEMS = isAnalysis
     ? [
-        { id: 'analytics'  as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
-        { id: 'detections' as SidebarTab, icon: '👁',  label: t.tabDetections },
+        { id: 'analytics'  as SidebarTab, icon: Bot, label: t.tabVideoAnalytics },
+        { id: 'detections' as SidebarTab, icon: Eye,  label: t.tabDetections },
       ]
     : [
-        { id: 'cameras'    as SidebarTab, icon: '📷', label: t.tabCameras },
-        { id: 'alerts'     as SidebarTab, icon: '🔔', label: t.tabAlerts },
-        { id: 'zones'      as SidebarTab, icon: '🗺',  label: t.tabZones },
-        { id: 'detections' as SidebarTab, icon: '👁',  label: t.tabDetections },
-        { id: 'faces'      as SidebarTab, icon: '🪪',  label: t.tabFaceGallery },
-      ].filter(Boolean) as { id: SidebarTab; icon: string; label: string }[];
+        { id: 'cameras'    as SidebarTab, icon: Camera, label: t.tabCameras },
+        { id: 'alerts'     as SidebarTab, icon: Bell, label: t.tabAlerts },
+        { id: 'zones'      as SidebarTab, icon: Map,  label: t.tabZones },
+        { id: 'detections' as SidebarTab, icon: Eye,  label: t.tabDetections },
+        { id: 'faces'      as SidebarTab, icon: ScanFace,  label: t.tabFaceGallery },
+      ].filter(Boolean) as { id: SidebarTab; icon: LucideIcon; label: string }[];
 
   // If dashboard context changes, reset to a valid tab.
   useEffect(() => {
@@ -1089,7 +1090,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
                 onClick={() => navigateDashboard(isAnalysis ? '/' : '/analysis')}
                 className="px-1.5 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-medium transition-colors"
               >
-                {isAnalysis ? '📹' : '🤖'}
+                {isAnalysis ? <Video className="w-3.5 h-3.5" /> : <Bot className="w-3.5 h-3.5" />}
               </button>
             )}
           </div>
@@ -1197,7 +1198,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
 
         {/* Mobile bottom navigation */}
         <nav className="flex border-t border-gray-700 bg-gray-900 flex-shrink-0" style={{ height: 52 }}>
-          {TAB_ITEMS.map(({ id, icon, label }) => (
+          {TAB_ITEMS.map(({ id, icon: Icon, label }) => (
             <button
               key={id}
               onClick={() => setSidebarTab(id)}
@@ -1208,7 +1209,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
               {sidebarTab === id && (
                 <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 bg-blue-400 rounded-b" />
               )}
-              <span className="text-lg leading-none">{icon}</span>
+              <Icon className="w-4 h-4" />
               <span className="text-[8px] font-semibold uppercase tracking-wide leading-none">{label}</span>
               {id === 'alerts' && unreadAlerts > 0 && (
                 <span className="absolute top-1 right-2 w-3.5 h-3.5 text-[8px] font-bold bg-red-600 text-white rounded-full flex items-center justify-center">
@@ -1254,7 +1255,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
               className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-gray-700 hover:bg-gray-600 border border-gray-600 text-gray-200 text-xs font-medium transition-colors whitespace-nowrap"
               title={isAnalysis ? t.switchToStreaming : t.switchToAnalysis}
             >
-              <span>{isAnalysis ? '📹' : '🤖'}</span>
+              {isAnalysis ? <Video className="w-3.5 h-3.5" /> : <Bot className="w-3.5 h-3.5" />}
               <span>{isAnalysis ? t.switchToStreaming : t.switchToAnalysis}</span>
             </button>
           )}
@@ -1388,7 +1389,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
           {sidebarCollapsed ? (
             /* ── Collapsed: icon-only strip ── */
             <div className="flex flex-col items-center pt-2 gap-1 w-full">
-              {TAB_ITEMS.map(({ id, icon, label }) => (
+              {TAB_ITEMS.map(({ id, icon: Icon, label }) => (
                 <button
                   key={id}
                   title={label}
@@ -1401,7 +1402,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
                       : 'text-gray-500 hover:text-gray-300 hover:bg-gray-700'
                   }`}
                 >
-                  <span className="text-base leading-none">{icon}</span>
+                  <Icon className="w-4 h-4" />
                   {id === 'alerts' && unreadAlerts > 0 && (
                     <span className="absolute top-0.5 right-0.5 w-3 h-3 text-[7px] font-bold bg-red-600 text-white rounded-full flex items-center justify-center">
                       {unreadAlerts > 9 ? '9+' : unreadAlerts}
@@ -1414,7 +1415,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
             /* ── Expanded: tab header + content ── */
             <>
               <div className="flex border-b border-gray-700 flex-shrink-0 overflow-x-auto scrollbar-none">
-                {TAB_ITEMS.map(({ id, icon, label }) => (
+                {TAB_ITEMS.map(({ id, icon: Icon, label }) => (
                   <button
                     key={id}
                     title={label}
@@ -1425,7 +1426,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
                         : 'text-gray-500 hover:text-gray-300'
                     }`}
                   >
-                    <span className="text-sm leading-none">{icon}</span>
+                    <Icon className="w-3.5 h-3.5" />
                     <span className="text-[9px] font-semibold uppercase tracking-wide leading-none truncate w-full text-center px-0.5">
                       {label}
                     </span>
@@ -1440,9 +1441,9 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
                 <button
                   onClick={() => setSidebarCollapsed(true)}
                   title="탭 숨기기"
-                  className="px-2.5 flex-shrink-0 text-gray-500 hover:text-white hover:bg-gray-700 transition-colors text-xs font-bold"
+                  className="px-2.5 flex-shrink-0 text-gray-500 hover:text-white hover:bg-gray-700 transition-colors"
                 >
-                  ✕
+                  <X className="w-3.5 h-3.5" />
                 </button>
               </div>
               <div className="flex-1 overflow-hidden">

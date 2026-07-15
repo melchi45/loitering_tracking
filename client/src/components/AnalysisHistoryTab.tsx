@@ -12,6 +12,7 @@
  */
 
 import { useEffect, useState } from 'react';
+import { Footprints, Flame, Wind, RotateCcw, X, type LucideIcon } from 'lucide-react';
 import { useI18n } from '../i18n';
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -43,10 +44,10 @@ const PRESET_MS: Record<RangePreset, number | null> = {
   'All': null,
 };
 
-const TYPE_ICON: Record<string, string> = {
-  loitering: '🚶',
-  fire:       '🔥',
-  smoke:      '💨',
+const TYPE_ICON: Record<string, LucideIcon> = {
+  loitering: Footprints,
+  fire:       Flame,
+  smoke:      Wind,
 };
 const TYPE_COLOR: Record<string, string> = {
   loitering: 'text-red-400',
@@ -171,9 +172,9 @@ export default function AnalysisHistoryTab({ cameraId }: { cameraId: string }) {
           title="Filter by detection type"
         >
           <option value="">All Types</option>
-          <option value="loitering">🚶 Loitering</option>
-          <option value="fire">🔥 Fire</option>
-          <option value="smoke">💨 Smoke</option>
+          <option value="loitering">Loitering</option>
+          <option value="fire">Fire</option>
+          <option value="smoke">Smoke</option>
         </select>
 
         <div className="flex-1" />
@@ -181,8 +182,8 @@ export default function AnalysisHistoryTab({ cameraId }: { cameraId: string }) {
         {loading
           ? <Spinner />
           : <button onClick={refresh}
-              className="text-gray-500 hover:text-gray-300 text-[10px] transition-colors"
-              title="Refresh">↺</button>
+              className="text-gray-500 hover:text-gray-300 transition-colors"
+              title="Refresh"><RotateCcw className="w-3 h-3" /></button>
         }
         <span className="text-gray-600">{events.length}</span>
       </div>
@@ -217,10 +218,10 @@ export default function AnalysisHistoryTab({ cameraId }: { cameraId: string }) {
           </button>
           <button
             onClick={() => { setCustomStart(''); setCustomEnd(''); setActiveRange({ from: null, to: null }); setFetchKey(k => k + 1); }}
-            className="text-gray-500 hover:text-gray-300 text-[9px] transition-colors"
+            className="text-gray-500 hover:text-gray-300 transition-colors"
             title="Clear range"
           >
-            ✕
+            <X className="w-2.5 h-2.5" />
           </button>
         </div>
       )}
@@ -247,8 +248,8 @@ export default function AnalysisHistoryTab({ cameraId }: { cameraId: string }) {
               onMouseLeave={() => setHovered(null)}
             >
               {/* Type icon */}
-              <span className={`text-sm flex-shrink-0 ${TYPE_COLOR[evt.type] ?? 'text-gray-400'}`}>
-                {TYPE_ICON[evt.type] ?? '●'}
+              <span className={`flex-shrink-0 ${TYPE_COLOR[evt.type] ?? 'text-gray-400'}`}>
+                {(() => { const Icon = TYPE_ICON[evt.type]; return Icon ? <Icon className="w-3.5 h-3.5" /> : <span className="text-sm">●</span>; })()}
               </span>
 
               {/* Content */}

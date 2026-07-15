@@ -1,4 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import {
+  Users, Bot, Wifi, Radio, ClipboardList, BarChart3, Monitor,
+  RotateCcw, Check, X, Download, FlaskConical, AlertTriangle, Loader2,
+  type LucideIcon,
+} from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useOnvifEventStore, type OnvifEventType } from '../../stores/onvifEventStore';
 import { useSocket } from '../../hooks/useSocket';
@@ -157,14 +162,14 @@ const SEVERITY_BADGE: Record<string, string> = {
 
 // ── Nav items ─────────────────────────────────────────────────────────────────
 
-const NAV: { id: AdminSection; label: string; icon: string; desc: string }[] = [
-  { id: 'users',     label: 'Users',      icon: '👥', desc: 'Manage user accounts & roles' },
-  { id: 'ai-models', label: 'AI Models',  icon: '🤖', desc: 'YOLO model catalog & AI modules' },
-  { id: 'webrtc',    label: 'WebRTC / ICE', icon: '📶', desc: 'STUN/TURN servers & ICE connectivity test' },
-  { id: 'onvif',     label: 'ONVIF',      icon: '📡', desc: 'Event type registry' },
-  { id: 'audit',     label: 'Audit Log',  icon: '📋', desc: 'Activity history' },
-  { id: 'system',    label: 'System',     icon: '📊', desc: 'CPU · Memory · Disk · DB metrics' },
-  { id: 'logs',      label: 'Server Logs', icon: '🖥️', desc: 'Real-time log viewer' },
+const NAV: { id: AdminSection; label: string; icon: LucideIcon; desc: string }[] = [
+  { id: 'users',     label: 'Users',      icon: Users, desc: 'Manage user accounts & roles' },
+  { id: 'ai-models', label: 'AI Models',  icon: Bot, desc: 'YOLO model catalog & AI modules' },
+  { id: 'webrtc',    label: 'WebRTC / ICE', icon: Wifi, desc: 'STUN/TURN servers & ICE connectivity test' },
+  { id: 'onvif',     label: 'ONVIF',      icon: Radio, desc: 'Event type registry' },
+  { id: 'audit',     label: 'Audit Log',  icon: ClipboardList, desc: 'Activity history' },
+  { id: 'system',    label: 'System',     icon: BarChart3, desc: 'CPU · Memory · Disk · DB metrics' },
+  { id: 'logs',      label: 'Server Logs', icon: Monitor, desc: 'Real-time log viewer' },
 ];
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -257,7 +262,7 @@ export default function AdminUsersPage() {
                   : 'text-gray-400 hover:text-white hover:bg-gray-800'
               }`}
             >
-              <span className="text-base w-5 text-center">{item.icon}</span>
+              <span className="w-5 flex justify-center"><item.icon className="w-4 h-4" /></span>
               <div>
                 <div className="font-medium leading-tight">{item.label}</div>
                 <div className="text-[10px] text-gray-500 leading-tight mt-0.5">{item.desc}</div>
@@ -526,7 +531,7 @@ function OnvifSection({ apiFetch }: { apiFetch: (p: string, o?: RequestInit) => 
             <button onClick={load} disabled={loading}
               className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-50
                          text-gray-300 rounded-lg text-xs font-medium transition-colors">
-              {loading ? 'Loading…' : '↺ Refresh'}
+              {loading ? 'Loading…' : <span className="inline-flex items-center gap-1"><RotateCcw className="w-3 h-3" /> Refresh</span>}
             </button>
             <button onClick={handleClear} disabled={loading || types.length === 0}
               className="px-3 py-1.5 bg-transparent hover:bg-red-900/30 disabled:opacity-40
@@ -596,17 +601,17 @@ function AuditSection({
       {/* Tab switcher */}
       <div className="flex gap-1 mb-5 bg-gray-800 rounded-lg p-1 w-fit">
         {([
-          { id: 'tests',    label: '🧪 Startup Tests' },
-          { id: 'activity', label: '📋 System Activity' },
-        ] as { id: AuditTab; label: string }[]).map(t => (
+          { id: 'tests',    label: 'Startup Tests', icon: FlaskConical },
+          { id: 'activity', label: 'System Activity', icon: ClipboardList },
+        ] as { id: AuditTab; label: string; icon: LucideIcon }[]).map(t => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            className={`px-4 py-1.5 rounded-md text-xs font-medium transition-colors ${
+            className={`px-4 py-1.5 rounded-md text-xs font-medium transition-colors inline-flex items-center gap-1.5 ${
               tab === t.id ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-white'
             }`}
           >
-            {t.label}
+            <t.icon className="w-3.5 h-3.5" /> {t.label}
           </button>
         ))}
       </div>
@@ -771,7 +776,7 @@ function TcResultsPanel({
         <button onClick={load} disabled={loading}
           className="px-3 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50
                      text-gray-300 rounded-lg text-xs font-medium transition-colors">
-          {loading ? '…' : '↺'}
+          {loading ? '…' : <RotateCcw className="w-3.5 h-3.5" />}
         </button>
 
         <button
@@ -836,8 +841,8 @@ function TcResultsPanel({
                     <span className="text-[10px] text-gray-500 font-mono truncate hidden sm:block">{srsRefs}</span>
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0 text-[10px]">
-                    {suitePass > 0 && <span className="text-green-400 font-medium">✓ {suitePass}</span>}
-                    {suiteFail > 0 && <span className="text-red-400 font-medium">✗ {suiteFail}</span>}
+                    {suitePass > 0 && <span className="text-green-400 font-medium inline-flex items-center gap-0.5"><Check className="w-2.5 h-2.5" /> {suitePass}</span>}
+                    {suiteFail > 0 && <span className="text-red-400 font-medium inline-flex items-center gap-0.5"><X className="w-2.5 h-2.5" /> {suiteFail}</span>}
                     {suiteSkip > 0 && <span className="text-yellow-500 font-medium">⊘ {suiteSkip}</span>}
                   </div>
                 </div>
@@ -927,7 +932,7 @@ function ActivityLogPanel({ apiFetch }: { apiFetch: (p: string, o?: RequestInit)
         <button onClick={load} disabled={loading}
           className="px-3 py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50
                      text-gray-300 rounded-lg text-xs font-medium transition-colors flex-shrink-0">
-          {loading ? '…' : '↺ Refresh'}
+          {loading ? '…' : <span className="inline-flex items-center gap-1"><RotateCcw className="w-3 h-3" /> Refresh</span>}
         </button>
       </div>
 
@@ -1198,13 +1203,13 @@ function AiModelsSection() {
                           <span className="text-[9px] text-indigo-400 font-medium">● active</span>
                         )}
                         {m.converting && (
-                          <span className="text-[9px] text-amber-400 animate-pulse">⟳ converting…</span>
+                          <span className="text-[9px] text-amber-400 animate-pulse inline-flex items-center gap-0.5"><Loader2 className="w-2.5 h-2.5 animate-spin" /> converting…</span>
                         )}
                         {m.downloading && !m.converting && (
-                          <span className="text-[9px] text-blue-400 animate-pulse">↓ {pct}%</span>
+                          <span className="text-[9px] text-blue-400 animate-pulse inline-flex items-center gap-0.5"><Download className="w-2.5 h-2.5" /> {pct}%</span>
                         )}
                         {m.downloadError && (
-                          <span className="text-[9px] text-red-400" title={m.downloadError}>✗ error</span>
+                          <span className="text-[9px] text-red-400 inline-flex items-center gap-0.5" title={m.downloadError}><X className="w-2.5 h-2.5" /> error</span>
                         )}
                       </div>
 
@@ -1237,7 +1242,7 @@ function AiModelsSection() {
                             disabled={!!dlLoading}
                             className="px-2.5 py-1 text-[10px] font-medium rounded bg-blue-700/70 text-blue-200 border border-blue-600/50 hover:bg-blue-700 disabled:opacity-40 transition-colors"
                           >
-                            {series === 'YOLO12' ? '↓ PT→ONNX' : '↓ Download'}
+                            <span className="inline-flex items-center gap-1"><Download className="w-2.5 h-2.5" /> {series === 'YOLO12' ? 'PT→ONNX' : 'Download'}</span>
                           </button>
                         )}
                         {isDownloading && (
@@ -1326,10 +1331,10 @@ function AiModelsSection() {
                       </span>
                       {m.active && <span className="text-[9px] text-indigo-400 font-medium">● active</span>}
                       {m.downloading && (
-                        <span className="text-[9px] text-blue-400 animate-pulse">↓ {pct}%</span>
+                        <span className="text-[9px] text-blue-400 animate-pulse inline-flex items-center gap-0.5"><Download className="w-2.5 h-2.5" /> {pct}%</span>
                       )}
                       {m.downloadError && (
-                        <span className="text-[9px] text-red-400" title={m.downloadError}>✗ error</span>
+                        <span className="text-[9px] text-red-400 inline-flex items-center gap-0.5" title={m.downloadError}><X className="w-2.5 h-2.5" /> error</span>
                       )}
                     </div>
                     <span className="text-[10px] text-gray-500 truncate" title={m.license}>{m.license ?? '—'}</span>
@@ -1354,7 +1359,7 @@ function AiModelsSection() {
                           disabled={!!dlLoading}
                           className="px-2.5 py-1 text-[10px] font-medium rounded bg-blue-700/70 text-blue-200 border border-blue-600/50 hover:bg-blue-700 disabled:opacity-40 transition-colors"
                         >
-                          ↓ Download
+                          <span className="inline-flex items-center gap-1"><Download className="w-2.5 h-2.5" /> Download</span>
                         </button>
                       )}
                       {isDownloading && (
@@ -1688,7 +1693,7 @@ function SystemSection({ apiFetch }: { apiFetch: (path: string, opts?: RequestIn
                 {db.connected ? 'Connected' : 'Disconnected'}
               </span>
               {!db.connected && db.mode === 'mongodb' && (
-                <span className="text-[10px] text-yellow-500">⚠ Falling back to lts.json</span>
+                <span className="text-[10px] text-yellow-500 inline-flex items-center gap-0.5"><AlertTriangle className="w-2.5 h-2.5" /> Falling back to lts.json</span>
               )}
             </div>
 
@@ -1999,7 +2004,7 @@ function WebRTCSection() {
             saved ? 'bg-green-700/60 text-green-300 cursor-default' : 'bg-blue-700 hover:bg-blue-600 text-white'
           }`}
         >
-          {saved ? 'Saved ✓' : 'Apply'}
+          {saved ? <span className="inline-flex items-center gap-1">Saved <Check className="w-3 h-3" /></span> : 'Apply'}
         </button>
       </div>
 
@@ -2026,7 +2031,7 @@ function WebRTCSection() {
 
         {iceFailedUrls.length > 0 && (
           <div className="bg-yellow-900/40 border border-yellow-700/60 rounded-lg px-3 py-2 mb-3 text-[10px] text-yellow-300">
-            <div className="font-semibold mb-1">⚠ {iceFailedUrls.length} server(s) unreachable (causes gather delay)</div>
+            <div className="font-semibold mb-1 inline-flex items-center gap-1"><AlertTriangle className="w-3 h-3" /> {iceFailedUrls.length} server(s) unreachable (causes gather delay)</div>
             {iceFailedUrls.map(u => <div key={u} className="font-mono text-yellow-400/80">{u}</div>)}
             <button
               onClick={() => {

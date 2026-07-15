@@ -1,4 +1,5 @@
 import { useEffect, useState, useCallback, useMemo } from 'react';
+import { RotateCw, X, Search } from 'lucide-react';
 import { useI18n, BCP47_LOCALE } from '../i18n';
 import type { Translations } from '../i18n/translations/en';
 
@@ -235,7 +236,7 @@ export default function AnalysisDetectionPanel({ onClose }: Props) {
 
         <button onClick={() => load()} title={t.evtRefresh}
           className="text-[10px] px-2 py-0.5 rounded bg-gray-800/60 text-gray-400 hover:text-gray-200 border border-gray-700 transition-colors">
-          ↻
+          <RotateCw className="w-3 h-3" />
         </button>
 
         {events.length > 0 && (
@@ -247,8 +248,8 @@ export default function AnalysisDetectionPanel({ onClose }: Props) {
 
         {onClose && (
           <button onClick={onClose} title={t.settingsClose}
-            className="ml-1 w-6 h-6 flex items-center justify-center rounded hover:bg-gray-700 text-gray-400 hover:text-white transition-colors text-lg leading-none">
-            ✕
+            className="ml-1 w-6 h-6 flex items-center justify-center rounded hover:bg-gray-700 text-gray-400 hover:text-white transition-colors">
+            <X className="w-3.5 h-3.5" />
           </button>
         )}
       </div>
@@ -283,7 +284,7 @@ export default function AnalysisDetectionPanel({ onClose }: Props) {
 
         {!loading && !error && events.length === 0 && (
           <div className="flex flex-col items-center justify-center h-40 text-center px-4">
-            <span className="text-3xl mb-2">🔍</span>
+            <Search className="w-8 h-8 mb-2" />
             <p className="text-sm text-gray-400">{t.evtNoEvents}</p>
             <p className="text-xs text-gray-600 mt-1">
               {typeFilter

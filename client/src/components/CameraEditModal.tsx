@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { AlertTriangle, Search } from 'lucide-react';
 import { useCameraStore } from '../stores/cameraStore';
 import { useChannelConfigStore } from '../stores/channelConfigStore';
 import { ChannelSlotPicker } from './ChannelSlotPicker';
@@ -279,8 +280,8 @@ export default function CameraEditModal({ camera, onClose }: Props) {
           <>
             <div className="p-4 space-y-3">
               {/* Restart notice */}
-              <div className="text-[10px] text-yellow-500 bg-yellow-900/20 border border-yellow-700/40 rounded px-2 py-1.5">
-                ⚠ Changing the URL, resolution, or bitrate will automatically restart the stream.
+              <div className="text-[10px] text-yellow-500 bg-yellow-900/20 border border-yellow-700/40 rounded px-2 py-1.5 flex items-start gap-1">
+                <AlertTriangle className="w-3 h-3 flex-shrink-0 mt-0.5" /> Changing the URL, resolution, or bitrate will automatically restart the stream.
               </div>
 
               {/* Name */}
@@ -494,7 +495,7 @@ export default function CameraEditModal({ camera, onClose }: Props) {
                     disabled={redetecting}
                     className="px-2 py-1 text-[10px] rounded bg-gray-700 hover:bg-gray-600 disabled:opacity-40 text-gray-200 transition-colors"
                   >
-                    {redetecting ? 'Detecting…' : '🔍 Re-detect'}
+                    {redetecting ? 'Detecting…' : <span className="inline-flex items-center gap-1"><Search className="w-2.5 h-2.5" /> Re-detect</span>}
                   </button>
                 </div>
                 {redetectError && <p className="text-[10px] text-red-400 mb-1">{redetectError}</p>}
