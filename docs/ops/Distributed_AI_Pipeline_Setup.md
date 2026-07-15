@@ -1035,6 +1035,58 @@ curl http://localhost:3443/api/galleries/match-history?limit=5
 
 **해결 (코드 수정 적용됨):** `_assignFaceIds(cameraId, cameraName, detectedFaces, timestamp)`로 시그니처 변경 — 매칭 이벤트·`face_match` 소켓 페이로드·DB 저장 레코드 모두에 `cameraName`이 포함됩니다. 이 수정 이전에 저장된 이력 레코드는 `cameraName`이 없으므로, 클라이언트가 카메라 목록에서 이름을 찾아 대체 표시합니다 (그래도 못 찾으면 원본 ID 표시).
 
+### 9.13 Analysis Server Dashboard의 "Currently Analyzing"과 "Loaded AI Models"가 서로 다름
+
+**증상:** "Currently Analyzing" 배지에는 특정 모듈(예: `ageEstimation`)이 나열되는데 "Loaded AI Models" 카드에는 해당 모델이 아예 보이지 않거나, 반대로 모델은 "loaded"로 표시되는데 admin이 그 모듈을 꺼둔 상태를 구분할 수 없음.
+
+**원인:** 두 섹션이 서로 무관한 데이터 소스를 읽고 있었습니다 — "Currently Analyzing"은 admin이 토글한 `analyticsConfig`, "Loaded AI Models"는 `_detector`/`_attrPipeline`/`_fireSmokeService` 런타임 인스턴스의 로드 상태(`analysisApi.js`의 `_getLoadedModels()`)였고, 둘 사이에 연결이 전혀 없었습니다. 추가로 `_getLoadedModels()`는 Age Estimation·Gender Classification 모델을 목록에서 아예 빠뜨리고 있었습니다.
+
+**해결 (코드 수정 적용됨):** `_getLoadedModels()`(analysisApi.js·pipelineManager.js 양쪽)가 각 모델에 `enabled` 필드(해당 analyticsConfig 모듈이 켜져 있는지)를 함께 반환하도록 수정, Age Estimation/Gender Classification 모델 항목 추가. Dashboard는 `enabled`가 false인 로드된 모델을 "active"(초록)가 아닌 "idle — module disabled"(회색)로 구분 표시합니다.
+
+### 9.14 Streaming 서버에서 Loitering이 발생했는데 Analysis Server Dashboard에는 표시되지 않음
+
+**증상:** streaming 서버 쪽 Alert Panel에는 배회 알림이 뜨는데, analysis 서버 자체 대시보드의 Loitering 카운트/이벤트 히스토리·실시간 오버레이에는 반영되지 않음.
+
+**원인:** `analysisApi.js`의 `/frame` 핸들러에서 `ctx.behavior.update()`(BehaviorEngine)는 `isLoitering`/`dwellTime`/`zoneId`가 주석된 **새 배열**을 반환하며 입력 배열(`enrichedObjects`)을 제자리에서 변경하지 않습니다. 그런데 이후의 `io.emit('detections', …)`, JSON 응답의 `tracked`, `_trackMeta` 갱신 루프, 스냅샷 트리거가 모두 behaviorEngine 호출 이전의 `enrichedObjects`를 그대로 참조하고 있어 `isLoitering`이 항상 `false`로 남았습니다. `behaviors` 배열(및 그로부터 계산되는 `_metrics.loiteringTotal`/DB persist)만 정상 값을 가져 streaming 쪽 1회성 알림은 뜨지만, 실시간 오버레이·detectionTracks 이력·소켓 브로드캐스트에는 반영되지 않았습니다.
+
+**해결 (코드 수정 적용됨):** `ctx.behavior.update()` 호출 직후 `enrichedObjects = behaviorsResult;`로 재대입 — 이후의 모든 다운스트림 코드가 동일한 annotated 배열을 참조하도록 통일했습니다. 부수적으로 `_persistLoitering`/`_persistFireSmoke`의 `.catch(() => {})`도 `console.warn`으로 교체해 저장 실패가 조용히 무시되지 않도록 함.
+
+### 9.15 Cumulative Analysis Results에 Missing/VIP/Blocklist/General 매칭 카운트가 없음
+
+**증상:** analysis 서버 대시보드의 "Cumulative Analysis Results" 섹션에 얼굴 갤러리 타입별(Missing/VIP/Blocklist/General) 매칭 건수가 전혀 표시되지 않음.
+
+**원인:** 실제 임베딩 매칭(`_persistentGallery` 비교 → `galleryType` 판정 → `faceMatchHistory` insert)은 오직 `pipelineManager.js`의 `_assignFaceIds()`에만 구현되어 있고, 이는 combined 모드의 로컬 캡처 루프 또는 streaming 모드의 `_processRemoteResult()`에서만 호출됩니다. 순수 `SERVER_MODE=analysis` 서버(`analysisApi.js`)는 얼굴 임베딩만 계산할 뿐 갤러리 비교 자체를 수행하지 않으며, `faceSearchSync.js`가 보내는 스냅샷도 의도적으로 embedding을 제외한 표시 전용 데이터라 analysis 서버에서 직접 매칭을 재현할 수 없습니다(§ `faceSearchSync.js` 상단 주석 참조 — 생체 임베딩을 analysis 서버로 보내지 않는 설계).
+
+**해결 (코드 수정 적용됨):** 매칭 자체는 계속 streaming 서버(또는 combined 모드)에서만 수행하되, `faceSearchSync.js`의 5초 주기 push에 `faceMatchHistory` **집계 카운트**(embedding·thumbnail 없이 `{ total, byType }`만)를 추가로 실어 보냅니다. analysis 서버는 `POST /api/analysis/face-search-conditions/sync`에서 이를 소스(IP)별로 저장해두고(30초 TTL로 연결 끊긴 streaming 서버의 값은 자동 만료), `GET /api/analysis/metrics`의 `faceMatches` 필드로 합산해 반환합니다. combined 모드는 로컬 `faceMatchHistory`를 직접 집계하므로 별도 동기화가 필요 없습니다. Dashboard의 "Cumulative Analysis Results"에 Missing/VIP/Blocklist/General 4개 행이 추가되었습니다.
+
+```bash
+# streaming 서버가 실제로 matches 필드를 보내는지 확인
+curl -s http://<analysis-host>:3001/api/analysis/metrics | jq '.faceMatches'
+```
+
+### 9.16 Analysis 서버의 SNAPSHOT_MAX_DIMENSION을 올려도 실제 Snapshot 해상도가 낮음
+
+**증상:** analysis 서버 `.env`의 `SNAPSHOT_MAX_DIMENSION`을 720(또는 그 이상)으로 설정했는데도, Analysis Server Dashboard(Detections 탭·Fullscreen 하단 DETECTION timeline)에 표시되는 person crop이 여전히 낮은 해상도로 저장됨.
+
+**원인:** analysis 서버는 카메라가 없으므로 `analysisApi.js`의 `POST /frame` 핸들러가 streaming 서버로부터 HTTP로 받은 `jpegBuffer` 하나만 가지고 자신의 `detectionSnapshots`를 직접 crop·저장합니다(Analysis Server Dashboard가 streaming 서버 없이도 단독으로 crop을 보여줄 수 있도록 추가된 경로). 그런데 streaming 서버는 이 프레임을 보내기 **직전** `pipelineManager.js`의 `_downscaleForAnalysis()`로 `AI_MAX_WIDTH`(기본 640, 이번에 960으로 상향) 폭까지 이미 축소합니다 — analysis 서버는 원본(native) 해상도 버퍼를 애초에 받지 못하므로, 이 crop의 해상도는 `min(AI_MAX_WIDTH, 카메라 실제 해상도)`로 상한이 걸립니다. `SNAPSHOT_MAX_DIMENSION`은 그 상한 안에서만 작동하는 "최댓값"일 뿐 — 실제로 받은 프레임 자체가 이미 그보다 작으면 아무 효과가 없습니다. 상세 아키텍처: `docs/design/Design_RTSP_Capture_Backend.md` §9.1/§9.2.
+
+**해결:** streaming 서버 `.env`의 `AI_MAX_WIDTH`를 페어링된 모든 analysis 서버의 `SNAPSHOT_MAX_DIMENSION` 중 최댓값 이상으로 설정합니다(예: analysis 서버가 720이면 streaming 서버는 최소 720, 여유를 두려면 960 이상). 이 값은 streaming 서버 쪽 `.env`에만 있으므로 analysis 서버 관리자가 직접 바꿀 수 없다는 점에 주의 — 두 서버가 다른 조직/관리자에 의해 운영되는 경우 사전에 합의가 필요합니다. `server/.env`/`.env.example`/`.env.streaming.example`/`.env.analysis.example`의 `AI_MAX_WIDTH` 기본값을 640→960으로 상향해 일반적인 `SNAPSHOT_MAX_DIMENSION`(640~720) 대비 여유를 확보했습니다. 이 값을 올려도 YOLO 추론은 항상 640×640 letterbox로 처리되므로 감지 정확도에는 영향이 없고, streaming↔analysis 간 네트워크/디코드 부하만 늘어납니다.
+
+```bash
+# streaming 서버가 실제로 보내는 프레임 폭 확인 (analysis 서버 로그 또는 응답의 frameWidth)
+curl -s -X POST http://<analysis-host>:3001/api/analysis/metrics | jq '.cameras'
+# streaming 서버 .env에서 현재 설정값 확인
+grep AI_MAX_WIDTH server/.env
+```
+
+### 9.17 Streaming 서버의 Fullscreen 하단 DETECTION timeline에서 Age Estimation / Gender Classification이 표시되지 않음
+
+**증상:** `SERVER_MODE=streaming` 서버에서 카메라를 Fullscreen으로 열고 하단 DETECTION timeline에서 person 트랙을 선택하면, 우측 Detail 패널에 Age (Est.) / Gender (Est.) 행이 아예 나타나지 않음 (Age/Gender 모듈이 analysis 서버에서 정상 동작 중이고 admin에서 켜져 있어도 마찬가지).
+
+**원인:** streaming 서버는 tracker가 analysis 서버에서 실행되므로, `pipelineManager.js`의 `_processRemoteResult()`가 자신만의 `ctx._trackMeta` 섀도 카피를 유지하며 30초 주기 flush(`ctx._activeFlushTimer`)로 `detectionTracks`에 영속화합니다 — 이 flush 로직 자체는 `estimatedAge`/`estimatedGender`를 이미 올바르게 저장하도록 되어 있었습니다([[project_age_estimation_streaming_gap]] 2026-07-14 수정분). 하지만 `_processRemoteResult()`가 analysis 서버 응답(`result.tracked`)을 받아 `ctx._trackMeta`에 적재하는 코드 자체가 `estimatedAge`/`estimatedGender` 필드를 읽지 않고 누락시키고 있었습니다 — combined/analysis 로컬 추론 경로(같은 파일의 다른 트랙메타 누적 지점)에는 이 필드가 이미 있었지만, streaming 전용 경로에는 처음부터 빠져 있었던 것으로, [[feedback_dual_frame_entry_points]]와 동일한 유형의 결함입니다.
+
+**해결 (코드 수정 적용됨):** `pipelineManager.js`의 `_processRemoteResult()` 내 `ctx._trackMeta` 갱신/생성 두 분기 모두에 `obj.estimatedAge`/`obj.estimatedGender` 반영을 추가했습니다. `result.tracked`(= `remoteTracked`)의 각 객체는 이미 analysis 서버(`analysisApi.js`)에서 계산되어 채워진 값을 담고 있으므로, 코드 변경만으로 다음 flush 사이클부터 streaming 서버 자신의 `detectionTracks`에도 반영되고 `DetectionsTimelineInline.tsx`의 Detail 패널에 표시됩니다.
+
 ---
 
 ## Revision History
@@ -1060,3 +1112,5 @@ curl http://localhost:3443/api/galleries/match-history?limit=5
 | 1.16 | 2026-07-12 | PromptPAR Download 자동화 반영 — §1.4 cloth-par 행을 "직접 배포"에서 `pyExport`(`exportPromptPAR.py`)로 갱신, 전제조건(CUDA GPU·git·Python 패키지)·Google Drive 폴더 다운로드 방식 운영 안내 추가, §5.1에 `PROMPTPAR_REPO_URL`/`_REPO_REF`/`_GDRIVE_FOLDER_ID`/`_CHECKPOINT_FILENAME`/`_CHECKPOINT_GDRIVE_FILE_ID`/`_VIT_BACKBONE_URL` 환경변수 6종 추가 |
 | 1.17 | 2026-07-13 | Model Deactivate 기능 반영 — §1.4에 YOLO 감지기를 제외한 8개 family의 Deactivate(메모리 언로드) 운영 안내 추가, analyticsConfig 토글과 독립적으로 동작함을 명시 |
 | 1.18 | 2026-07-14 | Active Model Persistence 반영 — §1.4에 Activate/Deactivate 선택이 서버 재시작 후에도 `settings` 테이블(row id `activeModels`)을 통해 유지됨을 안내, 저장된 모델 파일 삭제/카탈로그 제거 시 안전 폴백 동작 및 범위(pipelineManager 로컬 카메라 경로는 미포함) 명시 — [Design_AI_Model_Catalog.md §11](../design/Design_AI_Model_Catalog.md#11-active-model-persistence-server-restart-survival) 참조 |
+| 1.19 | 2026-07-15 | 섹션 9.13/9.14/9.15 추가 — Analysis Server Dashboard 3종 버그 수정: (1) Currently Analyzing/Loaded AI Models 데이터 소스 불일치 및 Age/Gender 모델 누락 수정, (2) `/frame` 핸들러의 behaviorEngine 결과가 다운스트림(소켓 emit·detectionTracks·스냅샷)에 반영되지 않던 문제 수정, (3) `faceSearchSync.js`에 갤러리 타입별 매칭 집계(`matches`) 전달 추가 — analysis 서버 `GET /api/analysis/metrics`가 `faceMatches` 필드로 Missing/VIP/Blocklist/General 카운트 반환 |
+| 1.20 | 2026-07-15 | 섹션 9.16/9.17 추가 — (1) analysis 서버 `SNAPSHOT_MAX_DIMENSION`이 streaming 서버 `AI_MAX_WIDTH`(기본 640→960 상향)에 의해 실질적으로 상한되는 문제 문서화 및 기본값 조정, 상세는 `docs/design/Design_RTSP_Capture_Backend.md` §9.2, (2) `pipelineManager.js` `_processRemoteResult()`의 streaming 모드 전용 `ctx._trackMeta` 누적 코드가 `estimatedAge`/`estimatedGender`를 누락시켜 Fullscreen DETECTION timeline Person Detail에 Age/Gender가 표시되지 않던 결함 수정 |

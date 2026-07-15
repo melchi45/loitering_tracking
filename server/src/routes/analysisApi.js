@@ -617,36 +617,65 @@ function _getEnabledModules() {
     .sort();
 }
 
+// Maps a _getLoadedModels() "service" key to the analyticsConfig module toggle(s) that
+// admin-enable it, so the dashboard can show "enabled but not loaded" / "loaded but
+// disabled" instead of two unrelated lists (Currently Analyzing vs Loaded AI Models
+// previously read from independent sources and could silently disagree).
+function _isServiceEnabled(service, cfg) {
+  switch (service) {
+    case 'detector':             return analyticsConfig.anyDetectionEnabled();
+    case 'ppe':                  return cfg.mask === true || cfg.hat === true;
+    case 'face-detect':
+    case 'face-embed':           return cfg.face === true;
+    case 'fire-smoke':           return cfg.fire === true || cfg.smoke === true;
+    case 'age-estimation':       return cfg.ageEstimation === true;
+    case 'gender-classification': return cfg.genderClassification === true;
+    default:                     return false;
+  }
+}
+
 function _getLoadedModels() {
   const path = require('path');
   const fs   = require('fs');
   const models = [];
+  const cfg = analyticsConfig.getConfig();
+  const withEnabled = (m) => ({ ...m, enabled: _isServiceEnabled(m.service, cfg) });
 
   if (_detector) {
     const mp = _detector.modelPath;
-    models.push({ name: path.basename(mp), path: mp, service: 'detector', loaded: true, exists: fs.existsSync(mp) });
+    models.push(withEnabled({ name: path.basename(mp), path: mp, service: 'detector', loaded: true, exists: fs.existsSync(mp) }));
   }
 
   if (_attrPipeline) {
     const ppe = _attrPipeline._ppe;
     if (ppe?.modelPath) {
       const mp = ppe.modelPath;
-      models.push({ name: path.basename(mp), path: mp, service: 'ppe', loaded: ppe.ready ?? false, exists: fs.existsSync(mp) });
+      models.push(withEnabled({ name: path.basename(mp), path: mp, service: 'ppe', loaded: ppe.ready ?? false, exists: fs.existsSync(mp) }));
     }
     const face = _attrPipeline._face;
     if (face?.scrfdPath) {
       const mp = face.scrfdPath;
-      models.push({ name: path.basename(mp), path: mp, service: 'face-detect', loaded: face.ready ?? false, exists: fs.existsSync(mp) });
+      models.push(withEnabled({ name: path.basename(mp), path: mp, service: 'face-detect', loaded: face.ready ?? false, exists: fs.existsSync(mp) }));
     }
     if (face?.arcfacePath) {
       const mp = face.arcfacePath;
-      models.push({ name: path.basename(mp), path: mp, service: 'face-embed', loaded: face.ready ?? false, exists: fs.existsSync(mp) });
+      models.push(withEnabled({ name: path.basename(mp), path: mp, service: 'face-embed', loaded: face.ready ?? false, exists: fs.existsSync(mp) }));
     }
   }
 
   if (_fireSmokeService) {
     const mp = _fireSmokeService.modelPath;
-    models.push({ name: path.basename(mp), path: mp, service: 'fire-smoke', loaded: true, exists: fs.existsSync(mp) });
+    models.push(withEnabled({ name: path.basename(mp), path: mp, service: 'fire-smoke', loaded: true, exists: fs.existsSync(mp) }));
+  }
+
+  if (_ageEstimation?.modelPath) {
+    const mp = _ageEstimation.modelPath;
+    models.push(withEnabled({ name: path.basename(mp), path: mp, service: 'age-estimation', loaded: _ageEstimation.ready ?? false, exists: fs.existsSync(mp) }));
+  }
+
+  if (_genderClassification?.modelPath) {
+    const mp = _genderClassification.modelPath;
+    models.push(withEnabled({ name: path.basename(mp), path: mp, service: 'gender-classification', loaded: _genderClassification.ready ?? false, exists: fs.existsSync(mp) }));
   }
 
   return models;
@@ -1401,7 +1430,15 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
 
     // 5. Behavior engine
     const behaviorsResult = ctx.behavior.update(cameraId, enrichedObjects, timestamp || new Date().toISOString());
-  const loiteringCount = (behaviorsResult || []).filter((b) => b.isLoitering || b.type === 'loitering').length;
+    const loiteringCount = (behaviorsResult || []).filter((b) => b.isLoitering || b.type === 'loitering').length;
+    // behaviorEngine.update() returns a NEW array (1:1 with the input, annotated with
+    // isLoitering/dwellTime/zoneId) rather than mutating enrichedObjects in place. Every
+    // downstream consumer (socket 'detections' emit, JSON response's `tracked`, the
+    // _trackMeta persistence loop, snapshot triggers) must read the annotated copy —
+    // otherwise isLoitering/zoneId/dwellTime silently stay false/null everywhere except
+    // inside the `behaviors` array itself, and loitering never reaches detectionTracks,
+    // live overlays, or the streaming server's remoteTracked bboxes.
+    enrichedObjects = behaviorsResult || enrichedObjects;
 
     // 6. Fire / smoke
     let fireSmoke = [];
@@ -1570,8 +1607,10 @@ router.post('/frame', _parseFrameBody, async (req, res) => {
         }
       }
 
-      if (fireSmoke.length > 0) _persistFireSmoke(db, io, cameraId, cameraName, ts, fireSmoke, jpegBuffer, frameWidth, frameHeight).catch(() => {});
-      if (behaviors.length > 0) _persistLoitering(db, io, cameraId, cameraName, ts, behaviors, jpegBuffer, frameWidth, frameHeight).catch(() => {});
+      if (fireSmoke.length > 0) _persistFireSmoke(db, io, cameraId, cameraName, ts, fireSmoke, jpegBuffer, frameWidth, frameHeight)
+        .catch((err) => console.warn(`[AnalysisAPI][${cameraId.slice(0,8)}] Fire/smoke persist error:`, err.message));
+      if (behaviors.length > 0) _persistLoitering(db, io, cameraId, cameraName, ts, behaviors, jpegBuffer, frameWidth, frameHeight)
+        .catch((err) => console.warn(`[AnalysisAPI][${cameraId.slice(0,8)}] Loitering persist error:`, err.message));
 
       // ── snapshot:new for regular tracked objects (isFirstSeen / isLoitering / hasFaceMatch) ─
       // Uses the same snapshotSvc.shouldSave() logic as combined/streaming modes so that
@@ -1647,6 +1686,31 @@ router.post('/face-embed', express.raw({ type: 'image/jpeg', limit: '10mb' }), a
   }
 });
 
+// ── Remote face-match stats (from streaming servers' faceMatchHistory, counts only) ──
+// Keyed by requester IP so multiple streaming servers pointed at the same analysis
+// server are aggregated rather than overwriting each other. Entries older than
+// REMOTE_MATCH_STATS_TTL_MS are dropped from the aggregate — a disconnected streaming
+// server's last-known counts should not linger forever on the analysis dashboard.
+const _remoteFaceMatchStats = new Map(); // sourceKey → { total, byType, updatedAt }
+const REMOTE_MATCH_STATS_TTL_MS = 30_000; // 5s sync interval × 6 — several missed ticks
+
+function _getAggregatedFaceMatchStats(db) {
+  const byType = { missing: 0, vip: 0, blocklist: 0, general: 0 };
+  let total = 0;
+  const now = Date.now();
+  for (const [key, stats] of _remoteFaceMatchStats) {
+    if (now - stats.updatedAt > REMOTE_MATCH_STATS_TTL_MS) { _remoteFaceMatchStats.delete(key); continue; }
+    total += stats.total;
+    for (const t of Object.keys(byType)) byType[t] += stats.byType[t] || 0;
+  }
+  // Include this process's own faceMatchHistory too, in case a future local-matching
+  // path (or a condition registered directly on this dashboard) ever populates it.
+  const local = faceSearchConditions.summarizeMatches(db);
+  total += local.total;
+  for (const t of Object.keys(byType)) byType[t] += local.byType[t] || 0;
+  return { total, byType };
+}
+
 // ── POST /api/analysis/face-search-conditions/sync ────────────────────────────
 // Bidirectional: receives a full gallery/face snapshot from a streaming server and
 // mirrors it locally (tagged source:'synced', display-only — never used for matching
@@ -1657,6 +1721,10 @@ router.post('/face-search-conditions/sync', express.json({ limit: '5mb' }), (req
   try {
     const db = req.app.get('db');
     faceSearchConditions.applyReconcile(db, req.body);
+    const matches = req.body?.matches;
+    if (matches && typeof matches.total === 'number' && matches.byType) {
+      _remoteFaceMatchStats.set(req.ip, { total: matches.total, byType: matches.byType, updatedAt: Date.now() });
+    }
     res.json({ success: true, ...faceSearchConditions.exportLocal(db) });
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
@@ -1753,6 +1821,7 @@ router.get('/metrics', (req, res) => {
     system: getSystemMetrics(),
     onnxProvider: getActiveProviderMode(),
     faceSearch: faceSearchConditions.summarize(req.app.get('db')),
+    faceMatches: _getAggregatedFaceMatchStats(req.app.get('db')),
   });
 });
 

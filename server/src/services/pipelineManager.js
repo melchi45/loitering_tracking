@@ -1777,39 +1777,69 @@ class PipelineManager {
       models: this._getLoadedModels(),
       system: getSystemMetrics(),
       faceSearch: faceSearchConditions.summarize(this._db),
+      faceMatches: faceSearchConditions.summarizeMatches(this._db),
     };
+  }
+
+  // Mirrors analysisApi.js's _isServiceEnabled() — keep both in sync. Maps a
+  // _getLoadedModels() "service" key to the analyticsConfig module toggle(s) that
+  // admin-enable it, so "Currently Analyzing" and "Loaded AI Models" agree instead of
+  // reading two unrelated sources.
+  _isModelServiceEnabled(service, cfg) {
+    switch (service) {
+      case 'detector':              return analyticsConfig.anyDetectionEnabled();
+      case 'ppe':                   return cfg.mask === true || cfg.hat === true;
+      case 'face-detect':
+      case 'face-embed':            return cfg.face === true;
+      case 'fire-smoke':            return cfg.fire === true || cfg.smoke === true;
+      case 'age-estimation':        return cfg.ageEstimation === true;
+      case 'gender-classification': return cfg.genderClassification === true;
+      default:                      return false;
+    }
   }
 
   _getLoadedModels() {
     const path = require('path');
     const fs   = require('fs');
     const models = [];
+    const cfg = analyticsConfig.getConfig();
+    const withEnabled = (m) => ({ ...m, enabled: this._isModelServiceEnabled(m.service, cfg) });
 
     if (this._detector) {
       const mp = this._detector.modelPath;
-      models.push({ name: path.basename(mp), path: mp, service: 'detector', loaded: true, exists: fs.existsSync(mp) });
+      models.push(withEnabled({ name: path.basename(mp), path: mp, service: 'detector', loaded: true, exists: fs.existsSync(mp) }));
     }
 
     if (this._attrPipeline) {
       const ppe = this._attrPipeline._ppe;
       if (ppe?.modelPath) {
         const mp = ppe.modelPath;
-        models.push({ name: path.basename(mp), path: mp, service: 'ppe', loaded: ppe.ready ?? false, exists: fs.existsSync(mp) });
+        models.push(withEnabled({ name: path.basename(mp), path: mp, service: 'ppe', loaded: ppe.ready ?? false, exists: fs.existsSync(mp) }));
       }
       const face = this._attrPipeline._face;
       if (face?.scrfdPath) {
         const mp = face.scrfdPath;
-        models.push({ name: path.basename(mp), path: mp, service: 'face-detect', loaded: face.ready ?? false, exists: fs.existsSync(mp) });
+        models.push(withEnabled({ name: path.basename(mp), path: mp, service: 'face-detect', loaded: face.ready ?? false, exists: fs.existsSync(mp) }));
       }
       if (face?.arcfacePath) {
         const mp = face.arcfacePath;
-        models.push({ name: path.basename(mp), path: mp, service: 'face-embed', loaded: face.ready ?? false, exists: fs.existsSync(mp) });
+        models.push(withEnabled({ name: path.basename(mp), path: mp, service: 'face-embed', loaded: face.ready ?? false, exists: fs.existsSync(mp) }));
       }
     }
 
     if (this._fireSmokeService) {
       const mp = this._fireSmokeService.modelPath;
-      models.push({ name: path.basename(mp), path: mp, service: 'fire-smoke', loaded: true, exists: fs.existsSync(mp) });
+      models.push(withEnabled({ name: path.basename(mp), path: mp, service: 'fire-smoke', loaded: true, exists: fs.existsSync(mp) }));
+    }
+
+    if (this._ageEstimation?.modelPath) {
+      const mp = this._ageEstimation.modelPath;
+      models.push(withEnabled({ name: path.basename(mp), path: mp, service: 'age-estimation', loaded: this._ageEstimation.ready ?? false, exists: fs.existsSync(mp) }));
+    }
+
+    if (this._genderClassification?.modelPath) {
+      const mp = this._genderClassification.modelPath;
+      models.push(withEnabled({ name: path.basename(mp), path: mp, service: 'gender-classification', loaded: this._genderClassification.ready ?? false, exists: fs.existsSync(mp) }));
     }
 
     return models;
@@ -2070,6 +2100,8 @@ class PipelineManager {
             if (obj.cloth)    existing.cloth    = obj.cloth;
             if (obj.zoneId)   existing.zoneId   = obj.zoneId;
             if (obj.zoneName) existing.zoneName = obj.zoneName;
+            if (obj.estimatedAge)    existing.estimatedAge    = obj.estimatedAge;
+            if (obj.estimatedGender) existing.estimatedGender = obj.estimatedGender;
           } else {
             _ctx._trackMeta.set(id, {
               firstSeenAt:  _ts,
@@ -2084,6 +2116,8 @@ class PipelineManager {
               zoneName:     obj.zoneName    ?? null,
               color:        obj.color       ?? null,
               cloth:        obj.cloth       ?? null,
+              estimatedAge:    obj.estimatedAge    ?? null,
+              estimatedGender: obj.estimatedGender ?? null,
             });
           }
         }

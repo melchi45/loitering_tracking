@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAPTURE-002 |
-| **Version** | 1.8 |
+| **Version** | 1.9 |
 | **Status** | Active |
-| **Date** | 2026-07-09 |
+| **Date** | 2026-07-15 |
 | **Ops Guide** | [RTSP_Capture_Backend_Setup.md](../ops/RTSP_Capture_Backend_Setup.md) |
 | **Related Design** | [Design_FFmpeg_RTSP_Capture.md](../design/Design_FFmpeg_RTSP_Capture.md) · [Design_RTSP_WebRTC_Architecture.md](../design/Design_RTSP_WebRTC_Architecture.md) |
 
@@ -592,7 +592,7 @@ stdout: [FF D8 FF ... FF D9][FF D8 FF ... FF D9][FF D8 FF ... (불완전)]
 | `GSTREAMER_HW_ACCEL` | `auto` | gstreamer | GStreamer 하드웨어 가속 모드: `auto` / `nvdec` / `vaapi` / `software` |
 | `PYAV_HW_ACCEL` | `none` | pyav | PyAV 하드웨어 가속 (인라인 사이드카): `none` / `cuda` / `videotoolbox` |
 | `MAX_PIPELINES` | `0` | 전체 | 동시 캡처 파이프라인 최대 수 (0=무제한) |
-| `AI_MAX_WIDTH` | `640` | streaming (Node.js) | (§9.1) streaming 서버가 remote analysis 서버로 전송하는 다운스케일 사본의 최대 가로 픽셀 |
+| `AI_MAX_WIDTH` | `960` | streaming (Node.js) | (§9.1, §9.2) streaming 서버가 remote analysis 서버로 전송하는 다운스케일 사본의 최대 가로 픽셀 — analysis 서버 자신의 SNAPSHOT_MAX_DIMENSION 이상으로 설정할 것 |
 | `JPEG_QUALITY` | `85` | ingest-daemon | AI JPEG 인코딩 품질(1-95) — 항상 원본(native) 해상도로 인코딩 |
 
 ### 9.1 AI 프레임 해상도와 `detectionSnapshots` crop 화질
@@ -604,7 +604,7 @@ stdout: [FF D8 FF ... FF D9][FF D8 FF ... FF D9][FF D8 FF ... (불완전)]
 
 이 설계로 두 목표를 동시에 달성합니다: (1) remote analysis 서버로 가는 HTTP 페이로드/디코드 부하는 `AI_MAX_WIDTH`로 계속 작게 유지되고, (2) `detectionSnapshots` crop은 항상 원본 해상도에서 추출되어 `AI_MAX_WIDTH` 설정과 무관하게 고화질입니다.
 
-**`AI_MAX_WIDTH`를 낮추거나 높여도 crop 화질에는 영향이 없습니다** — 이 값은 오직 analysis 서버로 보내는 사본의 네트워크/CPU 부하만 조절합니다. crop 화질은 이제 카메라의 실제 해상도(ingest-daemon이 그대로 전달)와 `SNAPSHOT_MAX_DIMENSION`/`SNAPSHOT_JPEG_QUALITY`(`docs/design/Design_Detection_Snapshot_Search.md` §14)에만 좌우됩니다.
+**`AI_MAX_WIDTH`를 낮추거나 높여도 *이 streaming 서버 자신의* crop 화질에는 영향이 없습니다** — 이 값은 오직 analysis 서버로 보내는 사본의 네트워크/CPU 부하만 조절합니다. 이 서버가 저장하는 crop 화질은 카메라의 실제 해상도(ingest-daemon이 그대로 전달)와 `SNAPSHOT_MAX_DIMENSION`/`SNAPSHOT_JPEG_QUALITY`(`docs/design/Design_Detection_Snapshot_Search.md` §14)에만 좌우됩니다. **단, remote analysis 서버 자신이 저장하는 crop은 예외입니다 — §9.2 참조.**
 
 **부하 참고:** ingest-daemon → Node.js 홉은 이제 원본 해상도를 항상 전송하므로 카메라 해상도가 높을수록(예: 4K) 이 홉의 CPU(JPEG 인코딩/디코드)·네트워크가 증가합니다. `!ctx.useWebRTC` 카메라(WebRTC 미사용, 브라우저에 raw JPEG 프레임 직접 전송)의 경우 브라우저로 가는 페이로드도 함께 커집니다. GPU/ONNX 추론 시간 자체는 영향받지 않습니다(입력 텐서가 항상 640×640으로 고정).
 
@@ -627,6 +627,16 @@ GSTREAMER_HW_ACCEL=nvdec
 CAPTURE_BACKEND=ffmpeg
 WEBRTC_ENGINE=mediamtx
 ```
+
+### 9.2 예외: remote analysis 서버 자신의 `detectionSnapshots` — `AI_MAX_WIDTH`에 해상도가 그대로 제한됨
+
+§9.1의 "AI_MAX_WIDTH는 crop 화질에 영향 없음" 결론은 **streaming 서버 자신**이 저장하는 crop(`_processRemoteResult()`, 원본 버퍼에서 추출)에만 해당합니다. 순수 `SERVER_MODE=analysis` 서버(카메라 없이 HTTP로 프레임을 위임받는 구성, `docs/ops/Distributed_AI_Pipeline_Setup.md`)는 자신의 Dashboard(`AnalysisServerDashboard.tsx`)에서도 crop을 보여주기 위해 `analysisApi.js`의 `POST /frame` 핸들러에서 **독자적으로** `detectionSnapshots`를 저장합니다. 이 경로가 크롭하는 소스는 그 요청의 `jpegBuffer` — 즉 streaming 서버가 `_downscaleForAnalysis()`로 `AI_MAX_WIDTH` 폭까지 이미 축소해서 보낸 바로 그 사본입니다. analysis 서버는 native 해상도 버퍼를 애초에 가지고 있지 않으므로, 이 crop의 최대 해상도는 **항상 `min(AI_MAX_WIDTH, 카메라 실제 해상도)`로 상한이 걸립니다.**
+
+**증상:** analysis 서버의 `SNAPSHOT_MAX_DIMENSION`을 720/1080 등으로 올려도, 페어링된 streaming 서버의 `AI_MAX_WIDTH`가 더 낮으면(예: 기본값 640이던 구버전 배포) crop 해상도가 그 값에서 더 이상 올라가지 않습니다 — analysis 서버 관리자 입장에서는 자신의 설정이 무시되는 것처럼 보입니다.
+
+**해결:** streaming 서버의 `AI_MAX_WIDTH`를 페어링된 analysis 서버(들) 중 가장 큰 `SNAPSHOT_MAX_DIMENSION` 이상으로 설정합니다. 두 값이 서로 다른 서버(종종 다른 관리자)의 `.env`에 있으므로 자동으로 동기화되지 않습니다 — 배포 시 수동으로 맞춰야 합니다. 기본값을 640→960으로 상향해 일반적인 `SNAPSHOT_MAX_DIMENSION`(640~720) 대비 여유를 두었습니다(`server/.env.example`, `.env.streaming.example`, `.env.analysis.example`).
+
+이 값을 올리면 streaming↔analysis 간 네트워크/디코드 부하가 늘어나지만(§9.1 "부하 참고" 동일 트레이드오프), YOLO 추론 자체는 어떤 입력 해상도든 640×640 letterbox로 처리되므로 감지 정확도에는 영향이 없습니다.
 
 ---
 
@@ -797,3 +807,4 @@ inp.read_timeout = int(APP_RTP_READ_TIMEOUT * 1_000_000)  # μs 단위
 | 1.6 | 2026-07-02 | §10.4 추가 — 카메라 삭제 시 ingest-daemon DELETE가 무재시도·무로그로 실패해 삭제된 카메라를 계속 재연결 시도하던 결함 수정 (재시도 1회 + 로그 + stopCamera()가 정리 작업을 await) |
 | 1.7 | 2026-07-09 | §9 환경변수 표에 `AI_MAX_WIDTH`/`JPEG_QUALITY` 추가, §9.1 신규 — AI 프레임(YOLO 추론+crop 공용 소스 원본) 해상도가 `detectionSnapshots` crop 화질의 실제 상한임을 문서화; 기본값 640→1920 상향 근거 및 CPU/대역폭 트레이드오프 명시 |
 | 1.8 | 2026-07-09 | §9.1 재작성 — v1.7의 "AI_MAX_WIDTH 상향" 방식을 아키텍처 수정으로 대체: `ingest_daemon.py`는 항상 원본(native) 해상도를 전송(리사이즈 제거), `AI_MAX_WIDTH`는 streaming 모드에서 Node.js(`pipelineManager.js`)가 remote analysis 서버 전송 직전 다운스케일하는 사본에만 적용, analysis 결과 bbox는 `_scaleBbox()`로 원본 좌표계 보정 후 crop — analysis 서버 부하와 crop 화질을 완전히 분리 |
+| 1.9 | 2026-07-15 | §9.2 신규 — remote analysis 서버 자신이 `analysisApi.js` `/frame`에서 직접 저장하는 `detectionSnapshots`(Analysis Server Dashboard 전용 crop)는 §9.1의 "AI_MAX_WIDTH 무관" 결론 예외임을 문서화(analysis 서버는 native 버퍼가 없어 streaming 서버가 보낸 다운스케일 사본에서만 crop 가능 — SNAPSHOT_MAX_DIMENSION을 올려도 AI_MAX_WIDTH가 더 낮으면 해상도가 그 값에 상한됨); §9 환경변수 표·`.env`/`.env.example`/`.env.streaming.example`/`.env.analysis.example`의 `AI_MAX_WIDTH` 기본값 640→960 상향 |

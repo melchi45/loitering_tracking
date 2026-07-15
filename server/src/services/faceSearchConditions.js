@@ -30,6 +30,21 @@ function summarize(db) {
   return { total: faces.length, byType };
 }
 
+/**
+ * { total, byType } over faceMatchHistory (actual live match EVENTS, not registered
+ * gallery faces — see summarize() above for that). Cheap enough for /metrics polling and
+ * for the 5s faceSearchSync push: only counts, no embeddings/thumbnails leave the process.
+ */
+function summarizeMatches(db) {
+  const matches = db.find('faceMatchHistory', {});
+  const byType = { missing: 0, vip: 0, blocklist: 0, general: 0 };
+  for (const m of matches) {
+    const type = m.galleryType || 'general';
+    if (Object.prototype.hasOwnProperty.call(byType, type)) byType[type]++;
+  }
+  return { total: matches.length, byType };
+}
+
 /** Full list with galleryType resolved, embedding excluded — for the dashboard detail view. */
 function listGrouped(db) {
   const galleries = db.all('faceGalleries');
@@ -94,4 +109,4 @@ function applyReconcile(db, snapshot) {
   }
 }
 
-module.exports = { GALLERY_TYPES, summarize, listGrouped, exportLocal, applyReconcile };
+module.exports = { GALLERY_TYPES, summarize, summarizeMatches, listGrouped, exportLocal, applyReconcile };

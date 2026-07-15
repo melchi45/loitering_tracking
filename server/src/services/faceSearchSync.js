@@ -7,7 +7,10 @@
  *
  * Outbound (streaming → analysis): this server's own conditions, embedding stripped —
  * the analysis-side copy is display-only (its "Active Face Search" dashboard count), never
- * consulted for matching there.
+ * consulted for matching there. Also carries aggregate faceMatchHistory counts (matches
+ * this server has actually made against its gallery) — counts only, no biometric data —
+ * so the analysis server's "Cumulative Analysis Results" can show Missing/VIP/Blocklist/
+ * General match totals even though the matching itself only ever runs here.
  *
  * Inbound (analysis → streaming, same round trip): the analysis server's response carries
  * ITS OWN locally-registered conditions (e.g. added directly on its dashboard), WITH
@@ -40,7 +43,8 @@ function _buildOutboundSnapshot(db) {
     bbox: f.bbox, score: f.score, createdAt: f.createdAt,
     // embedding intentionally omitted — the analysis-side mirror is display-only
   }));
-  return { galleries, faces };
+  const matches = faceSearchConditions.summarizeMatches(db);
+  return { galleries, faces, matches };
 }
 
 function _postJson(base, pathname, body) {

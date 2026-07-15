@@ -34,6 +34,10 @@ type OnnxModel = {
   service: string;
   loaded: boolean;
   exists: boolean;
+  // Whether the analyticsConfig module(s) that use this model are currently toggled on
+  // by the admin — independent of `loaded` (a model can be loaded in memory but idle
+  // because its module is off, or a module can be on while its model failed to load).
+  enabled: boolean;
 };
 
 type MetricsResponse = {
@@ -85,6 +89,10 @@ type MetricsResponse = {
     loitering: number;
   };
   faceSearch?: {
+    total: number;
+    byType: Record<GalleryType, number>;
+  };
+  faceMatches?: {
     total: number;
     byType: Record<GalleryType, number>;
   };
@@ -547,20 +555,27 @@ export default function AnalysisServerDashboard({
               <div className="rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-4">
                 <p className="text-[10px] uppercase tracking-[0.22em] text-slate-500">{t.dashLoadedOnnxModels}</p>
                 <div className="mt-3 space-y-1.5">
-                  {metrics?.models && metrics.models.length > 0 ? metrics.models.map((m) => (
-                    <div key={m.service} className="flex items-center justify-between gap-2">
-                      <span className="truncate text-xs text-slate-300" title={m.path}>{m.name}</span>
-                      <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-                        m.loaded && m.exists
-                          ? 'bg-emerald-500/15 text-emerald-300'
-                          : !m.exists
-                          ? 'bg-rose-500/15 text-rose-300'
-                          : 'bg-amber-500/15 text-amber-300'
-                      }`}>
-                        {m.loaded && m.exists ? 'loaded' : !m.exists ? 'missing' : 'not ready'}
-                      </span>
-                    </div>
-                  )) : (
+                  {metrics?.models && metrics.models.length > 0 ? metrics.models.map((m) => {
+                    // "active" = loaded AND the module that uses it is currently toggled
+                    // on — this is what "Currently Analyzing" above actually reflects.
+                    // "idle" = loaded but its module is off, so it agrees with (not
+                    // contradicts) an empty "Currently Analyzing" list for that module.
+                    const status = !m.exists ? 'missing' : !m.loaded ? 'not ready' : m.enabled ? 'active' : 'idle';
+                    const statusClass = {
+                      active:     'bg-emerald-500/15 text-emerald-300',
+                      idle:       'bg-slate-500/15 text-slate-400',
+                      missing:    'bg-rose-500/15 text-rose-300',
+                      'not ready': 'bg-amber-500/15 text-amber-300',
+                    }[status];
+                    return (
+                      <div key={m.service} className="flex items-center justify-between gap-2">
+                        <span className="truncate text-xs text-slate-300" title={m.path}>{m.name}</span>
+                        <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${statusClass}`}>
+                          {status}
+                        </span>
+                      </div>
+                    );
+                  }) : (
                     <p className="text-xs text-slate-500">{metrics ? t.dashNoModelLoaded : t.dashWaitingEllipsis}</p>
                   )}
                 </div>
@@ -615,6 +630,29 @@ export default function AnalysisServerDashboard({
                   </div>
                 );
               })}
+              {metrics?.faceMatches && (
+                <>
+                  <p className="pt-1 text-[10px] uppercase tracking-[0.18em] text-slate-600">Face Matches</p>
+                  {([
+                    { label: 'Missing',   value: metrics.faceMatches.byType.missing,   valueClass: 'text-rose-300' },
+                    { label: 'VIP',       value: metrics.faceMatches.byType.vip,       valueClass: 'text-purple-300' },
+                    { label: 'Blocklist', value: metrics.faceMatches.byType.blocklist, valueClass: 'text-orange-300' },
+                    { label: 'General',   value: metrics.faceMatches.byType.general,   valueClass: 'text-sky-200' },
+                  ] as const).map(({ label, value, valueClass }) => (
+                    <div
+                      key={label}
+                      className="flex items-center justify-between rounded-2xl border border-slate-800 bg-slate-900/80 px-4 py-3 cursor-pointer hover:border-slate-600 transition-colors"
+                      onClick={() => setShowFaceSearch(true)}
+                    >
+                      <span className="text-sm text-slate-400">{label}</span>
+                      <div className="flex items-center gap-2">
+                        <span className={`text-lg font-semibold ${valueClass}`}>{value}</span>
+                        <span className="text-[10px] text-slate-600">→</span>
+                      </div>
+                    </div>
+                  ))}
+                </>
+              )}
             </div>
           </div>
         </section>
@@ -628,26 +666,34 @@ export default function AnalysisServerDashboard({
             <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3">
               {metrics.models.map((model) => {
                 const serviceLabel: Record<string, string> = {
-                  detector:        t.dashModelDetector,
-                  ppe:             t.dashModelPpe,
-                  'face-detect':   t.dashModelFaceDetect,
-                  'face-embed':    t.dashModelFaceEmbed,
-                  'fire-smoke':    t.dashModelFireSmoke,
+                  detector:              t.dashModelDetector,
+                  ppe:                   t.dashModelPpe,
+                  'face-detect':         t.dashModelFaceDetect,
+                  'face-embed':          t.dashModelFaceEmbed,
+                  'fire-smoke':          t.dashModelFireSmoke,
+                  'age-estimation':      'Age Estimation',
+                  'gender-classification': 'Gender Classification',
                 };
                 const label = serviceLabel[model.service] ?? model.service;
-                const ok   = model.loaded && model.exists;
+                // active = loaded, exists, AND its analyticsConfig module is toggled on —
+                // this is what actually contributes to "Currently Analyzing" above.
+                // idle = loaded fine but the admin has the module switched off.
+                const ok   = model.loaded && model.exists && model.enabled;
+                const idle = model.loaded && model.exists && !model.enabled;
                 const warn = model.exists && !model.loaded;
                 return (
                   <div
                     key={model.path}
                     className={`flex items-start gap-3 rounded-2xl border px-4 py-3 ${
                       ok   ? 'border-emerald-500/20 bg-emerald-950/20' :
+                      idle ? 'border-slate-700/40 bg-slate-900/40' :
                       warn ? 'border-amber-500/20 bg-amber-950/20' :
                              'border-rose-500/20 bg-rose-950/20'
                     }`}
                   >
                     <span className={`mt-1 h-2 w-2 shrink-0 rounded-full ${
                       ok   ? 'bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]' :
+                      idle ? 'bg-slate-500' :
                       warn ? 'bg-amber-400' :
                              'bg-rose-500'
                     }`} />
@@ -656,10 +702,11 @@ export default function AnalysisServerDashboard({
                       <p className="mt-0.5 text-xs text-slate-400">{label}</p>
                       <p className={`mt-0.5 text-[10px] ${
                         ok   ? 'text-emerald-400' :
+                        idle ? 'text-slate-500' :
                         warn ? 'text-amber-400' :
                                'text-rose-400'
                       }`}>
-                        {!model.exists ? t.dashFileMissing : !model.loaded ? t.dashLoadFailed : t.dashLoadedOk}
+                        {!model.exists ? t.dashFileMissing : !model.loaded ? t.dashLoadFailed : idle ? 'Loaded — module disabled' : t.dashLoadedOk}
                       </p>
                     </div>
                   </div>
