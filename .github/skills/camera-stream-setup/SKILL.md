@@ -270,6 +270,10 @@ ingest-daemon crash
 [INFO]    [Start] ingest reregister: HTTP 200
 ```
 
+**버그 수정 — 계층 2 watchdog 재진입 가드 누락으로 인한 restart storm (2026-07-15):** `frameWatchdogTimer`의 `setInterval(async () => {...}, 8_000)` 콜백에 재진입 가드가 없어, `_ingestRemoveCamera()`+`_ingestRegisterCamera()` 재등록 왕복(재시도 포함 최대 ~15.5s)이 8초 폴링 주기보다 오래 걸리면 다음 tick이 이전 복구가 끝나기 전에 또 발동 — 같은 카메라에 remove+register를 중복 실행해 연결이 안정화되기도 전에 스스로 다시 끊는 무한 루프가 발생했음. TID-A800(`192.168.214.32`, RTSP 핸드셰이크 자체가 15초 이상 소요)에서 실측·재현, 로그상 "Stopped → removed → AI loop starting"이 8~25초 주기로 끝없이 반복되고 `AI frame #1`을 넘기지 못하는 패턴으로 나타남 — WebRTC "연결 안 됨"·전반적 "재생 끊김" 증상의 공통 원인이었음(재등록 왕복이 순간적으로 8초를 넘기면 어느 카메라에서도 재현 가능). 수정: `ctx._watchdogBusy` 재진입 가드 추가 + `capture.start()` 이후 `lastFrameAt`을 재시작 완료 시점 기준으로 재갱신(재등록 소요 시간만큼 유예가 깎이지 않도록). 소스: `server/src/services/pipelineManager.js`. 상세: `docs/design/Design_RTSP_Capture_Backend.md` §6.7.
+
+**신규 — `Camera.webrtcVideoOnly` (세션 부하 완화, 2026-07-15):** 위 재진입 가드 수정 후에도 TID-A800은 stall이 완전히 사라지지 않았음 — ping(0% 손실)과 AI 디코딩 멀티스레드화(`thread_type=AUTO`)로도 해결 안 됨, 진짜 원인은 카메라 자체의 동시 RTSP 세션 처리 한계였음(실측: 물리 카메라 1대당 세션 총량을 8→6으로 줄이자 양쪽 채널 모두 안정화). `PUT /api/cameras/:id { webrtcVideoOnly: true }`로 카메라별 audio+App RTP RTP 세션을 생략하고 AI+video만 유지(카메라당 세션 4→2) — mediasoup WHEP 소비자 쪽엔 오디오/데이터채널이 없다는 것만 다를 뿐 영상 재생엔 영향 없음. RTSP 세션 부하가 큰(동시 채널 다수 등록·저사양 인코더) 카메라에 적용. 소스: `server/src/services/webrtc/mediasoupEngine.js` `addCameraStream()` opts.videoOnly. 상세: `docs/design/Design_RTSP_Capture_Backend.md` §6.7.
+
 ### 환경변수
 
 | 변수 | 기본값 | 설명 |

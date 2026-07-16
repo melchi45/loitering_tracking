@@ -119,8 +119,34 @@ async function killExistingDaemon() {
   if (process.platform !== 'win32') {
     try { execSync("pkill -f 'ingest_daemon.py'", { stdio: 'ignore' }); } catch (_) {}
   }
-  // 포트가 비워질 때까지 잠깐 대기 (execSync('sleep ...')은 Windows에 없음)
-  await new Promise((resolve) => setTimeout(resolve, 500));
+  // Poll for the port to actually free up instead of a fixed 500ms sleep
+  // (2026-07-16) — ingest_daemon.py's graceful SIGTERM shutdown (stop_all(),
+  // joining every camera's threads with up to an 8s timeout each) can take
+  // several seconds under real fleet churn, occasionally much longer than
+  // that when threads don't exit cleanly (see docs/design/
+  // Design_RTSP_Capture_Backend.md §6.11/§6.12). A fixed 500ms wait let
+  // startDaemon() race against a still-listening old process, causing a
+  // reliable "Address already in use" crash on the fresh spawn. Wait up to
+  // 8s for the port to clear on its own; if it's still held after that,
+  // escalate to SIGKILL (systemd's TERM-then-KILL pattern) so the restart
+  // always eventually succeeds instead of failing outright.
+  const GRACE_MS = 8_000;
+  const deadline = Date.now() + GRACE_MS;
+  while (Date.now() < deadline) {
+    if (_getPortPid().length === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  const stillListening = _getPortPid();
+  if (stillListening.length > 0) {
+    console.warn(`[ingest:restart] SIGTERM 후 ${GRACE_MS}ms 내 종료되지 않음 — SIGKILL로 강제 종료: ${stillListening.join(', ')}`);
+    for (const pid of stillListening) {
+      try {
+        if (process.platform === 'win32') execSync(`taskkill /PID ${pid} /F`, { stdio: 'ignore' });
+        else process.kill(pid, 'SIGKILL');
+      } catch (_) { /* already dead */ }
+    }
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
 }
 
 // ── 새 daemon 시작 ────────────────────────────────────────────────────────────

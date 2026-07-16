@@ -488,6 +488,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       const {
         name, rtspUrl, username, password, webrtcEnabled, channelSlot, channelIndex,
         maxChannel, supportSunapi, nvrProfiles, thermalSensorWidth, thermalSensorHeight,
+        webrtcVideoOnly,
       } = req.body;
       let normalizedRtsp = null;
       if (rtspUrl !== undefined) {
@@ -521,6 +522,10 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       // calibrate onvif:temperature raw coordinates onto the actual video resolution.
       if (thermalSensorWidth  !== undefined) updates.thermalSensorWidth  = thermalSensorWidth  ? parseInt(thermalSensorWidth, 10)  : null;
       if (thermalSensorHeight !== undefined) updates.thermalSensorHeight = thermalSensorHeight ? parseInt(thermalSensorHeight, 10) : null;
+      // Video-only WebRTC fan-out (skip audio + App RTP ingest-daemon sessions) — for
+      // cameras whose RTSP server cannot sustain the full 4-session fan-out. See
+      // server/src/services/webrtc/mediasoupEngine.js addCameraStream() opts.videoOnly.
+      if (webrtcVideoOnly !== undefined) updates.webrtcVideoOnly = !!webrtcVideoOnly;
 
       db.update('cameras', camera.id, updates);
       const updated = db.findOne('cameras', { id: camera.id });
@@ -532,7 +537,8 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
         (rtspUrl       !== undefined && normalizedRtsp.value    !== camera.rtspUrl) ||
         (webrtcEnabled !== undefined && !!webrtcEnabled        !== !!camera.webrtcEnabled) ||
         (username      !== undefined && (username || null)     !== camera.username) ||
-        (password      !== undefined && (password || null)     !== camera.password);
+        (password      !== undefined && (password || null)     !== camera.password) ||
+        (webrtcVideoOnly !== undefined && !!webrtcVideoOnly    !== !!camera.webrtcVideoOnly);
 
       // Respond immediately so the browser does not time out while waiting for
       // ONNX model load / RTSP negotiation (can take several seconds).

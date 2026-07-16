@@ -450,6 +450,10 @@ async function phase2(testCameraId, iceConfig) {
   const context = await browser.newContext({
     // Grant all permissions up front
     permissions: ['microphone', 'camera'],
+    // This deployment serves HTTPS with a self-signed cert (standard for LAN
+    // installs, see CLAUDE.md) — without this the browser navigation itself
+    // fails with ERR_CERT_AUTHORITY_INVALID before any WebRTC test can run.
+    ignoreHTTPSErrors: true,
   });
   const page = await context.newPage();
 

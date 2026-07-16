@@ -265,7 +265,7 @@ loitering_tracking/
 | POST | `/api/cameras/discover` | ONVIF/UDP 자동 탐색 트리거 (결과는 Socket.IO `discovery:result`) |
 | POST | `/api/cameras/probe-channels` | 단일 IP SUNAPI/ONVIF MaxChannel 온디맨드 재탐지 (body: ip, httpPort?, onvifPort?, username?, password?, baseRtspUrl?, cameraId?) |
 | GET | `/api/cameras/:id` | 카메라 상세 조회 |
-| PUT | `/api/cameras/:id` | 카메라 설정 수정 (body: channelSlot?, channelIndex?, thermalSensorWidth?/thermalSensorHeight? — 열상 센서 네이티브 해상도, 예: 160x120, ThermalOverlay 좌표 calibration용, null이면 미보정) 포함 — 409: 이미 사용 중인 channelSlot; rtspUrl/자격증명/webrtcEnabled 변경 시 파이프라인 자동 재시작) |
+| PUT | `/api/cameras/:id` | 카메라 설정 수정 (body: channelSlot?, channelIndex?, thermalSensorWidth?/thermalSensorHeight? — 열상 센서 네이티브 해상도, 예: 160x120, ThermalOverlay 좌표 calibration용, null이면 미보정 / webrtcVideoOnly? — true 시 ingest-daemon audio+App RTP 세션 생략(mediasoup fan-out 4→2), RTSP 세션 부하가 큰 카메라의 안정성 개선용, Design_RTSP_Capture_Backend.md §6.7 참고) 포함 — 409: 이미 사용 중인 channelSlot; rtspUrl/자격증명/webrtcEnabled/webrtcVideoOnly 변경 시 파이프라인 자동 재시작) |
 | POST | `/api/cameras/:id/stream/reconnect` | 파이프라인 중지 후 재시작 |
 | DELETE | `/api/cameras/:id` | 카메라 삭제 (YouTube 카메라는 yt-dlp/ffmpeg 프로세스도 중지) |
 | POST | `/api/cameras/:id/ai/toggle` | AI 추론 ON/OFF 토글 (파이프라인 재시작 없이) |

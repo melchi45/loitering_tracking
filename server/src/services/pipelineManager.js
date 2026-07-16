@@ -528,17 +528,26 @@ class PipelineManager {
     // mediasoupEngine.addCameraStream() internally calls ingest-daemon with both the
     // AI callbackUrl AND the mediasoup RTP ports, so we skip the separate ingest-daemon
     // registration below when WEBRTC_ENGINE=mediasoup.
-    // YouTube cameras are excluded: they use AI-only ingest-daemon registration (below)
-    // since their stream is already managed by FFmpeg→MediaMTX; starting mediasoup RTP
-    // fan-out threads against a MediaMTX RTSP URL causes connection-refused retry loops.
+    // YouTube cameras were previously excluded here (2026-07-16 note: "starting
+    // mediasoup RTP fan-out threads against a MediaMTX RTSP URL causes
+    // connection-refused retry loops"). Re-enabled (2026-07-16, §6.16) — that
+    // finding predates the single-RTSP-connection ingest-daemon redesign
+    // (§6.8), which made every camera type, including this one, share one
+    // av.open() session fanning out to AI/video-RTP/audio-RTP/App-RTP; a
+    // YouTube camera's captureUrl already IS the same MediaMTX loopback
+    // (rtsp://127.0.0.1:8554/yt/<id>) that AI-only ingestion already opens
+    // successfully every time, so there is no longer a second/different RTSP
+    // connection class for mediasoup to fail against. If this addCameraStream()
+    // call fails, the existing needsDirectIngestReg fallback below still
+    // covers AI-only ingestion exactly as before — no regression risk.
     let altWebRTCReady = false;
-    const registerAltEngine = !isYouTube && WEBRTC_ENGINE !== 'mediamtx' &&
+    const registerAltEngine = WEBRTC_ENGINE !== 'mediamtx' &&
       (requestedWebRTC || WEBRTC_ENGINE === 'mediasoup');
     if (registerAltEngine) {
       // Retry up to 3 times with a 2-second delay — ingest-daemon may still be
       // binding its port when the first addCameraStream call arrives on startup.
       for (let attempt = 0; attempt < 3; attempt++) {
-        altWebRTCReady = await getWebRTCEngine().addCameraStream(camera.id, captureUrl, daemonAppRtpRtspUrl, captureFps).catch(() => false);
+        altWebRTCReady = await getWebRTCEngine().addCameraStream(camera.id, captureUrl, daemonAppRtpRtspUrl, captureFps, { videoOnly: camera.webrtcVideoOnly === true }).catch(() => false);
         if (altWebRTCReady) break;
         if (attempt < 2) {
           console.warn(`[PipelineManager][${camera.id.slice(0,8)}] addCameraStream attempt ${attempt + 1} failed — retrying in 2s`);
@@ -634,6 +643,10 @@ class PipelineManager {
       _ingestAppRtpCallbackUrl,
       _ingestAppRtpRtspUrl: daemonAppRtpRtspUrl ?? null,
       _captureUrl: captureUrl,   // URL ingest-daemon reads from (for mediasoup watchdog re-reg)
+      // Video-only fan-out (skip audio + App RTP sessions) — for cameras whose RTSP
+      // server cannot reliably sustain the full 4-session fan-out (AI+video+audio+appRTP).
+      // See Camera.webrtcVideoOnly.
+      _webrtcVideoOnly: camera.webrtcVideoOnly === true,
     };
 
     // ── Listen for loitering events ──────────────────────────────────────
@@ -1345,33 +1358,93 @@ class PipelineManager {
     // Frame watchdog: restart capture if no JPEG arrives for 20 s.
     // For IngestDaemonCapture, capture.stop()/start() only toggles an in-process flag.
     // The actual reconnect requires re-registering the camera with the daemon via HTTP.
+    //
+    // Bug fix (2026-07-15): the restart round-trip below (_ingestRemoveCamera +
+    // _ingestRegisterCamera) can legitimately take longer than the 8s tick interval —
+    // _ingestRemoveCamera alone retries once with a 5s HTTP timeout each (up to ~10.5s),
+    // plus _ingestRegisterCamera's own 5s timeout. Without a reentrancy guard, the next
+    // tick fired while the previous restart was still in-flight, issuing a second
+    // overlapping remove+register against the same camera ID and tearing down the
+    // connection before it ever stabilized — an unrecoverable restart storm for any
+    // camera whose reconnect takes ≥ 8s (confirmed live against TID-A800/192.168.214.32,
+    // whose RTSP handshake alone took >15s under concurrent session load). ctx._watchdogBusy
+    // makes a tick skip itself instead of piling on top of an in-progress restart.
     {
-      const FRAME_STALL_MS = 20_000;
+      // 20s → 45s (2026-07-16): the comment above this block already documented
+      // TID-A800's RTSP handshake alone taking >15s under concurrent session
+      // load — a 20s stall threshold left almost no margin for actual frame
+      // delivery after that handshake, so the watchdog was firing on cameras
+      // that were still mid-connect, not actually stalled. Confirmed live: this
+      // camera (and several others) cycled through restart→~24s stall→restart
+      // indefinitely, and every one of those restarts left its previous "io"
+      // thread as a zombie still holding an RTSP session open on the camera's
+      // own side (ingest_daemon.py's 8s _join_threads timeout — see
+      // docs/design/Design_RTSP_Capture_Backend.md §6.11), so each restart made
+      // the camera's concurrent-session pressure *worse*, not better — the
+      // watchdog was compounding the exact problem it was meant to recover
+      // from. A longer grace period reduces how often we interrupt a
+      // still-recovering connection.
+      const FRAME_STALL_MS = 45_000;
+      // Consecutive-failure backoff + jitter (2026-07-16, §6.14) — without this,
+      // a camera whose re-registration keeps failing (e.g. ingest-daemon's HTTP
+      // control plane wedged) retries every FRAME_STALL_MS+~8s like clockwork
+      // forever, with zero backoff. Confirmed live: when ingest-daemon's :7070
+      // got saturated (a few cameras' RTSP ports became unresponsive, each
+      // setup attempt hanging inside av.open()), EVERY camera's watchdog — not
+      // just the broken ones — started failing in the same ~48-56s lockstep
+      // cycle, because they'd all originally connected around the same time.
+      // Each failed attempt re-queued another setup call against the already-
+      // saturated daemon, so the fleet was collectively DOSing its own control
+      // plane and could never drain the backlog faster than it refilled —
+      // observed as a 6+ minute total-fleet outage that never self-recovered.
+      // Fix: track consecutive failures per camera and push the next retry
+      // further out (capped) so a chronically-failing camera stops hammering
+      // the shared resource; add small random jitter to every retry so cameras
+      // that started together don't stay phase-locked.
+      const WATCHDOG_BACKOFF_STEP_MS = 15_000;
+      const WATCHDOG_BACKOFF_MAX_MS  = 240_000;
+      ctx._watchdogBusy = false;
+      ctx._watchdogFailCount = 0;
       ctx.frameWatchdogTimer = setInterval(async () => {
-        if (!ctx.running || !ctx.lastFrameAt) return;
+        if (!ctx.running || !ctx.lastFrameAt || ctx._watchdogBusy) return;
         const stalledMs = Date.now() - ctx.lastFrameAt;
         if (stalledMs > FRAME_STALL_MS) {
-          console.warn(`[PipelineManager][${camera.id}] Frame watchdog: no frame for ${Math.round(stalledMs / 1000)}s — restarting capture`);
-          ctx.lastFrameAt = Date.now();
-          ctx.capture.stop();
+          ctx._watchdogBusy = true;
+          try {
+            console.warn(`[PipelineManager][${camera.id}] Frame watchdog: no frame for ${Math.round(stalledMs / 1000)}s — restarting capture (consecutive failures: ${ctx._watchdogFailCount})`);
+            ctx.lastFrameAt = Date.now();
+            ctx.capture.stop();
 
-          if (CAPTURE_BACKEND === 'ingest-daemon' && ctx._ingestRtspUrl) {
-            // AI-only or mediamtx-engine path: re-register directly with ingest-daemon.
-            await _ingestRemoveCamera(camera.id);
-            const ok = await _ingestRegisterCamera(camera.id, ctx._ingestRtspUrl, ctx._ingestCallbackUrl, ctx._ingestAppRtpCallbackUrl, ctx._ingestAppRtpRtspUrl);
-            if (!ok) {
-              console.error(`[PipelineManager][${camera.id}] Frame watchdog: ingest-daemon re-registration failed`);
+            let ok = true;
+            if (CAPTURE_BACKEND === 'ingest-daemon' && ctx._ingestRtspUrl) {
+              // AI-only or mediamtx-engine path: re-register directly with ingest-daemon.
+              await _ingestRemoveCamera(camera.id);
+              ok = await _ingestRegisterCamera(camera.id, ctx._ingestRtspUrl, ctx._ingestCallbackUrl, ctx._ingestAppRtpCallbackUrl, ctx._ingestAppRtpRtspUrl);
+              if (!ok) {
+                console.error(`[PipelineManager][${camera.id}] Frame watchdog: ingest-daemon re-registration failed`);
+              }
+            } else if (CAPTURE_BACKEND === 'ingest-daemon' && WEBRTC_ENGINE !== 'mediamtx') {
+              // mediasoup path: _ingestRtspUrl is null because mediasoupEngine.addCameraStream()
+              // handled registration. Re-register via the engine (recreates PlainTransports + re-POST to daemon).
+              ok = await getWebRTCEngine().addCameraStream(camera.id, ctx._captureUrl, ctx._ingestAppRtpRtspUrl, parseInt(process.env.CAPTURE_FPS, 10) || 0, { videoOnly: ctx._webrtcVideoOnly }).catch(() => false);
+              if (!ok) {
+                console.error(`[PipelineManager][${camera.id}] Frame watchdog: mediasoup re-registration failed`);
+              }
             }
-          } else if (CAPTURE_BACKEND === 'ingest-daemon' && WEBRTC_ENGINE !== 'mediamtx') {
-            // mediasoup path: _ingestRtspUrl is null because mediasoupEngine.addCameraStream()
-            // handled registration. Re-register via the engine (recreates PlainTransports + re-POST to daemon).
-            const ok = await getWebRTCEngine().addCameraStream(camera.id, ctx._captureUrl, ctx._ingestAppRtpRtspUrl, parseInt(process.env.CAPTURE_FPS, 10) || 0).catch(() => false);
-            if (!ok) {
-              console.error(`[PipelineManager][${camera.id}] Frame watchdog: mediasoup re-registration failed`);
-            }
+
+            ctx.capture.start();
+            ctx._watchdogFailCount = ok ? 0 : ctx._watchdogFailCount + 1;
+            const backoffMs = Math.min(ctx._watchdogFailCount * WATCHDOG_BACKOFF_STEP_MS, WATCHDOG_BACKOFF_MAX_MS);
+            const jitterMs  = Math.floor(Math.random() * 5_000);
+            // Reset the stall clock to the moment the new session actually started
+            // (not the moment the tick fired) so the freshly-registered capture gets
+            // the full FRAME_STALL_MS grace period to complete its RTSP handshake —
+            // plus backoff/jitter so repeated failures space themselves out instead
+            // of retrying in lockstep with every other stalled camera.
+            ctx.lastFrameAt = Date.now() + backoffMs + jitterMs;
+          } finally {
+            ctx._watchdogBusy = false;
           }
-
-          ctx.capture.start();
         }
       }, 8_000);
     }
@@ -1590,7 +1663,7 @@ class PipelineManager {
           results[cameraId] = { ok };
         } else if (CAPTURE_BACKEND === 'ingest-daemon') {
           // mediasoup path: engine re-creates PlainTransports and re-POSTs to daemon
-          const ok = await getWebRTCEngine().addCameraStream(cameraId, ctx._captureUrl, ctx._ingestAppRtpRtspUrl).catch(() => false);
+          const ok = await getWebRTCEngine().addCameraStream(cameraId, ctx._captureUrl, ctx._ingestAppRtpRtspUrl, 0, { videoOnly: ctx._webrtcVideoOnly }).catch(() => false);
           results[cameraId] = { ok };
         }
       } catch (e) {

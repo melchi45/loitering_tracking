@@ -140,7 +140,7 @@ loitering_tracking/
 |--------|------|------|
 | GET | `/api/cameras` | 카메라 목록 조회 |
 | POST | `/api/cameras` | 카메라 추가 (body: channelSlot — Dashboard Channel Slot 1..MAX_CHANNEL_NUM, 생략 시 자동 배정) |
-| PUT | `/api/cameras/:id` | 카메라 설정 수정 (body: channelSlot?, channelIndex?, thermalSensorWidth?/thermalSensorHeight? — 열상 센서 원본 해상도 calibration — 409: 슬롯 충돌) |
+| PUT | `/api/cameras/:id` | 카메라 설정 수정 (body: channelSlot?, channelIndex?, thermalSensorWidth?/thermalSensorHeight? — 열상 센서 원본 해상도 calibration / webrtcVideoOnly? — audio+App RTP 세션 생략, mediasoup fan-out 4→2 — 409: 슬롯 충돌) |
 | POST | `/api/cameras/discover` | 카메라 탐색 트리거 |
 | GET | `/api/alerts` | 경보 목록 조회 |
 | POST | `/api/alerts/:id/acknowledge` | 경보 확인 처리 |

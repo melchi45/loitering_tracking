@@ -2,12 +2,35 @@
 """
 LTS-2026 Ingest Daemon — Python implementation.
 
-Per-camera fan-out from a single MediaMTX RTSP loopback connection:
-  ① AI    thread : RTSP → PyAV H264 decode → resize 640 → JPEG → HTTP POST to Node.js
-  ② vRTP  thread: RTSP → PyAV H264 passthrough → RTP → UDP:{mediasoupPort}  (optional)
-  ③ aRTP  thread: RTSP → PyAV audio → Opus RTP → UDP:{mediasoupAudioPort}    (optional)
-  ④ apprtp thread: RTSP → PyAV data/subtitle track → JSON → HTTP POST to Node.js (optional)
-                   Payload forwarded as base64 → mediasoup DataProducer → browser DataChannel
+Single-RTSP-connection-per-camera fan-out (2026-07-15 redesign — see
+docs/design/Design_RTSP_Capture_Backend.md §6.8):
+  One "io" thread opens exactly ONE av.open(rtspUrl) container and demuxes
+  video + audio (+ data, when it lives on the same URL) together:
+    - video packets are muxed to RTP → UDP:{mediasoupPort} immediately (no
+      decode — passthrough only, so this stays fast/low-latency)
+    - video packets are also handed off (raw bytes, non-blocking, drop-if-full)
+      to a dedicated AI worker thread that owns its own independent
+      CodecContext and decodes + JPEG-encodes + POSTs to Node.js
+    - audio packets are muxed straight through when already Opus, or handed
+      off to a dedicated transcode worker thread (own CodecContext + resampler)
+      otherwise
+    - data/subtitle (ONVIF metadata) packets are POSTed to Node.js via the
+      shared push thread pool (non-blocking)
+  This replaces the previous design of 4 independent RTSP sessions per camera
+  (AI/video/audio/appRTP each opening their own av.open()), which multiplied
+  concurrent RTSP session pressure on the camera 4× (8× when a camera has two
+  channel registrations) and was found to be the dominant cause of connection
+  instability on resource-constrained encoders (e.g. TID-A800) — see design
+  doc §6.8 for the live-measured evidence.  A same-thread "everything inline"
+  merge was tried first and reverted (see design doc §6.7) because decode()
+  head-of-line-blocked the time-critical RTP mux; routing decode onto its own
+  thread via a raw-bytes queue (this design) avoids that specific failure.
+
+  App RTP (ONVIF metadata) stays on its own separate connection ONLY when
+  appRtpRtspUrl differs from rtspUrl (MediaMTX-loopback deployments, where the
+  ONVIF data track lives on the original camera URL, not the republished one)
+  — in the common case (mediasoup mode, direct-camera) the two URLs are equal
+  and the data track is folded into the single combined connection above.
 
 HTTP API (default :7070):
   POST   /cameras   { "id", "rtspUrl", "callbackUrl",
@@ -24,6 +47,11 @@ Environment:
   AI_FRAME_INTERVAL — push every Nth decoded frame to AI (default: 3, overridden per-camera by captureFps)
   JPEG_QUALITY      — JPEG encode quality 1-95 (default: 85)
   IDR_WAIT_TIMEOUT  — seconds to wait for first IDR keyframe (default: 2)
+  AI_DECODE_THREADS — libav internal decode threads per camera's AI CodecContext (default: 4).
+                      Fixed cap, not "0 = auto-size to all cores" — see §6.10 in
+                      docs/design/Design_RTSP_Capture_Backend.md for why an unbounded
+                      per-camera thread count (scaling with nproc) made the daemon's
+                      own HTTP server unresponsive under a real multi-camera fleet.
 
 AI frames are sent at native/decoded resolution (no resize) — this is the sole
 source buffer for both AI inference and detectionSnapshots crop extraction on
@@ -34,15 +62,19 @@ mode, so that hop stays cheap while crops stay full-resolution.
 
 import argparse
 import base64
+import faulthandler
 import io
 import json
 import logging
 import os
+import queue
+import re
+import signal
 import ssl
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 from urllib.request import urlopen, Request
 
@@ -60,10 +92,25 @@ logging.basicConfig(
 )
 log = logging.getLogger("ingest")
 
+# SIGUSR1 → dump every thread's real Python stack to a file (2026-07-16).
+# When the daemon goes fully unresponsive (all threads futex-blocked, 0%
+# CPU) py-spy/gdb can't attach without ptrace permissions (denied in this
+# environment, no sudo). faulthandler.register runs entirely inside this
+# process — no ptrace needed — and prints every thread's current frame,
+# which is enough to tell "waiting on a Lock/queue.get() that never wakes"
+# apart from "genuinely idle". Trigger with `kill -USR1 <pid>`, read
+# /tmp/ingest-daemon-stacks.log.
+_faulthandler_file = open("/tmp/ingest-daemon-stacks.log", "a")
+faulthandler.register(signal.SIGUSR1, file=_faulthandler_file, all_threads=True, chain=False)
+
 # ── Configuration ─────────────────────────────────────────────────────────────
 AI_FRAME_INTERVAL  = int(os.environ.get("AI_FRAME_INTERVAL", "3"))
 JPEG_QUALITY       = int(os.environ.get("JPEG_QUALITY", "85"))
 IDR_WAIT_TIMEOUT   = float(os.environ.get("IDR_WAIT_TIMEOUT", "2"))
+# Per-camera libav internal decode thread cap (see _ai_decode_worker) — fixed
+# instead of "0 = auto-size to all cores" so fleet-wide native thread count
+# scales with camera count × this cap, not camera count × nproc.
+_AI_DECODE_THREADS = int(os.environ.get("AI_DECODE_THREADS", "4"))
 # Idle timeout (seconds) for the AI / video RTP RTSP sessions, applied as the
 # libav "stimeout" socket I/O option (µs). All ingest loops (AI, video RTP,
 # audio, App RTP) now use stimeout exclusively — a prior per-camera background
@@ -80,6 +127,48 @@ RTSP_READ_TIMEOUT     = float(os.environ.get("RTSP_READ_TIMEOUT", "5"))
 # App RTP carries sparse ONVIF metadata (events may be minutes apart).
 # Use a much longer idle timeout than video/audio tracks.
 APP_RTP_READ_TIMEOUT  = float(os.environ.get("APP_RTP_READ_TIMEOUT", "60"))
+# Bound on the raw-bytes hand-off queues from the combined io thread to the AI
+# decode / audio transcode worker threads. ~2s of video at typical fleet frame
+# rates; if a worker falls behind, older packets are dropped (put_nowait) so
+# the io thread — which owns the single RTSP connection and the time-critical
+# RTP mux — is never blocked waiting on a slow decode.
+_WORKER_QUEUE_MAXSIZE = int(os.environ.get("INGEST_WORKER_QUEUE_MAXSIZE", "60"))
+
+# Shared JPEG/App-RTP push pool (2026-07-15) — was previously one
+# ThreadPoolExecutor(max_workers=4) PER CAMERA (up to 4 × camera-count threads,
+# e.g. 52 for a 13-camera fleet, on top of every camera's own io/AI-decode
+# threads). A fleet-wide daemon HTTP responsiveness stall (GET /health taking
+# minutes, Node.js's own re-registration calls timing out) was traced to the
+# process running with several hundred live threads at once — sharing one
+# bounded pool across all cameras keeps push concurrency the same in spirit
+# (still bounded, still non-blocking/drop-on-full for the decode thread) while
+# capping the daemon's total thread count regardless of fleet size. See
+# docs/design/Design_RTSP_Capture_Backend.md §6.8.
+_PUSH_WORKERS          = int(os.environ.get("INGEST_PUSH_WORKERS", "16"))
+_SHARED_PUSH_EXECUTOR  = ThreadPoolExecutor(max_workers=_PUSH_WORKERS, thread_name_prefix="push")
+_SHARED_PUSH_SEMAPHORE = threading.Semaphore(_PUSH_WORKERS)
+
+# Shared "stopper" pool (2026-07-16) — CameraManager.add()/remove() used to
+# spawn a brand-new threading.Thread(...) per old-session teardown so the HTTP
+# response could return immediately (see CameraManager.add() below). Under
+# heavy churn (a flaky camera or YouTube source reconnecting every few
+# seconds) that meant one throwaway thread per churn event with no cap,
+# stacking on top of the shared push pool and every live session's own
+# threads. Routing teardown through a small bounded executor keeps the same
+# fire-and-forget behaviour (submit() returns immediately, callers never wait
+# on the Future) while capping how many stop() calls can be in flight at once.
+_STOP_WORKERS         = int(os.environ.get("INGEST_STOP_WORKERS", "8"))
+_SHARED_STOP_EXECUTOR = ThreadPoolExecutor(max_workers=_STOP_WORKERS, thread_name_prefix="stopper")
+
+# Connection-establishment gate (2026-07-16, see _combined_ingest_once) — caps
+# how many cameras can be inside av.open()+probe+worker-thread-startup at the
+# same time. Confirmed live that letting the whole fleet do this simultaneously
+# (daemon restart, or a network blip hitting several cameras at once) freezes
+# the entire process — zero frames decoded, /health fully unresponsive — even
+# though the main HTTP accept thread stays idle. See docs/design/
+# Design_RTSP_Capture_Backend.md §6.10.
+_INGEST_SETUP_CONCURRENCY = int(os.environ.get("INGEST_SETUP_CONCURRENCY", "5"))
+_INGEST_SETUP_SEMAPHORE   = threading.Semaphore(_INGEST_SETUP_CONCURRENCY)
 
 _RTSP_OPTIONS = {
     "rtsp_transport": "tcp",
@@ -89,17 +178,55 @@ _RTSP_OPTIONS = {
 }
 
 
-# Must match VIDEO_SSRC / AUDIO_SSRC / AUDIO_PT in server/src/services/webrtc/mediasoupEngine.js.
+# Must match VIDEO_SSRC / AUDIO_SSRC / VIDEO_PT / AUDIO_PT in
+# server/src/services/webrtc/mediasoupEngine.js.
 # mediasoup PlainTransport (comedia=true) matches incoming RTP by both SSRC and payload type;
 # packets with mismatched SSRC or PT are silently discarded by the Producer.
 _MEDIASOUP_VIDEO_SSRC = 573785173   # 0x22334455
 _MEDIASOUP_AUDIO_SSRC = 860116326   # 0x33445566
+_MEDIASOUP_VIDEO_PT   = 96          # must match VIDEO_PT constant in mediasoupEngine.js
 _MEDIASOUP_AUDIO_PT   = 111         # must match AUDIO_PT constant in mediasoupEngine.js
 
 # Reusable SSL context for loopback HTTPS callbacks (self-signed cert OK).
 _SSL_CTX_NOVERIFY = ssl.create_default_context()
 _SSL_CTX_NOVERIFY.check_hostname = False
 _SSL_CTX_NOVERIFY.verify_mode    = ssl.CERT_NONE
+
+
+def _parse_h264_sps_pps(extradata: bytes):
+    """
+    Split Annex-B extradata (NAL units prefixed with 00 00 01 / 00 00 00 01 start
+    codes, as PyAV's RTSP demuxer exposes H.264 codec_context.extradata) into
+    individual NAL units, keep only SPS (type 7) and PPS (type 8), and return
+    (sprop_parameter_sets, profile_level_id):
+      - sprop_parameter_sets: comma-separated base64 NAL units per RFC 6184
+        (each unit base64-encoded WITHOUT its start code), "" if none found.
+      - profile_level_id: 6 hex chars (profile_idc + constraint_flags + level_idc,
+        the 3 bytes right after the SPS NAL header — RFC 6184 §8.1), taken from
+        the ACTUAL camera stream rather than a fixed guess. Confirmed live
+        (2026-07-16, §6.13) that hardcoding "42e01f" (Baseline) while real
+        cameras send High Profile (profile_idc 0x64) left the browser's decoder
+        never producing a single decoded frame despite healthy RTP delivery —
+        None if no SPS was found or it's too short to read.
+    Returns ("", None) for non-H.264 extradata (e.g. HEVC, whose NAL type
+    numbering and 2-byte header differ — never mistake it for usable H.264 sprop).
+    """
+    if not extradata:
+        return "", None
+    # Split on start codes, keeping the first byte of each unit (NAL header) so
+    # the type check below can inspect it.
+    parts = re.split(rb"\x00\x00\x01", extradata.replace(b"\x00\x00\x00\x01", b"\x00\x00\x01"))
+    units = []
+    profile_level_id = None
+    for p in parts:
+        if not p:
+            continue
+        nal_type = p[0] & 0x1F
+        if nal_type in (7, 8):  # SPS, PPS
+            units.append(base64.b64encode(p).decode("ascii"))
+            if nal_type == 7 and profile_level_id is None and len(p) >= 4:
+                profile_level_id = p[1:4].hex()
+    return ",".join(units), profile_level_id
 
 
 # ── Camera session ────────────────────────────────────────────────────────────
@@ -138,21 +265,45 @@ class CameraSession:
 
         self._stop = threading.Event()
 
-        # Async HTTP push: bounded thread pool + semaphore prevent queue overflow
-        # when the AI server is slower than the capture rate.
-        # max_workers=4: each camera may have ≥1 encode+POST in-flight; 4 workers
-        # allows 4 concurrent encodes across all cameras without blocking each other.
-        self._push_executor  = ThreadPoolExecutor(max_workers=4, thread_name_prefix=f"push-{self.id[:8]}")
-        self._push_semaphore = threading.Semaphore(4)  # max 4 in-flight POST requests
+        # Populated once the RTSP stream's SPS/PPS are probed (see
+        # _combined_ingest_once) — exposed via GET /cameras/:id/video-params so
+        # mediasoupEngine.js can inject sprop-parameter-sets into the WHEP SDP
+        # answer. Pure RTP passthrough (no transcode) can't guarantee every late-
+        # joining WebRTC viewer sees in-band SPS/PPS NAL units, and the mediasoup
+        # Producer is created (with only static profile-level-id) before this
+        # daemon has even connected to the camera — so the only reliable way to
+        # get the browser's H.264 decoder the parameter sets it needs is via the
+        # SDP's sprop-parameter-sets, fetched here after the fact. See
+        # docs/design/Design_RTSP_Capture_Backend.md §6.13.
+        self.video_codec_name       = None
+        self.sprop_parameter_sets   = None
+        self.profile_level_id       = None
+
+        # JPEG/App-RTP push uses the module-level _SHARED_PUSH_EXECUTOR /
+        # _SHARED_PUSH_SEMAPHORE (bounded pool shared by the whole daemon, not
+        # one per camera — see their definitions for why).
 
         self._threads: list[threading.Thread] = []
 
-        self._start_thread("ai",   self._ai_loop)
-        if self.mediasoup_video_port:
-            self._start_thread("vrtp", self._video_rtp_loop)
-        if self.mediasoup_audio_port:
-            self._start_thread("artp", self._audio_rtp_loop)
-        if self.app_rtp_callback_url:
+        # Single-RTSP-connection redesign (2026-07-15) — see module docstring and
+        # docs/design/Design_RTSP_Capture_Backend.md §6.8. A same-thread "everything
+        # inline" merge was tried earlier and reverted (§6.7) because decode()
+        # head-of-line-blocked the time-critical RTP mux on the same thread. This
+        # design keeps that lesson: the io thread below never calls decode() itself —
+        # it only demuxes and does fast passthrough muxing; AI decode (and audio
+        # transcode, when needed) run on their own dedicated worker threads fed via
+        # bounded, drop-if-full queues of raw packet bytes, so a slow decode can never
+        # delay the RTP passthrough path.
+        #
+        # App RTP (ONVIF metadata) is folded into the same connection only when it
+        # reads from the same URL as video/audio (appRtpRtspUrl == rtspUrl — the
+        # common case in mediasoup/direct-camera mode). When they differ (MediaMTX
+        # loopback mode, where the ONVIF data track only exists on the original
+        # camera URL) App RTP necessarily needs its own connection to that different
+        # source — that one case still uses the legacy independent thread below.
+        self._app_rtp_merged = bool(self.app_rtp_callback_url) and (self.app_rtp_rtsp_url == self.rtsp_url)
+        self._start_thread("io", self._combined_loop)
+        if self.app_rtp_callback_url and not self._app_rtp_merged:
             self._start_thread("apprtp", self._app_rtp_loop)
 
     def _start_thread(self, label: str, target) -> None:
@@ -164,32 +315,64 @@ class CameraSession:
         self._threads.append(t)
 
     def _signal_stop(self):
-        """Phase 1 — set stop flag and shut down the push executor immediately."""
+        """Phase 1 — set stop flag. The push executor is shared daemon-wide
+        (_SHARED_PUSH_EXECUTOR) and is not owned by any single camera, so it is
+        not shut down here — only the daemon process exit tears it down."""
         self._stop.set()
-        self._push_executor.shutdown(wait=False)
 
-    def _join_threads(self, timeout: float = 3.0):
-        """Phase 2 — wait for threads to exit after _signal_stop()."""
+    def _join_threads(self, timeout: float = 8.0):
+        """
+        Phase 2 — wait for the io thread to exit after _signal_stop().
+
+        8s default (was 3s pre-single-connection-redesign): the io thread's own
+        cleanup is now nested — it must first signal+join its AI decode worker
+        and (when transcoding) its audio worker (up to ~2s combined, since both
+        only poll their queue with a 0.5s timeout) before it can close the RTP
+        muxers/container and return. It can also be blocked inside libav's own
+        demux() for up to RTSP_READ_TIMEOUT (default 5s) if _stop was signalled
+        while mid-read. 8s covers that worst case with margin. Under the old
+        4-independent-threads design each thread got its own 3s budget (up to
+        12s total worst case), so this is not a regression — see
+        docs/design/Design_RTSP_Capture_Backend.md §6.8.
+        """
+        leaked = []
         for t in self._threads:
             try:
                 t.join(timeout=timeout)
             except KeyboardInterrupt:
                 pass  # second SIGINT during shutdown — ignore
-        log.info("[%s] Stopped", self.id[:8])
+            if t.is_alive():
+                leaked.append(t.name)
+        if leaked:
+            # This thread (almost always the "io" thread, blocked inside
+            # libav's demux() past the join timeout) is now a zombie: still
+            # holding its RTSP session open on the *camera's* side, still
+            # decoding/pushing frames through the shared pools, indefinitely
+            # — nothing forcibly kills it (safe forced-close from another
+            # thread is not possible, see _combined_ingest_once's docstring).
+            # Confirmed live (2026-07-16) as a compounding cause of session
+            # exhaustion on session-limited cameras (TID-A800) and inflated
+            # daemon thread counts after repeated restarts — previously this
+            # was 100% silent, indistinguishable from a clean stop.
+            log.warning("[%s] Stopped with %d thread(s) still alive after %.0fs: %s — leaked (camera-side RTSP session likely still open)",
+                        self.id[:8], len(leaked), timeout, ", ".join(leaked))
+        else:
+            log.info("[%s] Stopped", self.id[:8])
 
     def stop(self):
         self._signal_stop()
         self._join_threads()
 
-    # ── AI path ───────────────────────────────────────────────────────────────
+    # ── Combined io path (single RTSP connection → video RTP passthrough +
+    #    audio RTP passthrough/transcode + AI decode handoff + App RTP) ────────
 
-    def _ai_loop(self):
-        log.info("[%s] AI loop starting → %s", self.id[:8], self.rtsp_url[:50])
+    def _combined_loop(self):
+        log.info("[%s] Combined RTSP loop starting → %s", self.id[:8], self.rtsp_url[:50])
         retry_delay = 0.5
         while not self._stop.is_set():
             t0 = time.monotonic()
             try:
-                self._ai_ingest_once()
+                self._combined_ingest_once()
                 retry_delay = 0.5  # clean stop → reset
             except Exception as exc:
                 if self._stop.is_set():
@@ -197,77 +380,425 @@ class CameraSession:
                 # Session ran >10s → it was healthy, not a persistent failure
                 if time.monotonic() - t0 > 10.0:
                     retry_delay = 0.5
-                log.warning("[%s] AI RTSP error: %s — retry in %.1fs",
+                log.warning("[%s] Combined RTSP error: %s — retry in %.1fs",
                             self.id[:8], exc, retry_delay)
                 self._stop.wait(retry_delay)
                 retry_delay = min(retry_delay * 1.5, 5.0)
 
-    def _ai_ingest_once(self):
+    def _combined_ingest_once(self):
         # stimeout (socket I/O timeout, µs) instead of _Watchdog — closing the
         # container from a background thread while demux() runs on the foreground
         # thread is not thread-safe in libav and can crash the whole process
-        # (observed as STATUS_HEAP_CORRUPTION on Windows). Same fix already
-        # applied to the audio and App RTP paths; see their comments for detail.
-        _ai_opts = {**_RTSP_OPTIONS, "stimeout": str(int(RTSP_READ_TIMEOUT * 1_000_000))}
-        container = av.open(self.rtsp_url, options=_ai_opts)
+        # (observed as STATUS_HEAP_CORRUPTION on Windows).
+        _opts = {**_RTSP_OPTIONS, "stimeout": str(int(RTSP_READ_TIMEOUT * 1_000_000))}
+
+        # Connection-establishment gate (2026-07-16) — av.open() + stream probing
+        # + worker-thread startup is CPU/parsing-heavy and was found to hold the
+        # GIL far longer per-camera than the steady-state demux loop. When many
+        # cameras reconnect at once (daemon restart re-registering the whole
+        # fleet, or a network blip hitting several cameras together), every io
+        # thread does this heavy phase simultaneously — confirmed live (SIGUSR1
+        # stack dump, §6.10) as a total daemon freeze: 10+ io threads stuck at
+        # the same setup line, zero frames processed for 4+ minutes, /health
+        # completely unresponsive despite the main accept thread being idle in
+        # select(). Bounding how many cameras can be inside this phase at once
+        # spreads the burst out. Released as soon as the steady-state demux loop
+        # is entered — never held for a connection's full lifetime.
+        #
+        # Poll with a timeout instead of a plain blocking acquire() (2026-07-16,
+        # §6.12) — a plain acquire() never checks self._stop while waiting, so a
+        # session superseded by CameraManager.add()/remove() while still queued
+        # for a permit would wait FOREVER, permanently occupying a place in line.
+        # Under the fleet's actual restart cadence (every camera cycling roughly
+        # every 45-56s) this accumulated one permanently-stuck waiter per
+        # superseded session, and since only _INGEST_SETUP_CONCURRENCY (3)
+        # permits exist total, the queue eventually backed up badly enough that
+        # every real camera's *live* registration also started missing Node's 8s
+        # addCameraStream() timeout — confirmed live: all 7 real cameras showed
+        # near-equal counts of "mediasoup re-registration failed" in the logs,
+        # not just the one camera (TID-A800) that was the original suspect.
+        while not self._stop.is_set():
+            if _INGEST_SETUP_SEMAPHORE.acquire(timeout=0.5):
+                break
+        else:
+            return  # superseded/removed while still waiting for a permit
+        _setup_sem_released = False
         try:
-            vs = next((s for s in container.streams if s.type == "video"), None)
-            if vs is None:
-                raise RuntimeError("No video stream in RTSP source")
+            container = av.open(self.rtsp_url, options=_opts)
 
-            vs.codec_context.thread_type  = "NONE"
-            vs.codec_context.thread_count = 1
-            log.info("[%s] AI stream: %s %dx%d",
-                     self.id[:8],
-                     vs.codec_context.name,
-                     vs.codec_context.width,
-                     vs.codec_context.height)
+            ai_queue = ai_worker_stop = ai_worker_thread = None
+            audio_out = audio_out_stream = None
+            audio_queue = audio_worker_stop = audio_worker_thread = None
+            audio_mode = None
+            video_out = video_out_vs = None
 
-            idr_seen      = False
-            idr_deadline  = time.monotonic() + IDR_WAIT_TIMEOUT
-            packet_counter = 0  # counts all IDR-past packets, decoded or not
+            try:
+                vs = next((s for s in container.streams if s.type == "video"), None)
+                if vs is None:
+                    raise RuntimeError("No video stream in RTSP source")
 
-            for packet in container.demux(vs):
-                if self._stop.is_set():
-                    break
-                if packet.size == 0:
-                    continue
+                as_ = None
+                if self.mediasoup_audio_port:
+                    as_ = next((s for s in container.streams if s.type == "audio"), None)
 
-                if not idr_seen:
-                    if packet.is_keyframe:
-                        idr_seen = True
-                    elif time.monotonic() > idr_deadline:
-                        raise RuntimeError(
-                            f"No IDR within {IDR_WAIT_TIMEOUT}s — reconnecting"
-                        )
+                # Only claim the data/subtitle (ONVIF) stream on this connection when
+                # App RTP is configured to read from this same URL — see __init__.
+                app_stream = None
+                if self._app_rtp_merged:
+                    app_stream = next((s for s in container.streams if s.type not in ("video", "audio")), None)
+
+                log.info("[%s] Combined stream: video=%s %dx%d audio=%s app=%s",
+                         self.id[:8], vs.codec_context.name,
+                         vs.codec_context.width, vs.codec_context.height,
+                         (as_.codec_context.name if as_ else "none"),
+                         ("yes" if app_stream is not None else "no"))
+
+                # Confirmed live (2026-07-16, §6.13): browser framesDecoded stayed
+                # at 0 on every camera despite substantial bytesReceived — the
+                # camera's SPS/PPS reach PyAV only via the RTSP SDP (parsed into
+                # codec_context.extradata), not repeated in-band in the RTP
+                # payload, so a pure-passthrough WebRTC viewer never receives
+                # parameter sets its H.264 decoder needs. Extract them here and
+                # expose via GET /cameras/:id/video-params so mediasoupEngine.js
+                # can inject sprop-parameter-sets into the WHEP SDP answer.
+                self.video_codec_name = vs.codec_context.name
+                if vs.codec_context.name == "h264":
+                    self.sprop_parameter_sets, self.profile_level_id = _parse_h264_sps_pps(vs.codec_context.extradata)
+                    if self.sprop_parameter_sets and self.profile_level_id:
+                        log.info("[%s] sprop-parameter-sets ready (%d NAL unit(s), profile-level-id=%s)",
+                                 self.id[:8], self.sprop_parameter_sets.count(",") + 1, self.profile_level_id)
                     else:
+                        log.warning("[%s] no SPS/PPS found in extradata — WebRTC viewers may never decode video", self.id[:8])
+                else:
+                    self.sprop_parameter_sets = None
+                    self.profile_level_id = None
+                    log.warning("[%s] video codec is %s, not h264 — mediasoup Producer is H.264-only, WebRTC playback for this camera cannot work", self.id[:8], vs.codec_context.name)
+
+                # Video RTP passthrough output — no decode here, this stays on the io
+                # thread so it is never delayed by the (potentially slow) AI decode.
+                if self.mediasoup_video_port:
+                    # payload_type must be explicit — mediasoup's video Producer
+                    # (mediasoupEngine.js) is configured to only accept PT=96
+                    # (VIDEO_PT) and silently discards anything else. Without this
+                    # option ffmpeg's rtp muxer picks its own default dynamic PT,
+                    # which is not guaranteed to match (unlike the audio branch
+                    # below, which already sets this explicitly).
+                    video_out = av.open(
+                        f"rtp://127.0.0.1:{self.mediasoup_video_port}",
+                        "w", format="rtp",
+                        options={"ssrc": str(_MEDIASOUP_VIDEO_SSRC), "payload_type": str(_MEDIASOUP_VIDEO_PT)},
+                    )
+                    video_out_vs = video_out.add_stream(template=vs)
+                    log.info("[%s] Video RTP: %s → rtp://127.0.0.1:%d (ssrc=0x%08x pt=%d) time_base in=%s out=%s",
+                             self.id[:8], vs.codec_context.name,
+                             self.mediasoup_video_port, _MEDIASOUP_VIDEO_SSRC, _MEDIASOUP_VIDEO_PT,
+                             vs.time_base, video_out_vs.time_base)
+
+                # AI decode worker — owns an independent CodecContext (seeded with the
+                # extradata/SPS-PPS this container already probed) and receives raw
+                # packet bytes via a bounded, drop-if-full queue. A slow/large-frame
+                # decode (e.g. TID-A800's 2560x1920 @30fps thermal stream) can only
+                # ever fall behind on AI/JPEG output — it can never block the video
+                # RTP passthrough above, which is what the earlier same-thread merge
+                # (reverted — see module docstring) got wrong.
+                ai_queue = queue.Queue(maxsize=_WORKER_QUEUE_MAXSIZE)
+                ai_worker_stop = threading.Event()
+                ai_worker_thread = threading.Thread(
+                    target=self._ai_decode_worker,
+                    args=(ai_queue, ai_worker_stop, vs.codec_context.name, vs.codec_context.extradata),
+                    daemon=True, name=f"aiw-{self.id[:8]}",
+                )
+                ai_worker_thread.start()
+
+                # Audio: passthrough (already Opus) is cheap pure mux, kept inline on
+                # the io thread like video. Transcoding needs decode+resample+encode —
+                # real CPU work — so it gets its own worker thread, same pattern as AI.
+                if as_ is not None:
+                    codec_name = as_.codec_context.name
+                    if codec_name == "opus":
+                        audio_mode = "passthrough"
+                        audio_out = av.open(
+                            f"rtp://127.0.0.1:{self.mediasoup_audio_port}",
+                            "w", format="rtp",
+                            options={"ssrc": str(_MEDIASOUP_AUDIO_SSRC), "payload_type": str(_MEDIASOUP_AUDIO_PT)},
+                        )
+                        audio_out_stream = audio_out.add_stream(template=as_)
+                        log.info("[%s] Audio RTP passthrough opus → rtp://127.0.0.1:%d",
+                                 self.id[:8], self.mediasoup_audio_port)
+                    else:
+                        audio_mode = "transcode"
+                        audio_queue = queue.Queue(maxsize=_WORKER_QUEUE_MAXSIZE)
+                        audio_worker_stop = threading.Event()
+                        audio_worker_thread = threading.Thread(
+                            target=self._audio_transcode_worker,
+                            args=(audio_queue, audio_worker_stop, codec_name),
+                            daemon=True, name=f"artpw-{self.id[:8]}",
+                        )
+                        audio_worker_thread.start()
+
+                idr_seen       = False
+                idr_deadline   = time.monotonic() + IDR_WAIT_TIMEOUT
+                video_last_dts = None
+                audio_last_dts = None
+
+                demux_streams = [s for s in (vs, as_, app_stream) if s is not None]
+
+                # Setup is done — release the gate before entering the steady-state
+                # loop below, which can run for the connection's entire lifetime.
+                _INGEST_SETUP_SEMAPHORE.release()
+                _setup_sem_released = True
+
+                for packet in container.demux(*demux_streams):
+                    if self._stop.is_set():
+                        break
+                    if packet.size == 0:
                         continue
 
-                # H264 decoder state must advance through every packet — skipping
-                # decode() on P-frames causes the codec context to lose reference
-                # frames, producing corrupted output when the next decode() is called.
-                # We always decode but only push the resulting JPEG every N frames.
-                packet_counter += 1
-                if self._ai_push_interval > 0:
-                    _now = time.monotonic()
-                    _should_push = (_now - self._ai_last_push >= self._ai_push_interval)
-                else:
-                    _should_push = (packet_counter % AI_FRAME_INTERVAL == 0)
+                    if packet.stream is vs:
+                        if not idr_seen:
+                            if packet.is_keyframe:
+                                idr_seen = True
+                            elif time.monotonic() > idr_deadline:
+                                raise RuntimeError(
+                                    f"No IDR within {IDR_WAIT_TIMEOUT}s — reconnecting"
+                                )
+                            else:
+                                continue
 
+                        # Snapshot raw bytes BEFORE any mutation from the passthrough
+                        # mux below — the AI worker gets its own independent copy, so
+                        # it is never affected by, and can never block, that path.
+                        raw = bytes(packet)
+                        if video_out is not None:
+                            video_last_dts = self._mux_passthrough(packet, video_out, video_out_vs, video_last_dts)
+                        try:
+                            ai_queue.put_nowait(raw)
+                        except queue.Full:
+                            pass  # AI decode behind — drop; self-heals at next IDR
+
+                    elif as_ is not None and packet.stream is as_:
+                        if audio_mode == "passthrough":
+                            audio_last_dts = self._mux_passthrough(packet, audio_out, audio_out_stream, audio_last_dts)
+                        elif audio_mode == "transcode":
+                            try:
+                                audio_queue.put_nowait(bytes(packet))
+                            except queue.Full:
+                                pass  # transcode worker behind — drop this packet
+
+                    elif app_stream is not None and packet.stream is app_stream:
+                        self._submit_app_rtp(bytes(packet), packet.pts)
+
+            finally:
+                if ai_worker_stop is not None:
+                    ai_worker_stop.set()
+                if ai_worker_thread is not None:
+                    ai_worker_thread.join(timeout=2)
+                if audio_worker_stop is not None:
+                    audio_worker_stop.set()
+                if audio_worker_thread is not None:
+                    audio_worker_thread.join(timeout=2)
+                if video_out is not None:
+                    try:
+                        video_out.close()
+                    except Exception:
+                        pass
+                if audio_out is not None:
+                    try:
+                        audio_out.close()
+                    except Exception:
+                        pass
                 try:
-                    for frame in packet.decode():
-                        if _should_push:
-                            if self._ai_push_interval > 0:
-                                self._ai_last_push = time.monotonic()
-                            self._push_jpeg(frame)
-                        break  # only first frame per packet needed
-                except Exception as dec_err:
-                    log.debug("[%s] decode: %s", self.id[:8], dec_err)
+                    container.close()
+                except Exception:
+                    pass
+        finally:
+            if not _setup_sem_released:
+                _INGEST_SETUP_SEMAPHORE.release()
+
+    def _mux_passthrough(self, packet, out, out_stream, last_dts):
+        """Forward one demuxed packet to an RTP output muxer, no decode involved."""
+        # Rescale PTS/DTS from the SOURCE stream's time_base to the RTP output
+        # stream's time_base (2026-07-16, §6.13) — av.Packet has no rescale_ts()
+        # helper in this PyAV version, and neither add_stream(template=vs) nor
+        # container.mux() rescale timestamps for you; ffmpeg's muxer writes
+        # packet.pts/dts as-is, interpreted in whatever time_base the packet
+        # currently carries. RTP's rtpenc_h264 forces its own clock-rate-derived
+        # time_base (90000Hz) regardless of the source RTSP stream's demuxer
+        # time_base, so skipping this silently produced badly-scaled RTP
+        # timestamps — confirmed as the actual cause of browsers' framesDecoded
+        # staying at 0 forever despite healthy byte/packet delivery (mediasoup's
+        # own Producer score showed 10/10 — packets looked structurally fine at
+        # the RTP layer; only the *decoder*, which relies on RTP timestamps to
+        # reassemble/order frames, ever saw the corruption).
+        # out_stream.time_base reads as None until ffmpeg finalizes it (observed
+        # live: still None immediately after add_stream(template=vs), only
+        # populated after the muxer processes its first packet) — guard against
+        # it, since dividing by None crashed every single video packet mux
+        # attempt on this camera the moment this code first ran. Skipping the
+        # rescale for that one edge case is safe (matches the pre-fix
+        # behavior); it only matters before out_stream.time_base is known.
+        if out_stream.time_base is not None and packet.time_base != out_stream.time_base:
+            if packet.pts is not None:
+                packet.pts = int(packet.pts * packet.time_base / out_stream.time_base)
+            if packet.dts is not None:
+                packet.dts = int(packet.dts * packet.time_base / out_stream.time_base)
+            packet.time_base = out_stream.time_base
+        if packet.dts is not None:
+            if last_dts is not None and packet.dts <= last_dts:
+                packet.dts = last_dts + 1
+                if packet.pts is not None and packet.pts < packet.dts:
+                    packet.pts = packet.dts
+            last_dts = packet.dts
+        packet.stream = out_stream
+        try:
+            out.mux(packet)
+        except av.AVError:
+            pass  # Skip malformed packet; keep stream alive
+        return last_dts
+
+    def _ai_decode_worker(self, q: "queue.Queue", stop_evt: threading.Event,
+                           codec_name: str, extradata):
+        """
+        Runs on its own thread with its own CodecContext — entirely isolated from
+        the io thread's container/streams (no PyAV object is ever shared across
+        threads; only immutable raw bytes cross the queue). Falling behind here
+        only drops AI/JPEG frames; it can never delay video RTP delivery.
+        """
+        ctx = av.CodecContext.create(codec_name, "r")
+        if extradata:
+            ctx.extradata = extradata
+        # Multi-threaded decode: large-frame encoders (e.g. TID-A800's 2560x1920
+        # @30fps thermal/radiometric stream) could not keep single-threaded H.264
+        # decode in real time. "AUTO" lets libav pick frame/slice threading, but
+        # thread_count=0 auto-sizes to *available cores per CodecContext* — on a
+        # 40-core box, 13 cameras' AI decode contexts could each spawn up to 40
+        # native libav threads (520 in the worst case). These are real OS threads
+        # created by libav's own threading, invisible to Python's threading
+        # module/faulthandler, and were confirmed (2026-07-16, SIGUSR1 stack dump
+        # showing only ~50 Python-visible threads against 400+ in /proc) to be
+        # the actual source of the fleet-wide thread-count blowup that made the
+        # daemon's HTTP server unresponsive — not GIL contention, not the
+        # "stopper" cleanup threads. A fixed per-camera cap still gives large
+        # frames real frame/slice-level parallelism without scaling with core
+        # count fleet-wide (13 cameras × cap, not 13 × nproc).
+        ctx.thread_type  = "AUTO"
+        ctx.thread_count = _AI_DECODE_THREADS
+        packet_counter = 0  # counts all packets handed to this worker, decoded or not
+        while not stop_evt.is_set():
+            try:
+                raw = q.get(timeout=0.5)
+            except queue.Empty:
+                continue
+
+            # H264 decoder state must advance through every packet — skipping
+            # decode() on P-frames causes the codec context to lose reference
+            # frames, producing corrupted output when the next decode() is called.
+            # We always decode but only push the resulting JPEG every N frames.
+            packet_counter += 1
+            if self._ai_push_interval > 0:
+                _now = time.monotonic()
+                _should_push = (_now - self._ai_last_push >= self._ai_push_interval)
+            else:
+                _should_push = (packet_counter % AI_FRAME_INTERVAL == 0)
+
+            try:
+                pkt = av.Packet(raw)
+                for frame in ctx.decode(pkt):
+                    if _should_push:
+                        if self._ai_push_interval > 0:
+                            self._ai_last_push = time.monotonic()
+                        self._push_jpeg(frame)
+                    break  # only first frame per packet needed
+            except Exception as dec_err:
+                log.debug("[%s] AI decode: %s", self.id[:8], dec_err)
+
+    def _audio_transcode_worker(self, q: "queue.Queue", stop_evt: threading.Event, codec_name: str):
+        """Own thread, own CodecContext/resampler/output muxer — isolated from the io thread."""
+        ctx = av.CodecContext.create(codec_name, "r")
+        out = av.open(
+            f"rtp://127.0.0.1:{self.mediasoup_audio_port}",
+            "w", format="rtp",
+            options={"ssrc": str(_MEDIASOUP_AUDIO_SSRC), "payload_type": str(_MEDIASOUP_AUDIO_PT)},
+        )
+        try:
+            out_as = out.add_stream("libopus", rate=48000)
+            out_as.codec_context.channels = 2
+            out_as.codec_context.layout   = "stereo"
+            resampler = av.AudioResampler(format="s16", layout="stereo", rate=48000)
+            log.info("[%s] Audio RTP transcode %s → opus → rtp://127.0.0.1:%d",
+                     self.id[:8], codec_name, self.mediasoup_audio_port)
+
+            last_out_dts = None
+
+            def _mux_enc(pkt):
+                nonlocal last_out_dts
+                if pkt.dts is not None:
+                    if last_out_dts is not None and pkt.dts <= last_out_dts:
+                        pkt.dts = last_out_dts + 1
+                        if pkt.pts is not None and pkt.pts < pkt.dts:
+                            pkt.pts = pkt.dts
+                    last_out_dts = pkt.dts
+                try:
+                    out.mux(pkt)
+                except av.AVError:
+                    pass
+
+            while not stop_evt.is_set():
+                try:
+                    raw = q.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                try:
+                    pkt = av.Packet(raw)
+                    for frame in ctx.decode(pkt):
+                        for resampled in resampler.resample(frame):
+                            for out_pkt in out_as.encode(resampled):
+                                _mux_enc(out_pkt)
+                except Exception as e:
+                    log.debug("[%s] audio transcode: %s", self.id[:8], e)
+
+            # Flush encoder on clean stop
+            for frame in resampler.resample(None):
+                for out_pkt in out_as.encode(frame):
+                    _mux_enc(out_pkt)
+            for out_pkt in out_as.encode(None):
+                _mux_enc(out_pkt)
         finally:
             try:
-                container.close()
+                out.close()
             except Exception:
                 pass
+
+    def _submit_app_rtp(self, raw_bytes: bytes, pts):
+        """Async POST of one App RTP (ONVIF metadata) packet — never blocks the io thread."""
+        if not hasattr(self, "_app_rtp_seq"):
+            self._app_rtp_seq = 0
+            self._app_rtp_push_count = 0
+        seq = self._app_rtp_seq
+        self._app_rtp_seq += 1
+
+        url = self.app_rtp_callback_url
+        ctx = _SSL_CTX_NOVERIFY if url.startswith("https://") else None
+        payload_b64 = base64.b64encode(raw_bytes).decode("ascii")
+        body = json.dumps({
+            "pt":        0,
+            "timestamp": int(pts or 0),
+            "seq":       seq,
+            "payload":   payload_b64,
+        }).encode("utf-8")
+
+        def _post():
+            try:
+                req = Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
+                urlopen(req, timeout=1, context=ctx)
+                self._app_rtp_push_count += 1
+                if self._app_rtp_push_count == 1 or self._app_rtp_push_count % 500 == 0:
+                    log.debug("[%s] App RTP #%d: %dB payload",
+                              self.id[:8], self._app_rtp_push_count, len(payload_b64))
+            except Exception as e:
+                log.debug("[%s] App RTP callback failed: %s", self.id[:8], e)
+
+        _SHARED_PUSH_EXECUTOR.submit(_post)
 
     def _push_jpeg(self, frame: "av.VideoFrame"):
         """
@@ -277,6 +808,9 @@ class CameraSession:
 
         Flow: decode thread captures ndarray → semaphore check → thread pool
               (encode JPEG → POST /api/internal/frame → release semaphore).
+        Both the semaphore and the thread pool are shared daemon-wide
+        (_SHARED_PUSH_SEMAPHORE / _SHARED_PUSH_EXECUTOR) — see their
+        definitions for why this changed from one-per-camera.
         """
         if not hasattr(self, "_push_count"):
             self._push_count = 0
@@ -284,7 +818,7 @@ class CameraSession:
         count = self._push_count
 
         # Semaphore check happens in the decode thread — fast, no I/O.
-        if not self._push_semaphore.acquire(blocking=False):
+        if not _SHARED_PUSH_SEMAPHORE.acquire(blocking=False):
             log.debug("[%s] AI busy — dropping frame #%d", self.id[:8], count)
             return
 
@@ -294,7 +828,7 @@ class CameraSession:
             raw = frame.to_ndarray(format="rgb24")
             orig_w, orig_h = frame.width, frame.height
         except Exception as e:
-            self._push_semaphore.release()
+            _SHARED_PUSH_SEMAPHORE.release()
             log.warning("[%s] frame capture failed: %s", self.id[:8], e)
             return
 
@@ -325,239 +859,9 @@ class CameraSession:
             except Exception as e:
                 log.warning("[%s] push_jpeg failed: %s", self.id[:8], e)
             finally:
-                self._push_semaphore.release()
+                _SHARED_PUSH_SEMAPHORE.release()
 
-        self._push_executor.submit(_encode_and_post)
-
-    # ── Video RTP path (H.264 → mediasoup PlainTransport) ─────────────────────
-
-    def _video_rtp_loop(self):
-        log.info("[%s] Video RTP loop starting → UDP:%d",
-                 self.id[:8], self.mediasoup_video_port)
-        retry_delay = 0.5
-        while not self._stop.is_set():
-            t0 = time.monotonic()
-            try:
-                self._video_rtp_ingest_once()
-                retry_delay = 0.5
-            except Exception as exc:
-                if self._stop.is_set():
-                    break
-                if time.monotonic() - t0 > 10.0:
-                    retry_delay = 0.5
-                log.warning("[%s] Video RTP error: %s — retry in %.1fs",
-                            self.id[:8], exc, retry_delay)
-                self._stop.wait(retry_delay)
-                retry_delay = min(retry_delay * 1.5, 5.0)
-
-    def _video_rtp_ingest_once(self):
-        # stimeout instead of _Watchdog — see _ai_ingest_once() comment; closing
-        # the container from a background thread while demux() runs here is not
-        # thread-safe in libav and can crash the process.
-        _vrtp_opts = {**_RTSP_OPTIONS, "stimeout": str(int(RTSP_READ_TIMEOUT * 1_000_000))}
-        inp = av.open(self.rtsp_url, options=_vrtp_opts)
-        try:
-            vs = next((s for s in inp.streams if s.type == "video"), None)
-            if vs is None:
-                raise RuntimeError("No video stream")
-
-            out = av.open(
-                f"rtp://127.0.0.1:{self.mediasoup_video_port}",
-                "w", format="rtp",
-                options={"ssrc": str(_MEDIASOUP_VIDEO_SSRC)},
-            )
-            out_vs = out.add_stream(template=vs)
-            log.info("[%s] Video RTP: %s → rtp://127.0.0.1:%d (ssrc=0x%08x)",
-                     self.id[:8], vs.codec_context.name,
-                     self.mediasoup_video_port, _MEDIASOUP_VIDEO_SSRC)
-            try:
-                idr_seen     = False
-                idr_deadline = time.monotonic() + IDR_WAIT_TIMEOUT
-                last_dts     = None
-
-                for pkt in inp.demux(vs):
-                    if self._stop.is_set():
-                        break
-                    if pkt.size == 0:
-                        continue
-
-                    if not idr_seen:
-                        if pkt.is_keyframe:
-                            idr_seen = True
-                        elif time.monotonic() > idr_deadline:
-                            raise RuntimeError(
-                                f"No IDR within {IDR_WAIT_TIMEOUT}s — reconnecting"
-                            )
-                        else:
-                            continue
-
-                    # Enforce monotonically increasing DTS — RTP muxer requires it.
-                    if pkt.dts is not None:
-                        if last_dts is not None and pkt.dts <= last_dts:
-                            pkt.dts = last_dts + 1
-                            if pkt.pts is not None and pkt.pts < pkt.dts:
-                                pkt.pts = pkt.dts
-                        last_dts = pkt.dts
-
-                    pkt.stream = out_vs
-                    try:
-                        out.mux(pkt)
-                    except av.AVError:
-                        pass  # Skip malformed packet; keep stream alive
-            finally:
-                out.close()
-        finally:
-            try:
-                inp.close()
-            except Exception:
-                pass
-
-    # ── Audio RTP path (camera audio → Opus → mediasoup PlainTransport) ───────
-
-    def _audio_rtp_loop(self):
-        log.info("[%s] Audio RTP loop starting → UDP:%d",
-                 self.id[:8], self.mediasoup_audio_port)
-        retry_delay = 0.5
-        while not self._stop.is_set():
-            t0 = time.monotonic()
-            try:
-                self._audio_rtp_ingest_once()
-                retry_delay = 0.5
-            except RuntimeError as exc:
-                if "No audio stream" in str(exc):
-                    # Camera has no audio — stop thread silently
-                    log.info("[%s] No audio stream — audio RTP thread exiting", self.id[:8])
-                    return
-                raise
-            except Exception as exc:
-                if self._stop.is_set():
-                    break
-                if time.monotonic() - t0 > 10.0:
-                    retry_delay = 0.5
-                log.warning("[%s] Audio RTP error: %s — retry in %.1fs",
-                            self.id[:8], exc, retry_delay)
-                self._stop.wait(retry_delay)
-                retry_delay = min(retry_delay * 1.5, 5.0)
-
-    def _audio_rtp_ingest_once(self):
-        # Probe codec with a short-lived connection first, then reopen for the
-        # actual loop.  This avoids holding two simultaneous RTSP sessions.
-        probe = av.open(self.rtsp_url, options=_RTSP_OPTIONS)
-        try:
-            as_probe = next((s for s in probe.streams if s.type == "audio"), None)
-            if as_probe is None:
-                raise RuntimeError("No audio stream")
-            codec_name = as_probe.codec_context.name
-        finally:
-            try:
-                probe.close()
-            except Exception:
-                pass
-
-        out = av.open(
-            f"rtp://127.0.0.1:{self.mediasoup_audio_port}",
-            "w", format="rtp",
-            options={
-                "ssrc":         str(_MEDIASOUP_AUDIO_SSRC),
-                "payload_type": str(_MEDIASOUP_AUDIO_PT),
-            },
-        )
-
-        # Both passthrough and transcode paths use stimeout (socket-level I/O
-        # timeout) instead of _Watchdog.  Calling container.close() from a
-        # _Watchdog background thread while inp.demux() is blocking on a socket
-        # read is not thread-safe in libav and can segfault the process even for
-        # passthrough (demux+mux only, no explicit decode).  stimeout fires
-        # inside libav's own I/O layer and raises an exception on the foreground
-        # demux thread, which is always safe.
-        _audio_opts = {**_RTSP_OPTIONS,
-                       "stimeout": str(int(RTSP_READ_TIMEOUT * 1_000_000))}
-
-        # Pass through if already Opus; transcode everything else.
-        if codec_name == "opus":
-            inp = av.open(self.rtsp_url, options=_audio_opts)
-            try:
-                as_ = next((s for s in inp.streams if s.type == "audio"), None)
-                if as_ is None:
-                    raise RuntimeError("No audio stream")
-                out_as = out.add_stream(template=as_)
-                log.info("[%s] Audio RTP passthrough opus → rtp://127.0.0.1:%d",
-                         self.id[:8], self.mediasoup_audio_port)
-                try:
-                    last_dts = None
-                    for pkt in inp.demux(as_):
-                        if self._stop.is_set():
-                            break
-                        if pkt.size == 0:
-                            continue
-                        if pkt.dts is not None:
-                            if last_dts is not None and pkt.dts <= last_dts:
-                                pkt.dts = last_dts + 1
-                                if pkt.pts is not None and pkt.pts < pkt.dts:
-                                    pkt.pts = pkt.dts
-                            last_dts = pkt.dts
-                        pkt.stream = out_as
-                        try:
-                            out.mux(pkt)
-                        except av.AVError:
-                            pass
-                finally:
-                    out.close()
-            finally:
-                try:
-                    inp.close()
-                except Exception:
-                    pass
-        else:
-            inp = av.open(self.rtsp_url, options=_audio_opts)
-            try:
-                as_ = next((s for s in inp.streams if s.type == "audio"), None)
-                if as_ is None:
-                    raise RuntimeError("No audio stream")
-                out_as    = out.add_stream("libopus", rate=48000)
-                out_as.codec_context.channels = 2
-                out_as.codec_context.layout   = "stereo"
-                resampler = av.AudioResampler(format="s16", layout="stereo", rate=48000)
-                log.info("[%s] Audio RTP transcode %s → opus → rtp://127.0.0.1:%d",
-                         self.id[:8], codec_name, self.mediasoup_audio_port)
-                try:
-                    last_out_dts = None
-
-                    def _mux_enc(pkt):
-                        nonlocal last_out_dts
-                        if pkt.dts is not None:
-                            if last_out_dts is not None and pkt.dts <= last_out_dts:
-                                pkt.dts = last_out_dts + 1
-                                if pkt.pts is not None and pkt.pts < pkt.dts:
-                                    pkt.pts = pkt.dts
-                            last_out_dts = pkt.dts
-                        try:
-                            out.mux(pkt)
-                        except av.AVError:
-                            pass
-
-                    for pkt in inp.demux(as_):
-                        if self._stop.is_set():
-                            break
-                        if pkt.size == 0:
-                            continue
-                        for frame in pkt.decode():
-                            for resampled in resampler.resample(frame):
-                                for out_pkt in out_as.encode(resampled):
-                                    _mux_enc(out_pkt)
-                    # Flush encoder
-                    for frame in resampler.resample(None):
-                        for out_pkt in out_as.encode(frame):
-                            _mux_enc(out_pkt)
-                    for out_pkt in out_as.encode(None):
-                        _mux_enc(out_pkt)
-                finally:
-                    out.close()
-            finally:
-                try:
-                    inp.close()
-                except Exception:
-                    pass
+        _SHARED_PUSH_EXECUTOR.submit(_encode_and_post)
 
     # ── App RTP path (RTSP data/subtitle track → server HTTP callback → DataChannel) ──
 
@@ -692,7 +996,18 @@ class CameraManager:
         with self._lock:
             old = self._cameras.pop(cid, None)
         if old:
-            old.stop()
+            # Fire-and-forget: old.stop() can block up to _join_threads'
+            # timeout (8s) waiting for the io thread's nested cleanup. With
+            # ThreadingHTTPServer that only ever held up THIS request's own
+            # thread — but during a churn burst (a flaky camera reconnecting
+            # every ~30-60s) each blocked stop() still occupied a full request
+            # thread for seconds, and requests can arrive faster than that
+            # drains. Submitting to the bounded _SHARED_STOP_EXECUTOR lets the
+            # HTTP response return immediately without spawning an unbounded
+            # thread per churn event; the DB-of-truth (self._cameras) is
+            # already updated by the time the caller sees "ok", so nothing
+            # observes the old session as still-registered.
+            _SHARED_STOP_EXECUTOR.submit(old.stop)
         sess = CameraSession(cfg)
         with self._lock:
             self._cameras[cid] = sess
@@ -702,13 +1017,17 @@ class CameraManager:
         with self._lock:
             sess = self._cameras.pop(cid, None)
         if sess:
-            sess.stop()
+            _SHARED_STOP_EXECUTOR.submit(sess.stop)
             return True
         return False
 
     def count(self) -> int:
         with self._lock:
             return len(self._cameras)
+
+    def get(self, cid: str):
+        with self._lock:
+            return self._cameras.get(cid)
 
     def stop_all(self):
         with self._lock:
@@ -758,7 +1077,23 @@ class Handler(BaseHTTPRequestHandler):
         elif p == "/cameras":
             self._json(200, {"count": _manager.count()})
         else:
-            self._json(404, {"error": "not found"})
+            parts = p.strip("/").split("/")
+            if len(parts) == 3 and parts[0] == "cameras" and parts[2] == "video-params":
+                sess = _manager.get(parts[1])
+                if sess is None:
+                    self._json(404, {"error": "camera not found"})
+                elif sess.video_codec_name is None:
+                    # RTSP not yet probed (mid-(re)connect) — caller should retry shortly.
+                    self._json(202, {"ready": False})
+                else:
+                    self._json(200, {
+                        "ready":               True,
+                        "codec":               sess.video_codec_name,
+                        "spropParameterSets":  sess.sprop_parameter_sets or "",
+                        "profileLevelId":      sess.profile_level_id,
+                    })
+            else:
+                self._json(404, {"error": "not found"})
 
     def do_POST(self):
         p = urlparse(self.path).path
@@ -798,8 +1133,25 @@ class Handler(BaseHTTPRequestHandler):
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+def _handle_sigterm(signum, frame):
+    # Python installs no default SIGTERM handler — without this, SIGTERM (what
+    # `npm run ingest:restart`/`stop` actually send, not SIGINT) kills the
+    # process immediately with zero cleanup: no container.close(), no RTSP
+    # TEARDOWN ever sent to any camera. Every restart was silently leaking an
+    # open RTSP session per camera on the *camera's own* side. Confirmed live
+    # (2026-07-16) that a handful of rapid restarts during debugging left
+    # TID-A800 (which has known limited concurrent-session capacity — see
+    # §6.7) refusing/hanging on all new connection attempts, which then
+    # deadlocked the whole daemon via the setup semaphore (§6.10) never
+    # getting its permits back. Re-raising as KeyboardInterrupt reuses the
+    # exact same graceful-shutdown path main() already has for SIGINT/Ctrl-C.
+    raise KeyboardInterrupt()
+
+
 def main():
     global _manager
+
+    signal.signal(signal.SIGTERM, _handle_sigterm)
 
     parser = argparse.ArgumentParser()
     parser.add_argument("--addr", default=":7070")
@@ -813,7 +1165,17 @@ def main():
         host, port = h, int(p)
 
     _manager = CameraManager()
-    server   = HTTPServer((host, port), Handler)
+    # ThreadingHTTPServer (2026-07-15): the plain single-threaded HTTPServer
+    # processes one request at a time — a slow POST/DELETE (blocked inside
+    # CameraSession.stop()'s thread join, see _join_threads) stalled every
+    # other request, including /health, behind it. Under a burst of camera
+    # registrations (e.g. all cameras re-registering at startup) this
+    # serialized queue of slow requests was found to compound into a fully
+    # unresponsive daemon (TCP connections not even accepted) with hundreds of
+    # threads piled up. Each request now runs on its own thread so a slow
+    # stop() for one camera no longer blocks any other camera's add/remove or
+    # health checks.
+    server = ThreadingHTTPServer((host, port), Handler)
     log.info("Ingest daemon listening on %s:%d", host, port)
 
     try:

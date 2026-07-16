@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAPTURE-002 |
-| **Version** | 1.9 |
+| **Version** | 1.23 |
 | **Status** | Active |
-| **Date** | 2026-07-15 |
+| **Date** | 2026-07-16 |
 | **Ops Guide** | [RTSP_Capture_Backend_Setup.md](../ops/RTSP_Capture_Backend_Setup.md) |
 | **Related Design** | [Design_FFmpeg_RTSP_Capture.md](../design/Design_FFmpeg_RTSP_Capture.md) · [Design_RTSP_WebRTC_Architecture.md](../design/Design_RTSP_WebRTC_Architecture.md) |
 
@@ -443,6 +443,135 @@ ctx.frameWatchdogTimer = setInterval(async () => {
 | `ctx._ingestRtspUrl` | MediaMTX loopback URL | 설정 시 직접 HTTP 재등록 |
 | `ctx._captureUrl` | 원본 RTSP / MediaMTX URL | mediasoup 재등록 시 사용 |
 
+**버그 수정 — 재진입 가드 누락으로 인한 restart storm (2026-07-15):** 위 `setInterval(async () => {...}, 8_000)` 콜백에 재진입 가드가 없어, `_ingestRemoveCamera()`(최대 1회 재시도 포함 최대 ~10.5s) + `_ingestRegisterCamera()`(최대 5s) 왕복이 8초 폴링 주기보다 오래 걸리면 다음 tick이 이전 복구 작업이 끝나기 전에 또 발동해 같은 카메라 ID에 대해 remove+register를 중복 실행했음 — 새로 맺어진 연결이 안정화되기도 전에 스스로 다시 끊어버리는 무한 restart storm으로 이어짐. 실측(TID-A800, `192.168.214.32`)에서 RTSP 핸드셰이크 자체가 15초 이상 걸려 이 조건에 상시 해당했고, 동일 물리 카메라에 대해 2개의 카메라 레코드(채널 0/1)가 각각 4개(AI/videoRTP/audioRTP/appRTP) 세션을 열어 총 8개 동시 RTSP 세션이 걸리면서 증상이 더 심해짐 — 로그상 8~25초 주기로 "Stopped → removed → AI loop starting"이 끝없이 반복되고 `AI frame #1`을 넘어서기도 전에 다시 끊기는 패턴으로 나타났다. 다른 카메라라도 재등록 왕복이 일시적으로 8초를 넘기면 동일 증상이 재현될 수 있어, 특정 카메라만의 문제가 아니라 전반적인 "재생 끊김"의 공통 원인이었다.
+
+수정: `ctx._watchdogBusy` 불리언 가드를 추가해 이전 복구 작업이 진행 중이면 새 tick을 스킵. 또한 `ctx.capture.start()` 이후 `ctx.lastFrameAt`을 재시작 완료 시점으로 다시 갱신해, 새로 등록된 세션이 RTSP 핸드셰이크를 마칠 때까지 `FRAME_STALL_MS`(20s) 전체를 유예받도록 함(기존에는 tick이 발동한 시점 기준으로 갱신되어 실제 재등록 소요 시간만큼 유예가 깎였음). 소스: `server/src/services/pipelineManager.js` frame watchdog 블록.
+
+```javascript
+ctx._watchdogBusy = false;
+ctx.frameWatchdogTimer = setInterval(async () => {
+  if (!ctx.running || !ctx.lastFrameAt || ctx._watchdogBusy) return;
+  const stalledMs = Date.now() - ctx.lastFrameAt;
+  if (stalledMs > FRAME_STALL_MS) {
+    ctx._watchdogBusy = true;
+    try {
+      // ...capture.stop() → _ingestRemoveCamera() → _ingestRegisterCamera() → capture.start()
+      ctx.lastFrameAt = Date.now(); // 재시작 완료 시점 기준으로 유예 재부여
+    } finally {
+      ctx._watchdogBusy = false;
+    }
+  }
+}, 8_000);
+```
+
+#### `Camera.webrtcVideoOnly` — 세션 부하 완화용 video-only fan-out (2026-07-15 추가)
+
+재진입 가드(§6.7 계층 2) 적용 후에도 TID-A800(`192.168.214.32`)은 watchdog stall이 완전히 사라지지 않고 주기적으로 재발했음 — 원인 조사 순서(모두 라이브로 실측):
+
+1. **ICMP ping 클린**: `192.168.214.32`로 120회 ping, 패킷 손실 0%·지연 <2ms — 순수 네트워크 계층 문제 아님
+2. **AI 디코딩 CPU 병목 가설**: `ingest_daemon.py`의 AI 경로가 `codec_context.thread_type="NONE", thread_count=1`(단일 스레드 강제)였고, TID-A800(2560×1920@30fps)은 이 카메라 fleet에서 가장 큰 프레임 크기 — `thread_type="AUTO", thread_count=0`(멀티스레드 디코딩)으로 전환했으나 단독으로는 stall 빈도를 유의미하게 낮추지 못함
+3. **동일 물리 카메라 중복 등록**: `ffmpeg`로 채널 0(`/0/H.264/`)·채널 1(`/1/H.264/`) 각각 1프레임씩 캡처해 시각적으로 비교 — 완전히 동일한 화면(사무실 데스크뷰)으로 확인, 실제로는 단일 물리 카메라를 두 카메라 레코드("TID-A800"·"TID-A800 Ch2")로 중복 등록하고 있었음. 각 레코드가 4개(AI/video/audio/appRTP) RTSP 세션을 열어 총 8개 동시 세션이 한 카메라에 걸림 — 하나를 삭제해 반짝 안정화됐으나, 이후 다른 세션에서 같은 카메라가 재발견/재등록되며 두 레코드가 다시 공존하게 됨(아래 참고)
+4. **video-only fan-out**: 세션 수를 더 줄이기 위해 `mediasoupEngine.js`의 `addCameraStream(cameraId, rtspUrl, appRtpRtspUrl, captureFps, opts)`에 `opts.videoOnly`를 추가 — `true`면 audio `PlainTransport`/`Producer`와 App RTP용 `DirectTransport`/`DataProducer`를 아예 생성하지 않고, ingest-daemon 등록 body에서도 `mediasoupAudioPort`/`appRtpCallbackUrl`/`appRtpRtspUrl`을 생략(daemon 쪽 `CameraSession.__init__`이 `if self.mediasoup_audio_port:`/`if self.app_rtp_callback_url:`로 존재 여부만으로 스레드 기동 여부를 결정하므로, 필드 자체를 안 보내면 해당 스레드가 시작되지 않음). 카메라당 세션 4→2.
+   - `negotiate()`(WHEP)에서 `cam.audioProducer.closed`/`cam.dataProducer.closed`를 옵셔널 체이닝 없이 직접 참조하던 두 곳이 `videoOnly` 카메라에서 `TypeError`를 낼 수 있어 `cam.audioProducer && !cam.audioProducer.closed` / `cam.dataProducer && !cam.dataProducer.closed`로 가드 추가 — `_closeCam()`은 이미 전 필드 옵셔널 체이닝이라 무영향
+   - `Camera.webrtcVideoOnly`(boolean, `PUT /api/cameras/:id`) → `pipelineManager.js`가 `ctx._webrtcVideoOnly`로 캐싱해 watchdog 재등록 경로(`reregisterAllWithIngestDaemon()` 포함) 3곳 모두 동일하게 반영
+5. **최종 실측 결과**: `TID-A800`(video-only, 세션 2)에 적용 직후 1회 재시작(전환 직후 과도기적 40초 지점) 후 5분+ 연속 무중단, 동시에 재등록되어 있던 `TID-A800 Ch2`(표준 4세션, video-only 아님)도 같은 기간 재시작 0회 — 물리 카메라 1대당 총 세션 수가 8→6(2+4)로 줄어든 것만으로 두 채널 모두 안정화됨. 이는 원인이 카메라 자체의 동시 RTSP 세션 처리 한계(네트워크도 디코딩 속도도 아님)였음을 시사
+
+**중복 등록이 다시 나타난 경위**: 이 저장소 작업 환경은 여러 세션이 동시에 공유하므로(과거 기록 참고), 한 세션에서 카메라를 삭제해도 다른 세션이나 discovery 재스캔이 동일 물리 카메라를 다시 등록할 수 있음 — 실제로 그렇게 됨. 강제로 계속 유지하려 하지 않고, 대신 위 4번(video-only)으로 "레코드 2개가 공존해도 세션 총량이 감당 가능한 수준"이 되도록 조정하는 편이 이런 공유 환경에서 더 견고함.
+
+#### §6.8 카메라당 RTSP 세션을 정확히 1개로 — 단일 연결 재설계 (2026-07-15)
+
+`Camera.webrtcVideoOnly`(위 §6.7 항목)는 세션을 4→2로 줄여 TID-A800을 안정화했지만, "RTSP는 무조건 1개, YouTube도 1개"라는 명시적 요구를 만족하려면 그 이상이 필요함 — `ingest_daemon.py`를 카메라당 **정확히 1개의 `av.open()`**만 여는 구조로 재설계.
+
+**아키텍처 (모듈 docstring 및 코드 주석 참고):**
+- `CameraSession`에 스레드가 하나만 남음 — `io`(구 `_combined_loop`/`_combined_ingest_once`). 이 스레드가 `video`+`audio`(+같은 URL일 때 `app` data 스트림)를 `container.demux(*streams)` 하나로 함께 읽음.
+- 영상 RTP passthrough(디코드 없음, 시간 민감)는 `io` 스레드에서 그대로 처리 — 지연에 민감하므로 절대 다른 스레드로 옮기지 않음.
+- AI JPEG 디코드는 **완전히 별도 스레드**(`_ai_decode_worker`)로 분리 — `io` 스레드는 각 비디오 패킷의 **원시 바이트**(`bytes(packet)`, PyAV 객체가 아닌 불변 데이터)를 bounded queue(`_WORKER_QUEUE_MAXSIZE`, 기본 60, 가득 차면 drop)로 넘기고, 워커는 자신만의 독립 `CodecContext`(`vs.codec_context.extradata`로 시딩)로 디코드. **동일 스레드에서 decode+RTP mux를 합치는 시도는 과거(§6.7 이전) 한 번 시도·롤백됐음** — 느린 디코드가 시간 민감한 RTP mux를 head-of-line-block 시켰기 때문. 원시 바이트를 큐로 넘겨 디코드를 별도 스레드로 완전히 분리하는 이번 설계는 그 실패를 반복하지 않음(직접 검증: TID-A800에 대해 269개 패킷 크로스스레드 디코드, 에러 0).
+- 오디오: 이미 Opus인 경우 무손실 passthrough는 `io` 스레드에서 그대로(디코드 불필요, 저렴), 그 외 포맷은 transcode 전용 워커 스레드로 분리(AI 워커와 동일 패턴).
+- App RTP(ONVIF 메타데이터)는 `appRtpRtspUrl == rtspUrl`(현재 mediasoup/직접-카메라 배포의 일반적인 경우)일 때만 같은 연결에 합류 — 다를 때(MediaMTX loopback 모드)는 원본 카메라 URL이 필요하므로 기존 별도 연결(`_app_rtp_loop`)을 그대로 유지(이 경우는 물리적으로 다른 소스라 1개로 합칠 수 없음).
+
+**부수적으로 함께 발견·수정한 문제 3건** (모두 카메라 churn이 잦을 때만 드러남):
+
+1. **`_join_threads` 타임아웃 부족**: 스레드가 1개(`io`)로 줄면서 그 내부 정리(AI/오디오 워커 join + RTP muxer/container close)가 중첩됨 — 기존 3초 타임아웃은 이 중첩 정리 시간(최대 ~7초)에 못 미쳐 오히려 스레드가 새어나갔음(구조상 4개였을 때보다 스레드당 정리 시간이 길어졌기 때문). 8초로 상향(구조 4-스레드 방식은 스레드당 개별 3초 예산이라 이론상 최대 12초였으므로 회귀 아님).
+2. **HTTP 서버가 단일 스레드**: `HTTPServer`(요청 순차 처리) → `ThreadingHTTPServer`로 교체. 카메라 churn이 몰릴 때 느린 stop() 하나가 다른 모든 요청(다른 카메라 add/remove, `/health`)을 막던 문제 해결.
+3. **`CameraManager.add()`/`remove()`의 동기적 `sess.stop()`**: HTTP 요청을 처리하는 스레드가 최대 8초짜리 join을 그대로 물고 있었음 — `old.stop()`을 별도 `threading.Thread`로 fire-and-forget 실행하도록 변경, HTTP 응답은 즉시 반환.
+4. **카메라당 `ThreadPoolExecutor(max_workers=4)`**: JPEG/App RTP push용 스레드 풀을 카메라마다 만들고 있어 fleet 전체로 최대 4×카메라수(13대 기준 52개) 스레드가 쌓일 수 있었음 — 데몬 전체가 공유하는 `_SHARED_PUSH_EXECUTOR`(기본 `max_workers=16`, env `INGEST_PUSH_WORKERS`)와 `_SHARED_PUSH_SEMAPHORE`로 통합.
+
+**검증 (라이브, TID-A800 대상):**
+- 독립 스크립트로 원시 바이트 크로스스레드 디코드 기법 확인(269 패킷, 에러 0)
+- 실제 `CameraSession` 클래스를 직접 인스턴스화해 30초 실행 — video RTP 10,804 UDP 패킷/30s, AI JPEG 278프레임/30s, 스레드 누수 없음
+- `CameraSession` 4회 연속 시작/종료 사이클 — 매번 스레드 수가 정확히 baseline으로 복귀(누수 0)
+- 배포 후 13개 카메라+YouTube 전체 재등록 시 로그에 `Combined RTSP loop starting`이 카메라당 1줄만 나타남(과거처럼 `AI loop`/`Video RTP loop`/`Audio RTP loop`/`App RTP loop` 4줄이 아님) — "RTSP 1개" 요구가 코드 레벨에서 충족됨을 로그로 직접 확인
+
+**§6.8 배포 직후 남아있던 미해결 항목** (아래 §6.9에서 실제 근본 원인 확정·수정됨): 위 3개 부수 수정(join 타임아웃/ThreadingHTTPServer/공유 풀) 배포 후에도 데몬 스레드 수는 안정적(393개 고정, 성장 없음)이었지만, `curl http://127.0.0.1:7070/health`가 간헐적으로 수십초~2분 이상 응답하지 않는 현상이 남아있고, 이 창에서는 Node.js의 watchdog 재등록(`_ingestRemoveCamera`/`_ingestRegisterCamera`, 5초 타임아웃)이 실제로 반복 실패함(YouTube 채널 다수에서 로그로 확인). `av.open()`/`demux()`가 블로킹 구간에서 GIL을 정상적으로 반환하는지는 별도 스크립트로 검증해 문제 없음을 확인했으므로(카운터 스레드가 6개의 동시 PyAV 연결 중에도 베이스라인 속도 그대로 유지), GIL 경합은 원인이 아니었음.
+
+#### §6.9 진짜 근본 원인 — `mediasoupEngine.js`의 무제한 대기 HTTP 요청이 카메라를 영구히 잠금 (2026-07-16)
+
+§6.8 배포 다음날, TID-A800이 서버를 몇 시간 재시작 없이 켜뒀더니 다시 완전히 멈춰(`frameCount` 정지) 있었고, `POST /api/cameras/:id/stream/start`를 수동으로 호출해도 `{"success":true}`를 반환하면서도 실제로는 파이프라인이 전혀 시작되지 않는(`pipelineStatus`가 계속 `null`) 현상을 발견 — 로그에도 `Capture started`/`Fatal error` 어느 쪽도 찍히지 않고 완전히 침묵.
+
+**원인**: `pipelineManager.js`의 `startCamera(camera)`는 동시 호출 방지를 위해 `_starting`(Set) 가드를 사용합니다:
+```javascript
+async startCamera(camera) {
+  if (this._starting.has(camera.id)) return;   // 이미 시작 중이면 조용히 no-op
+  this._starting.add(camera.id);
+  try {
+    await this._doStartCamera(camera);
+  } finally {
+    this._starting.delete(camera.id);           // 항상 정리 — 단, await가 "끝나야" 실행됨
+  }
+}
+```
+`_doStartCamera()`는 mediasoup 경로에서 `getWebRTCEngine().addCameraStream()`을 호출하고, 그 내부는 ingest-daemon에 `POST /cameras`를 보내는 `_ingestPost()`를 `await`합니다. 그런데 `_ingestPost()`/`_ingestDelete()`(`mediasoupEngine.js`)는 **Node 내장 `http.request()`를 타임아웃 없이** 사용하고 있었음(`pipelineManager.js`의 동급 함수 `_ingestRegisterCamera`/`_ingestRemoveCamera`는 `fetch()` + `AbortSignal.timeout(5000)`로 이미 보호되어 있었지만, mediasoup 전용 헬퍼는 그 보호가 빠져 있었음). ingest-daemon이 (§6.8에서 다룬 것과 같은 부류의) 응답 지연을 한 번이라도 겪으면 이 Promise가 **영원히 resolve도 reject도 되지 않고**, `_doStartCamera()`의 `await`가 끝나지 않으므로 `finally { this._starting.delete(camera.id) }`도 절대 실행되지 않습니다 — 그 순간부터 해당 카메라 ID는 **프로세스가 재시작될 때까지 영구히** `_starting`에 남아, 이후의 모든 시작 시도(부팅 시 자동시작, watchdog 재시작, 수동 `stream/start` API 호출 전부)가 첫 줄의 가드에서 조용히 no-op됩니다 — 에러 로그도 전혀 남지 않아 원인 파악이 어려웠음.
+
+**수정**: `_ingestPost()`/`_ingestDelete()`에 `timeout: 8000`(ingest-daemon 쪽 `_join_threads` 8초 예산과 정합) 옵션과 `req.on('timeout', () => req.destroy(new Error(...)))` 핸들러 추가 — 타임아웃 시 `req.destroy(err)`가 기존 `req.on('error', reject)` 핸들러를 통해 Promise를 정상적으로 reject시켜, `_starting` 가드가 절대 영구 고착되지 않도록 보장. 소스: `server/src/services/webrtc/mediasoupEngine.js`.
+
+**검증**: 수정 배포 후 서버 재부팅 시 TID-A800 두 채널 모두 다른 11개 카메라와 함께 즉시 자동시작(`running=true`, frameCount 정상 증가) — 이전에는 매 재부팅마다 정적으로 남아있었음. 90초 관찰 창에서 TID-A800 watchdog 재시작 0회, mediasoup Consumer 진단 로그(`Consumer-diag [43e8ec94] bytesSent=2225750 pkts=1517`)로 실제 WebRTC 비디오 패킷이 지속적으로 전송되고 있음을 직접 확인. Playwright 기반 `iceTest.js`(`--headless`)로 STUN/TURN/ICE 인프라 자체도 독립 검증(ICE `connected`, LAN direct 경로) — 이 스크립트가 기존에는 자체 서명 인증서 때문에 `ERR_CERT_AUTHORITY_INVALID`로 항상 실패했던 것도 `ignoreHTTPSErrors: true` 추가로 함께 수정.
+
+**교훈**: 동일한 다운스트림(ingest-daemon)을 호출하는 두 개의 병렬 HTTP 클라이언트 구현(`pipelineManager.js`의 `fetch`+타임아웃 vs `mediasoupEngine.js`의 원시 `http.request`+무제한 대기)이 존재했고, 한쪽만 보호되어 있었던 것이 근본 원인 — 재발 방지를 위해 향후 ingest-daemon을 호출하는 신규 코드는 반드시 명시적 타임아웃을 갖춰야 함.
+
+#### §6.10 `ingest-daemon` 간헐적 응답 불능의 진짜 원인 — libav 내부 디코드 스레드가 코어 수만큼 자동 증식 (2026-07-16)
+
+§6.9 배포 이후에도 `ingest-daemon`의 `/health`가 다시 완전히 무응답 상태(10초 타임아웃)로 돌아오는 현상이 재발 — 이번엔 프로세스 스레드 수가 270개(기동 직후) → 399~482개(약 15~30분 후, 실제 카메라/YouTube churn 하에서)로 계속 증가한 뒤 완전히 멈췄음. `CameraManager.add()`/`remove()`의 "stopper" 스레드를 무제한 `threading.Thread(...).start()`에서 고정 크기(`_SHARED_STOP_EXECUTOR`, 8 workers) `ThreadPoolExecutor`로 교체했지만 재발을 막지 못함 — 이 수정 자체는 유효하지만 근본 원인이 아니었음.
+
+**진단**: `py-spy`/`gdb`는 이 환경에서 ptrace 권한(`/proc/sys/kernel/yama/ptrace_scope=1`, sudo 없음)이 없어 사용 불가. 대신 `faulthandler.register(signal.SIGUSR1, ...)`을 데몬 코드에 내장해 `kill -USR1 <pid>`만으로 프로세스 자신이 모든 Python 스레드의 실제 스택을 `/tmp/ingest-daemon-stacks.log`에 덤프하도록 함(외부 ptrace 불필요). 실제로 멈춘 인스턴스에 이 신호를 보내 확보한 덤프 결과, **Python이 인지하는 스레드는 51개뿐**이었는데 동시각 `/proc/<pid>/task`에는 400개 이상이 있었음 — 나머지 350개 이상은 Python `threading` 모듈에 등록되지 않은 스레드, 즉 C 확장(libav)이 내부적으로 만든 네이티브 스레드였다는 뜻.
+
+**원인**: `_ai_decode_worker()`가 각 카메라의 AI 디코드용 `CodecContext`에 `ctx.thread_type = "AUTO"; ctx.thread_count = 0`을 설정하고 있었음 — libav는 `thread_count=0`을 "가용 코어 수만큼 자동 할당"으로 해석한다. 이 서버는 40코어(`nproc`)이므로, 카메라 1대의 AI 디코드 `CodecContext` 하나가 최악의 경우 최대 40개의 네이티브 디코드 스레드를 열 수 있고, 13대 카메라 전체로는 이론상 최대 520개까지 누적될 수 있는 구조였다. 이 스레드들은 Python 레벨에서 전혀 보이지 않으므로 기존의 모든 진단(GIL 경합 배제 테스트, `_starting` 가드 조사, stopper 풀 도입)이 놓칠 수밖에 없었음 — `thread_type="AUTO"` 자체는 §6.7 이전부터 TID-A800의 2560×1920@30fps 대형 프레임을 단일 스레드 디코드로는 실시간 처리할 수 없어서 의도적으로 도입된 설정이었다(대형 프레임 자체의 멀티스레드 디코드 필요성은 여전히 유효함).
+
+**수정**: `thread_count=0`(코어 수만큼 자동)을 고정 상한 `_AI_DECODE_THREADS`(환경변수 `AI_DECODE_THREADS`, 기본값 4)로 교체 — 대형 프레임의 프레임/슬라이스 병렬 디코드 이점은 유지하면서, 전체 네이티브 스레드 수가 카메라 대수 × 코어 수가 아니라 카메라 대수 × 4로 상한선이 고정되도록 함. 소스: `ingest-daemon/ingest_daemon.py` `_ai_decode_worker()`.
+
+**검증**: 수정 배포 직후 프로세스 스레드 수 125개(이전 기동 직후 기준 270개 대비 대폭 감소), `/health` 응답 7ms. 장시간 churn 하에서의 스레드 수 증가 억제 여부는 후속 관찰 필요(진행 중).
+
+**교훈**: 스레드 수 폭증 진단에서 `/proc/<pid>/task`(OS 레벨)와 `threading.enumerate()`/`sys._current_frames()`(Python 레벨, faulthandler 포함)의 카운트가 다르면 C 확장이 자체적으로 스레드를 생성하고 있다는 강한 신호다 — Python 코드만 감사해서는 절대 찾을 수 없음. libav의 `thread_count=0`(auto)은 코어 수에 비례하므로, 컨테이너/멀티 카메라처럼 하나의 프로세스가 같은 종류의 `CodecContext`를 다수 여는 워크로드에서는 위험한 기본값 — 항상 고정 상한을 명시할 것.
+
+#### §6.11 재시작 직후 전체 함대 동시 연결로 인한 완전 정지, 그리고 SIGTERM 무응답으로 인한 카메라측 좀비 세션 (2026-07-16)
+
+§6.10 배포 직후에도 daemon 재시작 시 13개 카메라 + 6개 YouTube 세션이 **거의 동시에** `av.open()`을 호출하면서 4분 이상 전체 정지(프레임 0건, `/health` 완전 무응답, 메인 accept 스레드는 `select()`에서 정상 대기 중)가 재현됨. SIGUSR1 스택 덤프로 확인한 결과, 10개 이상의 카메라 io 스레드가 setup 단계의 동일한 지점에 몰려 있었고 단 하나도 steady-state 루프에 도달하지 못했음 — GIL이 CPU/파싱 부하가 큰 setup 단계(연결+스트림 프로빙+워커 스레드 기동)에서 다수 스레드에 의해 장시간 점유된 것으로 추정.
+
+**수정 1 — 연결 수립 게이트**: `_combined_ingest_once()`의 `av.open()`부터 steady-state demux 루프 진입 직전까지를 `_INGEST_SETUP_SEMAPHORE`(기본 3, `INGEST_SETUP_CONCURRENCY`)로 감싸 동시 setup 개수를 제한. steady-state 루프 진입 직후 즉시 해제(연결 수명 전체를 붙잡지 않음). 소스: `ingest_daemon.py` `_combined_ingest_once()`.
+
+**수정 2 — SIGTERM 무응답 발견**: 게이트 적용 후에도 REAL IP 카메라(TID-A800 등)에 대한 `av.open()`이 개별적으로 계속 멈춰있는 게 관찰됨. 원인 조사 중 `ingest_daemon.py`가 `except KeyboardInterrupt`(SIGINT)만 처리하고 **SIGTERM에는 아무 핸들러도 등록하지 않았음**을 발견 — `npm run ingest:restart`/`stop`이 실제로 보내는 신호는 SIGTERM인데, Python 기본 동작상 핸들러 없는 SIGTERM은 프로세스를 즉시 종료시켜 `finally` 블록도, `container.close()`(RTSP TEARDOWN 전송)도 전혀 실행되지 않음. 이 세션에서 디버깅 중 반복한 재시작(4~5회, 모두 SIGTERM)마다 카메라 측에 정상 종료되지 않은 RTSP 세션이 남았고, 특히 동시 세션 처리 한계가 낮은 TID-A800(§6.7)이 이 좀비 세션 누적으로 새 연결 자체를 거부/행(hang)하게 되어 §6.11 앞부분의 setup 게이트 permit이 영구히 반환되지 않는 연쇄 장애로 이어진 것으로 판단.
+
+**수정**: `signal.signal(signal.SIGTERM, _handle_sigterm)`을 `main()` 시작 시 등록, 핸들러는 `KeyboardInterrupt`를 재발생시켜 기존 SIGINT 경로의 `_manager.stop_all()`(→ 카메라별 `container.close()` → RTSP TEARDOWN)을 SIGTERM에도 동일하게 적용. 소스: `ingest_daemon.py` `_handle_sigterm()`.
+
+**검증**: 좀비 세션 발생 이후 daemon을 SIGTERM으로 재시작(이번엔 그레이스풀)하고 카메라측 세션 타임아웃을 기다린 뒤 재확인 — TID-A800 Ch1/Ch2 포함 13개 카메라 전부 `running=true`, `frameCount` 지속 증가, `lastFrameAt` 10~20초 이내로 신선함을 `/api/cameras` REST 조회로 직접 확인. `/health` 응답도 5~17ms로 정상.
+
+**미해결 (2026-07-16 시점, §6.12에서 부분 해소됨)**: 위 수정 이후에도 대부분의 카메라(TID-A800뿐 아니라 TNM-C2712TDR·TNO-C3020TRA·TNM-C2712T 등)의 `lastFrameAt`이 약 20~24초 주기로 정체된 뒤 Node.js 프레임 watchdog(`FRAME_STALL_MS=20_000`)에 의해 강제 재시작되는 패턴이 다수 카메라에서 거의 동시에 관찰됨 — 특정 카메라(TID-A800)만의 문제가 아니라 함대 전체에 걸친 주기적 현상일 가능성. daemon 프로세스 자체는 9분+ 동안 죽지 않고 살아있었지만(같은 PID 유지), 그 사이에도 `/health`가 어떤 순간엔 5~17ms, 어떤 순간엔 8초 완전 타임아웃으로 오락가락하는 것을 확인 — 완전 정지가 아니라 주기적 부분 마비.
+
+#### §6.12 setup 게이트의 진짜 결함 — 취소된 카메라가 permit을 영원히 기다림, 그리고 SIGTERM이 실제로는 신뢰할 수 없음 (2026-07-16)
+
+`FRAME_STALL_MS`를 20s→45s로 완화했지만 재발 — 이번엔 `mediasoup re-registration failed`가 **실제 IP 카메라 7대 전부**에서 거의 균등한 빈도(최근 100건 중 각 14~15건)로 나타남, TID-A800만의 문제가 아니었음. `addCameraStream failed: ingest-daemon POST /cameras timed out after 8000ms`가 원인 — ingest-daemon의 `/cameras` POST 핸들러 자체는 스레드만 스폰하고 즉시 응답해야 하는데도 8초를 넘김.
+
+**원인**: §6.11에서 추가한 `_INGEST_SETUP_SEMAPHORE.acquire()`가 **타임아웃도 `self._stop` 확인도 없는 순수 블로킹 호출**이었음. 카메라가 재시작될 때마다(약 45~56초 주기) 옛 세션의 io 스레드가 아직 permit을 기다리는 도중에 `CameraManager.add()`로 교체(cancel)될 수 있는데, 대기 중인 `acquire()`는 이 취소를 전혀 알지 못하고 **영원히 대기**함. permit은 5개(원래 3개)뿐이므로, 이런 영구 대기 스레드가 재시작마다 하나씩 누적되어 결국 새로 등록하려는 카메라조차 실제 permit을 받기까지 오래 걸리게 되고, 그 여파가 (놀랍게도) ingest-daemon 전체의 HTTP 응답성까지 저하시켜 POST 자체가 8초를 넘기게 만든 것으로 판단(스레드 수 폭증이 다시 §6.10과 같은 부류의 전반적 스케줄링 저하를 유발).
+
+**수정**: `acquire()`를 `while not self._stop.is_set(): if _INGEST_SETUP_SEMAPHORE.acquire(timeout=0.5): break` 폴링 방식으로 교체 — 취소된 카메라는 0.5초 내 대기를 포기하고 조용히 반환(`_combined_loop`의 `while not self._stop.is_set()`이 이를 정상적인 종료로 처리). 동시성도 3→5로 상향. 소스: `ingest_daemon.py` `_combined_ingest_once()`.
+
+**부수 발견 — 비디오 payload_type 암묵 의존**: 오디오 RTP 출력은 `payload_type`을 명시하는데 비디오는 하지 않고 있었음(ffmpeg rtp muxer 기본값에 암묵적으로 의존). mediasoup Producer는 `VIDEO_PT=96`만 허용하므로 위험한 비대칭 — `_MEDIASOUP_VIDEO_PT=96`을 신설해 오디오와 동일하게 명시.
+
+**검증**: 배포 후 WHEP 테스트에서 **처음으로 실제 비디오 바이트 수신 확인**(TID-A800, t=20s 시점 bytesReceived=1,628,448) — 이전까지는 예외 없이 0바이트였음. mediasoup 등록 실패 패턴도 재시작 직후 관찰 window에서 소멸.
+
+**부수 발견 — SIGTERM이 실제로는 신뢰할 수 없음**: §6.11에서 추가한 SIGTERM 핸들러가 격리된 재현 스크립트에서는 100% 정상 작동(핸들러 발동, 2초 내 정상 종료)하지만, **실제 daemon 프로세스에서는 재현 불가 — 여러 차례 SIGTERM을 보내도 메인 스레드가 몇 분씩 원래의 `select()` 호출에 그대로 남아있음**(SIGUSR1 스택 덤프로 확인). 스레드별 `SigBlk`도 확인했으나 SIGTERM을 차단하는 스레드는 없었음 — 정확한 메커니즘은 미확정(다중 스레드 부하 하에서 CPython의 시그널 처리 타이밍 이슈로 추정). 근본 원인 규명 대신, **`server/src/scripts/restartIngestDaemon.js`의 `killExistingDaemon()`에 systemd 스타일 TERM→(8초 대기)→KILL 승급 로직을 추가**해 재시작이 항상 성공하도록 함(기존에는 고정 500ms 대기 후 바로 `startDaemon()`을 호출해 옛 프로세스가 포트를 아직 쥐고 있으면 "Address already in use"로 매번 실패했음 — 사용자가 직접 `npm run ingest:restart`를 실행하다 이 실패를 겪음). `stopServer.js`는 이미 이 패턴을 쓰고 있었으므로 두 스크립트가 이제 일관됨.
+
+**미해결**: SIGTERM이 실제 daemon에서 왜 신뢰할 수 없는지 근본 원인 미확정(TERM→KILL 승급으로 증상은 우회됨). steady-state(정상 스트리밍 중) io 스레드가 `self._stop` 이후에도 8초 내 종료되지 않는 문제(§6.11 "leaked" 경고 로그)는 여전히 남아있음 — libav의 블로킹 `demux()`가 완전한 패킷은 아니지만 간헐적 소켓 활동이 있는 상황에서 `stimeout`을 안정적으로 트리거하지 못하는 것으로 추정되나, 다른 스레드에서 강제로 `container.close()`를 호출하면 크래시 위험이 있어(§6.8 문서화) 안전한 해결책이 아직 없음.
+
 #### 계층 3 — 프로세스 자동 재시작 (`startServer.js`)
 
 `startServer.js`는 ingest-daemon 프로세스의 `exit` 이벤트를 감지하여 지수 백오프로 재시작합니다.
@@ -773,6 +902,96 @@ inp.read_timeout = int(APP_RTP_READ_TIMEOUT * 1_000_000)  # μs 단위
 | ONVIF 메타데이터 적합성 | ❌ 5s 타임아웃 — 이벤트 간격보다 짧음 | ✅ 60s 타임아웃 |
 | AI/Video/Audio | ✅ 동일 Watchdog 유지 | — |
 
+### 6.13 mediasoup H.264 payload type 충돌 — `framesDecoded=0` 근본 원인 (2026-07-16)
+
+이전(1.12~1.16) 수정으로 바이트/패킷은 Producer→Consumer로 정상 도달했지만(`videoScore=10`, `bytesReceived>0`), 브라우저의 `RTCPeerConnection.getStats()`는 모든 카메라에서 `framesReceived=0`, `framesDecoded=0`, `jitterBufferEmittedCount=0`으로 고정 — SRTP 전송은 성공했지만 지터 버퍼가 프레임을 단 한 번도 조립하지 못하는, 디코드 이전 단계의 실패였다.
+
+**근본 원인**: 라우터(`_router.createRouter({mediaCodecs:...})`)의 H.264 `preferredPayloadType`이 `109`로 고정되어 있었는데, 이는 과거 세션에서 "Edge가 PT=109를 H264로 쓴다"고 오인해 채택한 값이었다. Chrome(및 Chromium 기반 Edge로 추정)의 실제 오퍼 SDP를 직접 파싱하면: `PT=108 → H264(pm=1, 42e01f)`가 진짜 1차 코덱이고, `PT=109 → rtx apt=108`(PT 108의 재전송 래퍼)이다. mediasoup 라우터가 PT=109로 H.264 본체를 응답하면, 브라우저는 들어오는 패킷을 "PT 108의 재전송"으로 잘못 해석해 지터 버퍼가 프레임을 조립하지 않는다 — bytesReceived는 전송 계층에서 집계되므로 정상으로 보이지만, framesReceived/framesDecoded는 영구히 0에 머문다.
+
+`_parseOffer()`/`_buildBrowserRtpCapabilities()`가 브라우저별로 PT를 동적으로 맞추려 시도했지만, `mediasoup/node/lib/ortc.js`의 `getConsumableRtpParameters()`를 직접 확인한 결과 Consumer가 실제 전송하는 PT는 **Producer 생성 시점의 라우터 `preferredPayloadType`으로 고정**되며, `transport.consume()`에 매번 전달하는 `remoteRtpCapabilities`의 `preferredPayloadType`은 코덱 매칭(필터링) 용도로만 쓰이고 실제 전송 PT에는 전혀 반영되지 않는다 — 즉 동적 PT 매핑 코드는 실질적으로 죽은 코드였다.
+
+**수정**: 라우터·Producer의 H.264 `preferredPayloadType`을 `109`→`108`(Chrome이 순수 H.264에 실제로 배정하는, 어떤 코덱의 RTX apt= 대상도 아닌 값)로 변경. Edge가 Chromium 기반으로 코덱 열거 순서를 공유한다는 점에서 기존 "Edge=109" 판단 자체가 Chrome과 동일한 RTX 항목 오독이었을 가능성이 높다고 결론.
+
+**검증**: 실카메라(`TNO-C3020TRA`, 768×576)에서 WHEP+headless Chrome+`getStats()` 48초 관측 — `framesDecoded` 209→1411 (프레임 드롭 0, keyFramesDecoded 4→24, ≈30.05fps로 목표치 근접). TID-A800(`9c02a7e1`, 2560×1920)도 완전 연결 불가(503)에서 실제 프레임 디코드 성공으로 전환 확인.
+
+부수적으로 `getProducerStats()`(`GET /api/webrtc/monitor`)가 `webrtcVideoOnly=true`(§6.7 `Camera.webrtcVideoOnly`) 카메라의 `audioProducer`/`audioPlain`이 `null`인 경우 옵셔널 체이닝이 `.closed` 프로퍼티에만 적용되고 실제 메서드 호출부에는 적용되지 않아 `Cannot read properties of null (reading 'getStats')`로 매 폴링마다 예외가 발생하던 결함도 함께 발견·수정.
+
+**미해결**: TID-A800 2대(`9c02a7e1`/`43e8ec94`)에 `webrtcVideoOnly=true`를 적용해도 videoBytesRx가 여전히 ~45초 주기로 정체(§6.7의 "동시 RTSP 세션 한계" 가설로는 완전히 설명되지 않음 — 세션을 최소치로 줄인 상태에서도 재현). 5MP(2560×1920) 고해상도 스트림의 카메라측 인코더 버퍼링/네트워크 대역폭 한계일 가능성 — 후속 조사 필요.
+
+---
+
+### 6.14 프레임 워치독 재시도 폭풍 — backoff/jitter 부재로 인한 함대 전체 장애 (2026-07-16)
+
+§6.13 배포 직후, 여러 카메라(192.168.214.38/39/40)의 RTSP 포트가 동시에 응답 불능 상태가 되면서 `ingest-daemon`의 `POST /cameras` setup 큐가 포화되어 `/health`조차 응답하지 않는 상태(커널 accept 큐 SYN_SENT 백로그로 `lsof` 확인)가 발생, 6분 이상 함대 전체 재생 불가로 이어졌다.
+
+**근본 원인**: `pipelineManager.js`의 프레임 워치독(`FRAME_STALL_MS=45s`, 8초 tick)이 재시작 시도의 성공/실패와 무관하게 항상 `ctx.lastFrameAt = Date.now()`로 리셋 — 즉 재등록이 실패해도 정확히 45초(+최대 8초 tick 지연) 후 동일 카메라에 대해 재시도하는 구조로, backoff이 전혀 없었다. 문제 카메라 몇 대의 재시도가 이미 포화된 `ingest-daemon`에 계속 새 setup 요청을 쌓으면서, **원래 멀쩡했던 카메라들까지** 같은 ~48-56초 주기로 동시에 재등록 실패를 겪기 시작 — 함대 전체가 자기 자신의 컨트롤 플레인을 스스로 DoS하는 공진(resonance) 상태에 빠져, 외부 개입 없이는 절대 스스로 회복되지 않았다(재시도가 곧 장애의 원인이므로).
+
+**수정**: 프레임 워치독에 연속 실패 카운터(`ctx._watchdogFailCount`)와 지수 백오프(실패 1회당 +15s, 최대 240s cap) + 랜덤 지터(0-5s)를 추가 — 재등록 성공 시 카운터 리셋, 실패 시 다음 재시도를 `Date.now() + backoffMs + jitterMs`만큼 미룸(`ctx.lastFrameAt`을 미래 시각으로 설정해 기존 `stalledMs > FRAME_STALL_MS` 게이트를 그대로 재사용). 만성적으로 실패하는 카메라는 최대 ~4분 45초까지 재시도 간격이 벌어지고, 동시에 시작된 여러 카메라의 재시도가 지터로 위상이 어긋나 lockstep이 깨진다.
+
+**검증**: 서버 전체 재시작(백오프 코드 반영) 후 9개 카메라 전부 프레임 재유입 확인, WHEP+`getStats()` 48초 관측으로 실제 재생 확인(1398프레임, 드롭 0, 정확히 30.0fps).
+
+**교훈**: 자동 재시도 로직은 반드시 실패 시 backoff을 가져야 하며, 특히 여러 인스턴스가 같은 공유 자원(이 경우 `ingest-daemon`의 단일 HTTP 컨트롤 플레인)에 재시도할 때는 지터로 동기화를 깨야 한다 — 이번 사고는 원인 카메라 자체보다 "재시도 storm이 재시도 storm을 낳는" 구조적 결함이 실제 장애 지속 시간(6분+)을 지배했다.
+
+---
+
+### 6.15 `webrtcVideoOnly` 카메라의 reject된 audio/data 섹션 `a=bundle-only` 모순 — "SDP without DTLS fingerprint" (2026-07-16)
+
+`Camera.webrtcVideoOnly=true`(§6.7) 카메라에서 WHEP negotiate가 매번 `Called with SDP without DTLS fingerprint`로 실패 — 비디오 섹션의 fingerprint 라인 자체는 바이트 단위로 검증해도 완전히 유효했다. 근본 원인: audio/data Consumer가 없어 reject하는 섹션(`m=audio 0 ... a=inactive`)에 `a=bundle-only`를 선언하면서도, `a=group:BUNDLE`에는 실제 Consumer가 있는 mid만 나열되어 이 reject 섹션이 그룹에서 빠져 있는 자기모순 SDP였음(예: `a=group:BUNDLE 0`인데 mid 1이 `a=bundle-only` 주장) — Chrome이 이 불일치로 BUNDLE 태그 해석에 실패해 전체 답변을 "fingerprint 없음"으로 잘못 보고. `webrtcVideoOnly`가 아닌 카메라(모든 Consumer 존재, 모든 mid가 그룹에 포함)에서는 재현되지 않아 특정.
+
+**수정**: reject 섹션에서 `a=bundle-only` 제거(포트 0 + `a=inactive`만으로 reject 의미 충분, RFC상 불필요한 속성). `mediasoupEngine.js` `_buildAnswer()`의 audio/data reject 블록 두 곳 수정.
+
+**검증**: TID-A800 Ch2(`webrtcVideoOnly=true`)에서 `setRemoteDescription` 성공, framesDecoded 0→393(48초, 드롭 0) 확인.
+
+### 6.16 YouTube 카메라 mediasoup WebRTC 재활성화 (2026-07-16)
+
+`pipelineManager.js`는 YouTube 카메라를 `!isYouTube` 조건으로 mediasoup 등록(`getWebRTCEngine().addCameraStream()`) 대상에서 원천 배제해 왔다(사유 주석: "MediaMTX RTSP URL에 mediasoup RTP fan-out을 걸면 connection-refused 재시도 루프가 생김"). 이 판단은 §6.8의 단일-RTSP-연결 재설계 **이전** 시점의 것으로, 현재는 YouTube 카메라의 `captureUrl`이 이미 AI-only ingestion이 매번 성공적으로 여는 것과 동일한 MediaMTX 루프백(`rtsp://127.0.0.1:8554/yt/<id>`)이라 mediasoup용으로 별도 연결을 열 이유가 없음을 확인, `!isYouTube` 게이트 제거.
+
+**검증**: 재활성화 후 mediasoup 등록 즉시 성공(`Camera added: yt-a372f [AI+vRTP+aRTP+appRTP]`, AAC→Opus 자동 트랜스코딩 포함), 실제 WHEP 재생으로 실사용자 브라우저가 4MB+ 정상 수신 확인. 재시도 폭풍 재현 없음(§6.8 이후 아키텍처에서 우려가 해소됨을 뒷받침).
+
+**미해결**: 이 YouTube 소스(1080p) 특정 세션에서 WHEP 재생이 처음 300프레임(~10초, 정상 디코딩) 후 `framesDecoded`가 정체되는 현상 관찰 — `bytesReceived`는 계속 증가하는데 `keyFramesDecoded`도 2에서 멈춤(추가 키프레임 요청/PLI 흐름 문제로 추정). 이 YouTube 스트림 자체가 테스트 중 URL 만료 자동복구 루프(404/403 반복, WebRTC와 무관한 기존 이슈)를 동시에 겪고 있어 두 현상이 얽혀 있을 가능성 — 후속 세션에서 독립적으로 재현·조사 필요.
+
+---
+
+### 6.17 RTX(재전송) 활성화 — 패킷 손실 시 재생 정지 구간 (2026-07-16)
+
+WHEP 세션을 90초간 관찰한 결과, 특정 카메라(특히 2048×1536 이상 고해상도)에서 `nackCount`가 수백까지 치솟으면서 `framesDecoded`가 수 초~수십 초간 멈췄다 한꺼번에 따라잡는(burst) 패턴이 재현됨 — Web UI에서 "재생 멈추는 구간"으로 체감되는 현상과 일치. 원인은 라우터에 RTX 코덱 자체가 없고 Consumer에 `enableRtx: false`가 박혀 있어, 패킷이 하나라도 유실되면 재전송 없이 카메라 자체의 다음 예약된 키프레임까지 기다릴 수밖에 없었기 때문(Producer가 인코더 없는 순수 RTSP→RTP passthrough라 PLI/FIR로 즉석 키프레임을 받아낼 방법도 없음 — 90초 세션에서 `pliCount`가 계속 늘어도 아무 효과 없었음을 확인).
+
+**1차 시도(실패)**: 라우터 `mediaCodecs`에 `video/rtx` 항목을 수동으로 추가했더니 `_ensureRouter()`가 매번 `media codec not supported [mimeType:video/rtx]`로 실패 — **전체 카메라의 mediasoup 등록이 전부 깨지는 회귀**를 일으킴. `mediasoup/node/lib/ortc.js`의 `generateRouterRtpCapabilities()`를 확인한 결과, RTX는 video 코덱마다 **자동 생성**되며 사용자가 `mediaCodecs`에 직접 선언하는 것은 애초에 지원되지 않음(정적 `supportedRtpCapabilities` 목록에 `video/rtx` 항목 자체가 없어 매칭 실패). 수동 항목 제거로 즉시 복구.
+
+**2차 시도(비효과적, §6.13과 동일 클래스의 문제)**: 자동 생성에 맡기면 mediasoup 내부 `DynamicPayloadTypes` 고정 순서([100,101,...,127,96...99]에서 이미 점유된 108/111 제외)상 PT=100으로 배정됨 — Chrome 오퍼에서 PT=100은 VP9 슬롯이라 §6.13과 동일한 PT 어휘 충돌. 실측 결과 RTX를 꺼둔 것보다 오히려 **악화**(nackCount 303→525, 정지 구간 비중 거의 2배)됐음 — 재전송 패킷이 죽은 코덱 슬롯으로 가서 회수되지 않고 NACK만 계속 쌓임.
+
+**3차 시도(수정)**: PT 100~107을 실제로는 절대 협상에 노출되지 않는 더미 오디오 코덱 8개(PCMU/PCMA/G722/iLBC/SILK×4)로 미리 소진시켜, H.264의 자동 생성 RTX가 정확히 PT=109(Chrome 실제 오퍼의 H264-RTX 슬롯과 동일)에 배정되도록 강제. 더미 코덱은 어떤 Producer도 사용하지 않으므로 `_buildAnswer()`가 실제 Consumer의 consumable 코덱만 직렬화하는 한 SDP에는 전혀 노출되지 않음.
+
+**검증**: 회귀 없음(768×576 카메라는 90초간 프레임 2655개, 스톨/드롭/NACK 전부 0, RTX 적용 전과 동일하게 완벽). WHEP negotiate 연속 8/8 성공(§6.15/§6.16 수정과 합쳐 "새로고침해도 가끔 안 나옴" 문제 해소로 판단). **미해결**: 2048×1536 이상 고해상도 카메라는 PT를 정확히 맞춘 RTX 적용 후에도 여전히 상당한 정지 구간 재현 — 대역폭/인코더 한계일 가능성. 테스트 시점에 이 서버를 동시에 사용 중인 다른 Claude Code 세션이 9개 이상 확인됨(load average 7.86) — 관측된 손실이 이 애플리케이션 코드만의 문제가 아니라 공유 서버 부하와 얽혀 있을 가능성이 있어 후속 세션에서 부하가 낮은 시간대에 독립적으로 재확인 필요.
+
+---
+
+### 6.18 커널 UDP 수신 버퍼 오버플로우 — §6.17까지의 패킷 손실 근본 원인 (2026-07-16)
+
+§6.17에서 RTX를 올바른 PT로 활성화한 뒤에도 고해상도 카메라(TID-A800 5MP, TNM-C2712T 3MP)는 여전히 심한 정지 구간(nackCount 수백)을 보였다. 실사용자 대시보드에서도 "영상은 안 나오는데 서버 쪽 Consumer는 수십 MB씩 정상 전송 중"인 채널이 다수 관찰되어, ICE 진단 패널(`iceStats`가 `null`로 하드코딩되어 있던 죽은 코드를 이번에 구현) 확인 결과 로컬망 경로(srflx↔host, 같은 192.168.214.x 서브넷) 위에서 실제로 6~16MB가 정상 수신되는데도 프레임이 전혀 디코딩되지 않는 극단적 사례가 확인됨 — 네트워크 대역폭이 아니라 "거의 모든 프레임이 최소 1패킷씩 유실"되는 양상.
+
+**근본 원인 확정**: `cat /proc/net/snmp | grep Udp:`로 시스템 전체 UDP 통계를 확인한 결과 `RcvbufErrors`가 1000만 건을 넘어 있었다 — 커널 UDP 소켓 수신 버퍼(`net.core.rmem_default` 기본값 ~208KB)가 오버플로우되어 패킷을 조용히 버리고 있었던 것. 5MP H.264 키프레임 하나가 만들어내는 UDP 데이터그램 버스트가 208KB 버퍼를 손쉽게 넘침 — 이번 세션 내내 유일하게 무결점이었던 저해상도(768×576) 카메라와 정확히 대비되는 패턴(작은 키프레임 버스트는 기본 버퍼로도 충분). **localhost(ingest-daemon→mediasoup PlainTransport) 구간에서도 재현**되어, 원격 네트워크 품질과 무관한 순수 서버 내부 문제임을 확정.
+
+**수정**: `mediasoupEngine.js`의 video/audio `PlainTransport` 생성 시 구버전 `listenIp`(버퍼 크기 옵션 없음) 대신 `listenInfo`(`protocol`, `ip`, `recvBufferSize` 포함)로 전환, `recvBufferSize: 8MB`(`net.core.rmem_max` 16MB 이내) 명시적 요청.
+
+**검증**: TID-A800 Ch2 40초 관측 — nackCount 319→**0**, 프레임 안정적으로 계속 증가(636프레임, 드롭은 일부 있으나 재전송 요청 자체가 사라짐). TNM-C2712T Ch1 40초 관측 — 정지 구간 다수(0-90초 구간의 상당 부분)→**0회**, nackCount 517→**0**, 933프레임(≈23fps)로 사실상 실시간 재생 수준 회복. 이번 세션에서 추적해온 "패킷 손실로 인한 재생 정지" 계열 문제의 실질적 근본 원인으로 판단.
+
+### 6.19 `<video>.play()`의 `NotAllowedError` 조용한 무시 — 정지된 프레임을 재생 중으로 오인 (2026-07-16)
+
+§6.18 수정 이후 재생 자체는 정상화됐지만, Chrome DevTools의 Media 패널에서 특정 타일이 "Pause" 상태로 표시되는 것이 확인됨 — 실제로는 `<video>` 엘리먼트가 마지막으로 디코딩한 프레임을 계속 화면에 보여주기 때문에(정지된 video도 현재 프레임은 계속 렌더링), 타일 자체는 "영상처럼" 보이지만 실제로는 멈춰있는 상태를 육안으로 구분할 수 없었다.
+
+**원인**: `useWebRTC.ts`가 `video.play().catch(_ignoreAbort)` 패턴을 3곳에서 사용했는데, `_ignoreAbort`가 `AbortError`(무해 — srcObject 재설정 등으로 이전 play() 요청이 superseded된 정상 케이스)뿐 아니라 **`NotAllowedError`(브라우저 자동재생 정책 차단)까지 동일하게 조용히 무시**하고 있었음. 타일 7개가 동시에 autoplay를 시도하는 페이지 로드/대량 재연결 시점에 일시적으로 정책 차단이 걸릴 수 있는데, 이 경우 아무 에러 로그도 없이 영원히 정지 상태로 남게 됨.
+
+**수정**: `_attachAndPlay()` 헬퍼로 통일 — `NotAllowedError`만 별도로 감지해 500ms 후 1회 재시도(일시적 정책 차단은 부하가 가라앉으면 재시도 시 대부분 해소됨), 재시도도 실패하면 콘솔에 명확히 로그. `AbortError`는 기존과 동일하게 무해하므로 계속 무시.
+
+### 6.20 클라이언트 프레임 스톨 재연결이 동기화되어 전체 타일이 함께 멈추던 문제 (2026-07-16)
+
+§6.19까지 반영 후에도 실사용자 대시보드 콘솔 로그를 직접 확인한 결과, **카메라 7개 전부**가 "framesDecoded stuck ... reconnecting"을 반복하고 있었다 — 이번 세션 내내 격리 테스트에서 단 한 번도 문제가 없었던 저해상도 카메라(TNO-C3020TRA)조차 프레임 60개 디코딩 후 정확히 멈춰 재연결되는 것을 확인. 원인: 그리드 페이지의 타일 7개가 거의 동시에 마운트되어 각자의 프레임 스톨 워치독(§6.18에서 추가)이 고정된 임계값(20초)으로 거의 동시에 만료 — 여러 타일이 동시에 재협상(새 RTCPeerConnection, ICE, DTLS, 서버측 Consumer)을 시작하면 그 부하 자체가 방금까지 멀쩡하던 다른 타일의 디코딩까지 멈추게 만들어, 스톨→재연결→(다른 타일)스톨→재연결이 서로를 촉발하며 영원히 반복되는 자기강화 루프였음 — §6.14에서 서버측에 이미 확인·수정했던 것과 동일한 클래스의 문제가 클라이언트에도 있었던 것.
+
+**수정**: `useWebRTC.ts`에 연결당 랜덤 지터(0-8초)를 `STALL_MS`/`FRAME_STALL_MS`에 추가해 타일 간 워치독 만료 시점을 분산시키고, 재연결 지연 시간에 `retryCount` 기반 증가 백오프(회당 +2초, 최대 +15초, §6.14의 서버측 백오프와 동일한 논리)를 추가 — 만성적으로 스톨되는 타일은 점점 더 느리게 재시도해 동시다발 재협상 폭풍을 방지.
+
+---
+
 ### 12.3 스트림별 타임아웃 전략
 
 | 스트림 | 방식 | 타임아웃 | 근거 |
@@ -808,3 +1027,17 @@ inp.read_timeout = int(APP_RTP_READ_TIMEOUT * 1_000_000)  # μs 단위
 | 1.7 | 2026-07-09 | §9 환경변수 표에 `AI_MAX_WIDTH`/`JPEG_QUALITY` 추가, §9.1 신규 — AI 프레임(YOLO 추론+crop 공용 소스 원본) 해상도가 `detectionSnapshots` crop 화질의 실제 상한임을 문서화; 기본값 640→1920 상향 근거 및 CPU/대역폭 트레이드오프 명시 |
 | 1.8 | 2026-07-09 | §9.1 재작성 — v1.7의 "AI_MAX_WIDTH 상향" 방식을 아키텍처 수정으로 대체: `ingest_daemon.py`는 항상 원본(native) 해상도를 전송(리사이즈 제거), `AI_MAX_WIDTH`는 streaming 모드에서 Node.js(`pipelineManager.js`)가 remote analysis 서버 전송 직전 다운스케일하는 사본에만 적용, analysis 결과 bbox는 `_scaleBbox()`로 원본 좌표계 보정 후 crop — analysis 서버 부하와 crop 화질을 완전히 분리 |
 | 1.9 | 2026-07-15 | §9.2 신규 — remote analysis 서버 자신이 `analysisApi.js` `/frame`에서 직접 저장하는 `detectionSnapshots`(Analysis Server Dashboard 전용 crop)는 §9.1의 "AI_MAX_WIDTH 무관" 결론 예외임을 문서화(analysis 서버는 native 버퍼가 없어 streaming 서버가 보낸 다운스케일 사본에서만 crop 가능 — SNAPSHOT_MAX_DIMENSION을 올려도 AI_MAX_WIDTH가 더 낮으면 해상도가 그 값에 상한됨); §9 환경변수 표·`.env`/`.env.example`/`.env.streaming.example`/`.env.analysis.example`의 `AI_MAX_WIDTH` 기본값 640→960 상향 |
+| 1.10 | 2026-07-15 | §6.7 계층 2에 버그 수정 기록 추가 — Node.js 프레임 watchdog의 `setInterval` 콜백에 재진입 가드가 없어 재등록 왕복(최대 ~15.5s)이 8초 폴링 주기를 넘기면 restart storm이 발생하던 결함(TID-A800/`192.168.214.32`에서 실측·수정, WebRTC 연결 불가·전체 재생 끊김의 공통 원인) 수정: `ctx._watchdogBusy` 재진입 가드 추가, `lastFrameAt`을 재시작 완료 시점 기준으로 재갱신 |
+| 1.11 | 2026-07-15 | §6.7 `Camera.webrtcVideoOnly` 신규 절 추가 — TID-A800 잔여 stall의 실제 원인이 카메라 자체의 동시 RTSP 세션 처리 한계였음을 ping/디코딩 스레딩/중복등록 순차 실측으로 특정, `mediasoupEngine.js` `addCameraStream()`에 `opts.videoOnly`(audio+App RTP 세션 생략, 4→2) 추가하고 적용 후 5분+ 무중단 실측 확인 |
+| 1.12 | 2026-07-15 | §6.8 신규 — "RTSP 1개·YouTube 1개" 요구를 충족하기 위해 `ingest_daemon.py`를 카메라당 4개 독립 RTSP 세션(AI/videoRTP/audioRTP/appRTP)에서 **정확히 1개**로 재설계: 단일 `av.open()` + `container.demux(*streams)`, AI 디코드는 원시 바이트를 큐로 넘겨 완전히 분리된 워커 스레드에서 처리(§6.7 이전 실패했던 동일-스레드 병합과 달리 RTP mux를 절대 블로킹하지 않음). 배포 중 부수적으로 발견한 스레드 누수 3건(`_join_threads` 타임아웃 부족, HTTP 서버 단일 스레드, `CameraManager` 동기적 stop(), 카메라당 개별 push 스레드풀)도 함께 수정. 라이브 검증(TID-A800): 크로스스레드 디코드 269패킷 무오류, `CameraSession` 30초 실행 시 video RTP 10,804패킷/AI 278프레임, 4회 연속 시작/종료 무누수, 배포 후 로그에 카메라당 `Combined RTSP loop starting` 1줄만 확인. **미해결**: 위 수정 후에도 `ingest-daemon`의 `/health`가 간헐적으로 수십초~2분 응답 지연되고 Node.js watchdog 재등록이 타임아웃되는 현상이 남음(GIL 경합은 별도 스크립트로 배제 확인) — 정확한 원인은 후속 세션에서 py-spy 등으로 추가 조사 필요 |
+| 1.13 | 2026-07-16 | §6.9 신규 — v1.12의 "미해결" 항목이 실은 별개의 심각한 버그였음을 확정: `mediasoupEngine.js`의 `_ingestPost`/`_ingestDelete`가 타임아웃 없는 원시 `http.request()`를 사용해, ingest-daemon 응답 지연 1회만으로 `pipelineManager.js`의 `_starting` 가드가 해당 카메라 ID에 **영구히**(프로세스 재시작 전까지) 고착 — 이후 모든 시작 시도(부팅 자동시작·watchdog·수동 API)가 에러 로그 없이 조용히 no-op됨. TID-A800이 몇 시간 동안 완전히 멈춰있던 실제 원인. `timeout: 8000` + `req.on('timeout', ...)` 추가로 수정. 검증: 재부팅 시 TID-A800 즉시 자동시작, 90초 관찰 창 watchdog 재시작 0회, mediasoup Consumer 진단 로그로 실제 비디오 패킷 전송 확인, Playwright `iceTest.js`(자체서명 인증서 무시 옵션 추가) 헤드리스 브라우저로 ICE/STUN/TURN 독립 검증 |
+| 1.14 | 2026-07-16 | §6.10 신규 — `ingest-daemon` 간헐적 완전 무응답의 진짜 근본 원인 확정: `_ai_decode_worker()`의 libav `CodecContext.thread_count=0`("AUTO")이 코어 수(40)만큼 카메라당 네이티브 디코드 스레드를 생성 — Python `threading`에 미등록되어 기존 진단(GIL 배제 테스트 등)에서 전혀 보이지 않던 스레드 폭증의 실체였음. ptrace 권한 없이(py-spy/gdb 불가) `faulthandler.register(SIGUSR1)`을 내장해 실제 스택 덤프로 확정(Python 가시 스레드 51개 vs `/proc` 400개+). `thread_count`를 고정 상한 `AI_DECODE_THREADS`(기본 4)로 교체, `CameraManager.add()`/`remove()`의 "stopper" 스레드도 `_SHARED_STOP_EXECUTOR`(고정 8 workers)로 함께 정리(단, 이 자체는 근본 원인이 아니었음을 §6.10에 명시) |
+| 1.15 | 2026-07-16 | §6.11 신규 — 재시작 직후 함대 전체 동시 `av.open()`으로 인한 완전 정지를 `_INGEST_SETUP_SEMAPHORE`(연결 수립 단계만 감싸는 게이트, 기본 동시 3개)로 완화; 조사 중 `ingest_daemon.py`가 SIGTERM에 아무 핸들러도 없어(`KeyboardInterrupt`=SIGINT만 처리) `npm run ingest:restart`/`stop`의 모든 재시작이 `container.close()`(RTSP TEARDOWN) 없이 즉시 강제종료되어 카메라측에 좀비 세션을 누적시켜온 사실을 발견 — `signal.signal(SIGTERM, ...)`으로 동일한 그레이스풀 종료 경로 적용. 검증: 좀비 세션 해소 후 13개 카메라 전부(TID-A800 포함) `running=true`·`frameCount` 증가·`lastFrameAt` 10~20초 이내로 정상 확인. **미해결**: 대부분의 카메라가 ~20~24초 주기로 정체 후 Node.js 프레임 watchdog에 재시작되는 함대 전체 패턴 재관찰 — 공유 push pool 포화 vs 재시작 자체의 스레드 정리 지연 자기강화, 두 가설 중 미확정 |
+| 1.16 | 2026-07-16 | §6.12 신규 — `_INGEST_SETUP_SEMAPHORE.acquire()`가 타임아웃·`self._stop` 확인 없는 순수 블로킹 호출이라, 재시작마다 교체된 옛 세션의 스레드가 permit을 영원히 대기하며 누적 — 결국 실제 카메라 7대 전부의 mediasoup 등록이 8초 타임아웃으로 실패하는 함대 전체 장애로 번짐(WHEP 비디오 0바이트, Web UI "WebRTC connection failed" 사용자 신고의 실제 원인). `self._stop` 확인하는 폴링 방식으로 교체 + 동시성 3→5 상향, 비디오 RTP `payload_type` 명시(오디오와 대칭) 추가 수정 — 배포 후 WHEP에서 최초로 실제 비디오 바이트 수신 확인(1.6MB). 부수적으로 SIGTERM이 격리 테스트에서는 완벽히 작동하지만 실제 daemon에서는 재현 불가하게 무시되는 현상을 발견(근본 원인 미확정) — `restartIngestDaemon.js`에 TERM→8초 대기→KILL 승급 로직 추가로 재시작 실패(사용자가 직접 겪음)를 우회. **미해결**: steady-state io 스레드가 8초 내 종료 안 되는 근본 문제, SIGTERM 무시 근본 원인 |
+| 1.17 | 2026-07-16 | §6.13 신규 — 바이트/패킷은 정상 도달하는데 `framesDecoded`가 모든 카메라에서 영구히 0으로 고정되던 근본 원인 확정: mediasoup 라우터 H.264 `preferredPayloadType=109`가 Chrome 오퍼에서 실제로는 `rtx apt=108`(PT 108의 재전송)에 해당해, 브라우저 지터 버퍼가 들어오는 순수 H.264 패킷을 재전송 래퍼로 오인식 — `mediasoup/node/lib/ortc.js` 확인 결과 Consumer 실전송 PT는 Producer 생성 시점 라우터 설정으로 고정되며 `_buildBrowserRtpCapabilities()`의 동적 PT 매핑은 죽은 코드였음. PT를 108(Chrome이 실제 순수 H.264에 배정하는 값)로 변경 후 WHEP+`getStats()` 실측으로 프레임 디코드 정상 확인(≈30fps). 부수적으로 `getProducerStats()`가 `webrtcVideoOnly` 카메라의 null `audioProducer`/`audioPlain`에서 매 폴링 예외를 던지던 결함도 수정. **미해결**: TID-A800 2대는 `webrtcVideoOnly=true` 적용 후에도 ~45초 주기로 videoBytesRx 정체 재현 — 세션 수 감소로 설명되지 않는 별개 원인(고해상도 인코더/대역폭 한계 추정) 조사 필요 |
+| 1.18 | 2026-07-16 | §6.14 신규 — 일부 카메라(192.168.214.38/39/40)의 RTSP 포트가 동시에 응답 불능이 되면서 `ingest-daemon`의 setup 큐가 포화(`/health`조차 무응답, 커널 accept 큐 SYN_SENT 백로그로 확인)되어 함대 전체가 6분 이상 재생 불가에 빠진 사고 분석: 프레임 워치독(`pipelineManager.js`)이 재등록 성공/실패와 무관하게 매번 정확히 45초(+최대 8초) 후 동일 카메라를 재시도하는 구조라 backoff이 전무했고, 문제 카메라들의 무한 재시도가 이미 포화된 daemon을 계속 두드리면서 원래 멀쩡했던 카메라들까지 같은 주기로 동기화되어 재등록 실패 — 함대가 자기 자신의 컨트롤 플레인을 스스로 DoS하는 공진 상태(외부 개입 없이는 회복 불가)에 빠졌던 것을 확정. 연속 실패 카운터 기반 지수 백오프(+15s/회, 최대 240s) + 랜덤 지터(0-5s)를 워치독에 추가해 재발 방지, 서버 재시작 후 9개 카메라 전부 즉시 복구·WHEP 재생 30fps/드롭 0 확인 |
+| 1.19 | 2026-07-16 | §6.15 신규 — `webrtcVideoOnly` 카메라에서 WHEP negotiate가 항상 "SDP without DTLS fingerprint"로 실패하던 결함 확정: fingerprint 라인 자체는 유효했으나, reject된 audio/data 섹션이 `a=group:BUNDLE`에 없으면서도 `a=bundle-only`를 선언하는 자기모순 SDP였음 — 해당 속성 제거로 수정(TID-A800 Ch2 재생 정상 확인). §6.16 신규 — YouTube 카메라를 mediasoup WebRTC 등록에서 배제하던 `!isYouTube` 게이트를 제거(§6.8 단일-RTSP-연결 재설계로 과거의 "connection-refused 재시도 루프" 우려 근거가 사라졌음을 확인) — 재활성화 후 등록 즉시 성공, 실사용자 WHEP로 4MB+ 정상 수신 확인, 재시도 폭풍 재현 없음. **미해결**: 해당 YouTube 세션에서 초기 300프레임 정상 디코딩 후 framesDecoded 정체 현상(YouTube 자체 URL 만료 자동복구 루프와 동시 발생, 인과관계 미확정) |
+| 1.20 | 2026-07-16 | §6.17 신규 — WHEP 재생 중 정지 구간(nackCount 급증과 상관)의 원인이 RTX(재전송) 완전 비활성화였음을 확정하고 활성화: 라우터에 `video/rtx`를 수동 선언하면 mediasoup가 원천적으로 거부(`media codec not supported`)해 전체 카메라 등록이 깨지는 회귀를 유발함을 발견·롤백, RTX는 video 코덱마다 자동 생성됨을 확인. 자동 생성 PT(100)가 Chrome 오퍼의 VP9 슬롯과 충돌해 §6.13과 동일한 클래스의 문제로 오히려 악화(nackCount 303→525)됨을 실측 확인 후, 더미 오디오 코덱 8개로 PT 100-107을 선점시켜 자동 RTX를 Chrome의 실제 H264-RTX 슬롯(PT=109)에 정확히 배정 — 저해상도 카메라 무회귀 확인(90초 무결점), WHEP negotiate 연속 8/8 성공. **미해결**: 고해상도(2048×1536+) 카메라는 PT를 정확히 맞춘 RTX 적용 후에도 정지 구간 재현 — 대역폭/인코더 한계 추정, 테스트 시점 동일 서버를 쓰는 다른 Claude Code 세션 9개+ 확인(load average 7.86)되어 공유 서버 부하와의 상관관계 미확정 |
+| 1.21 | 2026-07-16 | §6.18 신규 — §6.17의 "미해결" 항목의 진짜 근본 원인 확정: `/proc/net/snmp`의 `Udp: RcvbufErrors`가 1000만 건 이상 — 커널 UDP 수신 버퍼(기본 ~208KB) 오버플로우로 5MP/3MP 카메라의 키프레임 버스트가 조용히 유실되고 있었음(localhost 구간에서도 재현되어 원격 네트워크와 무관함을 확정). `mediasoupEngine.js`의 video/audio PlainTransport를 구버전 `listenIp`에서 `listenInfo`(`recvBufferSize: 8MB`)로 전환. 검증: TID-A800 Ch2 nackCount 319→0, TNM-C2712T Ch1 정지 구간 다수→0회·nackCount 517→0(≈23fps로 사실상 실시간 회복) — 이번 세션 전체를 관통한 "패킷 손실형 재생 정지"의 실질 근본 원인. 부수적으로 `useWebRTC.ts`의 ICE 진단 패널(`iceStats`)이 항상 `null`로 하드코딩되어 "Collecting stats…"만 표시되던 죽은 코드를 발견·구현(기존 스톨 감시 로직이 이미 수집하던 candidate-pair 정보를 재사용). 또한 프레임 스톨 자동 재연결이 사용자 수동 "재연결" 버튼 전용 함수(`retryCount` 리셋)를 그대로 호출해 `MAX_AUTO_RETRIES` 제한이 무력화되며 무한 재연결 폭풍을 일으키던 회귀를 자체 발견·수정(기존 byte-stall 경로도 동일 결함 보유, 함께 수정) — 자동 재시도는 이제 다른 자동 경로와 동일하게 횟수 제한 있는 지연 방식(`setRetryCount(n=>n+1)` + 3초 지연)만 사용 |
+| 1.22 | 2026-07-16 | §6.19 신규 — Chrome DevTools Media 패널에서 특정 타일이 "Pause"로 표시되는 현상 확인: `<video>.play()` 실패 시 `_ignoreAbort`가 무해한 `AbortError`뿐 아니라 `NotAllowedError`(자동재생 정책 차단)까지 조용히 무시해, 정지된 마지막 프레임만 계속 표시되는데도 아무 에러 없이 영원히 멈춰있을 수 있었던 결함 발견·수정 — `_attachAndPlay()` 헬퍼로 통일해 `NotAllowedError`만 500ms 후 1회 재시도 |
+| 1.23 | 2026-07-16 | §6.20 신규 — 실사용자 콘솔 로그 직접 확인 결과 카메라 7개 전부가 프레임 스톨→재연결을 반복 중임을 확정: 그리드의 모든 타일이 거의 동시에 마운트되어 §6.18의 프레임 스톨 워치독(고정 20초 임계값)이 동시에 만료 → 여러 타일이 동시에 재협상하며 그 부하 자체가 서로의 디코딩을 방해 → 다시 동시 스톨 → 재연결이 서로를 촉발하는 자기강화 루프였음(§6.14 서버측 문제와 동일 클래스, 이번엔 클라이언트). `useWebRTC.ts`에 연결당 랜덤 지터(0-8초)로 워치독 만료 시점 분산 + `retryCount` 기반 증가 백오프(회당 +2초, 최대 +15초)로 재연결 지연 추가 |

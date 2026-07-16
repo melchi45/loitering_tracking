@@ -82,6 +82,15 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
 
   const [retryCount, setRetryCount] = useState(0);
   const [retryNonce, setRetryNonce] = useState(0); // forces re-run when cached stream dies
+  // iceStats (2026-07-16) — was permanently `null` (see the old final return
+  // statement's `iceStats: null as IceStats | null`), so the ICE debug panel
+  // in CameraView.tsx showed "Collecting stats…" forever regardless of actual
+  // connection state — confirmed live, this made it useless for diagnosing
+  // exactly the remote-network-path question it exists to answer (host vs
+  // srflx vs relay candidate, real bytes sent/received). The stall-watchdog
+  // below already parses the nominated candidate-pair on every poll; it just
+  // never got stored anywhere. Populated from that same loop now.
+  const [iceStats, setIceStats] = useState<IceStats | null>(null);
 
   const retry = useCallback(() => {
     setRetryCount(0);
@@ -120,7 +129,7 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
       setHasAudio(existingEntry.hasAudio);
       if (videoRef.current) {
         videoRef.current.srcObject = existingEntry.stream;
-        videoRef.current.play().catch(_ignoreAbort);
+        _attachAndPlay(videoRef.current, cameraId);
       }
 
       const handleInactive = () => {
@@ -148,7 +157,7 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
         if (cancelled) return;
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
-          videoRef.current.play().catch(_ignoreAbort);
+          _attachAndPlay(videoRef.current, cameraId);
         }
         setState('connected');
         setHasAudio(ha);
@@ -236,6 +245,22 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
         console.log(`[useWebRTC][${cameraId.slice(0,8)}] track-UNMUTED: kind=${trackKind}`);
       event.track.onmute = () =>
         console.log(`[useWebRTC][${cameraId.slice(0,8)}] track-MUTED: kind=${trackKind}`);
+      // The server closes and recreates its mediasoup Producer whenever the
+      // camera's own capture pipeline restarts (e.g. the frame watchdog
+      // reconnecting a flaky RTSP source) — this closes every Consumer bound
+      // to that Producer, which fires 'ended' on the browser's track. The
+      // RTCPeerConnection's overall connectionState does NOT change when only
+      // one track ends, so onconnectionstatechange never fires and the retry
+      // logic below was never triggered — the video simply froze forever on
+      // its last decoded frame with no way to recover short of a page reload.
+      // Confirmed live against TID-A800, whose capture restarts every
+      // 20-40s during rough patches. retry() forces a fresh WHEP negotiation.
+      if (trackKind === 'video') {
+        event.track.onended = () => {
+          console.log(`[useWebRTC][${cameraId.slice(0,8)}] track-ENDED: kind=${trackKind} — reconnecting`);
+          if (!cancelled) retry();
+        };
+      }
       let stream = event.streams?.[0];
       if (!stream) {
         if (!_peerStream) _peerStream = new MediaStream();
@@ -258,7 +283,7 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
         `[useWebRTC][${cameraId.slice(0,8)}] srcObject set` +
         ` tracks=${stream.getTracks().map(t => t.kind + '/' + t.readyState).join(',')}`
       );
-      videoRef.current.play().catch(_ignoreAbort);
+      _attachAndPlay(videoRef.current, cameraId);
       if (!cancelled) setHasAudio(ha);
     };
 
@@ -279,15 +304,57 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
             clearTimeout(connectTimeoutId);
             if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = undefined; }
             setState('connected');
-            // ── Post-connect diagnostics: log getStats() every 2s for 20s ────────
-            let statsTick = 0;
+            // ── Stale-stream watchdog (runs for the connection's lifetime) ──────
+            // mediasoup closes its server-side Consumer when the camera's own
+            // Producer is torn down and recreated (e.g. pipelineManager's frame
+            // watchdog reconnecting a flaky RTSP source — confirmed live against
+            // TID-A800, which does this every 20-40s during rough patches). That
+            // Consumer-close does NOT trigger any SDP renegotiation or track-level
+            // signal to the browser: RTCPeerConnection.connectionState stays
+            // "connected" and the video MediaStreamTrack never fires 'ended' —
+            // confirmed by direct WHEP testing (getStats().bytesReceived froze
+            // for 75s+ across a real server-side restart with no track-ended
+            // event and no connectionState change). So neither onconnectionstate-
+            // change nor track.onended (kept above as defense-in-depth for
+            // engines/scenarios that DO signal explicitly) can detect this —
+            // the only reliable signal is inbound-rtp.bytesReceived going flat
+            // while nominally "connected". STALL_MS is kept above the server's
+            // own FRAME_STALL_MS (20s, pipelineManager.js) so this doesn't fire
+            // before the server has even started its own recovery.
+            // Jitter (2026-07-16, §client-reconnect-storm) — ALL tiles on a grid
+            // page mount within milliseconds of each other, so with fixed
+            // thresholds every camera's watchdog fires in the same instant. If
+            // several reconnect at once, the resulting negotiation/decoder-
+            // teardown burst is itself enough to stall decode on OTHER tiles
+            // that were fine a moment earlier — confirmed live: even the one
+            // camera that was flawless across dozens of isolated 90s tests all
+            // session got caught in the exact same repeating stall→reconnect
+            // cycle once it was sharing a page with 6 other tiles whose
+            // watchdogs kept firing in near-lockstep. A random per-connection
+            // offset spreads reconnects out so they stop synchronizing.
+            const jitterMs      = Math.floor(Math.random() * 8_000);
+            const STALL_MS      = 25_000 + jitterMs;
+            // Frame-decode stall gets a longer grace period than byte-stall: a
+            // fresh connection legitimately shows bytesReceived growing for a
+            // few seconds before the first keyframe arrives and framesDecoded
+            // starts moving (mid-GOP join, waiting on requestKeyFrame()), so
+            // this must not fire during that normal startup window.
+            const FRAME_STALL_MS = 20_000 + jitterMs;
+            const POLL_MS       = 5_000;
+            let lastBytesRx     = -1;
+            let lastBytesRxAt   = Date.now();
+            let lastFrames      = -1;
+            let lastFramesAt    = Date.now();
+            let statsTick       = 0;
             const statsTimer = setInterval(async () => {
-              if (cancelled || statsTick++ >= 10) { clearInterval(statsTimer); return; }
+              if (cancelled) { clearInterval(statsTimer); return; }
               try {
                 const stats = await pc.getStats();
                 let vBytesRx = 0, vPktsRx = 0, vFrames = 0;
                 let cpBytesRx = 0, cpBytesTx = 0;
                 let localCand = '', remoteCand = '';
+                let localInfo:  { type: string; protocol: string; address: string; port: number } | null = null;
+                let remoteInfo: { type: string; protocol: string; address: string; port: number } | null = null;
                 const candidatePairIds = new Set<string>();
                 stats.forEach(r => {
                   if (r.type === 'inbound-rtp' && r.kind === 'video') {
@@ -307,19 +374,109 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
                   }
                   if (r.type === 'local-candidate' && candidatePairIds.has('L:' + r.id)) {
                     localCand = `${r.candidateType}/${r.protocol}/${r.address}:${r.port}`;
+                    localInfo = { type: r.candidateType, protocol: r.protocol, address: r.address, port: r.port };
                   }
                   if (r.type === 'remote-candidate' && candidatePairIds.has('R:' + r.id)) {
                     remoteCand = `${r.candidateType}/${r.protocol}/${r.address}:${r.port}`;
+                    remoteInfo = { type: r.candidateType, protocol: r.protocol, address: r.address, port: r.port };
                   }
                 });
-                console.log(
-                  `[useWebRTC][${cameraId.slice(0,8)}] stats t+${statsTick*2}s:` +
-                  ` vBytesRx=${vBytesRx} vPkts=${vPktsRx} vFrames=${vFrames}` +
-                  ` cpRx=${cpBytesRx} cpTx=${cpBytesTx}` +
-                  ` local=${localCand} remote=${remoteCand}`
-                );
+                if (localInfo && remoteInfo) {
+                  const li = localInfo as { type: string; protocol: string; address: string; port: number };
+                  const ri = remoteInfo as { type: string; protocol: string; address: string; port: number };
+                  setIceStats({
+                    localType:     li.type,
+                    localProtocol: li.protocol,
+                    localAddress:  li.address,
+                    localPort:     li.port,
+                    remoteType:    ri.type,
+                    remoteAddress: ri.address,
+                    remotePort:    ri.port,
+                    bytesSent:     cpBytesTx,
+                    bytesReceived: cpBytesRx,
+                  });
+                }
+                statsTick += 1;
+                if (statsTick <= 10) {
+                  // Verbose connect-time diagnostics only for the first ~50s.
+                  console.log(
+                    `[useWebRTC][${cameraId.slice(0,8)}] stats t+${statsTick*POLL_MS/1000}s:` +
+                    ` vBytesRx=${vBytesRx} vPkts=${vPktsRx} vFrames=${vFrames}` +
+                    ` cpRx=${cpBytesRx} cpTx=${cpBytesTx}` +
+                    ` local=${localCand} remote=${remoteCand}`
+                  );
+                }
+                // Byte-stall and frame-stall are separate failure modes (2026-07-16,
+                // §dashboard-black-tiles): bytesReceived can keep climbing forever
+                // while framesDecoded never moves off 0 — confirmed live via the
+                // server's own webrtc/monitor endpoint showing a healthy, growing
+                // Consumer (bytesSent in the megabytes, ICE/DTLS connected) for a
+                // tile the dashboard rendered as a solid black video element the
+                // whole time. The byte-stall check above never fires in that case
+                // (bytes ARE moving), so nothing here previously caught it —
+                // vFrames was captured into a local var and only ever logged, never
+                // compared. This mirrors the byte check but keyed on framesDecoded.
+                let frameStalled = false;
+                if (vFrames !== lastFrames) {
+                  lastFrames   = vFrames;
+                  lastFramesAt = Date.now();
+                } else if (Date.now() - lastFramesAt > FRAME_STALL_MS) {
+                  frameStalled = true;
+                }
+                if (vBytesRx !== lastBytesRx) {
+                  lastBytesRx   = vBytesRx;
+                  lastBytesRxAt = Date.now();
+                }
+                // staleReconnect (2026-07-16) — both stall paths used to call
+                // retry(), which resets retryCount to 0. That's correct for the
+                // user-facing "Reconnect" button (a fresh manual click deserves a
+                // full retry budget) but WRONG here: it silently defeats
+                // MAX_AUTO_RETRIES for every automatic stall detection, so a
+                // camera stuck in a genuine stall-reconnect-stall cycle (e.g.
+                // client-side decode CPU starvation from many simultaneous
+                // high-res tiles/tabs, confirmed live — reconnecting cannot fix a
+                // browser decode-capacity problem) retries forever instead of
+                // settling into 'failed' after MAX_AUTO_RETRIES like every other
+                // automatic retry path in this file already does
+                // (setRetryCount(n => n + 1), never a reset). Mirror that pattern:
+                // increment (respecting the cap via the effect's own top-of-run
+                // check).
+                //
+                // Backoff (2026-07-16, §client-reconnect-storm) — a fixed
+                // AUTO_RETRY_DELAY meant every stalled tile retried at the same
+                // fast cadence forever, so a fleet of tiles that stalled together
+                // (see the jitter comment above) kept reconnecting together too,
+                // and each synchronized burst of renegotiations was itself heavy
+                // enough to stall decode on tiles that had just barely recovered
+                // — a self-sustaining loop confirmed live across all 7 tiles
+                // simultaneously, including one with zero prior stall history.
+                // Grow the delay with retryCount so a chronically-stalling tile
+                // backs off instead of hammering at a constant rate, same
+                // rationale as pipelineManager.js's server-side watchdog backoff.
+                const staleReconnect = (reason: string) => {
+                  const backoffMs = Math.min(retryCount * 2_000, 15_000);
+                  console.log(`[useWebRTC][${cameraId.slice(0,8)}] ${reason} — reconnecting in ${Math.round((AUTO_RETRY_DELAY + backoffMs)/1000)}s`);
+                  clearInterval(statsTimer);
+                  if (cancelled) return;
+                  setState('failed');
+                  if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+                  retryTimerRef.current = setTimeout(() => {
+                    if (!cancelled) setRetryCount(n => n + 1);
+                  }, AUTO_RETRY_DELAY + backoffMs);
+                };
+                if (frameStalled) {
+                  staleReconnect(
+                    `framesDecoded stuck at ${vFrames} for ${Math.round((Date.now() - lastFramesAt) / 1000)}s ` +
+                    `despite bytesReceived=${vBytesRx} and connectionState=connected`
+                  );
+                } else if (Date.now() - lastBytesRxAt > STALL_MS) {
+                  staleReconnect(
+                    `video stream stale for ${Math.round((Date.now() - lastBytesRxAt) / 1000)}s ` +
+                    `despite connectionState=connected`
+                  );
+                }
               } catch (_) {}
-            }, 2000);
+            }, POLL_MS);
           } else if (cs === 'failed' || cs === 'closed') {
             setState('failed');
             if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
@@ -411,9 +568,9 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
       }
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cameraId, enabled, socket, retryCount, retryNonce]);
+  }, [cameraId, enabled, socket, retryCount, retryNonce, retry]);
 
-  return { videoRef, state, hasAudio, retry, iceStats: null as IceStats | null };
+  return { videoRef, state, hasAudio, retry, iceStats };
 }
 
 function _ignoreAbort(err: DOMException | Error) {
@@ -421,6 +578,38 @@ function _ignoreAbort(err: DOMException | Error) {
   if (name !== 'AbortError' && name !== 'NotAllowedError') {
     console.warn('[useWebRTC] play():', err.message ?? err);
   }
+}
+
+// _attachAndPlay (2026-07-16) — replaces the old bare
+// `video.play().catch(_ignoreAbort)` at every call site. That silently
+// swallowed NotAllowedError exactly like the harmless AbortError case
+// (superseded play() calls, e.g. from React re-attaching srcObject), but
+// NotAllowedError means the element is genuinely stuck paused — confirmed
+// live via Chrome's own Media panel showing "Pause" for a tile whose element
+// still displayed its last decoded frame (a paused <video> keeps rendering
+// its current frame, so a frozen-but-present image gave no visual sign
+// anything was wrong). All several tiles autoplaying at once on page load /
+// mass-reconnect is exactly the kind of burst that can trip a transient
+// autoplay rejection, so retry once after a short delay before giving up —
+// unlike AbortError, a NotAllowedError is often gone on the next attempt
+// once the burst settles.
+function _attachAndPlay(video: HTMLVideoElement, cameraId: string) {
+  video.play().catch((err: DOMException | Error) => {
+    const name = (err as DOMException).name ?? '';
+    if (name === 'NotAllowedError') {
+      console.warn(`[useWebRTC][${cameraId.slice(0,8)}] play() blocked (NotAllowedError) — retrying once`);
+      setTimeout(() => {
+        video.play().catch((err2: DOMException | Error) => {
+          const name2 = (err2 as DOMException).name ?? '';
+          if (name2 !== 'AbortError') {
+            console.warn(`[useWebRTC][${cameraId.slice(0,8)}] play() retry failed:`, err2.message ?? err2);
+          }
+        });
+      }, 500);
+      return;
+    }
+    _ignoreAbort(err);
+  });
 }
 
 // Keep typ=host candidates (all) and typ=srflx candidates whose address is
