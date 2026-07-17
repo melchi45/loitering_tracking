@@ -226,6 +226,11 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
     // (mediasoup before the fix). Without a=msid, event.streams is [], so we
     // collect each incoming track into a single MediaStream manually.
     let _peerStream: MediaStream | null = null;
+    // Tracked so the bottom cleanup can remove the 'inactive' listener added
+    // in ontrack below (see handleStreamInactive) — without this, every
+    // reconnect cycle leaks one listener on the previous stream object.
+    let _lastStream: MediaStream | null = null;
+    let _lastInactiveHandler: (() => void) | null = null;
 
     pc.ontrack = (event) => {
       // Diagnostic: log BEFORE early-return so we can see if ontrack fires even when
@@ -250,15 +255,34 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
       // reconnecting a flaky RTSP source) — this closes every Consumer bound
       // to that Producer, which fires 'ended' on the browser's track. The
       // RTCPeerConnection's overall connectionState does NOT change when only
-      // one track ends, so onconnectionstatechange never fires and the retry
-      // logic below was never triggered — the video simply froze forever on
-      // its last decoded frame with no way to recover short of a page reload.
-      // Confirmed live against TID-A800, whose capture restarts every
-      // 20-40s during rough patches. retry() forces a fresh WHEP negotiation.
+      // one track ends, so onconnectionstatechange never fires.
+      //
+      // Broadcast via stream.stop(), not local retry() (2026-07-16,
+      // §shared-session-watchdog-scope) — a grid tile and a fullscreen view of
+      // the SAME camera share one RTCPeerConnection through sessionRegistry
+      // (Case A below reuses an already-active stream), but only the ONE
+      // component instance that originally created the connection (Case C,
+      // right here) owned this onended handler — scoped to ITS OWN `cancelled`
+      // flag. Confirmed live: opening a camera fullscreen hides/unmounts the
+      // grid tile behind it, which runs Case C's cleanup and flips its
+      // `cancelled` to true — silently disabling this exact handler (and the
+      // stall watchdog below, same issue) for the REMAINING fullscreen viewer,
+      // which then had literally nothing left watching for a dead track. The
+      // video froze on its last decoded frame with no way to recover short of
+      // a page reload — exactly the symptom reported live against the
+      // fullscreen YouTube view while its detection overlay kept updating
+      // (detections arrive over Socket.IO, an entirely separate channel from
+      // the video track). Fix: stop every track on the shared `stream`
+      // instead of calling this instance's own retry() — that fires the
+      // native 'inactive' event on the MediaStream, which EVERY consumer
+      // (Case A's handleInactive below, and this same Case C instance's own
+      // mirrored listener a few lines down) already listens for and reacts to
+      // independently, regardless of which specific component originally
+      // created the connection or whether that creator is still mounted.
       if (trackKind === 'video') {
         event.track.onended = () => {
           console.log(`[useWebRTC][${cameraId.slice(0,8)}] track-ENDED: kind=${trackKind} — reconnecting`);
-          if (!cancelled) retry();
+          try { stream?.getTracks().forEach(t => t.stop()); } catch (_) {}
         };
       }
       let stream = event.streams?.[0];
@@ -277,6 +301,19 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
         for (const cb of e.callbacks) cb(stream, ha);
         e.callbacks.clear();
       }
+
+      // Mirrors Case A's handleInactive (2026-07-16) — this Case C instance is
+      // itself just one of potentially several consumers of this stream once a
+      // second component (e.g. a fullscreen view) attaches via Case A, so it
+      // needs to react to the stream going inactive exactly the same way,
+      // regardless of which consumer's watchdog/onended actually detected the
+      // problem and called stream.stop().
+      const handleStreamInactive = () => {
+        if (!cancelled) { setState('connecting'); setRetryNonce(n => n + 1); }
+      };
+      stream.addEventListener('inactive', handleStreamInactive);
+      _lastStream = stream;
+      _lastInactiveHandler = handleStreamInactive;
 
       videoRef.current.srcObject = stream;
       console.log(
@@ -347,7 +384,17 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
             let lastFramesAt    = Date.now();
             let statsTick       = 0;
             const statsTimer = setInterval(async () => {
-              if (cancelled) { clearInterval(statsTimer); return; }
+              // Entry-liveness check, not `cancelled` (2026-07-16,
+              // §shared-session-watchdog-scope) — see the onended handler
+              // comment above for the full story. This lets the watchdog
+              // outlive the specific component instance that created the
+              // connection, as long as the connection itself (same `pc`) is
+              // still the one registered for this camera — i.e. as long as
+              // ANY consumer (this one or another, e.g. a fullscreen view)
+              // still needs it. It only stops once the entry is gone
+              // (refCount hit 0) or points at a different pc (a reconnect
+              // already happened via some other path).
+              if (sessionRegistry.get(cameraId)?.pc !== pc) { clearInterval(statsTimer); return; }
               try {
                 const stats = await pc.getStats();
                 let vBytesRx = 0, vPktsRx = 0, vFrames = 0;
@@ -381,7 +428,12 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
                     remoteInfo = { type: r.candidateType, protocol: r.protocol, address: r.address, port: r.port };
                   }
                 });
-                if (localInfo && remoteInfo) {
+                if (localInfo && remoteInfo && !cancelled) {
+                  // Local cancelled guard here specifically (unlike the loop's
+                  // own continuation above) — this setIceStats call updates
+                  // THIS component instance's React state, which must not
+                  // fire once THIS instance has unmounted even if the shared
+                  // watchdog keeps running for other consumers.
                   const li = localInfo as { type: string; protocol: string; address: string; port: number };
                   const ri = remoteInfo as { type: string; protocol: string; address: string; port: number };
                   setIceStats({
@@ -453,15 +505,29 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
                 // Grow the delay with retryCount so a chronically-stalling tile
                 // backs off instead of hammering at a constant rate, same
                 // rationale as pipelineManager.js's server-side watchdog backoff.
+                //
+                // Broadcast via stream.stop(), not local setState/setRetryCount
+                // (2026-07-16, §shared-session-watchdog-scope) — same reasoning
+                // as the onended handler above: this watchdog may now be
+                // running on behalf of OTHER consumers after its own creating
+                // component unmounted (e.g. a fullscreen view left running
+                // after the grid tile behind it was hidden), so the reconnect
+                // action must not depend on THIS instance's own React state —
+                // stopping the shared stream's tracks fires 'inactive' on
+                // every attached consumer independently. `cancelled` is no
+                // longer checked here; the entry-liveness check already
+                // guards the interval itself (above).
                 const staleReconnect = (reason: string) => {
                   const backoffMs = Math.min(retryCount * 2_000, 15_000);
                   console.log(`[useWebRTC][${cameraId.slice(0,8)}] ${reason} — reconnecting in ${Math.round((AUTO_RETRY_DELAY + backoffMs)/1000)}s`);
                   clearInterval(statsTimer);
-                  if (cancelled) return;
-                  setState('failed');
-                  if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
-                  retryTimerRef.current = setTimeout(() => {
-                    if (!cancelled) setRetryCount(n => n + 1);
+                  setTimeout(() => {
+                    // Read the CURRENT shared stream at fire time, not a
+                    // closure over ontrack's local `stream` (out of scope
+                    // here, and may have been replaced by a newer negotiation
+                    // by the time this delayed callback runs anyway).
+                    const liveStream = sessionRegistry.get(cameraId)?.stream;
+                    try { liveStream?.getTracks().forEach(t => t.stop()); } catch (_) {}
                   }, AUTO_RETRY_DELAY + backoffMs);
                 };
                 if (frameStalled) {
@@ -549,6 +615,9 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
       clearTimeout(connectTimeoutId);
       socket.off('camera:stream-unavailable', handleStreamUnavailable);
       if (retryTimerRef.current) { clearTimeout(retryTimerRef.current); retryTimerRef.current = undefined; }
+      if (_lastStream && _lastInactiveHandler) {
+        _lastStream.removeEventListener('inactive', _lastInactiveHandler);
+      }
 
       detachVideo(videoRef);
       setState('idle');
