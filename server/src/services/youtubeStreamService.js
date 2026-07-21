@@ -62,6 +62,13 @@ const START_TIMEOUT   = parseInt(process.env.YOUTUBE_START_TIMEOUT_MS || '30000'
 const FFMPEG_BIN      = process.env.FFMPEG_BIN  || 'ffmpeg';
 // Bypass SSL certificate verification (corporate networks with self-signed certs)
 const YTDLP_NO_CHECK_CERT = process.env.YTDLP_NO_CHECK_CERT !== 'false';
+// Force IPv4-only connections to YouTube/Google endpoints. On hosts where IPv6
+// has a route but is actually unreachable (common on cloud/VPN networks with
+// a stale IPv6 default route), yt-dlp's dual-stack resolver still tries every
+// AAAA address first and eats ~20s per dead address before falling back to
+// IPv4 — easily blowing past START_TIMEOUT and failing every "Add" attempt
+// with STREAM_TIMEOUT even though the URL itself resolves fine over IPv4.
+const YTDLP_FORCE_IPV4 = process.env.YTDLP_FORCE_IPV4 === 'true';
 // Remote EJS challenge-solver components (ejs:github or ejs:npm). Set to '' to disable.
 const YTDLP_REMOTE_COMPONENTS = process.env.YTDLP_REMOTE_COMPONENTS !== undefined
   ? process.env.YTDLP_REMOTE_COMPONENTS
@@ -144,6 +151,7 @@ const YTDLP_BIN = _isAnalysis ? 'yt-dlp' : findYtDlp();
 if (!_isAnalysis) {
   console.log(`[YouTubeStream] yt-dlp binary: ${YTDLP_BIN}`);
   console.log(`[YouTubeStream] SSL check: ${YTDLP_NO_CHECK_CERT ? 'disabled (--no-check-certificate)' : 'enabled'}`);
+  console.log(`[YouTubeStream] IPv4-only: ${YTDLP_FORCE_IPV4 ? 'enabled (--force-ipv4)' : 'disabled'}`);
 }
 
 // ── URL-expiry refresh: if FFmpeg stderr contains HTTP 403 re-resolve ─────────
@@ -660,6 +668,7 @@ class YouTubeStreamService {
       if (NODE_BIN_FOR_YTDLP) ytArgs.push('--js-runtimes', `node:${NODE_BIN_FOR_YTDLP}`);
       if (NODE_BIN_FOR_YTDLP && YTDLP_REMOTE_COMPONENTS) ytArgs.push('--remote-components', YTDLP_REMOTE_COMPONENTS);
       if (YTDLP_NO_CHECK_CERT) ytArgs.push('--no-check-certificate');
+      if (YTDLP_FORCE_IPV4) ytArgs.push('--force-ipv4');
       ytArgs.push(entry.youtubeUrl);
 
       console.log(`[YouTubeStream] Spawning yt-dlp | ffmpeg pipe for ${entry.id}`);
