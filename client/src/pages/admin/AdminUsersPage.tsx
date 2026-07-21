@@ -1495,6 +1495,34 @@ interface DbInfo {
   cumulative:{ inserts: number; updates: number; deletes: number; finds: number };
 }
 
+interface DbTableStat {
+  name:         string;
+  rowCount:     number;
+  capRowCount:  number | null;
+  sizeBytes:    number;
+  storageBytes?: number; // mongodb only — on-disk (compressed) size
+  indexBytes?:  number;  // mongodb only
+}
+
+interface DbDiskUsage {
+  path?:          string;         // json mode — lts.json path
+  fileSizeBytes?: number | null;  // json mode — actual file size on disk
+  storageBytes?:  number;         // mongodb mode — collection storage bytes
+  indexBytes?:    number;         // mongodb mode — index bytes
+  fsUsedBytes?:   number | null;  // mongodb mode — data dir bytes (engine-dependent)
+  fsTotalBytes?:  number | null;
+  overheadBytes:  number | null;  // json: pretty-print padding; mongodb: index+meta over raw data
+}
+
+interface DbDetailInfo {
+  mode:           'mongodb' | 'json';
+  connected:      boolean;
+  tables:         DbTableStat[];
+  totalRows:      number;
+  totalDataBytes: number;
+  diskUsage:      DbDiskUsage | null;
+}
+
 function fmtBytes(b: number): string {
   if (b >= 1e12) return (b / 1e12).toFixed(1) + ' TB';
   if (b >= 1e9)  return (b / 1e9).toFixed(1)  + ' GB';
@@ -1553,8 +1581,10 @@ function MetricCard({ title, value, sub, pct, color = 'blue', children }: {
 function SystemSection({ apiFetch }: { apiFetch: (path: string, opts?: RequestInit) => Promise<unknown> }) {
   const [systemInfo, setSystemInfo] = useState<SystemInfo | null>(null);
   const [dbInfo,     setDbInfo]     = useState<DbInfo | null>(null);
+  const [dbDetail,   setDbDetail]   = useState<DbDetailInfo | null>(null);
   const [error,      setError]      = useState<string | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const timerRef       = useRef<ReturnType<typeof setInterval> | null>(null);
+  const dbDetailTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -1567,11 +1597,27 @@ function SystemSection({ apiFetch }: { apiFetch: (path: string, opts?: RequestIn
     }
   }, [apiFetch]);
 
+  // Per-table row counts + disk footprint — heavier than /admin/system (real
+  // collStats round-trips for MongoDB), so it polls on its own slower interval.
+  const loadDbDetail = useCallback(async () => {
+    try {
+      setDbDetail(await apiFetch('/admin/system/db') as DbDetailInfo);
+    } catch {
+      // Non-fatal — the rest of the System Health panel still works without it.
+    }
+  }, [apiFetch]);
+
   useEffect(() => {
     load();
     timerRef.current = setInterval(load, 3000);
     return () => { if (timerRef.current) clearInterval(timerRef.current); };
   }, [load]);
+
+  useEffect(() => {
+    loadDbDetail();
+    dbDetailTimerRef.current = setInterval(loadDbDetail, 10000);
+    return () => { if (dbDetailTimerRef.current) clearInterval(dbDetailTimerRef.current); };
+  }, [loadDbDetail]);
 
   const sys = systemInfo;
   const db  = dbInfo;
@@ -1581,7 +1627,7 @@ function SystemSection({ apiFetch }: { apiFetch: (path: string, opts?: RequestIn
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h2 className="text-lg font-semibold text-white">System Health</h2>
-          <p className="text-sm text-gray-500 mt-0.5">CPU · Memory · Disk I/O · DB — auto-refreshes every 3s</p>
+          <p className="text-sm text-gray-500 mt-0.5">CPU · Memory · Disk I/O · DB (tables/disk) — auto-refreshes every 3s (DB tables every 10s)</p>
         </div>
         {sys && (
           <span className="text-[10px] text-gray-500 font-mono">
@@ -1732,6 +1778,103 @@ function SystemSection({ apiFetch }: { apiFetch: (path: string, opts?: RequestIn
                 </div>
               ))}
             </div>
+
+            {/* Per-table row counts + disk footprint */}
+            {dbDetail && dbDetail.tables.length > 0 && (
+              <div className="border-t border-gray-800 pt-3">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-[10px] text-gray-500 uppercase tracking-wider">
+                    Tables ({dbDetail.tables.length}) · {fmtNum(dbDetail.totalRows)} rows
+                    {db.mode === 'mongodb' && !db.connected && (
+                      <span className="text-yellow-500 normal-case"> — last known, disconnected</span>
+                    )}
+                  </span>
+                  <span className="text-[10px] text-gray-500 font-mono">{fmtBytes(dbDetail.totalDataBytes)} data</span>
+                </div>
+
+                <div className="max-h-56 overflow-y-auto rounded-lg border border-gray-800">
+                  <table className="w-full text-[11px]">
+                    <thead className="sticky top-0 bg-gray-800 text-gray-500">
+                      <tr>
+                        <th className="text-left px-2 py-1 font-normal">Table</th>
+                        <th className="text-right px-2 py-1 font-normal">Rows</th>
+                        <th className="text-right px-2 py-1 font-normal">Cap</th>
+                        <th className="text-right px-2 py-1 font-normal">Size</th>
+                        {db.mode === 'mongodb' && <th className="text-right px-2 py-1 font-normal">Index</th>}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {dbDetail.tables.map(t => (
+                        <tr key={t.name} className="border-t border-gray-800/60">
+                          <td className="px-2 py-1 text-gray-300 font-mono truncate max-w-[160px]" title={t.name}>{t.name}</td>
+                          <td className="px-2 py-1 text-right text-gray-300 font-mono">{fmtNum(t.rowCount)}</td>
+                          <td className="px-2 py-1 text-right text-gray-600 font-mono">{t.capRowCount != null ? fmtNum(t.capRowCount) : '—'}</td>
+                          <td className="px-2 py-1 text-right text-gray-300 font-mono">{fmtBytes(t.sizeBytes)}</td>
+                          {db.mode === 'mongodb' && (
+                            <td className="px-2 py-1 text-right text-gray-500 font-mono">
+                              {t.indexBytes != null ? fmtBytes(t.indexBytes) : '—'}
+                            </td>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Disk usage + overhead */}
+                {dbDetail.diskUsage && (
+                  <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 text-[11px]">
+                    {db.mode === 'json' ? (
+                      <>
+                        <div>
+                          <div className="text-gray-300 font-mono">
+                            {dbDetail.diskUsage.fileSizeBytes != null ? fmtBytes(dbDetail.diskUsage.fileSizeBytes) : '—'}
+                          </div>
+                          <div className="text-gray-600">File on disk</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-300 font-mono">{fmtBytes(dbDetail.totalDataBytes)}</div>
+                          <div className="text-gray-600">Raw data</div>
+                        </div>
+                        <div>
+                          <div className="text-yellow-400 font-mono">
+                            {dbDetail.diskUsage.overheadBytes != null ? fmtBytes(dbDetail.diskUsage.overheadBytes) : '—'}
+                          </div>
+                          <div className="text-gray-600">Overhead (formatting)</div>
+                        </div>
+                        <div className="truncate" title={dbDetail.diskUsage.path}>
+                          <div className="text-gray-500 font-mono truncate">{dbDetail.diskUsage.path}</div>
+                          <div className="text-gray-600">Path</div>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div>
+                          <div className="text-gray-300 font-mono">{fmtBytes(dbDetail.diskUsage.storageBytes ?? 0)}</div>
+                          <div className="text-gray-600">Storage on disk</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-300 font-mono">{fmtBytes(dbDetail.diskUsage.indexBytes ?? 0)}</div>
+                          <div className="text-gray-600">Indexes</div>
+                        </div>
+                        <div>
+                          <div className="text-yellow-400 font-mono">
+                            {dbDetail.diskUsage.overheadBytes != null ? fmtBytes(dbDetail.diskUsage.overheadBytes) : '—'}
+                          </div>
+                          <div className="text-gray-600">Overhead (index+meta)</div>
+                        </div>
+                        <div>
+                          <div className="text-gray-300 font-mono">
+                            {dbDetail.diskUsage.fsUsedBytes != null ? fmtBytes(dbDetail.diskUsage.fsUsedBytes) : '—'}
+                          </div>
+                          <div className="text-gray-600">FS used (data dir)</div>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         ) : (
           <div className="text-xs text-gray-600">Loading…</div>

@@ -7,6 +7,12 @@ const { ALL_TABLES, TABLE_ROW_CAPS, LEGACY_MIGRATIONS } = require('./constants')
 
 const PERSIST_DEBOUNCE_MS = 2000;
 
+// getDetailedStats() re-stringifies every table to measure its byte size —
+// cheap for most tables but detectionSnapshots/onvif_snapshots carry base64
+// image blobs, so re-running it on every Admin Dashboard poll would burn CPU
+// for no new information. Cache the result for a few seconds instead.
+const DETAILED_STATS_CACHE_MS = 8000;
+
 class JsonDatabase extends BaseDatabase {
   constructor() {
     super();
@@ -16,6 +22,8 @@ class JsonDatabase extends BaseDatabase {
     this._persistTimer   = null;
     this._persistPending = false;
     this._writing        = false;
+    this._detailedStatsCache   = null;
+    this._detailedStatsCachedAt = 0;
     ALL_TABLES.forEach(t => { this._store[t] = []; });
   }
 
@@ -115,6 +123,52 @@ class JsonDatabase extends BaseDatabase {
     this._counts.finds++;
     if (!Array.isArray(this._store[table])) return [];
     return [...this._store[table]];
+  }
+
+  /**
+   * Per-table row counts + byte sizes, plus whole-file disk usage, for the
+   * Admin Dashboard DB detail view. "Overhead" here is the gap between the
+   * pretty-printed file on disk and the sum of each table's minified byte
+   * size — i.e. how much of lts.json is JSON.stringify(…, null, 2)
+   * indentation/whitespace rather than actual data.
+   */
+  async getDetailedStats() {
+    const now = Date.now();
+    if (this._detailedStatsCache && (now - this._detailedStatsCachedAt) < DETAILED_STATS_CACHE_MS) {
+      return this._detailedStatsCache;
+    }
+
+    const tables = ALL_TABLES.map(name => {
+      const rows = Array.isArray(this._store[name]) ? this._store[name] : [];
+      return {
+        name,
+        rowCount:    rows.length,
+        capRowCount: TABLE_ROW_CAPS[name] ?? null,
+        sizeBytes:   Buffer.byteLength(JSON.stringify(rows)),
+      };
+    }).sort((a, b) => b.sizeBytes - a.sizeBytes);
+
+    const totalRows      = tables.reduce((s, t) => s + t.rowCount, 0);
+    const totalDataBytes = tables.reduce((s, t) => s + t.sizeBytes, 0);
+
+    let fileSizeBytes = null;
+    try { fileSizeBytes = fs.statSync(this._path).size; } catch (_) { /* not yet persisted */ }
+
+    const result = {
+      ...this.getStats(),
+      tables,
+      totalRows,
+      totalDataBytes,
+      diskUsage: {
+        path:          this._path,
+        fileSizeBytes,
+        overheadBytes: fileSizeBytes != null ? Math.max(0, fileSizeBytes - totalDataBytes) : null,
+      },
+    };
+
+    this._detailedStatsCache    = result;
+    this._detailedStatsCachedAt = now;
+    return result;
   }
 
   // ── Internal ──────────────────────────────────────────────────────────────

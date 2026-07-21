@@ -73,7 +73,7 @@ loitering_tracking/
 │   │   ├── UserService.js          # 사용자 CRUD
 │   │   ├── AuditService.js         # 감사 로그
 │   │   ├── MsalService.js          # Microsoft MSAL 인증
-│   │   ├── mongoDbService.js       # MongoDB 연결 · 5초 keep-alive 핑 · 재연결 Retry (선형 back-off) · findDirect() 직접 쿼리 (onvif_snapshots 등 비hydration 테이블용)
+│   │   ├── mongoDbService.js       # MongoDB 연결 · 5초 keep-alive 핑 · 재연결 Retry (선형 back-off) · findDirect() 직접 쿼리 (onvif_snapshots 등 비hydration 테이블용) · getCollectionStats() 컬렉션별 collStats+db.stats() (Admin `/admin/system/db` 전용, in-memory cap 우회한 실제 count/storageSize/indexSize)
 │   │   ├── analyticsConfig.js      # 분석 설정
 │   │   ├── activeModelConfig.js    # AI Model Active 선택 영속화 — `settings` 테이블(row id `activeModels`), family→modelId 맵, DB_TYPE(json/mongodb) 공통, 서버 재시작 시 analysisApi.js가 자동 복원
 │   │   ├── missingPersonService.js # 실종자 등록·검색·감지 매칭·상태 관리
@@ -254,6 +254,7 @@ loitering_tracking/
 | PATCH | `/admin/users/:id` | 사용자 상태 변경 (body: action=approve\|reject\|revoke\|reactivate, role?) |
 | DELETE | `/admin/users/:id` | 사용자 삭제 |
 | GET | `/admin/system` | CPU·메모리·GPU·디스크 I/O·스토리지·DB 쿼리 통계 |
+| GET | `/admin/system/db` | DB 상세 통계 — 테이블별 Row 개수·크기(Cap 포함), 전체 disk 사용량·Overhead (JSON: lts.json 실제 파일 크기 vs pretty-print 포맷팅 오버헤드 / MongoDB: 실제 collStats 기반 count·storageSize·indexSize — in-memory TABLE_ROW_CAPS 미러 우회, `/admin/system`보다 무거워 별도 엔드포인트로 분리) |
 | GET | `/admin/audit` | 감사 로그 조회 |
 | GET | `/admin/tc-results` | 최신 서버 시작 시 TC 테스트 실행 결과 (TC번호·SRS·Pass/Fail) |
 | DELETE | `/admin/tc-results` | TC 테스트 결과 전체 삭제 |
@@ -388,12 +389,14 @@ loitering_tracking/
 | POST | `/api/analysis/face-embed` | 얼굴 등록 사진 detect+embed 위임 수신 (streaming 모드가 로컬 얼굴 모델 없을 때 호출, raw JPEG → bbox/score/embedding/thumbnail) |
 | POST | `/api/analysis/face-search-conditions/sync` | streaming 서버의 `faceGalleries`/`faceGalleryFaces` 전체 스냅샷 반영 (embedding 제외, `source:'synced'` 태그로 upsert/delete) + `faceMatchHistory` 갤러리 타입별 집계(`matches: {total, byType}`, embedding/thumbnail 제외) 수신 — IP별 30초 TTL로 저장, `/api/analysis/metrics`의 `faceMatches` 필드에 합산 반영 |
 | GET | `/api/analysis/face-search-conditions` | 활성 Face Search Condition 상세 조회 (Analysis Server Dashboard 드릴다운용) — `total`/`byType`는 `/api/analysis/metrics`의 `faceSearch` 필드에도 포함 |
+| POST | `/api/analysis/camera-removed` | streaming 서버의 `DELETE /api/cameras/:id` 성공 시 fire-and-forget 통지 수신 (body: `{cameraId}`) — `_cameraContexts`/`_metrics.perCamera`에서 즉시 삭제, 미호출 시에도 idle 5분(`CONTEXT_EXPIRY_MS`) 후 자동 정리됨 |
 
 ### ONVIF 이벤트 & 로그 & 헬스체크
 
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
 | GET | `/health` | 서버 상태 확인 (maxChannelNum — 현재 유효 MAX_CHANNEL_NUM 포함) |
+| GET | `/api/ingest-status` | ingest-daemon 연결 상태 (CAPTURE_BACKEND=ingest-daemon 전용, `/health` 폴링 결과 — enabled/healthy/cameras) — Streaming Dashboard Channel Group nav의 상태 배지가 사용 |
 | GET | `/api/client-logs` | 브라우저 콘솔 로그 조회 (query: level, sessionId, from, to, limit) |
 | POST | `/api/client-logs` | 브라우저 콘솔 로그 수신 (HTTP 직접 전송 경로) |
 | DELETE | `/api/client-logs` | 콘솔 로그 전체 삭제 |

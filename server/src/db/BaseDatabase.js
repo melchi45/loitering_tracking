@@ -105,6 +105,15 @@ class BaseDatabase {
     };
   }
 
+  /**
+   * Per-table row counts + disk footprint, for the Admin Dashboard DB detail
+   * view. Overridden by JsonDatabase/MongoDatabase; base implementation
+   * returns an empty breakdown so unimplemented backends still respond.
+   */
+  async getDetailedStats() {
+    return { ...this.getStats(), tables: [], totalRows: 0, totalDataBytes: 0, diskUsage: null };
+  }
+
   // ── Legacy SQLite-compat shims ─────────────────────────────────────────────
 
   pragma() { return this; }

@@ -156,6 +156,62 @@ class MongoDatabase extends BaseDatabase {
   }
 
   /**
+   * Real per-collection row counts + disk footprint (data/storage/index
+   * bytes), for the Admin Dashboard DB detail view. Deliberately bypasses the
+   * in-memory `_store` mirror — that mirror is capped per TABLE_ROW_CAPS and
+   * only reflects the cap, not the real MongoDB collection size (see the
+   * insert() comment above re: the 2026-07-20 incident where the in-memory
+   * cap masked collections that had grown to tens of GB).
+   */
+  async getDetailedStats() {
+    const base = this.getStats();
+    if (!this.isConnected()) {
+      return { ...base, tables: [], totalRows: 0, totalDataBytes: 0, diskUsage: null };
+    }
+
+    const result = await this._mongo.getCollectionStats();
+    if (!result) {
+      return { ...base, tables: [], totalRows: 0, totalDataBytes: 0, diskUsage: null };
+    }
+
+    const tables = result.collections.map(c => ({
+      name:         c.name,
+      rowCount:     c.count,
+      capRowCount:  TABLE_ROW_CAPS[c.name] ?? null,
+      sizeBytes:    c.dataBytes,
+      storageBytes: c.storageBytes,
+      indexBytes:   c.indexBytes,
+    })).sort((a, b) => b.storageBytes - a.storageBytes);
+
+    const totalRows          = tables.reduce((s, t) => s + t.rowCount, 0);
+    const totalDataBytes     = tables.reduce((s, t) => s + t.sizeBytes, 0);
+    const totalStorageBytes  = tables.reduce((s, t) => s + t.storageBytes, 0);
+    const totalIndexBytes    = tables.reduce((s, t) => s + t.indexBytes, 0);
+
+    const db = result.dbStats;
+    const storageBytes = db?.storageBytes ?? totalStorageBytes;
+    const indexBytes   = db?.indexBytes   ?? totalIndexBytes;
+    const dataBytes    = db?.dataBytes    ?? totalDataBytes;
+
+    return {
+      ...base,
+      tables,
+      totalRows,
+      totalDataBytes,
+      diskUsage: {
+        storageBytes,
+        indexBytes,
+        fsUsedBytes:   db?.fsUsedBytes  ?? null,
+        fsTotalBytes:  db?.fsTotalBytes ?? null,
+        // Extra bytes on disk beyond raw data — indexes + WiredTiger
+        // bookkeeping. Never negative even though compression can make
+        // storageBytes < dataBytes for an individual collection.
+        overheadBytes: Math.max(0, (storageBytes + indexBytes) - dataBytes),
+      },
+    };
+  }
+
+  /**
    * Delete every row whose `id` is in `ids` from MongoDB (and the in-memory
    * mirror, if present). Used by snapshotArchiveService.js after it has
    * durably written a batch to storage/archive/ — unlike delete(table, id)

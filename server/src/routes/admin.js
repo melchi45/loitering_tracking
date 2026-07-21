@@ -10,7 +10,7 @@ const TcRunnerService = require('../services/TcRunnerService');
 const { verifyAccessToken } = require('../middleware/auth');
 const { requireRole }       = require('../middleware/role');
 const { getSystemMetrics }  = require('../services/systemMetrics');
-const { getDbStats }        = require('../db');
+const { getDbStats, getDbDetailedStats } = require('../db');
 const { getRecentLogs, setLogLevel, getLogLevel, tailLogFile } = require('../utils/logger');
 
 // All admin routes require authentication + admin role
@@ -96,6 +96,20 @@ router.get('/system', (_req, res) => {
     system: getSystemMetrics(),
     db:     getDbStats(),
   });
+});
+
+// ── GET /admin/system/db ──────────────────────────────────────────────────────
+// Returns per-table row counts + disk footprint (real counts for MongoDB —
+// bypasses the in-memory TABLE_ROW_CAPS mirror — file size breakdown for JSON).
+// Split from /admin/system because it's heavier (per-collection collStats
+// round-trips for MongoDB) and the client polls it on a slower interval.
+router.get('/system/db', async (_req, res) => {
+  try {
+    res.json(await getDbDetailedStats());
+  } catch (err) {
+    console.error('[admin/system/db]', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
 });
 
 // ── GET /admin/audit ──────────────────────────────────────────────────────────

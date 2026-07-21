@@ -366,6 +366,62 @@ async function compact(table) {
   }
 }
 
+/**
+ * Per-collection + whole-database storage stats, for the Admin Dashboard DB
+ * detail view (real row counts and on-disk footprint — unlike the in-memory
+ * mirror, which is capped per TABLE_ROW_CAPS and can undercount by orders of
+ * magnitude, see the 2026-07-20 incident this cap eviction fix addresses).
+ *
+ * Uses db.listCollections() rather than the hardcoded TABLES list so any
+ * collection actually present (including onvif_snapshots, excluded from
+ * startup hydration) is reported.
+ *
+ * @returns {Promise<{collections: object[], dbStats: object|null}|null>}
+ */
+async function getCollectionStats() {
+  if (!_connected) return null;
+  const db = mongoose.connection.db;
+  try {
+    const cols = await db.listCollections().toArray();
+    const collections = [];
+    for (const { name } of cols) {
+      if (name.startsWith('system.')) continue;
+      try {
+        const stats = await db.command({ collStats: name });
+        collections.push({
+          name,
+          count:        stats.count ?? 0,
+          dataBytes:    stats.size ?? 0,
+          storageBytes: stats.storageSize ?? 0,
+          indexBytes:   stats.totalIndexSize ?? 0,
+        });
+      } catch (_) {
+        collections.push({ name, count: 0, dataBytes: 0, storageBytes: 0, indexBytes: 0 });
+      }
+    }
+
+    let dbStats = null;
+    try {
+      const s = await db.stats();
+      dbStats = {
+        dataBytes:    s.dataSize ?? 0,
+        storageBytes: s.storageSize ?? 0,
+        indexBytes:   s.indexSize ?? 0,
+        // Only populated by some storage engines/deployments (e.g. WiredTiger
+        // with directoryperdb) — null otherwise, UI falls back to the
+        // collection-sum totals above.
+        fsUsedBytes:  s.fsUsedSize  ?? null,
+        fsTotalBytes: s.fsTotalSize ?? null,
+      };
+    } catch (_) { /* db.stats() unsupported on this deployment — collection sums still apply */ }
+
+    return { collections, dbStats };
+  } catch (err) {
+    console.error('[MongoDB] getCollectionStats failed:', err.message);
+    return null;
+  }
+}
+
 module.exports = {
   TABLES,
   connect,
@@ -377,4 +433,5 @@ module.exports = {
   findDirect,
   isConnected,
   compact,
+  getCollectionStats,
 };
