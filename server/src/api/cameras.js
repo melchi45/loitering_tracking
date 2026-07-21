@@ -1,5 +1,7 @@
 'use strict';
 
+const https = require('https');
+const http  = require('http');
 const { Router } = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { validateChannelSlot, nextFreeChannelSlot } = require('../services/channelSlotService');
@@ -20,6 +22,51 @@ function withTimeout(promise, ms, fallback) {
 const SERVER_MODE      = process.env.SERVER_MODE      || 'combined';
 const CAPTURE_BACKEND  = (process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase();
 const WEBRTC_ENGINE    = (process.env.WEBRTC_ENGINE   || 'mediamtx').toLowerCase();
+
+// Fire-and-forget notification to the remote analysis server on camera deletion
+// (2026-07-21, §6.29.11/§6.29.12) — mirrors the pattern faceSearchSync.js
+// already uses for streaming→analysis pushes: short timeout, warn-only on
+// failure, never blocks the caller. Without this, the analysis server's
+// per-camera in-memory state (_cameraContexts/_metrics.perCamera in
+// analysisApi.js) only clears after its own 5-minute idle-prune sweep, so a
+// just-deleted camera's tile/metrics linger on the Analysis Server Dashboard
+// for up to 5 minutes after removal here.
+//
+// Uses http(s).request directly rather than the global fetch() — confirmed
+// live that fetch() fails outright ("fetch failed", no further detail) against
+// this deployment's self-signed HTTPS cert, since undici validates certs by
+// default and there is no per-call equivalent of an Agent's
+// rejectUnauthorized:false. faceSearchSync.js already solved this the same
+// way for its own streaming→analysis calls.
+const _analysisNotifyHttpsAgent = new https.Agent({ keepAlive: true, rejectUnauthorized: false });
+const _analysisNotifyHttpAgent  = new http.Agent({ keepAlive: true });
+
+function _notifyAnalysisCameraRemoved(cameraId) {
+  if (SERVER_MODE !== 'streaming' || !process.env.ANALYSIS_SERVER_URL) return;
+  let base;
+  try { base = new URL(process.env.ANALYSIS_SERVER_URL); } catch { return; }
+  const isHttps = base.protocol === 'https:';
+  const mod     = isHttps ? https : http;
+  const body    = JSON.stringify({ cameraId });
+  const req = mod.request({
+    hostname: base.hostname,
+    port:     base.port || (isHttps ? 443 : 80),
+    path:     '/api/analysis/camera-removed',
+    method:   'POST',
+    headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+    timeout:  4000,
+    agent:    isHttps ? _analysisNotifyHttpsAgent : _analysisNotifyHttpAgent,
+  }, (res) => {
+    res.resume();
+    if (res.statusCode >= 400) {
+      console.warn(`[cameras] camera-removed notify to analysis server returned HTTP ${res.statusCode} for ${cameraId}`);
+    }
+  });
+  req.on('error',   (err) => console.warn(`[cameras] camera-removed notify to analysis server failed for ${cameraId}: ${err.message}`));
+  req.on('timeout', () => req.destroy());
+  req.write(body);
+  req.end();
+}
 
 // ingest-daemon now supports RTP fan-out for mediasoup (mediasoupPort / mediasoupAudioPort).
 // WebRTC availability is determined by the pipeline, not forced off here.
@@ -616,6 +663,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
         db.delete('cameras', camera.id);
       }
 
+      _notifyAnalysisCameraRemoved(camera.id);
       res.json({ success: true, message: 'Camera removed' });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });

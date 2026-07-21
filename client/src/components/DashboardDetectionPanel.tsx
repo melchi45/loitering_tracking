@@ -4,43 +4,10 @@ import { useCrossCameraStore } from '../stores/crossCameraStore';
 import { usePersonTrajectoryStore } from '../stores/personTrajectoryStore';
 import { useAllDetections } from '../hooks/useAllDetections';
 import { useSocket } from '../hooks/useSocket';
+import { useAnalysisClientStatus } from '../hooks/useSystemStatus';
 import { DetectionRow, CATEGORIES, getCategoryKey } from './FullscreenCameraView';
 import { useI18n } from '../i18n';
 import type { Detection } from '../types';
-
-// ── Analysis server status (streaming mode only) ──────────────────────────────
-
-interface AnalysisClientStatus {
-  connected:         boolean;
-  circuitOpen:       boolean;
-  total:             number;
-  errors:            number;
-  dropped:           number;
-  lastError?:        string;
-  timeoutMs?:        number;
-  analysisServerUrl?: string;
-}
-
-function useAnalysisClientStatus(): AnalysisClientStatus | null {
-  const [status, setStatus] = useState<AnalysisClientStatus | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    const poll = async () => {
-      try {
-        const res = await fetch('/api/analysis/client-status');
-        if (!res.ok) { setStatus(null); return; } // not streaming mode — endpoint absent
-        const data: AnalysisClientStatus = await res.json();
-        if (!cancelled) setStatus(data);
-      } catch { if (!cancelled) setStatus(null); }
-    };
-    poll();
-    const id = setInterval(poll, 5000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, []);
-
-  return status;
-}
 
 interface MergedDetection extends Detection {
   _cameraId:   string;

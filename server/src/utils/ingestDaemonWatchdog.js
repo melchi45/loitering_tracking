@@ -25,15 +25,35 @@ const STARTUP_GRACE_MS    = 30_000; // let the daemon finish its own boot first
 const RESTART_COOLDOWN_MS = 90_000; // restartIngestDaemon.js itself takes ~10s;
                                      // give re-registration time before re-arming
 
-function checkHealth(url) {
+// Fetches and parses ingest-daemon's own /health body (e.g. {"status":"ok","cameras":9})
+// — used by both the watchdog loop (boolean-only) and the dashboard status API
+// (wants the camera count too). Never rejects; timeout/parse/connection errors
+// all resolve to { ok: false, error }.
+function fetchIngestDaemonHealth(url) {
   return new Promise((resolve) => {
     const req = http.get(url, { timeout: HEALTH_TIMEOUT_MS }, (res) => {
-      res.resume();
-      resolve(res.statusCode >= 200 && res.statusCode < 300);
+      let body = '';
+      res.on('data', (chunk) => { body += chunk; });
+      res.on('end', () => {
+        if (res.statusCode < 200 || res.statusCode >= 300) {
+          resolve({ ok: false, error: `HTTP ${res.statusCode}` });
+          return;
+        }
+        try {
+          const parsed = JSON.parse(body);
+          resolve({ ok: true, cameras: parsed.cameras });
+        } catch {
+          resolve({ ok: false, error: 'invalid JSON response' });
+        }
+      });
     });
-    req.on('timeout', () => { req.destroy(); resolve(false); });
-    req.on('error',   () => resolve(false));
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'timeout' }); });
+    req.on('error',   (err) => resolve({ ok: false, error: err.message }));
   });
+}
+
+async function checkHealth(url) {
+  return (await fetchIngestDaemonHealth(url)).ok;
 }
 
 function triggerRestart() {
@@ -87,4 +107,4 @@ function startIngestDaemonWatchdog() {
   cooldownUntil = Date.now() + STARTUP_GRACE_MS;
 }
 
-module.exports = { startIngestDaemonWatchdog };
+module.exports = { startIngestDaemonWatchdog, fetchIngestDaemonHealth };

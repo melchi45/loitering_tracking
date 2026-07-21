@@ -18,7 +18,7 @@
  *   getStorageMode()  → 'json' | 'mongodb' | …
  *   getDbStats()          → { mode, connected, rates, cumulative }
  *   getDbDetailedStats()  → Promise<{ ...getDbStats(), tables, totalRows, totalDataBytes, diskUsage }>
- *   flushNow()            → void
+ *   flushNow()            → Promise<void>
  */
 
 const JsonDatabase  = require('./JsonDatabase');
@@ -89,8 +89,8 @@ async function getDbDetailedStats() {
     : { mode: 'unknown', connected: false, rates: {}, cumulative: {}, tables: [], totalRows: 0, totalDataBytes: 0, diskUsage: null };
 }
 
-function flushNow() {
-  if (_db) _db.flushNow();
+async function flushNow() {
+  if (_db) await _db.flushNow();
 }
 
 module.exports = { initDB, getDB, getStorageMode, getDbStats, getDbDetailedStats, flushNow };

@@ -16,6 +16,7 @@ import AlertPanel from './components/AlertPanel';
 import DiscoveredCameraPanel from './components/DiscoveredCameraPanel';
 import FullscreenCameraView from './components/FullscreenCameraView';
 import { DashboardDetectionPanel } from './components/DashboardDetectionPanel';
+import { SystemStatusBadges } from './components/SystemStatusBadges';
 import AnalysisEventsTab from './components/AnalysisEventsTab';
 import ZonesPanel from './components/ZonesPanel';
 import VideoAnalyticsTab from './components/VideoAnalyticsTab';
@@ -1354,33 +1355,36 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
                     />
                   )}
                 </div>
-                {totalGroups > 1 && (
-                  <div className="flex-shrink-0 flex items-center justify-center gap-3 mt-2 py-1.5 bg-gray-800/80 border border-gray-700 rounded-lg mx-auto px-3">
-                    <button
-                      className="w-6 h-6 flex items-center justify-center rounded text-white hover:bg-gray-700 disabled:text-gray-600 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
-                      onClick={() => setChannelOffset((o) => Math.max(0, o - pageSize))}
-                      disabled={!canPrev}
-                      title="Previous channel group"
-                    >
-                      <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
-                      </svg>
-                    </button>
-                    <span className="text-xs text-gray-300 whitespace-nowrap select-none">
-                      Channel Group {currentGroup + 1} of {totalGroups} (CH {channelOffset + 1}–{Math.min(channelOffset + pageSize, maxChannelNum)})
-                    </span>
-                    <button
-                      className="w-6 h-6 flex items-center justify-center rounded text-white hover:bg-gray-700 disabled:text-gray-600 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
-                      onClick={() => setChannelOffset((o) => Math.min((totalGroups - 1) * pageSize, o + pageSize))}
-                      disabled={!canNext}
-                      title="Next channel group"
-                    >
-                      <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
-                        <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
-                      </svg>
-                    </button>
-                  </div>
-                )}
+                <div className="flex-shrink-0 flex items-center justify-center gap-3 mt-2 mx-auto">
+                  {totalGroups > 1 && (
+                    <div className="flex items-center gap-3 py-1.5 bg-gray-800/80 border border-gray-700 rounded-lg px-3">
+                      <button
+                        className="w-6 h-6 flex items-center justify-center rounded text-white hover:bg-gray-700 disabled:text-gray-600 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
+                        onClick={() => setChannelOffset((o) => Math.max(0, o - pageSize))}
+                        disabled={!canPrev}
+                        title="Previous channel group"
+                      >
+                        <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                      </button>
+                      <span className="text-xs text-gray-300 whitespace-nowrap select-none">
+                        Channel Group {currentGroup + 1} of {totalGroups} (CH {channelOffset + 1}–{Math.min(channelOffset + pageSize, maxChannelNum)})
+                      </span>
+                      <button
+                        className="w-6 h-6 flex items-center justify-center rounded text-white hover:bg-gray-700 disabled:text-gray-600 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
+                        onClick={() => setChannelOffset((o) => Math.min((totalGroups - 1) * pageSize, o + pageSize))}
+                        disabled={!canNext}
+                        title="Next channel group"
+                      >
+                        <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                        </svg>
+                      </button>
+                    </div>
+                  )}
+                  <SystemStatusBadges />
+                </div>
               </div>
             );
           })()}

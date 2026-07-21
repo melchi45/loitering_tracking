@@ -82,8 +82,10 @@ class BaseDatabase {
   /** Async setup — connect, load initial data, etc. */
   async init() { _abstract(this, 'init'); }
 
-  /** Flush pending writes synchronously (graceful shutdown). */
-  flushNow() {}
+  /** Flush pending writes (graceful shutdown) — async so a backend with truly
+   *  in-flight remote writes (see MongoDatabase) can await them; a synchronous
+   *  backend's override just returns normally. */
+  async flushNow() {}
 
   /** Release resources — connections, timers. */
   close() { clearInterval(this._rateTimer); }

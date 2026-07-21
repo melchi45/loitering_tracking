@@ -18,7 +18,7 @@ const session      = require('express-session');
 const { Server: SocketIOServer } = require('socket.io');
 
 const { startEventLoopLagMonitor } = require('./utils/eventLoopLag');
-const { startIngestDaemonWatchdog } = require('./utils/ingestDaemonWatchdog');
+const { startIngestDaemonWatchdog, fetchIngestDaemonHealth } = require('./utils/ingestDaemonWatchdog');
 const { initDB, flushNow }    = require('./db');
 const { ensureMongoDB }       = require('./scripts/ensureMongodb');
 const PipelineManager     = require('./services/pipelineManager');
@@ -310,6 +310,20 @@ async function main() {
 
   // System-wide Stats Dashboard
   app.use('/api/stats',     buildStatsRouter(db));
+
+  // ingest-daemon status — dashboard indicator (2026-07-21, §6.29.10). Reuses
+  // the watchdog's own health-check helper rather than re-implementing the
+  // HTTP call, so this always reflects the exact same "healthy" definition
+  // the auto-recovery watchdog acts on.
+  app.get('/api/ingest-status', async (_req, res) => {
+    const backend = (process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase();
+    if (backend !== 'ingest-daemon') {
+      return res.json({ enabled: false, healthy: false });
+    }
+    const url = `${(process.env.INGEST_DAEMON_URL || 'http://127.0.0.1:7070').replace(/\/$/, '')}/health`;
+    const result = await fetchIngestDaemonHealth(url);
+    res.json({ enabled: true, healthy: result.ok, cameras: result.cameras, error: result.error });
+  });
 
   // Analysis API — exposed when this process acts as an AI analysis server
   if (SERVER_MODE === 'analysis' || SERVER_MODE === 'combined') {
@@ -765,7 +779,14 @@ async function main() {
       await youtubeSvc.stopAll();
       await pipelineManager.stopAll();
       io.close();
-      flushNow(); // flush any pending debounced DB write before shutdown
+      // Await, not fire-and-forget (2026-07-21, §6.29.15) — MongoDatabase's
+      // flushNow() used to be a synchronous no-op ("writes are fire-and-forget,
+      // nothing to flush"), so a DELETE/update responding success right before
+      // a restart could have its actual MongoDB write abandoned mid-flight —
+      // confirmed live: deleted camera records reappeared, with their original
+      // createdAt, after a restart that followed within seconds of the delete.
+      // Now genuinely waits for every in-flight Mongo write to settle.
+      await flushNow();
       httpServer.close(() => {
         console.log(`[Server] ${httpsEnabled ? 'HTTPS' : 'HTTP'} server closed`);
         try { db.close(); } catch (_) {}

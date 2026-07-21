@@ -33,6 +33,16 @@ class MongoDatabase extends BaseDatabase {
     this._mongo           = null; // mongoDbService singleton
     this._connected       = false;
     this._fallbackLogged  = false;
+    // In-flight MongoDB write promises (2026-07-21, §6.29.15) — _persist() was
+    // pure fire-and-forget with no way for anything to know a write was still
+    // in flight. Confirmed live: DELETE /api/cameras/:id responds
+    // {success:true} as soon as the in-memory _store is updated, but the
+    // actual _mongo.remove() may not have reached MongoDB yet; a server
+    // restart moments later (flushNow() was a no-op — see below) could abandon
+    // that write mid-flight, and the "deleted" record would reappear on next
+    // boot's hydration from MongoDB. Tracked here so flushNow() has something
+    // real to wait for.
+    this._pendingWrites   = new Set();
   }
 
   // ── Metadata ──────────────────────────────────────────────────────────────
@@ -66,8 +76,15 @@ class MongoDatabase extends BaseDatabase {
     console.log('[DB] Storage mode: MongoDB (all writes go to MongoDB only)');
   }
 
-  flushNow() {
-    // MongoDB writes are async fire-and-forget — nothing to flush synchronously.
+  async flushNow() {
+    // Was a pure no-op (see the constructor's _pendingWrites comment for why
+    // that was a real data-loss gap, not just a missed optimization) — now
+    // awaits every write _persist() has kicked off that hasn't settled yet.
+    // Promise.allSettled, not Promise.all: a failed write already logs its
+    // own error in _persist()'s .catch(); shutdown should still proceed
+    // rather than hang or reject on one bad write.
+    if (this._pendingWrites.size === 0) return;
+    await Promise.allSettled([...this._pendingWrites]);
   }
 
   close() {
@@ -233,15 +250,14 @@ class MongoDatabase extends BaseDatabase {
   _persist(op, table, id, row) {
     if (this.isConnected()) {
       this._fallbackLogged = false;
-      if (op === 'remove') {
-        this._mongo.remove(table, id).catch(e =>
-          console.error('[DB:mongo] remove failed:', e.message)
-        );
-      } else {
-        this._mongo.upsert(table, id, row).catch(e =>
-          console.error('[DB:mongo] upsert failed:', e.message)
-        );
-      }
+      const write = op === 'remove'
+        ? this._mongo.remove(table, id).catch(e => console.error('[DB:mongo] remove failed:', e.message))
+        : this._mongo.upsert(table, id, row).catch(e => console.error('[DB:mongo] upsert failed:', e.message));
+      // Still fire-and-forget from the caller's perspective (delete()/update()/
+      // insert() stay synchronous — see the class comment) — only flushNow()
+      // ever awaits this set, at shutdown.
+      this._pendingWrites.add(write);
+      write.finally(() => this._pendingWrites.delete(write));
       return;
     }
     // Disconnected: hold in-memory only — no JSON fallback

@@ -1600,32 +1600,46 @@ class PipelineManager {
 
   async stopCamera(cameraId) {
     const ctx = this._pipelines.get(cameraId);
-    if (!ctx) return;
+    // Previously returned here with NO cleanup at all when this cameraId has no
+    // in-memory pipeline (2026-07-21, §6.29.12) — e.g. a camera left 'paused'/
+    // 'error' across a server restart, or one whose startCamera() never
+    // completed. DELETE /api/cameras/:id calls this unconditionally, so any
+    // such camera's ingest-daemon/mediasoup/mediamtx registration (which lives
+    // independently of this process's in-memory _pipelines Map) was silently
+    // never torn down — a real zombie-registration source, distinct from the
+    // TC test suite's ad-hoc analysis-server cameraIds (§6.29.11), which never
+    // had a Camera record or pipeline to begin with. Now falls through to the
+    // same external-system cleanup either way; only the ctx-scoped bookkeeping
+    // below (timers, capture, behavior engine) is skipped when there's no ctx.
+    if (ctx) {
+      // Close any open (state='true') ONVIF events before taking the camera offline.
+      if (typeof this._onCameraOfflineHook === 'function') {
+        try { this._onCameraOfflineHook(cameraId); } catch (_) {}
+      }
 
-    // Close any open (state='true') ONVIF events before taking the camera offline.
-    if (typeof this._onCameraOfflineHook === 'function') {
-      try { this._onCameraOfflineHook(cameraId); } catch (_) {}
+      ctx.running       = false;
+      ctx._pendingFrame = null; // discard any pending frame so _runPendingAnalysis exits cleanly
+      if (ctx.frameWatchdogTimer) {
+        clearInterval(ctx.frameWatchdogTimer);
+        ctx.frameWatchdogTimer = null;
+      }
+      if (ctx._activeFlushTimer) {
+        clearInterval(ctx._activeFlushTimer);
+        ctx._activeFlushTimer = null;
+      }
+      ctx.capture.stop();
+      ctx.behavior.reset();
+      ctx.behavior.removeAllListeners();
     }
-
-    ctx.running       = false;
-    ctx._pendingFrame = null; // discard any pending frame so _runPendingAnalysis exits cleanly
-    if (ctx.frameWatchdogTimer) {
-      clearInterval(ctx.frameWatchdogTimer);
-      ctx.frameWatchdogTimer = null;
-    }
-    if (ctx._activeFlushTimer) {
-      clearInterval(ctx._activeFlushTimer);
-      ctx._activeFlushTimer = null;
-    }
-    ctx.capture.stop();
-    ctx.behavior.reset();
-    ctx.behavior.removeAllListeners();
-    const needsMediaMTXCleanup = (ctx.useWebRTC && WEBRTC_ENGINE === 'mediamtx')
+    const needsMediaMTXCleanup = (ctx?.useWebRTC && WEBRTC_ENGINE === 'mediamtx')
       || CAPTURE_BACKEND === 'mediamtx';
     // Awaited (not fire-and-forget) so the caller — DELETE /api/cameras/:id — only
     // responds "removed" once ingest-daemon has actually been told to stop, with
     // its own retry (see _ingestRemoveCamera). Each cleanup logs its own failure
     // internally, so one failing independently of the others doesn't hide it.
+    // All three are safe best-effort no-ops when nothing was actually registered
+    // for this cameraId (no ctx case above), which is the common/expected path
+    // for a camera that was never started in this process's lifetime.
     await Promise.allSettled([
       needsMediaMTXCleanup ? mediamtxManager.removeCameraPath(cameraId) : Promise.resolve(),
       WEBRTC_ENGINE !== 'mediamtx' ? getWebRTCEngine().removeCameraStream(cameraId) : Promise.resolve(),

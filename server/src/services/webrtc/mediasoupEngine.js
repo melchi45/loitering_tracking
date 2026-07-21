@@ -1527,6 +1527,19 @@ async function negotiate(cameraId, sdpOffer) {
 
     const sdpAnswer = _buildAnswer({ parsed, transport, videoConsumer, audioConsumer, dataConsumer, cameraId, spropParameterSets, profileLevelId });
     console.log(`[WebRTC][mediasoup] negotiate OK [${cameraId.slice(0,8)}] audio=${!!audioConsumer} data=${!!dataConsumer}`);
+    // Opt-in SDP diagnostic (2026-07-21, LTS_DEBUG_SDP=true — off by default, no
+    // cost when disabled) — dumps the exact video/audio codec lines sent to the
+    // browser alongside the spropParameterSets/profileLevelId values that fed
+    // them, so a mismatch between "what negotiate() computed" and "what actually
+    // went out in the SDP" is visible without re-adding ad-hoc logging each time.
+    // Originally added chasing a Baseline-profile-level-id (42e01f) sighting that
+    // turned out to correlate with the §6.29.5 ingest-daemon overload window
+    // (see Design_RTSP_Capture_Backend.md §6.29.14) rather than a code defect —
+    // kept as a standing tool since this class of question recurs.
+    if (process.env.LTS_DEBUG_SDP === 'true') {
+      const vLine = sdpAnswer.split('\r\n').filter(l => /^(m=video|a=rtpmap|a=fmtp|a=ssrc|m=audio)/.test(l)).join(' | ');
+      console.log(`[SDP-DEBUG][${cameraId.slice(0,8)}] vars: sprop=${JSON.stringify(spropParameterSets)} profileLevelId=${JSON.stringify(profileLevelId)} | sdp: ${vLine}`);
+    }
 
     return { status: 201, sdpAnswer, headers: {} };
   } catch (err) {

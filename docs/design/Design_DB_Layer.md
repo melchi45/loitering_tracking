@@ -4,8 +4,8 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-STORAGE-001 |
-| **Version** | 1.8 |
-| **Status** | Active — amended 2026-06-23 |
+| **Version** | 2.1 |
+| **Status** | Active — amended 2026-07-21 |
 | **Date** | 2026-05-27 |
 | **Parent SRS** | srs/SRS_DB_Layer.md |
 
@@ -1185,3 +1185,4 @@ DB_TYPE=sqlite
 | 1.8 | 2026-06-23 | LTS Engineering Team | DB_TYPE=mongodb 시작 시 JSON fallback 완전 제거(서버 시작 거부) · mongoDbService 5초 keep-alive 핑 + 선형 back-off 재연결 Retry 추가 |
 | 1.9 | 2026-06-25 | LTS Engineering Team | `queryAsync()` 비동기 직접 조회 API 추가 — `BaseDatabase`: 기본 구현(in-memory sort/slice); `MongoDatabase`: MongoDB 직접 조회(연결 해제 시 in-memory fallback); `mongoDbService.findDirect()` 신규. `TABLES` 누락 보완 (`faceTrajectories`, `tc_results`); `onvif_snapshots` 는 frameData 블롭 크기로 in-memory hydration 영구 제외, `queryAsync()` 로 요청 시점 직접 조회. `LOAD_LIMITS`에 `faceTrajectories`(5000), `tc_results`(10000) 추가. |
 | 2.0 | 2026-06-26 | LTS Engineering Team | §7 Startup Sequence 개정: DB_TYPE=mongodb 시 MongoDB 미연결 → process.exit(1) (lts.json fallback 완전 제거); §13 Error Handling 업데이트; ensureMongoDB() index.js에서 initDB() 전 호출 명시 |
+| 2.1 | 2026-07-21 | Claude | **데이터 유실 버그 수정**: `MongoDatabase.flushNow()`가 완전한 no-op이었음(`_persist()`의 `_mongo.remove()`/`upsert()`가 순수 fire-and-forget이라 in-flight write를 아무도 추적하지 않음) — `DELETE`/`update` API가 in-memory 제거만으로 즉시 성공 응답하고, 실제 MongoDB 쓰기가 아직 진행 중인 상태에서 서버가 재시작되면 그 변경이 통째로 유실되고 다음 부팅의 하이드레이션이 예전 레코드를 되살리는 구조였음(카메라 삭제로 실측 재현·검증). `MongoDatabase`에 `_pendingWrites` Set 추가해 진행 중인 쓰기를 추적, `flushNow()`를 `async`로 변경해 `Promise.allSettled()`로 실제 대기하도록 수정 — `BaseDatabase`/`db/index.js` 인터페이스도 async로 통일, `index.js`의 graceful shutdown이 `await flushNow()`로 호출하도록 수정. 카메라 테이블에 국한되지 않고 `db.delete()`/`db.update()`를 쓰는 모든 테이블에 해당하던 버그. 상세: `Design_RTSP_Capture_Backend.md` §6.29.15 |

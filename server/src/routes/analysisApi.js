@@ -1084,13 +1084,26 @@ function _getOrCreateContext(cameraId, zonesArray, cameraName) {
   return ctx;
 }
 
-// Prune idle contexts every minute
+// Prune idle contexts every minute — also prunes _metrics.perCamera (2026-07-21,
+// §6.29.11) which previously had NO expiry at all: any cameraId ever POSTed to
+// /frame (including ad-hoc test cameraIds like the TC-DAP suite's
+// 'tc009-cam-alpha'/'tc009-cam-beta'/'test-cam-distributed', which are never
+// registered Cameras and so have no DELETE /api/cameras/:id target at all)
+// left a permanent entry here for the life of the process. _cameraContexts
+// already self-pruned on the same CONTEXT_EXPIRY_MS idle window; perCamera
+// just wasn't wired to the same sweep. Keyed off metric.lastFrameAt, which
+// every /frame request already updates.
 setInterval(() => {
   const now = Date.now();
   for (const [id, ctx] of _cameraContexts) {
     if (now - ctx.lastSeenAt > CONTEXT_EXPIRY_MS) {
       _cameraContexts.delete(id);
       console.log(`[AnalysisAPI] Pruned idle context for camera ${id.slice(0, 8)}`);
+    }
+  }
+  for (const [id, metric] of _metrics.perCamera) {
+    if (metric.lastFrameAt && now - metric.lastFrameAt > CONTEXT_EXPIRY_MS) {
+      _metrics.perCamera.delete(id);
     }
   }
 }, 60_000).unref();
@@ -1729,6 +1742,21 @@ router.post('/face-search-conditions/sync', express.json({ limit: '5mb' }), (req
   } catch (err) {
     res.status(500).json({ success: false, error: err.message });
   }
+});
+
+// ── POST /api/analysis/camera-removed ──────────────────────────────────────────
+// Called (fire-and-forget, best-effort) by a streaming server's DELETE
+// /api/cameras/:id so this analysis server's per-camera in-memory state
+// (_cameraContexts, _metrics.perCamera) clears immediately instead of waiting
+// out CONTEXT_EXPIRY_MS (2026-07-21, §6.29.11 — closes the loop for real
+// deleted cameras; TC-suite ad-hoc cameraIds that were never registered have
+// no DELETE call to trigger this and still rely on the idle-prune sweep above).
+router.post('/camera-removed', express.json(), (req, res) => {
+  const cameraId = req.body?.cameraId;
+  if (!cameraId) return res.status(400).json({ success: false, error: 'cameraId required' });
+  _cameraContexts.delete(cameraId);
+  _metrics.perCamera.delete(cameraId);
+  res.json({ success: true });
 });
 
 // ── GET /api/analysis/face-search-conditions ──────────────────────────────────

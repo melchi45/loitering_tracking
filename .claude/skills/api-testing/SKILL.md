@@ -247,6 +247,18 @@ runAll().catch(err => { console.error(err); process.exit(1); });
 - `.github/workflows/test.yml` — GitHub Actions 자동 테스트
 - Push 또는 PR 시 자동 실행: `npm test` → 결과를 PR 상태로 표시
 
+## 테스트 격리·정리 관련 주의사항 (2026-07-21 실측)
+
+### 1. 서버 재시작이 TC 자동 실행을 중단시키면 테스트 카메라가 고아로 남는다
+
+`camera_discovery.test.js`(TC-B 그룹)처럼 `POST /api/cameras`로 실제 카메라 레코드를 만드는 스위트는 `main()` 맨 끝의 `cleanupAll()`에서 일괄 삭제하는 구조 — 테스트 하나하나가 아니라 **런 전체가 끝나야** 정리된다. 액티브 디버깅 세션에서 서버를 자주 재시작(`npm run start`)하면 `TcRunnerService.runOnStartup()`이 매 부팅마다 43개 스위트를 새로 돌리는데(30초 지연 후 시작), 다음 재시작이 그 실행 도중에 발생하면 `cleanupAll()`에 도달하기 전에 프로세스가 죽어 `TC-B-001 Cam`, `TC-B-005 Del`, `TC-A-*-Cam*` 같은 이름의 카메라 레코드가 DB에 영구적으로 남는다 — RTSP URL이 `10.0.0.x`/`192.0.2.x`(TEST-NET, RFC 5737) 대역이라 실제 카메라일 수 없음이 확인 기준.
+
+**예방**: 서버를 반복 재시작해야 하는 활성 디버깅 세션에서는 `server/.env`에 `TC_STARTUP_RUN=false`를 임시로 설정해 자동 실행 자체를 끄는 것을 권장 — 작업이 끝나면 원복. 이미 고아가 된 카메라는 이름이 `TC-*` 접두사이고 RTSP URL이 TEST-NET 대역인지 확인 후 `DELETE /api/cameras/:id`로 안전하게 정리 가능.
+
+### 2. `distributed_pipeline.test.js`의 TC-DAP-005/009는 카메라를 등록하지 않고 cameraId만 사용한다
+
+`POST /api/analysis/frame`에 `cameraId: 'test-cam-distributed'` / `'tc009-cam-alpha'` / `'tc009-cam-beta'`를 직접 실어 보내는 방식(FR-DAP-027 — cameraId별 상태 격리 검증이 테스트 목적이므로 실제 카메라 등록이 오히려 불필요) — 이 cameraId들은 `POST /api/cameras`를 거친 적이 없어 `DELETE /api/cameras/:id`로 지울 대상 자체가 없다. Analysis 서버(`analysisApi.js`)가 프레임을 받을 때마다 `_cameraContexts`/`_metrics.perCamera`에 lazy-create하는데, `_cameraContexts`는 5분 idle 후 자동 정리(`CONTEXT_EXPIRY_MS`)되지만 `_metrics.perCamera`는 2026-07-21 이전에는 만료 로직이 없어 프로세스 수명 내내 누적되던 버그였음 — 같은 60초 프루닝 인터벌에 편입해 수정 완료(`Design_RTSP_Capture_Backend.md` §6.29.11). 정상 등록된 카메라를 삭제할 때는 `DELETE /api/cameras/:id`가 이제 `POST {ANALYSIS_SERVER_URL}/api/analysis/camera-removed`로 즉시 통지해 5분을 기다리지 않고 정리된다(§6.29.12) — 단, 이 통지가 실제로 반영되려면 **Analysis 서버 자신도 이 커밋을 pull·재시작해야** 신규 엔드포인트가 응답한다(원격 서버라 이 세션에서 직접 재시작 불가, 실측 시 404 확인됨).
+
 ## 디버깅 팁
 ```bash
 npm test -- --verbose    # 자세한 로그
