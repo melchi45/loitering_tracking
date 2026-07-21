@@ -2,6 +2,10 @@
 
 > 이 파일은 Claude AI가 이 프로젝트 작업 시 자동으로 로드하는 프로젝트 컨텍스트 파일입니다.
 
+## 응답 언어
+
+이 프로젝트에서 작업할 때 Claude는 **항상 한국어로 응답**합니다. 코드·커밋 메시지·파일 경로 등은 원문(영어)을 유지하되, 설명·분석·요약 등 사용자에게 보여주는 텍스트는 한국어를 기본으로 합니다.
+
 ---
 
 ## 프로젝트 개요
@@ -63,6 +67,7 @@ loitering_tracking/
 │   │   ├── onvifDiscovery.js       # ONVIF WS-Discovery
 │   │   ├── youtubeStreamService.js # YouTube → RTSP 변환
 │   │   ├── snapshotService.js      # 프레임 스냅샷 저장
+│   │   ├── snapshotArchiveService.js # onvif_snapshots/detectionSnapshots 날짜 기반 보관 — SNAPSHOT_ARCHIVE_RETENTION_DAYS(기본 1일) 경과 문서를 storage/archive/<table>/<date>.ndjson로 덤프 후 MongoDB에서 삭제+compact (MongoDB 전용, TABLE_ROW_CAPS의 개수 기반 즉시삭제에서 이 두 테이블은 제외됨 — MongoDatabase.js ARCHIVED_TABLES)
 │   │   ├── trackerConfig.js        # 추적기 파라미터
 │   │   ├── TokenService.js         # JWT 토큰 관리
 │   │   ├── UserService.js          # 사용자 CRUD

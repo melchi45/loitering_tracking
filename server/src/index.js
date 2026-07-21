@@ -135,6 +135,10 @@ async function main() {
   const db = await _initDBWithRetry();
   console.log('[Server] Database initialised (mode:', require('./db').getStorageMode(), ')');
 
+  // Date-based retention for onvif_snapshots/detectionSnapshots (MongoDB only —
+  // see snapshotArchiveService.js). No-op under DB_TYPE=json.
+  require('./services/snapshotArchiveService').start();
+
   // Optional vector DB (Proposed — AI-05 Phase-3 / CrossCamera Face Tracking Phase-2).
   // Disabled unless QDRANT_ENABLED=true; falls back to in-memory galleries otherwise.
   const qdrantService = new QdrantService();

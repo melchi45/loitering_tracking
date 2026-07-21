@@ -224,6 +224,12 @@ async function connect(uri, dbName) {
 
   console.log(`[MongoDB] connected | URI: ${uri}`);
   _startKeepAlive();
+
+  // Best-effort — snapshotArchiveService.js date-range-queries these two
+  // collections every run; without an index that's a full collection scan
+  // (confirmed live 2026-07-20: neither had anything beyond _id/id before this).
+  model('onvif_snapshots').collection.createIndex({ createdAt: 1 }).catch(() => {});
+  model('detectionSnapshots').collection.createIndex({ createdAt: 1 }).catch(() => {});
 }
 
 /**
@@ -340,6 +346,26 @@ async function findDirect(table, where = {}, sort = {}, limit = null) {
   return docs.map(({ _id, __v, ...rest }) => normalizeDates(rest));
 }
 
+/**
+ * Reclaim disk space after a large deleteMany() — WiredTiger keeps deleted
+ * pages reserved for reuse inside the same .wt file rather than shrinking it,
+ * so a delete alone never reduces disk usage (confirmed live 2026-07-20: an
+ * 84GB deleteMany moved zero bytes on `df` until compact ran). Used by
+ * snapshotArchiveService.js after each purge run.
+ * @param {string} table
+ * @returns {Promise<number>} bytes freed (0 if not connected or command failed)
+ */
+async function compact(table) {
+  if (!_connected) return 0;
+  try {
+    const res = await mongoose.connection.db.command({ compact: table, force: true });
+    return Number(res.bytesFreed || 0);
+  } catch (err) {
+    console.error(`[MongoDB] compact ${table} failed:`, err.message);
+    return 0;
+  }
+}
+
 module.exports = {
   TABLES,
   connect,
@@ -350,4 +376,5 @@ module.exports = {
   removeWhere,
   findDirect,
   isConnected,
+  compact,
 };

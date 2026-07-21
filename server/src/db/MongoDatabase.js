@@ -3,6 +3,15 @@
 const BaseDatabase = require('./BaseDatabase');
 const { ALL_TABLES, TABLE_ROW_CAPS } = require('./constants');
 
+// Tables whose MongoDB-side lifecycle is owned by snapshotArchiveService.js
+// (date-based retention, image blob archived to storage/archive/ before
+// deletion) instead of by the count-based cap below. Skipping the immediate
+// cap-triggered Mongo delete here prevents a write burst from silently
+// deleting images before the archive job ever sees them — the in-memory
+// mirror is still trimmed for RAM safety, only the real Mongo delete is
+// deferred to the archive job's own purge step.
+const ARCHIVED_TABLES = new Set(['onvif_snapshots', 'detectionSnapshots']);
+
 /**
  * MongoDatabase — MongoDB backend for LTS-2026.
  *
@@ -76,7 +85,15 @@ class MongoDatabase extends BaseDatabase {
     this._store[table].push(record);
     const cap = TABLE_ROW_CAPS[table];
     if (cap && this._store[table].length > cap) {
+      // Trimming the in-memory mirror alone leaves the real MongoDB collection
+      // growing unbounded forever (confirmed live 2026-07-20: detectionSnapshots
+      // capped at 2000 in-memory but 7.27M documents / 38GB in MongoDB,
+      // onvif_snapshots 2000 vs 242K / 40GB) — every table using TABLE_ROW_CAPS
+      // was silently affected. Evicted ids are deleted from Mongo too via the
+      // existing `id` unique index, so this stays cheap even on huge collections.
+      const evictedIds = this._store[table].slice(0, this._store[table].length - cap).map(r => r.id).filter(Boolean);
       this._store[table] = this._store[table].slice(-cap);
+      if (evictedIds.length > 0 && !ARCHIVED_TABLES.has(table)) this._persistEvictions(table, evictedIds);
     }
     this._persist('upsert', table, record.id, record);
   }
@@ -138,6 +155,23 @@ class MongoDatabase extends BaseDatabase {
     return super.queryAsync(table, where, sort, limit);
   }
 
+  /**
+   * Delete every row whose `id` is in `ids` from MongoDB (and the in-memory
+   * mirror, if present). Used by snapshotArchiveService.js after it has
+   * durably written a batch to storage/archive/ — unlike delete(table, id)
+   * this is batched via the `id` index so it stays cheap for large batches.
+   */
+  async deleteByIds(table, ids) {
+    if (!ids || ids.length === 0) return 0;
+    if (Array.isArray(this._store[table])) {
+      const idSet = new Set(ids);
+      this._store[table] = this._store[table].filter(r => !idSet.has(r.id));
+    }
+    if (!this.isConnected()) return 0;
+    await this._mongo.removeWhere(table, { id: { $in: ids } });
+    return ids.length;
+  }
+
   // ── Internal ──────────────────────────────────────────────────────────────
 
   _persist(op, table, id, row) {
@@ -159,6 +193,13 @@ class MongoDatabase extends BaseDatabase {
       console.error('[DB:mongo] Disconnected — writes held in-memory until reconnect (no JSON fallback)');
       this._fallbackLogged = true;
     }
+  }
+
+  _persistEvictions(table, ids) {
+    if (!this.isConnected()) return; // reconnect will not replay evictions — acceptable, cap re-enforces on next insert
+    this._mongo.removeWhere(table, { id: { $in: ids } }).catch(e =>
+      console.error(`[DB:mongo] cap eviction cleanup failed for ${table}:`, e.message)
+    );
   }
 }
 
