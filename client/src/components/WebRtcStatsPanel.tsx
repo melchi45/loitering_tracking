@@ -109,9 +109,14 @@ export default function WebRtcStatsPanel({ iceStats, history, codec }: Props) {
           </span>
 
           <span className="text-gray-500">Codec</span>
-          <span className="truncate" title={`video: ${codec.videoDetail}\naudio: ${codec.audioDetail}`}>
-            {codec.video || '–'} / {codec.audio || '–'}
-          </span>
+          <div className="truncate">
+            <div>{codec.video || '–'} / {codec.audio || '–'}</div>
+            {(codec.videoDetail || codec.audioDetail) && (
+              <div className="text-[10px] text-gray-500 truncate">
+                {codec.videoDetail}{codec.videoDetail && codec.audioDetail ? ' · ' : ''}{codec.audioDetail}
+              </div>
+            )}
+          </div>
 
           <span className="text-gray-500">Speed</span>
           <div>

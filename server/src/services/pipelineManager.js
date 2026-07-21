@@ -337,6 +337,19 @@ class PipelineManager {
       setInterval(() => this.reloadPersistentGallery(), 10_000).unref();
     }
 
+    // WebRTC self-heal sweep (2026-07-21, §6.29) — startCamera()'s addCameraStream()
+    // retry loop (3 attempts, 2s apart) gives up permanently on failure and leaves
+    // ctx.useWebRTC=false with no other recovery path: the existing frame watchdog
+    // only fires on AI-frame stalls, which don't happen here (capture is otherwise
+    // healthy — only the mediasoup registration failed). Reproduced live: on a
+    // full-fleet restart, every camera's registration POST hits ingest-daemon at
+    // once (thundering herd), several time out past the 3-retry budget, and those
+    // cameras stayed WebRTC-disabled for 26+ minutes until manually reconnected via
+    // POST /stream/reconnect. This sweep is that same recovery, automatic.
+    if (WEBRTC_ENGINE !== 'mediamtx') {
+      setInterval(() => this._healWebRTCPipelines(), 30_000).unref();
+    }
+
     // Cross-camera Re-ID statistics for the current server session
     // Map: faceId → { faceId, firstCameraId, lastCameraId, transitionCount, lastSeenAt }
     this._crossCameraStats  = new Map();
@@ -654,6 +667,11 @@ class PipelineManager {
       // server cannot reliably sustain the full 4-session fan-out (AI+video+audio+appRTP).
       // See Camera.webrtcVideoOnly.
       _webrtcVideoOnly: camera.webrtcVideoOnly === true,
+      // What the camera config actually wants, independent of whether registration
+      // happened to succeed this time — lets the WebRTC self-heal sweep (2026-07-21,
+      // §6.29) tell "never wanted WebRTC" apart from "wanted it but addCameraStream()
+      // gave up after its 3 retries", which useWebRTC alone can't distinguish.
+      _requestedWebRTC: requestedWebRTC,
     };
 
     // ── Listen for loitering events ──────────────────────────────────────
@@ -2780,6 +2798,31 @@ class PipelineManager {
       console.log(`[PipelineManager] Persistent gallery reloaded — ${this._persistentGallery.length} face(s)`);
     } catch (e) {
       console.warn('[PipelineManager] reloadPersistentGallery error:', e.message);
+    }
+  }
+
+  /**
+   * Retry mediasoup registration for any running pipeline that wants WebRTC
+   * but doesn't have it (2026-07-21, §6.29) — see the setInterval comment in
+   * the constructor for why this exists. One attempt per tick per camera
+   * (not a burst) so a still-recovering ingest-daemon isn't hit with the same
+   * thundering herd that caused the original failure.
+   */
+  async _healWebRTCPipelines() {
+    for (const [cameraId, ctx] of this._pipelines.entries()) {
+      if (!ctx.running || !ctx._requestedWebRTC || ctx.useWebRTC || ctx._webrtcHealBusy) continue;
+      ctx._webrtcHealBusy = true;
+      try {
+        const ok = await getWebRTCEngine()
+          .addCameraStream(cameraId, ctx._captureUrl, ctx._ingestAppRtpRtspUrl, parseInt(process.env.CAPTURE_FPS, 10) || 0, { videoOnly: ctx._webrtcVideoOnly })
+          .catch(() => false);
+        if (ok) {
+          ctx.useWebRTC = true;
+          console.log(`[PipelineManager][${cameraId.slice(0, 8)}] WebRTC self-heal: registration succeeded — re-enabled`);
+        }
+      } finally {
+        ctx._webrtcHealBusy = false;
+      }
     }
   }
 

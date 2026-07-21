@@ -32,20 +32,13 @@ export interface RxCodecInfo {
 
 const RX_HISTORY_MAX = 120; // ~2min of history — sampled every RATE_POLL_MS (1s, 2026-07-21)
 
-// Adaptive jitter buffer (2026-07-20) — RTCRtpReceiver.jitterBufferTarget lets
-// the page ask the browser's own jitter buffer to hold at least N ms before
-// playout, trading latency for smoothness. Shipped in Chrome 123 (W3C-named
-// successor to the older seconds-based playoutDelayHint, which Chrome keeps
-// only for back-compat — see MDN/Chromium intent-to-ship). This does NOT
-// replace the browser's own adaptive jitter estimator; it only raises the
-// floor. Left untouched (browser default) until this connection actually
-// shows a freeze or loss burst, then ramped up and slowly decayed back down —
-// never forced below a "was already needed" floor, to avoid fighting the
-// browser's own estimator or thrashing on/off every tick.
-const JITTER_TARGET_FLOOR_MS   = 100; // once triggered, never decay below this
-const JITTER_TARGET_MAX_MS     = 1000; // spec allows up to 4000; stay conservative
-const JITTER_TARGET_STEP_UP_MS = 150;
-const JITTER_TARGET_STEP_DOWN_MS = 30;
+// Manual jitterBufferTarget control (RTCRtpReceiver.jitterBufferTarget, Chrome
+// 123+) was tried here 2026-07-20 through 2026-07-21 as a way to proactively
+// ask the browser to hold more buffer before an anticipated freeze. REMOVED
+// (2026-07-21) after causing four separate self-inflicted-delay bugs — see
+// the escalation block below for the final root-cause writeup. The browser's
+// own adaptive jitter buffer already does this natively without an external
+// hint; this file no longer sets jitterBufferTarget at all.
 // bufferMs "yellow"/"red" thresholds — single source of truth shared with
 // WebRtcStatsPanel.tsx's color coding (2026-07-20). Live observation: a rising
 // bufferMs consistently PRECEDES an fps-drop-to-0 freeze by a few seconds — the
@@ -63,20 +56,25 @@ export const BUFFER_MS_BAD  = 300;
 // WebRtcStatsPanel.tsx's color coding.
 export const LATENCY_MS_WARN = 150;
 export const LATENCY_MS_BAD  = 400;
-// Buffer-saturation proactive reconnect (2026-07-20, §6.27 decode/presentation
-// backlog) — live user reports: bufferMs climbs all the way to the
-// JITTER_TARGET_MAX_MS ceiling (~980ms observed) with fps still 30, then fps
-// drops to 0 and the stream freezes until the frame/byte-stall watchdog
-// (20-25s) finally reconnects it. Once jitterTargetMs is already pinned at
-// its max AND bufferMs is still BAD, escalating further cannot help — we've
-// already asked the browser to hold as much buffer as we're willing to, and
-// it's not enough, meaning whatever is behind the frame (decode or, per
-// chrome://gpu, possibly a software compositor/overlay presentation path)
-// isn't keeping up. That is a strong, early predictor of the same freeze the
-// stall watchdog eventually catches — reconnect on it directly rather than
-// waiting out the full stall grace period, so the user sees a brief
-// reconnect blip instead of many seconds of a frozen frame first. Two
-// consecutive ticks (not one) so a single transient spike doesn't trigger.
+// Buffer-saturation proactive reconnect (2026-07-20, reverted 2026-07-21,
+// re-added 2026-07-21) — see the escalation block's own comment below for
+// the trigger condition. History: added after live observation that
+// bufferMs climbing to the JITTER_TARGET_MAX_MS ceiling reliably precedes a
+// multi-second freeze; reverted the same day after the reconnect itself
+// proved visibly disruptive (a real 1-2s "channel refresh" every time it
+// fired) while the actual root cause was still unconfirmed. Since then,
+// two GENUINE unrelated bugs were found and fixed (ingest-daemon had
+// crashed; a stale profileLevelId cache was negotiating Baseline/Level 3.1
+// for cameras that are actually High Profile/Level 5.0) — but a THIRD,
+// still-unexplained failure mode remains: completely independent streams
+// (different cameras, different capture backends) closing within
+// milliseconds of each other, repeatedly, with mediasoup scores healthy
+// and host CPU mostly idle (mpstat-confirmed) — consistent with a brief
+// stall in a single-threaded shared process (Node's event loop, the
+// mediasoup worker, or ingest-daemon's GIL) rather than host exhaustion.
+// Until that's pinned down (see eventLoopLag.js, added alongside this),
+// a long unrecovered freeze is worse than a brief visible reconnect, so
+// this is back — re-revert once the real trigger is fixed at the source.
 const BUFFER_SATURATED_TICKS_LIMIT = 2;
 
 function shortCodecName(mimeType: string): string {
@@ -588,11 +586,10 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
             // since-connect average that barely moves after the first minute.
             let prevJitterDelay = -1;
             let prevJitterCount = -1;
-            // Adaptive jitterBufferTarget state (2026-07-20) — see the
-            // JITTER_TARGET_* constants' comment above. 0 means "not yet
-            // triggered, leave the browser's own default alone".
-            const videoReceiver = pc.getReceivers().find(r => r.track?.kind === 'video');
-            let jitterTargetMs   = 0;
+            // Freeze/loss tracking — early-warning signal only (2026-07-21).
+            // Previously drove manual jitterBufferTarget control; that
+            // mechanism was removed (see the escalation block's comment below),
+            // so these deltas are computed but not currently acted on.
             let prevFreezeCount  = -1;
             let prevLossForAdapt = -1;
             // See BUFFER_SATURATED_TICKS_LIMIT's comment above.
@@ -694,50 +691,64 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
                 }
                 prevJitterDelay = vJitterDelay;
                 prevJitterCount = vJitterCount;
-                // Adaptive jitterBufferTarget (2026-07-20, revised) — see
-                // BUFFER_MS_WARN/BAD and JITTER_TARGET_* constants' comments.
-                // Two triggers, both step the target UP:
-                //   1. bufferMs itself crossing yellow/red — PROACTIVE, fires
-                //      before a freeze actually happens (the whole point,
-                //      per live observation that this reliably precedes an
-                //      fps-drop-to-0 event).
-                //   2. A freeze or new packet loss actually occurring THIS
-                //      tick — reinforcing signal, kept as a fallback for
-                //      cases where bufferMs doesn't rise cleanly beforehand
-                //      (e.g. a sudden loss burst rather than gradual jitter).
-                // With neither signal present, decay back toward the floor
-                // so latency doesn't stay inflated once things settle.
-                // Skipped entirely while the tab is hidden — bufferMs/freeze/
-                // loss readings are meaningless (inflated or frozen) against
-                // Chrome's background-tab decode throttling, so escalating
-                // off them here would just be reacting to the same false
-                // signal the stall-watchdog guard above already ignores.
+                // Adaptive jitterBufferTarget (2026-07-21, §self-reinforcing-buffer-loop) —
+                // PREVIOUSLY escalated on bufferMs itself crossing yellow/red, on the
+                // theory that "rising bufferMs precedes a freeze, so raise the target
+                // proactively." That reasoning has a fatal flaw: this SAME code sets
+                // `videoReceiver.jitterBufferTarget = jitterTargetMs` a few lines below,
+                // which directly commands the browser to hold frames for at least that
+                // long — and the browser's own jitterBufferDelay stat (which `bufferMs`
+                // above is computed from) then faithfully reports back that
+                // self-imposed hold time as "the buffer is elevated." That closes a
+                // positive feedback loop: any minor, ordinary jitter blip crossing the
+                // (low) BUFFER_MS_WARN threshold triggers a step-up, which raises
+                // bufferMs on the NEXT tick (partly or wholly because of that step-up),
+                // which triggers another step-up — with STEP_UP (150-300ms/tick)
+                // 5-10x steeper than STEP_DOWN (30ms/tick), this ratchets to the
+                // JITTER_TARGET_MAX_MS ceiling in ~3-4 ticks (15-20s) essentially
+                // regardless of whether there was ever a real underlying problem.
+                // Confirmed live: reported "bufferMs periodically spikes past 900ms
+                // even though data reception is fine" — exactly this runaway.
+                // FIX: escalate only on signals we do NOT ourselves influence —
+                // an actual decoder freeze (freezeCount) or actual new packet loss
+                // (packetsLost). bufferMs stays a passive display metric only.
+                // Skipped entirely while the tab is hidden — freeze/loss readings
+                // are meaningless (inflated or frozen) against Chrome's
+                // background-tab decode throttling, so escalating off them here
+                // would just be reacting to a false signal.
                 if (!document.hidden) {
                   const freezeDelta = prevFreezeCount >= 0 ? Math.max(0, vFreezeCount - prevFreezeCount) : 0;
                   const lossDeltaForAdapt = prevLossForAdapt >= 0 ? Math.max(0, vPacketsLost - prevLossForAdapt) : 0;
                   prevFreezeCount  = vFreezeCount;
                   prevLossForAdapt = vPacketsLost;
-                  if (bufferMs >= BUFFER_MS_BAD) {
-                    // Already red — jump harder, we may be seconds from a stall.
-                    jitterTargetMs = Math.min(
-                      JITTER_TARGET_MAX_MS,
-                      Math.max(JITTER_TARGET_FLOOR_MS, jitterTargetMs) + JITTER_TARGET_STEP_UP_MS * 2,
-                    );
-                  } else if (bufferMs >= BUFFER_MS_WARN || freezeDelta > 0 || lossDeltaForAdapt > 0) {
-                    jitterTargetMs = Math.min(
-                      JITTER_TARGET_MAX_MS,
-                      Math.max(JITTER_TARGET_FLOOR_MS, jitterTargetMs) + JITTER_TARGET_STEP_UP_MS,
-                    );
-                  } else if (jitterTargetMs > 0) {
-                    jitterTargetMs = Math.max(JITTER_TARGET_FLOOR_MS, jitterTargetMs - JITTER_TARGET_STEP_DOWN_MS);
-                  }
-                  if (jitterTargetMs > 0 && videoReceiver && 'jitterBufferTarget' in videoReceiver) {
-                    try { videoReceiver.jitterBufferTarget = jitterTargetMs; } catch (_) {}
-                  }
-                  // See BUFFER_SATURATED_TICKS_LIMIT's comment — escalation
-                  // has nothing left to give once it's already at the max
-                  // and bufferMs is still bad.
-                  bufferSaturatedTicks = (jitterTargetMs >= JITTER_TARGET_MAX_MS && bufferMs >= BUFFER_MS_BAD)
+                  // Manual jitterBufferTarget control REMOVED (2026-07-21) — this
+                  // mechanism caused four separate bugs across this project's
+                  // history (v1.20 → v1.36 → v1.37 → v1.41, see the constants'
+                  // comment above and §self-reinforcing-buffer-loop) and root-cause
+                  // analysis of a fifth (live: 2048x1536/15fps stream, bufferMs
+                  // climbing to 1439ms, framesDropped ~25%, packetsLost <1%) found
+                  // the same class of problem again: STEP_UP (150ms/event) so far
+                  // outpaces STEP_DOWN (30ms/5s tick) that on any long-lived
+                  // connection with even occasional real loss/freeze — not
+                  // uncommon on these links — jitterTargetMs ratchets toward
+                  // JITTER_TARGET_MAX_MS and rarely gets the ~2.5 clean minutes
+                  // needed to fully decay back down. We were then COMMANDING the
+                  // browser via `videoReceiver.jitterBufferTarget` to hold every
+                  // frame for up to that long before decode — a self-imposed delay
+                  // that looks identical to "the decoder can't keep up" in every
+                  // metric (bufferMs, latencyMs) without actually being a decode
+                  // problem at all. The browser's own adaptive jitter buffer
+                  // already balances this natively without an external hint;
+                  // freeze/loss are still tracked below purely as an early-warning
+                  // signal, but no longer used to command the receiver.
+                  void freezeDelta;
+                  void lossDeltaForAdapt;
+                  // See BUFFER_SATURATED_TICKS_LIMIT's comment. Triggers on
+                  // bufferMs alone — now a purely observational metric (nothing in
+                  // this file sets jitterBufferTarget anymore), so a sustained
+                  // high reading reflects real jitter-buffer/decode delay, not a
+                  // delay we commanded ourselves.
+                  bufferSaturatedTicks = bufferMs >= BUFFER_MS_BAD
                     ? bufferSaturatedTicks + 1
                     : 0;
                 }
@@ -837,8 +848,8 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
                   // background, reconnecting a tab nobody is watching.
                 } else if (bufferSaturatedTicks >= BUFFER_SATURATED_TICKS_LIMIT) {
                   staleReconnect(
-                    `jitterBufferTarget maxed at ${jitterTargetMs}ms and bufferMs=${Math.round(bufferMs)}ms ` +
-                    `still bad for ${bufferSaturatedTicks} ticks — reconnecting proactively before a freeze`
+                    `bufferMs=${Math.round(bufferMs)}ms still bad for ${bufferSaturatedTicks} ticks ` +
+                    `— reconnecting proactively before a freeze`
                   );
                 } else if (frameStalled) {
                   staleReconnect(
@@ -874,6 +885,9 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
             let ratePrevAudioBytes  = -1;
             let ratePrevJitterDelay = -1;
             let ratePrevJitterCount = -1;
+            // Carries the last successfully-computed bufferMs forward across
+            // ticks (2026-07-21, §buffer-oscillation) — see its use below.
+            let lastKnownBufferMs   = 0;
             const rateTimer = setInterval(async () => {
               if (sessionRegistry.get(cameraId)?.pc !== pc) {
                 clearInterval(rateTimer);
@@ -905,11 +919,25 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
                 });
 
                 const rtp = extractInboundRtp(stats);
-                let bufferMs = 0;
+                // bufferMs (2026-07-21, §buffer-oscillation) — at this 1s
+                // cadence, a tick with zero newly-emitted frames is common
+                // even in a healthy connection (~30fps ÷ 1s window has real
+                // variance), and jitterBufferEmittedCount simply doesn't
+                // advance in that case. Previously this fell through to a
+                // hardcoded 0, then the NEXT tick divided the two ticks'
+                // worth of accumulated jitterBufferDelay across whichever
+                // frames emitted since — producing a false "0ms" reading
+                // immediately followed by a compensating spike, every couple
+                // of ticks. Confirmed live: user-reported Buffer/Latency
+                // oscillating between 0ms and 900ms+ repeatedly. Carrying the
+                // last known-good value forward instead of resetting to 0
+                // means bufferMs only changes when there's actually new
+                // jitter-buffer data to compute it from.
                 if (ratePrevJitterCount >= 0 && rtp.vJitterCount > ratePrevJitterCount) {
-                  bufferMs = ((rtp.vJitterDelay - ratePrevJitterDelay) / (rtp.vJitterCount - ratePrevJitterCount)) * 1000;
+                  lastKnownBufferMs = Math.max(0,
+                    ((rtp.vJitterDelay - ratePrevJitterDelay) / (rtp.vJitterCount - ratePrevJitterCount)) * 1000);
                 }
-                bufferMs = Math.max(0, bufferMs);
+                const bufferMs = lastKnownBufferMs;
                 ratePrevJitterDelay = rtp.vJitterDelay;
                 ratePrevJitterCount = rtp.vJitterCount;
                 const totalLost = rtp.vPacketsLost + rtp.aPacketsLost;

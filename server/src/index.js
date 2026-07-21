@@ -17,6 +17,8 @@ const cookieParser = require('cookie-parser');
 const session      = require('express-session');
 const { Server: SocketIOServer } = require('socket.io');
 
+const { startEventLoopLagMonitor } = require('./utils/eventLoopLag');
+const { startIngestDaemonWatchdog } = require('./utils/ingestDaemonWatchdog');
 const { initDB, flushNow }    = require('./db');
 const { ensureMongoDB }       = require('./scripts/ensureMongodb');
 const PipelineManager     = require('./services/pipelineManager');
@@ -92,9 +94,13 @@ function checkFfmpeg() {
 
 async function main() {
   console.log(`[Server] Starting in mode: ${SERVER_MODE}`);
+  startEventLoopLagMonitor();
 
   // ── ffmpeg availability check (not required in analysis-only mode or ingest-daemon mode) ───────
   const CAPTURE_BACKEND_CHECK = (process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase();
+  if (CAPTURE_BACKEND_CHECK === 'ingest-daemon') {
+    startIngestDaemonWatchdog();
+  }
   if (SERVER_MODE !== 'analysis' && CAPTURE_BACKEND_CHECK !== 'ingest-daemon') {
     const hasFfmpeg = await checkFfmpeg();
     if (!hasFfmpeg) {
@@ -738,8 +744,23 @@ async function main() {
   TcRunnerService.runOnStartup(ACTIVE_PORT, ACTIVE_PROTO);
 
   // ── Graceful shutdown ────────────────────────────────────────────────────
+  // Force-exit watchdog (2026-07-21, §shutdown-hang) — MUST be armed before
+  // any of the awaits below, not after. It used to be placed after
+  // `await pipelineManager.stopAll()`, which meant it never got a chance to
+  // fire if THAT await was the thing hanging (confirmed live: a wedged
+  // mediasoup-worker IPC channel — Producer/Consumer/Transport .close()
+  // calls inside stopAll() all round-trip through it — left the process
+  // completely unresponsive to SIGTERM, requiring an external SIGKILL from
+  // stopServer.js's own timeout fallback instead of exiting on its own).
+  // Arming the timer first means the process now guarantees its own exit
+  // within 10s of receiving the signal, regardless of what hangs downstream.
   const shutdown = async (signal) => {
     console.log(`\n[Server] Received ${signal} — shutting down gracefully…`);
+    const forceExitTimer = setTimeout(() => {
+      console.error('[Server] Graceful shutdown did not complete in time — forcing exit');
+      process.exit(1);
+    }, 10000);
+    forceExitTimer.unref();
     try {
       await youtubeSvc.stopAll();
       await pipelineManager.stopAll();
@@ -748,10 +769,9 @@ async function main() {
       httpServer.close(() => {
         console.log(`[Server] ${httpsEnabled ? 'HTTPS' : 'HTTP'} server closed`);
         try { db.close(); } catch (_) {}
+        clearTimeout(forceExitTimer);
         process.exit(0);
       });
-      // Force-exit after 10 seconds if graceful shutdown hangs
-      setTimeout(() => process.exit(1), 10000).unref();
     } catch (err) {
       console.error('[Server] Error during shutdown:', err);
       process.exit(1);

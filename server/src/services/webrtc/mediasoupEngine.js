@@ -87,6 +87,22 @@ const _activeConsumers = new Map();
 // see Design_RTSP_Capture_Backend.md §6.8) plus margin.
 const INGEST_HTTP_TIMEOUT_MS = 8000;
 
+// mediasoup Worker IPC (Node ↔ C++ child process) round-trips every
+// Producer/Consumer/Transport getStats()/close() call through a channel that
+// can wedge — the await then never resolves *nor* rejects, so a bare
+// try/catch does nothing (2026-07-21, discovered via getProducerStats()
+// hanging /api/webrtc/monitor indefinitely on a fresh restart, i.e. not just
+// accumulated multi-hour state). Race every such call against this timeout
+// so one wedged camera can't block the whole monitor endpoint.
+const WORKER_IPC_TIMEOUT_MS = 3000;
+
+function _withIpcTimeout(promise, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${WORKER_IPC_TIMEOUT_MS}ms (worker IPC stall)`)), WORKER_IPC_TIMEOUT_MS)),
+  ]);
+}
+
 function _ingestPost(path, body) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
@@ -137,6 +153,22 @@ function _ingestDelete(cameraId) {
 // ingest-daemon shouldn't stall the whole handshake, sprop-parameter-sets is a
 // nice-to-have for decode, not required for the connection itself to complete).
 const INGEST_VIDEO_PARAMS_TIMEOUT_MS = 2000;
+
+// Last-known-good video-params cache (2026-07-21, §self-caused-baseline-fallback)
+// — confirmed live (133 occurrences in one day's log) that this 2s fetch
+// routinely fails while ingest-daemon is busy processing several cameras'
+// RTSP/AI/mux at once (250%+ CPU observed), and negotiate() re-runs this
+// fetch on EVERY reconnect, not just once at pipeline start. Previously a
+// failed fetch meant profileLevelId stayed null for that negotiation, and
+// _buildAnswer() then fell through to the Producer's hardcoded
+// Baseline/'42e01f' default (see addCameraStream()) — genuinely incompatible
+// with these cameras' real High-Profile streams, causing partial decode
+// (a handful of frames) then a stall. A camera's actual encoder profile
+// does not change between reconnects, so once we've learned it successfully
+// even once, there is no reason a later transient fetch failure should ever
+// throw that knowledge away — cache the last successful result per camera
+// and fall back to IT (not the Baseline default) when a given fetch fails.
+const _lastKnownVideoParams = new Map(); // cameraId → { spropParameterSets, profileLevelId }
 
 function _ingestGetVideoParams(cameraId) {
   return new Promise((resolve) => {
@@ -755,6 +787,17 @@ async function addCameraStream(cameraId, rtspUrl, appRtpRtspUrl = undefined, cap
       } else if (videoParams?.codec && videoParams.codec !== 'h264') {
         console.warn(`[WebRTC][mediasoup] ${cameraId.slice(0, 8)} camera codec is ${videoParams.codec} (neither h264 nor hevc) — WebRTC playback cannot work for this camera`);
       }
+      // Opportunistically warm _lastKnownVideoParams (see its comment) —
+      // this poll already retries for up to 5s, far more robust than
+      // negotiate()'s own single-shot 2s fetch, so the FIRST WHEP
+      // negotiation for this camera can hit a warm cache instead of racing
+      // ingest-daemon fresh.
+      if (videoParams?.ready && videoParams.spropParameterSets) {
+        _lastKnownVideoParams.set(cameraId, {
+          spropParameterSets: videoParams.spropParameterSets,
+          profileLevelId:     videoParams.profileLevelId,
+        });
+      }
     }).catch(() => {});
 
     // New registration confirmed working — swap it in, THEN tear down the old
@@ -806,6 +849,7 @@ async function removeCameraStream(cameraId) {
   _cameras.delete(cameraId);
   _closeCam(cam, cameraId);
   _closeAltPipelines(cameraId);
+  _lastKnownVideoParams.delete(cameraId);
 }
 
 async function waitForStreamReady(cameraId, maxWaitMs = 8000) {
@@ -1340,10 +1384,23 @@ async function negotiate(cameraId, sdpOffer) {
     if (videoParams?.ready && videoParams.spropParameterSets) {
       spropParameterSets = videoParams.spropParameterSets;
       profileLevelId     = videoParams.profileLevelId;
+      _lastKnownVideoParams.set(cameraId, { spropParameterSets, profileLevelId });
     } else if (videoParams?.ready && videoParams.codec && videoParams.codec !== 'h264') {
       console.warn(`[WebRTC][mediasoup] [${cameraId.slice(0,8)}] camera video codec is ${videoParams.codec}, not h264 — mediasoup has no H.265 support, playback cannot work for this camera`);
     } else {
-      console.warn(`[WebRTC][mediasoup] [${cameraId.slice(0,8)}] video-params not available yet (ready=${videoParams?.ready}) — SDP answer will have no sprop-parameter-sets`);
+      // See _lastKnownVideoParams' comment above — this fetch fails often
+      // enough under load that falling all the way back to the Producer's
+      // Baseline/'42e01f' default (genuinely incompatible with these
+      // cameras' real High-Profile streams) would otherwise happen on a
+      // meaningful fraction of ordinary reconnects, not just cold starts.
+      const cached = _lastKnownVideoParams.get(cameraId);
+      if (cached) {
+        spropParameterSets = cached.spropParameterSets;
+        profileLevelId     = cached.profileLevelId;
+        console.warn(`[WebRTC][mediasoup] [${cameraId.slice(0,8)}] video-params fetch failed (ready=${videoParams?.ready}) — reusing last-known-good profile-level-id=${profileLevelId}`);
+      } else {
+        console.warn(`[WebRTC][mediasoup] [${cameraId.slice(0,8)}] video-params not available yet (ready=${videoParams?.ready}) — SDP answer will have no sprop-parameter-sets`);
+      }
     }
 
     // Video Consumer — enableRtx (2026-07-16, §6.17; made conditional
@@ -1438,9 +1495,21 @@ async function negotiate(cameraId, sdpOffer) {
     });
     transport.on('routerclose', () => clearTimeout(lifetimeTimer));
     if (videoConsumer) {
-      videoConsumer.on('score', score =>
-        console.log(`[WebRTC][mediasoup] vScore [${cameraId.slice(0,8)}]:`, JSON.stringify(score))
-      );
+      // vScore throttling (2026-07-21) — mediasoup emits 'score' on every
+      // recalculation, including harmless 9↔10 flicker under normal jitter;
+      // with several concurrent streams this produced 10+ log lines/sec of
+      // pure noise (confirmed live) and the console.log + file-write cost
+      // itself adds load on an already CPU-constrained shared server. Only
+      // log when score.score actually moves by a meaningful margin from the
+      // last logged value — small flicker is suppressed, real degradation
+      // (or recovery from it) still gets logged.
+      const VSCORE_LOG_DELTA = 2;
+      let lastLoggedVScore = -1;
+      videoConsumer.on('score', score => {
+        if (lastLoggedVScore >= 0 && Math.abs(score.score - lastLoggedVScore) < VSCORE_LOG_DELTA) return;
+        lastLoggedVScore = score.score;
+        console.log(`[WebRTC][mediasoup] vScore [${cameraId.slice(0,8)}]:`, JSON.stringify(score));
+      });
     }
 
     // Register in active consumer registry for monitor inspection.
@@ -1490,8 +1559,10 @@ async function getProducerStats() {
   const result = {};
   for (const [cameraId, cam] of _cameras.entries()) {
     try {
-      const vStats = cam.videoProducer && !cam.videoProducer.closed ? await cam.videoProducer.getStats() : null;
-      const aStats = cam.audioProducer && !cam.audioProducer.closed ? await cam.audioProducer.getStats() : null;
+      const vStats = cam.videoProducer && !cam.videoProducer.closed
+        ? await _withIpcTimeout(cam.videoProducer.getStats(), `[${cameraId.slice(0, 8)}] videoProducer.getStats()`) : null;
+      const aStats = cam.audioProducer && !cam.audioProducer.closed
+        ? await _withIpcTimeout(cam.audioProducer.getStats(), `[${cameraId.slice(0, 8)}] audioProducer.getStats()`) : null;
       const vRx = vStats ? vStats.reduce((s, x) => s + (x.byteCount || 0), 0) : 0;
       const aRx = aStats ? aStats.reduce((s, x) => s + (x.byteCount || 0), 0) : 0;
 
@@ -1499,7 +1570,8 @@ async function getProducerStats() {
       const consumers = _activeConsumers.get(cameraId) || [];
       const consumerStats = await Promise.all(consumers.map(async entry => {
         try {
-          const cs = entry.videoConsumer?.closed ? [] : await entry.videoConsumer.getStats();
+          const cs = entry.videoConsumer?.closed
+            ? [] : await _withIpcTimeout(entry.videoConsumer.getStats(), `[${cameraId.slice(0, 8)}] videoConsumer.getStats()`);
           const out = cs.find(s => s.type === 'outbound-rtp');
           return {
             bytesSent:      out?.byteCount     ?? 0,
@@ -1511,12 +1583,13 @@ async function getProducerStats() {
             dtlsState:      entry.transport?.dtlsState          ?? null,
             ageSec:         Math.round((Date.now() - entry.created) / 1000),
           };
-        } catch { return { error: 'stats-err' }; }
+        } catch (e) { return { error: e.message || 'stats-err' }; }
       }));
 
       // Transport-level stats to verify if PlainTransport is receiving packets
       // (distinct from Producer stats which count after SSRC/PT routing)
-      const aTransStats = cam.audioPlain && !cam.audioPlain.closed ? await cam.audioPlain.getStats().catch(() => []) : [];
+      const aTransStats = cam.audioPlain && !cam.audioPlain.closed
+        ? await _withIpcTimeout(cam.audioPlain.getStats(), `[${cameraId.slice(0, 8)}] audioPlain.getStats()`).catch(() => []) : [];
       const aTransRx = aTransStats.reduce((s, x) => s + (x.bytesReceived || x.byteCount || 0), 0);
       result[cameraId.slice(0, 8)] = {
         videoPort:        cam.videoPlain?.tuple?.localPort,

@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAPTURE-002 |
-| **Version** | 1.39 |
+| **Version** | 1.46 |
 | **Status** | Active |
 | **Date** | 2026-07-21 |
 | **Ops Guide** | [RTSP_Capture_Backend_Setup.md](../ops/RTSP_Capture_Backend_Setup.md) |
@@ -765,6 +765,25 @@ CPU·손실률·PLI 모두 실측으로 뚜렷하게 개선됨을 확인. 다만
 
 **별개로 발견·수정 — Buffer/Latency가 0ms↔900ms+로 반복 진동하는 결함 (2026-07-21)**: 위 조사와 별개로 사용자가 "이전보다 더 안 좋다, Buffer/Latency가 0ms와 900ms+ 사이를 너무 자주 왔다갔다한다"고 보고. 원인은 최근(다른 세션에서) `rxHistory` 샘플링이 `statsTimer`(5초 주기)에서 `rateTimer`(1초 주기)로 이전되면서, `bufferMs` 계산이 `jitterBufferEmittedCount`가 해당 1초 틱 동안 전혀 증가하지 않으면(30fps 기준 1초 창에서는 흔히 발생 가능) 무조건 0으로 폴백하도록 되어 있던 것 — 그 다음 틱에서 두 틱 분량의 누적 `jitterBufferDelay`가 그사이 emit된 소수의 프레임에 나눠지며 보정성 스파이크가 발생, 결과적으로 0ms↔900ms+ 톱니파가 반복됨. `useWebRTC.ts`의 `rateTimer`에 `lastKnownBufferMs`(마지막으로 유효하게 계산된 값을 다음 틱에 이월)를 추가해 새 데이터가 있을 때만 갱신하고 없으면 이전 값을 유지하도록 수정 — `statsTimer`(5초, 스톨 워치독·jitterBufferTarget escalation 담당)의 별도 계산 로직은 손대지 않음. `npx tsc --noEmit`/`npm run build` 클린 통과 확인.
 
+**최종 근본 원인 확정 — ingest-daemon 다운 + `profileLevelId` 캐시 고착 (2026-07-21)**: §6.27 전체를 관통한 "framesDecoded=0"/"Codec 칸이 빈칸"/"버퍼 급등 후 정지" 증상들의 실제 근본 원인 두 가지를 최종 확정:
+1. **ingest-daemon 프로세스 자체가 다운**: `curl http://127.0.0.1:7070/health`가 `Connection refused` — 포트 7070에 아무 프로세스도 없었음(`ps aux`로 확인). 원인 미상(공유 서버 부하 중 크래시 추정, 별도 크래시 로그 없음). 서버가 재시작될 때마다 `PipelineManager][<id>] ingest-daemon register failed: fetch failed` → `WebRTC disabled for this pipeline (engine: mediasoup, ready: false)`로 귀결되어, 재시작을 몇 번을 해도 WHEP negotiate가 `Camera <id> is not streaming via mediasoup`(503)로 즉시 거부됨 — 이번 세션에서 반복했던 여러 차례의 `npm run restart`가 전부 이 이유로 헛수고였음. `npm run ingest:start`로 데몬을 되살리고 카메라 8대 재등록 확인 후 메인 서버를 재시작하자 실제 카메라 2대(4e562747/61813f62)는 즉시 정상화(`vFrames`가 실시간으로 증가하기 시작함, 실측 확인).
+2. **`profileLevelId` 캐시 고착 — Baseline(`42e01f`)로 영구 고정**: mediasoup Producer의 `profile-level-id`는 `addCameraStream()` 시점에 딱 한 번 `_pollVideoCodec()`(예산 5초)로 ingest-daemon의 실제 SPS 파싱 결과를 가져와 캐싱하고, 이후 모든 negotiate()에서 재조회 없이 재사용하는 구조(§6.13 설계, 코드 주석에 이미 "Producer는 ingest-daemon이 SPS를 다 읽기 전 하드코딩된 `42e01f`(Baseline)로 먼저 생성되고 나중에 실제 값으로 덮어써야 한다"고 명시돼 있었음). 오늘 ingest-daemon이 여러 차례 다운·재시작을 반복하는 동안 이 카메라들의 `addCameraStream()`이 실행됐을 때, 5초 폴링 예산 안에 ingest-daemon이 SPS 파싱을 못 끝내 폴백값 `42e01f`(Baseline, Level 3.1)가 그대로 캐싱됨. 이후 ingest-daemon이 완전히 복구돼 `GET /cameras/:id/video-params`로 직접 조회하면 정상값(`640032`, High Profile Level 5.0)이 나오는데도, 캐시된 값은 갱신되지 않아 계속 `42e01f`로 협상됨. Level 3.1은 2048×1536(61813f62/TNM-C2712T Ch1) 같은 고해상도 스트림엔 턱없이 부족(MaxFS 3600 매크로블록 vs 실제 소요 12288)해 일부 프레임(14개)만 디코드되다 막히는 것으로 실측 확인(Buffer 506ms/Latency 507ms로 급등, 8.2% 손실 동반) — 코덱이 아예 안 잡히던 다른 케이스(`Codec: – / opus`)도 같은 계열로 추정.
+   - **미봉책(적용 완료)**: `POST /api/cameras/:id/stream/reconnect`로 두 카메라의 파이프라인을 재시작해 캐시를 새로 고침 — ingest-daemon이 이미 건강한 상태에서 재폴링되어 `640032`로 정상 갱신됨(로그로 확인: `sprop-parameter-sets ready ... profile-level-id=640032`).
+   - **근본 수정은 미적용, 후속 필요**: `_pollVideoCodec()`의 결과가 폴백(Baseline)이었던 경우 이후 negotiate() 시점에 한 번 더 재폴링을 시도하는 지연 재확인 로직, 또는 폴링 예산 초과를 감지해 별도 상태로 노출(관리자가 "이 카메라는 프로파일 정보가 폴백값입니다" 식으로 인지 가능하게)하는 개선이 필요함.
+3. 조사 과정에서 서버 로직(`mediasoupEngine.js`)에 임시로 추가했던 SDP 원문 디버그 로그(`SDP-DEBUG-BEGIN/SDP-DEBUG/SDP-DEBUG-END`)는 근본 원인 확정 후 제거함.
+
+**§6.27 재재보완 — "데이터 수신은 정상인데 Buffer만 주기적으로 900ms+" 최종 근본 원인: `jitterBufferTarget` 자기강화 피드백 루프 (2026-07-21)**: 위 두 가지 원인(ingest-daemon 다운, profileLevelId 캐시 고착)을 고친 뒤에도 사용자가 "데이터 수신은 아주 잘되는데 Buffer가 왜 주기적으로 900ms 이상 되는지" 재차 질문 — `BUFFER_SATURATED_TICKS_LIMIT`를 다시 추가했다가 재연결이 오히려 더 잦아지는(5~20초 간격) 부작용까지 실측되면서, 이번엔 임계값 튜닝이 아니라 로직 자체를 처음부터 재검증:
+
+- **버그 메커니즘**: §6.27 상단에서 구현한 프로액티브 escalation은 `bufferMs`(브라우저의 실측 지터 버퍼 보유 시간)가 `BUFFER_MS_WARN`(100ms)만 넘어도 `jitterTargetMs`를 올리고, 그 값을 곧바로 `videoReceiver.jitterBufferTarget`에 써서 **브라우저에게 "최소 이만큼 프레임을 들고 있어라"고 직접 명령**한다. 문제는 그 다음 틱에 다시 읽는 `bufferMs` 자체가 `jitterBufferDelay/jitterBufferEmittedCount`(getStats())로, 즉 **우리가 방금 내린 명령의 결과를 그대로 반영**한다는 것 — "문제의 증거"로 쓰는 지표를 같은 코드가 직접 조작하고 있어 양성 피드백 루프가 성립한다. `JITTER_TARGET_STEP_UP_MS`(150~300ms/틱)가 `JITTER_TARGET_STEP_DOWN_MS`(30ms/틱)보다 5~10배 가파른 비대칭 때문에, 정상적인 지터 한 번(100ms 초과는 흔함)만으로도 3~4틱(15~20초) 만에 `JITTER_TARGET_MAX_MS`(1000ms) 상한까지 자동으로 폭주 — 실측된 "Buffer 900ms+ 주기적 반복"과 정확히 일치. 데이터 수신량과는 애초에 무관했던 것.
+- **수정**: escalation 트리거에서 `bufferMs` 기반 조건(`bufferMs >= BUFFER_MS_BAD/WARN`)을 완전히 제거하고, 우리 코드가 직접 조작하지 않는 진짜 외부 신호인 `freezeDelta`(실제 디코더 프리즈 발생)와 `lossDeltaForAdapt`(실제 새 패킷 손실)만으로 escalate하도록 변경. `bufferMs`는 계속 표시/모니터링용으로만 사용(패널 표시, `BUFFER_SATURATED_TICKS_LIMIT` 판정의 보조 조건). `jitterTargetMs`가 상한에 도달하는 경우도 이제 반복된 "진짜" freeze/loss 없이는 불가능해져, `BUFFER_SATURATED_TICKS_LIMIT` 프로액티브 재연결도 자기 자신이 만든 상황이 아닌 진짜 위기에만 반응하게 됨.
+- **검증**: `npx tsc --noEmit`/`npm run build` 클린 통과. 클라이언트 전용 변경이라 서버 재시작 불필요, 브라우저 새로고침만으로 반영.
+- 별개로 이번 라운드에서 Node.js 이벤트 루프 지연 모니터(`server/src/utils/eventLoopLag.js`, 200ms 이상 블로킹 시 `[EventLoopLag]` 로그)를 신규 추가 — 완전히 무관한 스트림들이 밀리초 단위로 동시에 끊기는 잔여 패턴의 원인 후보(Node 이벤트 루프 vs mediasoup worker vs ingest-daemon GIL) 중 하나를 실측으로 배제/확정하기 위함이며, 실제로 233ms/217ms 블로킹이 관측됨(경미하나 실재).
+
+**§6.27 재재재보완 — `profile-level-id=42e01f`가 재연결마다 무작위로 재발하는 진짜 원인: `negotiate()`의 단발성 video-params 조회 (2026-07-21)**: v1.40에서 `POST /stream/reconnect`로 프로파일 캐시를 `640032`(High Profile)로 고쳤는데도, 사용자가 이후 여러 번의 ICE 패널 스크린샷에서 `profile-level-id=42e01f`(Baseline)이 다시 나타나는 것을 확인 — 재연결할 때마다 결과가 랜덤하게 좋았다 나빴다 하는 패턴이었음. 로그에서 `video-params not available yet (ready=undefined)` 경고가 **하루 133회** 발견되어 원인 확정:
+- `negotiate()`는 WHEP 재협상(재연결)이 일어날 때마다 매번 `_ingestGetVideoParams()`를 **재시도 없이, 2초 타임아웃 한 번만 걸고** 직접 호출해 ingest-daemon으로부터 카메라의 실제 `profileLevelId`/`spropParameterSets`를 가져온다(`addCameraStream()` 시점 1회 캐싱이라는 이전 v1.40의 이해는 부정확했음 — 실제로는 negotiate()마다 매번 fresh fetch). ingest-daemon이 여러 카메라의 RTSP/AI/mux를 동시 처리하느라 바쁠 때(250%+ CPU 실측) 이 2초 안에 응답하지 못하면 그 요청은 실패 처리되고, `_buildAnswer()`가 Producer의 하드코딩된 Baseline(`42e01f`) 기본값으로 조용히 폴백한다. 재연결이 잦을수록(다른 미해결 원인으로 인해) 이 실패 확률도 비례해서 누적되는 악순환.
+- **수정**: `_lastKnownVideoParams`(cameraId → 마지막 성공값) 모듈 레벨 캐시 추가. `negotiate()`의 fetch가 성공하면 캐시를 갱신하고, 실패하면 Baseline 기본값이 아니라 **캐시된 마지막 성공값**으로 폴백 — 카메라의 실제 인코더 프로파일은 재연결 사이에 바뀌지 않으므로, 한 번이라도 성공적으로 알아낸 값을 일시적 fetch 실패 때문에 버릴 이유가 없음. `addCameraStream()`의 기존 H.265 진단용 `_pollVideoCodec()`(5초 예산, 재시도 있음)도 성공 시 같은 캐시를 선제적으로 채워, 카메라 파이프라인 시작 직후 첫 negotiate()부터 캐시가 이미 따뜻한 상태가 되도록 함. `removeCameraStream()`에서 카메라 삭제 시 캐시도 함께 정리.
+- **검증 예정**: 서버 재시작 후 재연결이 반복돼도 `profile-level-id`가 더 이상 `42e01f`로 되돌아가지 않는지 확인 필요.
+
 ### 6.28 카메라별 Pause/Resume — RTSP/YouTube 수집 연결 일시정지 (2026-07-21, 신규 기능)
 
 **요구사항**: Streaming Dashboard 사이드바에서 개별 카메라의 RTSP(ingest-daemon)·YouTube(yt-dlp/ffmpeg) 수집 연결을 카메라 레코드/`channelSlot`을 유지한 채 일시정지·재개할 수 있어야 함(대역폭/CPU 절약, 계획된 점검 등). UI 반영은 `Design_Channel_Slot.md` §5.3b 참고.
@@ -1021,6 +1040,133 @@ while not self._stop.is_set():
 
 ---
 
+### 6.29 Graceful Shutdown 행 & mediasoup Worker IPC 무한 대기 — 강제 SIGKILL 근본 수정 (2026-07-21)
+
+#### 6.29.1 증상
+
+`npm run stop`(→ `stopServer.js`)이 SIGTERM 전송 후 10초 내에 프로세스가 종료되지 않아 매번 외부 SIGKILL로 강제 종료해야 했다. 사용자가 이를 "임시방편이 아닌 근본 수정"으로 명시 요청.
+
+#### 6.29.2 근본 원인 — 워치독 등록 순서 버그
+
+`index.js`의 `shutdown()` 핸들러가 강제종료 워치독 `setTimeout`을 `await pipelineManager.stopAll()` 등 잠재적으로 행(hang)할 수 있는 호출들 **뒤에** 등록하고 있었다:
+
+```js
+// 수정 전 — 워치독이 await 뒤에 있어, await 자체가 멎으면 워치독도 영원히 등록 안 됨
+const shutdown = async (signal) => {
+  await youtubeSvc.stopAll();
+  await pipelineManager.stopAll();   // 이 await가 멎으면 아래 setTimeout은 코드 도달 자체를 못함
+  const forceExitTimer = setTimeout(() => process.exit(1), 10000);
+  ...
+};
+```
+
+`pipelineManager.stopAll()`은 내부적으로 mediasoup Producer/Consumer/Transport의 `.close()`를 호출하며, 이는 §6.29.3의 Worker IPC 채널을 거친다 — 그 채널이 멎어 있으면 `await`가 resolve도 reject도 하지 않고 영원히 대기하며, 함수는 워치독을 등록하는 코드 줄에 영영 도달하지 못한다. 즉 `stopServer.js`의 외부 10초 타임아웃 SIGKILL이 사실상 유일한 안전망이었다.
+
+**수정**: 워치독을 함수 최상단, 어떤 `await`보다도 먼저 무조건 등록.
+
+```js
+const shutdown = async (signal) => {
+  console.log(`\n[Server] Received ${signal} — shutting down gracefully…`);
+  const forceExitTimer = setTimeout(() => {
+    console.error('[Server] Graceful shutdown did not complete in time — forcing exit');
+    process.exit(1);
+  }, 10000);
+  forceExitTimer.unref();
+  try {
+    await youtubeSvc.stopAll();
+    await pipelineManager.stopAll();
+    io.close();
+    flushNow();
+    httpServer.close(() => { db.close(); clearTimeout(forceExitTimer); process.exit(0); });
+  } catch (err) {
+    console.error('[Server] Error during shutdown:', err);
+    process.exit(1);
+  }
+};
+```
+
+실측 검증: SIGTERM 전송 후 2~7초 내 `[Server] HTTPS server closed` 로그와 함께 정상 종료(`kill -0`로 확인), 외부 SIGKILL 불필요.
+
+#### 6.29.3 관련 근본 원인 — mediasoup Worker IPC 무한 대기 (`getProducerStats()`)
+
+`/api/webrtc/monitor`가 사용하는 `getProducerStats()`가 완전히 새로 재시작한 직후에도(누적 다중 시간 상태 문제가 아님) 무한 대기하는 것을 확인 — mediasoup Worker(Node ↔ C++ 자식 프로세스) IPC 채널이 멎으면 `await producer.getStats()`가 **resolve도 reject도 하지 않아** `try/catch`가 무력화된다. 이는 §6.29.2의 shutdown 행과 동일한 근본 메커니즘(Worker IPC 정체)일 가능성이 높다.
+
+**수정**: 모든 mediasoup `getStats()` 호출(`videoProducer`/`audioProducer`/`videoConsumer`/`audioPlain`)을 `Promise.race` 기반 `_withIpcTimeout()`(3초)로 감싸, 카메라 1개의 IPC 정체가 엔드포인트 전체를 막지 못하도록 함:
+
+```js
+const WORKER_IPC_TIMEOUT_MS = 3000;
+function _withIpcTimeout(promise, label) {
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${WORKER_IPC_TIMEOUT_MS}ms (worker IPC stall)`)), WORKER_IPC_TIMEOUT_MS)),
+  ]);
+}
+```
+
+실측: 활성 카메라 다수 상태에서 `/api/webrtc/monitor` 응답 시간 ~50ms(이전엔 무한 대기, `curl --max-time`으로 확인 시 exit code 28 타임아웃).
+
+**미해결**: Worker IPC 채널이 애초에 왜 멎는지(신선한 재시작에서도 재현)는 이번 세션에서 원인을 확정하지 못했다 — 타임아웃 가드는 증상(무한 대기)을 막을 뿐, 채널 정체 자체의 근본 원인은 후속 조사 과제로 남는다.
+
+#### 6.29.5 진짜 근본 원인 — ingest-daemon HTTP API가 살아있는 채로 완전히 응답 불능 상태에 빠짐
+
+§6.29.1~6.29.4까지의 수정을 전부 반영한 뒤에도 서버 재시작 직후 WebRTC 카메라 3대 전부가 `addCameraStream POST /cameras timed out after 8000ms`로 3회 재시도 모두 실패해 `useWebRTC=false`로 폴백되는 것이 재현되었고, 26분이 지나도 자연 복구되지 않았다(기존에는 이 상태를 벗어날 자동 경로가 전혀 없었음 — §6.29.6 참고). 원인을 추적한 결과:
+
+- `ps aux`에는 `ingest_daemon.py` 프로세스가 살아있고 CPU도 소모 중이었으나(200~250%), `curl http://127.0.0.1:7070/health`와 `/cameras` 모두 **응답 없이 무한 대기** — 데몬이 죽은 게 아니라 자기 자신의 HTTP API에 전혀 응답 못 하는 상태.
+- 사용자가 실제로 확인: 대시보드가 아닌 ingest-daemon 자체 채널 상태 화면에서 "모든 채널이 노란색(미연결)"으로 표시됨 — Node 쪽 증상(등록 타임아웃, WebRTC 비활성 폴백)과 정확히 같은 시각에 발생.
+- `npm run ingest:restart`로 재시작 시도 시, SIGTERM에 8초간 응답이 없어 스크립트가 자동으로 SIGKILL로 강제 종료해야 했음 — 정상 종료 신호에도 응답 못 할 만큼 완전히 멎어 있었다는 추가 증거.
+- 새 데몬(신선한 프로세스)으로 교체 후 `/health`가 즉시 응답, 9개 카메라 전부 정상 재등록, WebRTC self-heal 스윕(§6.29.6)이 30초 안에 나머지 카메라를 수동 개입 없이 자동 복구.
+
+CPython GIL 경합(다중 카메라의 PyAV 디코드 스레드가 HTTP 서버 스레드를 계속 밀어냄)이 유력한 메커니즘으로 의심되나, 이번 세션에서 `ingest_daemon.py` 내부까지는 프로파일링하지 못했다 — py-spy로 확인하려면 `ptrace_scope=1` 때문에 root 권한이 필요해 차단됨(§6.29.7 참고). 근본적인 Python 쪽 수정(HTTP 서버를 별도 프로세스/스레드풀로 분리 등)은 후속 과제로 남는다.
+
+부수적으로, 같은 시간대에 사용자가 보고한 고해상도 열상 카메라(2560×1920, 2048×1536) 2대의 Buffer/Latency 급상승(991ms/2575ms)도 이 ingest-daemon 응답 불능 상태와 겹쳐 있었다 — RTP가 고르게 전달되지 못하고 버스트로 전달되면서 지터 버퍼가 누적됐을 가능성이 있으나, ingest-daemon 재시작 후 재현 여부는 사용자 확인 대기 중(미확정).
+
+#### 6.29.6 WebRTC self-heal 스윕 — `useWebRTC=false` 영구 고착에 대한 자동 복구
+
+`startCamera()`의 `addCameraStream()` 재시도 루프(3회, 2초 간격)가 실패하면 `ctx.useWebRTC=false`로 영구 폴백되는데, 기존 프레임 워치독(`ctx.frameWatchdogTimer`)은 AI 프레임 자체가 끊겼을 때만 발동해 이 케이스(캡처는 정상, mediasoup 등록만 실패)를 전혀 커버하지 못했다 — 수동으로 `/stream/reconnect`를 호출하기 전까지 26분 넘게 방치된 것을 실측으로 확인.
+
+`pipelineManager.js`에 `_healWebRTCPipelines()`를 추가하고 `WEBRTC_ENGINE !== 'mediamtx'`일 때 30초 주기로 실행 — `ctx.running && ctx._requestedWebRTC && !ctx.useWebRTC`인 모든 파이프라인에 대해 카메라당 1회씩(동시에 몰아넣지 않고) `addCameraStream()`을 재시도하고, 성공 시 `ctx.useWebRTC=true`로 전환한다. `ctx` 리터럴에 `_requestedWebRTC`(카메라 설정이 원래 WebRTC를 원했는지, 이번 시도 성공 여부와 무관하게)를 추가해 `useWebRTC` 하나만으로는 구분 안 되던 "애초에 미설정" vs "재시도 소진 후 실패"를 구분했다. 실측 검증: ingest-daemon 재시작 직후 3대 카메라가 다시 3회 재시도 모두 실패했으나, 30초 뒤 self-heal 스윕이 수동 개입 없이 전부 자동 복구(`WebRTC self-heal: registration succeeded — re-enabled`).
+
+#### 6.29.7 서버 재시작 시 등록 thundering herd
+
+이번 세션에서 반복 재현: 서버가 카메라 7~9대를 부팅 시퀀스에서 거의 동시에 시작하면서, 각 카메라의 `addCameraStream()` POST가 수백 ms 이내에 전부 ingest-daemon에 몰리고(로그 타임스탬프 밀리초 단위로 겹침 확인), ingest-daemon이 이를 감당 못 해 8초 타임아웃이 카메라 전체에서 동시다발적으로 발생한다. §6.29.6의 self-heal 스윕이 사후 복구를 제공하지만, thundering herd 자체(등록 요청 간 지연 도입 등)를 완화하는 것은 범위 밖으로 남겨둔다 — ingest-daemon의 HTTP 응답성 자체가 더 근본적인 병목(§6.29.5)이므로, 등록 요청 스태거링만으로는 데몬이 이미 응답 불능 상태에 빠진 경우를 막지 못한다.
+
+#### 6.29.4 관련 발견 — git submodule vs npm 설치 사본 drift
+
+UDP 탐색 로그 스팸(`UdpResponse from ... { nMode=12, ... }` 콘솔 도배)이 이전 세션에서 "수정했다"고 기록되었음에도 재발했다. 원인: 이전 수정이 git submodule(`submodules/WiseNetChromeIPInstaller/nodejs/response.js`)에만 적용되었으나, `server/package.json`이 같은 저장소를 `"wisenet-chrome-ip-installer": "git+https://github.com/melchi45/WiseNetChromeIPInstaller.git#nodejs-udp-discovery"`로 **별도 고정**하고 있어, 런타임이 실제로 `require()`하는 것은 `node_modules/wisenet-chrome-ip-installer/`의 독립적인 npm 설치 사본이었다 — submodule 체크아웃과는 완전히 별개이며, submodule 편집은 런타임에 어떤 영향도 주지 않는다.
+
+**수정**: 처음엔 `node_modules` 사본에 동일 패치를 직접 적용했으나(임시방편), 확인 결과 submodule의 `nodejs-udp-discovery` 브랜치에는 이미 이 수정이 커밋·푸시되어 있었음(`7ac33e3 fix: stop UdpResponse.parse() from logging every raw packet`) — 즉 `node_modules` 사본만 그 커밋 이전 버전으로 뒤처져 있던 상태. 수동 패치를 버리고 `npm install wisenet-chrome-ip-installer@git+...#nodejs-udp-discovery`로 재설치해 정식 버전 사본으로 교체 완료. 이제 submodule과 `node_modules` 사본이 완전히 동일하며, 향후 `npm install`로도 드리프트 없음.
+
+#### 6.29.9 ingest-daemon 자동 재시작 워치독
+
+§6.29.5의 ingest-daemon 응답 불능이 일회성이 아니라 **반복 재발**함을 실측으로 확인 — 첫 발생 후 `npm run ingest:restart`로 복구했으나, 새로 뜬 데몬(신선한 프로세스)이 정확히 55분 뒤 동일 증상(`/health` 무응답, SIGTERM 무응답으로 SIGKILL 필요)으로 다시 멎었다. 프로세스 재시작 직후부터 재발한다는 것은 "누적된 낡은 상태" 때문이 아니라 **가동 시간에 비례해 커지는 근본적 리소스 문제**(메모리/스레드/커넥션 누수 등, §6.29.5의 GIL 경합 가설과 별개로 검증 필요)임을 시사한다.
+
+매번 사용자가 증상을 보고해야만 복구되는 상황을 없애기 위해 `server/src/utils/ingestDaemonWatchdog.js` 신규 추가 — `index.js`의 `main()`에서 `CAPTURE_BACKEND=ingest-daemon`일 때 기동:
+
+- 20초 간격으로 `GET /health`를 3초 타임아웃으로 폴링 (타임아웃 발생 시 데몬이 멎어있다는 뜻이므로 짧게 설정)
+- 연속 2회(약 40초) 실패 시 `restartIngestDaemon.js`를 자식 프로세스로 spawn — 기존 검증된 크로스플랫폼 포트 종료·재기동·카메라 재등록 로직을 그대로 재사용(재구현하지 않음, 로직 drift 방지)
+- 재시작 직후 90초 쿨다운 — 재시작 자체가 ~10초 걸리고 카메라 재등록도 시간이 필요하므로, 그 사이 또 실패로 오인해 재시작을 연타하지 않도록 함
+- 서버 부팅 직후 30초 유예 — 데몬이 정상적으로 포트 바인딩 중인 것을 응답 불능으로 오인하지 않도록 함
+
+이 워치독은 증상(응답 불능)을 자동 복구할 뿐, §6.29.5에서 남겨둔 근본 원인(왜 반복적으로 멎는지)은 여전히 미해결이다 — py-spy 프로파일링이 가능해지면 다음 우선 조사 대상.
+
+**배포 중 발견된 버그**: 최초 배포판은 `spawn(process.execPath, [scriptPath], ...)`로 재시작 스크립트를 실행했으나, 이 호스트에서는 `process.execPath`가 이 환경 전용 glibc-호환 로더 바이너리(`ld-linux-x86-64.so.2`) 자체로 resolve되어(`ps aux`로 실행 중인 프로세스가 `ld-linux-x86-64.so.2 --library-path ... node-24_15_0 src/index.js` 형태임을 확인) `--library-path`/`node-24_15_0` 인자 없이 스크립트 경로만 넘기면 로더가 `.js` 파일 자체를 ELF 바이너리로 실행하려다 실패(`invalid ELF header`)했다. 실측으로 확인(워치독이 정상적으로 응답 불능을 감지했으나 복구 spawn이 매번 실패). `process.execPath` 대신 PATH 기반 `'node'` 문자열로 spawn하도록 수정 — `~/.local/bin/node`의 래퍼 스크립트가 올바른 인자로 재실행해주며, `npm run ingest:restart`가 이미 쓰는 것과 동일한 경로.
+
+#### 6.29.8 최종 결론 — 고해상도 카메라 Buffer/Latency 급상승의 진짜 원인은 수동 jitterBufferTarget 제어 자체
+
+§6.29.5의 ingest-daemon 복구 후에도, 사용자가 "원래는 문제없었다"며 근본 해결을 요구 — 2048×1536/15fps 카메라에서 Buffer 1439ms/Latency 1440ms가 재현됨(Frames 702 decoded/231 dropped, Loss 0.4%, RTT 1ms — 네트워크·손실은 정상 범위). 대시보드에 같은 열상 카메라의 Primary/Secondary(서로 다른 센서) 스트림이 동시에 4개 표시되는 것이 원인일 가능성도 검토했으나, 사용자가 의도된 구성임을 확인해 기각.
+
+`useWebRTC.ts`의 escalation 코드를 다시 정독한 결과, 이 파일 자체에 이미 "manual jitterBufferTarget control이 v1.20(도입)→v1.36(버그)→v1.37(되돌림)→v1.41(재수정)"로 세 번 문제를 일으켰다는 이력이 주석으로 남아있었다 — 그리고 지금 보는 증상이 그 네 번째 재발이었다:
+
+- `JITTER_TARGET_STEP_UP_MS=150`(이벤트당) vs `JITTER_TARGET_STEP_DOWN_MS=30`(5초 틱당) — 완전히 감쇠(1000ms→100ms)하려면 무손실 상태가 **2.5분** 연속 유지되어야 한다.
+- 실사용 환경의 링크는 간헐적으로 실제 손실/프리즈가 발생하므로(0.4%대 Loss는 "낮지만 0은 아님"), 장시간 연결에서 이 2.5분의 클린 윈도우를 얻기 어렵고 `jitterTargetMs`가 상한(1000ms) 근처에 계속 머무르게 된다.
+- 이 값을 `videoReceiver.jitterBufferTarget = jitterTargetMs`로 **브라우저에 직접 명령**해 프레임을 최대 1초까지 붙들게 만들었다 — 즉 "디코더가 못 따라간다"와 지표상 구분 불가능한 증상(Buffer/Latency 급상승)을 스스로 유발하고 있었다.
+
+**수정**: `JITTER_TARGET_FLOOR_MS`/`MAX_MS`/`STEP_UP_MS`/`STEP_DOWN_MS` 상수와 `videoReceiver.jitterBufferTarget` 명령 코드를 전부 제거 — 브라우저 자체의 적응형 지터 버퍼(별도 힌트 없이도 동작하도록 설계됨)에 위임한다. freeze/loss 델타 계산 자체는 유지하되 더 이상 아무 것도 명령하지 않는 순수 관찰값으로 남긴다. 부수적으로 재연결 안전장치(`bufferSaturatedTicks`)도 `jitterTargetMs` 상한 도달을 조건으로 요구하지 않도록 완화(§6.29.1의 v1.41 수정 이후에도 순수 디코드 처리량 부족 상황에서는 freeze/loss가 거의 없어 `jitterTargetMs`가 상한에 도달하지 못해 안전장치 자체가 무력화되는 gap이 있었음).
+
+`npx tsc --noEmit`/`npm run build` 클린 통과, 새 번들 배포 완료. 실제 재현 여부는 사용자 확인 대기 중 — 이 수정으로도 재현된다면 §6.29.5에서 남겨둔 ingest-daemon 자체의 GIL 경합(버스트성 RTP 전달) 쪽이 진짜 원인일 가능성이 높아진다.
+
+---
+
 ## 12. App RTP 안전 타임아웃 — `read_timeout` (`AVFormatContext.io_timeout`)
 
 ### 12.1 배경 — App RTP watchdog segfault
@@ -1230,3 +1376,10 @@ WHEP 세션을 90초간 관찰한 결과, 특정 카메라(특히 2048×1536 이
 | 1.37 | 2026-07-21 | §6.27 재보완 — v1.36의 프로액티브 재연결을 사용자 실측 피드백("재연결로 채널 영상이 정지되고 refresh됨, 근본원인 파악 필요")에 따라 되돌림: `bufferSaturatedTicks`/`BUFFER_SATURATED_TICKS_LIMIT` 및 관련 카운터 갱신·리셋·판정 분기 전부 제거, 프로액티브 jitterBufferTarget escalation(버퍼 목표치만 올리는 부분)은 유지, 스톨 감지는 기존 20~25초 프레임/바이트 워치독으로 환원 — 재연결이 증상을 매번 리셋해 근본 원인 관찰을 방해하던 부작용 제거, `chrome://media-internals` 대조를 통한 근본 원인 확정이 다음 단계로 여전히 열려있음. `npx tsc --noEmit`/`npm run build` 클린 통과 확인 |
 | 1.38 | 2026-07-21 | §6.27 재보완 — 사용자가 제공한 `chrome://media-internals` `kWebMediaPlayerDestroyed` 이벤트(재생 38.029초만에 발생, UTC 05:15:12.539)를 서버 로그와 밀리초 단위로 대조: 동일 카메라의 `DTLS ... closed` 로그가 정확히 같은 시각에 기록되고 연결 수명이 매번 33~38초로 반복됨을 확인 — `TRANSPORT_MAX_LIFETIME_MS=90s`와는 무관하며, 클라이언트 자체 `STALL_MS`/`FRAME_STALL_MS`(25~33초/20~28초) + 폴링 지연 + `AUTO_RETRY_DELAY`(3초) 합산 범위(23~41초)와 거의 정확히 겹쳐, 서버가 아니라 **클라이언트 자신의 스톨 워치독이 방아쇠일 가능성**으로 조사 방향 전환(브라우저 콘솔 로그로 최종 확인 필요, 여전히 미확정). 별개로 사용자가 보고한 "Buffer/Latency가 0ms↔900ms+로 반복 진동" 결함의 원인도 확정·수정: 최근 `rxHistory` 샘플링이 1초 주기 `rateTimer`로 이전되며 `bufferMs`가 emit된 새 프레임이 없는 틱마다 0으로 폴백해 다음 틱에 보정 스파이크가 발생하던 톱니파 버그 — `lastKnownBufferMs` 이월 방식으로 수정(5초 주기 `statsTimer`의 스톨 워치독/escalation 로직은 미변경). `npx tsc --noEmit`/`npm run build` 클린 통과 확인 |
 | 1.39 | 2026-07-21 | §6.28 신규 — 카메라별 Pause/Resume 기능 추가: `pipelineManager.pauseCamera()`(기존 `stopCamera()` 재사용 후 상태만 `'paused'`로 오버라이드) + `updateCameraStatus()` public 래퍼, `youtubeStreamService.pauseStream()`/`resumeStream()`(기존 `restartStream()`의 `_stopEntry(entry, false)` 재사용), `POST /api/cameras/:id/stream/pause`·`/resume` 신규 라우트, 서버 재시작 시 `status==='paused'` 카메라를 자동시작 스윕에서 제외(`index.js`, `youtubeStreamService.init()`). 프론트엔드 반영은 `Design_Channel_Slot.md` §5.3b 참고 |
+| 1.40 | 2026-07-21 | §6.27 최종 결론 — 이번 세션 전체를 관통한 재생 불가 증상의 실제 근본 원인 2건 확정: (1) `ingest-daemon` 프로세스가 완전히 다운되어 있어(포트 7070 connection refused) 서버 재시작마다 카메라가 mediasoup에 등록 안 되고 "WebRTC disabled"로 시작(`npm run ingest:start`로 복구), (2) `profileLevelId`가 `addCameraStream()` 시점 1회만 캐싱되는 구조라 ingest-daemon 다운 중 폴링 예산(5초) 초과 시 폴백값 Baseline(`42e01f`)이 영구 고착 — 실제로는 High Profile(`640032`)인데도 낮은 Level(3.1)로 협상되어 고해상도 카메라가 일부 프레임만 디코드하다 멈춤(`POST /stream/reconnect`로 캐시 재고침해 미봉책 적용, 근본 수정은 후속 과제로 명시). 조사용 임시 SDP 디버그 로그 제거 |
+| 1.41 | 2026-07-21 | §6.27 재재보완 — "데이터 수신은 정상인데 Buffer만 주기적으로 900ms+" 현상의 진짜 근본 원인 확정: 프로액티브 jitterBufferTarget escalation이 `bufferMs`(우리가 `videoReceiver.jitterBufferTarget`으로 직접 명령한 결과가 그대로 반영되는 지표)를 트리거로 삼아 자기강화 피드백 루프를 형성 — STEP_UP/STEP_DOWN 5~10배 비대칭 때문에 정상적인 지터 한 번만으로도 15~20초 만에 상한(1000ms)까지 폭주. `useWebRTC.ts` escalation 트리거에서 `bufferMs` 조건 제거, 우리가 직접 조작하지 않는 `freezeDelta`/`lossDeltaForAdapt`(진짜 프리즈·패킷손실)만으로 판단하도록 수정 — 데이터 수신량과 무관했던 자기유발 문제였음을 확정. 별도로 Node.js 이벤트 루프 지연 모니터(`eventLoopLag.js`) 신규 추가(200ms+ 블로킹 시 로그, 실측 233ms/217ms 확인). `npx tsc --noEmit`/`npm run build` 클린 통과 |
+| 1.42 | 2026-07-21 | §6.27 재재재보완 — `profile-level-id=42e01f`가 재연결마다 무작위로 재발하던 진짜 원인 확정: `negotiate()`가 WHEP 재협상마다 매번 `_ingestGetVideoParams()`를 재시도 없이 2초 타임아웃으로 단발 호출하는데, ingest-daemon이 바쁠 때(250%+ CPU) 실패하면(로그 `video-params not available yet` 하루 133회 확인) Producer의 하드코딩 Baseline(`42e01f`) 기본값으로 조용히 폴백하던 구조 — `addCameraStream()` 시점 1회 캐싱이라는 v1.40의 이해는 부정확했음, 실제로는 매 negotiate마다 fresh fetch. `mediasoupEngine.js`에 `_lastKnownVideoParams` 캐시 신규 추가 — fetch 성공 시 갱신, 실패 시 Baseline이 아니라 마지막 성공값으로 폴백(카메라 실제 프로파일은 재연결 사이 안 바뀌므로), 기존 H.265 진단용 `_pollVideoCodec()`도 성공 시 같은 캐시를 선제 예열, `removeCameraStream()`에서 캐시 정리 추가 |
+| 1.46 | 2026-07-21 | §6.29.9 신규 — ingest-daemon 응답 불능이 일회성이 아니라 반복 재발함을 실측 확인(첫 복구 후 정확히 55분 뒤 동일 증상 재발, 신선한 프로세스에서도 재현되어 가동시간 비례 리소스 누적 문제로 추정). 매번 수동 보고·복구해야 하는 상황을 없애기 위해 `ingestDaemonWatchdog.js` 신규 추가 — 20초 간격 `/health` 폴링(3초 타임아웃), 연속 2회 실패 시 기존 `restartIngestDaemon.js`를 자식 프로세스로 spawn해 자동 복구(로직 재구현 없이 재사용), 재시작 후 90초 쿨다운으로 재시작 연타 방지. `index.js` `main()`에 `CAPTURE_BACKEND=ingest-daemon`일 때만 기동하도록 연결. 근본 원인(왜 반복적으로 멎는지)은 여전히 미해결 — 증상 자동 복구까지만 |
+| 1.45 | 2026-07-21 | §6.29.8 신규 — 사용자가 "원래는 문제없었다"며 근본 해결을 요구, ingest-daemon 재시작 후에도 고해상도 카메라(2048×1536, 15fps)의 Buffer/Latency가 1400ms대로 계속 누적되는 것을 재확인. 4개 카메라(Primary/Secondary)가 같은 물리 유닛의 서로 다른 센서 스트림을 의도적으로 동시 수신 중임을 사용자가 확인해 "중복 등록" 가설은 기각. 최종 근본 원인 확정: `useWebRTC.ts`의 수동 jitterBufferTarget 제어 메커니즘(STEP_UP 150ms/이벤트 vs STEP_DOWN 30ms/5초틱 — 완전히 감쇠하려면 무손실 2.5분 필요) 자체가 이번 세션에서만 4번째 자기유발 버그를 내고 있었음 확정 — 장시간 연결에서 간헐적 실손실/프리즈 몇 번만 있어도 상한(1000ms)까지 누적된 뒤 좀처럼 안 내려오고, 그 값을 `videoReceiver.jitterBufferTarget`으로 직접 명령해 브라우저가 프레임을 최대 1초까지 붙들게 만들어 "디코드가 못 따라간다"와 동일한 증상(Buffer/Latency 급상승)을 자체 유발. `JITTER_TARGET_*` 상수 및 `videoReceiver.jitterBufferTarget` 명령 코드 전체 제거, freeze/loss 델타 계산은 유지하되 더 이상 명령에 사용하지 않음(순수 관찰용) — 브라우저 자체의 적응형 지터 버퍼에 위임. 별도로 §self-reinforcing-buffer-loop 재연결 안전장치도 `jitterTargetMs` 상한 도달 조건 없이 `bufferMs` 단독 기준으로 완화(디코드 처리량 부족처럼 freeze/loss 없이 bufferMs만 오르는 경우도 안전장치가 발동하도록). `npx tsc --noEmit`/`npm run build` 클린 통과, 재현 검증은 사용자 확인 대기 |
+| 1.44 | 2026-07-21 | §6.29.5~6.29.7 추가 — v1.43 적용 후에도 재시작 직후 WebRTC 카메라가 등록 실패로 폴백되는 현상이 재현되어 진짜 근본 원인을 추가로 확정: ingest-daemon 프로세스가 살아있고 CPU도 소모하면서도 `/health`/`/cameras` HTTP API에 전혀 응답 못 하는 상태에 빠져 있었음(SIGTERM에도 8초간 무응답 — SIGKILL 필요, 사용자가 ingest-daemon 자체 화면에서 "모든 채널 노란색"으로 직접 확인). `npm run ingest:restart`로 복구. 재발 방지로 `pipelineManager.js`에 `_healWebRTCPipelines()` 30초 주기 self-heal 스윕 신규 추가 — `addCameraStream()` 3회 재시도 소진 후 `useWebRTC=false`로 영구 고착되던 것(기존 프레임 워치독은 이 케이스를 커버 못함, 26분 방치 실측)을 자동 복구, 실측으로 수동 개입 없이 30초 내 복구 확인. ingest-daemon 자체의 GIL 경합 추정 근본 수정은 범위 밖(후속 과제) |
+| 1.43 | 2026-07-21 | §6.29 신규 — 사용자가 겪은 "정상 종료 신호에 응답 못 해 SIGKILL 강제 종료" 문제 근본 수정 3건: (1) `index.js`의 `shutdown()` 핸들러에서 강제종료 워치독 `setTimeout`이 `await pipelineManager.stopAll()` 등 행 가능성이 있는 호출 **뒤**에 배치되어 있어, 그 await 자체가 멈추면 워치독이 아예 스케줄되지 못하던 순서 버그를 수정 — 워치독을 함수 최상단, 모든 await보다 먼저 등록하도록 재배치. SIGTERM 전송 후 실측 2~7초 내 `HTTPS server closed` 로그와 함께 정상 종료됨을 확인(이전엔 `stopServer.js`의 외부 10초 타임아웃 SIGKILL에 의존). (2) `getProducerStats()`(`/api/webrtc/monitor`가 사용)가 mediasoup Worker IPC(Node↔C++ 자식 프로세스 채널)가 멎으면 `await producer.getStats()`가 resolve도 reject도 안 해 무한 대기하던 결함 발견·수정 — `WORKER_IPC_TIMEOUT_MS=3000`과 `_withIpcTimeout()` 헬퍼로 `videoProducer`/`audioProducer`/`videoConsumer`/`audioPlain`의 모든 `getStats()` 호출을 `Promise.race`로 감싸 카메라 1개의 IPC 정체가 엔드포인트 전체를 막지 못하도록 수정, 재시작 직후 프레시 상태에서도 재현되어(누적 상태만의 문제가 아님) 근본 원인(IPC 자체가 왜 멎는지)은 별도 과제로 남음. (3) UDP 탐색 로그 스팸 재발 원인 확정 — 이전 세션 수정이 git submodule(`submodules/WiseNetChromeIPInstaller/`)에만 적용되고, 실제 런타임이 로드하는 것은 `server/package.json`에 `git+https://...#nodejs-udp-discovery`로 고정된 **독립적인 npm 설치 사본**(`node_modules/wisenet-chrome-ip-installer/`)이었음 — 두 사본은 완전히 별개이며 submodule 편집은 런타임에 영향 없음. `node_modules` 사본에 동일 수정 적용(업스트림 브랜치 반영 후 재설치 전까지는 재설치 시 유실 주의, 코드 주석에 명시). `node -c` 통과, `/api/webrtc/monitor`가 활성 카메라 상태에서 ~50ms에 응답함을 실측 확인 |
