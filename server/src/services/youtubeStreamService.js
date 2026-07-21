@@ -198,6 +198,10 @@ class YouTubeStreamService {
     const rows = this.db.find('cameras', { type: 'youtube' });
     for (const cam of rows) {
       if (this.streams.has(cam.id)) continue;
+      // A camera explicitly paused before restart (see pauseStream()) must stay
+      // paused — everything else reverts to 'offline' since its yt-dlp/ffmpeg
+      // processes are gone after a restart regardless of their prior state.
+      const restoredStatus = cam.status === 'paused' ? 'paused' : 'offline';
       const entry = {
         id:             cam.id,
         name:           cam.name,
@@ -208,7 +212,7 @@ class YouTubeStreamService {
         bitrate:        cam.bitrate ? Math.round(cam.bitrate / 1000) : 2000,
         maxHeight:      RESOLUTION_MAP[cam.resolution] || 1080,
         webrtcEnabled:  cam.webrtcEnabled !== false, // default true for restored streams
-        status:         'offline',
+        status:         restoredStatus,
         restartCount:   0,
         repeatPlayback: !!cam.repeatPlayback,
         createdAt:      cam.createdAt || new Date().toISOString(),
@@ -220,13 +224,14 @@ class YouTubeStreamService {
         liveReject:     null,
       };
       this.streams.set(cam.id, entry);
-      // Sync status to offline in DB (processes are gone after restart)
-      this.db.update('cameras', cam.id, { status: 'offline' });
-      console.log(`[YouTubeStream] Restored stream ${cam.id} (${cam.name}) from DB`);
+      this.db.update('cameras', cam.id, { status: restoredStatus });
+      console.log(`[YouTubeStream] Restored stream ${cam.id} (${cam.name}) from DB — status=${restoredStatus}`);
     }
     if (rows.length) {
       console.log(`[YouTubeStream] Restored ${rows.length} stream(s) from DB`);
-      // Auto-start restored streams after a brief delay to let other services init
+      // Auto-start restored streams after a brief delay to let other services init.
+      // Paused streams (status !== 'offline' here) are intentionally skipped —
+      // they resume only via an explicit resumeStream() call.
       setTimeout(() => {
         for (const cam of rows) {
           const entry = this.streams.get(cam.id);
@@ -380,6 +385,64 @@ class YouTubeStreamService {
     // Fire-and-forget — caller receives 'starting' state immediately
     this._startStream(entry).catch((err) => {
       console.error(`[YouTubeStream] Manual restart failed for ${id}:`, err.message);
+      entry.status = 'error';
+      this.db.update('cameras', id, { status: 'error' });
+    });
+    return this._toPublic(entry);
+  }
+
+  /**
+   * Pause a stream: kill yt-dlp/ffmpeg and the LTS AI pipeline (via _stopEntry,
+   * same teardown restartStream() uses) but keep the DB camera record and the
+   * in-memory entry, so it can be resumed later without losing its channelSlot,
+   * name, or YouTube URL. Idempotent.
+   * @param {string} id
+   */
+  async pauseStream(id) {
+    const entry = this.streams.get(id);
+    if (!entry) {
+      const err = new Error(`Stream ${id} not found`);
+      err.code  = 'NOT_FOUND';
+      throw err;
+    }
+    if (entry.status === 'paused') return this._toPublic(entry);
+    if (entry.status === 'stopping' || entry.status === 'removed') {
+      const err = new Error('Stream has been stopped and removed');
+      err.code  = 'STREAM_STOPPED';
+      throw err;
+    }
+    await this._stopEntry(entry, false);
+    entry.status = 'paused';
+    this.db.update('cameras', id, { status: 'paused' });
+    // _stopEntry() already routed an 'offline' status through pipelineManager
+    // (DB write + camera:status broadcast) as part of tearing down the AI
+    // pipeline — overwrite it with the final 'paused' state on both fronts.
+    if (this.pipelineManager) this.pipelineManager.updateCameraStatus(id, 'paused');
+    return this._toPublic(entry);
+  }
+
+  /**
+   * Resume a stream previously paused via pauseStream().
+   * Re-spawns yt-dlp → FFmpeg exactly like restartStream().
+   * @param {string} id
+   */
+  async resumeStream(id) {
+    const entry = this.streams.get(id);
+    if (!entry) {
+      const err = new Error(`Stream ${id} not found`);
+      err.code  = 'NOT_FOUND';
+      throw err;
+    }
+    if (entry.status !== 'paused') {
+      const err = new Error('Stream is not paused');
+      err.code  = 'STREAM_NOT_PAUSED';
+      throw err;
+    }
+    entry.restartCount = 0;
+    entry.status       = 'starting';
+    this.db.update('cameras', id, { status: 'starting' });
+    this._startStream(entry).catch((err) => {
+      console.error(`[YouTubeStream] Resume failed for ${id}:`, err.message);
       entry.status = 'error';
       this.db.update('cameras', id, { status: 'error' });
     });

@@ -1,5 +1,5 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Pencil, RotateCcw, X, Search, AlertTriangle, Hourglass } from 'lucide-react';
+import { Pencil, RotateCcw, X, Search, AlertTriangle, Hourglass, Pause, Play } from 'lucide-react';
 import { useSocket } from '../hooks/useSocket';
 import { useCameraStore } from '../stores/cameraStore';
 import { useDiscoveryStore } from '../stores/discoveryStore';
@@ -34,6 +34,7 @@ function StatusDot({ status }: { status: Camera['status'] }) {
   const color =
     (status === 'live' || status === 'streaming') ? 'bg-green-500' :
     status === 'error'                            ? 'bg-red-500'   :
+    status === 'paused'                           ? 'bg-blue-400'  :
     status === 'offline'                          ? 'bg-gray-500'  : 'bg-yellow-500';
   return <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${color}`} title={status} />;
 }
@@ -106,6 +107,14 @@ export default function CameraList() {
   const updateCamera = useCameraStore((s) => s.updateCamera);
   const selectedId   = useCameraStore((s) => s.selectedId);
   const selectCamera = useCameraStore((s) => s.selectCamera);
+
+  // Added tab shows cameras in Dashboard Channel Slot mapping order, not insertion
+  // order — cameras without a channelSlot (shouldn't normally happen, see
+  // channelSlotService.js backfill) sort to the end instead of the front.
+  const sortedCameras = useMemo(
+    () => [...cameras].sort((a, b) => (a.channelSlot ?? Infinity) - (b.channelSlot ?? Infinity)),
+    [cameras]
+  );
 
   const discovered    = useDiscoveryStore((s) => s.cameras);
   const selected      = useDiscoveryStore((s) => s.selected);
@@ -277,6 +286,25 @@ export default function CameraList() {
         updateCamera(cam.id, { aiEnabled: data.aiEnabled });
       }
     } catch { /* ignore */ }
+  }, [updateCamera]);
+
+  const [pausing, setPausing] = useState<string | null>(null);
+
+  // Pauses/resumes the camera's ingest connection (RTSP via ingest-daemon, or
+  // the yt-dlp/ffmpeg pipeline for YouTube). The server broadcasts the resulting
+  // 'paused'/'starting' status over camera:status, so this only needs an
+  // optimistic local update for instant button feedback.
+  const handlePauseToggle = useCallback(async (e: React.MouseEvent, cam: Camera) => {
+    e.stopPropagation();
+    const isPaused = cam.status === 'paused';
+    setPausing(cam.id);
+    try {
+      const res = await fetch(`/api/cameras/${cam.id}/stream/${isPaused ? 'resume' : 'pause'}`, { method: 'POST' });
+      if (res.ok) {
+        updateCamera(cam.id, { status: isPaused ? 'connecting' : 'paused' });
+      }
+    } catch { /* ignore */ }
+    finally { setPausing(null); }
   }, [updateCamera]);
 
   const handleCameraClick = useCallback((cam: Camera) => {
@@ -473,7 +501,7 @@ export default function CameraList() {
             tab === 'added' ? 'text-blue-400 border-b-2 border-blue-400' : 'text-gray-500 hover:text-gray-300'
           }`}
         >
-          Added ({cameras.length})
+          Added ({sortedCameras.length})
         </button>
         <button
           onClick={() => setTab('found')}
@@ -493,14 +521,16 @@ export default function CameraList() {
         {/* ── Added cameras ── */}
         {tab === 'added' && (
           <div className="p-2 space-y-1">
-            {cameras.length === 0 ? (
+            {sortedCameras.length === 0 ? (
               <p className="text-xs text-gray-500 text-center mt-6">
                 No cameras yet. Use <strong>+ Add</strong> or select from <strong>Found</strong>.
               </p>
             ) : (
-              cameras.map((cam) => {
+              sortedCameras.map((cam) => {
                 const isSelected = selectedId === cam.id;
                 const isReconn   = reconnecting === cam.id;
+                const isPaused   = cam.status === 'paused';
+                const isPausing  = pausing === cam.id;
                 const aiOn       = cam.aiEnabled !== false; // default true
                 return (
                   <div
@@ -517,9 +547,17 @@ export default function CameraList() {
                     <StatusDot status={cam.status} />
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-1">
+                        {cam.channelSlot != null && (
+                          <span className="flex-shrink-0 text-[9px] font-mono text-gray-500" title="Channel Slot">
+                            #{cam.channelSlot}
+                          </span>
+                        )}
                         <span className="text-xs font-semibold text-white truncate">{cam.name}</span>
                         {cam.type === 'youtube' && (
                           <span className="flex-shrink-0 bg-red-700 text-white text-[9px] font-bold px-1 py-px rounded-sm">YT</span>
+                        )}
+                        {isPaused && (
+                          <span className="flex-shrink-0 bg-blue-700 text-white text-[9px] font-bold px-1 py-px rounded-sm">PAUSED</span>
                         )}
                       </div>
                       {cam.type === 'youtube'
@@ -550,6 +588,16 @@ export default function CameraList() {
                         title="Reconnect"
                       >
                         <RotateCcw className="w-3 h-3" />
+                      </button>
+                      <button
+                        onClick={(e) => handlePauseToggle(e, cam)}
+                        disabled={isPausing}
+                        className={`px-1 disabled:opacity-50 disabled:cursor-wait ${
+                          isPaused ? 'text-blue-400 hover:text-blue-300' : 'text-gray-500 hover:text-blue-400'
+                        }`}
+                        title={isPaused ? 'Resume ingest connection' : 'Pause ingest connection'}
+                      >
+                        {isPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
                       </button>
                       <button
                         onClick={(e) => handleAiToggle(e, cam)}

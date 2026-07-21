@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAPTURE-002 |
-| **Version** | 1.36 |
+| **Version** | 1.39 |
 | **Status** | Active |
-| **Date** | 2026-07-20 |
+| **Date** | 2026-07-21 |
 | **Ops Guide** | [RTSP_Capture_Backend_Setup.md](../ops/RTSP_Capture_Backend_Setup.md) |
 | **Related Design** | [Design_FFmpeg_RTSP_Capture.md](../design/Design_FFmpeg_RTSP_Capture.md) · [Design_RTSP_WebRTC_Architecture.md](../design/Design_RTSP_WebRTC_Architecture.md) |
 
@@ -753,11 +753,39 @@ CPU·손실률·PLI 모두 실측으로 뚜렷하게 개선됨을 확인. 다만
 - **가설 수정**: 순수 "디코드 처리량 부족"보다는, "디코드는 하드웨어로 빠르게 끝나지만 그 결과를 화면에 합성하는 소프트웨어 오버레이 경로가 병목이 되어 프레젠테이션이 밀리고, 그 결과가 jitterBufferDelay 상승(재생이 안 되니 버퍼에 계속 쌓임)으로 나타난다"는 쪽이 증거와 더 잘 맞음 — 디코드 자체가 아니라 "디코드된 프레임을 화면에 올리는" 프레젠테이션 단계가 약한 GPU/드라이버 조합(소프트웨어 오버레이)인 것이 실제 병목일 가능성.
 - 다음 확인 필요(여전히 미수정): `chrome://media-internals`에서 증상 재현 시점에 프레임 드롭/디코더 지연이 실제로 발생하는지, 그리고 그 시각이 GPU 프로세스 로그의 `ProduceOverlay`/`ProduceSkia` 에러 시각과 겹치는지 대조. 겹치면 프레젠테이션(오버레이/컴포지팅) 병목 가설이 확정됨.
 
-**적용된 수정 — bufferMs 포화 시 프로액티브 재연결 (2026-07-20)**: 정확한 근본 원인(디코드 vs 프레젠테이션 병목)은 `chrome://media-internals` 대조로 아직 확정되지 않았지만, 원인과 무관하게 유효한 개선을 먼저 적용: `jitterTargetMs`가 이미 `JITTER_TARGET_MAX_MS`(1000ms) 상한까지 escalation된 상태에서 `bufferMs`가 여전히 `BUFFER_MS_BAD`(300ms) 이상이면, 더 이상 escalation으로 얻을 수 있는 여지가 없다는 뜻 — 브라우저에게 요청할 수 있는 버퍼를 이미 최대로 요청했는데도 따라가지 못하고 있다는 신호이므로, 실제 fps 정지가 벌어지는 20~25초짜리 프레임/바이트 스톨 워치독을 기다리지 않고 바로 `staleReconnect()`를 트리거하도록 변경.
-- `useWebRTC.ts`에 `BUFFER_SATURATED_TICKS_LIMIT=2`(단발성 스파이크에 반응하지 않도록 연속 2틱=10초 요구) 및 `bufferSaturatedTicks` 카운터 추가 — jitterBufferTarget escalation 블록(`!document.hidden` 가드 내부)에서 `jitterTargetMs >= JITTER_TARGET_MAX_MS && bufferMs >= BUFFER_MS_BAD`일 때만 증가, 그 외에는 0으로 리셋.
-- 최종 스톨 판정 if/else 체인에 `bufferSaturatedTicks >= BUFFER_SATURATED_TICKS_LIMIT` 분기를 `frameStalled`보다 먼저(더 이른 신호이므로) 추가 — 동일한 `staleReconnect()`를 재사용해 기존 backoff/retryCount 상한 로직을 그대로 상속.
-- `handleVisibilityChange`(탭 재활성화 시 리셋 목록)에도 `bufferSaturatedTicks = 0` 추가 — 백그라운드 탭에서 인위적으로 부풀려진 bufferMs가 포그라운드 복귀 직후 오탐 재연결을 유발하지 않도록.
-- 효과: 사용자가 겪던 "Buffer가 980ms까지 오르며 화면이 얼어붙어 있다가 한참 후에야 재연결" 패턴이, 버퍼가 포화되는 즉시(대략 10초 이내) 짧은 재연결로 대체됨 — 화면이 멈춰있는 체감 시간이 크게 줄어듦. `npx tsc --noEmit`/`npm run build` 클린 통과 확인.
+**적용했다가 되돌림 — bufferMs 포화 시 프로액티브 재연결 (2026-07-20 적용, 2026-07-21 revert)**: 정확한 근본 원인(디코드 vs 프레젠테이션 병목)이 `chrome://media-internals` 대조로 확정되기 전, 원인과 무관하게 유효할 것으로 보고 다음을 적용했었음: `jitterTargetMs`가 이미 `JITTER_TARGET_MAX_MS`(1000ms) 상한까지 escalation된 상태에서 `bufferMs`가 여전히 `BUFFER_MS_BAD`(300ms) 이상이면 실제 fps 정지가 벌어지는 20~25초짜리 프레임/바이트 스톨 워치독을 기다리지 않고 바로 `staleReconnect()`를 트리거(`BUFFER_SATURATED_TICKS_LIMIT=2`, 연속 2틱=10초 요구).
+- **사용자 실측 피드백(2026-07-21)**: "재연결로 인해 채널의 영상이 정지되고, 채널이 refresh 되고 있습니다. 근본원인 파악이 필요합니다" — 즉 이 프로액티브 재연결 자체가 사용자에게 뚜렷이 보이는 화면 정지+새로고침으로 체감되어, "긴 프리즈를 짧은 재연결로 대체"라는 원래 의도와 달리 오히려 눈에 띄는 방해로 작용했고, 근본 원인을 가리는 부작용도 있음(재연결이 증상을 매번 리셋시켜 버려 `chrome://media-internals` 등으로 실제 디코드/프레젠테이션 지연을 관찰할 기회 자체가 줄어듦).
+- **되돌린 이유**: 증상을 마스킹하는 임시방편보다, 근본 원인(§6.27 상단의 `chrome://gpu` 소프트웨어 오버레이/`SharedImageManager` mailbox 에러 가설)을 먼저 확정하는 것이 우선이라는 사용자 판단에 따름 — `useWebRTC.ts`에서 `BUFFER_SATURATED_TICKS_LIMIT` 상수, `bufferSaturatedTicks` 카운터(선언·escalation 블록 내 갱신·`handleVisibilityChange` 리셋·최종 판정 분기) 전부 제거, 프로액티브 jitterBufferTarget escalation 로직 자체(§6.27 상단)는 유지 — 재연결이 아니라 버퍼 목표치만 올리는 부분은 그대로 둠. 스톨 감지는 다시 기존 20~25초 프레임/바이트 워치독만 사용. `npx tsc --noEmit`/`npm run build` 클린 통과 확인.
+- **다음 단계**: `chrome://media-internals`로 실제 프레임 드롭/디코더 지연 시각을 GPU 프로세스 로그의 `ProduceOverlay`/`ProduceSkia` 에러 시각과 대조하는 근본 원인 확인이 여전히 필요 — 프로액티브 재연결을 제거했으므로 이제 증상이 방해받지 않고 자연스럽게 관찰 가능함.
+
+**진전 — `chrome://media-internals` 실측으로 서버 로그와 밀리초 단위 대조 확인 (2026-07-21)**: 사용자가 제공한 `kWebMediaPlayerDestroyed` 이벤트(재생 시작 후 38.029초만에 `kPause`+`kWebMediaPlayerDestroyed` 동시 발생, UTC 05:15:12.539)를 서버 로그(`server/logs/lts-2026-07-21.log`, 브래킷 타임스탬프가 UTC임을 `date -u`로 확인)와 대조한 결과, **동일 카메라(`4e562747`)의 `DTLS ... closed` 로그가 정확히 05:15:12.539(밀리초 단위 일치)에 찍힘** — 직전 연결도 05:14:32.479에 DTLS closed 후 05:14:34.510 재협상, 이번 연결도 05:15:12.539 DTLS closed 후 05:15:14.565 재협상으로 패턴이 반복(연결 수명 약 33~38초). `Consumer-diag`/`vScore` 로그는 종료 직전까지 정상(bytesSent 증가 중, score 9~10)이라 서버측 mediasoup Consumer/Producer 자체의 이상 징후는 없음.
+- `mediasoupEngine.js:1398`의 `TRANSPORT_MAX_LIFETIME_MS=90_000`(90초 하드 타임아웃)은 33~38초와 맞지 않아 배제.
+- 대신 클라이언트 자체 스톨 워치독 타이밍과 겹침에 주목: `STALL_MS = 25_000 + jitterMs(0~8000)`(25~33초) 감지 + 다음 5초 폴링 틱까지 지연(최대 5초) + `staleReconnect()`의 `AUTO_RETRY_DELAY=3_000`(최초 재시도, backoffMs=0) = 총 33~41초 — 관찰된 33~38초 범위와 거의 정확히 겹침. `FRAME_STALL_MS`(20~28초) 경로도 유사 범위(23~36초)로 겹침.
+- **잠정 결론**: 이 재연결이 서버가 먼저 끊은 것이 아니라, **클라이언트 자신의 프레임/바이트 스톨 워치독이 `stream.getTracks().forEach(t=>t.stop())`을 호출해 브라우저 쪽에서 먼저 ICE/DTLS를 닫고, 그 결과가 서버 로그에 "DTLS closed"로 나타났을` 가능성이 높음 — 즉 반복되는 재연결의 실제 방아쇠가 디코드/프레젠테이션 병목이 아니라 **우리 자신의 워치독 임계값(threshold)이 너무 민감하게 잡히고 있을 가능성**으로 무게중심 이동. 확정을 위해서는 사용자가 재현 시점에 브라우저 개발자도구 콘솔에서 `[useWebRTC][4e562747] video stream stale for ...` 또는 `framesDecoded stuck at ...` 로그가 실제로 찍히는지 확인 필요 — 찍힌다면 클라이언트발 재연결 확정.
+
+**별개로 발견·수정 — Buffer/Latency가 0ms↔900ms+로 반복 진동하는 결함 (2026-07-21)**: 위 조사와 별개로 사용자가 "이전보다 더 안 좋다, Buffer/Latency가 0ms와 900ms+ 사이를 너무 자주 왔다갔다한다"고 보고. 원인은 최근(다른 세션에서) `rxHistory` 샘플링이 `statsTimer`(5초 주기)에서 `rateTimer`(1초 주기)로 이전되면서, `bufferMs` 계산이 `jitterBufferEmittedCount`가 해당 1초 틱 동안 전혀 증가하지 않으면(30fps 기준 1초 창에서는 흔히 발생 가능) 무조건 0으로 폴백하도록 되어 있던 것 — 그 다음 틱에서 두 틱 분량의 누적 `jitterBufferDelay`가 그사이 emit된 소수의 프레임에 나눠지며 보정성 스파이크가 발생, 결과적으로 0ms↔900ms+ 톱니파가 반복됨. `useWebRTC.ts`의 `rateTimer`에 `lastKnownBufferMs`(마지막으로 유효하게 계산된 값을 다음 틱에 이월)를 추가해 새 데이터가 있을 때만 갱신하고 없으면 이전 값을 유지하도록 수정 — `statsTimer`(5초, 스톨 워치독·jitterBufferTarget escalation 담당)의 별도 계산 로직은 손대지 않음. `npx tsc --noEmit`/`npm run build` 클린 통과 확인.
+
+### 6.28 카메라별 Pause/Resume — RTSP/YouTube 수집 연결 일시정지 (2026-07-21, 신규 기능)
+
+**요구사항**: Streaming Dashboard 사이드바에서 개별 카메라의 RTSP(ingest-daemon)·YouTube(yt-dlp/ffmpeg) 수집 연결을 카메라 레코드/`channelSlot`을 유지한 채 일시정지·재개할 수 있어야 함(대역폭/CPU 절약, 계획된 점검 등). UI 반영은 `Design_Channel_Slot.md` §5.3b 참고.
+
+**설계 제약 — 진짜 "freeze"가 아니라 "재연결 가능한 완전 정지"**: `ingest_daemon.py`의 `CameraManager`는 `add()`/`remove()`만 제공하며, RTSP 세션(io/AI decode/RTP mux/App RTP 스레드)을 유지한 채 콜백만 멈추는 중간 상태가 없다(`CameraSession.stop()`이 전체 스레드를 종료하는 것이 유일한 정지 경로, §11 Graceful Shutdown과 동일 메커니즘). 따라서 Pause는 daemon 레벨에 새 프리미티브를 추가하지 않고, **기존 `stopCamera()`/`_ingestRemoveCamera()` 경로를 그대로 재사용해 완전히 연결을 끊되, DB `status`를 `'offline'`이 아닌 `'paused'`로 남겨** "의도된 정지"와 "장애로 인한 오프라인"을 구분하는 방식으로 구현함. 카메라 설정(자격증명, `channelSlot`, 구역 등)은 전혀 건드리지 않음 — Delete와 달리 DB 레코드가 삭제되지 않는다.
+
+**백엔드 구현**:
+- `pipelineManager.js`에 `pauseCamera(cameraId)` 추가 — 기존 `stopCamera(cameraId)`(ingest-daemon 등록 해제, MediaMTX/mediasoup 정리, `_pipelines` 맵에서 제거)를 호출한 뒤 `_updateCameraStatus(cameraId, 'paused')`로 최종 상태만 덮어씀. 파이프라인이 이미 없는 카메라(예: 이미 `error`/`offline`)에 호출해도 `stopCamera()`가 no-op이라 안전(멱등).
+- Resume은 별도 메서드 없이 기존 `startCamera(camera)`를 그대로 재사용(상태 필드를 사전에 검사하지 않으므로 `'paused'`에서의 재시작에 특별한 처리 불필요).
+- `pipelineManager.updateCameraStatus(cameraId, status)` — 기존 private `_updateCameraStatus()`(DB 기록 + `camera:status` 소켓 브로드캐스트)의 public 래퍼. YouTube 카메라처럼 이 매니저가 소유하지 않는 연결(yt-dlp/ffmpeg)의 상태를 동일한 DB+소켓 경로로 반영해야 하는 다른 서비스를 위해 추가.
+- **YouTube 카메라** (`youtubeStreamService.js`): YouTube 가상 카메라는 ingest-daemon이 다루지 않고(§6.1, MediaMTX `/yt/<id>` 경로로 발행), yt-dlp/ffmpeg 프로세스가 실제 "연결"이다. `pauseStream(id)`/`resumeStream(id)`를 신규 추가 — 기존 `restartStream()`이 쓰던 `_stopEntry(entry, false)`(DB 레코드는 삭제하지 않고 yt-dlp→ffmpeg 프로세스 트리 + `pipelineManager.stopCamera()`까지만 정리)를 그대로 재사용하되, 즉시 재시작하는 대신 `status='paused'`로 멈춰두고 `pipelineManager.updateCameraStatus(id, 'paused')`로 최종 상태를 덮어씀(그렇지 않으면 `_stopEntry` 내부의 `pipelineManager.stopCamera()`가 이미 브로드캐스트한 `'offline'`이 마지막 상태로 남음). Resume은 `restartStream()`과 동일하게 `_startStream(entry)`를 재호출.
+- **서버 재시작 시 자동복원 예외 처리**: `index.js`의 부트 시 전체 카메라 자동시작 루프(§6.6과 무관, 서버 기동 직후 5초 지연 후 `db.find('cameras', {})` 전체를 순회하며 `startCamera()` 호출하는 기존 로직)와 `youtubeStreamService.init()`의 YouTube 스트림 자동시작(2초 지연) 양쪽 모두 `camera.status === 'paused'`인 레코드를 건너뛰도록 수정 — 그렇지 않으면 일시정지가 서버 재시작 한 번으로 무효화됨. `youtubeStreamService.init()`은 기존에 모든 YouTube 카메라의 `status`를 무조건 `'offline'`으로 리셋했는데(프로세스가 재시작으로 사라졌다는 전제), 이 리셋이 `'paused'`를 함께 지워버리지 않도록 복원 시점에 `cam.status === 'paused'`인 경우만 예외적으로 유지하도록 수정.
+
+**API**:
+
+| 메서드 | 경로 | 설명 |
+|---|---|---|
+| POST | `/api/cameras/:id/stream/pause` | RTSP는 `pipelineManager.pauseCamera()`, YouTube(`camera.type === 'youtube'`)는 `youtubeStreamService.pauseStream()` 호출 |
+| POST | `/api/cameras/:id/stream/resume` | RTSP는 `pipelineManager.startCamera()`, YouTube는 `youtubeStreamService.resumeStream()` 호출 |
+
+**알려진 한계**: `PUT /api/cameras/:id`가 `rtspUrl`/자격증명/`webrtcEnabled`/`webrtcVideoOnly` 변경 시 파이프라인을 자동 재시작하는 기존 동작(CLAUDE.md API 표 참고)은 일시정지 상태를 인지하지 않음 — 일시정지된 카메라를 편집해 이 필드들을 바꾸면 의도치 않게 재개(resume)된다. 별도 이슈로 후속 처리 필요.
 
 ---
 
@@ -1199,3 +1227,6 @@ WHEP 세션을 90초간 관찰한 결과, 특정 카메라(특히 2048×1536 이
 | 1.34 | 2026-07-20 | §6.27 재보완 — ICE 패널 Rate 갱신 주기를 메인 5초 stats/워치독 루프(`POLL_MS`)에서 분리한 별도 1초 `rateTimer`(`RATE_POLL_MS`)로 단축, candidate-pair 파싱 공통 로직을 `extractNominatedPair()` 헬퍼로 추출해 두 루프가 공유(`POLL_MS`를 직접 낮추면 스톨 워치독 민감도와 jitterBufferTarget escalation/decay 속도까지 5배 빨라져 §6.27 상단에서 튜닝한 값이 깨지므로 회피). 사용자가 보고한 "Buffer가 ~980ms까지 상승→fps 0→재연결→반복" 패턴을 §6.20에서 이미 예견된 클라이언트 디코드 용량 한계(네트워크가 아닌 브라우저 디코드 처리량 부족으로 지터 버퍼에 프레임이 계속 쌓이는 현상)로 진단·문서화, 코드 수정은 사용자 확인 후로 보류 |
 | 1.35 | 2026-07-20 | §6.27 재보완 — 사용자가 제공한 `chrome://gpu` 실측(Windows/Edge, NVIDIA RTX 2000 Ada)으로 v1.34 가설 수정: H.264 하드웨어 디코드가 4096×4096까지 지원되어 "소프트웨어 디코드" 가설 배제, 동시 오픈 타일도 WebRTC 비디오 디코드 2개뿐(JPEG 폴링 4개는 비디오 디코드 무관)이라 "다수 타일 동시 디코드 경합"의 설명력도 약화. 대신 overlay 지원이 전부 SOFTWARE로 표시되고 GPU 프로세스 로그에 `SharedImageManager::ProduceOverlay`/`ProduceSkia` "non-existent mailbox" 에러가 반복 발견되어, 디코드가 아닌 "디코드된 프레임을 화면에 합성하는 프레젠테이션(오버레이/컴포지팅) 경로"가 실제 병목일 가능성으로 가설 이동 — 여전히 미수정, `chrome://media-internals` 프레임 드롭 시각과 GPU 에러 시각 대조 필요 |
 | 1.36 | 2026-07-20 | §6.27 재보완 — 근본 원인 확정 전이지만 원인과 무관하게 유효한 개선으로 프로액티브 재연결 추가: `useWebRTC.ts`에 `bufferSaturatedTicks`/`BUFFER_SATURATED_TICKS_LIMIT=2` 도입, jitterBufferTarget escalation이 이미 `JITTER_TARGET_MAX_MS` 상한에 도달했는데도 `bufferMs`가 계속 `BUFFER_MS_BAD` 이상이면(더 escalation할 여지가 없다는 신호) 20~25초짜리 프레임/바이트 스톨 워치독을 기다리지 않고 즉시 `staleReconnect()` 트리거 — 사용자가 겪던 "Buffer 980ms까지 상승 후 장시간 정지" 패턴을 짧은 재연결로 대체. `npx tsc --noEmit`/`npm run build` 클린 통과 확인 |
+| 1.37 | 2026-07-21 | §6.27 재보완 — v1.36의 프로액티브 재연결을 사용자 실측 피드백("재연결로 채널 영상이 정지되고 refresh됨, 근본원인 파악 필요")에 따라 되돌림: `bufferSaturatedTicks`/`BUFFER_SATURATED_TICKS_LIMIT` 및 관련 카운터 갱신·리셋·판정 분기 전부 제거, 프로액티브 jitterBufferTarget escalation(버퍼 목표치만 올리는 부분)은 유지, 스톨 감지는 기존 20~25초 프레임/바이트 워치독으로 환원 — 재연결이 증상을 매번 리셋해 근본 원인 관찰을 방해하던 부작용 제거, `chrome://media-internals` 대조를 통한 근본 원인 확정이 다음 단계로 여전히 열려있음. `npx tsc --noEmit`/`npm run build` 클린 통과 확인 |
+| 1.38 | 2026-07-21 | §6.27 재보완 — 사용자가 제공한 `chrome://media-internals` `kWebMediaPlayerDestroyed` 이벤트(재생 38.029초만에 발생, UTC 05:15:12.539)를 서버 로그와 밀리초 단위로 대조: 동일 카메라의 `DTLS ... closed` 로그가 정확히 같은 시각에 기록되고 연결 수명이 매번 33~38초로 반복됨을 확인 — `TRANSPORT_MAX_LIFETIME_MS=90s`와는 무관하며, 클라이언트 자체 `STALL_MS`/`FRAME_STALL_MS`(25~33초/20~28초) + 폴링 지연 + `AUTO_RETRY_DELAY`(3초) 합산 범위(23~41초)와 거의 정확히 겹쳐, 서버가 아니라 **클라이언트 자신의 스톨 워치독이 방아쇠일 가능성**으로 조사 방향 전환(브라우저 콘솔 로그로 최종 확인 필요, 여전히 미확정). 별개로 사용자가 보고한 "Buffer/Latency가 0ms↔900ms+로 반복 진동" 결함의 원인도 확정·수정: 최근 `rxHistory` 샘플링이 1초 주기 `rateTimer`로 이전되며 `bufferMs`가 emit된 새 프레임이 없는 틱마다 0으로 폴백해 다음 틱에 보정 스파이크가 발생하던 톱니파 버그 — `lastKnownBufferMs` 이월 방식으로 수정(5초 주기 `statsTimer`의 스톨 워치독/escalation 로직은 미변경). `npx tsc --noEmit`/`npm run build` 클린 통과 확인 |
+| 1.39 | 2026-07-21 | §6.28 신규 — 카메라별 Pause/Resume 기능 추가: `pipelineManager.pauseCamera()`(기존 `stopCamera()` 재사용 후 상태만 `'paused'`로 오버라이드) + `updateCameraStatus()` public 래퍼, `youtubeStreamService.pauseStream()`/`resumeStream()`(기존 `restartStream()`의 `_stopEntry(entry, false)` 재사용), `POST /api/cameras/:id/stream/pause`·`/resume` 신규 라우트, 서버 재시작 시 `status==='paused'` 카메라를 자동시작 스윕에서 제외(`index.js`, `youtubeStreamService.init()`). 프론트엔드 반영은 `Design_Channel_Slot.md` §5.3b 참고 |

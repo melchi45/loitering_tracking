@@ -673,6 +673,49 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
     }
   });
 
+  /**
+   * POST /api/cameras/:id/stream/pause
+   * Pause the camera's ingest connection (RTSP via ingest-daemon, or the
+   * yt-dlp/ffmpeg pipeline for YouTube virtual cameras) without deleting the
+   * camera record. Persists status='paused' so it survives a server restart
+   * and is excluded from the boot-time auto-start sweep — see index.js.
+   */
+  router.post('/:id/stream/pause', async (req, res) => {
+    try {
+      const camera = db.findOne('cameras', { id: req.params.id });
+      if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
+
+      if (camera.type === 'youtube' && youtubeSvc) {
+        await youtubeSvc.pauseStream(camera.id);
+      } else {
+        await pipelineManager.pauseCamera(camera.id);
+      }
+      res.json({ success: true, message: 'Camera paused', cameraId: camera.id });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * POST /api/cameras/:id/stream/resume
+   * Resume a camera previously paused via /stream/pause.
+   */
+  router.post('/:id/stream/resume', async (req, res) => {
+    try {
+      const camera = db.findOne('cameras', { id: req.params.id });
+      if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
+
+      if (camera.type === 'youtube' && youtubeSvc) {
+        await youtubeSvc.resumeStream(camera.id);
+      } else {
+        await pipelineManager.startCamera(camera);
+      }
+      res.json({ success: true, message: 'Camera resumed', cameraId: camera.id });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   return router;
 }
 

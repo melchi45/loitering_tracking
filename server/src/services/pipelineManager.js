@@ -1618,6 +1618,33 @@ class PipelineManager {
   }
 
   /**
+   * Pause a camera: tear down its capture/ingest-daemon session exactly like
+   * stopCamera(), but leave the DB/UI status at 'paused' instead of 'offline' so
+   * it reads as an intentional pause (not a disconnect/error) and is excluded
+   * from the server-boot auto-start sweep (see index.js) until resumed via
+   * startCamera(). Safe to call on an already-stopped camera (stopCamera() is
+   * a no-op without an active pipeline).
+   * @param {string} cameraId
+   */
+  async pauseCamera(cameraId) {
+    await this.stopCamera(cameraId);
+    this._updateCameraStatus(cameraId, 'paused');
+  }
+
+  /**
+   * Public wrapper around the internal DB+socket status broadcaster, for
+   * services that manage a camera's connection outside this manager's own
+   * pipeline lifecycle (e.g. YouTubeStreamService pausing/resuming the
+   * yt-dlp/ffmpeg process while this manager's pipeline for that camera is
+   * already stopped).
+   * @param {string} cameraId
+   * @param {string} status
+   */
+  updateCameraStatus(cameraId, status) {
+    this._updateCameraStatus(cameraId, status);
+  }
+
+  /**
    * Get runtime status of a camera pipeline.
    * @param {string} cameraId
    * @returns {{ running: boolean, frameCount: number, lastFrameAt: number|null }|null}

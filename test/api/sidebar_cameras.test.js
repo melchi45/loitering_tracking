@@ -247,6 +247,57 @@ async function runGroupG() {
   });
 }
 
+// ── Group H — Pause/Resume Ingest Connection ──────────────────────────────────
+
+async function runGroupH() {
+  console.log('[Group H] Pause/Resume Ingest Connection\n');
+
+  let pauseCamId = null;
+
+  await test('TC-H-001', 'POST /api/cameras/:id/stream/pause — non-existent → 404', async () => {
+    const { status, body } = await post('/api/cameras/00000000-0000-0000-0000-000000000000/stream/pause', {});
+    assertEq(status, 404, 'HTTP status');
+    assertEq(body.success, false, 'success false');
+  });
+
+  await test('TC-H-002', 'POST /api/cameras/:id/stream/resume — non-existent → 404', async () => {
+    const { status, body } = await post('/api/cameras/00000000-0000-0000-0000-000000000000/stream/resume', {});
+    assertEq(status, 404, 'HTTP status');
+    assertEq(body.success, false, 'success false');
+  });
+
+  await test('TC-H-003', 'POST /api/cameras/:id/stream/pause — RTSP camera → 200, status becomes paused', async () => {
+    const { body: cam } = await post('/api/cameras', { name: 'H-003 Pause Cam', rtspUrl: 'rtsp://1.2.3.4:554/h3' });
+    assert(cam.data?.id, 'camera created');
+    pauseCamId = cam.data.id;
+    createdCameras.push(pauseCamId);
+
+    const { status, body } = await post(`/api/cameras/${pauseCamId}/stream/pause`, {});
+    assertEq(status, 200, 'HTTP status');
+    assertEq(body.success, true, 'success true');
+
+    const { body: fetched } = await get(`/api/cameras/${pauseCamId}`);
+    assertEq(fetched.data.status, 'paused', 'camera status');
+  });
+
+  await test('TC-H-004', 'POST /api/cameras/:id/stream/pause — idempotent on an already-paused camera', async () => {
+    if (!pauseCamId) { console.log('      (no camera from TC-H-003)'); return; }
+    const { status, body } = await post(`/api/cameras/${pauseCamId}/stream/pause`, {});
+    assertEq(status, 200, 'HTTP status');
+    assertEq(body.success, true, 'success true');
+  });
+
+  await test('TC-H-005', 'POST /api/cameras/:id/stream/resume — paused camera → 200, status leaves paused', async () => {
+    if (!pauseCamId) { console.log('      (no camera from TC-H-003)'); return; }
+    const { status, body } = await post(`/api/cameras/${pauseCamId}/stream/resume`, {});
+    assertEq(status, 200, 'HTTP status');
+    assertEq(body.success, true, 'success true');
+
+    const { body: fetched } = await get(`/api/cameras/${pauseCamId}`);
+    assert(fetched.data.status !== 'paused', `expected non-paused status, got ${fetched.data.status}`);
+  });
+}
+
 // ── Cleanup ───────────────────────────────────────────────────────────────────
 
 async function cleanup() {
@@ -270,6 +321,7 @@ async function main() {
     await runGroupD();
     runGroupEF_notes();
     await runGroupG();
+    await runGroupH();
   } finally {
     await cleanup();
   }

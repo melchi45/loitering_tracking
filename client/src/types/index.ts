@@ -31,7 +31,7 @@ export interface Camera {
   ip?: string;
   mac?: string;
   webrtcEnabled?: boolean;
-  status: 'live' | 'streaming' | 'connecting' | 'reconnecting' | 'offline' | 'error' | 'idle';
+  status: 'live' | 'streaming' | 'connecting' | 'reconnecting' | 'offline' | 'error' | 'idle' | 'paused';
   /** 'youtube' for virtual YouTube stream channels; absent for physical IP cameras */
   type?: 'youtube' | string;
   /** Original YouTube page URL — only present when type === 'youtube' */

@@ -276,6 +276,8 @@ loitering_tracking/
 | POST | `/api/cameras/:id/ai/toggle` | AI 추론 ON/OFF 토글 (파이프라인 재시작 없이) |
 | POST | `/api/cameras/:id/stream/start` | 파이프라인 시작 |
 | POST | `/api/cameras/:id/stream/stop` | 파이프라인 중지 |
+| POST | `/api/cameras/:id/stream/pause` | 카메라 레코드는 유지한 채 수집 연결만 일시정지 (RTSP는 ingest-daemon 세션 해제, YouTube는 yt-dlp/ffmpeg 프로세스 종료) — `status`를 `paused`로 저장, 서버 재시작 후에도 자동 재개되지 않음. Design_RTSP_Capture_Backend.md §6.28 참고 |
+| POST | `/api/cameras/:id/stream/resume` | `/stream/pause`로 일시정지된 카메라의 수집 연결 재개 |
 
 ### 구역 (`/api/cameras/:cameraId/zones`)
 

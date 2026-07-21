@@ -666,9 +666,16 @@ async function main() {
   if (SERVER_MODE !== 'analysis') {
     try {
       const allCameras = db.find('cameras', {});
-      if (allCameras.length > 0) {
-        console.log(`[Server] Scheduling ${allCameras.length} camera pipeline(s) (deferred 5 s)`);
-        allCameras.forEach((cam, i) => {
+      // Cameras paused via POST /:id/stream/pause stay paused across a restart —
+      // only resumed by an explicit /:id/stream/resume call.
+      const startableCameras = allCameras.filter((cam) => cam.status !== 'paused');
+      const pausedCount = allCameras.length - startableCameras.length;
+      if (pausedCount > 0) {
+        console.log(`[Server] Skipping auto-start for ${pausedCount} paused camera(s)`);
+      }
+      if (startableCameras.length > 0) {
+        console.log(`[Server] Scheduling ${startableCameras.length} camera pipeline(s) (deferred 5 s)`);
+        startableCameras.forEach((cam, i) => {
           setTimeout(() => {
             pipelineManager.startCamera(cam).catch((err) => {
               console.error(`[Server] Auto-start failed for camera ${cam.id}:`, err.message);

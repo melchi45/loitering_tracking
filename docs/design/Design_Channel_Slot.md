@@ -2,8 +2,8 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Global Channel Slot Mapping for Cameras / YouTube Streams
-**Version:** 1.15
-**Date:** 2026-07-02
+**Version:** 1.16
+**Date:** 2026-07-21
 
 ---
 
@@ -730,6 +730,17 @@ This does not change `POST /api/cameras/probe-channels` itself — it remains us
 
 **Known remaining gap**: `Camera.httpType` is not persisted (only `httpPort`), so `CameraEditModal.tsx`'s "Re-detect" (§5.4) still cannot recall whether a saved camera's SUNAPI port is HTTP or HTTPS — it always probes HTTP. Fixing this requires adding an `httpType` column end-to-end (db schema, `POST/PUT /api/cameras`, `DiscoveredCameraPanel.tsx`'s add payload) and is left as a follow-up.
 
+### 5.3b `CameraList.tsx` — "Added" tab sorted by Channel Slot, per-camera Pause/Resume (2026-07-21)
+
+**Symptom / request**: the sidebar's Added tab rendered cameras in `cameraStore` array order (DB insertion order via `createdAt desc`), which does not track the grid's `channelSlot` layout — an operator scanning the sidebar top-to-bottom while cross-checking the dashboard grid (which *does* render by `channelSlot`, see §5.5) had no way to line the two up. There was also no way to temporarily suspend a single camera's ingest connection (bandwidth/CPU relief, planned maintenance) without fully deleting it and losing its `channelSlot`/config.
+
+**Fix**:
+- `CameraList.tsx` derives `sortedCameras = [...cameras].sort((a, b) => (a.channelSlot ?? Infinity) - (b.channelSlot ?? Infinity))` via `useMemo` and renders that instead of the raw store array for the Added tab. Cameras without a `channelSlot` (should not normally occur post-backfill, §4.4) sort to the end rather than the front. Each row now also shows a `#<channelSlot>` badge ahead of the name so the mapping is visible, not just implied by order.
+- A new per-row Pause/Resume icon button (`lucide-react` `Pause`/`Play`, same hover-reveal action-group pattern as Edit/Reconnect/Remove) calls `POST /api/cameras/:id/stream/pause` or `/stream/resume`. A `PAUSED` badge appears next to the name and `StatusDot` gets a distinct blue (`bg-blue-400`) for `status === 'paused'`, kept visually separate from `error` (red) and `offline` (gray) since a pause is operator-intentional, not a fault.
+- `Camera['status']` (`client/src/types/index.ts`) gains a `'paused'` member; the `camera:status` socket handler in `App.tsx` was already forwarding whatever string the server sent, but its local type annotation was narrowed to `'live' | 'offline' | 'error'` — widened to `Camera['status']` so this and any future server-emitted status stays type-accurate.
+
+**Backend** — see `Design_RTSP_Capture_Backend.md` §6.9 for the ingest-daemon/YouTube pause implementation and the `POST /:id/stream/pause` / `/stream/resume` API contract.
+
 ### 5.4 `CameraEditModal.tsx` — Edit integration
 
 - `<ChannelSlotPicker>` pre-populated from `camera.channelSlot`
@@ -905,3 +916,4 @@ Added to the same `GET /health` fetch `App.tsx` already performs on mount for `s
 | 1.13 | 2026-07-02 | §5.4b 신규 추가 — Edit 모달 "Re-detect"가 저장 전 RTSP URL/IP 수정은 반영하지 않고 여전히 카메라의 저장된 주소로 probe하던 버그 수정 (§4.6e는 username/password만 폼 값을 사용하도록 고쳤고 RTSP URL 필드는 누락돼 있었음) — `handleRedetectChannels()`가 `rtspForm.rtspUrl`에서 IP를 파싱하도록 변경, §5.4 Re-detect 서술 갱신 |
 | 1.14 | 2026-07-02 | §4.6h 신규 추가 — probe-channels 결과가 discovery 레지스트리 값보다 높으면 `DiscoveryService.applyProbeResult()`로 레지스트리를 갱신하고 discovery:result 재브로드캐스트 (FR-CH-068) — UDP=1/attributes.cgi=2로 확인된 실 카메라(192.168.214.32)에서 Re-detect 정정이 패널을 닫으면 사라지던 문제 수정, 클라이언트 코드 변경 불필요(기존 addOrUpdate() 소켓 파이프 재사용) |
 | 1.15 | 2026-07-02 | §4.6i 신규 추가 — probe-channels가 이번 요청의 라이브 SUNAPI+ONVIF 쿼리 모두 실패했을 때 discovery 레지스트리에 이미 알려진 MaxChannel로 폴백해야 함 (FR-CH-069) — attributes.cgi/GetVideoSources를 못 찾으면 MaxChannel이 다시 1로 되돌아가던 문제 리포트로 도입. 결정 로직을 `resolveProbeChannelsDecision()`(순수 함수)으로 추출해 `test/api/channel_slot.test.js` TC-CH-F-013~013d로 자동화 |
+| 1.16 | 2026-07-21 | §5.3b 신규 추가 — Streaming Dashboard 사이드바 Added 탭을 `channelSlot` 오름차순으로 정렬(기존 삽입 순서), 각 행에 `#<slot>` 배지 및 Pause/Resume 버튼 추가. `Camera.status`에 `'paused'` 추가. 백엔드 구현은 `Design_RTSP_Capture_Backend.md` §6.9 참고 |

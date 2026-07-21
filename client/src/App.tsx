@@ -27,7 +27,7 @@ import StatsPanelModal from './components/StatsPanelModal';
 import AnalysisStatsModal from './components/AnalysisStatsModal';
 import ProfileModal from './components/ProfileModal';
 import type { SearchResult } from './hooks/useSearch';
-import type { Alert, CrossCameraReIdEvent, ClothingReIdEvent, PersonTrajectory } from './types';
+import type { Alert, CrossCameraReIdEvent, ClothingReIdEvent, PersonTrajectory, Camera as CameraModel } from './types';
 import { useAuthStore } from './stores/authStore';
 import SignInPage from './pages/SignInPage';
 import PendingPage from './pages/PendingPage';
@@ -782,7 +782,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
 
   // Global socket event handlers
   useEffect(() => {
-    const handleCameraStatus = (event: { cameraId: string; status: 'live' | 'offline' | 'error' }) => {
+    const handleCameraStatus = (event: { cameraId: string; status: CameraModel['status'] }) => {
       updateCameraStatus(event.cameraId, event.status);
     };
 
