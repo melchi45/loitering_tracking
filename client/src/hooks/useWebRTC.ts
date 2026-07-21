@@ -18,14 +18,19 @@ export interface RxSample {
   bufferMs:  number; // jitter buffer delay accrued this tick (video)
   rttMs:     number; // nominated candidate-pair round-trip time
   lossPct:   number; // cumulative packet loss %, video+audio combined
+  latencyMs: number; // approx. glass-to-glass estimate: rttMs/2 (one-way network) + bufferMs (playout hold)
+  framesDecoded:  number; // cumulative, since connect
+  framesReceived: number; // cumulative, since connect — framesReceived - framesDecoded = dropped
 }
 
 export interface RxCodecInfo {
-  video: string;
-  audio: string;
+  video:       string; // short name, e.g. "H264"
+  audio:       string; // short name, e.g. "opus"
+  videoDetail: string; // e.g. "pt96 · 90000Hz · profile-level-id=640033"
+  audioDetail: string; // e.g. "pt111 · 48000Hz · 2ch"
 }
 
-const RX_HISTORY_MAX = 24; // ~2min of history at POLL_MS=5000
+const RX_HISTORY_MAX = 120; // ~2min of history — sampled every RATE_POLL_MS (1s, 2026-07-21)
 
 // Adaptive jitter buffer (2026-07-20) — RTCRtpReceiver.jitterBufferTarget lets
 // the page ask the browser's own jitter buffer to hold at least N ms before
@@ -53,6 +58,11 @@ const JITTER_TARGET_STEP_DOWN_MS = 30;
 // avoid the underrun instead of just noticing it after the fact.
 export const BUFFER_MS_WARN = 100;
 export const BUFFER_MS_BAD  = 300;
+// Latency (rttMs/2 + bufferMs, see the setRxHistory call below) thresholds —
+// same single-source-of-truth pattern as BUFFER_MS_WARN/BAD, shared with
+// WebRtcStatsPanel.tsx's color coding.
+export const LATENCY_MS_WARN = 150;
+export const LATENCY_MS_BAD  = 400;
 // Buffer-saturation proactive reconnect (2026-07-20, §6.27 decode/presentation
 // backlog) — live user reports: bufferMs climbs all the way to the
 // JITTER_TARGET_MAX_MS ceiling (~980ms observed) with fps still 30, then fps
@@ -119,6 +129,70 @@ function extractNominatedPair(stats: RTCStatsReport): NominatedPairInfo | null {
   });
   if (!local || !remote) return null;
   return { local, remote, bytesSent: bytesTx, bytesReceived: bytesRx, rttMs };
+}
+
+export interface CodecInfo { mimeType: string; payloadType?: number; clockRate?: number; channels?: number; sdpFmtpLine?: string; }
+
+interface InboundRtpSnapshot {
+  vBytesRx: number; vPktsRx: number; vFrames: number; vFramesReceived: number;
+  aBytesRx: number; aPktsRx: number;
+  vWidth: number; vHeight: number; vFps: number;
+  vJitterDelay: number; vJitterCount: number;
+  vFreezeCount: number;
+  vPacketsLost: number; aPacketsLost: number;
+  vCodecId: string; aCodecId: string;
+  codecById: Map<string, CodecInfo>;
+}
+
+// Shared by the 5s stats/watchdog loop (needs every field, including the
+// jitter/freeze counters that drive stall detection and jitterBufferTarget
+// escalation) and the 1s rate loop (2026-07-21 — needs bytes/jitter/frames
+// for the panel's 1s-refresh graphs, NOT the watchdog fields) — both parse
+// the same inbound-rtp + codec report shape out of a getStats() report, so
+// this avoids maintaining two copies of that parsing.
+function extractInboundRtp(stats: RTCStatsReport): InboundRtpSnapshot {
+  const snap: InboundRtpSnapshot = {
+    vBytesRx: 0, vPktsRx: 0, vFrames: 0, vFramesReceived: 0,
+    aBytesRx: 0, aPktsRx: 0,
+    vWidth: 0, vHeight: 0, vFps: 0,
+    vJitterDelay: 0, vJitterCount: 0,
+    vFreezeCount: 0,
+    vPacketsLost: 0, aPacketsLost: 0,
+    vCodecId: '', aCodecId: '',
+    codecById: new Map(),
+  };
+  stats.forEach(r => {
+    if (r.type === 'inbound-rtp' && r.kind === 'video') {
+      snap.vBytesRx        = r.bytesReceived ?? 0;
+      snap.vPktsRx         = r.packetsReceived ?? 0;
+      snap.vFrames         = r.framesDecoded ?? 0;
+      snap.vFramesReceived = r.framesReceived ?? 0;
+      snap.vWidth          = r.frameWidth ?? 0;
+      snap.vHeight         = r.frameHeight ?? 0;
+      snap.vFps            = r.framesPerSecond ?? 0;
+      snap.vJitterDelay    = r.jitterBufferDelay ?? 0;
+      snap.vJitterCount    = r.jitterBufferEmittedCount ?? 0;
+      snap.vFreezeCount    = r.freezeCount ?? 0;
+      snap.vPacketsLost    = r.packetsLost ?? 0;
+      snap.vCodecId        = r.codecId ?? '';
+    }
+    if (r.type === 'inbound-rtp' && r.kind === 'audio') {
+      snap.aBytesRx     = r.bytesReceived ?? 0;
+      snap.aPktsRx      = r.packetsReceived ?? 0;
+      snap.aPacketsLost = r.packetsLost ?? 0;
+      snap.aCodecId     = r.codecId ?? '';
+    }
+    if (r.type === 'codec') {
+      snap.codecById.set(r.id, {
+        mimeType:    r.mimeType ?? '',
+        payloadType: r.payloadType,
+        clockRate:   r.clockRate,
+        channels:    r.channels,
+        sdpFmtpLine: r.sdpFmtpLine,
+      });
+    }
+  });
+  return snap;
 }
 
 // Kept for backwards compatibility with components that import this type
@@ -209,7 +283,7 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
   // never got stored anywhere. Populated from that same loop now.
   const [iceStats, setIceStats] = useState<IceStats | null>(null);
   const [rxHistory, setRxHistory] = useState<RxSample[]>([]);
-  const [rxCodec, setRxCodec] = useState<RxCodecInfo>({ video: '', audio: '' });
+  const [rxCodec, setRxCodec] = useState<RxCodecInfo>({ video: '', audio: '', videoDetail: '', audioDetail: '' });
 
   const retry = useCallback(() => {
     setRetryCount(0);
@@ -508,10 +582,6 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
             let lastFrames      = -1;
             let lastFramesAt    = Date.now();
             let statsTick       = 0;
-            // Mini rx graph (2026-07-20) — previous sample for delta→kbps conversion.
-            let prevVideoBytes  = -1;
-            let prevAudioBytes  = -1;
-            let prevSampleAt    = Date.now();
             // Buffer health (2026-07-20) — jitterBufferDelay/-EmittedCount are
             // cumulative counters; averaging the delta between two polls gives
             // the mean jitter-buffer hold time for THIS tick instead of a
@@ -577,56 +647,44 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
               }
               try {
                 const stats = await pc.getStats();
-                let vBytesRx = 0, vPktsRx = 0, vFrames = 0;
-                let aBytesRx = 0, aPktsRx = 0;
-                let vWidth = 0, vHeight = 0, vFps = 0;
-                let vJitterDelay = 0, vJitterCount = 0;
-                let vFreezeCount = 0;
-                let vPacketsLost = 0, aPacketsLost = 0;
-                let vCodecId = '', aCodecId = '';
-                const codecMimeById = new Map<string, string>();
-                stats.forEach(r => {
-                  if (r.type === 'inbound-rtp' && r.kind === 'video') {
-                    vBytesRx     = r.bytesReceived ?? 0;
-                    vPktsRx      = r.packetsReceived ?? 0;
-                    vFrames      = r.framesDecoded ?? 0;
-                    vWidth       = r.frameWidth ?? 0;
-                    vHeight      = r.frameHeight ?? 0;
-                    vFps         = r.framesPerSecond ?? 0;
-                    vJitterDelay = r.jitterBufferDelay ?? 0;
-                    vJitterCount = r.jitterBufferEmittedCount ?? 0;
-                    vFreezeCount = r.freezeCount ?? 0;
-                    vPacketsLost = r.packetsLost ?? 0;
-                    vCodecId     = r.codecId ?? '';
-                  }
-                  if (r.type === 'inbound-rtp' && r.kind === 'audio') {
-                    aBytesRx     = r.bytesReceived ?? 0;
-                    aPktsRx      = r.packetsReceived ?? 0;
-                    aPacketsLost = r.packetsLost ?? 0;
-                    aCodecId     = r.codecId ?? '';
-                  }
-                  if (r.type === 'codec') {
-                    codecMimeById.set(r.id, r.mimeType ?? '');
-                  }
-                });
+                // Only the fields the stall watchdog / jitterBufferTarget escalation /
+                // codec-detail update below actually use — vFramesReceived/aBytesRx/
+                // aPktsRx/vWidth/vHeight/vFps/aPacketsLost are the rxHistory-only
+                // fields, sampled by the 1s rateTimer instead (see its comment).
+                const {
+                  vBytesRx, vPktsRx, vFrames,
+                  vJitterDelay, vJitterCount, vFreezeCount,
+                  vPacketsLost,
+                  vCodecId, aCodecId, codecById,
+                } = extractInboundRtp(stats);
                 // ICE Local/Remote/Rate panel rows are now populated by the
                 // separate rateTimer below (1s cadence) — this loop only
                 // needs the nominated pair's rttMs for the rx graph.
                 const rttMs = extractNominatedPair(stats)?.rttMs ?? 0;
                 if (!cancelled) {
-                  const videoCodec = shortCodecName(codecMimeById.get(vCodecId) ?? '');
-                  const audioCodec = shortCodecName(codecMimeById.get(aCodecId) ?? '');
+                  const vCodecInfo = codecById.get(vCodecId);
+                  const aCodecInfo = codecById.get(aCodecId);
+                  const videoCodec = shortCodecName(vCodecInfo?.mimeType ?? '');
+                  const audioCodec = shortCodecName(aCodecInfo?.mimeType ?? '');
+                  // "Codecs" detail line (2026-07-21) — mirrors the extra codec
+                  // parameters YouTube's stats-for-nerds shows alongside the
+                  // codec name (payload type / clock rate / fmtp), sourced
+                  // straight from the RTCCodecStats record already being
+                  // iterated above rather than a second getStats() pass.
+                  const videoDetail = vCodecInfo
+                    ? [`pt${vCodecInfo.payloadType ?? '?'}`, vCodecInfo.clockRate ? `${vCodecInfo.clockRate}Hz` : null, vCodecInfo.sdpFmtpLine || null]
+                        .filter(Boolean).join(' · ')
+                    : '';
+                  const audioDetail = aCodecInfo
+                    ? [`pt${aCodecInfo.payloadType ?? '?'}`, aCodecInfo.clockRate ? `${aCodecInfo.clockRate}Hz` : null, aCodecInfo.channels ? `${aCodecInfo.channels}ch` : null]
+                        .filter(Boolean).join(' · ')
+                    : '';
                   setRxCodec(prev =>
                     prev.video === videoCodec && prev.audio === audioCodec
+                    && prev.videoDetail === videoDetail && prev.audioDetail === audioDetail
                       ? prev
-                      : { video: videoCodec, audio: audioCodec });
+                      : { video: videoCodec, audio: audioCodec, videoDetail, audioDetail });
                 }
-                // Mini rx graph (2026-07-20) — per-tick receive bitrate sample, kept
-                // as its own small ring buffer so CameraView can render a compact
-                // YouTube-stats-style bar graph next to the ICE panel. Component-local
-                // state, same `!cancelled` guard used throughout this loop.
-                const sampleAt = Date.now();
-                const elapsedS = (sampleAt - prevSampleAt) / 1000;
                 // Buffer ms: mean jitter-buffer hold time accrued since the last poll
                 // (see prevJitterDelay/-Count declaration above). 0 on the first tick
                 // and whenever the emitted-frame counter hasn't advanced.
@@ -683,21 +741,6 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
                     ? bufferSaturatedTicks + 1
                     : 0;
                 }
-                const totalLost = vPacketsLost + aPacketsLost;
-                const totalRecv = vPktsRx + aPktsRx;
-                const lossPct = totalLost + totalRecv > 0 ? (totalLost / (totalLost + totalRecv)) * 100 : 0;
-                if (prevVideoBytes >= 0 && elapsedS > 0 && !cancelled) {
-                  const videoKbps = Math.max(0, ((vBytesRx - prevVideoBytes) * 8) / 1000 / elapsedS);
-                  const audioKbps = Math.max(0, ((aBytesRx - prevAudioBytes) * 8) / 1000 / elapsedS);
-                  setRxHistory(h => [...h, {
-                    t: sampleAt, videoKbps, audioKbps,
-                    resWidth: vWidth, resHeight: vHeight, fps: vFps,
-                    bufferMs: Math.max(0, bufferMs), rttMs, lossPct,
-                  }].slice(-RX_HISTORY_MAX));
-                }
-                prevVideoBytes = vBytesRx;
-                prevAudioBytes = aBytesRx;
-                prevSampleAt   = sampleAt;
                 statsTick += 1;
                 if (statsTick <= 10) {
                   // Verbose connect-time diagnostics only for the first ~50s.
@@ -819,13 +862,26 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
             let ratePrevBytesTx = -1;
             let ratePrevBytesRx = -1;
             let ratePrevAt      = Date.now();
+            // rxHistory sampling (2026-07-21) — moved here from the 5s
+            // statsTimer so the panel/graphs refresh every second, WITHOUT
+            // touching statsTimer's own cadence (its stall-watchdog and
+            // jitterBufferTarget escalation are tuned against 5s ticks — see
+            // POLL_MS's comment — so that loop is left completely alone).
+            // Own independent prev-tracking, separate from statsTimer's
+            // (both read the same cumulative getStats() counters but compute
+            // deltas over their own window — no shared mutable state).
+            let ratePrevVideoBytes  = -1;
+            let ratePrevAudioBytes  = -1;
+            let ratePrevJitterDelay = -1;
+            let ratePrevJitterCount = -1;
             const rateTimer = setInterval(async () => {
               if (sessionRegistry.get(cameraId)?.pc !== pc) {
                 clearInterval(rateTimer);
                 return;
               }
               try {
-                const nominated = extractNominatedPair(await pc.getStats());
+                const stats    = await pc.getStats();
+                const nominated = extractNominatedPair(stats);
                 if (!nominated || cancelled) return;
                 const now     = Date.now();
                 const elapsed = (now - ratePrevAt) / 1000;
@@ -847,6 +903,35 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
                   sentBps,
                   receivedBps,
                 });
+
+                const rtp = extractInboundRtp(stats);
+                let bufferMs = 0;
+                if (ratePrevJitterCount >= 0 && rtp.vJitterCount > ratePrevJitterCount) {
+                  bufferMs = ((rtp.vJitterDelay - ratePrevJitterDelay) / (rtp.vJitterCount - ratePrevJitterCount)) * 1000;
+                }
+                bufferMs = Math.max(0, bufferMs);
+                ratePrevJitterDelay = rtp.vJitterDelay;
+                ratePrevJitterCount = rtp.vJitterCount;
+                const totalLost = rtp.vPacketsLost + rtp.aPacketsLost;
+                const totalRecv = rtp.vPktsRx + rtp.aPktsRx;
+                const lossPct   = totalLost + totalRecv > 0 ? (totalLost / (totalLost + totalRecv)) * 100 : 0;
+                // Approx. glass-to-glass latency — see RxSample.latencyMs's
+                // comment on the interface: rttMs/2 (one-way network) +
+                // bufferMs (playout hold), understates true latency but
+                // tracks relative changes faithfully.
+                const latencyMs = nominated.rttMs / 2 + bufferMs;
+                if (ratePrevVideoBytes >= 0 && elapsed > 0 && !cancelled) {
+                  const videoKbps = Math.max(0, ((rtp.vBytesRx - ratePrevVideoBytes) * 8) / 1000 / elapsed);
+                  const audioKbps = Math.max(0, ((rtp.aBytesRx - ratePrevAudioBytes) * 8) / 1000 / elapsed);
+                  setRxHistory(h => [...h, {
+                    t: now, videoKbps, audioKbps,
+                    resWidth: rtp.vWidth, resHeight: rtp.vHeight, fps: rtp.vFps,
+                    bufferMs, rttMs: nominated.rttMs, lossPct, latencyMs,
+                    framesDecoded: rtp.vFrames, framesReceived: rtp.vFramesReceived,
+                  }].slice(-RX_HISTORY_MAX));
+                }
+                ratePrevVideoBytes = rtp.vBytesRx;
+                ratePrevAudioBytes = rtp.aBytesRx;
               } catch (_) {}
             }, RATE_POLL_MS);
           } else if (cs === 'failed' || cs === 'closed') {

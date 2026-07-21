@@ -478,13 +478,13 @@ export default function CameraView({ cameraId, cameraName }: Props) {
             )}
           </div>
 
-          {/* ICE debug panel — a single label:value grid (2026-07-20), mirroring
-              YouTube's actual "stats for nerds" overlay (plain one-line-per-metric
-              text, not a graph) rather than spending vertical space on bar charts.
+          {/* ICE debug panel — YouTube "stats for nerds"-style label:value grid
+              (2026-07-20) plus small per-metric timeline graphs for Network
+              Activity/Buffer/Latency (2026-07-21, WebRtcStatsPanel.tsx).
               Capped to the tile's own height with its own scroll so it never
               grows past the video underneath it. */}
           {showIcePanel && webrtcState === 'connected' && (
-            <div className="absolute top-9 right-2 max-h-[calc(100%-3rem)] overflow-y-auto bg-black/85 rounded-lg p-1.5 text-[9px] font-mono text-gray-200 z-20 w-[190px] border border-gray-700/60">
+            <div className="absolute top-9 right-2 max-h-[calc(100%-3rem)] overflow-y-auto bg-black/85 rounded-lg p-1.5 text-[9px] font-mono text-gray-200 z-20 w-[220px] border border-gray-700/60">
               <WebRtcStatsPanel iceStats={iceStats} history={rxHistory} codec={rxCodec} />
             </div>
           )}
