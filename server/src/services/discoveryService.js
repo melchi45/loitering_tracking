@@ -429,6 +429,22 @@ function deviceKey(dev) {
   return `ip_${dev.IPAddress}`;
 }
 
+// The subset of fields a human actually cares about seeing change in the log
+// — deliberately excludes fields that fluctuate without meaning anything
+// (e.g. `profiles` array identity, `source` badge flips as UDP/ONVIF discover
+// the same device in either order across scans).
+const DEVICE_SIGNATURE_FIELDS = [
+  'IPAddress', 'MACAddress', 'Model', 'DeviceType',
+  'MaxChannel', 'SunapiMaxChannel', 'OnvifMaxChannel',
+  'HttpPort', 'HttpsPort', 'HttpType', 'rtspUrl',
+  'Gateway', 'SubnetMask', 'SupportSunapi', 'SupportOnvif',
+];
+
+/** Comparable one-line signature of the fields that matter for change-detection logging. */
+function deviceSignature(dev) {
+  return DEVICE_SIGNATURE_FIELDS.map(f => `${f}=${dev[f]}`).join(' ');
+}
+
 /**
  * Merge an incoming device into an existing one.
  * UDP result wins for Hanwha-specific fields; ONVIF enrichment wins for
@@ -509,6 +525,10 @@ class DiscoveryService {
     this._ipIndex  = new Map();   // IPAddress → deviceKey  (for cross-protocol dedup)
     this._scanning = false;
     this._pendingDone = 0;        // counts how many protocols are still running
+    // Add/change/remove logging (2026-07-21, §discovery-log-noise) — see
+    // _upsert()/_sweepMissing()'s comments.
+    this._seenThisScan = new Set();  // deviceKeys upserted during the CURRENT scan cycle
+    this._missCounts   = new Map();  // deviceKey → consecutive scan cycles NOT seen
   }
 
   start() {
@@ -628,6 +648,8 @@ class DiscoveryService {
       const merged   = mergeDevices(existing, device);
       this._known.set(existingKeyByIp, merged);
       if (device.MACAddress) this._ipIndex.set(device.IPAddress, existingKeyByIp);
+      this._logDeviceChange(existingKeyByIp, existing, merged);
+      this._seenThisScan.add(existingKeyByIp);
       return merged;
     }
 
@@ -636,7 +658,31 @@ class DiscoveryService {
     const merged = prev ? mergeDevices(prev, device) : device;
     this._known.set(key, merged);
     this._ipIndex.set(device.IPAddress, key);
+    this._logDeviceChange(key, prev, merged);
+    this._seenThisScan.add(key);
     return merged;
+  }
+
+  /**
+   * Log only when a device is genuinely new or a tracked field actually
+   * changed (2026-07-21, §discovery-log-noise) — every UDP/ONVIF scan cycle
+   * re-announces every camera on the subnet unchanged, and the raw
+   * per-packet log this used to rely on (submodules/WiseNetChromeIPInstaller
+   * response.js's UdpResponse.parse()) produced 10+ lines/sec of pure noise
+   * with just a handful of cameras. `prev` is undefined for a brand-new
+   * device (never seen this deviceKey before); `deviceSignature()` scopes
+   * the comparison to fields a human would actually care about.
+   */
+  _logDeviceChange(key, prev, merged) {
+    if (!prev) {
+      console.log(`[Discovery] + added ${merged.IPAddress} (${merged.Model || 'unknown model'}, ${key})`);
+      return;
+    }
+    const before = deviceSignature(prev);
+    const after  = deviceSignature(merged);
+    if (before !== after) {
+      console.log(`[Discovery] ~ changed ${merged.IPAddress} (${key}): ${before} → ${after}`);
+    }
   }
 
   _emit(device) {
@@ -649,9 +695,44 @@ class DiscoveryService {
     if (this._pendingDone <= 0) {
       this._pendingDone = 0;
       this._scanning    = false;
+      this._sweepMissing();
       this._io.emit('discovery:scanning', { scanning: false, count: this._known.size });
       this._timer = setTimeout(() => this._runScan(), SCAN_INTERVAL);
     }
+  }
+
+  // Consecutive full scan cycles a known device can go unseen before it's
+  // logged/treated as removed — UDP broadcast is lossy across a subnet, so
+  // evicting after a single missed cycle would flap devices in and out of
+  // the list on ordinary packet loss rather than an actual disconnect.
+  static REMOVE_AFTER_MISSED_SCANS = 2;
+
+  /**
+   * Runs once per completed scan cycle (both UDP and ONVIF done) — anything
+   * in `_known` that wasn't re-upserted this cycle (2026-07-21,
+   * §discovery-log-noise, completes the add/change/remove trio requested
+   * alongside _logDeviceChange()) gets a miss strike; devices are only
+   * logged/evicted once they've missed REMOVE_AFTER_MISSED_SCANS cycles in a
+   * row, and the counter resets the moment they're seen again.
+   */
+  _sweepMissing() {
+    for (const key of this._known.keys()) {
+      if (this._seenThisScan.has(key)) {
+        this._missCounts.delete(key);
+        continue;
+      }
+      const misses = (this._missCounts.get(key) || 0) + 1;
+      if (misses >= DiscoveryService.REMOVE_AFTER_MISSED_SCANS) {
+        const removed = this._known.get(key);
+        console.log(`[Discovery] - removed ${removed.IPAddress} (${removed.Model || 'unknown model'}, ${key}) — unseen for ${misses} scans`);
+        this._known.delete(key);
+        this._missCounts.delete(key);
+        if (this._ipIndex.get(removed.IPAddress) === key) this._ipIndex.delete(removed.IPAddress);
+      } else {
+        this._missCounts.set(key, misses);
+      }
+    }
+    this._seenThisScan.clear();
   }
 
   _runScan() {
