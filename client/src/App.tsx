@@ -1335,54 +1335,53 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
             const canPrev  = channelOffset > 0;
             const canNext  = currentGroup < totalGroups - 1;
             return (
-              <>
-                <CameraGrid
-                  layoutId={layout}
-                  onCameraDoubleClick={setFullscreenCameraId}
-                  groupStart={channelOffset}
-                />
+              // Channel Group nav lives in its own flex-shrink-0 bar below the grid,
+              // not as an absolute overlay on top of it (2026-07-21): an overlay badge
+              // and side-floating prev/next buttons previously covered per-tile chrome
+              // (WebRTC/ICE toggle buttons) in dense layouts — see git history for the
+              // 2026-07-20 top-3→bottom-3 patch that only partially addressed this.
+              <div className="flex flex-col h-full">
+                <div className="flex-1 min-h-0 relative">
+                  <CameraGrid
+                    layoutId={layout}
+                    onCameraDoubleClick={setFullscreenCameraId}
+                    groupStart={channelOffset}
+                  />
+                  {selectedDiscovered && (
+                    <DiscoveredCameraPanel
+                      camera={selectedDiscovered}
+                      onClose={() => selectDiscovered(null)}
+                    />
+                  )}
+                </div>
                 {totalGroups > 1 && (
-                  // bottom-3, not top-3 (2026-07-20): centered at the top edge, this
-                  // badge landed directly over the top row's tile chrome (WebRTC/ICE
-                  // toggle buttons cluster near top-right of each tile) — confirmed
-                  // live, made the ICE button on the channel-1 tile unclickable. The
-                  // bottom edge has no per-tile controls at bottom-center (camera name
-                  // + mute icon sit bottom-LEFT), so it's clear there in every layout.
-                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 bg-black/60 rounded px-2 py-0.5 pointer-events-none">
-                    <span className="text-[10px] text-gray-300">
+                  <div className="flex-shrink-0 flex items-center justify-center gap-3 mt-2 py-1.5 bg-gray-800/80 border border-gray-700 rounded-lg mx-auto px-3">
+                    <button
+                      className="w-6 h-6 flex items-center justify-center rounded text-white hover:bg-gray-700 disabled:text-gray-600 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
+                      onClick={() => setChannelOffset((o) => Math.max(0, o - pageSize))}
+                      disabled={!canPrev}
+                      title="Previous channel group"
+                    >
+                      <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
+                      </svg>
+                    </button>
+                    <span className="text-xs text-gray-300 whitespace-nowrap select-none">
                       Channel Group {currentGroup + 1} of {totalGroups} (CH {channelOffset + 1}–{Math.min(channelOffset + pageSize, maxChannelNum)})
                     </span>
+                    <button
+                      className="w-6 h-6 flex items-center justify-center rounded text-white hover:bg-gray-700 disabled:text-gray-600 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors"
+                      onClick={() => setChannelOffset((o) => Math.min((totalGroups - 1) * pageSize, o + pageSize))}
+                      disabled={!canNext}
+                      title="Next channel group"
+                    >
+                      <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
+                        <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
+                      </svg>
+                    </button>
                   </div>
                 )}
-                {canPrev && (
-                  <button
-                    className="absolute left-3 top-1/2 -translate-y-1/2 z-20 bg-black/60 hover:bg-black/80 text-white w-8 h-14 flex items-center justify-center rounded-r-lg transition-colors shadow-lg"
-                    onClick={() => setChannelOffset((o) => Math.max(0, o - pageSize))}
-                    title="Previous channel group"
-                  >
-                    <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M12.707 5.293a1 1 0 010 1.414L9.414 10l3.293 3.293a1 1 0 01-1.414 1.414l-4-4a1 1 0 010-1.414l4-4a1 1 0 011.414 0z" clipRule="evenodd" />
-                    </svg>
-                  </button>
-                )}
-                {canNext && (
-                  <button
-                    className="absolute right-3 top-1/2 -translate-y-1/2 z-20 bg-black/60 hover:bg-black/80 text-white w-8 h-14 flex items-center justify-center rounded-l-lg transition-colors shadow-lg"
-                    onClick={() => setChannelOffset((o) => Math.min((totalGroups - 1) * pageSize, o + pageSize))}
-                    title="Next channel group"
-                  >
-                    <svg className="w-5 h-5" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M7.293 14.707a1 1 0 010-1.414L10.586 10 7.293 6.707a1 1 0 011.414-1.414l4 4a1 1 0 010 1.414l-4 4a1 1 0 01-1.414 0z" clipRule="evenodd" />
-                    </svg>
-                  </button>
-                )}
-                {selectedDiscovered && (
-                  <DiscoveredCameraPanel
-                    camera={selectedDiscovered}
-                    onClose={() => selectDiscovered(null)}
-                  />
-                )}
-              </>
+              </div>
             );
           })()}
         </main>
