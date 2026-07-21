@@ -252,5 +252,6 @@
   "chat.agent.maxRequests": 1000,
   // settings.json
   "browser.startUrl": "https://dev.hanwhavision.com:3443",
-  "browser.useExternalBrowser": true
+  "browser.useExternalBrowser": true,
+  "workbench.editorLargeFileConfirmation": 500
 }

@@ -42,6 +42,8 @@ HTTP API (default :7070):
   DELETE /cameras/:id
   GET    /cameras   → { "count": N }
   GET    /health    → { "status": "ok", "cameras": N }
+  POST   /cameras/:id/video-fanout   { "port" }  # add extra video RTP fan-out destination (§6.26)
+  GET    /cameras/:id/video-params   → codec/sprop info (see CameraSession docstring)
 
 Environment:
   AI_FRAME_INTERVAL — push every Nth decoded frame to AI (default: 3, overridden per-camera by captureFps)
@@ -229,6 +231,81 @@ def _parse_h264_sps_pps(extradata: bytes):
     return ",".join(units), profile_level_id
 
 
+def _remove_emulation_prevention(data: bytes) -> bytes:
+    """
+    Strip Annex-B "emulation prevention" bytes (0x03 inserted after any raw
+    RBSP "00 00" whose next byte is <= 0x03, so the encoded NAL never contains
+    a real start-code-like "00 00 0x" sequence — H.265 spec §7.3.1.1) to
+    recover the logical RBSP bitstream. Required before any bit-offset parsing
+    of a NAL payload beyond the first couple of bytes — confirmed live
+    (2026-07-20, §6.25) that skipping this silently shifts every offset past
+    the first escaped byte, which is exactly why an early version of
+    _parse_h265_vps_sps_pps() below read general_level_idc as 0 for every
+    real camera (compared against a byte-level decode of an actual camera's
+    SPS: raw byte offset 14 was an inserted 0x03 escape byte, not the real
+    level_idc byte; after stripping, the SAME SPS decodes to level_idc=150 =
+    Level 5.0, a plausible real value).
+    """
+    out = bytearray()
+    zero_run = 0
+    for b in data:
+        if zero_run >= 2 and b == 0x03:
+            zero_run = 0
+            continue
+        out.append(b)
+        zero_run = zero_run + 1 if b == 0 else 0
+    return bytes(out)
+
+
+def _parse_h265_vps_sps_pps(extradata: bytes):
+    """
+    HEVC/H.265 equivalent of _parse_h264_sps_pps() — same Annex-B NAL splitting,
+    but H.265 uses a 2-byte NAL header (vs. H.264's 1-byte) and three SEPARATE
+    fmtp params per RFC 7798 §7.1 (sprop-vps/sprop-sps/sprop-pps, rather than
+    H.264's single combined sprop-parameter-sets), plus profile-id/tier-flag/
+    level-id decoded from the SPS's profile_tier_level() bitstream structure
+    (H.265 spec §7.3.3) rather than a fixed byte offset like H.264's
+    profile-level-id.
+    Returns (sprop_vps, sprop_sps, sprop_pps, profile_id, tier_flag, level_id) —
+    the last three None if no usable SPS was found.
+    """
+    if not extradata:
+        return "", "", "", None, None, None
+    parts = re.split(rb"\x00\x00\x01", extradata.replace(b"\x00\x00\x00\x01", b"\x00\x00\x01"))
+    vps_units, sps_units, pps_units = [], [], []
+    profile_id = tier_flag = level_id = None
+    for p in parts:
+        if len(p) < 2:
+            continue
+        nal_type = (p[0] >> 1) & 0x3F
+        if nal_type == 32:      # VPS
+            vps_units.append(base64.b64encode(p).decode("ascii"))
+        elif nal_type == 33:    # SPS
+            sps_units.append(base64.b64encode(p).decode("ascii"))
+            if profile_id is None:
+                # Bit offsets below are relative to the RBSP with emulation
+                # prevention bytes removed (see _remove_emulation_prevention) —
+                # NOT the raw NAL bytes, which real camera SPS data does
+                # contain 0x03 escape bytes within (confirmed live).
+                # rbsp[0] = sps_video_parameter_set_id(4b) +
+                #           sps_max_sub_layers_minus1(3b) +
+                #           sps_temporal_id_nesting_flag(1b), then
+                # profile_tier_level()'s 12-byte general profile section
+                # begins at rbsp[1]; general_level_idc is its 12th byte.
+                rbsp = _remove_emulation_prevention(p[2:])
+                if len(rbsp) >= 13:
+                    ptl0 = rbsp[1]
+                    profile_id = ptl0 & 0x1F
+                    tier_flag  = (ptl0 >> 5) & 0x1
+                    level_id   = rbsp[1 + 11]
+        elif nal_type == 34:    # PPS
+            pps_units.append(base64.b64encode(p).decode("ascii"))
+    return (
+        ",".join(vps_units), ",".join(sps_units), ",".join(pps_units),
+        profile_id, tier_flag, level_id,
+    )
+
+
 # ── Camera session ────────────────────────────────────────────────────────────
 
 class CameraSession:
@@ -278,6 +355,38 @@ class CameraSession:
         self.video_codec_name       = None
         self.sprop_parameter_sets   = None
         self.profile_level_id       = None
+        # H.265/HEVC equivalents (2026-07-20, §6.25) — cameras streaming HEVC
+        # were previously left with mediasoup's H.264-only Producer, so WebRTC
+        # playback silently never worked. video_codec_name distinguishes which
+        # set of these is populated; mediasoupEngine.js picks its Producer
+        # mimeType dynamically from that field.
+        self.sprop_vps              = None
+        self.sprop_sps              = None
+        self.sprop_pps              = None
+        self.h265_profile_id        = None
+        self.h265_tier_flag         = None
+        self.h265_level_id          = None
+
+        # Video RTP fan-out destinations (2026-07-20, §6.26) — a browser's own
+        # SDP offer assigns whatever RTP payload type number it likes to H.264
+        # (varies by browser/OS/version, confirmed NOT stable even between
+        # Chrome and Edge in the same session), but mediasoup fixes a Producer's
+        # outgoing PT permanently at Router-registration time — there is no way
+        # to change it per-negotiate. mediasoupEngine.js's fix is to run one
+        # Producer per PT actually observed in the wild, each needing its own
+        # copy of this camera's video RTP. Rather than opening a second RTSP
+        # session per PT (would multiply pressure on camera-side concurrent-
+        # session limits — see module docstring), every registered destination
+        # here receives the SAME already-demuxed packet from the ONE RTSP
+        # session. List of dicts: {"port", "out" (av output container),
+        # "stream" (output stream), "last_dts"}. self._video_template_stream
+        # holds the source video stream object (set once RTSP connects) so
+        # add_video_fanout() can add_stream(template=...) for a fan-out
+        # registered after the fact, from the HTTP handler thread.
+        self._video_fanout_lock     = threading.Lock()
+        self._video_fanout          = []   # ephemeral per-connection: [{"port","out","stream","last_dts"}]
+        self._video_fanout_ports    = []   # persistent across RTSP reconnects: [port, ...]
+        self._video_template_stream = None
 
         # JPEG/App-RTP push uses the module-level _SHARED_PUSH_EXECUTOR /
         # _SHARED_PUSH_SEMAPHORE (bounded pool shared by the whole daemon, not
@@ -430,10 +539,10 @@ class CameraSession:
             audio_out = audio_out_stream = None
             audio_queue = audio_worker_stop = audio_worker_thread = None
             audio_mode = None
-            video_out = video_out_vs = None
 
             try:
                 vs = next((s for s in container.streams if s.type == "video"), None)
+                self._video_template_stream = vs
                 if vs is None:
                     raise RuntimeError("No video stream in RTSP source")
 
@@ -469,30 +578,51 @@ class CameraSession:
                                  self.id[:8], self.sprop_parameter_sets.count(",") + 1, self.profile_level_id)
                     else:
                         log.warning("[%s] no SPS/PPS found in extradata — WebRTC viewers may never decode video", self.id[:8])
+                elif vs.codec_context.name == "hevc":
+                    (self.sprop_vps, self.sprop_sps, self.sprop_pps,
+                     self.h265_profile_id, self.h265_tier_flag, self.h265_level_id) = \
+                        _parse_h265_vps_sps_pps(vs.codec_context.extradata)
+                    if self.sprop_sps and self.sprop_pps and self.h265_profile_id is not None:
+                        log.info("[%s] H.265 sprop-vps/sps/pps ready (profile-id=%d tier-flag=%d level-id=%d)",
+                                 self.id[:8], self.h265_profile_id, self.h265_tier_flag, self.h265_level_id)
+                    else:
+                        log.warning("[%s] no usable VPS/SPS/PPS found in extradata — WebRTC viewers may never decode video", self.id[:8])
                 else:
                     self.sprop_parameter_sets = None
                     self.profile_level_id = None
-                    log.warning("[%s] video codec is %s, not h264 — mediasoup Producer is H.264-only, WebRTC playback for this camera cannot work", self.id[:8], vs.codec_context.name)
+                    log.warning("[%s] video codec is %s — mediasoup Producer only supports h264/hevc, WebRTC playback for this camera cannot work", self.id[:8], vs.codec_context.name)
 
-                # Video RTP passthrough output — no decode here, this stays on the io
-                # thread so it is never delayed by the (potentially slow) AI decode.
-                if self.mediasoup_video_port:
-                    # payload_type must be explicit — mediasoup's video Producer
-                    # (mediasoupEngine.js) is configured to only accept PT=96
-                    # (VIDEO_PT) and silently discards anything else. Without this
-                    # option ffmpeg's rtp muxer picks its own default dynamic PT,
-                    # which is not guaranteed to match (unlike the audio branch
-                    # below, which already sets this explicitly).
-                    video_out = av.open(
-                        f"rtp://127.0.0.1:{self.mediasoup_video_port}",
-                        "w", format="rtp",
-                        options={"ssrc": str(_MEDIASOUP_VIDEO_SSRC), "payload_type": str(_MEDIASOUP_VIDEO_PT)},
-                    )
-                    video_out_vs = video_out.add_stream(template=vs)
-                    log.info("[%s] Video RTP: %s → rtp://127.0.0.1:%d (ssrc=0x%08x pt=%d) time_base in=%s out=%s",
-                             self.id[:8], vs.codec_context.name,
-                             self.mediasoup_video_port, _MEDIASOUP_VIDEO_SSRC, _MEDIASOUP_VIDEO_PT,
-                             vs.time_base, video_out_vs.time_base)
+                # Video RTP passthrough output(s) — no decode here, this stays on
+                # the io thread so it is never delayed by the (potentially slow)
+                # AI decode. Fans out to the primary mediasoup_video_port plus
+                # any extra ports registered via add_video_fanout() (2026-07-20,
+                # §6.26) — rebuilt fresh here on every (re)connect since the
+                # previous connection's output muxers were closed in the
+                # `finally` block below; self._video_fanout_ports itself
+                # persists across reconnects so extra fan-outs survive a camera
+                # dropping and re-establishing its RTSP session.
+                with self._video_fanout_lock:
+                    self._video_fanout = []
+                    fanout_ports = [self.mediasoup_video_port] if self.mediasoup_video_port else []
+                    fanout_ports += [p for p in self._video_fanout_ports if p != self.mediasoup_video_port]
+                    for port in fanout_ports:
+                        # payload_type must be explicit — mediasoup's video Producer
+                        # (mediasoupEngine.js) is configured to only accept PT=96
+                        # (VIDEO_PT) and silently discards anything else. Without this
+                        # option ffmpeg's rtp muxer picks its own default dynamic PT,
+                        # which is not guaranteed to match (unlike the audio branch
+                        # below, which already sets this explicitly).
+                        out = av.open(
+                            f"rtp://127.0.0.1:{port}",
+                            "w", format="rtp",
+                            options={"ssrc": str(_MEDIASOUP_VIDEO_SSRC), "payload_type": str(_MEDIASOUP_VIDEO_PT)},
+                        )
+                        out_stream = out.add_stream(template=vs)
+                        self._video_fanout.append({"port": port, "out": out, "stream": out_stream, "last_dts": None})
+                        log.info("[%s] Video RTP: %s → rtp://127.0.0.1:%d (ssrc=0x%08x pt=%d) time_base in=%s out=%s",
+                                 self.id[:8], vs.codec_context.name,
+                                 port, _MEDIASOUP_VIDEO_SSRC, _MEDIASOUP_VIDEO_PT,
+                                 vs.time_base, out_stream.time_base)
 
                 # AI decode worker — owns an independent CodecContext (seeded with the
                 # extradata/SPS-PPS this container already probed) and receives raw
@@ -538,7 +668,6 @@ class CameraSession:
 
                 idr_seen       = False
                 idr_deadline   = time.monotonic() + IDR_WAIT_TIMEOUT
-                video_last_dts = None
                 audio_last_dts = None
 
                 demux_streams = [s for s in (vs, as_, app_stream) if s is not None]
@@ -569,8 +698,18 @@ class CameraSession:
                         # mux below — the AI worker gets its own independent copy, so
                         # it is never affected by, and can never block, that path.
                         raw = bytes(packet)
-                        if video_out is not None:
-                            video_last_dts = self._mux_passthrough(packet, video_out, video_out_vs, video_last_dts)
+                        # Fan out to every registered destination (2026-07-20, §6.26).
+                        # _mux_passthrough() mutates packet.pts/dts/time_base/stream
+                        # in place, so pts/dts/time_base must be reset to the
+                        # ORIGINAL (source) values before each destination's own
+                        # independent rescale+monotonic-DTS-fixup runs — otherwise
+                        # the second-and-later destinations would rescale from the
+                        # FIRST destination's already-mutated state instead of the
+                        # true source timing.
+                        orig_pts, orig_dts, orig_time_base = packet.pts, packet.dts, packet.time_base
+                        for _o in self._video_fanout:
+                            packet.pts, packet.dts, packet.time_base = orig_pts, orig_dts, orig_time_base
+                            _o["last_dts"] = self._mux_passthrough(packet, _o["out"], _o["stream"], _o["last_dts"])
                         try:
                             ai_queue.put_nowait(raw)
                         except queue.Full:
@@ -597,11 +736,14 @@ class CameraSession:
                     audio_worker_stop.set()
                 if audio_worker_thread is not None:
                     audio_worker_thread.join(timeout=2)
-                if video_out is not None:
-                    try:
-                        video_out.close()
-                    except Exception:
-                        pass
+                with self._video_fanout_lock:
+                    for _o in self._video_fanout:
+                        try:
+                            _o["out"].close()
+                        except Exception:
+                            pass
+                    self._video_fanout = []
+                self._video_template_stream = None
                 if audio_out is not None:
                     try:
                         audio_out.close()
@@ -655,6 +797,37 @@ class CameraSession:
         except av.AVError:
             pass  # Skip malformed packet; keep stream alive
         return last_dts
+
+    def add_video_fanout(self, port: int) -> bool:
+        """
+        Register an additional video RTP fan-out destination (2026-07-20,
+        §6.26) — mediasoupEngine.js calls this the first time it needs a video
+        Producer at a payload type its default Router doesn't declare (a
+        browser's own SDP offer can assign H.264 any PT, which varies by
+        browser/OS/version and cannot be changed per-negotiate once a
+        mediasoup Producer exists — see Design_RTSP_Capture_Backend.md §6.26).
+        The port persists in self._video_fanout_ports across RTSP reconnects;
+        if the session is currently connected, also opens the muxer
+        immediately so playback can start without waiting for a reconnect.
+        Returns True once the port is registered (immediate or pending-next-
+        connect), False only if the port was somehow already active.
+        """
+        with self._video_fanout_lock:
+            if port not in self._video_fanout_ports:
+                self._video_fanout_ports.append(port)
+            if any(o["port"] == port for o in self._video_fanout):
+                return True  # already live on the current connection
+            vs = self._video_template_stream
+            if vs is None:
+                return True  # not connected yet — will be created on next connect
+            out = av.open(
+                f"rtp://127.0.0.1:{port}", "w", format="rtp",
+                options={"ssrc": str(_MEDIASOUP_VIDEO_SSRC), "payload_type": str(_MEDIASOUP_VIDEO_PT)},
+            )
+            out_stream = out.add_stream(template=vs)
+            self._video_fanout.append({"port": port, "out": out, "stream": out_stream, "last_dts": None})
+        log.info("[%s] Video RTP fan-out added → rtp://127.0.0.1:%d", self.id[:8], port)
+        return True
 
     def _ai_decode_worker(self, q: "queue.Queue", stop_evt: threading.Event,
                            codec_name: str, extradata):
@@ -1091,6 +1264,12 @@ class Handler(BaseHTTPRequestHandler):
                         "codec":               sess.video_codec_name,
                         "spropParameterSets":  sess.sprop_parameter_sets or "",
                         "profileLevelId":      sess.profile_level_id,
+                        "spropVps":            sess.sprop_vps or "",
+                        "spropSps":            sess.sprop_sps or "",
+                        "spropPps":            sess.sprop_pps or "",
+                        "h265ProfileId":       sess.h265_profile_id,
+                        "h265TierFlag":        sess.h265_tier_flag,
+                        "h265LevelId":         sess.h265_level_id,
                     })
             else:
                 self._json(404, {"error": "not found"})
@@ -1119,7 +1298,23 @@ class Handler(BaseHTTPRequestHandler):
             log.info("Camera added: %s [%s]", body["id"][:8], "+".join(mode_parts))
             self._json(201, {"ok": True, "id": body["id"]})
         else:
-            self._json(404, {"error": "not found"})
+            parts = p.strip("/").split("/")
+            if len(parts) == 3 and parts[0] == "cameras" and parts[2] == "video-fanout":
+                sess = _manager.get(parts[1])
+                if sess is None:
+                    self._json(404, {"error": "camera not found"})
+                    return
+                length = int(self.headers.get("Content-Length", 0))
+                try:
+                    body = json.loads(self.rfile.read(length))
+                    port = int(body["port"])
+                except Exception:
+                    self._json(400, {"error": "invalid JSON or missing/non-numeric 'port'"})
+                    return
+                sess.add_video_fanout(port)
+                self._json(200, {"ok": True})
+            else:
+                self._json(404, {"error": "not found"})
 
     def do_DELETE(self):
         parts = urlparse(self.path).path.strip("/").split("/")

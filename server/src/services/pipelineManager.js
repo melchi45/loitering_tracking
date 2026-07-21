@@ -144,6 +144,13 @@ async function _ingestRegisterCamera(cameraId, rtspUrl, callbackUrl, appRtpCallb
     return true;
   } catch (err) {
     console.warn(`[PipelineManager][${cameraId.slice(0, 8)}] ingest-daemon register failed: ${err.message}`);
+    // The POST above may have reached and been processed by ingest-daemon even though
+    // we never saw the response (timeout / connection reset while the daemon was busy
+    // or restarting) — the daemon then holds a session with no DB-side record, so no
+    // future reconcile pass will ever know to clean it up. DELETE is idempotent on the
+    // daemon side ({ok:false} when absent), so firing one here on every register
+    // failure closes that gap at negligible cost (2026-07-20 orphaned-camera incident).
+    await _ingestRemoveCamera(cameraId).catch(() => {});
     return false;
   }
 }
@@ -1295,16 +1302,18 @@ class PipelineManager {
       console.log(`[PipelineManager][${camera.id}] Capture started (${CAPTURE_BACKEND}): ${cmdline}`);
     });
 
-    capture.on('frame', (() => {
-      let firstFrame = true;
-      return () => {
-        if (firstFrame) {
-          firstFrame = false;
-          console.log(`[PipelineManager][${camera.id}] Stream connected — receiving frames`);
-          this._updateCameraStatus(camera.id, 'streaming');
-        }
-      };
-    })());
+    capture.on('frame', () => {
+      // ctx._statusIsDown covers both the very first connect and recovery after
+      // a watchdog-flagged stall — without it, a camera that reconnects after
+      // going silent never re-announces 'streaming' (this handler otherwise
+      // only fired once per capture instance, which the watchdog reuses across
+      // restarts instead of recreating).
+      if (ctx._statusIsDown) {
+        ctx._statusIsDown = false;
+        console.log(`[PipelineManager][${camera.id}] Stream connected — receiving frames`);
+        this._updateCameraStatus(camera.id, 'streaming');
+      }
+    });
 
     capture.on('warn', ({ message }) => {
       console.warn(`[Capture:${CAPTURE_BACKEND}][${camera.id}] ${message}`);
@@ -1351,6 +1360,7 @@ class PipelineManager {
 
     ctx.startedAt = Date.now();
     ctx.frameWatchdogTimer = null;
+    ctx._statusIsDown = true; // cleared on first frame (see capture.on('frame') above)
     this._pipelines.set(camera.id, ctx);
     this._updateCameraStatus(camera.id, 'connecting');
     capture.start();
@@ -1403,6 +1413,11 @@ class PipelineManager {
       // that started together don't stay phase-locked.
       const WATCHDOG_BACKOFF_STEP_MS = 15_000;
       const WATCHDOG_BACKOFF_MAX_MS  = 240_000;
+      // Consecutive re-registration failures before the dashboard is told the
+      // camera is actually down (not just momentarily reconnecting) — below
+      // this, a single flaky retry would flip the status dot to red for what
+      // is normally a few-second hiccup.
+      const WATCHDOG_ERROR_THRESHOLD = 3;
       ctx._watchdogBusy = false;
       ctx._watchdogFailCount = 0;
       ctx.frameWatchdogTimer = setInterval(async () => {
@@ -1412,6 +1427,12 @@ class PipelineManager {
           ctx._watchdogBusy = true;
           try {
             console.warn(`[PipelineManager][${camera.id}] Frame watchdog: no frame for ${Math.round(stalledMs / 1000)}s — restarting capture (consecutive failures: ${ctx._watchdogFailCount})`);
+            // Surface the stall to the dashboard immediately — previously this
+            // watchdog restarted the capture silently with no camera:status
+            // emission at all, so a camera that went dark (powered off, network
+            // drop) left the sidebar frozen on its last-known status forever.
+            ctx._statusIsDown = true;
+            this._updateCameraStatus(camera.id, 'reconnecting');
             ctx.lastFrameAt = Date.now();
             ctx.capture.stop();
 
@@ -1434,6 +1455,9 @@ class PipelineManager {
 
             ctx.capture.start();
             ctx._watchdogFailCount = ok ? 0 : ctx._watchdogFailCount + 1;
+            if (ctx._watchdogFailCount >= WATCHDOG_ERROR_THRESHOLD) {
+              this._updateCameraStatus(camera.id, 'error');
+            }
             const backoffMs = Math.min(ctx._watchdogFailCount * WATCHDOG_BACKOFF_STEP_MS, WATCHDOG_BACKOFF_MAX_MS);
             const jitterMs  = Math.floor(Math.random() * 5_000);
             // Reset the stall clock to the moment the new session actually started
@@ -2796,7 +2820,11 @@ class PipelineManager {
   _updateCameraStatus(cameraId, status) {
     try {
       this._db.update('cameras', cameraId, { status });
-      this._io.to(cameraId).emit('camera:status', { cameraId, status });
+      // Broadcast (not room-scoped): the sidebar "Cameras" list renders status
+      // for every added camera regardless of which camera's video tile is
+      // currently subscribed/visible, so a room-scoped emit silently drops
+      // status updates for any camera not on the active grid page.
+      this._io.emit('camera:status', { cameraId, status });
     } catch (_) {}
   }
 }

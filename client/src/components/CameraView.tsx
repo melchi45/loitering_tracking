@@ -6,6 +6,7 @@ import { useCameraStore } from '../stores/cameraStore';
 import { useI18n } from '../i18n';
 import ZoneEditor from './ZoneEditor';
 import ThermalOverlay from './ThermalOverlay';
+import WebRtcStatsPanel from './WebRtcStatsPanel';
 import type { Detection, Zone } from '../types';
 
 interface Props {
@@ -324,7 +325,7 @@ export default function CameraView({ cameraId, cameraName }: Props) {
   // JPEG path (always active for AI detections; frame only used when not WebRTC)
   const { frame, detections, frameWidth, frameHeight } = useCamera(cameraId);
   // WebRTC path (active only when webrtcEnabled + global WebRTC enabled)
-  const { videoRef, state: webrtcState, hasAudio, retry: retryWebRTC, iceStats } = useWebRTC(cameraId, useWebRTCMode);
+  const { videoRef, state: webrtcState, hasAudio, retry: retryWebRTC, iceStats, rxHistory, rxCodec } = useWebRTC(cameraId, useWebRTCMode);
 
   const imgRef    = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -477,42 +478,14 @@ export default function CameraView({ cameraId, cameraName }: Props) {
             )}
           </div>
 
-          {/* ICE debug panel */}
+          {/* ICE debug panel — a single label:value grid (2026-07-20), mirroring
+              YouTube's actual "stats for nerds" overlay (plain one-line-per-metric
+              text, not a graph) rather than spending vertical space on bar charts.
+              Capped to the tile's own height with its own scroll so it never
+              grows past the video underneath it. */}
           {showIcePanel && webrtcState === 'connected' && (
-            <div className="absolute top-9 right-2 bg-black/85 rounded-lg p-2 text-[10px] font-mono text-gray-200 z-20 min-w-[200px] leading-5 border border-gray-700/60">
-              {iceStats ? (() => {
-                const typeColor = (t: string) =>
-                  t === 'relay'  ? 'text-orange-400' :
-                  t === 'srflx'  ? 'text-yellow-400' : 'text-green-400';
-                const typeLabel = (t: string) =>
-                  t === 'relay'  ? 'TURN relay' :
-                  t === 'srflx'  ? 'STUN mapped' :
-                  t === 'host'   ? 'host (LAN)' : t;
-                const fmtBytes = (b: number) =>
-                  b >= 1_048_576 ? `${(b / 1_048_576).toFixed(1)} MB` :
-                  b >= 1024      ? `${(b / 1024).toFixed(1)} KB` : `${b} B`;
-                return (
-                  <>
-                    <div className="text-gray-500 mb-0.5">─ local</div>
-                    <div>
-                      <span className={typeColor(iceStats.localType)}>[{iceStats.localType}]</span>
-                      {' '}{iceStats.localProtocol.toUpperCase()}{' '}
-                      {iceStats.localAddress}:{iceStats.localPort}
-                    </div>
-                    <div className="text-gray-500 text-[9px]">{typeLabel(iceStats.localType)}</div>
-                    <div className="text-gray-500 mt-0.5 mb-0.5">─ remote</div>
-                    <div>
-                      <span className={typeColor(iceStats.remoteType)}>[{iceStats.remoteType}]</span>
-                      {' '}{iceStats.remoteAddress}:{iceStats.remotePort}
-                    </div>
-                    <div className="text-gray-500 text-[9px] mt-0.5 border-t border-gray-700/60 pt-0.5">
-                      ↑ {fmtBytes(iceStats.bytesSent)} &nbsp; ↓ {fmtBytes(iceStats.bytesReceived)}
-                    </div>
-                  </>
-                );
-              })() : (
-                <span className="text-gray-500">Collecting stats…</span>
-              )}
+            <div className="absolute top-9 right-2 max-h-[calc(100%-3rem)] overflow-y-auto bg-black/85 rounded-lg p-1.5 text-[9px] font-mono text-gray-200 z-20 w-[190px] border border-gray-700/60">
+              <WebRtcStatsPanel iceStats={iceStats} history={rxHistory} codec={rxCodec} />
             </div>
           )}
         </>

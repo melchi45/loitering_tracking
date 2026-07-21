@@ -1342,7 +1342,13 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
                   groupStart={channelOffset}
                 />
                 {totalGroups > 1 && (
-                  <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 bg-black/60 rounded px-2 py-0.5 pointer-events-none">
+                  // bottom-3, not top-3 (2026-07-20): centered at the top edge, this
+                  // badge landed directly over the top row's tile chrome (WebRTC/ICE
+                  // toggle buttons cluster near top-right of each tile) — confirmed
+                  // live, made the ICE button on the channel-1 tile unclickable. The
+                  // bottom edge has no per-tile controls at bottom-center (camera name
+                  // + mute icon sit bottom-LEFT), so it's clear there in every layout.
+                  <div className="absolute bottom-3 left-1/2 -translate-x-1/2 z-20 bg-black/60 rounded px-2 py-0.5 pointer-events-none">
                     <span className="text-[10px] text-gray-300">
                       Channel Group {currentGroup + 1} of {totalGroups} (CH {channelOffset + 1}–{Math.min(channelOffset + pageSize, maxChannelNum)})
                     </span>

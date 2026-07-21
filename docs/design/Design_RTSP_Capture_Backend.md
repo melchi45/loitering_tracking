@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAPTURE-002 |
-| **Version** | 1.24 |
+| **Version** | 1.36 |
 | **Status** | Active |
-| **Date** | 2026-07-16 |
+| **Date** | 2026-07-20 |
 | **Ops Guide** | [RTSP_Capture_Backend_Setup.md](../ops/RTSP_Capture_Backend_Setup.md) |
 | **Related Design** | [Design_FFmpeg_RTSP_Capture.md](../design/Design_FFmpeg_RTSP_Capture.md) · [Design_RTSP_WebRTC_Architecture.md](../design/Design_RTSP_WebRTC_Architecture.md) |
 
@@ -640,6 +640,125 @@ async reregisterAllWithIngestDaemon() {
 
 HTTP API: `POST /api/internal/ingest/reregister` (localhost 전용, 인증 없음)
 
+#### §6.24 프레임 워치독이 재시작을 시도하는 동안 대시보드 상태가 전혀 갱신되지 않던 결함 (2026-07-20)
+
+**증상**: 카메라가 물리적으로 꺼지거나 네트워크가 끊겨도 Dashboard 우측 "Cameras" 패널(Added 탭)의 상태 dot이 변화 없이 마지막 상태(보통 초록 `streaming`)에 고정되어 있다는 사용자 보고.
+
+**원인 (두 가지가 겹쳐 있었음)**:
+
+1. `IngestDaemonCapture`(`ingestDaemonCapture.js`)는 `'started'`/`'stats'`/`'frame'` 세 이벤트만 emit하고 `'warn'`/`'reconnecting'`/`'error'`는 전혀 emit하지 않는 순수 passive receiver다. `pipelineManager.js`의 `_updateCameraStatus()` 호출 6곳 중 4곳(`source_unavailable`/`reconnecting`/`error`/최초 `streaming`)은 전부 이 `capture` EventEmitter의 이벤트에 의존하므로, ingest-daemon 백엔드(현재 기본값)에서는 프레임 워치독(§6.7 계층 2)이 스톨을 감지해 재등록을 반복 시도해도 성공이든 실패든 `camera:status`가 **한 번도 발행되지 않았다.**
+2. `_updateCameraStatus()`가 `this._io.to(cameraId).emit(...)`으로 **해당 카메라 room에만** 전송하고 있었다. Room 가입은 `useCamera.ts`/`useAllDetections.ts`가 그 카메라의 `CameraView`를 실제로 마운트할 때만 일어나므로, 사이드바 "Cameras" 목록(`CameraList.tsx`)처럼 room에 가입하지 않는 컴포넌트나, 다른 채널 그룹 페이지로 넘어가 화면에 없는 카메라는 상태 갱신을 원천적으로 못 받는 구조였다.
+
+**수정** (`pipelineManager.js`):
+
+- `_updateCameraStatus()`: `io.to(cameraId).emit(...)` → `io.emit(...)` 전역 broadcast로 변경. `camera:status`는 저빈도 이벤트이고 사이드바 목록은 항상 최신 상태를 반영해야 하므로 room 제한의 이점이 없음.
+- 프레임 워치독(§6.7 계층 2) 스톨 감지 분기 진입 시 재등록 시도 전에 즉시 `_updateCameraStatus(camera.id, 'reconnecting')` 발행.
+- 재등록 연속 실패 횟수(`ctx._watchdogFailCount`)가 `WATCHDOG_ERROR_THRESHOLD`(3회) 이상이면 `_updateCameraStatus(camera.id, 'error')`로 격상 — 한 번의 일시적 재시도 실패만으로 빨간 dot을 띄우지 않도록 임계값을 둠.
+- `ctx._statusIsDown` 플래그 도입: 기존 `capture.on('frame', ...)` 핸들러는 클로저 `firstFrame` 변수로 파이프라인 생애주기 통틀어 **딱 한 번만** `streaming`을 재발행했는데, 워치독이 `capture` 인스턴스를 재생성하지 않고 `stop()`/`start()`만 호출하는 구조라 스톨 이후 실제로 프레임이 재개돼도 `streaming` 상태가 다시 알려지지 않는 별개의 결함이었다. `ctx._statusIsDown`을 최초 연결 대기 중과 워치독 스톨 감지 시 모두 `true`로 세팅하고, 프레임 수신 시 `true`면 `streaming`을 재발행 후 `false`로 리셋하도록 통합.
+
+**검증 범위**: 코드 정적 검토 및 `node --check` 문법 확인. 실제 카메라 전원 차단 재현 테스트는 후속 세션에서 라이브 확인 필요.
+
+#### §6.25 H.265/HEVC 카메라의 WebRTC 재생 불가 — mediasoup 자체의 H.265 미지원이 근본 원인 (2026-07-20)
+
+**증상**: 일부 카메라(TNM-C2712TDR 계열 4채널)의 WebRTC 영상이 아예 재생되지 않고(검은 화면, ICE 통계상 bytesReceived≈0), 실제 스트림 코덱을 확인한 결과 H.264가 아닌 H.265/HEVC였음. `ingest_daemon.py`는 이미 이 경우를 감지해 경고 로그를 남기고 있었지만, 그 이상의 처리는 없었음.
+
+**1차 시도(동적 코덱 감지·선택)와 그 결과**: `mediasoupEngine.js`의 Router `mediaCodecs`와 video Producer가 전부 `video/H264`로 정적 하드코딩되어 있고 Producer가 ingest-daemon의 코덱 파악보다 먼저 생성되는 구조였으므로, 처음에는 이를 동적으로 만드는 방향으로 수정했음:
+
+- `ingest_daemon.py`: `_parse_h264_sps_pps()`에 대응하는 `_parse_h265_vps_sps_pps()`를 추가해 H.265의 2바이트 NAL 헤더(VPS=32/SPS=33/PPS=34)와 RFC 7798 §7.1의 3분리 fmtp(`sprop-vps`/`sprop-sps`/`sprop-pps`)를 파싱, SPS의 `profile_tier_level()`에서 profile-id/tier-flag/level-id 추출. **최초 구현에는 Annex-B emulation-prevention byte(`00 00 03` → `00 00`) 제거 없이 비트 오프셋을 그대로 읽는 버그가 있어 `level-id`가 실제 카메라 4대 전부에서 0으로 나왔음** — 실제 SPS 바이트를 수동 디코드해 확인(예: level_idc 위치의 실제 바이트가 escape byte였음), `_remove_emulation_prevention()` 헬퍼를 추가해 수정(수정 후 2048×1536 카메라는 Level 5.0(150), 640×480 카메라들은 Level 4.0(120)으로 해상도와 합리적으로 상관되는 값이 나옴을 확인).
+- `mediasoupEngine.js`: Router `mediaCodecs`에 `video/H265` 항목 추가, `addCameraStream()`의 video Producer 생성을 ingest-daemon 등록 이후로 옮겨 감지된 코덱에 따라 H264/H265 rtpParameters를 동적 선택, `_parseOffer()`/`_buildBrowserRtpCapabilities()`/`_buildAnswer()`를 H265 PT 매칭·3분리 sprop fmtp 주입까지 확장.
+
+**실제 재현한 결과 — 근본적으로 막다른 길**: 서버·ingest-daemon을 재시작해 실제로 확인한 결과, `videoPlain.produce({ rtpParameters: { codecs: [{ mimeType: 'video/H265', ... }] } })` 호출이 **매번** `media codec not supported [mimeType:video/H265]`로 실패했음. 원인은 mediasoup 자체에 있음 — 설치된 버전(3.21.0)과 npm에 게시된 최신 버전(3.21.2)의 `node/lib/supportedRtpCapabilities.js`를 직접 확인한 결과, mediasoup의 네이티브 워커(C++)가 인식하는 비디오 코덱은 **VP8/VP9/H264/AV1뿐이며 H.265는 어떤 버전에도 존재하지 않음**. 즉 Producer 측 코덱 선언을 아무리 정확히 구성해도 mediasoup 자체가 H.265 RTP 페이로드 포맷(RFC 7798)을 처리하는 코드를 가지고 있지 않아 구조적으로 불가능함 — 이 프로젝트 코드의 버그가 아니라 의존 라이브러리의 기능 한계.
+
+**최종 조치(되돌림)**: 위 mediasoup 관련 변경(Router H.265 항목, 동적 Producer 코덱 선택, `_parseOffer`/`_buildBrowserRtpCapabilities`/`_buildAnswer`의 H.265 분기)을 전부 제거하고 video Producer는 항상 H.264로 고정(기존 동작으로 복귀) — `addCameraStream()`도 Producer 생성을 원래 순서(등록 POST 이전)로 되돌림. 다만 `ingest_daemon.py`의 H.265 감지·파싱 로직(EPB 수정 포함)과 `GET /cameras/:id/video-params`의 확장 필드는 **유지** — 어떤 카메라가 HEVC라서 재생이 불가능한지 진단하는 용도로 여전히 유용하며, `addCameraStream()`이 등록 후 non-blocking으로 `_pollVideoCodec()`을 호출해 HEVC 카메라마다 명확한 경고 로그(`mediasoup has no H.265 support, WebRTC playback cannot work for this camera until it's reconfigured to H.264`)를 남김. 부수적으로 `negotiate()`의 `profileLevelId` 변수가 선언만 되고 `videoParams.profileLevelId`로부터 할당되지 않아 H.264 카메라에서도 `_buildAnswer()`의 override 분기가 항상 스킵되던 기존 결함을 발견·수정(이 부분은 되돌리지 않음, 정상 동작).
+
+**실질적 해결책**: 이 4개 카메라의 WebRTC 재생을 살리려면 (a) 카메라/NVR 설정에서 해당 RTSP 프로파일을 H.264로 변경하거나, (b) mediasoup을 H.265를 지원하는 버전/포크로 교체하거나 다른 미디어 서버로 전환하는 두 경로뿐이며 둘 다 이 리포지토리의 코드 수정만으로 해결 불가능함. AI 감지 파이프라인(JPEG 캡처)은 mediasoup을 거치지 않으므로 이 카메라들에서도 정상 동작 중.
+
+**검증 범위**: `node -c`/`python3 -m py_compile` 문법 확인 + 실제 라이브 재시작으로 재현·확인(`media codec not supported` 에러 직접 관측, mediasoup 3.21.0/3.21.2 소스 직접 다운로드해 지원 코덱 목록 확인). EPB 수정은 실제 4대 카메라의 SPS 원본 바이트를 수동 디코드해 검증.
+
+#### §6.26 H.264 카메라조차 WebRTC 재생이 안 되던 진짜 원인 — mediasoup Consumer PT가 브라우저 offer와 무관하게 고정되는 구조적 한계, PT별 Router/파이프라인 캐시로 해결 (2026-07-20)
+
+**증상**: 코덱이 확실히 H.264인 카메라(TID-A800 192.168.214.32, TNM-C2712TDR 192.168.214.40)조차 Chrome에서 재생이 안 됨 — Edge에서는 같은 카메라가 정상 재생됨. 브라우저 getStats()에서 `bytesReceived`는 정상 증가하지만 `framesReceived`/`framesDecoded`가 0에 머무르고, 비디오 `codec` 통계 항목 자체가 아예 생성되지 않음 — §6.13/§6.21에서 이미 다뤘던 "healthy transport, decoder never binds" 패턴과 동일.
+
+**근본 원인 (mediasoup `node/lib/ortc.js` 직접 확인으로 확정)**: `getConsumableRtpParameters()`/`getConsumerRtpParameters()`는 Consumer가 실제로 내보내는 코덱 payload type을 **Router가 등록 시 정적으로 선언한 `preferredPayloadType`**으로 항상 고정한다. `negotiate()`마다 넘기는 `remoteRtpCapabilities`(`_buildBrowserRtpCapabilities()`가 브라우저 offer에 맞춰 패치하던 값)는 `matchCodecs(..., {strict:true})`로 "호환 코덱이 있는지"만 필터링할 뿐, 실제 전송 PT에는 **전혀 영향을 주지 않는다** — 이 파일의 기존 주석(§6.14 등)이 반대로 가정하고 있었던 부분. 브라우저의 SDP offer가 H.264에 어떤 PT를 배정하는지는 브라우저의 코덱 열거 순서(AV1/VP9 지원 여부, OS, 버전)에 좌우되며 **같은 머신의 Chrome과 Edge조차 다를 수 있음**(실측: Edge=PT108/재생됨, Chrome=PT109·RTX114/재생 안 됨) — Router에 정적으로 108을 박아두는 기존 방식은 "브라우저가 우연히 108을 쓰면 되고 아니면 실패"하는 도박이었음.
+
+**시도했다가 폐기한 방법**: Router `mediaCodecs`에 H.264 엔트리를 PT=108/109 두 개 선언 + Producer 두 개 생성. mediasoup `ortc.js`의 `getProducerRtpParametersMapping()`을 직접 읽어 확인한 결과, Producer→Router capability 매칭은 `matchCodecs()`(packetization-mode + H.264 profile family만 비교, PT는 비교 기준에 없음)로 이뤄지고 `.find()`가 배열의 첫 매치를 결정적으로 선택함 — 두 엔트리가 실제로는 같은 카메라의 같은 비트스트림(같은 packetization-mode/profile)을 설명해야 하므로 구별 불가능, Producer를 몇 개 만들어도 항상 첫 번째(108)로만 매핑됨. `transport.produce()`에 `rtpMapping`을 직접 지정하는 옵션도 없어 우회 불가 — **한 Router 안에서는 근본적으로 불가능함을 소스 레벨로 확정**.
+
+**실제 해결 — PT별 Router/파이프라인 지연 생성·캐싱**: RFC 3264 §6.1(answer는 offer가 실제 사용한 PT만 사용해야 함)을 만족하려면 브라우저가 offer한 PT를 **그대로** 선언한 Router가 있어야 하므로, 통계적 추측(자주 보이는 값 몇 개를 하드코딩) 대신 실제로 필요한 PT가 나타날 때마다 그 자리에서 만들어 캐싱하는 구조로 구현:
+
+- `mediasoupEngine.js`: `_ensurePtRouter(videoPt, videoRtxPt)` — `videoPt`가 기존 기본값(108)이면 기존 공유 `_router`를 그대로 재사용(비용 0), 처음 보는 값이면 그 PT **하나만** 선언하는 새 Router를 같은 Worker 위에 생성(모호성 자체가 없어 매칭 문제 재발 안 함). RTX는 `_computeRtxPlaceholderPts()`(기존 §6.17의 8개 고정 placeholder 트릭을 임의의 목표 PT로 일반화 — mediasoup의 `dynamicPayloadTypes` free-list 순서를 그대로 재현해 목표 PT 앞의 모든 값을 harmless한 `audio/PCMU` placeholder로 미리 점유)로 브라우저가 실제 offer한 RTX PT에 맞춤 — 모를 때는 Consumer의 `enableRtx`를 꺼서 §6.17에서 확인된 "잘못된 PT에 RTX를 켜면 끄는 것보다 더 나빠짐" 위험을 피함.
+- `_ensureAltPipeline()`/`_buildAltPipeline()` — 카메라별로 PT-Router 위에 video Producer(+App RTP DataProducer)를 지연 생성, ingest-daemon에 같은 RTP를 새 목적지로 fan-out 등록. 오디오는 이번 조사에서 문제가 확인되지 않아 범위 밖으로 두고 alt 파이프라인은 비디오+데이터만 제공(문서화된 의도적 축소).
+- `ingest_daemon.py`: `CameraSession`에 `_video_fanout`(현재 연결 한정)/`_video_fanout_ports`(RTSP 재연결 간 유지) 도입, video RTP passthrough를 단일 목적지에서 리스트 기반 fan-out으로 변경. **주의**: `_mux_passthrough()`가 `packet.pts/dts/time_base/stream`을 제자리에서 변형하므로, 같은 패킷을 여러 목적지에 순서대로 mux할 때 원본 타이밍 값을 목적지마다 리셋하지 않으면 두 번째부터는 첫 번째 목적지의 변형된 상태를 기준으로 재계산되는 버그가 있었음 — 목적지 루프마다 `packet.pts/dts/time_base`를 원본값으로 리셋하도록 수정. 신규 엔드포인트 `POST /cameras/:id/video-fanout { port }`로 실행 중인 세션에도 목적지 추가 가능.
+- `addCameraStream()`이 카메라 재등록마다 alt 파이프라인의 fan-out을 ingest-daemon에 재등록(ingest-daemon의 `CameraManager.add()`가 매번 새 `CameraSession` 객체를 만들어 `_video_fanout_ports`가 초기화되므로, 재등록 후 자동 복구 안 하면 alt-PT 시청자가 재연결/크래시 복구 때마다 조용히 끊김) + `_worker`의 `died` 핸들러에서 PT-Router 캐시도 함께 초기화.
+
+**검증(실제 재현, 통계·추측 아님)**: 서버·ingest-daemon 재시작 후 실제 브라우저(Chrome) 재접속 시 로그에서 `alt-PT router ready videoPt=109 rtxPt=114` → `Video RTP fan-out added` → `alt-pipeline ready` 순서로 6개 카메라 전부 자동 생성됨을 확인. 이후 TID-A800의 실제 브라우저 WebRTC 통계(`GET /api/client-logs/webrtc`)에서 `framesDecoded: 2812`, `framesReceived: 2817`, `frameWidth: 2560`, `frameHeight: 1920`, `framesPerSecond: 30`, `keyFramesDecoded: 56` 확인 — 이 프로젝트의 전체 디버깅 세션을 통틀어 TID-A800에서 처음으로 실제 프레임 디코드가 확인된 사례.
+
+#### §6.27 §6.26 배포 직후 재생은 되지만 FPS가 0/28/5fps로 요동치고 버퍼가 자주 비는 현상 — 커널 UDP 버퍼 실측 진단과 두 가지 원인 수정 (2026-07-20)
+
+**증상**: §6.26 배포 후 Chrome·Edge 모두에서 영상 자체는 재생되지만, Dashboard ICE 패널에서 FPS가 0fps/28fps/5fps 등으로 자주 요동치고 buffer가 종종 0이 됨.
+
+**진단(실측)**:
+- `/proc/net/snmp`의 UDP `RcvbufErrors`가 5초 사이 42건(초당 ~8건) 증가 — 시스템 전체 UDP 소켓에서 커널 수신 버퍼 오버플로가 **그 순간에도 계속 발생 중**이었음(§6.18과 같은 클래스의 문제, 이번엔 다른 소켓).
+- `ingest_daemon.py`가 CPU 270%대를 지속 사용 중. SIGUSR1 스레드 덤프(faulthandler)로 확인한 결과 명시적 크래시/블로킹은 아니었으나, §6.26으로 카메라당 video RTP mux 목적지가 최대 2개(기본 PT=108 + alt-PT)로 늘어난 상태에서 **실측상 거의 모든 실제 뷰어가 alt-PT(Chrome=109)만 사용**하고 있어 기본(108) 파이프라인은 아무도 안 보는데도 ingest-daemon이 계속 그쪽에도 mux하고 있었음 — "절대 지연되면 안 되는" io 스레드의 패킷당 작업량이 실질적으로 불필요하게 2배가 된 상태.
+- `net.core.rmem_max`는 16MB로 이미 충분히 크지만(sudo 없이 확인만 가능, 변경은 불가), mediasoup의 `PlainTransport`만 §6.18에서 명시적으로 8MB 버퍼를 요청했을 뿐 **브라우저와 직접 통신하는 `WebRtcTransport`는 이 옵션 자체를 쓸 방법이 없는 `listenIps`(구식 API)를 사용 중**이어서 OS 기본값(`net.core.rmem_default` ≈ 208KB)에 머물러 있었음 — `Router.js` 소스 직접 확인으로 `listenIps`가 내부적으로 `listenInfos`로 변환될 때 `recvBufferSize`/`sendBufferSize` 필드가 전달되지 않음을 확정.
+
+**수정**:
+- `mediasoupEngine.js`의 `createWebRtcTransport()`를 `listenIps` → `listenInfos`로 전환(각 IP × udp/tcp 조합에 `recvBufferSize`/`sendBufferSize` 2MB 명시) — `Router.js`의 `listenIps→listenInfos` 자동 변환 로직을 그대로 수동 재현(같은 프로토콜 우선순위, `preferUdp` 유지).
+- 기본(PT=108) 파이프라인의 ingest-daemon fan-out 등록을 **alt-PT 파이프라인과 동일하게 지연 생성**으로 전환 — `addCameraStream()`의 초기 `POST /cameras`에서 `mediasoupPort`를 아예 빼고, `negotiate()`가 실제로 PT=108을 필요로 하는 첫 순간에만 `POST /cameras/:id/video-fanout`으로 등록(`cam.videoFanoutRegistered` 플래그로 중복 등록 방지). 카메라 재등록/ingest-daemon 재시작 시에도 이 상태가 유실되지 않도록 `addCameraStream()`과 `reregisterAllWithIngestDaemon()`(= `npm run ingest:restart`가 실제로 타는 경로) 양쪽에 재등록 로직 추가 — 후자는 기존에 alt-PT 파이프라인 재등록 자체가 없던 결함이라 함께 수정.
+- `waitForStreamReady()`가 실제로는 어디서도 호출되지 않는 죽은 코드임을 확인 — 기본 파이프라인 지연화가 그 함수의 동작을 바꿔도 실제 영향이 없음을 근거로 안전하다고 판단.
+
+**검증(실제 재현)**: 재시작 후 실제 뷰어 재접속 로그에서 카메라별로 `(pipeline: default)`/`(pipeline: alt-PT 109)`가 혼재해서 찍히는 것을 확인(동일 서버에 여러 브라우저/탭이 각자 실제로 쓰는 PT에 대해서만 파이프라인이 생성됨). 수정 전 5초당 42건씩 증가하던 `RcvbufErrors`가 수정 후 5초간 **0건 증가**로 확인됨.
+
+**추가 확인 — 위 수정만으로는 불충분했음**: `RcvbufErrors`는 잡았지만 사용자가 실제 Dashboard에서 재확인한 결과 FPS 요동·버퍼 비는 증상은 그대로였음. `ingest_daemon.py` CPU가 여전히 250~270%대에서 안 내려간 게 단서 — `AI_DECODE_THREADS`를 4→8로 늘려봤지만 CPU는 250%대로 거의 변화 없어(디코드 병렬도가 원인이 아님을 반증) 배제. 대신 실제 브라우저 candidate-pair RTT가 1~2ms로 완전히 동일 LAN임을 확인해 인터넷 구간 손실 가능성도 배제.
+
+다음으로 `.env`의 `CAPTURE_FPS`가 빈 값이라 "네이티브 fps 자동 매칭" 모드로 동작해야 하는데, 실제 ingest-daemon 로그의 AI frame 카운터 간격을 보면 TID-A800이 초당 약 9~10프레임씩 2560×1920 원본 해상도로 JPEG 인코딩·푸시되고 있었음(참고: `pipelineManager.js`가 `process.env.CAPTURE_FPS || 10`으로 항상 truthy 값을 강제해, `.env` 주석이 설명하는 "비워두면 자동 매칭" 경로가 실제로는 한 번도 타지 않는 기존 불일치도 함께 발견 — 이번 세션에서는 수정하지 않고 기록만 함). `CAPTURE_FPS=5`로 명시적으로 낮추고(전역 설정이라 카메라별 차등은 현재 배선 없음) 서버·ingest-daemon 재시작 후 재측정:
+
+| 지표 | 수정 전 | `CAPTURE_FPS=5` 적용 후 |
+|---|---|---|
+| `ingest_daemon.py` CPU | 250~270% | **170%** |
+| TID-A800 패킷 손실률 | ~1.2% | **~0.26%** |
+| .40 카메라(TNM) 패킷 손실률 | ~1.26% | **~0.56%** |
+| TID-A800 PLI(디코더 풀 리셋 요청) | 16~19회 | **2회** |
+
+CPU·손실률·PLI 모두 실측으로 뚜렷하게 개선됨을 확인. 다만 freezeCount가 완전히 0이 되지는 않아(8~14회) 잔여 불안정 요소가 더 있을 가능성은 남아있음 — AI 배회 감지의 시간 해상도를 낮추는 트레이드오프이므로 값 확정 전 실사용 화면으로 최종 확인 필요.
+
+**클라이언트 측 보완 — 적응형 jitter buffer**: 서버 측 개선 후에도 카메라별로 수신 fps가 다르고(다른 Video 연결에 의한 자연스러운 편차) Dashboard ICE 패널의 Buffer 값이 카메라마다 다르게 나타남(TID-A800 100ms, TNM 7~12ms) — 사용자 확인 결과 이 편차 자체는 정상이나, "수신 fps가 흔들릴 때 재생기 버퍼가 동적으로 늘어나야 끊김이 준다"는 방향 확인 요청. `RTCRtpReceiver.jitterBufferTarget`(ms 단위, Chrome 123+; 이전 seconds 단위 `playoutDelayHint`의 W3C 표준화된 후속 — MDN·Chromium Intent-to-Ship로 확인)로 페이지에서 브라우저의 jitter buffer 최소 유지 시간을 직접 요청 가능함을 확인. `useWebRTC.ts`의 기존 5초 주기 stats 폴링 루프에 추가:
+- 매 tick마다 freezeCount·packetsLost 증가분을 계산해, 증가가 있으면 목표치를 150ms 상향(최대 1000ms), 없으면 30ms씩 하향(플로어 100ms) — 아무 문제가 없었던 연결은 브라우저 기본값을 그대로 두고(0 = 미설정) 건드리지 않음.
+- `pc.getReceivers()`에서 video 트랙의 Receiver를 연결 시점에 한 번 획득, `'jitterBufferTarget' in receiver` 런타임 feature-detect 후 적용.
+- 클라이언트 빌드(`npm run build`)까지 완료 확인 — `express.static`이 매 요청마다 디스크에서 직접 서빙하고 Vite 빌드 산출물이 콘텐츠 해시 파일명이라, 서버 재시작 없이 브라우저 새로고침만으로 반영됨(server/src/index.js 주석에 이미 명시된 설계).
+
+**추가 확인 — 백그라운드 탭 전환 시 "무조건" 재현되는 별개 원인**: 사용자가 위 프로액티브 jitterBufferTarget 적용 후에도 재확인한 결과 Buffer red→fps 0 증상이 남아있었고, 특히 브라우저 탭을 다른 창으로 전환했다가 되돌아올 때 "무조건" 발생한다는 결정적 단서를 제공함. WebSearch로 확인한 결과 Chrome은 백그라운드(비활성) 탭의 WebRTC 비디오 디코드를 절전을 위해 자체적으로 스로틀링/일시정지하며, 백그라운드 타이머 스로틀링 예산은 약 30초 후부터 적용됨 — 이 프로젝트의 프레임/바이트 스톨 워치독(`FRAME_STALL_MS`/`STALL_MS`, §6.20/§6.22에서 다룬 것과 같은 계열의 로직이나 그 당시엔 탭 가시성 자체를 인지하지 못했음)이 이 정상적인 브라우저 절전 동작을 실제 스트림 장애로 오인해 `staleReconnect()`를 유발하고 있었음이 근본 원인으로 확정됨.
+
+**수정**: `useWebRTC.ts`에 Page Visibility API(`document.hidden`/`visibilitychange`) 기반 가드 추가:
+- `visibilitychange` 리스너가 탭이 다시 보이는 순간(`!document.hidden`) 프레임/바이트/freeze/loss 기준 시각·카운터(`lastFrames`/`lastFramesAt`/`lastBytesRx`/`lastBytesRxAt`/`prevFreezeCount`/`prevLossForAdapt`/`prevJitterDelay`/`prevJitterCount`)를 모두 리셋 — 백그라운드 동안 쌓인 시간 격차를 "정지"로 오판하지 않도록 함. 리스너는 `sessionRegistry`의 `pc` 일치 여부로 자가 정리(§6.22와 동일한 패턴).
+- 프레임/바이트 스톨 판정 로직 전체를 `if (!document.hidden) { ... }`로 감싸 탭이 숨겨진 동안은 카운터 갱신도, 스톨 판정도 하지 않음 — 최종 재연결 결정 블록도 `document.hidden`이면 완전히 no-op.
+- 프로액티브 jitterBufferTarget 상향 로직(`bufferMs`/`freezeDelta`/`lossDeltaForAdapt` 기반 escalation)도 동일하게 `!document.hidden`으로 감싸 백그라운드 탭에서 부풀려지거나 정지된 `bufferMs` 값에 반응해 목표치를 잘못 올리는 것을 방지. decay(하향) 로직도 같은 블록 안에 있어 탭이 숨겨진 동안은 목표치가 고정됨.
+- `document.removeEventListener('visibilitychange', ...)` 정리를 `clearInterval(statsTimer)`가 발생하는 두 지점(인터벌 자체의 entry-liveness 체크, `staleReconnect()` 내부) 모두에 추가.
+
+**검증**: `npx tsc --noEmit`, `npm run build` 모두 클린 통과 확인.
+
+**추가 개선 — ICE 패널 Bytes 표시를 누적 바이트에서 순간 bps로 변경 (2026-07-20)**: 기존 ICE 디버그 패널의 "Bytes ↑/↓" 항목은 nominated candidate-pair의 `bytesSent`/`bytesReceived`를 그대로 표시(§6.18에서 처음 구현)했는데, 이는 연결 시작 이후 누적값이라 시간이 지날수록 계속 커지기만 하고 "지금" 링크 상태를 보여주지 못함. `useWebRTC.ts`의 기존 5초 stats 폴링에서 video/audio Kbps를 계산하던 것과 동일한 델타 방식(`prevCpBytesTx`/`prevCpBytesRx` + 이전 샘플 시각 대비 경과 시간)으로 candidate-pair 바이트의 순간 전송률을 계산해 `IceStats.sentBps`/`receivedBps`(bits/sec)로 교체 — 기존 `bytesSent`/`bytesReceived` 필드는 제거. `WebRtcStatsPanel.tsx`의 해당 행 라벨을 "Bytes"→"Rate"로 변경하고 `fmtBps()` 헬퍼(bps/kbps/Mbps 자동 단위)로 표시, 더 이상 쓰이지 않게 된 `fmtBytes()` 헬퍼는 `noUnusedLocals` 빌드 설정에 따라 함께 제거. `npx tsc --noEmit`/`npm run build` 클린 통과 확인.
+
+**추가 개선 — Rate 갱신 주기를 5초 폴링에서 분리해 1초로 단축 (2026-07-20)**: 사용자 요청으로 ICE 패널 Rate 값의 갱신 빈도를 높임. 전체 `statsTimer`의 `POLL_MS`(5초) 자체를 낮추는 대신 별도의 `rateTimer`(`RATE_POLL_MS=1000`)를 신설해 candidate-pair bytes만 1초마다 재조회·재계산하는 방식을 택함 — `POLL_MS`는 프레임/바이트 스톨 워치독의 판정 주기이자 `JITTER_TARGET_STEP_UP_MS`/`STEP_DOWN_MS`(§6.27 상단)의 틱당 증분 크기가 전제하는 시간 단위이기도 해서, 이 값을 그대로 1초로 낮추면 스톨 감지가 더 예민해지는 것은 물론 jitterBufferTarget escalation/decay 속도가 의도치 않게 5배 빨라져 §6.27 전체에서 검증한 튜닝이 깨짐. 두 루프가 candidate-pair를 파싱하는 로직(nominated pair 탐색 → local/remote candidate 매칭 → rttMs)이 동일해, 이를 모듈 스코프 `extractNominatedPair()` 헬퍼로 추출해 공유(메인 루프는 rttMs만, rateTimer는 local/remote+bytes만 사용). `rateTimer`는 `document.hidden`으로 게이팅하지 않음 — candidate-pair bytes는 ICE/네트워크 계층 카운터라 탭이 백그라운드로 디코드를 멈춘 동안에도(§focus-throttle) 실제로 계속 증가하므로, 스톨 워치독/jitterBufferTarget escalation과 달리 여기서는 감춰야 할 "허위 신호"가 아님. `npx tsc --noEmit`/`npm run build` 클린 통과 확인.
+
+**추가 확인 — Buffer가 ~980ms까지 상승 후 fps 0·재생 정지·재연결·다시 반복되는 패턴 (2026-07-20, 진단만, 미수정)**: 사용자가 수신 대역폭이 10Mbps 이상으로 충분함에도 이 패턴이 반복된다고 보고 — 네트워크 대역폭은 원인에서 배제되고, 이는 이미 §6.20 코드 주석에 "client-side decode CPU starvation from many simultaneous high-res tiles/tabs — reconnecting cannot fix a browser decode-capacity problem"로 정확히 예견되어 있던 클라이언트 디코드 용량 한계 클래스의 증상과 정확히 일치함:
+- `bufferMs`(`jitterBufferDelay`/`jitterBufferEmittedCount` 델타)는 "프레임이 재생되기까지 지터 버퍼에 머문 평균 시간"이지 네트워크 지연이 아님 — 네트워크는 정상인데 이 값이 계속 오르기만 하고 안정되지 않는다는 것은, 디코더가 도착 속도만큼 프레임을 소비(디코드+재생)하지 못해 버퍼에 미디어가 계속 쌓이고 있다는 신호. §6.21에서 이 카메라들에 Level 5.1(2560×1920 등급)을 적용했으므로 인코딩 자체는 정상이지만, 그만큼 브라우저 쪽 디코드 부하도 큼.
+- 이 프로젝트의 프로액티브 jitterBufferTarget 로직(§6.27 상단)은 "bufferMs가 오르는 것은 네트워크 지터이니 버퍼를 더 늘려 흡수하자"는 전제로 설계됨 — 실제 원인이 네트워크 지터가 아니라 디코드 용량 부족이라면, 목표 버퍼를 올려봐야 디코드 처리량 자체가 늘지 않으므로 문제를 해결하지 못하고 오히려 큐만 더 깊게 쌓은 뒤에 무너지게 만들 가능성이 있음 — `JITTER_TARGET_MAX_MS=1000` 천장까지 거의 다 차서(~980ms) 정지하는 관찰과 부합.
+- fps가 0으로 떨어졌다가 재연결로 30fps가 회복되는 패턴은, 재연결이 Consumer/디코더 상태를 리셋해 쌓여있던 백로그를 강제로 비워주기 때문일 뿐 — 디코드 용량 자체가 늘어난 것이 아니므로, 동일한 조건(예: 동일 그리드에 여러 고해상도 타일 동시 렌더링)이 유지되면 버퍼가 다시 쌓이기 시작해 같은 주기로 재현되는 것으로 설명됨.
+- 검증되지 않은 가설이므로 다음 세션에서 확인 필요: (1) 해당 카메라를 그리드가 아닌 단일 풀스크린으로만 열어 동시 디코드 타일 수를 1개로 줄였을 때도 재현되는지(재현 안 되면 디코드 용량 가설 강화), (2) `chrome://gpu`/`chrome://media-internals`에서 해당 스트림이 하드웨어 가속 디코드를 실제로 타는지(소프트웨어 디코드라면 그 자체가 원인), (3) 재현 시점에 동시에 열려있던 다른 카메라 타일 수. **미수정** — 코드 변경 전 사용자 확인 대기 중.
+
+**추가 확인 — `chrome://gpu` 실측 결과로 가설 수정 (2026-07-20)**: 사용자가 증상 재현 환경(Windows, Edge/151, NVIDIA RTX 2000 Ada, 동시 오픈 타일 JPEG 폴링 4개 + WebRTC 2개)의 `chrome://gpu` 리포트를 제공:
+- **"Video Decode: Hardware accelerated"** 및 Video Acceleration Information에 `Decode h264 high: 64x64 to 4096x4096 pixels` 확인 — H.264 High 프로파일 하드웨어 디코드가 2560×1920(Level 5.1)을 충분히 커버함. **(2)번 확인 항목의 "소프트웨어 디코드가 원인" 가설은 이걸로 배제됨.**
+- 동시 오픈 타일이 WebRTC 비디오 디코드가 필요한 것은 2개뿐(JPEG 폴링 4개는 `<img>` 갱신이라 별도 비디오 디코드 파이프라인을 타지 않음) — §6.20이 예견한 "many simultaneous high-res tiles"만큼 극단적인 동시 디코드 경합은 아니어서, 순수 디코드 처리량 부족 가설의 설명력이 약해짐.
+- 대신 같은 리포트에서 새로운 단서 발견: `YUY2/NV12/BGRA8/RGB10A2/P010 overlay support`가 전부 **SOFTWARE**로 표시됨(`Direct Rendering Display Compositor: Disabled`도 함께) — 즉 H.264 디코드 자체는 GPU 하드웨어를 타지만, 디코드된 프레임을 화면에 합성(overlay/compositing)하는 경로는 이 GPU/드라이버 조합에서 진짜 제로카피 하드웨어 오버레이가 아니라 소프트웨어 경로로 폴백하고 있음. 또한 GPU 프로세스 로그에 `SharedImageManager::ProduceOverlay`/`ProduceSkia: Trying to Produce a ... representation from a non-existent mailbox` 에러가 여러 날짜·시각에 걸쳐 반복적으로(때로는 짧은 간격으로 연달아) 발생 — 디코드된 프레임을 컴포지터로 넘기는 SharedImage/mailbox 단계에서 실패가 간헐적으로 발생 중임을 시사.
+- **가설 수정**: 순수 "디코드 처리량 부족"보다는, "디코드는 하드웨어로 빠르게 끝나지만 그 결과를 화면에 합성하는 소프트웨어 오버레이 경로가 병목이 되어 프레젠테이션이 밀리고, 그 결과가 jitterBufferDelay 상승(재생이 안 되니 버퍼에 계속 쌓임)으로 나타난다"는 쪽이 증거와 더 잘 맞음 — 디코드 자체가 아니라 "디코드된 프레임을 화면에 올리는" 프레젠테이션 단계가 약한 GPU/드라이버 조합(소프트웨어 오버레이)인 것이 실제 병목일 가능성.
+- 다음 확인 필요(여전히 미수정): `chrome://media-internals`에서 증상 재현 시점에 프레임 드롭/디코더 지연이 실제로 발생하는지, 그리고 그 시각이 GPU 프로세스 로그의 `ProduceOverlay`/`ProduceSkia` 에러 시각과 겹치는지 대조. 겹치면 프레젠테이션(오버레이/컴포지팅) 병목 가설이 확정됨.
+
+**적용된 수정 — bufferMs 포화 시 프로액티브 재연결 (2026-07-20)**: 정확한 근본 원인(디코드 vs 프레젠테이션 병목)은 `chrome://media-internals` 대조로 아직 확정되지 않았지만, 원인과 무관하게 유효한 개선을 먼저 적용: `jitterTargetMs`가 이미 `JITTER_TARGET_MAX_MS`(1000ms) 상한까지 escalation된 상태에서 `bufferMs`가 여전히 `BUFFER_MS_BAD`(300ms) 이상이면, 더 이상 escalation으로 얻을 수 있는 여지가 없다는 뜻 — 브라우저에게 요청할 수 있는 버퍼를 이미 최대로 요청했는데도 따라가지 못하고 있다는 신호이므로, 실제 fps 정지가 벌어지는 20~25초짜리 프레임/바이트 스톨 워치독을 기다리지 않고 바로 `staleReconnect()`를 트리거하도록 변경.
+- `useWebRTC.ts`에 `BUFFER_SATURATED_TICKS_LIMIT=2`(단발성 스파이크에 반응하지 않도록 연속 2틱=10초 요구) 및 `bufferSaturatedTicks` 카운터 추가 — jitterBufferTarget escalation 블록(`!document.hidden` 가드 내부)에서 `jitterTargetMs >= JITTER_TARGET_MAX_MS && bufferMs >= BUFFER_MS_BAD`일 때만 증가, 그 외에는 0으로 리셋.
+- 최종 스톨 판정 if/else 체인에 `bufferSaturatedTicks >= BUFFER_SATURATED_TICKS_LIMIT` 분기를 `frameStalled`보다 먼저(더 이른 신호이므로) 추가 — 동일한 `staleReconnect()`를 재사용해 기존 backoff/retryCount 상한 로직을 그대로 상속.
+- `handleVisibilityChange`(탭 재활성화 시 리셋 목록)에도 `bufferSaturatedTicks = 0` 추가 — 백그라운드 탭에서 인위적으로 부풀려진 bufferMs가 포그라운드 복귀 직후 오탐 재연결을 유발하지 않도록.
+- 효과: 사용자가 겪던 "Buffer가 980ms까지 오르며 화면이 얼어붙어 있다가 한참 후에야 재연결" 패턴이, 버퍼가 포화되는 즉시(대략 10초 이내) 짧은 재연결로 대체됨 — 화면이 멈춰있는 체감 시간이 크게 줄어듦. `npx tsc --noEmit`/`npm run build` 클린 통과 확인.
+
 ---
 
 ## 7. 백엔드 선택 기준 비교
@@ -1008,6 +1127,16 @@ WHEP 세션을 90초간 관찰한 결과, 특정 카메라(특히 2048×1536 이
 
 ---
 
+### 6.23 등록 응답 유실 시 ingest-daemon 좀비 세션 (2026-07-20)
+
+메인 서버 크래시 복구 구간(04:37~04:43)에서 카메라 삭제 API가 정상 처리된 후, ingest-daemon이 보고하는 카메라 수(`/health`의 `cameras`)가 DB의 실제 카메라 수보다 1개 많은 상태로 지속되는 현상이 발견됨.
+
+**원인**: `_ingestRegisterCamera()`(`pipelineManager.js`)는 `POST /cameras` 호출이 `fetch` 레벨에서 실패(타임아웃·커넥션 리셋)하면 무조건 "등록 실패"로 간주해 `false`를 반환한다. 그러나 이 시점 ingest-daemon이 요청 자체는 정상적으로 처리해 내부적으로 카메라를 이미 등록해놓고, 그 **응답만** 네트워크 혼잡·데몬 자체 재시작 등으로 유실되는 경우가 있음이 로그로 확인됨(`cf24e5b4-8aa3-4d75-9bf8-ebd1bc88914b`, 2026-07-20 04:42:12 — register가 "fetch failed"로 실패 처리됐지만 daemon 쪽엔 실제로 등록되어 있었음). 등록 실패로 처리된 카메라는 DB에 저장되지 않으므로, 이후 어떤 재조정(reconcile) 경로도 이 ID를 알지 못해 `DELETE`를 호출할 방법이 없다 — daemon 내부에 영구적인 좀비 세션으로 남는다.
+
+**수정**: `_ingestRegisterCamera()`의 catch 블록에서 실패를 로그로 남긴 직후, 동일한 `cameraId`로 `_ingestRemoveCamera()`(§10.4에서 이미 구현된 재시도 1회 + 로그 포함 DELETE 헬퍼)를 즉시 호출하도록 변경. `DELETE`는 daemon 쪽에 해당 ID가 없으면 `{ok:false}`를 반환할 뿐 오류가 아니므로(멱등), 실제로 등록이 실패했던 정상 케이스에서는 비용이 거의 없고, 등록은 성공했지만 응답만 유실된 케이스에서는 좀비 세션을 즉시 정리한다. 검증: 수동으로 `DELETE http://127.0.0.1:7070/cameras/cf24e5b4-...`를 호출해 daemon의 `cameras` 카운트가 5→4로 즉시 DB와 일치함을 확인, 이후 이 정리 로직을 register 실패 경로에 상시 편입.
+
+---
+
 ### 12.3 스트림별 타임아웃 전략
 
 | 스트림 | 방식 | 타임아웃 | 근거 |
@@ -1058,3 +1187,15 @@ WHEP 세션을 90초간 관찰한 결과, 특정 카메라(특히 2048×1536 이
 | 1.22 | 2026-07-16 | §6.19 신규 — Chrome DevTools Media 패널에서 특정 타일이 "Pause"로 표시되는 현상 확인: `<video>.play()` 실패 시 `_ignoreAbort`가 무해한 `AbortError`뿐 아니라 `NotAllowedError`(자동재생 정책 차단)까지 조용히 무시해, 정지된 마지막 프레임만 계속 표시되는데도 아무 에러 없이 영원히 멈춰있을 수 있었던 결함 발견·수정 — `_attachAndPlay()` 헬퍼로 통일해 `NotAllowedError`만 500ms 후 1회 재시도 |
 | 1.23 | 2026-07-16 | §6.20 신규 — 실사용자 콘솔 로그 직접 확인 결과 카메라 7개 전부가 프레임 스톨→재연결을 반복 중임을 확정: 그리드의 모든 타일이 거의 동시에 마운트되어 §6.18의 프레임 스톨 워치독(고정 20초 임계값)이 동시에 만료 → 여러 타일이 동시에 재협상하며 그 부하 자체가 서로의 디코딩을 방해 → 다시 동시 스톨 → 재연결이 서로를 촉발하는 자기강화 루프였음(§6.14 서버측 문제와 동일 클래스, 이번엔 클라이언트). `useWebRTC.ts`에 연결당 랜덤 지터(0-8초)로 워치독 만료 시점 분산 + `retryCount` 기반 증가 백오프(회당 +2초, 최대 +15초)로 재연결 지연 추가 |
 | 1.24 | 2026-07-16 | §6.21 신규 — 고해상도 카메라가 계속 검은 화면이던 마지막 원인 확정: mediasoup이 정적으로 선언하는 H.264 `profile-level-id`가 Level 4.0(MaxFS 8192 매크로블록)인데 TID-A800/TNM-C2712T Ch1의 실제 SPS는 Level 5.0이고 해상도(2560×1920/2048×1536)가 Level 4.0의 최대 프레임 크기를 초과하는 규격 위반이었음 — Level 5.1(`640033`)로 상향, TID-A800 Ch2 26.6fps·TNM-C2712T Ch1 29fps(스톨/NACK/드롭 전부 0)로 완전 회복. §6.22 신규 — 그리드 타일+풀스크린처럼 같은 카메라를 공유하는 여러 컴포넌트 중, §6.18/§6.20의 프레임 스톨 워치독이 연결을 최초로 만든 컴포넌트의 `cancelled` 플래그에만 묶여 있어 그 컴포넌트가 언마운트(예: 풀스크린 열면서 그리드 타일이 가려짐)되면 감시 자체가 조용히 중단되던 결함 발견·수정 — 워치독 종료 조건을 `sessionRegistry` 엔트리의 `pc` 일치 여부로 변경(생성자 언마운트와 무관하게 다른 소비자가 남아있으면 계속 동작), 재연결 액션도 공유 `stream.getTracks().forEach(t=>t.stop())`로 바꿔 네이티브 `inactive` 이벤트를 통해 현재 마운트된 모든 소비자에게 자동 전파되도록 함 |
+| 1.25 | 2026-07-20 | §6.23 신규 — 메인 서버 크래시 복구 구간에서 `_ingestRegisterCamera()`의 `POST /cameras`가 `fetch` 레벨에서 실패(타임아웃/커넥션 리셋)해도 daemon 쪽은 실제로 등록을 완료해놓는 경우가 있어, DB엔 없고 daemon 내부에만 존재하는 좀비 세션이 남던 결함 확인(`/health`의 `cameras`가 DB 카메라 수보다 많음) — catch 블록에서 동일 ID로 `_ingestRemoveCamera()`(멱등 DELETE)를 즉시 호출하도록 수정, 실측으로 카운트 5→4 정합 확인 |
+| 1.26 | 2026-07-20 | §6.24 신규 — 카메라가 꺼져도 Dashboard "Cameras" 패널 상태 dot이 갱신되지 않던 결함 수정: `IngestDaemonCapture`가 `warn`/`reconnecting`/`error`를 전혀 emit하지 않아 프레임 워치독의 재시도가 `camera:status`를 한 번도 발행하지 않던 문제(워치독 스톨 감지 시 `reconnecting`, 연속 3회 실패 시 `error` 발행 추가) + `_updateCameraStatus()`가 room-scoped emit이라 사이드바처럼 room 미가입 컴포넌트에 도달하지 않던 문제(전역 broadcast로 변경) + 워치독 복구 후 `streaming` 재발행 누락(`ctx._statusIsDown` 플래그로 통합) 함께 수정 |
+| 1.27 | 2026-07-20 | §6.25 신규 — H.265/HEVC 카메라 WebRTC 재생 불가 원인 조사: 최초 동적 코덱 선택 구현(Router H.265 항목, Producer 동적 mimeType, SDP H.265 fmtp 주입) 후 실제 재시작으로 검증한 결과 mediasoup 3.21.0/3.21.2 모두 H.265를 전혀 지원하지 않음(`media codec not supported`)을 확인 — 해당 mediasoup 관련 변경을 전부 되돌리고 video Producer는 항상 H.264로 고정. `ingest_daemon.py`의 H.265 감지·파싱(`_parse_h265_vps_sps_pps`, EPB 버그 수정 포함)과 `/video-params` 확장 필드는 진단용으로 유지. 부수적으로 `negotiate()`의 미사용 `profileLevelId` 할당 누락 결함도 함께 발견·수정(유지) |
+| 1.28 | 2026-07-20 | §6.26 신규 — H.264 카메라조차 Chrome에서 재생 안 되던 근본 원인 확정: mediasoup Consumer의 실제 전송 PT는 Router 등록 시 정적 선언값으로 영구 고정되며 `negotiate()`마다 넘기는 `remoteRtpCapabilities`는 호환성 필터일 뿐 PT를 바꾸지 못함(`ortc.js` 직접 확인) — 브라우저 offer가 Router 고정값과 다른 PT를 쓰면 프레임이 영원히 디코드 안 됨(Edge=108 재생됨, Chrome=109 재생 안 됨 실측). 한 Router 안에 PT 두 개를 선언하는 방식은 Producer→capability 매칭이 PT를 기준으로 삼지 않아 근본적으로 불가능함을 소스로 확정, 대신 PT별 Router/파이프라인을 필요할 때마다 생성·캐싱하는 방식(`_ensurePtRouter`/`_ensureAltPipeline`)으로 해결. `ingest_daemon.py`에 video RTP 다중 목적지 fan-out 추가(`_mux_passthrough`의 패킷 in-place 변형으로 인한 목적지 간 타이밍 오염 버그도 함께 발견·수정). 실제 브라우저 재접속으로 TID-A800의 `framesDecoded`가 처음으로 0 아닌 값(2812, 30fps, 2560×1920)을 기록함을 확인 |
+| 1.29 | 2026-07-20 | §6.27 신규 — §6.26 배포 직후 재생은 되지만 FPS 요동·버퍼 empty가 빈번하던 증상 실측 진단: UDP `RcvbufErrors`가 초당 ~8건씩 실시간 증가 중이었음(WebRtcTransport가 `listenIps`(구식 API) 사용으로 §6.18의 버퍼 크기 옵션을 못 받고 있었음 + 아무도 안 보는 기본(108) 파이프라인까지 ingest-daemon이 계속 mux) — `listenInfos`로 전환해 버퍼 명시 + 기본 파이프라인도 alt-PT처럼 지연 생성으로 전환, `RcvbufErrors` 증가를 0으로 확인. 그러나 사용자 재확인 결과 시각적 증상은 그대로였음 — `AI_DECODE_THREADS` 4→8은 CPU 무변화로 배제, candidate-pair RTT 1~2ms로 네트워크 구간 손실도 배제. 최종적으로 `CAPTURE_FPS`가 실질적으로 항상 10fps 강제(`.env` 문서의 "비워두면 자동 매칭" 경로가 코드상 한 번도 실행 안 되는 기존 불일치 발견, 미수정 기록만)였고 TID-A800 기준 초당 9~10회 2560×1920 원본 해상도 JPEG 인코딩이 지속 부하원이었음을 확인 — `CAPTURE_FPS=5`로 낮춰 CPU 250~270%→170%, TID-A800 손실률 1.2%→0.26%, PLI 16~19회→2회로 실측 개선 |
+| 1.30 | 2026-07-20 | §6.27 보완 — 클라이언트 측 적응형 jitter buffer 추가: `useWebRTC.ts`에 `RTCRtpReceiver.jitterBufferTarget`(Chrome 123+) 기반 로직 도입, 5초 stats 폴링마다 freezeCount/packetsLost 증가 여부로 목표 버퍼 시간을 100~1000ms 사이에서 동적 조정(문제 없으면 브라우저 기본값 유지). `npx tsc --noEmit`/`npm run build` 확인, 서버 재시작 없이 브라우저 새로고침만으로 반영됨을 확인 |
+| 1.31 | 2026-07-20 | §6.27 재보완 — 사용자 실측 관찰(Buffer가 빨간색으로 변한 뒤 얼마 지나 fps가 0이 되는 패턴 반복)에 따라 트리거를 반응형(freeze 발생 후)에서 선제형(bufferMs 자체가 WebRtcStatsPanel의 yellow/red 임계값을 넘는 순간)으로 변경 — `BUFFER_MS_WARN`(100ms)/`BUFFER_MS_BAD`(300ms) 상수를 `useWebRTC.ts`에서 export해 `WebRtcStatsPanel.tsx`와 단일 소스로 공유, red 진입 시 2배 폭으로 즉시 상향 |
+| 1.32 | 2026-07-20 | §6.27 재보완 — 브라우저 탭 Focus In/Out 시 "무조건" 재현되는 재연결 근본 원인 확정: Chrome의 백그라운드 탭 WebRTC 비디오 디코드 스로틀링을 기존 스톨 워치독이 정상 동작으로 인지하지 못해 오탐 재연결을 유발 — `useWebRTC.ts`에 Page Visibility API 기반 가드 추가(탭 숨김 중 스톨 판정·jitterBufferTarget escalation 전면 정지, 재표시 시 기준 시각/카운터 리셋). `npx tsc --noEmit`/`npm run build` 클린 통과 확인 |
+| 1.33 | 2026-07-20 | §6.27 재보완 — ICE 패널 "Bytes ↑/↓" 항목을 연결 시작 이후 누적 바이트에서 순간 전송률(bps)로 변경: candidate-pair `bytesSent`/`bytesReceived` 델타를 video/audio Kbps와 동일한 방식으로 계산해 `IceStats.sentBps`/`receivedBps`로 교체, `WebRtcStatsPanel.tsx` 라벨 "Bytes"→"Rate" + `fmtBps()` 자동 단위(bps/kbps/Mbps) 표시로 변경, 미사용 `fmtBytes()` 제거 |
+| 1.34 | 2026-07-20 | §6.27 재보완 — ICE 패널 Rate 갱신 주기를 메인 5초 stats/워치독 루프(`POLL_MS`)에서 분리한 별도 1초 `rateTimer`(`RATE_POLL_MS`)로 단축, candidate-pair 파싱 공통 로직을 `extractNominatedPair()` 헬퍼로 추출해 두 루프가 공유(`POLL_MS`를 직접 낮추면 스톨 워치독 민감도와 jitterBufferTarget escalation/decay 속도까지 5배 빨라져 §6.27 상단에서 튜닝한 값이 깨지므로 회피). 사용자가 보고한 "Buffer가 ~980ms까지 상승→fps 0→재연결→반복" 패턴을 §6.20에서 이미 예견된 클라이언트 디코드 용량 한계(네트워크가 아닌 브라우저 디코드 처리량 부족으로 지터 버퍼에 프레임이 계속 쌓이는 현상)로 진단·문서화, 코드 수정은 사용자 확인 후로 보류 |
+| 1.35 | 2026-07-20 | §6.27 재보완 — 사용자가 제공한 `chrome://gpu` 실측(Windows/Edge, NVIDIA RTX 2000 Ada)으로 v1.34 가설 수정: H.264 하드웨어 디코드가 4096×4096까지 지원되어 "소프트웨어 디코드" 가설 배제, 동시 오픈 타일도 WebRTC 비디오 디코드 2개뿐(JPEG 폴링 4개는 비디오 디코드 무관)이라 "다수 타일 동시 디코드 경합"의 설명력도 약화. 대신 overlay 지원이 전부 SOFTWARE로 표시되고 GPU 프로세스 로그에 `SharedImageManager::ProduceOverlay`/`ProduceSkia` "non-existent mailbox" 에러가 반복 발견되어, 디코드가 아닌 "디코드된 프레임을 화면에 합성하는 프레젠테이션(오버레이/컴포지팅) 경로"가 실제 병목일 가능성으로 가설 이동 — 여전히 미수정, `chrome://media-internals` 프레임 드롭 시각과 GPU 에러 시각 대조 필요 |
+| 1.36 | 2026-07-20 | §6.27 재보완 — 근본 원인 확정 전이지만 원인과 무관하게 유효한 개선으로 프로액티브 재연결 추가: `useWebRTC.ts`에 `bufferSaturatedTicks`/`BUFFER_SATURATED_TICKS_LIMIT=2` 도입, jitterBufferTarget escalation이 이미 `JITTER_TARGET_MAX_MS` 상한에 도달했는데도 `bufferMs`가 계속 `BUFFER_MS_BAD` 이상이면(더 escalation할 여지가 없다는 신호) 20~25초짜리 프레임/바이트 스톨 워치독을 기다리지 않고 즉시 `staleReconnect()` 트리거 — 사용자가 겪던 "Buffer 980ms까지 상승 후 장시간 정지" 패턴을 짧은 재연결로 대체. `npx tsc --noEmit`/`npm run build` 클린 통과 확인 |

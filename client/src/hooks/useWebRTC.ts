@@ -4,6 +4,123 @@ import { useWebRTCConfigStore } from '../stores/webrtcConfigStore';
 import { useDataChannelStore } from '../stores/dataChannelStore';
 import { registerPeerConnection } from '../clientLogger';
 
+// WebRTC stats panel (2026-07-20) — one sample per stats poll tick: video/audio
+// receive bitrate plus resolution/buffer/RTT/loss, for a YouTube "stats for
+// nerds"-style Connection Speed / Network Activity timeline. Bounded ring
+// buffer, see RX_HISTORY_MAX below.
+export interface RxSample {
+  t:         number; // Date.now() at sample time
+  videoKbps: number;
+  audioKbps: number;
+  resWidth:  number;
+  resHeight: number;
+  fps:       number;
+  bufferMs:  number; // jitter buffer delay accrued this tick (video)
+  rttMs:     number; // nominated candidate-pair round-trip time
+  lossPct:   number; // cumulative packet loss %, video+audio combined
+}
+
+export interface RxCodecInfo {
+  video: string;
+  audio: string;
+}
+
+const RX_HISTORY_MAX = 24; // ~2min of history at POLL_MS=5000
+
+// Adaptive jitter buffer (2026-07-20) — RTCRtpReceiver.jitterBufferTarget lets
+// the page ask the browser's own jitter buffer to hold at least N ms before
+// playout, trading latency for smoothness. Shipped in Chrome 123 (W3C-named
+// successor to the older seconds-based playoutDelayHint, which Chrome keeps
+// only for back-compat — see MDN/Chromium intent-to-ship). This does NOT
+// replace the browser's own adaptive jitter estimator; it only raises the
+// floor. Left untouched (browser default) until this connection actually
+// shows a freeze or loss burst, then ramped up and slowly decayed back down —
+// never forced below a "was already needed" floor, to avoid fighting the
+// browser's own estimator or thrashing on/off every tick.
+const JITTER_TARGET_FLOOR_MS   = 100; // once triggered, never decay below this
+const JITTER_TARGET_MAX_MS     = 1000; // spec allows up to 4000; stay conservative
+const JITTER_TARGET_STEP_UP_MS = 150;
+const JITTER_TARGET_STEP_DOWN_MS = 30;
+// bufferMs "yellow"/"red" thresholds — single source of truth shared with
+// WebRtcStatsPanel.tsx's color coding (2026-07-20). Live observation: a rising
+// bufferMs consistently PRECEDES an fps-drop-to-0 freeze by a few seconds — the
+// browser's own jitter estimator is already straining to keep up with growing
+// network jitter/loss before it finally loses the race. Reacting only to an
+// already-occurred freeze (the original version of this logic) was too late;
+// bufferMs crossing into yellow/red now drives the SAME proactive step-up,
+// on the theory that reinforcing the browser's own in-progress adaptation
+// with a higher explicit floor, sooner, gives it more margin to actually
+// avoid the underrun instead of just noticing it after the fact.
+export const BUFFER_MS_WARN = 100;
+export const BUFFER_MS_BAD  = 300;
+// Buffer-saturation proactive reconnect (2026-07-20, §6.27 decode/presentation
+// backlog) — live user reports: bufferMs climbs all the way to the
+// JITTER_TARGET_MAX_MS ceiling (~980ms observed) with fps still 30, then fps
+// drops to 0 and the stream freezes until the frame/byte-stall watchdog
+// (20-25s) finally reconnects it. Once jitterTargetMs is already pinned at
+// its max AND bufferMs is still BAD, escalating further cannot help — we've
+// already asked the browser to hold as much buffer as we're willing to, and
+// it's not enough, meaning whatever is behind the frame (decode or, per
+// chrome://gpu, possibly a software compositor/overlay presentation path)
+// isn't keeping up. That is a strong, early predictor of the same freeze the
+// stall watchdog eventually catches — reconnect on it directly rather than
+// waiting out the full stall grace period, so the user sees a brief
+// reconnect blip instead of many seconds of a frozen frame first. Two
+// consecutive ticks (not one) so a single transient spike doesn't trigger.
+const BUFFER_SATURATED_TICKS_LIMIT = 2;
+
+function shortCodecName(mimeType: string): string {
+  return mimeType.split('/')[1] || mimeType;
+}
+
+interface NominatedPairCandidate {
+  type:     string;
+  protocol: string;
+  address:  string;
+  port:     number;
+}
+
+interface NominatedPairInfo {
+  local:         NominatedPairCandidate;
+  remote:        NominatedPairCandidate;
+  bytesSent:     number;
+  bytesReceived: number;
+  rttMs:         number;
+}
+
+// Shared by the main 5s stats/watchdog loop (only needs rttMs, for the rx
+// graph's RTT column) and the 1s ICE Rate loop (needs local/remote + bytes
+// for the Local/Remote/Rate panel rows) — both parse the same nominated
+// candidate-pair shape out of a getStats() report, so this avoids
+// maintaining two copies of the candidate-pair/local-candidate/
+// remote-candidate parsing logic.
+function extractNominatedPair(stats: RTCStatsReport): NominatedPairInfo | null {
+  let bytesRx = 0, bytesTx = 0, rttMs = 0;
+  let localId = '', remoteId = '';
+  stats.forEach(r => {
+    if (r.type === 'candidate-pair' && r.nominated) {
+      bytesRx  += r.bytesReceived ?? 0;
+      bytesTx  += r.bytesSent ?? 0;
+      rttMs     = (r.currentRoundTripTime ?? 0) * 1000;
+      localId   = r.localCandidateId ?? '';
+      remoteId  = r.remoteCandidateId ?? '';
+    }
+  });
+  if (!localId || !remoteId) return null;
+  let local:  NominatedPairCandidate | null = null;
+  let remote: NominatedPairCandidate | null = null;
+  stats.forEach(r => {
+    if (r.type === 'local-candidate' && r.id === localId) {
+      local = { type: r.candidateType, protocol: r.protocol, address: r.address, port: r.port };
+    }
+    if (r.type === 'remote-candidate' && r.id === remoteId) {
+      remote = { type: r.candidateType, protocol: r.protocol, address: r.address, port: r.port };
+    }
+  });
+  if (!local || !remote) return null;
+  return { local, remote, bytesSent: bytesTx, bytesReceived: bytesRx, rttMs };
+}
+
 // Kept for backwards compatibility with components that import this type
 export interface IceStats {
   localType:     string;
@@ -13,8 +130,8 @@ export interface IceStats {
   remoteType:    string;
   remoteAddress: string;
   remotePort:    number;
-  bytesSent:     number;
-  bytesReceived: number;
+  sentBps:       number; // instantaneous send rate, bits/sec (candidate-pair delta)
+  receivedBps:   number; // instantaneous receive rate, bits/sec (candidate-pair delta)
 }
 
 type WebRTCState = 'idle' | 'connecting' | 'connected' | 'failed';
@@ -91,6 +208,8 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
   // below already parses the nominated candidate-pair on every poll; it just
   // never got stored anywhere. Populated from that same loop now.
   const [iceStats, setIceStats] = useState<IceStats | null>(null);
+  const [rxHistory, setRxHistory] = useState<RxSample[]>([]);
+  const [rxCodec, setRxCodec] = useState<RxCodecInfo>({ video: '', audio: '' });
 
   const retry = useCallback(() => {
     setRetryCount(0);
@@ -378,11 +497,68 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
             // this must not fire during that normal startup window.
             const FRAME_STALL_MS = 20_000 + jitterMs;
             const POLL_MS       = 5_000;
+            // ICE panel Rate (2026-07-20) — polled on its own faster cadence,
+            // independent of POLL_MS: the stall watchdog/adaptive jitter logic
+            // below is tuned against 5s ticks (§6.20/§6.27's JITTER_TARGET_STEP_*
+            // sizes assume a 5s cadence), so changing POLL_MS itself would
+            // silently change their behavior too. See the rateTimer block below.
+            const RATE_POLL_MS  = 1_000;
             let lastBytesRx     = -1;
             let lastBytesRxAt   = Date.now();
             let lastFrames      = -1;
             let lastFramesAt    = Date.now();
             let statsTick       = 0;
+            // Mini rx graph (2026-07-20) — previous sample for delta→kbps conversion.
+            let prevVideoBytes  = -1;
+            let prevAudioBytes  = -1;
+            let prevSampleAt    = Date.now();
+            // Buffer health (2026-07-20) — jitterBufferDelay/-EmittedCount are
+            // cumulative counters; averaging the delta between two polls gives
+            // the mean jitter-buffer hold time for THIS tick instead of a
+            // since-connect average that barely moves after the first minute.
+            let prevJitterDelay = -1;
+            let prevJitterCount = -1;
+            // Adaptive jitterBufferTarget state (2026-07-20) — see the
+            // JITTER_TARGET_* constants' comment above. 0 means "not yet
+            // triggered, leave the browser's own default alone".
+            const videoReceiver = pc.getReceivers().find(r => r.track?.kind === 'video');
+            let jitterTargetMs   = 0;
+            let prevFreezeCount  = -1;
+            let prevLossForAdapt = -1;
+            // See BUFFER_SATURATED_TICKS_LIMIT's comment above.
+            let bufferSaturatedTicks = 0;
+            // Background-tab focus guard (2026-07-20, §focus-throttle) —
+            // confirmed live: switching away from the browser tab and back
+            // reliably triggered a stall-reconnect almost every time. Chrome
+            // throttles/pauses WebRTC video decode for hidden tabs to save
+            // power (framesDecoded legitimately stops advancing while
+            // hidden), which looks EXACTLY like a real stall to the
+            // frame-stall watchdog below, and also inflates bufferMs
+            // (jitterBufferDelay keeps accumulating against a near-frozen
+            // emitted count) enough to fire the proactive jitterBufferTarget
+            // escalation on backgrounded-tab noise. Neither is a real
+            // problem — the tab wasn't decoding because nobody was
+            // watching, not because the network failed. Reset every "last
+            // seen" baseline the moment the tab becomes visible again so
+            // the next poll tick starts a fresh comparison window instead of
+            // measuring across the entire hidden period; the poll tick
+            // itself also skips stall-detection and buffer escalation
+            // entirely while still hidden (see their own `!document.hidden`
+            // guards below) so nothing fires while there's no one watching.
+            const handleVisibilityChange = () => {
+              if (sessionRegistry.get(cameraId)?.pc !== pc) {
+                document.removeEventListener('visibilitychange', handleVisibilityChange);
+                return;
+              }
+              if (!document.hidden) {
+                lastFrames = -1;      lastFramesAt   = Date.now();
+                lastBytesRx = -1;     lastBytesRxAt  = Date.now();
+                prevFreezeCount = -1; prevLossForAdapt = -1;
+                prevJitterDelay = -1; prevJitterCount  = -1;
+                bufferSaturatedTicks = 0;
+              }
+            };
+            document.addEventListener('visibilitychange', handleVisibilityChange);
             const statsTimer = setInterval(async () => {
               // Entry-liveness check, not `cancelled` (2026-07-16,
               // §shared-session-watchdog-scope) — see the onended handler
@@ -394,68 +570,140 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
               // still needs it. It only stops once the entry is gone
               // (refCount hit 0) or points at a different pc (a reconnect
               // already happened via some other path).
-              if (sessionRegistry.get(cameraId)?.pc !== pc) { clearInterval(statsTimer); return; }
+              if (sessionRegistry.get(cameraId)?.pc !== pc) {
+                clearInterval(statsTimer);
+                document.removeEventListener('visibilitychange', handleVisibilityChange);
+                return;
+              }
               try {
                 const stats = await pc.getStats();
                 let vBytesRx = 0, vPktsRx = 0, vFrames = 0;
-                let cpBytesRx = 0, cpBytesTx = 0;
-                let localCand = '', remoteCand = '';
-                let localInfo:  { type: string; protocol: string; address: string; port: number } | null = null;
-                let remoteInfo: { type: string; protocol: string; address: string; port: number } | null = null;
-                const candidatePairIds = new Set<string>();
+                let aBytesRx = 0, aPktsRx = 0;
+                let vWidth = 0, vHeight = 0, vFps = 0;
+                let vJitterDelay = 0, vJitterCount = 0;
+                let vFreezeCount = 0;
+                let vPacketsLost = 0, aPacketsLost = 0;
+                let vCodecId = '', aCodecId = '';
+                const codecMimeById = new Map<string, string>();
                 stats.forEach(r => {
                   if (r.type === 'inbound-rtp' && r.kind === 'video') {
-                    vBytesRx = r.bytesReceived ?? 0;
-                    vPktsRx  = r.packetsReceived ?? 0;
-                    vFrames  = r.framesDecoded ?? 0;
+                    vBytesRx     = r.bytesReceived ?? 0;
+                    vPktsRx      = r.packetsReceived ?? 0;
+                    vFrames      = r.framesDecoded ?? 0;
+                    vWidth       = r.frameWidth ?? 0;
+                    vHeight      = r.frameHeight ?? 0;
+                    vFps         = r.framesPerSecond ?? 0;
+                    vJitterDelay = r.jitterBufferDelay ?? 0;
+                    vJitterCount = r.jitterBufferEmittedCount ?? 0;
+                    vFreezeCount = r.freezeCount ?? 0;
+                    vPacketsLost = r.packetsLost ?? 0;
+                    vCodecId     = r.codecId ?? '';
                   }
-                  if (r.type === 'candidate-pair' && r.nominated) {
-                    cpBytesRx += r.bytesReceived ?? 0;
-                    cpBytesTx += r.bytesSent ?? 0;
-                    const lcId = r.localCandidateId ?? '';
-                    const rcId = r.remoteCandidateId ?? '';
-                    if (lcId) candidatePairIds.add('L:' + lcId);
-                    if (rcId) candidatePairIds.add('R:' + rcId);
-                    localCand  = lcId;
-                    remoteCand = rcId;
+                  if (r.type === 'inbound-rtp' && r.kind === 'audio') {
+                    aBytesRx     = r.bytesReceived ?? 0;
+                    aPktsRx      = r.packetsReceived ?? 0;
+                    aPacketsLost = r.packetsLost ?? 0;
+                    aCodecId     = r.codecId ?? '';
                   }
-                  if (r.type === 'local-candidate' && candidatePairIds.has('L:' + r.id)) {
-                    localCand = `${r.candidateType}/${r.protocol}/${r.address}:${r.port}`;
-                    localInfo = { type: r.candidateType, protocol: r.protocol, address: r.address, port: r.port };
-                  }
-                  if (r.type === 'remote-candidate' && candidatePairIds.has('R:' + r.id)) {
-                    remoteCand = `${r.candidateType}/${r.protocol}/${r.address}:${r.port}`;
-                    remoteInfo = { type: r.candidateType, protocol: r.protocol, address: r.address, port: r.port };
+                  if (r.type === 'codec') {
+                    codecMimeById.set(r.id, r.mimeType ?? '');
                   }
                 });
-                if (localInfo && remoteInfo && !cancelled) {
-                  // Local cancelled guard here specifically (unlike the loop's
-                  // own continuation above) — this setIceStats call updates
-                  // THIS component instance's React state, which must not
-                  // fire once THIS instance has unmounted even if the shared
-                  // watchdog keeps running for other consumers.
-                  const li = localInfo as { type: string; protocol: string; address: string; port: number };
-                  const ri = remoteInfo as { type: string; protocol: string; address: string; port: number };
-                  setIceStats({
-                    localType:     li.type,
-                    localProtocol: li.protocol,
-                    localAddress:  li.address,
-                    localPort:     li.port,
-                    remoteType:    ri.type,
-                    remoteAddress: ri.address,
-                    remotePort:    ri.port,
-                    bytesSent:     cpBytesTx,
-                    bytesReceived: cpBytesRx,
-                  });
+                // ICE Local/Remote/Rate panel rows are now populated by the
+                // separate rateTimer below (1s cadence) — this loop only
+                // needs the nominated pair's rttMs for the rx graph.
+                const rttMs = extractNominatedPair(stats)?.rttMs ?? 0;
+                if (!cancelled) {
+                  const videoCodec = shortCodecName(codecMimeById.get(vCodecId) ?? '');
+                  const audioCodec = shortCodecName(codecMimeById.get(aCodecId) ?? '');
+                  setRxCodec(prev =>
+                    prev.video === videoCodec && prev.audio === audioCodec
+                      ? prev
+                      : { video: videoCodec, audio: audioCodec });
                 }
+                // Mini rx graph (2026-07-20) — per-tick receive bitrate sample, kept
+                // as its own small ring buffer so CameraView can render a compact
+                // YouTube-stats-style bar graph next to the ICE panel. Component-local
+                // state, same `!cancelled` guard used throughout this loop.
+                const sampleAt = Date.now();
+                const elapsedS = (sampleAt - prevSampleAt) / 1000;
+                // Buffer ms: mean jitter-buffer hold time accrued since the last poll
+                // (see prevJitterDelay/-Count declaration above). 0 on the first tick
+                // and whenever the emitted-frame counter hasn't advanced.
+                let bufferMs = 0;
+                if (prevJitterCount >= 0 && vJitterCount > prevJitterCount) {
+                  bufferMs = ((vJitterDelay - prevJitterDelay) / (vJitterCount - prevJitterCount)) * 1000;
+                }
+                prevJitterDelay = vJitterDelay;
+                prevJitterCount = vJitterCount;
+                // Adaptive jitterBufferTarget (2026-07-20, revised) — see
+                // BUFFER_MS_WARN/BAD and JITTER_TARGET_* constants' comments.
+                // Two triggers, both step the target UP:
+                //   1. bufferMs itself crossing yellow/red — PROACTIVE, fires
+                //      before a freeze actually happens (the whole point,
+                //      per live observation that this reliably precedes an
+                //      fps-drop-to-0 event).
+                //   2. A freeze or new packet loss actually occurring THIS
+                //      tick — reinforcing signal, kept as a fallback for
+                //      cases where bufferMs doesn't rise cleanly beforehand
+                //      (e.g. a sudden loss burst rather than gradual jitter).
+                // With neither signal present, decay back toward the floor
+                // so latency doesn't stay inflated once things settle.
+                // Skipped entirely while the tab is hidden — bufferMs/freeze/
+                // loss readings are meaningless (inflated or frozen) against
+                // Chrome's background-tab decode throttling, so escalating
+                // off them here would just be reacting to the same false
+                // signal the stall-watchdog guard above already ignores.
+                if (!document.hidden) {
+                  const freezeDelta = prevFreezeCount >= 0 ? Math.max(0, vFreezeCount - prevFreezeCount) : 0;
+                  const lossDeltaForAdapt = prevLossForAdapt >= 0 ? Math.max(0, vPacketsLost - prevLossForAdapt) : 0;
+                  prevFreezeCount  = vFreezeCount;
+                  prevLossForAdapt = vPacketsLost;
+                  if (bufferMs >= BUFFER_MS_BAD) {
+                    // Already red — jump harder, we may be seconds from a stall.
+                    jitterTargetMs = Math.min(
+                      JITTER_TARGET_MAX_MS,
+                      Math.max(JITTER_TARGET_FLOOR_MS, jitterTargetMs) + JITTER_TARGET_STEP_UP_MS * 2,
+                    );
+                  } else if (bufferMs >= BUFFER_MS_WARN || freezeDelta > 0 || lossDeltaForAdapt > 0) {
+                    jitterTargetMs = Math.min(
+                      JITTER_TARGET_MAX_MS,
+                      Math.max(JITTER_TARGET_FLOOR_MS, jitterTargetMs) + JITTER_TARGET_STEP_UP_MS,
+                    );
+                  } else if (jitterTargetMs > 0) {
+                    jitterTargetMs = Math.max(JITTER_TARGET_FLOOR_MS, jitterTargetMs - JITTER_TARGET_STEP_DOWN_MS);
+                  }
+                  if (jitterTargetMs > 0 && videoReceiver && 'jitterBufferTarget' in videoReceiver) {
+                    try { videoReceiver.jitterBufferTarget = jitterTargetMs; } catch (_) {}
+                  }
+                  // See BUFFER_SATURATED_TICKS_LIMIT's comment — escalation
+                  // has nothing left to give once it's already at the max
+                  // and bufferMs is still bad.
+                  bufferSaturatedTicks = (jitterTargetMs >= JITTER_TARGET_MAX_MS && bufferMs >= BUFFER_MS_BAD)
+                    ? bufferSaturatedTicks + 1
+                    : 0;
+                }
+                const totalLost = vPacketsLost + aPacketsLost;
+                const totalRecv = vPktsRx + aPktsRx;
+                const lossPct = totalLost + totalRecv > 0 ? (totalLost / (totalLost + totalRecv)) * 100 : 0;
+                if (prevVideoBytes >= 0 && elapsedS > 0 && !cancelled) {
+                  const videoKbps = Math.max(0, ((vBytesRx - prevVideoBytes) * 8) / 1000 / elapsedS);
+                  const audioKbps = Math.max(0, ((aBytesRx - prevAudioBytes) * 8) / 1000 / elapsedS);
+                  setRxHistory(h => [...h, {
+                    t: sampleAt, videoKbps, audioKbps,
+                    resWidth: vWidth, resHeight: vHeight, fps: vFps,
+                    bufferMs: Math.max(0, bufferMs), rttMs, lossPct,
+                  }].slice(-RX_HISTORY_MAX));
+                }
+                prevVideoBytes = vBytesRx;
+                prevAudioBytes = aBytesRx;
+                prevSampleAt   = sampleAt;
                 statsTick += 1;
                 if (statsTick <= 10) {
                   // Verbose connect-time diagnostics only for the first ~50s.
                   console.log(
                     `[useWebRTC][${cameraId.slice(0,8)}] stats t+${statsTick*POLL_MS/1000}s:` +
-                    ` vBytesRx=${vBytesRx} vPkts=${vPktsRx} vFrames=${vFrames}` +
-                    ` cpRx=${cpBytesRx} cpTx=${cpBytesTx}` +
-                    ` local=${localCand} remote=${remoteCand}`
+                    ` vBytesRx=${vBytesRx} vPkts=${vPktsRx} vFrames=${vFrames} rttMs=${Math.round(rttMs)}`
                   );
                 }
                 // Byte-stall and frame-stall are separate failure modes (2026-07-16,
@@ -468,16 +716,22 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
                 // (bytes ARE moving), so nothing here previously caught it —
                 // vFrames was captured into a local var and only ever logged, never
                 // compared. This mirrors the byte check but keyed on framesDecoded.
+                // Skip stall bookkeeping entirely while the tab is hidden
+                // (2026-07-20, §focus-throttle — see handleVisibilityChange's
+                // comment above) — vFrames/vBytesRx naturally stop advancing
+                // while backgrounded, which is expected, not a stall.
                 let frameStalled = false;
-                if (vFrames !== lastFrames) {
-                  lastFrames   = vFrames;
-                  lastFramesAt = Date.now();
-                } else if (Date.now() - lastFramesAt > FRAME_STALL_MS) {
-                  frameStalled = true;
-                }
-                if (vBytesRx !== lastBytesRx) {
-                  lastBytesRx   = vBytesRx;
-                  lastBytesRxAt = Date.now();
+                if (!document.hidden) {
+                  if (vFrames !== lastFrames) {
+                    lastFrames   = vFrames;
+                    lastFramesAt = Date.now();
+                  } else if (Date.now() - lastFramesAt > FRAME_STALL_MS) {
+                    frameStalled = true;
+                  }
+                  if (vBytesRx !== lastBytesRx) {
+                    lastBytesRx   = vBytesRx;
+                    lastBytesRxAt = Date.now();
+                  }
                 }
                 // staleReconnect (2026-07-16) — both stall paths used to call
                 // retry(), which resets retryCount to 0. That's correct for the
@@ -521,6 +775,8 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
                   const backoffMs = Math.min(retryCount * 2_000, 15_000);
                   console.log(`[useWebRTC][${cameraId.slice(0,8)}] ${reason} — reconnecting in ${Math.round((AUTO_RETRY_DELAY + backoffMs)/1000)}s`);
                   clearInterval(statsTimer);
+                  clearInterval(rateTimer);
+                  document.removeEventListener('visibilitychange', handleVisibilityChange);
                   setTimeout(() => {
                     // Read the CURRENT shared stream at fire time, not a
                     // closure over ontrack's local `stream` (out of scope
@@ -530,7 +786,18 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
                     try { liveStream?.getTracks().forEach(t => t.stop()); } catch (_) {}
                   }, AUTO_RETRY_DELAY + backoffMs);
                 };
-                if (frameStalled) {
+                if (document.hidden) {
+                  // No-op — see the guard above; a hidden tab intentionally
+                  // stops updating lastFramesAt/lastBytesRxAt, so evaluating
+                  // their staleness against real wall-clock time here would
+                  // false-positive the moment STALL_MS elapses in the
+                  // background, reconnecting a tab nobody is watching.
+                } else if (bufferSaturatedTicks >= BUFFER_SATURATED_TICKS_LIMIT) {
+                  staleReconnect(
+                    `jitterBufferTarget maxed at ${jitterTargetMs}ms and bufferMs=${Math.round(bufferMs)}ms ` +
+                    `still bad for ${bufferSaturatedTicks} ticks — reconnecting proactively before a freeze`
+                  );
+                } else if (frameStalled) {
                   staleReconnect(
                     `framesDecoded stuck at ${vFrames} for ${Math.round((Date.now() - lastFramesAt) / 1000)}s ` +
                     `despite bytesReceived=${vBytesRx} and connectionState=connected`
@@ -543,6 +810,45 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
                 }
               } catch (_) {}
             }, POLL_MS);
+            // ICE panel Rate — 1s cadence, deliberately separate from
+            // statsTimer above (see RATE_POLL_MS's comment). Bytes sent/
+            // received come straight off the ICE candidate-pair, which
+            // keeps counting real network traffic even while the tab is
+            // hidden and decode is throttled (§focus-throttle) — so unlike
+            // the stall/jitter logic this is NOT gated on document.hidden.
+            let ratePrevBytesTx = -1;
+            let ratePrevBytesRx = -1;
+            let ratePrevAt      = Date.now();
+            const rateTimer = setInterval(async () => {
+              if (sessionRegistry.get(cameraId)?.pc !== pc) {
+                clearInterval(rateTimer);
+                return;
+              }
+              try {
+                const nominated = extractNominatedPair(await pc.getStats());
+                if (!nominated || cancelled) return;
+                const now     = Date.now();
+                const elapsed = (now - ratePrevAt) / 1000;
+                const sentBps     = ratePrevBytesTx >= 0 && elapsed > 0
+                  ? Math.max(0, ((nominated.bytesSent - ratePrevBytesTx) * 8) / elapsed) : 0;
+                const receivedBps = ratePrevBytesRx >= 0 && elapsed > 0
+                  ? Math.max(0, ((nominated.bytesReceived - ratePrevBytesRx) * 8) / elapsed) : 0;
+                ratePrevBytesTx = nominated.bytesSent;
+                ratePrevBytesRx = nominated.bytesReceived;
+                ratePrevAt      = now;
+                setIceStats({
+                  localType:     nominated.local.type,
+                  localProtocol: nominated.local.protocol,
+                  localAddress:  nominated.local.address,
+                  localPort:     nominated.local.port,
+                  remoteType:    nominated.remote.type,
+                  remoteAddress: nominated.remote.address,
+                  remotePort:    nominated.remote.port,
+                  sentBps,
+                  receivedBps,
+                });
+              } catch (_) {}
+            }, RATE_POLL_MS);
           } else if (cs === 'failed' || cs === 'closed') {
             setState('failed');
             if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
@@ -639,7 +945,7 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cameraId, enabled, socket, retryCount, retryNonce, retry]);
 
-  return { videoRef, state, hasAudio, retry, iceStats };
+  return { videoRef, state, hasAudio, retry, iceStats, rxHistory, rxCodec };
 }
 
 function _ignoreAbort(err: DOMException | Error) {

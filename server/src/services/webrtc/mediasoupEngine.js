@@ -158,6 +158,55 @@ function _ingestGetVideoParams(cameraId) {
   });
 }
 
+// Polls GET /cameras/:id/video-params until ingest-daemon reports the RTSP
+// probe is done (ready:true) or a budget expires (2026-07-20, §6.25). This
+// runs once at addCameraStream() time (pipeline start), not on the
+// low-latency WHEP negotiate() path, so a multi-second budget is acceptable —
+// ingest-daemon needs to complete its own RTSP DESCRIBE/stream-open first,
+// which this call's own POST /cameras just triggered.
+const VIDEO_CODEC_POLL_BUDGET_MS   = 5000;
+const VIDEO_CODEC_POLL_INTERVAL_MS = 300;
+function _pollVideoCodec(cameraId) {
+  const deadline = Date.now() + VIDEO_CODEC_POLL_BUDGET_MS;
+  return (async function poll() {
+    for (;;) {
+      const params = await _ingestGetVideoParams(cameraId);
+      if (params?.ready) return params;
+      if (Date.now() >= deadline) return null;
+      await new Promise(r => setTimeout(r, VIDEO_CODEC_POLL_INTERVAL_MS));
+    }
+  })();
+}
+
+// Builds the video Producer's rtpParameters (2026-07-20, §6.25). Always
+// H.264 — mediasoup 3.21.x has no H.265 support at all (confirmed against
+// both the installed version and the latest published 3.21.2; see the
+// router mediaCodecs comment above), so there is no second branch to select
+// dynamically. Kept as its own function (rather than inlined) because
+// _pollVideoCodec()'s result is still used to log a clear diagnostic when a
+// camera turns out to be HEVC, even though the Producer itself can't adapt.
+function _buildVideoRtpParameters() {
+  return {
+    codecs: [{
+      mimeType:    'video/H264',
+      payloadType: VIDEO_PT,
+      clockRate:   90000,
+      parameters: {
+        'packetization-mode':      1,
+        // Must match the router's mediaCodecs declaration above (2026-07-16,
+        // §6.13/§6.21) — a mismatch here is exactly what caused "no
+        // compatible media codecs" when only one side was patched to the
+        // real value. See the router declaration's comment for why this is
+        // '640033' (Level 5.1) and not '640028' (Level 4.0, too small for
+        // this fleet's higher-resolution cameras).
+        'profile-level-id':        '640033',
+        'level-asymmetry-allowed': 1,
+      },
+    }],
+    encodings: [{ ssrc: VIDEO_SSRC }],
+  };
+}
+
 // ── Router boot ───────────────────────────────────────────────────────────────
 
 async function _ensureRouter() {
@@ -185,6 +234,11 @@ async function _boot() {
     _initP  = null;
     for (const [id, cam] of _cameras.entries()) _closeCam(cam, id);
     _cameras.clear();
+    // Alt-PT routers/pipelines (2026-07-20, §6.26) live on the same dead
+    // Worker — stale either way; self-heal lazily on each camera's next
+    // negotiate() against the new worker/router, no need to actively rebuild.
+    for (const id of _altPipelines.keys()) _closeAltPipelines(id);
+    _ptRouters.clear();
     if (toRestore.length > 0) {
       setTimeout(async () => {
         console.log(`[WebRTC][mediasoup] re-registering ${toRestore.length} cameras after worker restart`);
@@ -293,6 +347,20 @@ async function _boot() {
           'level-asymmetry-allowed': 1,
         },
       },
+      // NOTE (2026-07-20, §6.25) — an H.265/'video/H265' entry was added here
+      // and reverted the same day. mediasoup 3.21.0 (and 3.21.2, the latest
+      // published version at the time) has NO H.265 support at all — its own
+      // supportedRtpCapabilities.js lists only VP8/VP9/H264/AV1 as valid video
+      // mimeTypes, confirmed by inspecting the installed package and a fresh
+      // `npm pack mediasoup@3.21.2` download. transport.produce() rejects any
+      // 'video/H265' rtpParameters outright with "media codec not supported
+      // [mimeType:video/H265]" — confirmed live, it broke addCameraStream()
+      // for every HEVC camera in the fleet. This is not fixable from this
+      // codebase; it requires either the cameras being reconfigured to stream
+      // H.264 instead, or a mediasoup release that adds H.265 support. See
+      // design doc §6.25 for the full writeup and the ingest-daemon-side
+      // codec-detection work (kept — genuinely useful for diagnosing which
+      // cameras are affected) that this depended on.
       {
         kind:      'audio',
         mimeType:  'audio/opus',
@@ -308,6 +376,184 @@ async function _boot() {
     `[WebRTC][mediasoup] ready  announcedIps=[${listenIps}]  rtcPorts=${RTC_MIN_PORT}-${RTC_MAX_PORT}`
   );
   return _router;
+}
+
+// ── Per-PT alternate Router/pipeline cache (2026-07-20, §6.26) ───────────────
+//
+// mediasoup permanently fixes a Producer's outgoing video payload type to
+// whatever the Router declared at boot — confirmed by reading ortc.js's
+// getConsumableRtpParameters()/getConsumerRtpParameters() directly. The
+// per-negotiate remoteRtpCapabilities argument (built by
+// _buildBrowserRtpCapabilities()) only filters which codecs are considered
+// compatible; it can never change the transmitted PT, despite this file's
+// earlier comments assuming otherwise. A browser's own SDP offer assigns
+// H.264 whatever PT its own codec-enumeration happens to land on that
+// session — NOT stable even between Chrome and Edge on the same machine,
+// confirmed live: Edge offered PT=108 and played; Chrome (same session)
+// offered PT=109 and produced framesDecoded=0 forever despite healthy
+// bytesReceived, because Chrome's own offer never associated PT 108 with
+// H.264 at all — packets arrived and were counted at the transport layer,
+// but no decoder ever bound to them.
+//
+// The only spec-correct fix (RFC 3264 §6.1 — the answer must use PT numbers
+// the offer actually used) is to have a Router, and therefore a Producer
+// chain, that was built declaring EXACTLY the PT the current browser
+// offered — there is no way to retrofit an existing Producer to a different
+// PT. Rather than pre-guessing which PTs might occur (fragile — silently
+// wrong the moment a browser update shifts its codec order), this is built
+// lazily: the FIRST negotiate() that sees a given videoPt creates a
+// dedicated Router + per-camera Producer set for it; every later
+// negotiate() (any camera, any viewer) that shares that PT reuses it. A
+// given PT is a near-deterministic function of browser+OS+version, not
+// random per-connection, so this stays small and stable in practice without
+// ever needing to hardcode which values to expect.
+//
+// PT=108 (DEFAULT_VIDEO_PT) keeps using the existing shared `_router` /
+// `_cameras` map unchanged — zero extra cost for whatever fraction of
+// viewers happen to match it. Only a genuinely different PT triggers this
+// additional machinery.
+
+const DEFAULT_VIDEO_PT = 108;
+
+// mediasoup's own DynamicPayloadTypes free-list order (ortc.js
+// generateRouterRtpCapabilities()) — RTX for a video codec is auto-assigned
+// via dynamicPayloadTypes.shift() at the moment that codec entry is
+// processed, so explicitly claiming (via harmless placeholder audio codec
+// entries earlier in the mediaCodecs array) every value that would otherwise
+// be picked before the desired target forces RTX to land exactly there. Same
+// trick as the static _rtxPtReservations above, generalized to an arbitrary
+// target instead of the one hardcoded case.
+const _DYNAMIC_PT_ORDER = [];
+for (let pt = 100; pt <= 127; pt++) _DYNAMIC_PT_ORDER.push(pt);
+for (let pt = 96;  pt <= 99;  pt++) _DYNAMIC_PT_ORDER.push(pt);
+
+function _computeRtxPlaceholderPts(claimedPts, targetRtxPt) {
+  const placeholders = [];
+  for (const pt of _DYNAMIC_PT_ORDER) {
+    if (pt === targetRtxPt) break;
+    if (!claimedPts.has(pt)) placeholders.push(pt);
+  }
+  return placeholders;
+}
+
+// videoPt → Promise<Router>, cached/idempotent.
+const _ptRouters = new Map();
+
+function _ensurePtRouter(videoPt, videoRtxPt) {
+  if (videoPt === DEFAULT_VIDEO_PT) return _ensureRouter();
+  if (_ptRouters.has(videoPt)) return _ptRouters.get(videoPt);
+  const p = _bootPtRouter(videoPt, videoRtxPt).catch(err => { _ptRouters.delete(videoPt); throw err; });
+  _ptRouters.set(videoPt, p);
+  return p;
+}
+
+async function _bootPtRouter(videoPt, videoRtxPt) {
+  await _ensureRouter(); // guarantees _worker exists — Routers share one Worker
+  // Opus MUST be claimed before the RTX-placeholder computation below, not
+  // just excluded from it conceptually — mediasoup's real free-list walk
+  // only skips a PT once something EARLIER in the mediaCodecs array explicitly
+  // claimed it. If videoRtxPt sorts after AUDIO_PT (111) in dynamic-PT order
+  // (observed live: Chrome offered RTX-PT=114 this session), leaving Opus
+  // for later would let mediasoup's own auto-RTX claim 111 by mistake.
+  const claimed = new Set([videoPt, AUDIO_PT]);
+  const mediaCodecs = [
+    { kind: 'audio', mimeType: 'audio/opus', preferredPayloadType: AUDIO_PT, clockRate: 48000, channels: 2 },
+  ];
+  // Force H264's auto-RTX onto the browser's own actually-offered RTX PT when
+  // known — best-effort only (unlike the primary codec, an RTX mismatch just
+  // degrades loss recovery, it doesn't block decode entirely — negotiate()
+  // disables RTX on the Consumer instead of guessing when this isn't known).
+  if (videoRtxPt != null && !claimed.has(videoRtxPt)) {
+    for (const pt of _computeRtxPlaceholderPts(claimed, videoRtxPt)) {
+      mediaCodecs.push({ kind: 'audio', mimeType: 'audio/PCMU', clockRate: 8000, preferredPayloadType: pt });
+      claimed.add(pt);
+    }
+  }
+  mediaCodecs.push({
+    kind:      'video',
+    mimeType:  'video/H264',
+    preferredPayloadType: videoPt,
+    clockRate: 90000,
+    parameters: {
+      'packetization-mode':      1,
+      'profile-level-id':        '640033',
+      'level-asymmetry-allowed': 1,
+    },
+  });
+
+  const router = await _worker.createRouter({ mediaCodecs });
+  console.log(`[WebRTC][mediasoup] alt-PT router ready videoPt=${videoPt}${videoRtxPt != null ? ` rtxPt=${videoRtxPt}` : ' (rtxPt unknown — RTX disabled for this PT)'}`);
+  return router;
+}
+
+// ── Per-camera alternate pipeline cache (paired with the PT-router above) ───
+// cameraId → Map<videoPt, Promise<{ router, videoPlain, videoProducer, directTransport, dataProducer }>>
+// Deliberately no audio Producer here (2026-07-20, §6.26 — out of scope: no
+// confirmed audio PT mismatch has been observed, unlike video's repeatedly
+// reproduced framesDecoded=0 failures). Alt-PT viewers get working video +
+// the App RTP data channel; audio is silently omitted rather than risking
+// the same class of bug in a path with no evidence it's broken. Revisit if
+// audio decode failures are ever actually reported.
+const _altPipelines = new Map();
+
+function _ensureAltPipeline(cameraId, videoPt, videoRtxPt) {
+  const cam = _cameras.get(cameraId);
+  if (!cam) return Promise.reject(new Error(`Camera ${cameraId} is not streaming via mediasoup.`));
+  if (!_altPipelines.has(cameraId)) _altPipelines.set(cameraId, new Map());
+  const camAlt = _altPipelines.get(cameraId);
+  if (camAlt.has(videoPt)) return camAlt.get(videoPt);
+  const p = _buildAltPipeline(cameraId, cam, videoPt, videoRtxPt).catch(err => { camAlt.delete(videoPt); throw err; });
+  camAlt.set(videoPt, p);
+  return p;
+}
+
+async function _buildAltPipeline(cameraId, cam, videoPt, videoRtxPt) {
+  const router = await _ensurePtRouter(videoPt, videoRtxPt);
+
+  const videoPlain = await router.createPlainTransport({
+    listenInfo: { protocol: 'udp', ip: '127.0.0.1', recvBufferSize: 8 * 1024 * 1024 },
+    rtcpMux:  true,
+    comedia:  true,
+  });
+  const videoPort = videoPlain.tuple.localPort;
+  const videoProducer = await videoPlain.produce({
+    kind: 'video',
+    rtpParameters: _buildVideoRtpParameters(),
+  });
+  // Tell ingest-daemon to fan this camera's already-flowing video RTP out to
+  // this new destination too — no second RTSP session (see
+  // ingest_daemon.py's add_video_fanout() docstring).
+  const status = await _ingestPost(`/cameras/${cameraId}/video-fanout`, { port: videoPort });
+  if (status !== 200) {
+    throw new Error(`ingest-daemon video-fanout registration returned HTTP ${status}`);
+  }
+
+  let directTransport = null, dataProducer = null;
+  if (!cam.videoOnly) {
+    directTransport = await router.createDirectTransport({ maxMessageSize: 262144 });
+    dataProducer = await directTransport.produceData({
+      label:    `apprtp-${cameraId.slice(0, 8)}-pt${videoPt}`,
+      protocol: 'json',
+      ordered:  false,
+    });
+  }
+
+  console.log(`[WebRTC][mediasoup] alt-pipeline ready [${cameraId.slice(0, 8)}] videoPt=${videoPt} video:${videoPort}`);
+  return { router, videoPlain, videoProducer, directTransport, dataProducer };
+}
+
+function _closeAltPipelines(cameraId) {
+  const camAlt = _altPipelines.get(cameraId);
+  if (!camAlt) return;
+  for (const pPromise of camAlt.values()) {
+    pPromise.then(alt => {
+      try { alt.videoProducer?.close(); }    catch (_) {}
+      try { alt.videoPlain?.close(); }       catch (_) {}
+      try { alt.dataProducer?.close(); }     catch (_) {}
+      try { alt.directTransport?.close(); }  catch (_) {}
+    }).catch(() => {});
+  }
+  _altPipelines.delete(cameraId);
 }
 
 function _closeCam(cam, cameraId) {
@@ -381,25 +627,7 @@ async function addCameraStream(cameraId, rtspUrl, appRtpRtspUrl = undefined, cap
 
     videoProducer = await videoPlain.produce({
       kind: 'video',
-      rtpParameters: {
-        codecs: [{
-          mimeType:    'video/H264',
-          payloadType: VIDEO_PT,
-          clockRate:   90000,
-          parameters: {
-            'packetization-mode':      1,
-            // Must match the router's mediaCodecs declaration above (2026-07-16,
-            // §6.13/§6.21) — a mismatch here is exactly what caused "no
-            // compatible media codecs" when only one side was patched to the
-            // real value. See the router declaration's comment for why this is
-            // '640033' (Level 5.1) and not '640028' (Level 4.0, too small for
-            // this fleet's higher-resolution cameras).
-            'profile-level-id':        '640033',
-            'level-asymmetry-allowed': 1,
-          },
-        }],
-        encodings: [{ ssrc: VIDEO_SSRC }],
-      },
+      rtpParameters: _buildVideoRtpParameters(),
     });
 
     // ── Audio PlainTransport (skipped when videoOnly) ─────────────────────────
@@ -447,11 +675,25 @@ async function addCameraStream(cameraId, rtspUrl, appRtpRtspUrl = undefined, cap
     const proto = isHttps ? 'https' : 'http';
     const base  = `${proto}://127.0.0.1:${serverPort}`;
 
+    // mediasoupPort (video RTP fan-out) is deliberately OMITTED here and
+    // registered lazily instead (2026-07-20, §6.27) — see the block after
+    // the ingest-daemon POST succeeds. Live evidence: once §6.26's alt-PT
+    // pipeline existed, essentially every real viewer landed on a non-108
+    // PT (Chrome), leaving this DEFAULT pipeline's video Producer wired up
+    // but unwatched — ingest-daemon was still muxing every packet to it
+    // anyway, doubling the per-camera CPU cost on the io thread that must
+    // never be delayed (see module docstring), for a destination nobody
+    // consumed. `/proc/net/snmp`'s UDP RcvbufErrors was climbing in real
+    // time under this load. Only registering the fan-out once a browser
+    // actually negotiates at PT=108 (mirroring exactly how alt-PT
+    // pipelines already work) removes that wasted work in the now-common
+    // case where the default PT goes unused, at zero cost to the case
+    // where it IS used (first negotiate() just pays one extra idempotent
+    // HTTP round trip, tracked via cam.videoFanoutRegistered afterward).
     const ingestBody = {
       id:                 cameraId,
       rtspUrl,
       callbackUrl:        `${base}/api/internal/frame/${cameraId}`,
-      mediasoupPort:      videoPort,
     };
     if (!videoOnly) {
       ingestBody.appRtpCallbackUrl  = `${base}/api/internal/apprtp/${cameraId}`;
@@ -471,6 +713,50 @@ async function addCameraStream(cameraId, rtspUrl, appRtpRtspUrl = undefined, cap
       throw new Error(`ingest-daemon returned HTTP ${status}`);
     }
 
+    // Re-register any existing alt-PT pipelines' video fan-out (2026-07-20,
+    // §6.26) — ingest-daemon's CameraManager.add() always creates a brand-new
+    // CameraSession object on every /cameras POST (confirmed in
+    // ingest_daemon.py), which loses the previous session's
+    // _video_fanout_ports list. Without this, a viewer already connected via
+    // an alt-PT pipeline would silently stop receiving video on the next
+    // reconnect/crash-recovery/worker-died cycle, with nothing surfacing the
+    // failure. Fire-and-forget: this camera's DEFAULT pipeline is already
+    // confirmed working at this point, and a slow/failed alt re-fanout only
+    // affects viewers on that specific non-default PT, not the whole camera.
+    const camAlt = _altPipelines.get(cameraId);
+    if (camAlt) {
+      for (const pPromise of camAlt.values()) {
+        pPromise.then(alt => {
+          const port = alt.videoPlain?.tuple?.localPort;
+          if (port) _ingestPost(`/cameras/${cameraId}/video-fanout`, { port }).catch(() => {});
+        }).catch(() => {});
+      }
+    }
+    // Same idea for the DEFAULT pipeline's own fan-out (2026-07-20, §6.27) —
+    // its registration is now lazy too (see the ingestBody comment above), so
+    // if a PREVIOUS registration had already established that PT=108 is
+    // actually in use, that fact needs to survive this reconnect the same
+    // way alt-PT pipelines do, or an existing PT=108 viewer would silently
+    // go dark on the next reconnect/crash-recovery cycle.
+    const videoFanoutRegistered = !!oldCam?.videoFanoutRegistered;
+    if (videoFanoutRegistered) {
+      _ingestPost(`/cameras/${cameraId}/video-fanout`, { port: videoPort }).catch(() => {});
+    }
+
+    // Diagnostic only (2026-07-20, §6.25) — fire-and-forget, does NOT gate
+    // Producer creation (which is always H.264; see _buildVideoRtpParameters()
+    // comment — mediasoup itself has no H.265 support to select into). Lets
+    // operators see in the log, per camera, exactly why WebRTC playback won't
+    // work if the camera turns out to stream HEVC, without adding the ~5s
+    // worst-case RTSP-probe latency to every single camera add/reconnect.
+    _pollVideoCodec(cameraId).then(videoParams => {
+      if (videoParams?.codec === 'hevc') {
+        console.warn(`[WebRTC][mediasoup] ${cameraId.slice(0, 8)} camera streams H.265/HEVC — mediasoup has no H.265 support, WebRTC playback cannot work for this camera until it's reconfigured to H.264 (see design doc §6.25)`);
+      } else if (videoParams?.codec && videoParams.codec !== 'h264') {
+        console.warn(`[WebRTC][mediasoup] ${cameraId.slice(0, 8)} camera codec is ${videoParams.codec} (neither h264 nor hevc) — WebRTC playback cannot work for this camera`);
+      }
+    }).catch(() => {});
+
     // New registration confirmed working — swap it in, THEN tear down the old
     // one. ingest-daemon's own POST /cameras handler already replaced the old
     // RTSP session in place (CameraManager.add()), so the old mediasoup-side
@@ -480,6 +766,7 @@ async function addCameraStream(cameraId, rtspUrl, appRtpRtspUrl = undefined, cap
       appRtpRtspUrl,
       captureFps: _captureFps,
       videoOnly,
+      videoFanoutRegistered,
       videoPlain, videoProducer,
       audioPlain, audioProducer,
       directTransport, dataProducer,
@@ -518,6 +805,7 @@ async function removeCameraStream(cameraId) {
   if (!cam) return;
   _cameras.delete(cameraId);
   _closeCam(cam, cameraId);
+  _closeAltPipelines(cameraId);
 }
 
 async function waitForStreamReady(cameraId, maxWaitMs = 8000) {
@@ -534,12 +822,24 @@ async function waitForStreamReady(cameraId, maxWaitMs = 8000) {
 // ── Application RTP / server-push event forwarding ───────────────────────────
 
 function sendAppRtp(cameraId, payload) {
+  const msg = typeof payload === 'string' ? payload : JSON.stringify(payload);
   const cam = _cameras.get(cameraId);
-  if (!cam?.dataProducer || cam.dataProducer.closed) return;
-  try {
-    const msg = typeof payload === 'string' ? payload : JSON.stringify(payload);
-    cam.dataProducer.send(msg);
-  } catch (_) {}
+  if (cam?.dataProducer && !cam.dataProducer.closed) {
+    try { cam.dataProducer.send(msg); } catch (_) {}
+  }
+  // Alt-PT pipelines (2026-07-20, §6.26) carry their own DataProducer on a
+  // separate Router — a viewer connected via one of those needs the same App
+  // RTP events broadcast there too, not just on the default pipeline.
+  const camAlt = _altPipelines.get(cameraId);
+  if (camAlt) {
+    for (const pPromise of camAlt.values()) {
+      pPromise.then(alt => {
+        if (alt.dataProducer && !alt.dataProducer.closed) {
+          try { alt.dataProducer.send(msg); } catch (_) {}
+        }
+      }).catch(() => {});
+    }
+  }
 }
 
 // ── SDP helpers ───────────────────────────────────────────────────────────────
@@ -912,7 +1212,6 @@ async function negotiate(cameraId, sdpOffer) {
   }
 
   try {
-    const router = await _ensureRouter();
     const parsed = _parseOffer(sdpOffer);
 
     if (!parsed.fingerprint.value) {
@@ -923,16 +1222,72 @@ async function negotiate(cameraId, sdpOffer) {
     const browserCands = sdpOffer.match(/a=candidate:[^\r\n]+/g) || [];
     const browserIPs = [...new Set(browserCands.map(c => { const m = c.match(/\d+\.\d+\.\d+\.\d+/g); return m ? m[0] : null; }).filter(Boolean))];
     console.log(`[WebRTC][mediasoup] WHEP [${cameraId.slice(0,8)}] browser-IPs=[${browserIPs.join(', ') || 'none-gathered'}]`);
+
+    // Route to the PT-matched Router/pipeline (2026-07-20, §6.26) — see the
+    // big comment above _bootPtRouter() for why this exists: mediasoup fixes
+    // a Producer's outgoing PT permanently at Router-registration time, so
+    // matching THIS browser's actual offered PT requires selecting (or
+    // lazily building) a Router that declared exactly that PT, not patching
+    // capabilities after the fact. Falls back to the shared default pipeline
+    // if the offer had no recognizable H.264 entry at all (defensive —
+    // negotiate() would fail downstream anyway in that case).
+    const targetVideoPt = parsed.videoPt ?? DEFAULT_VIDEO_PT;
+    let router, videoProducer, audioProducer, dataProducer, rtxMatched;
+    if (targetVideoPt === DEFAULT_VIDEO_PT) {
+      router        = await _ensureRouter();
+      videoProducer = cam.videoProducer;
+      audioProducer = cam.audioProducer;
+      dataProducer  = cam.dataProducer;
+      rtxMatched    = true; // default router's RTX PT (109) is the historically-confirmed common case
+      // Lazy fan-out registration (2026-07-20, §6.27) — see the ingestBody
+      // comment in addCameraStream(): the default pipeline's video Producer
+      // is always created, but ingest-daemon isn't told to mux RTP into it
+      // until a browser actually negotiates at PT=108. Fire-and-forget from
+      // the SDP-answer-latency perspective (don't await), but mark it
+      // registered synchronously so a second concurrent negotiate() for the
+      // same camera doesn't fire a redundant POST.
+      if (!cam.videoFanoutRegistered) {
+        cam.videoFanoutRegistered = true;
+        const port = cam.videoPlain?.tuple?.localPort;
+        if (port) _ingestPost(`/cameras/${cameraId}/video-fanout`, { port }).catch(() => { cam.videoFanoutRegistered = false; });
+      }
+    } else {
+      const alt     = await _ensureAltPipeline(cameraId, targetVideoPt, parsed.videoRtxPt);
+      router        = alt.router;
+      videoProducer = alt.videoProducer;
+      audioProducer = null; // alt pipelines carry video + data only — see _altPipelines comment
+      dataProducer  = alt.dataProducer;
+      rtxMatched    = parsed.videoRtxPt != null;
+    }
     console.log(
       `[WebRTC][mediasoup] WHEP [${cameraId.slice(0,8)}]` +
-      ` browser H264-PT=${parsed.videoPt} RTX-PT=${parsed.videoRtxPt} Opus-PT=${parsed.audioPt}`
+      ` browser H264-PT=${parsed.videoPt} RTX-PT=${parsed.videoRtxPt} Opus-PT=${parsed.audioPt}` +
+      ` (pipeline: ${targetVideoPt === DEFAULT_VIDEO_PT ? 'default' : `alt-PT ${targetVideoPt}`})`
     );
 
     // WebRtcTransport with SCTP enabled for DataChannel.
     // listenIps includes all non-docker server IPs so the browser can reach it
     // regardless of which network segment it's on.
     const transport = await router.createWebRtcTransport({
-      listenIps:          _getListenIps(),
+      // listenInfos instead of the deprecated listenIps (2026-07-20, §6.27) —
+      // only listenInfos entries carry recvBufferSize/sendBufferSize; the
+      // deprecated listenIps form (confirmed by reading Router.js directly)
+      // gets auto-expanded into listenInfos WITHOUT those fields, silently
+      // leaving every WebRtcTransport's UDP/TCP sockets at the OS default
+      // (~208KB, confirmed via `sysctl net.core.rmem_default` — well under
+      // the 16MB ceiling `net.core.rmem_max` already allows). PlainTransport
+      // already got this fix in §6.18 for the ingest-daemon→mediasoup hop;
+      // WebRtcTransport (the actual browser-facing hop) never did. 2MB per
+      // socket, not the PlainTransports' 8MB — this is per-VIEWER, not
+      // per-camera, so it doesn't scale as favorably with connection count.
+      // Manually replicates Router.js's own listenIps→listenInfos expansion
+      // (one entry per IP × enabled protocol, UDP preferred first to match
+      // preferUdp:true below) since providing listenInfos directly skips
+      // that automatic conversion entirely.
+      listenInfos: _getListenIps().flatMap(({ ip, announcedIp }) => [
+        { protocol: 'udp', ip, announcedAddress: announcedIp, recvBufferSize: 2 * 1024 * 1024, sendBufferSize: 2 * 1024 * 1024 },
+        { protocol: 'tcp', ip, announcedAddress: announcedIp, recvBufferSize: 2 * 1024 * 1024, sendBufferSize: 2 * 1024 * 1024 },
+      ]),
       enableUdp:          true,
       enableTcp:          true,
       preferUdp:          true,
@@ -948,54 +1303,63 @@ async function negotiate(cameraId, sdpOffer) {
       },
     });
 
-    // mediasoup v3.19+ derives the Consumer's PT from the router's consumable PT
-    // (ignoring preferredPayloadType in the passed rtpCapabilities). The router
-    // Build capabilities that remap extension IDs to match the browser's offer.
-    // mediasoup v3.19 sends RTP using Consumer.rtpParameters.headerExtensions[].preferredId.
-    // If these don't match the browser's a=extmap IDs, the browser can't find the MID
-    // extension in incoming RTP → BUNDLE demux fails → all packets dropped, no inbound-rtp.
-    // Note: v3.19+ derives codec PT from the ROUTER's preferredPayloadType (ignoring
-    // preferredPayloadType in passed caps) — hence the router is configured with PT=109.
-    // RTX is disabled: the auto-assigned RTX PT would conflict with other browser codecs.
+    // mediasoup derives the Consumer's codec PT from the SELECTED router's own
+    // preferredPayloadType, not from the capabilities passed here (confirmed
+    // by reading ortc.js directly — see the big comment above _bootPtRouter()
+    // for the full story) — which is exactly why `router` above is now chosen
+    // to already declare targetVideoPt. This call still matters for the
+    // header-extension remap: mediasoup sends RTP using Consumer.rtpParameters
+    // .headerExtensions[].preferredId, and if those don't match the browser's
+    // own a=extmap IDs, the browser can't find the MID extension in incoming
+    // RTP → BUNDLE demux fails → all packets dropped, no inbound-rtp at all.
     const browserCaps = _buildBrowserRtpCapabilities(parsed, router.rtpCapabilities);
 
     // Fetch the camera's real SPS/PPS (2026-07-16, §6.13) for the SDP answer's
     // sprop-parameter-sets (see _buildAnswer()). profile-level-id is NOT
-    // patched here anymore — an earlier version of this fix set browserCaps'
-    // video codec parameters to the camera's actual profile-level-id (e.g.
-    // '64001f', High Profile) right before transport.consume(), which made
-    // mediasoup's Producer (still declared as Baseline '42e01f' — see
-    // addCameraStream()) vs. Consumer-capabilities profile MISMATCH badly
-    // enough that mediasoup's internal H.264 profile-compatibility check
-    // rejected the negotiation outright ("no compatible media codecs").
-    // Baseline vs High are genuinely incompatible profiles per RFC 6184's
-    // compatibility rules, not just a level difference `level-asymmetry-
-    // allowed` can paper over. The real fix is the STATIC default declared at
-    // Producer-creation time (see VIDEO_CODEC_PARAMETERS / addCameraStream()),
-    // since the Producer is created before ingest-daemon has even connected
-    // to probe the camera's actual profile — there is no per-camera value
-    // available yet at that point.
+    // patched into browserCaps here — an earlier version of this fix set
+    // browserCaps' video codec parameters to the camera's actual
+    // profile-level-id (e.g. '64001f', High Profile) right before
+    // transport.consume(), which made mediasoup's Producer (still declared as
+    // Baseline '42e01f' — see addCameraStream()) vs. Consumer-capabilities
+    // profile MISMATCH badly enough that mediasoup's internal H.264
+    // profile-compatibility check rejected the negotiation outright ("no
+    // compatible media codecs"). Baseline vs High are genuinely incompatible
+    // profiles per RFC 6184's compatibility rules, not just a level
+    // difference `level-asymmetry-allowed` can paper over. The real fix is
+    // the STATIC default declared at Producer-creation time (see
+    // VIDEO_CODEC_PARAMETERS / addCameraStream()), since the Producer is
+    // created before ingest-daemon has even connected to probe the camera's
+    // actual profile — there is no per-camera value available yet at that
+    // point.
+    // mediasoup has no H.265 support at all (2026-07-20, §6.25 — see the
+    // router mediaCodecs comment), so an hevc camera's video-params are only
+    // ever used for the diagnostic warning in addCameraStream(), never here.
     const videoParams = await _ingestGetVideoParams(cameraId);
     let spropParameterSets = null;
     let profileLevelId     = null;
     if (videoParams?.ready && videoParams.spropParameterSets) {
       spropParameterSets = videoParams.spropParameterSets;
+      profileLevelId     = videoParams.profileLevelId;
     } else if (videoParams?.ready && videoParams.codec && videoParams.codec !== 'h264') {
-      console.warn(`[WebRTC][mediasoup] [${cameraId.slice(0,8)}] camera video codec is ${videoParams.codec}, not h264 — this WebRTC Producer is H.264-only, playback cannot work for this camera`);
+      console.warn(`[WebRTC][mediasoup] [${cameraId.slice(0,8)}] camera video codec is ${videoParams.codec}, not h264 — mediasoup has no H.265 support, playback cannot work for this camera`);
     } else {
       console.warn(`[WebRTC][mediasoup] [${cameraId.slice(0,8)}] video-params not available yet (ready=${videoParams?.ready}) — SDP answer will have no sprop-parameter-sets`);
     }
 
-    // Video Consumer — enableRtx:true (2026-07-16, §6.17) lets mediasoup replay
-    // lost packets from its own send buffer on NACK, independent of the
-    // passthrough Producer (see RTX router codec comment above). The Producer
-    // itself needs no RTX-related change; getConsumableRtpParameters() pairs
-    // it with the router's RTX codec automatically.
+    // Video Consumer — enableRtx (2026-07-16, §6.17; made conditional
+    // 2026-07-20, §6.26) lets mediasoup replay lost packets from its own send
+    // buffer on NACK, independent of the passthrough Producer. Only enabled
+    // when this router's RTX PT is known to match what the browser's own
+    // offer actually uses (rtxMatched, computed above) — enabling it against
+    // a PT the browser never associated with H264-RTX is the exact "actively
+    // harmful, not just ineffective" collision class documented on the
+    // default router's RTX comment (retransmits landing on a codec the
+    // browser interprets differently made loss recovery WORSE than RTX off).
     const videoConsumer = await transport.consume({
-      producerId:      cam.videoProducer.id,
+      producerId:      videoProducer.id,
       rtpCapabilities: browserCaps,
       paused:          false,
-      enableRtx:       true,
+      enableRtx:       rtxMatched,
     });
     // A viewer joining mid-GOP only receives P-frames referencing an I-frame it
     // never saw — undecodable, so the browser reports bytesReceived growing but
@@ -1005,11 +1369,13 @@ async function negotiate(cameraId, sdpOffer) {
     // sends actually reaches something that can act on it (see caveat below).
     videoConsumer.requestKeyFrame().catch(() => {});
 
-    // Audio Consumer (non-fatal if audio hasn't started yet, or camera is videoOnly)
+    // Audio Consumer (non-fatal if audio hasn't started yet, camera is
+    // videoOnly, or this negotiation landed on an alt-PT pipeline — those
+    // don't carry an audio Producer at all, see _altPipelines comment)
     let audioConsumer = null;
-    if (cam.audioProducer && !cam.audioProducer.closed) {
+    if (audioProducer && !audioProducer.closed) {
       audioConsumer = await transport.consume({
-        producerId:      cam.audioProducer.id,
+        producerId:      audioProducer.id,
         rtpCapabilities: browserCaps,
         paused:          false,
         enableRtx:       false,
@@ -1018,9 +1384,9 @@ async function negotiate(cameraId, sdpOffer) {
 
     // DataConsumer (only if browser included m=application in offer, and camera isn't videoOnly)
     let dataConsumer = null;
-    if (parsed.hasData && cam.dataProducer && !cam.dataProducer.closed) {
+    if (parsed.hasData && dataProducer && !dataProducer.closed) {
       dataConsumer = await transport.consumeData({
-        dataProducerId: cam.dataProducer.id,
+        dataProducerId: dataProducer.id,
       }).catch(() => null);
     }
 
@@ -1191,12 +1557,32 @@ async function reregisterAllWithIngest() {
         rtspUrl:            cam.rtspUrl,
         callbackUrl:        `${base}/api/internal/frame/${cameraId}`,
         appRtpCallbackUrl:  `${base}/api/internal/apprtp/${cameraId}`,
-        mediasoupPort:      videoPort,
         mediasoupAudioPort: audioPort,
       };
+      // mediasoupPort stays conditional on videoFanoutRegistered (2026-07-20,
+      // §6.27) — see addCameraStream()'s ingestBody comment for why the
+      // default pipeline's video fan-out is lazy; re-registering it
+      // unconditionally here would undo that saving on every ingest-daemon
+      // restart, which is exactly the path `npm run ingest:restart` drives.
+      if (cam.videoFanoutRegistered) reregBody.mediasoupPort = videoPort;
       if (cam.appRtpRtspUrl) reregBody.appRtpRtspUrl = cam.appRtpRtspUrl;
       if (cam.captureFps > 0) reregBody.captureFps = cam.captureFps;
       const status = await _ingestPost('/cameras', reregBody);
+      // Re-register alt-PT pipelines' video fan-out too (2026-07-20, §6.27) —
+      // ingest-daemon's restart wipes ALL CameraSession state, so any alt-PT
+      // viewer (the now-common case per §6.26's live evidence) would
+      // silently go dark after `npm run ingest:restart` without this,
+      // mirroring the same re-registration addCameraStream() does on a
+      // per-camera reconnect.
+      const camAlt = _altPipelines.get(cameraId);
+      if (camAlt) {
+        for (const pPromise of camAlt.values()) {
+          pPromise.then(alt => {
+            const port = alt.videoPlain?.tuple?.localPort;
+            if (port) _ingestPost(`/cameras/${cameraId}/video-fanout`, { port }).catch(() => {});
+          }).catch(() => {});
+        }
+      }
       results[cameraId] = { ok: status === 200 || status === 201, status, videoPort, audioPort };
     } catch (e) {
       results[cameraId] = { ok: false, error: e.message };
