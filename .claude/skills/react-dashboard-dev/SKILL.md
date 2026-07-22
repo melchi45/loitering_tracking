@@ -178,6 +178,7 @@ npm run preview      # 빌드 결과 미리보기
 | `pages/admin/AdminUsersPage.tsx` (ONVIF 섹션) | `docs/design/Design_Admin_Dashboard.md` §4.4 · `docs/design/Design_ONVIF_Timeline.md` §3.4 |
 | `pages/admin/AdminUsersPage.tsx` (Audit 섹션) | `docs/design/Design_Admin_Dashboard.md` §4.5 |
 | `pages/admin/AdminUsersPage.tsx` (Server Logs 섹션) | `docs/design/Design_Admin_Log_Viewer.md` · `docs/srs/SRS_Admin_Log_Viewer.md` · `docs/tc/TC_Admin_Log_Viewer.md` |
+| `pages/admin/AdminUsersPage.tsx` (Ingest Daemon 섹션) | `docs/design/Design_Admin_Dashboard.md` §4.6 · `docs/design/Design_Ingest_Daemon_Monitoring.md` (전체 설계+구현, `IngestDaemonSection.tsx`/`ingestStatsAggregator.js`/`ingest_daemon.py` 계측 포함) |
 | `components/AdminLogPanel.tsx` | `docs/design/Design_Admin_Log_Viewer.md` — Socket.IO relay, level control, source selector 변경 시 |
 | 새 컴포넌트 추가 | PRD + SRS + Design + TC 문서 신규 작성 또는 관련 문서에 섹션 추가 |
 

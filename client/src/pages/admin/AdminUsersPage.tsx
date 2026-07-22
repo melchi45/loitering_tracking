@@ -1,13 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Users, Bot, Wifi, Radio, ClipboardList, BarChart3, Monitor,
-  RotateCcw, Check, X, Download, FlaskConical, AlertTriangle, Loader2,
+  RotateCcw, Check, X, Download, FlaskConical, AlertTriangle, Loader2, Plug,
   type LucideIcon,
 } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
 import { useOnvifEventStore, type OnvifEventType } from '../../stores/onvifEventStore';
 import { useSocket } from '../../hooks/useSocket';
 import AdminLogPanel from '../../components/AdminLogPanel';
+import IngestDaemonSection from '../../components/IngestDaemonSection';
 import { useWebRTCConfigStore, type WebRTCConfig, type TurnServer } from '../../stores/webrtcConfigStore';
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -62,7 +63,7 @@ interface TcRun {
 }
 
 type StatusFilter = 'all' | 'pending' | 'active' | 'rejected' | 'revoked';
-type AdminSection = 'users' | 'onvif' | 'audit' | 'ai-models' | 'webrtc' | 'system' | 'logs';
+type AdminSection = 'users' | 'onvif' | 'audit' | 'ai-models' | 'webrtc' | 'system' | 'logs' | 'ingest';
 
 // ── AI Models types ───────────────────────────────────────────────────────────
 
@@ -166,6 +167,7 @@ const NAV: { id: AdminSection; label: string; icon: LucideIcon; desc: string }[]
   { id: 'users',     label: 'Users',      icon: Users, desc: 'Manage user accounts & roles' },
   { id: 'ai-models', label: 'AI Models',  icon: Bot, desc: 'YOLO model catalog & AI modules' },
   { id: 'webrtc',    label: 'WebRTC / ICE', icon: Wifi, desc: 'STUN/TURN servers & ICE connectivity test' },
+  { id: 'ingest',    label: 'Ingest Daemon', icon: Plug, desc: 'Real-time camera capture/codec/throughput monitoring' },
   { id: 'onvif',     label: 'ONVIF',      icon: Radio, desc: 'Event type registry' },
   { id: 'audit',     label: 'Audit Log',  icon: ClipboardList, desc: 'Activity history' },
   { id: 'system',    label: 'System',     icon: BarChart3, desc: 'CPU · Memory · Disk · DB metrics' },
@@ -174,10 +176,24 @@ const NAV: { id: AdminSection; label: string; icon: LucideIcon; desc: string }[]
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
+const ADMIN_SECTION_IDS: AdminSection[] = ['users', 'onvif', 'audit', 'ai-models', 'webrtc', 'system', 'logs', 'ingest'];
+
 export default function AdminUsersPage() {
-  const { accessToken, navigateTo } = useAuthStore();
-  const [section, setSection] = useState<AdminSection>('users');
+  const { accessToken, navigateTo, pendingAdminSection, setPendingAdminSection } = useAuthStore();
+  // Honor a pending deep-link (e.g. SystemStatusBadges' Ingest-Daemon badge)
+  // set right before navigateTo('admin') — consumed once, on mount, so it
+  // doesn't fight a later manual section switch on this same mount.
+  const [section, setSection] = useState<AdminSection>(() =>
+    (ADMIN_SECTION_IDS as string[]).includes(pendingAdminSection ?? '')
+      ? (pendingAdminSection as AdminSection)
+      : 'users'
+  );
   const [serverMode, setServerMode] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (pendingAdminSection) setPendingAdminSection(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') navigateTo('dashboard'); };
@@ -199,7 +215,8 @@ export default function AdminUsersPage() {
   // hide WebRTC/ICE in analysis mode (no camera capture, nothing to configure)
   const visibleNav = NAV.filter(item =>
     !(item.id === 'ai-models' && isStreaming) &&
-    !(item.id === 'webrtc'    && isAnalysis)
+    !(item.id === 'webrtc'    && isAnalysis) &&
+    !(item.id === 'ingest'    && isAnalysis)
   );
 
   async function apiFetch(path: string, opts: RequestInit = {}) {
@@ -276,6 +293,7 @@ export default function AdminUsersPage() {
           {section === 'users'     && <UsersSection apiFetch={apiFetch} />}
           {section === 'ai-models' && <AiModelsSection />}
           {section === 'webrtc'    && <WebRTCSection />}
+          {section === 'ingest'    && <IngestDaemonSection accessToken={accessToken} />}
           {section === 'onvif'     && <OnvifSection apiFetch={apiFetch} />}
           {section === 'audit'     && <AuditSection apiFetch={apiFetch} />}
           {section === 'system'    && <SystemSection apiFetch={apiFetch} />}

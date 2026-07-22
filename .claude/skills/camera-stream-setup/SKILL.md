@@ -669,7 +669,11 @@ paths:
 | 엔드포인트 | 설명 |
 |---|---|
 | `GET /health` | `{"status":"ok","cameras":N}` |
+| `GET /cameras` | `{"count":N}` — 개수만, 목록·상세 없음 |
+| `GET /cameras/:id/video-params` | SDP 협상용 codec/sprop-parameter-sets/profile-level-id (H.264/H.265) — 실시간 통계 아님 |
+| `GET /cameras/stats` | 전체 카메라 실시간 통계 배열 — 연결상태·peer IP/port·video/audio bps·fps·AI push fps·해상도·codec·fan-out 포트 등(2026-07-21 신규, Admin Dashboard Ingest Daemon 패널이 1.5초 주기로 폴링) |
 | `POST /cameras` | `{"id","rtspUrl","callbackUrl"}` 카메라 등록 |
+| `POST /cameras/:id/video-fanout` | `{"port"}` 비디오 RTP fan-out 대상 포트 추가 |
 | `DELETE /cameras/:id` | 카메라 등록 해제 |
 
 ```bash
@@ -681,9 +685,14 @@ curl -X POST http://127.0.0.1:7070/cameras \
   -H 'Content-Type: application/json' \
   -d '{"id":"test","rtspUrl":"rtsp://...","callbackUrl":"https://127.0.0.1:3443/api/internal/frame/test"}'
 
+# 실시간 통계 확인
+curl http://127.0.0.1:7070/cameras/stats
+
 # MediaMTX 등록 경로 확인
 curl http://127.0.0.1:9997/v3/paths/list
 ```
+
+**Admin Dashboard 실시간 모니터링**: `GET /cameras/stats`(위)를 Node의 `ingestStatsAggregator.js`가 1.5초 주기로 폴링해 DB 카메라 메타·`pipelineManager` AI/분석 누적치·mediasoup 수신량과 병합, `admin:ingest-stats` Socket.IO 이벤트로 admin 검증된 세션에만 push한다(2026-07-21 구현 완료) — 설계·구현 상세는 [Design_Ingest_Daemon_Monitoring.md](../../../docs/design/Design_Ingest_Daemon_Monitoring.md) 참고. Streaming Dashboard의 Ingest-Daemon 상태 배지를 admin 계정으로 클릭하면 이 패널로 이동한다.
 
 ### B-프레임 H264 카메라 처리
 

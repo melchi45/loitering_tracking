@@ -1773,6 +1773,36 @@ class PipelineManager {
     return result;
   }
 
+  /**
+   * Per-camera AI/analysis pipeline counters for the Admin Dashboard Ingest
+   * Daemon monitoring panel (2026-07-21) — see
+   * docs/design/Design_Ingest_Daemon_Monitoring.md §3/§6. Deliberately
+   * separate from getAllPipelineStatus() (used by /api/webrtc/monitor, whose
+   * consumers don't need these fields) rather than widening that method's
+   * existing contract.
+   */
+  getIngestMonitorStats() {
+    const result = {};
+    for (const [cameraId, ctx] of this._pipelines) {
+      result[cameraId] = {
+        running:            ctx.running,
+        aiEnabled:          ctx.aiEnabled,
+        useWebRTC:          ctx.useWebRTC,
+        frameCount:         ctx.frameCount,
+        lastFrameAt:        ctx.lastFrameAt,
+        framesProcessed:    ctx.framesProcessed,
+        bytesReceivedTotal: ctx.bytesReceivedTotal,
+        detectionsTotal:    ctx.detectionsTotal,
+        trackedTotal:       ctx.trackedTotal,
+        facesTotal:         ctx.facesTotal,
+        fireSmokeTotal:     ctx.fireSmokeTotal,
+        loiteringTotal:     ctx.loiteringTotal,
+        totalProcessingMs:  ctx.totalProcessingMs,
+      };
+    }
+    return result;
+  }
+
   /** Returns analysis client circuit-breaker stats, or null in non-streaming mode. */
   getAnalysisClientStats() {
     if (!this._analysisClient) return null;

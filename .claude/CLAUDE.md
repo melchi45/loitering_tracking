@@ -443,6 +443,9 @@ loitering_tracking/
 | `onvif:temperature` | Server → Client | 열상 카메라 BoxTemperatureReading 실시간 스트림 (DB 미저장, ThermalOverlay 전용) |
 | `server:log` | Server → Client | 실시간 서버 로그 항목 — `{ ts, level, msg, t }` (Admin Log Viewer, 브로드캐스트) |
 | `admin:subscribe-logs` | Client → Server | Admin Log Viewer 구독 요청 — 서버가 최근 500개 버퍼 엔트리를 즉시 flush |
+| `admin:subscribe-ingest-stats` | Client → Server | Admin Dashboard Ingest Daemon 패널 구독 요청 (body: `{ token }` — JWT admin role 서버 검증 필수, 실패 시 무응답으로 무시. `server:log`/`admin:subscribe-logs`와 달리 `io.emit()` 전체 브로드캐스트가 아니라 검증된 소켓에만 개별 전송 — RTSP URL이 카메라 자격증명을 포함하므로) |
+| `admin:unsubscribe-ingest-stats` | Client → Server | Ingest Daemon 패널 구독 해제 |
+| `admin:ingest-stats` | Server → Client | 카메라별 실시간 연결상태·Bps/Fps/codec·IP·Analysis 왕복·mediasoup 수신량 스냅샷 (1.5초 주기, admin 검증된 소켓에만) — `CAPTURE_BACKEND=ingest-daemon`일 때만 송신, 상세: `docs/design/Design_Ingest_Daemon_Monitoring.md` |
 
 ---
 

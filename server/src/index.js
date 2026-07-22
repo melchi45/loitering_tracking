@@ -254,6 +254,14 @@ async function main() {
   const youtubeSvc = SERVER_MODE !== 'analysis' ? new YouTubeStreamService(db, pipelineManager) : null;
   if (youtubeSvc) youtubeSvc.init();
 
+  // Ingest Daemon real-time monitoring (2026-07-21, Admin Dashboard) — only
+  // meaningful when this server actually runs ingest-daemon as its capture
+  // backend (see docs/design/Design_Ingest_Daemon_Monitoring.md).
+  if ((process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase() === 'ingest-daemon') {
+    const { startIngestStatsAggregator } = require('./services/ingestStatsAggregator');
+    startIngestStatsAggregator({ io, db, pipelineManager, getWebRTCEngine });
+  }
+
   // ── Auth / Admin Routes ───────────────────────────────────────────────────
   app.use('/auth',  authRouter);
   app.use('/admin', adminRouter);

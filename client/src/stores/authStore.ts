@@ -25,6 +25,13 @@ interface AuthState {
   page: AppPage;
   loading: boolean;
   error: string | null;
+  // Section id to pre-select the next time AdminUsersPage mounts (2026-07-21)
+  // — e.g. the Streaming Dashboard's Ingest-Daemon status badge sets this to
+  // 'ingest' before navigateTo('admin'). AdminUsersPage reads and clears it
+  // on mount so a later manual section switch isn't overridden on remount.
+  // A plain string (not AdminSection) since that type lives in the admin
+  // page module, not shared — avoids a cross-import just for this.
+  pendingAdminSection: string | null;
 
   // Actions
   register: (email: string, password: string, name?: string) => Promise<void>;
@@ -32,6 +39,7 @@ interface AuthState {
   logout: () => Promise<void>;
   refresh: () => Promise<boolean>;
   navigateTo: (page: AppPage) => void;
+  setPendingAdminSection: (section: string | null) => void;
   clearError: () => void;
   setError: (msg: string | null) => void;
   updateProfile: (fields: {
@@ -62,8 +70,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   page:        'signin',
   loading:     false,
   error:       null,
+  pendingAdminSection: null,
 
   navigateTo: (page) => set({ page }),
+  setPendingAdminSection: (section) => set({ pendingAdminSection: section }),
   clearError: ()     => set({ error: null }),
   setError:   (msg)  => set({ error: msg }),
 

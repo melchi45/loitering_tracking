@@ -72,10 +72,12 @@ import os
 import queue
 import re
 import signal
+import socket
 import ssl
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse
 from urllib.request import urlopen, Request
@@ -306,6 +308,76 @@ def _parse_h265_vps_sps_pps(extradata: bytes):
     )
 
 
+def _resolve_rtsp_peer(rtsp_url: str) -> tuple[str | None, int | None]:
+    """
+    Best-effort resolve the RTSP URL's host to an IP for the "IP 연결 정보"
+    column in the Ingest Daemon monitoring panel (2026-07-21). PyAV/ffmpeg
+    don't expose the underlying RTSP TCP socket's actual peer address through
+    the Python API, so this resolves the URL's hostname independently rather
+    than reading it off the live connection — for the common case (URL
+    already an IP literal, or a hostname that resolves to one stable address)
+    this is equivalent and good enough for a monitoring display; it is NOT
+    guaranteed to be the exact address av.open() ended up connecting to if
+    DNS round-robins between calls. Never raises — returns (None, None) on
+    any failure (malformed URL, DNS failure, etc.), which the caller displays
+    as "unknown" rather than treating as fatal.
+    """
+    try:
+        parsed = urlparse(rtsp_url)
+        host = parsed.hostname
+        port = parsed.port or 554
+        if host is None:
+            return None, None
+        ip = socket.gethostbyname(host)
+        return ip, port
+    except Exception:
+        return None, None
+
+
+# ── Camera stats (2026-07-21, Admin Dashboard Ingest Daemon monitoring) ───────
+# See docs/design/Design_Ingest_Daemon_Monitoring.md. Cumulative counters are
+# incremented by the io/decode/push threads that already own each field;
+# _stats_sampler() (module-level, below) periodically diffs them into bps/fps.
+
+@dataclass
+class CameraStats:
+    connection_state: str = "connecting"  # connecting | connected | reconnecting | failed
+    peer_ip: str | None = None
+    peer_port: int | None = None
+    connected_at: float | None = None       # time.time() epoch seconds
+    last_video_packet_at: float | None = None
+    last_audio_packet_at: float | None = None
+    last_ai_push_at: float | None = None
+    last_app_rtp_at: float | None = None
+    video_width: int | None = None
+    video_height: int | None = None
+
+    # Cumulative — single-writer per field, see CameraSession.__init__ comment.
+    video_bytes_total: int = 0
+    video_packets_total: int = 0
+    audio_bytes_total: int = 0
+    audio_packets_total: int = 0
+    ai_frames_total: int = 0
+    ai_bytes_total: int = 0
+    app_rtp_packets_total: int = 0
+
+    # Rates — recomputed every tick by _stats_sampler(), not by the hot path.
+    video_bps: float = 0.0
+    video_fps: float = 0.0
+    audio_bps: float = 0.0
+    audio_fps: float = 0.0
+    ai_fps: float = 0.0
+
+    # Internal — previous tick's snapshot, used by _stats_sampler() to compute
+    # deltas. Not part of the public GET /cameras/stats payload.
+    _prev_sample_at: float = field(default_factory=time.monotonic, repr=False)
+    _prev_video_bytes: int = field(default=0, repr=False)
+    _prev_video_packets: int = field(default=0, repr=False)
+    _prev_audio_bytes: int = field(default=0, repr=False)
+    _prev_audio_packets: int = field(default=0, repr=False)
+    _prev_ai_frames: int = field(default=0, repr=False)
+
+
 # ── Camera session ────────────────────────────────────────────────────────────
 
 class CameraSession:
@@ -391,6 +463,18 @@ class CameraSession:
         # JPEG/App-RTP push uses the module-level _SHARED_PUSH_EXECUTOR /
         # _SHARED_PUSH_SEMAPHORE (bounded pool shared by the whole daemon, not
         # one per camera — see their definitions for why).
+
+        # Real-time stats for GET /cameras/stats (2026-07-21, Admin Dashboard
+        # Ingest Daemon monitoring — see docs/design/Design_Ingest_Daemon_Monitoring.md).
+        # Cumulative counters are written ONLY from the io/decode/push threads
+        # that already own each field (single-writer per field, matching this
+        # class's existing threading model — see module docstring), so plain
+        # int += is safe without a lock; CPython's GIL makes each individual
+        # += atomic, and cross-field consistency isn't required for a
+        # monitoring display. _stats_sampler() (module-level background
+        # thread) is the only reader, taking periodic snapshots to compute
+        # bps/fps deltas — never mutates these directly.
+        self.stats = CameraStats()
 
         self._threads: list[threading.Thread] = []
 
@@ -478,8 +562,11 @@ class CameraSession:
     def _combined_loop(self):
         log.info("[%s] Combined RTSP loop starting → %s", self.id[:8], self.rtsp_url[:50])
         retry_delay = 0.5
+        first_attempt = True
         while not self._stop.is_set():
             t0 = time.monotonic()
+            self.stats.connection_state = "connecting" if first_attempt else "reconnecting"
+            first_attempt = False
             try:
                 self._combined_ingest_once()
                 retry_delay = 0.5  # clean stop → reset
@@ -489,6 +576,7 @@ class CameraSession:
                 # Session ran >10s → it was healthy, not a persistent failure
                 if time.monotonic() - t0 > 10.0:
                     retry_delay = 0.5
+                self.stats.connection_state = "failed"
                 log.warning("[%s] Combined RTSP error: %s — retry in %.1fs",
                             self.id[:8], exc, retry_delay)
                 self._stop.wait(retry_delay)
@@ -534,6 +622,9 @@ class CameraSession:
         _setup_sem_released = False
         try:
             container = av.open(self.rtsp_url, options=_opts)
+            self.stats.connection_state = "connected"
+            self.stats.connected_at = time.time()
+            self.stats.peer_ip, self.stats.peer_port = _resolve_rtsp_peer(self.rtsp_url)
 
             ai_queue = ai_worker_stop = ai_worker_thread = None
             audio_out = audio_out_stream = None
@@ -561,6 +652,8 @@ class CameraSession:
                          vs.codec_context.width, vs.codec_context.height,
                          (as_.codec_context.name if as_ else "none"),
                          ("yes" if app_stream is not None else "no"))
+                self.stats.video_width  = vs.codec_context.width
+                self.stats.video_height = vs.codec_context.height
 
                 # Confirmed live (2026-07-16, §6.13): browser framesDecoded stayed
                 # at 0 on every camera despite substantial bytesReceived — the
@@ -698,6 +791,10 @@ class CameraSession:
                         # mux below — the AI worker gets its own independent copy, so
                         # it is never affected by, and can never block, that path.
                         raw = bytes(packet)
+                        st = self.stats
+                        st.video_bytes_total   += len(raw)
+                        st.video_packets_total += 1
+                        st.last_video_packet_at = time.time()
                         # Fan out to every registered destination (2026-07-20, §6.26).
                         # _mux_passthrough() mutates packet.pts/dts/time_base/stream
                         # in place, so pts/dts/time_base must be reset to the
@@ -716,6 +813,9 @@ class CameraSession:
                             pass  # AI decode behind — drop; self-heals at next IDR
 
                     elif as_ is not None and packet.stream is as_:
+                        self.stats.audio_bytes_total   += packet.size
+                        self.stats.audio_packets_total += 1
+                        self.stats.last_audio_packet_at = time.time()
                         if audio_mode == "passthrough":
                             audio_last_dts = self._mux_passthrough(packet, audio_out, audio_out_stream, audio_last_dts)
                         elif audio_mode == "transcode":
@@ -797,6 +897,44 @@ class CameraSession:
         except av.AVError:
             pass  # Skip malformed packet; keep stream alive
         return last_dts
+
+    def stats_dict(self) -> dict:
+        """
+        Identity + real-time stats snapshot for GET /cameras/stats (2026-07-21).
+        Node's admin route merges this with DB camera metadata (name/type),
+        pipelineManager's own counters, and the Analysis-server circuit
+        breaker stats — see docs/design/Design_Ingest_Daemon_Monitoring.md §3
+        for which fields live where.
+        """
+        st = self.stats
+        return {
+            "id":                   self.id,
+            "rtspUrl":              self.rtsp_url,
+            "videoCodec":           self.video_codec_name,
+            "connectionState":      st.connection_state,
+            "peerIp":               st.peer_ip,
+            "peerPort":             st.peer_port,
+            "connectedAt":          st.connected_at,
+            "lastVideoPacketAt":    st.last_video_packet_at,
+            "lastAudioPacketAt":    st.last_audio_packet_at,
+            "lastAiPushAt":         st.last_ai_push_at,
+            "lastAppRtpAt":         st.last_app_rtp_at,
+            "videoWidth":           st.video_width,
+            "videoHeight":          st.video_height,
+            "videoBps":             round(st.video_bps, 1),
+            "videoFps":             round(st.video_fps, 2),
+            "audioBps":             round(st.audio_bps, 1),
+            "audioFps":             round(st.audio_fps, 2),
+            "aiFps":                round(st.ai_fps, 2),
+            "videoBytesTotal":      st.video_bytes_total,
+            "audioBytesTotal":      st.audio_bytes_total,
+            "aiFramesTotal":        st.ai_frames_total,
+            "aiBytesTotal":         st.ai_bytes_total,
+            "appRtpPacketsTotal":   st.app_rtp_packets_total,
+            "videoFanoutPorts":     list(self._video_fanout_ports),
+            "mediasoupVideoPort":   self.mediasoup_video_port,
+            "mediasoupAudioPort":   self.mediasoup_audio_port,
+        }
 
     def add_video_fanout(self, port: int) -> bool:
         """
@@ -965,6 +1103,8 @@ class CameraSession:
                 req = Request(url, data=body, headers={"Content-Type": "application/json"}, method="POST")
                 urlopen(req, timeout=1, context=ctx)
                 self._app_rtp_push_count += 1
+                self.stats.app_rtp_packets_total += 1
+                self.stats.last_app_rtp_at = time.time()
                 if self._app_rtp_push_count == 1 or self._app_rtp_push_count % 500 == 0:
                     log.debug("[%s] App RTP #%d: %dB payload",
                               self.id[:8], self._app_rtp_push_count, len(payload_b64))
@@ -1026,6 +1166,9 @@ class CameraSession:
                 ctx = _SSL_CTX_NOVERIFY if is_https else None
                 with urlopen(req, timeout=3, context=ctx) as resp:
                     code = resp.getcode()
+                self.stats.ai_frames_total += 1
+                self.stats.ai_bytes_total  += len(jpeg_bytes)
+                self.stats.last_ai_push_at  = time.time()
                 if count == 1 or count % 100 == 0:
                     log.info("[%s] AI frame #%d: %dx%d → %dB → HTTP %d",
                              self.id[:8], count, w, h, len(jpeg_bytes), code)
@@ -1155,6 +1298,39 @@ class CameraSession:
                 pass
 
 
+# ── Stats sampler (2026-07-21, Admin Dashboard Ingest Daemon monitoring) ──────
+# Single module-level background thread — deliberately NOT one thread per
+# camera (this daemon already runs several threads per camera; see module
+# docstring on why concurrent per-camera setup is bounded/rate-limited).
+# Computes bps/fps by diffing each CameraSession's cumulative counters against
+# its own previous snapshot every tick; never touches the hot io/decode/push
+# paths, so a slow tick (e.g. GIL contention under load) only delays stats
+# freshness, never camera capture.
+
+_STATS_SAMPLE_INTERVAL_S = 1.0
+
+
+def _stats_sampler(manager: "CameraManager", stop_evt: threading.Event) -> None:
+    while not stop_evt.wait(_STATS_SAMPLE_INTERVAL_S):
+        now = time.monotonic()
+        for sess in manager.all():
+            st = sess.stats
+            dt = now - st._prev_sample_at
+            if dt <= 0:
+                continue
+            st.video_bps = (st.video_bytes_total - st._prev_video_bytes) * 8 / dt
+            st.video_fps = (st.video_packets_total - st._prev_video_packets) / dt
+            st.audio_bps = (st.audio_bytes_total - st._prev_audio_bytes) * 8 / dt
+            st.audio_fps = (st.audio_packets_total - st._prev_audio_packets) / dt
+            st.ai_fps    = (st.ai_frames_total - st._prev_ai_frames) / dt
+            st._prev_sample_at      = now
+            st._prev_video_bytes    = st.video_bytes_total
+            st._prev_video_packets  = st.video_packets_total
+            st._prev_audio_bytes    = st.audio_bytes_total
+            st._prev_audio_packets  = st.audio_packets_total
+            st._prev_ai_frames      = st.ai_frames_total
+
+
 # ── Camera manager ────────────────────────────────────────────────────────────
 
 class CameraManager:
@@ -1201,6 +1377,13 @@ class CameraManager:
     def get(self, cid: str):
         with self._lock:
             return self._cameras.get(cid)
+
+    def all(self) -> "list[CameraSession]":
+        """Snapshot of every currently-registered session — for GET /cameras/stats
+        and _stats_sampler() (2026-07-21). Returns a new list each call so the
+        caller can iterate without holding the lock."""
+        with self._lock:
+            return list(self._cameras.values())
 
     def stop_all(self):
         with self._lock:
@@ -1249,6 +1432,10 @@ class Handler(BaseHTTPRequestHandler):
             self._json(200, {"status": "ok", "cameras": _manager.count()})
         elif p == "/cameras":
             self._json(200, {"count": _manager.count()})
+        elif p == "/cameras/stats":
+            # Real-time per-camera stats for the Admin Dashboard Ingest Daemon
+            # panel (2026-07-21) — see docs/design/Design_Ingest_Daemon_Monitoring.md.
+            self._json(200, {"cameras": [sess.stats_dict() for sess in _manager.all()]})
         else:
             parts = p.strip("/").split("/")
             if len(parts) == 3 and parts[0] == "cameras" and parts[2] == "video-params":
@@ -1360,6 +1547,16 @@ def main():
         host, port = h, int(p)
 
     _manager = CameraManager()
+
+    # Stats sampler (2026-07-21) — see its own comment above for why this is
+    # one shared thread rather than one per camera. .unref()-equivalent for
+    # Python: daemon=True so it never blocks process exit on its own.
+    _stats_stop = threading.Event()
+    threading.Thread(
+        target=_stats_sampler, args=(_manager, _stats_stop),
+        daemon=True, name="stats-sampler",
+    ).start()
+
     # ThreadingHTTPServer (2026-07-15): the plain single-threaded HTTPServer
     # processes one request at a time — a slow POST/DELETE (blocked inside
     # CameraSession.stop()'s thread join, see _join_threads) stalled every

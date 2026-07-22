@@ -1,4 +1,5 @@
 import { useIngestDaemonStatus, useAnalysisClientStatus } from '../hooks/useSystemStatus';
+import { useAuthStore } from '../stores/authStore';
 
 // Small status pills for the Channel Group nav bar (2026-07-21) — shows
 // ingest-daemon and Analysis-server connectivity so a silent failure (e.g.
@@ -15,21 +16,33 @@ function StatusDot({ ok }: { ok: boolean }) {
 export function SystemStatusBadges() {
   const ingest   = useIngestDaemonStatus();
   const analysis = useAnalysisClientStatus();
+  const { user, navigateTo, setPendingAdminSection } = useAuthStore();
+  const isAdmin = user?.role === 'admin';
 
   // Neither status applies to this deployment (e.g. combined mode with a
   // non-ingest-daemon capture backend and no remote analysis server) — render
   // nothing rather than an empty pill bar.
   if ((!ingest || !ingest.enabled) && !analysis) return null;
 
+  const goToIngestPanel = () => {
+    setPendingAdminSection('ingest');
+    navigateTo('admin');
+  };
+
   return (
     <div className="flex items-center gap-2">
       {ingest && ingest.enabled && (
         <div
-          className="flex items-center gap-1.5 px-2 py-1 bg-gray-800/80 border border-gray-700 rounded-lg"
+          role={isAdmin ? 'button' : undefined}
+          tabIndex={isAdmin ? 0 : undefined}
+          onClick={isAdmin ? goToIngestPanel : undefined}
+          onKeyDown={isAdmin ? (e) => { if (e.key === 'Enter' || e.key === ' ') goToIngestPanel(); } : undefined}
+          className={`flex items-center gap-1.5 px-2 py-1 bg-gray-800/80 border border-gray-700 rounded-lg ${isAdmin ? 'cursor-pointer hover:border-gray-500 transition-colors' : ''}`}
           title={
-            ingest.healthy
+            (ingest.healthy
               ? `ingest-daemon connected — ${ingest.cameras ?? 0} camera(s) registered`
-              : `ingest-daemon unresponsive${ingest.error ? ` (${ingest.error})` : ''} — auto-recovery in progress`
+              : `ingest-daemon unresponsive${ingest.error ? ` (${ingest.error})` : ''} — auto-recovery in progress`)
+            + (isAdmin ? ' — click for details' : '')
           }
         >
           <StatusDot ok={ingest.healthy} />
