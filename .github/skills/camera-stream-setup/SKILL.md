@@ -1,6 +1,6 @@
 ---
 name: camera-stream-setup
-description: "LTS-2026 카메라 스트림 설정 및 관리. Use when: RTSP 카메라 추가/연결, ONVIF 카메라 자동 탐색, YouTube/RTMP 스트림 RTSP 변환 ingestion, WebRTC 미디어 게이트웨이 설정, MediaMTX 프록시/WHEP 설정, ICE/STUN/TURN 연결 문제 해결, 카메라 스트림 끊김 디버깅, 새 카메라 소스 지원 추가, CAPTURE_BACKEND 전환(ingest-daemon/gstreamer/ffmpeg), WEBRTC_ENGINE 선택(mediamtx/mediasoup), ingest-daemon 설정 및 재시작(ingest:restart), GStreamer 하드웨어 가속 설정(nvdec/vaapi), B-프레임 H264 카메라 처리, camera:capabilities 소켓 이벤트, Dashboard Channel Slot(channelSlot 전역 채널 매핑, MAX_CHANNEL_NUM, NVR 채널 전환). Covers: captureFactory.js, ingestDaemonCapture.js, ingest_daemon.py, rtspCapture.js, gstreamerCapture.js, pyavCapture.js, discoveryService.js, onvifDiscovery.js, youtubeStreamService.js, mediamtx.yml, streamHandler.js, channelSlotService.js."
+description: "LTS-2026 카메라 스트림 설정 및 관리. Use when: RTSP 카메라 추가/연결, ONVIF 카메라 자동 탐색, YouTube/RTMP 스트림 RTSP 변환 ingestion, WebRTC 미디어 게이트웨이 설정, MediaMTX 프록시/WHEP 설정, ICE/STUN/TURN 연결 문제 해결, 카메라 스트림 끊김 디버깅, 새 카메라 소스 지원 추가, CAPTURE_BACKEND 전환(ingest-daemon/gstreamer/ffmpeg), WEBRTC_ENGINE 선택(mediamtx/mediasoup), ingest-daemon 설정 및 재시작(ingest:restart), GStreamer 하드웨어 가속 설정(nvdec/vaapi), B-프레임 H264 카메라 처리, camera:capabilities 소켓 이벤트, Dashboard Channel Slot(channelSlot 전역 채널 매핑, MAX_CHANNEL_NUM, NVR 채널 전환), UMP Player RTSP-over-WebSocket 3번째 재생 경로(streamingMode 3-way 토글, /StreamingServer WS 브릿지, RTSP Digest 인증, ump-player 서브모듈). Covers: captureFactory.js, ingestDaemonCapture.js, ingest_daemon.py, rtspCapture.js, gstreamerCapture.js, pyavCapture.js, discoveryService.js, onvifDiscovery.js, youtubeStreamService.js, mediamtx.yml, streamHandler.js, channelSlotService.js, submodules/ump-player."
 argument-hint: "카메라 소스 유형 (RTSP / ONVIF / YouTube / WebRTC) 또는 백엔드 (ingest-daemon / gstreamer / ffmpeg)"
 ---
 
@@ -106,6 +106,21 @@ ONVIF 자동 탐색 ──► discoveryService.js ──► RTSP 주소 → inge
 | 비디오 (H.264) | MediaMTX WHEP → SRTP | mediasoup WebRtcTransport → SRTP |
 | 오디오 (Opus) | MediaMTX WHEP → SRTP | mediasoup WebRtcTransport → SRTP |
 | Application RTP (PT 96~127) | Socket.IO `appRtp` 이벤트 | WebRTC DataChannel (SCTP) |
+
+## UMP Player RTSP-over-WebSocket (3번째 재생 경로, 2026-07-23 구현 완료 — 라이브 검증 대기)
+
+JPEG Capture(Socket.IO)/WebRTC에 이어 **세 번째 카메라 재생 경로**로 Hanwha `<ump-player>` 웹 컴포넌트(npm `@melchi45/ump-player`, GitHub Packages)를 이용한 RTSP-over-WebSocket을 추가했습니다. 카메라 Add/Edit 화면의 기존 "WebRTC On/Off" 토글이 **Streaming Mode 3-way 선택(JPEG(Default) / WebRTC / UMP)**으로 교체됐습니다.
+
+**설계 상세(필독) → [`docs/design/Design_UMP_Player_RTSP_over_WebSocket.md`](../../../docs/design/Design_UMP_Player_RTSP_over_WebSocket.md) (v1.1) · 운영 가이드 → [`docs/ops/UMP_Player_Streaming_Setup.md`](../../../docs/ops/UMP_Player_Streaming_Setup.md)**
+
+핵심 요점:
+- **카메라에 새 RTSP 세션이 추가되지 않습니다** — ingest-daemon의 기존 단일 세션이 그대로 유지된 채, 신규 6번째 fan-out(`CameraSession.add_rtsp_publish()`/`remove_rtsp_publish()`)으로 로컬 MediaMTX에 채널별 publish(`rtsp://127.0.0.1:{MEDIAMTX_RTSP_PORT}/<channelSlot>/media.smp`, YouTube 카메라가 이미 쓰는 것과 동일한 loopback 패턴).
+- 신규 `/StreamingServer` WebSocket 엔드포인트(`server/src/services/umpStreamingServer.js`)가 RTSP Digest(MD5) 인증(카메라별 저장된 username/password 재사용, 신규 `GET /api/cameras/:id/ump-credentials` — JWT 필수인 유일한 카메라 엔드포인트) 후 WS↔TCP **순수 바이트 릴레이**만 수행.
+- ingest-daemon의 6번째 fan-out은 **on-demand**(WS 브릿지가 뷰어 수를 세어 `POST`/`DELETE /cameras/:id/rtsp-publish` 직접 호출) — 평상시 부하 0.
+- 카메라 스키마: 기존 `webrtcEnabled`(boolean)는 그대로 두고 신규 `umpEnabled`(boolean)를 추가 — `pipelineManager.js`의 기존 webrtcEnabled 로직에 영향 없음. API 계층(`server/src/api/cameras.js`)의 `streamingModeToFlags()`/`deriveStreamingMode()`가 UI의 `streamingMode`(`'jpeg'|'webrtc'|'ump'`)와 이 두 boolean 사이를 변환.
+- **클라이언트 번들 로드 순서 주의(2026-07-23 jsdom으로 실측 재현·수정)** — `ump-player.min.js` 최상단 초기화 코드가 `window.log4javascript` 없이는 내부 `new Logger()` 폴백에서 `TypeError: Logger is not a constructor`로 throw(번들 자체 버그)해 `customElements.define('ump-player', ...)`까지 도달하지 못하고 "Loading UMP player…"에서 무한 대기함 — 처음엔 CryptoJS/ffmpegAAC 순서만 의심했다가 jsdom(`JSDOM({runScripts:'dangerously'})`)으로 번들을 직접 `eval`해서 진짜 원인을 확정. 반드시 **`log4javascript.js` → `crypto-js.js`(RTSP Digest 인증용, 마찬가지로 외부 전역 참조) → `ffmpegAAC.js` → `ump-player.min.js`** 순서로 로드(`UmpPlayerView.tsx`). `profile`/`profile_number` 속성이 없으면 `generateRTSPURL()`이 throw하므로 `profile_number="1"`을 항상 설정, 재생은 `autoplay` 속성이 아니라 엘리먼트에 명시적으로 `.play()` 호출.
+- `supportSunapi`(SUNAPI 지원 여부)와 무관하게 모든 카메라에 UMP 옵션 노출. YouTube 카메라는 UMP 대상에서 제외(2-way JPEG/WebRTC 그대로).
+- 서브모듈(`submodules/ump-player`, 프로토콜 분석 참고용, 클라이언트가 실제 로드하는 건 아님)과 그 중첩 서브모듈(`app/media`, `app/external-lib`)은 `.gitmodules`가 private repo HTTPS URL이라 `git submodule update --init`이 "Repository not found"로 실패함 — `git config submodule.<path>.url git@github.com:melchi45/<repo>.git` 로컬 override 후 재시도 필요.
 
 ## 핵심 파일 위치
 
@@ -892,6 +907,7 @@ TURN_CREDENTIAL_2=test1234
 | GStreamer 스트림 미동작 | `gst-launch-1.0` 미설치 | `apt install gstreamer1.0-tools gstreamer1.0-plugins-good` |
 | **mediasoup Edge 검은 화면** (`inbound-rtp` 없음) | Router `preferredPayloadType`이 Edge H264 PT(109)와 불일치 | `_boot()`에서 `preferredPayloadType: 109` 확인. 진단: `GET /api/client-logs/webrtc`에서 `candidate-pair.bytesReceived > 0`이지만 `inbound-rtp` 항목 없음. 참조: SRS FR-WRTC-070, TC-A-008, Design §4.6 |
 | **mediasoup 모든 브라우저 검은 화면** (ICE loopback) | `_getListenIps()`가 서버 공인 IP를 포함해 loopback ICE path 형성 | `SERVER_IP` / `SERVER_PUBLIC_IP` 환경변수를 LAN IP로 한정. 서버 시작 로그 `announcedIps=[...]` 확인. 참조: SRS FR-WRTC-071, TC-A-009, Design §4.7 |
+| **`WEBRTC_ENGINE=mediamtx`에서 YouTube 카메라만 WebRTC connection failed** (RTSP/ONVIF 카메라는 정상) | YouTube는 MediaMTX에 `yt/{cameraId}` 경로로 publish되는데, WHEP 협상이 `{cameraId}/whep`(접두사 없음)로 요청되어 404 (2026-07-23 수정 완료) | 최신 코드에서는 `index.js`가 `camera.type==='youtube'`를 확인해 `yt/{cameraId}` 경로로 자동 협상함 — 여전히 재현되면 서버 버전 확인. 참조: Design_WebRTC_Engine_Modes.md §3.5 |
 
 ### .env 빠른 검증 스크립트
 

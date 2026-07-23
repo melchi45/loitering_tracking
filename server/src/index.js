@@ -262,6 +262,16 @@ async function main() {
     startIngestStatsAggregator({ io, db, pipelineManager, getWebRTCEngine });
   }
 
+  // UMP Player RTSP-over-WebSocket bridge (2026-07-23) — same ingest-daemon
+  // dependency as the monitoring aggregator above (needs its rtsp-publish
+  // API); also skipped in analysis mode, which has no cameras at all. See
+  // docs/design/Design_UMP_Player_RTSP_over_WebSocket.md §4.2.
+  if (SERVER_MODE !== 'analysis' &&
+      (process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase() === 'ingest-daemon') {
+    const { attachUmpStreamingServer } = require('./services/umpStreamingServer');
+    attachUmpStreamingServer(httpServer, db);
+  }
+
   // ── Auth / Admin Routes ───────────────────────────────────────────────────
   app.use('/auth',  authRouter);
   app.use('/admin', adminRouter);
@@ -461,7 +471,13 @@ async function main() {
       const sdpOffer = typeof req.body === 'string' ? req.body : '';
       if (!sdpOffer) return res.status(400).json({ error: 'Missing SDP offer body (Content-Type: application/sdp)' });
       try {
-        const { status, sdpAnswer, headers } = await getWebRTCEngine().negotiate(cameraId, sdpOffer);
+        // YouTube cameras publish to MediaMTX at yt/{cameraId}, not {cameraId} —
+        // pipelineManager deliberately skips creating a second {cameraId} path for
+        // them (would be a MediaMTX→MediaMTX loopback), so the WHEP request must
+        // target the path that actually has a publisher.
+        const camera = db.findOne('cameras', { id: cameraId });
+        const mediamtxPath = camera?.type === 'youtube' ? `yt/${cameraId}` : undefined;
+        const { status, sdpAnswer, headers } = await getWebRTCEngine().negotiate(cameraId, sdpOffer, mediamtxPath);
         // Forward WHEP spec headers (Location, Link, ETag) if present
         for (const [hdr, val] of Object.entries(headers)) res.setHeader(hdr, val);
         res.status(status).type('application/sdp').send(sdpAnswer);

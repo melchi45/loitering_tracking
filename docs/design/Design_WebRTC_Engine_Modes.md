@@ -93,6 +93,26 @@ MEDIAMTX_URL=http://localhost:8889  # MediaMTX HTTP API
 | `mediamtx.yml` | MediaMTX 미디어 서버 설정 |
 | `server/src/scripts/startServer.js` | MediaMTX 자동 시작 |
 
+### 3.5 버그 수정 — YouTube 카메라 WebRTC 연결 실패 (2026-07-23)
+
+**증상**: `WEBRTC_ENGINE=mediamtx`에서 RTSP/ONVIF 카메라의 WebRTC는 정상 동작하지만, YouTube 가상 카메라는 WebRTC 토글을 켜도 `WebRTC connection failed`(브라우저 ICE 실패, 실제로는 WHEP 협상 자체가 404)로 재생되지 않음.
+
+**원인**: 두 코드가 서로 다른 MediaMTX 경로 이름을 가정하고 있었음.
+- `youtubeStreamService.js`는 yt-dlp/ffmpeg로 MediaMTX에 `yt/{cameraId}` 경로로 **publish**한다(§Design_YouTube_RTSP_Ingest.md).
+- `pipelineManager.js`의 `needsMediaMTX`는 YouTube 카메라를 의도적으로 제외한다 — `mediamtxManager.addCameraPath(cameraId, ...)`로 `{cameraId}`(yt/ 접두사 없음) 경로를 또 만들면 MediaMTX가 자기 자신의 `yt/{cameraId}` 경로를 다시 pull하는 불필요한 루프백이 되기 때문(§6.16 커밋 노트).
+- 그런데 `mediamtxEngine.js`의 `negotiate()`는 항상 `${cameraId}/whep`(접두사 없음)로 WHEP 요청을 보냈음 — RTSP/ONVIF 카메라는 `{cameraId}` 경로가 실제로 존재하므로 우연히 맞았지만, YouTube 카메라는 그 경로가 애초에 만들어지지 않으므로 항상 404.
+- 게다가 `pipelineManager.js`의 `useWebRTC = requestedWebRTC && (WEBRTC_ENGINE==='mediamtx' ? mediamtxReady : altWebRTCReady)`도 YouTube 카메라의 `mediamtxReady`가 (위 이유로) 항상 `false`라서 `useWebRTC`가 절대 `true`가 될 수 없었음 — 서버 쪽 상태도 이미 "WebRTC 비활성"으로 기록되고 있었음.
+
+**수정**:
+- `server/src/index.js`의 `POST /api/webrtc/whep/:cameraId` 라우트가 `db.findOne('cameras', { id: cameraId })`로 `camera.type === 'youtube'`인지 확인해, YouTube 카메라면 `mediamtxPath = 'yt/' + cameraId`를 `negotiate()`에 전달.
+- `mediamtxEngine.js`의 `negotiate(cameraId, sdpOffer, mediamtxPath)`가 3번째 인자로 받은 경로를 우선 사용(없으면 기존처럼 `cameraId` 그대로).
+- `pipelineManager.js`가 `isYouTube`일 때는 `mediamtxReady` 대신 `true`를 신뢰하도록 `mediamtxWebRTCReady` 변수 도입 — mediasoup 엔진이 YouTube 카메라에 이미 주던 것과 동일한 신뢰 수준(§6.16 comment)을 mediamtx 엔진에도 맞춤.
+- MediaMTX에 `{cameraId}` 경로를 별도로 만들지 않는다는 원래 설계(루프백 방지)는 그대로 유지 — 이번 수정은 오직 "브라우저가 물어야 할 경로 이름"만 바로잡은 것.
+
+**영향 범위**: RTSP/ONVIF 카메라의 WHEP 협상 경로는 변경 없음(`mediamtxPath`가 `undefined`이면 기존과 동일하게 `cameraId`를 그대로 사용).
+
+관련 파일: `server/src/index.js`, `server/src/services/webrtc/mediamtxEngine.js`, `server/src/services/pipelineManager.js`
+
 ---
 
 ## 4. mediasoup 모드 (`WEBRTC_ENGINE=mediasoup`)
@@ -361,3 +381,4 @@ cd server && npm run stop:streaming && npm run streaming
 | 1.0 | 2026-06-16 | 초기 작성 — mediamtx·mediasoup·werift 세 엔진 상세 비교 |
 | 1.1 | 2026-06-16 | §4.6 RTP PT 제약 추가 (PT=109 선택 근거, Edge/Chrome 비교, 진단 방법), §4.7 ICE loopback 방지 `_getListenIps()` 추가 |
 | 1.2 | 2026-07-23 | §2 비교표에 카메라 접속 방식·오디오 트랜스코드·PT 매칭 방식·HEVC 지원 여부 컬럼 추가; §4.6 PT=109 고정 방식을 폐기하고 §4.6a 동적 alt-PT Router 캐시로 대체(구버전은 §4.6-구버전으로 이력 보존); §4.8 Worker Pool(§6.31), §4.9 H.265 미지원(§6.25) 신설; §9 운영 비교 결론 신설 — 실측상 mediamtx가 안정적이었고 mediasoup은 dormant 상태임을 명문화, MRD/RFP/PRD/SRS/ops/TC 신규 문서 세트로 연결 |
+| 1.3 | 2026-07-23 | §3.5 신설 — YouTube 카메라 WebRTC 연결 실패 버그 수정(WHEP 협상이 `yt/{cameraId}` 대신 `{cameraId}`로 요청되던 경로 불일치, `pipelineManager.js`의 `mediamtxReady`가 YouTube 카메라에서 항상 false였던 문제 포함) |

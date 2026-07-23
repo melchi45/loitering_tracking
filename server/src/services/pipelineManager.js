@@ -610,11 +610,17 @@ class PipelineManager {
       }
     }
 
-    const useWebRTC = requestedWebRTC && (WEBRTC_ENGINE === 'mediamtx' ? mediamtxReady : altWebRTCReady);
+    // YouTube cameras never set mediamtxReady (needsMediaMTX excludes them, above —
+    // their RTSP URL already IS a MediaMTX path at yt/<id>), so gating on it here
+    // would permanently disable WebRTC for YouTube cameras under WEBRTC_ENGINE=mediamtx.
+    // The WHEP proxy (index.js) resolves the yt/<id> path for these cameras, so trust
+    // requestedWebRTC directly — same trust level mediasoup already gives YouTube cams.
+    const mediamtxWebRTCReady = isYouTube ? true : mediamtxReady;
+    const useWebRTC = requestedWebRTC && (WEBRTC_ENGINE === 'mediamtx' ? mediamtxWebRTCReady : altWebRTCReady);
     if (requestedWebRTC && !useWebRTC) {
       console.warn(
         `[PipelineManager][${camera.id}] WebRTC disabled for this pipeline ` +
-        `(engine: ${WEBRTC_ENGINE}, ready: ${WEBRTC_ENGINE === 'mediamtx' ? mediamtxReady : altWebRTCReady}).`
+        `(engine: ${WEBRTC_ENGINE}, ready: ${WEBRTC_ENGINE === 'mediamtx' ? mediamtxWebRTCReady : altWebRTCReady}).`
       );
     }
 

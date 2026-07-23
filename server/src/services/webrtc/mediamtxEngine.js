@@ -6,6 +6,11 @@
  * Uses the WHEP protocol: browser POSTs an SDP offer to /api/webrtc/whep/:cameraId,
  * which this engine proxies to MediaMTX at MEDIAMTX_WEBRTC_URL/{cameraId}/whep.
  * ICE media (UDP) flows directly between the browser and MediaMTX.
+ *
+ * YouTube cameras publish to MediaMTX at path yt/{cameraId} (not {cameraId}) —
+ * the WHEP route resolves the correct path and passes it as negotiate()'s
+ * mediamtxPath override so the WHEP request targets the path that actually
+ * has a publisher.
  */
 
 const mediamtxManager = require('../mediamtxManager');
@@ -26,8 +31,8 @@ async function waitForStreamReady(cameraId, maxWaitMs = 8000) {
   return mediamtxManager.waitForPathReady(cameraId, maxWaitMs);
 }
 
-async function negotiate(cameraId, sdpOffer) {
-  const whepUrl = `${MEDIAMTX_WEBRTC}/${cameraId}/whep`;
+async function negotiate(cameraId, sdpOffer, mediamtxPath) {
+  const whepUrl = `${MEDIAMTX_WEBRTC}/${mediamtxPath || cameraId}/whep`;
   const upstream = await fetch(whepUrl, {
     method:  'POST',
     headers: { 'Content-Type': 'application/sdp' },
