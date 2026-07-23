@@ -17,6 +17,7 @@
 const path    = require('path');
 const os      = require('os');
 const fs      = require('fs');
+const net     = require('net');
 const http    = require('http');
 const https   = require('https');
 const { execSync, spawn } = require('child_process');
@@ -107,8 +108,33 @@ function _getPortPid() {
   } catch (_) { return []; }
 }
 
+// Whether the port is actually free, checked by attempting a real bind
+// instead of asking lsof/`_getPortPid()` who owns it (2026-07-23).
+// `_getPortPid()` shells out to `lsof -ti tcp:PORT`, which resolves a
+// listening socket to a PID via `/proc/<pid>/fd` — a read that requires
+// ptrace permission on the target process. On hosts with the (Ubuntu
+// default) `kernel.yama.ptrace_scope=1`, that permission is denied for
+// any process outside the caller's ptrace tree, e.g. a daemon started by
+// a different shell/session — even though it's the same uid. In that
+// case lsof silently returns nothing, `_getPortPid()` reports `[]`, and
+// the poll loop below used to read that as "port already free" and
+// return immediately, skipping the SIGKILL escalation entirely — so
+// `startDaemon()` raced onto a port a still-alive zombie daemon held,
+// crashing on EADDRINUSE in a loop. Binding a throwaway server is what
+// the real daemon spawn is about to do anyway, so it's a direct,
+// permission-independent proxy for "is this port actually available".
+function isPortFree(port) {
+  return new Promise((resolve) => {
+    const tester = net.createServer();
+    tester.once('error', () => resolve(false));
+    tester.once('listening', () => tester.close(() => resolve(true)));
+    tester.listen(port, '0.0.0.0');
+  });
+}
+
 async function killExistingDaemon() {
   console.log('[ingest:restart] 기존 daemon 종료 중…');
+  const addrPort = parseInt(DAEMON_ADDR.replace(':', ''), 10);
   const pids = _getPortPid();
   for (const pid of pids) {
     try {
@@ -117,6 +143,9 @@ async function killExistingDaemon() {
     } catch (_) { /* already dead */ }
   }
   if (process.platform !== 'win32') {
+    // pkill matches via /proc/<pid>/cmdline, which — unlike /proc/<pid>/fd —
+    // is NOT gated by ptrace_scope, so this still reaches the daemon even
+    // when `_getPortPid()` above (lsof) found no owner for the port.
     try { execSync("pkill -f 'ingest_daemon.py'", { stdio: 'ignore' }); } catch (_) {}
   }
   // Poll for the port to actually free up instead of a fixed 500ms sleep
@@ -133,19 +162,31 @@ async function killExistingDaemon() {
   const GRACE_MS = 8_000;
   const deadline = Date.now() + GRACE_MS;
   while (Date.now() < deadline) {
-    if (_getPortPid().length === 0) return;
+    if (await isPortFree(addrPort)) return;
     await new Promise((resolve) => setTimeout(resolve, 250));
   }
+  if (await isPortFree(addrPort)) return;
+  console.warn(`[ingest:restart] SIGTERM 후 ${GRACE_MS}ms 내 종료되지 않음 — SIGKILL로 강제 종료`);
   const stillListening = _getPortPid();
-  if (stillListening.length > 0) {
-    console.warn(`[ingest:restart] SIGTERM 후 ${GRACE_MS}ms 내 종료되지 않음 — SIGKILL로 강제 종료: ${stillListening.join(', ')}`);
-    for (const pid of stillListening) {
-      try {
-        if (process.platform === 'win32') execSync(`taskkill /PID ${pid} /F`, { stdio: 'ignore' });
-        else process.kill(pid, 'SIGKILL');
-      } catch (_) { /* already dead */ }
-    }
-    await new Promise((resolve) => setTimeout(resolve, 500));
+  for (const pid of stillListening) {
+    try {
+      if (process.platform === 'win32') execSync(`taskkill /PID ${pid} /F`, { stdio: 'ignore' });
+      else process.kill(pid, 'SIGKILL');
+    } catch (_) { /* already dead */ }
+  }
+  if (process.platform !== 'win32') {
+    // Same ptrace_scope blind spot as the SIGTERM step above — always
+    // also try the cmdline-matched fallback so the daemon is actually
+    // killed even when `_getPortPid()` can't see it.
+    try { execSync("pkill -9 -f 'ingest_daemon.py'", { stdio: 'ignore' }); } catch (_) {}
+  }
+  const killDeadline = Date.now() + 3_000;
+  while (Date.now() < killDeadline) {
+    if (await isPortFree(addrPort)) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  if (!(await isPortFree(addrPort))) {
+    console.error(`[ingest:restart] SIGKILL 후에도 포트 ${addrPort}가 해제되지 않았습니다.`);
   }
 }
 
