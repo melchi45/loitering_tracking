@@ -100,6 +100,7 @@ const SUITES = [
   { file: 'test/api/detection_snapshot_search.test.js',     srs: 'FR-SNAP-001~010',                         label: 'Detection Snapshots' },
   // WebRTC
   { file: 'test/api/webrtc.test.js',                        srs: 'FR-WEBRTC-001~020',                       label: 'WebRTC Capabilities & Stats  F' },
+  { file: 'test/api/webrtc_engine_modes.test.js',           srs: 'FR-WEM-001~033',                          label: 'WebRTC Engine Modes  A+D' },
   { file: 'test/api/webrtc_ice.test.js',                    srs: 'FR-WEBRTC-ICE-001~010',                   label: 'WebRTC ICE Config  A+C' },
   { file: 'test/api/webrtc_stability.test.js',              srs: 'FR-WEBRTC-STA-001~010',                   label: 'WebRTC Stability  H' },
   { file: 'test/api/webrtc_telemetry.test.js',              srs: 'FR-WEBRTC-TEL-001~010',                   label: 'WebRTC Telemetry' },

@@ -31,6 +31,8 @@
 
 ---
 
+> **⚠️ 2026-07-23 정확성 안내**: 이 문서는 mediasoup을 유일한 엔진으로 전제하고 작성되었습니다. 실제로는 `WEBRTC_ENGINE=mediamtx`가 기본값·활성 엔진이며, mediasoup은 실측 불안정성(영상 끊김/재생 불가)으로 인해 dormant 상태입니다. FR-WRTC-070(PT=109 고정)은 이후 alt-PT Router 캐시 방식으로 대체되었습니다. 엔진 선택·비교·현재 상태의 정확한 근거는 [SRS_WebRTC_Engine_Modes.md](SRS_WebRTC_Engine_Modes.md)를 참조하십시오.
+
 ## 1. Introduction
 
 ### 1.1 Purpose
@@ -460,3 +462,4 @@ Server start
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for WebRTC Media Gateway |
 | 1.1 | 2026-05-29 | LTS Engineering Team | Added post-patch stability requirements (duplicate guard, timestamp stability, frozen-stream recovery) |
 | 1.2 | 2026-06-16 | LTS Engineering Team | FR-WRTC-070/071 추가 — mediasoup Router H.264 PT=109 강제 및 ICE listenIps env-var 전용 제약 (Edge 검은 화면 및 ICE loopback 근본 원인 문서화) |
+| 1.3 | 2026-07-23 | LTS Engineering Team | 문서 상단에 정확성 안내 추가 — mediamtx가 현재 기본·활성 엔진이며 mediasoup은 dormant임을 명시, `SRS_WebRTC_Engine_Modes.md`로 연결 |

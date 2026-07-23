@@ -33,6 +33,8 @@
 
 ---
 
+> **⚠️ 2026-07-23 정확성 안내**: 이 문서(§3, §7, §8, §11)가 서술하는 FFmpeg 듀얼 출력 + mediasoup-client capabilities-exchange(Socket.IO `webrtc:getCapabilities`/`webrtc:createTransport` 등) 아키텍처는 **실제로 구현되지 않았습니다**. 현재 코드는 ingest-daemon(Python PyAV) + WHEP 스타일 `negotiate()` 기반이며, `mediamtx`(기본값)와 `mediasoup` 두 엔진을 `WEBRTC_ENGINE`으로 선택합니다. 엔진 내부 동작의 정확한 최신 근거는 [RFP_WebRTC_Engine_Modes.md](RFP_WebRTC_Engine_Modes.md)와 [Design_WebRTC_Engine_Modes.md](../design/Design_WebRTC_Engine_Modes.md)를 참조하십시오. 이 문서는 M1~M5 로드맵(녹화·Playback·Re-ID 영속화 등) 참고용으로만 유효합니다.
+
 ## 1. Overview
 
 The LTS-2026 system currently transports camera video to the React WebUI using a **FFmpeg → JPEG → Socket.IO** pipeline. This approach discards the audio and application RTP tracks present in most IP camera streams and incurs avoidable latency and bandwidth overhead from JPEG serialisation and base64 encoding.
@@ -730,3 +732,4 @@ ss -ulnp | grep -E 'mediasoup|ffmpeg'
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for WebRTC Media Gateway |
 | 1.2 | 2026-06-16 | LTS Engineering Team | §5.1 FR-V-6/FR-V-7 추가 — mediasoup PT=109 H264 제약 및 ICE listenIps env-var 전용 요구사항 |
+| 1.3 | 2026-07-23 | LTS Engineering Team | 문서 상단에 정확성 안내 추가 — 본 문서의 FFmpeg 듀얼출력/mediasoup-client 시그널링 아키텍처는 미구현이며, 실제 엔진 동작은 `RFP_WebRTC_Engine_Modes.md`/`Design_WebRTC_Engine_Modes.md` 참조 |

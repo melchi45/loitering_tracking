@@ -12,6 +12,8 @@
 
 ---
 
+> **⚠️ 2026-07-23 정확성 안내**: Group B(Socket.IO Signaling, `getCapabilities`/`createTransport` 등)는 실제로 구현되지 않은 시그널링 모델을 전제합니다. 실제 서버는 WHEP 스타일 `POST /api/webrtc/whep/:cameraId` 단일 엔드포인트로 SDP를 교환하며, `WEBRTC_ENGINE=mediamtx`가 기본·활성 엔진이고 mediasoup은 dormant 상태입니다. 엔진 계약·진단에 대한 정확한 테스트 케이스는 [TC_WebRTC_Engine_Modes.md](TC_WebRTC_Engine_Modes.md)를 참조하십시오.
+
 ## Table of Contents
 
 1. [Test Strategy](#1-test-strategy)
@@ -358,3 +360,4 @@ Group F (REST API) → Group A (codec config) → Group C (router lifecycle) →
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for WebRTC Media Gateway |
 | 1.1 | 2026-05-29 | LTS Engineering Team | Added post-patch stability verification (TC-H-001 ~ TC-H-004) |
 | 1.2 | 2026-06-16 | LTS Engineering Team | TC-A-008/TC-A-009 추가 — mediasoup PT=109 H264 검증, ICE listenIps env-var 전용 검증; SRS Traceability FR-WRTC-070/071 → TC-A-008/009 추가 |
+| 1.3 | 2026-07-23 | LTS Engineering Team | 문서 상단에 정확성 안내 추가 — Group B 시그널링 모델은 미구현, 실제는 WHEP 단일 엔드포인트; `TC_WebRTC_Engine_Modes.md`로 연결 |

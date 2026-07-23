@@ -29,7 +29,7 @@ The WebRTC Media Gateway replaces the FFmpeg → JPEG → Socket.IO streaming pa
 
 **현재 구현 (기본값 — `WEBRTC_ENGINE=mediamtx`)**: MediaMTX가 RTSP → WebRTC(WHEP) 변환을 직접 처리하며, 브라우저는 `http://<host>:8889/<cameraId>/whep`에서 H.264를 DTLS-SRTP로 직접 수신한다. mediasoup 의존성을 제거하여 ICE 연결 문제를 해소. AI 추론 결과(검출·배회·경보)는 현재 Socket.IO(`frameData`, `newAlert`)로 전달.
 
-**레거시 경로 (`WEBRTC_ENGINE=mediasoup`)**: mediasoup SFU가 카메라 RTP를 PlainTransport로 수신 후 WebRtcTransport를 통해 브라우저에 전달. Audio/Application RTP 및 DataChannel 경로는 이 모드에서 정의됨.
+**레거시 경로 (`WEBRTC_ENGINE=mediasoup`)**: mediasoup SFU가 카메라 RTP를 PlainTransport로 수신 후 WebRtcTransport를 통해 브라우저에 전달. Audio/Application RTP 및 DataChannel 경로는 이 모드에서 정의됨. 실측상 영상 끊김/재생 불가가 반복 관측되어 현재 dormant 상태이며(코드는 삭제하지 않고 보존), §4.1의 PT=109 고정 방식은 이후 alt-PT Router 캐시 방식으로 대체되었다 — 최신 정확한 내용은 [PRD_WebRTC_Engine_Modes.md](PRD_WebRTC_Engine_Modes.md)를 참조.
 
 **장기 목표**: Application RTP → WebRTC DataChannel 브리지로 AI 추론 결과를 Socket.IO 없이 브라우저에 전달 (→ M4 DataChannel, `Design_RTSP_WebRTC_Architecture.md §3.7` 참조).
 
@@ -361,3 +361,4 @@ All DataChannel messages are UTF-8 JSON with a `type` discriminator field.
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for WebRTC Media Gateway |
 | 1.1 | 2026-06-11 | LTS Engineering Team | §1 현재 구현(MediaMTX WHEP) 반영; §8 M5 추가(WHEP 완료), M3/M4 DataChannel 참조 추가; Status → Active |
 | 1.2 | 2026-06-16 | LTS Engineering Team | §4.1 RTP PT=109 제약 및 ICE listenIps env-var 전용 제약 추가 (mediasoup 모드 Edge 검은 화면 + ICE loopback 근본 원인 명시) |
+| 1.3 | 2026-07-23 | LTS Engineering Team | §1 레거시 경로 설명에 mediasoup dormant 상태 및 alt-PT 대체 사실 반영, `PRD_WebRTC_Engine_Modes.md`로 연결 |

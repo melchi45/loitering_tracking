@@ -38,6 +38,7 @@ test/
 | `face_match_history.test.js` | 얼굴 매칭 이력 조회 API |
 | `face_match_timeline_navigation.test.js` | Live Match → Detections 타임라인 이동 (join key 계약) |
 | `webrtc.test.js` | WebRTC 기본 연결 |
+| `webrtc_engine_modes.test.js` | mediamtx/mediasoup 엔진 계약·진단 (WEBRTC_ENGINE) |
 | `webrtc_ice.test.js` | ICE/STUN/TURN 협상 |
 | `webrtc_stability.test.js` | WebRTC 연결 안정성 |
 | `webrtc_telemetry.test.js` | WebRTC 품질 메트릭 |
@@ -292,6 +293,7 @@ npm test -- --testNamePattern="WebRTC ICE"
 | `camera_discovery.test.js` | `docs/tc/TC_Camera_Discovery.md` |
 | `channel_slot.test.js` | `docs/tc/TC_Channel_Slot.md` |
 | `webrtc.test.js`, `webrtc_ice.test.js`, `webrtc_stability.test.js` | `docs/tc/TC_WebRTC_Media_Gateway.md`, `docs/tc/TC_STUN_TURN_ICE.md` |
+| `webrtc_engine_modes.test.js` | `docs/tc/TC_WebRTC_Engine_Modes.md` |
 | `auth.test.js` | `docs/tc/TC_User_Authentication.md` |
 | `sidebar_alerts_zones.test.js` | `docs/tc/TC_Dashboard_Sidebar_Alerts_Zones.md` |
 | `youtube_streams.test.js` | `docs/tc/TC_LTS2026_YouTube_RTSP_Ingest.md` |
