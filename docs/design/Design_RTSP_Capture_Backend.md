@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAPTURE-002 |
-| **Version** | 1.49 |
+| **Version** | 1.50 |
 | **Status** | Active |
-| **Date** | 2026-07-21 |
+| **Date** | 2026-07-23 |
 | **Ops Guide** | [RTSP_Capture_Backend_Setup.md](../ops/RTSP_Capture_Backend_Setup.md) |
 | **Related Design** | [Design_FFmpeg_RTSP_Capture.md](../design/Design_FFmpeg_RTSP_Capture.md) · [Design_RTSP_WebRTC_Architecture.md](../design/Design_RTSP_WebRTC_Architecture.md) |
 
@@ -1385,6 +1385,19 @@ WHEP 세션을 90초간 관찰한 결과, 특정 카메라(특히 2048×1536 이
 
 ---
 
+### 6.34 AI_DECODE_THREADS가 카메라 대수만큼 곱해져 `/health`·SIGTERM이 무응답 상태에 빠짐 — fleet-wide 상한 도입 (2026-07-23)
+
+`npm run ingest:restart` 실행 중 새 daemon 프로세스는 `:7070`에 정상 바인딩했는데도 `/health`가 8~10초 넘게 무응답이라 헬스체크가 타임아웃되고 재시작이 실패로 보고되는 현상이 재현됨. 프로세스를 강제 종료하지 않고 `SIGUSR1`(§6.10에서 이미 등록된 `faulthandler` 스택 덤프, `/tmp/ingest-daemon-stacks.log`)로 진단한 결과:
+
+- `serve_forever()`의 accept 루프(메인 스레드)는 `select()`에서 idle 상태로 정상 대기 중 — HTTP 서버 자체가 멈춘 게 아니었음.
+- 그런데 `/proc/<pid>/status`의 `Threads:` 값은 140인 반면 SIGUSR1 덤프에 찍힌 파이썬 스레드는 약 40개뿐 — 나머지 100개는 §6.10에서 이미 식별된 것과 동일한 패턴인 libav 내부 네이티브 디코드 스레드(파이썬 `threading`/`faulthandler`에는 보이지 않음).
+
+**원인**: `_INGEST_SETUP_SEMAPHORE`(§6.10/§6.12)는 RTSP 연결 수립(`av.open()`) 단계만 동시 5개로 제한할 뿐, 연결이 끝나고 각 카메라가 steady-state 디코딩에 들어간 뒤에는 아무 제한이 없다. 각 카메라의 AI 디코드 워커(`_ai_decode_worker`)는 독립된 `CodecContext`에 `thread_count = AI_DECODE_THREADS`(고정값, §6.10에서 "카메라 수 × nproc" 폭증을 막기 위해 카메라당 고정 캡으로 도입)를 설정하는데, 이 캡 자체가 **카메라 대수와 무관한 고정값**이라 fleet-wide 네이티브 스레드 총수 = `카메라 수 × AI_DECODE_THREADS`로 무한정 비례해서 늘어난다. 실측: `AI_DECODE_THREADS=8`(§6.27에서 GIL 경합 실험 목적으로 기본값 4에서 상향)  × 카메라 9대 = 네이티브 디코드 스레드 72개(전체 140 OS 스레드) — `/health` 응답이 10초 이상 지연되고, `restartIngestDaemon.js`의 8초 SIGKILL 에스컬레이션에 상시 의존하게 됨(graceful SIGTERM 종료 경로가 사실상 항상 우회됨).
+
+**수정**: `AI_DECODE_THREADS_TOTAL`(기본값 `os.cpu_count()`) 신규 도입 — 카메라별 실제 `thread_count`를 고정값이 아니라 `max(1, min(AI_DECODE_THREADS, AI_DECODE_THREADS_TOTAL // 활성_카메라수))`로 매 (재)연결마다 동적으로 계산한다. 카메라가 늘어나거나 `AI_DECODE_THREADS`를 개별 카메라(예: TID-A800 2560×1920 열상)를 위해 높게 설정해도, fleet-wide 네이티브 디코드 스레드 총수는 `AI_DECODE_THREADS_TOTAL`을 넘지 않도록 상한이 걸려 `/health`·SIGTERM 응답성이 카메라 대수·설정값과 무관하게 안정적으로 유지된다. `ingest_daemon.py`, `server/.env`/`.env.example`/`.env.streaming.example`/`.env.analysis.example` 4종 동시 수정.
+
+---
+
 ### 12.3 스트림별 타임아웃 전략
 
 | 스트림 | 방식 | 타임아웃 | 근거 |
@@ -1453,6 +1466,7 @@ WHEP 세션을 90초간 관찰한 결과, 특정 카메라(특히 2048×1536 이
 | 1.40 | 2026-07-21 | §6.27 최종 결론 — 이번 세션 전체를 관통한 재생 불가 증상의 실제 근본 원인 2건 확정: (1) `ingest-daemon` 프로세스가 완전히 다운되어 있어(포트 7070 connection refused) 서버 재시작마다 카메라가 mediasoup에 등록 안 되고 "WebRTC disabled"로 시작(`npm run ingest:start`로 복구), (2) `profileLevelId`가 `addCameraStream()` 시점 1회만 캐싱되는 구조라 ingest-daemon 다운 중 폴링 예산(5초) 초과 시 폴백값 Baseline(`42e01f`)이 영구 고착 — 실제로는 High Profile(`640032`)인데도 낮은 Level(3.1)로 협상되어 고해상도 카메라가 일부 프레임만 디코드하다 멈춤(`POST /stream/reconnect`로 캐시 재고침해 미봉책 적용, 근본 수정은 후속 과제로 명시). 조사용 임시 SDP 디버그 로그 제거 |
 | 1.41 | 2026-07-21 | §6.27 재재보완 — "데이터 수신은 정상인데 Buffer만 주기적으로 900ms+" 현상의 진짜 근본 원인 확정: 프로액티브 jitterBufferTarget escalation이 `bufferMs`(우리가 `videoReceiver.jitterBufferTarget`으로 직접 명령한 결과가 그대로 반영되는 지표)를 트리거로 삼아 자기강화 피드백 루프를 형성 — STEP_UP/STEP_DOWN 5~10배 비대칭 때문에 정상적인 지터 한 번만으로도 15~20초 만에 상한(1000ms)까지 폭주. `useWebRTC.ts` escalation 트리거에서 `bufferMs` 조건 제거, 우리가 직접 조작하지 않는 `freezeDelta`/`lossDeltaForAdapt`(진짜 프리즈·패킷손실)만으로 판단하도록 수정 — 데이터 수신량과 무관했던 자기유발 문제였음을 확정. 별도로 Node.js 이벤트 루프 지연 모니터(`eventLoopLag.js`) 신규 추가(200ms+ 블로킹 시 로그, 실측 233ms/217ms 확인). `npx tsc --noEmit`/`npm run build` 클린 통과 |
 | 1.42 | 2026-07-21 | §6.27 재재재보완 — `profile-level-id=42e01f`가 재연결마다 무작위로 재발하던 진짜 원인 확정: `negotiate()`가 WHEP 재협상마다 매번 `_ingestGetVideoParams()`를 재시도 없이 2초 타임아웃으로 단발 호출하는데, ingest-daemon이 바쁠 때(250%+ CPU) 실패하면(로그 `video-params not available yet` 하루 133회 확인) Producer의 하드코딩 Baseline(`42e01f`) 기본값으로 조용히 폴백하던 구조 — `addCameraStream()` 시점 1회 캐싱이라는 v1.40의 이해는 부정확했음, 실제로는 매 negotiate마다 fresh fetch. `mediasoupEngine.js`에 `_lastKnownVideoParams` 캐시 신규 추가 — fetch 성공 시 갱신, 실패 시 Baseline이 아니라 마지막 성공값으로 폴백(카메라 실제 프로파일은 재연결 사이 안 바뀌므로), 기존 H.265 진단용 `_pollVideoCodec()`도 성공 시 같은 캐시를 선제 예열, `removeCameraStream()`에서 캐시 정리 추가 |
+| 1.50 | 2026-07-23 | §6.34 신규 — `AI_DECODE_THREADS`가 카메라 대수만큼 곱해져(9대×8=72 네이티브 디코드 스레드, 전체 140 OS 스레드) `/health`가 8~10초+ 무응답이 되고 재시작이 SIGKILL 에스컬레이션에 상시 의존하던 결함을 SIGUSR1 스택 덤프(프로세스 kill 없이 진단)로 확정 — `AI_DECODE_THREADS_TOTAL`(기본값 `os.cpu_count()`) 신규 도입, 카메라별 `thread_count`를 고정값 대신 `max(1, min(AI_DECODE_THREADS, AI_DECODE_THREADS_TOTAL // 활성_카메라수))`로 매 (재)연결마다 동적 계산해 fleet-wide 네이티브 스레드 총수를 카메라 대수·설정값과 무관하게 상한. `ingest_daemon.py` + `.env`/`.env.example`/`.env.streaming.example`/`.env.analysis.example` 4종 동시 수정 |
 | 1.49 | 2026-07-21 | §6.29.14/§6.29.15 신규 — v1.48 배포 직후 사용자가 "현재 WebRTC의 모든 채널이 0fps"라고 긴급 보고, 원인은 ingest-daemon에 34개(!) 카메라가 등록되어 과부하 상태였던 것 — 백그라운드에서 자동 실행 중이던 TC 스위트(TcRunnerService.runOnStartup)가 실제 카메라를 계속 생성/삭제하며 라이브 시청과 ingest-daemon 자원을 놓고 경쟁한 것이 원인. `TC_STARTUP_RUN=false`로 자동 실행을 끄고 잔여 테스트 카메라를 정리해 즉시 복구(§6.29.14). 복구 과정에서 사용자가 특정 채널의 `profile-level-id=42e01f`(Baseline 폴백) 재현을 보고해 SDP 변수 덤프로 재검증했으나 코드 자체는 정상 동작 확인(§6.29.14) — 그러나 삭제했던 테스트 카메라들이 재시작 후 원래 생성시각 그대로 되살아나는 것을 발견하며 훨씬 더 근본적인 버그를 확정: **`MongoDatabase.flushNow()`가 완전한 no-op**이었다 — `_persist()`가 `_mongo.remove()`/`upsert()`를 fire-and-forget으로 던지고 반환값을 아무도 추적하지 않아, `DELETE /api/cameras/:id`가 `{success:true}`를 응답한 직후(in-memory 제거는 동기 완료되지만 실제 MongoDB 네트워크 왕복은 미완료 상태) 서버가 재시작되면 그 삭제가 통째로 유실되고 다음 부팅 시 MongoDB의 예전 레코드가 그대로 재수화(hydrate)되던 구조 — 오늘 세션 내내 반복한 "delete 후 곧바로 재시작" 패턴이 정확히 이 조건을 매번 충족시키고 있었다(§6.29.15). `MongoDatabase`에 `_pendingWrites` Set으로 진행 중인 Mongo 쓰기를 추적하도록 추가하고 `flushNow()`를 실제로 `Promise.allSettled()`로 대기하는 async 함수로 교체, `BaseDatabase`/`db/index.js`의 인터페이스도 async로 통일, `index.js`의 graceful shutdown 핸들러가 `flushNow()`를 `await`하도록 수정. 동일 레이스 컨디션을 재현하는 실측 테스트(카메라 생성→즉시 삭제→즉시 SIGTERM→재시작)로 수정 전/후 대조 검증 완료 — 수정 후 삭제가 재시작을 확실히 견뎌냄을 확인 |
 | 1.48 | 2026-07-21 | §6.29.11/§6.29.12/§6.29.13 신규 — 사용자가 Analysis 서버에서 `tc009-cam-alpha`/`tc009-cam-beta`/`test-cam-distributed` 좀비 채널을 보고했다며 원인·방지책 조사 요청. 근본 원인 3건 확정 및 수정: (1) `distributed_pipeline.test.js`의 TC-DAP-005/009가 카메라 등록 없이 `POST /api/analysis/frame`에 cameraId만 실어 보내 Analysis 서버의 `_metrics.perCamera`에 만료 로직 없이 영구 누적되던 버그 — `_cameraContexts`와 같은 60초 프루닝 인터벌에 편입해 수정. (2) Streaming 서버 `pipelineManager.stopCamera()`가 in-memory 파이프라인이 없으면 ingest-daemon/mediasoup/mediamtx 정리를 전혀 시도하지 않고 조기 반환하던 버그(실제 등록된 카메라가 재시작 후 미기동 상태에서 삭제되면 ingest-daemon 쪽에 좀비 등록이 남을 수 있음) — ctx 유무와 무관하게 외부 시스템 정리를 항상 시도하도록 수정, 각 정리 함수가 미등록 상태에 대해 이미 안전한 no-op임을 코드 추적으로 확인. (3) `DELETE /api/cameras/:id`가 Analysis 서버에 삭제를 전혀 통지하지 않아 정상 삭제된 카메라도 5분 idle-prune 전까지는 Analysis 서버에 잔류하던 gap — `POST {ANALYSIS_SERVER_URL}/api/analysis/camera-removed` 신규 fire-and-forget 통지 추가(`faceSearchSync.js` 패턴 재사용, self-signed TLS 대응 위해 `https.Agent({rejectUnauthorized:false})` 필요함을 실측으로 확인 — 최초 구현은 기본 `fetch()`로 "fetch failed" 실패). 부수적으로 오늘 세션 중 반복 재시작이 서버 부팅 시 자동 실행되는 TC 스위트(`TcRunnerService.runOnStartup`)를 매번 중간에 끊어 `TC-B-*`/`TC-A-*` 등 14개 고아 테스트 카메라가 DB에 쌓인 것을 발견·정리(사용자 확인 후 삭제) — `TC_STARTUP_RUN=false`로 끌 수 있음을 확인, `api-testing/SKILL.md`(.claude+.github)에 예방법 기록 |
 | 1.47 | 2026-07-21 | §6.29.10 신규 — Streaming Dashboard Channel Group nav 우측에 ingest-daemon/Analysis 서버 연결 상태 배지 추가. 서버에 `GET /api/ingest-status`(§6.29.9의 watchdog 헬스체크 로직 재사용) 신규 추가, 기존 `GET /api/analysis/client-status`(streaming 모드 전용)와 함께 5초 폴링. `DashboardDetectionPanel.tsx`에 있던 `useAnalysisClientStatus` 훅을 `hooks/useSystemStatus.ts`로 추출해 `SystemStatusBadges.tsx`와 공유(중복 제거) — §6.29.5의 ingest-daemon 응답 불능이 지금까지는 WebRTC 증상으로만 간접 드러났는데, 이제 대시보드에서 직접 확인 가능 |

@@ -113,8 +113,21 @@ JPEG_QUALITY       = int(os.environ.get("JPEG_QUALITY", "85"))
 IDR_WAIT_TIMEOUT   = float(os.environ.get("IDR_WAIT_TIMEOUT", "2"))
 # Per-camera libav internal decode thread cap (see _ai_decode_worker) — fixed
 # instead of "0 = auto-size to all cores" so fleet-wide native thread count
-# scales with camera count × this cap, not camera count × nproc.
-_AI_DECODE_THREADS = int(os.environ.get("AI_DECODE_THREADS", "4"))
+# scales with camera count × this cap, not camera count × nproc. This alone
+# still scales *linearly* with fleet size though: raising AI_DECODE_THREADS
+# for one demanding camera (e.g. TID-A800's 2560x1920 thermal stream) also
+# multiplies every other camera's native thread count. Confirmed live
+# (2026-07-23) at AI_DECODE_THREADS=8 × 9 cameras = 72 native decode threads
+# (140 OS threads fleet-wide) — /health took 8-10s+ to respond (SIGUSR1 stack
+# dump showed the accept-loop thread idle in select(), i.e. not deadlocked,
+# just starved), which made `npm run ingest:restart`'s 10s health-check
+# timeout flaky and pushed every restart onto killExistingDaemon()'s SIGKILL
+# escalation path instead of a clean SIGTERM shutdown. AI_DECODE_THREADS_TOTAL
+# below bounds the fleet-wide native decode thread budget so this stays stable
+# regardless of fleet size or how high AI_DECODE_THREADS is set — see
+# _ai_decode_worker for how the two combine.
+_AI_DECODE_THREADS       = int(os.environ.get("AI_DECODE_THREADS", "4"))
+_AI_DECODE_THREADS_TOTAL = int(os.environ.get("AI_DECODE_THREADS_TOTAL", str(os.cpu_count() or 8)))
 # Idle timeout (seconds) for the AI / video RTP RTSP sessions, applied as the
 # libav "stimeout" socket I/O option (µs). All ingest loops (AI, video RTP,
 # audio, App RTP) now use stimeout exclusively — a prior per-camera background
@@ -992,8 +1005,16 @@ class CameraSession:
         # "stopper" cleanup threads. A fixed per-camera cap still gives large
         # frames real frame/slice-level parallelism without scaling with core
         # count fleet-wide (13 cameras × cap, not 13 × nproc).
+        # Divide the fleet-wide native decode thread budget across every
+        # currently-registered camera (not just this one) so raising
+        # AI_DECODE_THREADS for a demanding camera, or simply adding more
+        # cameras, can never blow past AI_DECODE_THREADS_TOTAL native threads
+        # fleet-wide — see the module-level comment on AI_DECODE_THREADS_TOTAL.
+        # Evaluated fresh on every (re)connect, so it re-balances live as
+        # cameras are added/removed rather than only at daemon startup.
+        active_cameras   = max(1, _manager.count()) if _manager is not None else 1
         ctx.thread_type  = "AUTO"
-        ctx.thread_count = _AI_DECODE_THREADS
+        ctx.thread_count = max(1, min(_AI_DECODE_THREADS, _AI_DECODE_THREADS_TOTAL // active_cameras))
         packet_counter = 0  # counts all packets handed to this worker, decoded or not
         while not stop_evt.is_set():
             try:
