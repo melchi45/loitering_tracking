@@ -4,10 +4,10 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-003 |
-| **Version** | 1.1 |
+| **Version** | 2.0 |
 | **Status** | Active |
-| **Date** | 2026-05-21 |
-| **Related RFP** | RFP_WebRTC_Media_Gateway.md (LTS-2026-003 v1.1) |
+| **Date** | 2026-05-21 (rev 2026-07-23) |
+| **Related RFP** | [rfp/RFP_WebRTC_Media_Gateway.md](../rfp/RFP_WebRTC_Media_Gateway.md) (LTS-2026-003 v2.0) |
 
 ---
 
@@ -19,19 +19,19 @@
 5. [Technical Requirements](#5-technical-requirements)
 6. [API / Interface Contract](#6-api--interface-contract)
 7. [Acceptance Criteria](#7-acceptance-criteria)
-8. [Milestones & TODO](#8-milestones--todo)
+8. [Implementation Status](#8-implementation-status)
 
 ---
 
 ## 1. Product Vision
 
-The WebRTC Media Gateway replaces the FFmpeg → JPEG → Socket.IO streaming path with a low-latency WebRTC delivery path. The system has evolved through two major implementations:
+운영자는 브라우저에서 카메라 영상을 저지연 WebRTC로 보고, 동시에 AI 감지·배회·알림 이벤트를 실시간으로 받는다. 이 두 가지는 **서로 다른 두 전달 경로**로 영구히 공존한다 — 하나가 다른 하나를 대체하는 마이그레이션이 아니다:
 
-**현재 구현 (기본값 — `WEBRTC_ENGINE=mediamtx`)**: MediaMTX가 RTSP → WebRTC(WHEP) 변환을 직접 처리하며, 브라우저는 `http://<host>:8889/<cameraId>/whep`에서 H.264를 DTLS-SRTP로 직접 수신한다. mediasoup 의존성을 제거하여 ICE 연결 문제를 해소. AI 추론 결과(검출·배회·경보)는 현재 Socket.IO(`frameData`, `newAlert`)로 전달.
+- **영상/오디오**: `webrtcEnabled=true`인 카메라는 WHEP 기반 WebRTC(`mediamtx` 기본, `mediasoup` dormant — [PRD_WebRTC_Engine_Modes.md](PRD_WebRTC_Engine_Modes.md) 참조)로 `<video>`에 전달. `webrtcEnabled=false`인 카메라는 어노테이션된 JPEG를 Socket.IO `frame`으로 전달 — 이는 임시 폴백이 아니라 카메라별로 영구히 고정되는 두 갈래 경로다.
+- **AI 이벤트(감지/배회/화재/알림)**: WebRTC 상태와 무관하게 항상 Socket.IO로 전달된다. WebRTC DataChannel로 옮기는 계획은 실행되지 않았고 앞으로도 계획되어 있지 않다(RFP §4.3).
+- **App RTP(ONVIF)**: Socket.IO(원본 `appRtp` + 파싱된 `onvif:event`)로 항상 전달되며, `mediasoup` 모드에서는 동일 데이터가 WebRTC DataChannel로도 중복 전달된다(클라이언트가 `seq` 기준 중복 제거).
 
-**레거시 경로 (`WEBRTC_ENGINE=mediasoup`)**: mediasoup SFU가 카메라 RTP를 PlainTransport로 수신 후 WebRtcTransport를 통해 브라우저에 전달. Audio/Application RTP 및 DataChannel 경로는 이 모드에서 정의됨. 실측상 영상 끊김/재생 불가가 반복 관측되어 현재 dormant 상태이며(코드는 삭제하지 않고 보존), §4.1의 PT=109 고정 방식은 이후 alt-PT Router 캐시 방식으로 대체되었다 — 최신 정확한 내용은 [PRD_WebRTC_Engine_Modes.md](PRD_WebRTC_Engine_Modes.md)를 참조.
-
-**장기 목표**: Application RTP → WebRTC DataChannel 브리지로 AI 추론 결과를 Socket.IO 없이 브라우저에 전달 (→ M4 DataChannel, `Design_RTSP_WebRTC_Architecture.md §3.7` 참조).
+이 PRD는 v1.x가 서술했던, 실제로는 구현되지 않은 아키텍처(FFmpeg 듀얼출력, mediasoup-client Socket.IO 시그널링, DataChannel AI 이벤트)를 대체하여 **실제 동작을 정확히 서술**한다.
 
 ---
 
@@ -39,266 +39,122 @@ The WebRTC Media Gateway replaces the FFmpeg → JPEG → Socket.IO streaming pa
 
 ### 2.1 Goals
 
-- Forward H.264 video RTP from each camera's RTSP session to subscribed browsers via mediasoup without re-encoding (zero-transcode SFU forwarding).
-- Receive audio RTP tracks from cameras and transcode non-Opus codecs to Opus 48 kHz via FFmpeg before mediasoup injection.
-- Pass application RTP tracks (dynamic payload types 96–127) through a mediasoup DataProducer for future plugin consumption.
-- Replace the Socket.IO `frame` / `detections` / `loitering` event model with WebRTC DataChannel delivery of AI inference results.
-- Retain Socket.IO exclusively for mediasoup-client capabilities exchange and signaling; maintain backward-compatible Socket.IO JPEG fallback until full validation.
-- Expose per-camera WebRTC health metrics at `GET /api/webrtc/stats`.
+- `webrtcEnabled=true`인 카메라의 H.264 영상을 서버 재인코딩 없이 브라우저 `<video>`에 전달한다.
+- Opus가 아닌 오디오 코덱을 가진 카메라는 ingest-daemon이 전용 워커 스레드에서 Opus로 트랜스코드하여 전달하고, Opus 카메라는 순수 패스스루한다.
+- Application RTP(ONVIF 메타데이터)를 원본(raw) 형태와 파싱된 구조화 이벤트 형태 양쪽으로 제공한다.
+- `WEBRTC_ENGINE`이 `mediamtx`/`mediasoup` 어느 쪽이어도 클라이언트 코드 변경 없이 동일하게 동작한다(단일 WHEP 계약).
+- AI 감지·배회·알림 이벤트는 WebRTC 상태와 무관하게 항상 Socket.IO로 안정적으로 전달된다.
+- 카메라별 음소거 버튼을 서버 재협상 없이 클라이언트에서 즉시 처리한다.
 
 ### 2.2 Non-Goals
 
-- The DataChannel AI event path (Phase 3) is not in scope for the initial Phase 1/2 deployment; AI results continue to be delivered via Socket.IO until Phase 3 is complete.
-- A raw `RTCPeerConnection` SDP offer/answer endpoint for non-mediasoup-client consumers (e.g., native mobile apps) is deferred.
-- Per-stream adaptive bitrate (ABR/simulcast) is not in scope for this version.
+- AI 이벤트를 WebRTC DataChannel로 이전하는 것 — 명시적으로 계획되어 있지 않다(RFP §4.3의 근거를 뒤집으려면 이 PRD와 RFP를 먼저 개정해야 한다).
+- `werift` 엔진 구현 — 여전히 스텁.
+- 글로벌 `WEBRTC_ENABLED` 플래그 — 카메라별 `webrtcEnabled` 필드가 그 역할을 대신하며, 별도의 전역 스위치는 없다.
+- 영상 녹화·Playback API — `RFP_RTSP_WebRTC_Architecture.md`의 M1/M2 범위이며 이 PRD의 범위 밖이다.
+- 엔진 내부 동작(Worker Pool, alt-PT 캐시 등) — `PRD_WebRTC_Engine_Modes.md`에서 다룬다.
 
 ---
 
 ## 3. User Personas
 
-**Operator at Console** — Monitors multiple camera feeds simultaneously in a browser. Expects low-latency, hardware-decoded video with audio, and accurate bounding box overlays. Needs a mute button per camera and a Reconnect button when a connection fails.
+**보안 운영자(Security Operator)** — 대시보드에서 다중 카메라를 동시에 감시한다. 영상은 `<video>`(WebRTC 카메라) 또는 어노테이션된 `<img>`(JPEG 카메라)로 보이며, 어느 쪽이든 감지·배회·알림은 동일하게 실시간으로 뜬다.
 
-**System Administrator** — Configures `SERVER_IP` and mediasoup port ranges in `.env`. Uses `GET /api/webrtc/stats` and `chrome://webrtc-internals` to diagnose connectivity issues.
+**System Administrator** — 카메라 추가/수정 시 `webrtcEnabled`를 켤지 결정하고, `WEBRTC_ENGINE`(mediamtx/mediasoup)을 배포 환경에 맞게 설정한다. 문제 발생 시 `POST /api/webrtc/ice-test`로 엔진 상태를 우선 확인한다.
 
-**AI/Analytics Developer** — Relies on the DataChannel message schema to consume detection events and loitering alerts without changes to the existing Zustand store interface.
+**AI/Analytics Developer** — 새로운 AI 이벤트 타입을 추가할 때 이것이 Socket.IO 경로를 사용해야 함을 알아야 한다 — DataChannel에 새 메시지 타입을 얹으려는 시도는 이 PRD의 §2.2 Non-Goals에 위배된다.
 
 ---
 
 ## 4. Functional Specification
 
-### 4.1 Video Track
+### 4.1 영상 트랙 (RFP FR-WRTC-010~013)
 
-The gateway must forward the H.264 video RTP track from each camera to every subscribed browser session without re-encoding. Cameras that stream H.265 (HEVC) must be transcoded to H.264 via FFmpeg before mediasoup injection. The browser `<video>` element replaces the current `<img>` JPEG display and must render at the camera's native frame rate (up to 30 FPS). The AI inference pipeline (YOLOv8, ByteTrack) must continue to receive decoded frames; the `RtpIngestion` component tees the H.264 bitstream — one path to mediasoup, one path to the existing JPEG decoder for inference. RTCP PLI / FIR keyframe requests from mediasoup must be forwarded back to the camera via the RTSP/RTP path.
+`webrtcEnabled=true`인 카메라는 H.264 RTP를 재인코딩 없이 활성 엔진을 통해 브라우저로 전달한다. 클라이언트(`useWebRTC.ts`)는 `ontrack`으로 트랙을 받고, SDP answer에 `a=msid`가 없는 경우(mediasoup에서 관측됨) `MediaStream`을 직접 합성한다. `webrtcEnabled=false`인 카메라는 대신 Socket.IO `frame` 이벤트로 어노테이션된 JPEG를 전달한다 — `pipelineManager.js`가 `if (!ctx.useWebRTC)`로 이 둘을 배타적으로 분기한다(폴백이 아니라 카메라별 영구 모드).
 
-**RTP Payload Type Constraint (mediasoup mode)**: The mediasoup Router must be created with `preferredPayloadType: 109` for H.264 (not 108). mediasoup v3.19+ hard-pins the Consumer PT to the Router's `preferredPayloadType`. Edge browser assigns PT=109 to H264/CBP/pm=1; if the server answer carries PT=108, Edge discards all SRTP packets at the media layer, resulting in black video despite a successfully connected ICE/DTLS session. Chrome offers PT=108 but accepts PT=109 in the answer per RFC 8829 (JSEP).
+### 4.2 오디오 트랙 (RFP FR-WRTC-020~024)
 
-**ICE Listen IP Constraint (mediasoup mode)**: The `WebRtcTransport` listenIps list must be built exclusively from `SERVER_IP` / `SERVER_PUBLIC_IP` environment variables — never from `os.networkInterfaces()`. Advertising all NIC IPs as ICE host candidates causes the browser's ICE agent to select the server's own public IP as a shared local candidate, routing SRTP in a loopback path back to the server process instead of delivering it to the browser.
+오디오 트랙이 있는 카메라는 코덱이 이미 Opus면 ingest-daemon이 순수 RTP mux로 패스스루하고, 그 외 코덱(G.711, AAC 등)은 메인 RTSP I/O 스레드와 분리된 전용 워커 스레드에서 Opus로 트랜스코드한다 — 트랜스코드가 느려도 영상/AI 프레임 전달이 막히지 않는다. 오디오 트랙이 없는 카메라는 오류 없이 영상만 정상 동작한다. 클라이언트는 카메라별 음소거 버튼(`CameraView.tsx`)을 제공하며, `videoRef.current.muted` 토글만으로 즉시 처리되고 서버 재협상이 필요 없다.
 
-### 4.2 Audio Track
+### 4.3 Application RTP 트랙 (RFP FR-WRTC-030~035)
 
-The gateway must receive audio RTP from cameras that carry audio (G.711 µ-law/A-law, AAC, or G.722). Non-Opus codecs must be transcoded to Opus 48 kHz mono. Audio must be delivered to the browser alongside the video track. The operator UI must expose a per-camera mute button (implemented client-side via `track.enabled = false`). Cameras without an audio track must continue to work without error.
+ingest-daemon이 추출한 App RTP(ONVIF) 패킷은 `POST /api/internal/apprtp/:cameraId`로 서버에 전달된다. 서버는 이를 (1) ONVIF XML을 구조화 파싱해 Socket.IO `onvif:event`/`onvif:temperature`로, (2) 원본 그대로 Socket.IO `appRtp`로, 두 경로 모두로 브로드캐스트한다. `WEBRTC_ENGINE=mediasoup`일 때만 동일한 원본 패킷이 WebRTC DataChannel로도 추가 전달되며(mediamtx는 DataChannel이 없으므로 해당 없음), 클라이언트는 두 소스를 `seq` 기준으로 중복 제거한다.
 
-### 4.3 Application RTP Track
+### 4.4 AI 이벤트 전달 (RFP FR-WRTC-040~042)
 
-Application RTP tracks (payload types 96–127) detected in the camera's RTSP SDP must be passed through as raw binary data via a mediasoup DataProducer. Unknown payload types must be buffered and forwarded without interpretation; unrecognised payloads must not crash the server.
+`detections`, `loitering`, `fire:alert`, `alert:new`, `snapshot:new`, `face_match` 등은 카메라의 `webrtcEnabled`/`WEBRTC_ENGINE` 설정과 무관하게 항상 Socket.IO로 전달된다. 클라이언트는 `<video>`/`<img>` 렌더링 방식과 별개로 항상 `camera:subscribe` room에 join해야 이 이벤트들을 수신한다.
 
-### 4.4 AI Inference DataChannel
+### 4.5 시그널링 (RFP FR-WRTC-001~005)
 
-AI inference results (detections, tracking IDs, loitering events, fire/smoke alerts) must be delivered over the WebRTC DataChannel rather than Socket.IO frame events. Each DataChannel message is a UTF-8 JSON string with a discriminating `type` field. Detection messages use `maxRetransmits: 0` (unreliable, UDP-like) to avoid head-of-line blocking. Alert messages (`loitering`, `fire`, `intrusion`) use ordered reliable delivery. The `useWebRTC` hook dispatches DataChannel messages to the existing Zustand store without requiring changes to downstream UI components.
+시그널링은 단일 WHEP 엔드포인트(`POST /api/webrtc/whep/:cameraId`) 하나뿐이다 — SDP offer를 body로 보내면 활성 엔진의 SDP answer를 그대로 받는다. Socket.IO 기반 시그널링 이벤트(`webrtc:getCapabilities` 등)는 존재하지 않는다.
 
-### 4.5 RTP Ingestion Pipeline (per camera)
+### 4.6 진단/헬스 노출 (RFP FR-WRTC-050~053)
 
-`RtpIngestion` spawns a dual-output FFmpeg process:
-1. Video RTP → mediasoup PlainTransport loopback UDP port (H.264 copy, or libx264 transcode for H.265 cameras)
-2. Audio RTP → mediasoup PlainTransport loopback UDP port (libopus transcode)
-3. JPEG pipe → AI inference (existing path, 10 FPS, unchanged)
-
-`RtpIngestion` allocates 6 sequential ports per camera from a pool starting at 40000:
-
-| Offset | Use |
-|---|---|
-| +0 | Video RTP |
-| +1 | Video RTCP |
-| +2 | Audio RTP |
-| +3 | Audio RTCP |
-| +4 | Application RTP (optional) |
-| +5 | Application RTCP (optional) |
-
-mediasoup PlainTransports use `comedia: true` so no explicit `transport.connect()` call is needed; the transport auto-connects from the first incoming RTP packet.
-
-### 4.6 Signaling
-
-Signaling uses the mediasoup-client capabilities-exchange protocol over the existing Socket.IO connection. The sequence is:
-1. `webrtc:getCapabilities` — client receives Router RTP capabilities and loads a Device.
-2. `webrtc:createTransport` — server creates WebRtcTransport; client creates RecvTransport.
-3. `webrtc:connectTransport` — client sends DTLS fingerprint; ICE + DTLS handshake proceeds.
-4. `webrtc:consume` — server creates paused Consumers; client calls `transport.consume()`.
-5. `webrtc:resumeConsumer` — server calls `consumer.resume()`; SRTP data begins flowing.
-6. `webrtc:leave` — server closes transport and consumers.
-
-Stale transports for the same socket:camera pair are closed before creating a new one.
-
-### 4.7 Migration and Fallback
-
-A feature flag `WEBRTC_ENABLED` in `server/.env` controls the path:
-- `WEBRTC_ENABLED=false` — existing Socket.IO JPEG path unchanged.
-- `WEBRTC_ENABLED=true` — WebRTC path active; Socket.IO JPEG path runs in parallel until Phase 4 sign-off.
+`POST /api/webrtc/ice-test`가 활성 엔진의 헬스와 정보를, `GET /api/webrtc/ice-config`가 STUN/TURN 설정을, `GET /api/webrtc/monitor`(dev-only/localhost 전용)가 파이프라인 상세를 노출한다. `GET /api/capabilities`는 AI 모듈 가용성 맵이며 WebRTC와 무관하다.
 
 ---
 
 ## 5. Technical Requirements
 
-### 5.1 Selected Stack
+### 5.1 실제 구성 요소
 
-| Component | Version | Role |
-|---|---|---|
-| `mediasoup` | ^3.14 | SFU — Worker/Router/Transport/Producer/Consumer |
-| `FFmpeg` | ≥ 6.0 | RTP ingestion, audio transcode, JPEG tee |
-| `Socket.IO` | ^4.7 | Signaling (capabilities exchange, transport params) |
-| `mediasoup-client` | latest | Browser-side Device / RecvTransport lifecycle |
+| 컴포넌트 | 역할 |
+|---|---|
+| `ingest-daemon` (Python PyAV) | 카메라당 단일 RTSP 세션, 4갈래 팬아웃 |
+| `webrtcEngineFactory.js` | `WEBRTC_ENGINE`에 따라 mediamtx/mediasoup/werift 중 선택 |
+| `webrtc/mediamtxEngine.js` | MediaMTX WHEP 프록시 (기본, 활성) |
+| `webrtc/mediasoupEngine.js` | Worker Pool 기반 SFU (구현됨, dormant) |
+| `pipelineManager.js` | 카메라별 useWebRTC/JPEG 분기, Socket.IO 이벤트 발신 오케스트레이션 |
+| `internalApi.js` | ingest-daemon → 서버 콜백(`/frame/:id`, `/apprtp/:id`) 수신 |
+| `useWebRTC.ts` | WHEP negotiation, ontrack, DataChannel appRtp 수신, freeze/ICE 실패 워치독 |
 
-No new npm packages are required on the client side; the browser uses native `RTCPeerConnection` APIs via mediasoup-client.
+`RtpIngestion`, `WebRTCGateway`, `WebRtcSession`, `webrtcSignaling.js` 등 v1.x가 언급한 파일은 존재하지 않는다.
 
 ### 5.2 Non-Functional Requirements
 
-| ID | Requirement | Target |
+| ID | Requirement | Note |
 |---|---|---|
-| NFR-1 | Glass-to-glass latency (camera to browser) | ≤ 300 ms on LAN |
-| NFR-2 | Audio overhead per camera | ≤ 50 kbps (Opus) |
-| NFR-3 | Concurrent camera streams × browser subscribers | ≥ 16 cameras × 4 tabs at ≤ 70% CPU (4-core host) |
-| NFR-4 | Media encryption | DTLS-SRTP mandatory; no plaintext RTP to browsers |
-| NFR-5 | Camera disconnect recovery | Exponential backoff reconnection; matches current `RETRY_DELAY` in `rtspCapture.js` |
-| NFR-6 | Browser compatibility | Chrome ≥ 110, Firefox ≥ 110, Safari ≥ 16.4 |
-| NFR-7 | Backward compatibility | Socket.IO `camera:subscribe` / `detections` / `loitering` events remain active as fallback |
+| NFR-1 | 미디어 암호화 | DTLS-SRTP 필수, 두 엔진 모두 적용 |
+| NFR-2 | 오디오 전달 | Opus 패스스루 또는 전용 스레드 트랜스코드, 메인 I/O 스레드 비차단 |
+| NFR-3 | 엔진 무관 클라이언트 | `WEBRTC_ENGINE` 전환 시 클라이언트 코드 변경 불필요 |
+| NFR-4 | AI 이벤트 신뢰성 | Socket.IO 이벤트는 WebRTC 상태와 무관하게 항상 전달 |
+| NFR-5 | 재연결 | 카메라 재연결은 ingest-daemon 자체 재연결 로직을 따름(FFmpeg `RETRY_DELAY` 아님) |
 
-### 5.3 SERVER_IP Configuration
+구체적 지연시간(ms)·CPU·동시 세션 수 등 정량 SLA는 코드에서 측정/강제되지 않으므로 이 PRD에서 목표치로 명시하지 않는다(v1.x의 "≤300ms", "≤70% CPU" 등은 검증되지 않은 수치였음 — RFP §6 참조).
 
-`SERVER_IP` must be set in `server/.env`. mediasoup uses this value to announce ICE candidates to browsers. Without it, auto-detection on multi-homed servers can produce 16+ ICE candidates, causing 10–30 second connection delays.
+### 5.3 엔진별 환경변수
 
-```dotenv
-SERVER_IP=192.168.90.186
-```
-
-Auto-detection (when `SERVER_IP` is unset) skips Docker bridge interfaces and announces only the first IPv4 address of each physical interface.
-
-### 5.4 Port Configuration
-
-```dotenv
-WEBRTC_PORT_MIN=40000
-WEBRTC_PORT_MAX=49999
-WEBRTC_LISTEN_IP=0.0.0.0
-```
-
-Firewall must allow UDP 40000–49999 on the server.
-
-### 5.5 Security
-
-| Concern | Mitigation |
-|---|---|
-| Media encryption | DTLS-SRTP enforced by mediasoup |
-| Signaling auth | Existing Socket.IO JWT applied to `webrtc:*` events |
-| Local RTP | FFmpeg sends to `127.0.0.1` only; PlainTransport bound to loopback |
-| Port exhaustion | Pool bounded by `WEBRTC_PORT_MAX`; allocation failure raises error |
-| DataChannel injection | Incoming JSON parsed with try/catch; malformed messages logged, not executed |
-
-### 5.6 File & Module Layout
-
-```
-server/src/
-├── services/
-│   ├── rtspCapture.js          RETAINED (JPEG pipe for AI inference)
-│   ├── rtpIngestion.js         EXISTS: FFmpeg dual-output + PlainTransport (comedia=true)
-│   ├── webrtcGateway.js        EXISTS: mediasoup Worker/Router pool; getAllListenIps()
-│   ├── webrtcSession.js        DEFERRED: logic inlined in webrtcSignaling.js
-│   └── pipelineManager.js      EXISTS: uses RtpIngestion; starts WebRTC path
-├── socket/
-│   ├── streamHandler.js        RETAINED
-│   └── webrtcSignaling.js      EXISTS: capabilities-exchange protocol; stale transport cleanup
-└── api/
-    └── cameras.js              MODIFIED: /api/webrtc/stats planned Phase 4
-
-client/src/
-├── hooks/
-│   ├── useWebRTC.ts            EXISTS: mediasoup-client Device lifecycle; 30s timeout; retry()
-│   └── useCamera.ts            MODIFIED: delegates to useWebRTC when webrtcEnabled
-└── components/
-    ├── CameraView.tsx           EXISTS: <video> WebRTC; retry button; canvas overlay preserved
-    └── VideoAnalyticsTab.tsx    EXISTS: WebRTC enable/disable toggle per camera
-```
+`SERVER_IP`, `MEDIASOUP_*`, `MEDIAMTX_*` 등은 엔진별로 다르며 [ops/WebRTC_Engine_Modes_Guide.md](../ops/WebRTC_Engine_Modes_Guide.md) §6에서 관리한다 — 이 PRD에서 중복 기술하지 않는다.
 
 ---
 
 ## 6. API / Interface Contract
 
-### 6.1 Socket.IO Events (Signaling Plane)
-
-| Event | Direction | Description |
-|---|---|---|
-| `webrtc:getCapabilities` | Client → Server | Request Router RTP capabilities; response injected into mediasoup Device |
-| `webrtc:createTransport` | Client → Server | Create WebRtcTransport; response: `{ id, iceParameters, iceCandidates, dtlsParameters, sctpParameters }` |
-| `webrtc:connectTransport` | Client → Server | Send DTLS fingerprint; server calls `transport.connect()` |
-| `webrtc:consume` | Client → Server | Send `rtpCapabilities`; response: video and audio Consumer parameters |
-| `webrtc:resumeConsumer` | Client → Server | Unpause consumer; SRTP data starts flowing |
-| `webrtc:leave` | Client → Server | Close transport and consumers for this socket:camera pair |
-
-### 6.2 REST Endpoints
-
 ```
-GET /api/webrtc/stats
-  Response: {
-    cameras: {
-      [cameraId]: {
-        producerVideo: { bitrate: number, packetsLost: number },
-        producerAudio: { bitrate: number },
-        consumers:     number,
-        avgRttMs:      number
-      }
-    }
-  }
+POST /api/webrtc/whep/:cameraId
+  Content-Type: application/sdp
+  Body: SDP offer
+  → 200/201 + SDP answer (+ Location/Link/ETag 헤더)
+  → 400 { error }  — SDP body 누락
+  → 503 { error }  — 엔진 unreachable
 
-GET /api/webrtc/capabilities
-  Response: mediasoup Router RTP capabilities
-```
+POST /api/webrtc/ice-test
+  → 200 { testId, engine, ...engineInfo }
+  → 503 { error, engine, hint }
 
-### 6.3 DataChannel Message Schema
+GET /api/webrtc/ice-config
+  → 200 { stunUrls: string[], turns: [...] }
 
-All DataChannel messages are UTF-8 JSON with a `type` discriminator field.
+GET /api/webrtc/monitor          (dev-only / localhost 전용)
+  → 200 { serverMode, webrtcEngine, webrtc:{engine,ok}, pipelines, producerStats }
+  → 403 { error }
 
-**`detections`** (unreliable delivery, `maxRetransmits: 0`):
-```jsonc
-{
-  "type": "detections",
-  "cameraId": "uuid",
-  "frameId": 1234,
-  "timestamp": 1716134400000,
-  "frameWidth": 1920, "frameHeight": 1080,
-  "objects": [{
-    "trackId": 7, "classId": 0, "label": "person", "confidence": 0.91,
-    "bbox": { "x": 120, "y": 80, "w": 64, "h": 180 },
-    "loiteringSeconds": 12.4,
-    "attributes": { "faceId": null, "clothColor": "blue", "hat": false, "mask": false }
-  }]
-}
-```
+Socket.IO (항상, WebRTC 상태 무관):
+  detections, loitering, fire:alert, alert:new, snapshot:new,
+  face_match, appRtp, onvif:event, onvif:temperature
 
-**`loitering`** (reliable ordered delivery):
-```jsonc
-{
-  "type": "loitering",
-  "cameraId": "uuid", "trackId": 7, "zoneId": "zone-uuid",
-  "durationSeconds": 30.0, "thumbnail": "base64-jpeg-or-null",
-  "timestamp": 1716134400000
-}
-```
-
-**`fire`** (reliable ordered delivery):
-```jsonc
-{
-  "type": "fire",
-  "cameraId": "uuid", "confidence": 0.87,
-  "bbox": { "x": 200, "y": 100, "w": 300, "h": 200 },
-  "timestamp": 1716134400000
-}
-```
-
-**`app-rtp`** (raw application RTP payload passthrough):
-```jsonc
-{
-  "type": "app-rtp",
-  "cameraId": "uuid", "payloadType": 102,
-  "sequenceNumber": 4321, "timestamp": 12345678, "payload": "<base64>"
-}
-```
-
-**`stream-stats`** (emitted every 5 seconds by server):
-```jsonc
-{
-  "type": "stream-stats",
-  "cameraId": "uuid",
-  "videoBitrateKbps": 2048, "audioBitrateKbps": 32,
-  "videoPacketLossRate": 0.001, "rttMs": 4.2,
-  "timestamp": 1716134400000
-}
+Socket.IO (webrtcEnabled=false 카메라 전용):
+  frame  (어노테이션 JPEG)
 ```
 
 ---
@@ -307,50 +163,34 @@ All DataChannel messages are UTF-8 JSON with a `type` discriminator field.
 
 | ID | Criterion |
 |---|---|
-| AC-1 | H.264 video from an RTSP camera is displayed in a browser `<video>` element via WebRTC with glass-to-glass latency ≤ 300 ms on LAN. |
-| AC-2 | Bounding box canvas overlay continues to render correctly on top of the `<video>` element. |
-| AC-3 | Audio from a camera with a G.711 audio track plays in the browser after Opus transcoding; cameras without audio continue to stream video normally. |
-| AC-4 | A per-camera mute button suppresses audio client-side without restarting the WebRTC session. |
-| AC-5 | N browser tabs subscribing to the same camera all receive identical video without server re-encoding. |
-| AC-6 | When `WEBRTC_ENABLED=false`, the existing Socket.IO JPEG path is used and no WebRTC setup occurs. |
-| AC-7 | When `SERVER_IP` is set correctly, `chrome://webrtc-internals` shows exactly 2 ICE candidates (1 UDP + 1 TCP). |
-| AC-8 | When ICE connection fails, the UI shows a "Reconnect" button; clicking it re-initiates the capabilities-exchange sequence. |
-| AC-9 | A camera disconnect triggers graceful stream teardown; automatic reconnection with exponential backoff succeeds within 30 seconds. |
-| AC-10 | `GET /api/webrtc/stats` returns valid JSON with `producerVideo.bitrate > 0` for all active cameras. |
-| AC-11 | 16 cameras × 4 browser tabs run simultaneously for 30 minutes at ≤ 70% CPU on a 4-core host. |
-| AC-12 | DTLS-SRTP is used for all media delivery; `chrome://webrtc-internals` shows no plaintext RTP. |
-| AC-13 | DataChannel `detections` messages dispatched to the Zustand store produce correct bounding box overlays without code changes to UI components. |
-| AC-14 | Stale WebRTC transports from a previous browser connection to the same camera are closed when the client reconnects. |
+| AC-1 | `webrtcEnabled=true` 카메라의 H.264 영상이 재인코딩 없이 `<video>`에 렌더링된다. |
+| AC-2 | `webrtcEnabled=false` 카메라는 Socket.IO `frame`으로만 영상을 받고 WebRTC 협상을 시도하지 않는다. |
+| AC-3 | 오디오 트랙이 있는 카메라는 코덱과 무관하게 브라우저에서 정상 재생되며, 없는 카메라는 오류 없이 영상만 재생된다. |
+| AC-4 | 음소거 버튼 클릭이 WebRTC 세션을 재시작시키지 않는다. |
+| AC-5 | 두 엔진 어느 쪽으로 설정해도 클라이언트 코드 수정 없이 `POST /api/webrtc/whep/:cameraId`로 재생 가능하다. |
+| AC-6 | `webrtcEnabled` 값과 무관하게 모든 카메라에서 `detections`/`loitering`/`alert:new`가 Socket.IO로 수신된다. |
+| AC-7 | `mediasoup` 모드에서 App RTP가 Socket.IO `appRtp`와 DataChannel 양쪽으로 오되, 클라이언트가 중복 렌더링하지 않는다(seq 중복 제거). |
+| AC-8 | `mediamtx` 모드에서 DataChannel이 열리지 않거나 데이터가 오지 않아도 `appRtp` Socket.IO 이벤트로 App RTP가 정상 수신된다. |
+| AC-9 | `POST /api/webrtc/ice-test`가 현재 엔진의 정확한 이름과 헬스 상태를 반환한다. |
+| AC-10 | `GET /api/webrtc/monitor`가 프로덕션 환경의 원격 요청에는 403을 반환한다. |
 
 ---
 
-## 8. Milestones & TODO
+## 8. Implementation Status
 
-### 8.1 Milestone Progress
-
-| Milestone | Description | Target | Completed | Status |
-|---|---|---|---|---|
-| M1 | Server-side WebRTC infrastructure: mediasoup Worker/Router, RtpIngestion, webrtcSignaling | Week 1–2 | 2026-05-22 | ✅ Done |
-| M2 | Client-side WebRTC integration: useWebRTC hook, CameraView `<video>`, DataChannel dispatch | Week 3 | 2026-05-22 | ✅ Done |
-| M5 | **MediaMTX WHEP 기본 경로**: ingest-daemon + `mediamtxManager.js` + WHEP 클라이언트; ICE 안정화 완료 | — | 2026-06-11 | ✅ Done |
-| M3 | Audio & Application RTP DataChannel: codec detection, audio UI, app-rtp hook, DataChannel 브리지 (§3.7 참조) | TBD | - | ⏳ Pending |
-| M4 | Hardening & observability: reconnection, RTCP PLI relay, port cleanup, load test, fallback flag | TBD | - | ⏳ Pending |
-
-### 8.2 TODO
-
-- [ ] Implement `WebRtcSession` service (currently inlined in `webrtcSignaling.js`)
-- [ ] Complete `GET /api/webrtc/stats` endpoint (Phase 4)
-- [ ] Implement Phase 3 audio codec detection via `ffprobe`; select `copy` for Opus cameras
-- [ ] Implement Phase 3 application RTP track detection (`ffprobe -select_streams d`)
-- [ ] Add audio UI: speaker icon, mute button, keyboard shortcut `M`
-- [ ] Implement `onAppRtp` callback in `useWebRTC` hook for future plugin registration
-- [ ] Implement RTCP PLI relay from mediasoup back to camera RTSP/RTP path
-- [ ] Verify UDP port cleanup with `ss -u -a` integration test
-- [ ] Perform load test: 16 cameras × 4 tabs; record CPU, RAM, packet loss
-- [ ] Add `WEBRTC_ENABLED` feature flag documentation to `.env.example`
-- [ ] Update README §5 (Architecture) and §16 (API Reference)
-- [ ] Write `docs/webrtc-setup.md` covering SERVER_IP, port configuration, and firewall rules
-- [ ] Remove Socket.IO JPEG emission and `maxHttpBufferSize: 10 MB` override after 1-week production soak
+| 항목 | 상태 |
+|---|---|
+| WHEP 시그널링 단일 엔드포인트 | ✅ 구현 완료 |
+| mediamtx 엔진(기본) | ✅ 구현·활성 |
+| mediasoup 엔진 | ✅ 구현 완료, dormant (`WEBRTC_ENGINE=mediasoup` 필요) |
+| werift 엔진 | 🚧 스텁 |
+| 카메라별 webrtcEnabled 분기(JPEG ↔ WebRTC) | ✅ 구현 완료 |
+| 오디오 패스스루/트랜스코드 | ✅ 구현 완료 |
+| App RTP 원본+파싱 이중 전달 | ✅ 구현 완료 |
+| App RTP DataChannel(mediasoup 전용) | ✅ 구현 완료 |
+| AI 이벤트 DataChannel 이전 | ❌ 계획 폐기 (§2.2) |
+| `GET /api/webrtc/stats` / `GET /api/webrtc/capabilities` | ❌ 구현되지 않음, 계획 없음 — `ice-test`/`ice-config`/`monitor`가 대체 |
+| 글로벌 `WEBRTC_ENABLED` 플래그 | ❌ 존재하지 않음, 카메라별 `webrtcEnabled`가 대체 |
 
 ---
 
@@ -362,3 +202,4 @@ All DataChannel messages are UTF-8 JSON with a `type` discriminator field.
 | 1.1 | 2026-06-11 | LTS Engineering Team | §1 현재 구현(MediaMTX WHEP) 반영; §8 M5 추가(WHEP 완료), M3/M4 DataChannel 참조 추가; Status → Active |
 | 1.2 | 2026-06-16 | LTS Engineering Team | §4.1 RTP PT=109 제약 및 ICE listenIps env-var 전용 제약 추가 (mediasoup 모드 Edge 검은 화면 + ICE loopback 근본 원인 명시) |
 | 1.3 | 2026-07-23 | LTS Engineering Team | §1 레거시 경로 설명에 mediasoup dormant 상태 및 alt-PT 대체 사실 반영, `PRD_WebRTC_Engine_Modes.md`로 연결 |
+| 2.0 | 2026-07-23 | LTS Engineering Team | 전면 재작성 — 실제 코드 기준(단일 WHEP, 카메라별 webrtcEnabled 분기, AI 이벤트는 항상 Socket.IO, App RTP 이중 전달) 재정의; RFP v2.0 FR-WRTC-001~053에 맞춰 §4/§6/§7/§8 전면 교체; 존재하지 않는 API/파일/메시지 스키마 전체 제거 |
