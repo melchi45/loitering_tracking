@@ -19,6 +19,8 @@ export interface RxSample {
   rttMs:     number; // nominated candidate-pair round-trip time
   lossPct:   number; // cumulative packet loss %, video+audio combined
   latencyMs: number; // approx. glass-to-glass estimate: rttMs/2 (one-way network) + bufferMs (playout hold)
+  sentBps:     number; // instantaneous ICE candidate-pair send rate, bits/sec (2026-07-22, same tick as iceStats)
+  receivedBps: number; // instantaneous ICE candidate-pair receive rate, bits/sec
   framesDecoded:  number; // cumulative, since connect
   framesReceived: number; // cumulative, since connect — framesReceived - framesDecoded = dropped
 }
@@ -220,15 +222,47 @@ const CONNECT_TIMEOUT_MS = 30_000;
 // notified via callbacks. RefCount tracks every active consumer; the PC is
 // closed only when the last one unmounts.
 //
+// Shared ICE/rx stats broadcast (2026-07-23) — iceStats/rxHistory/rxCodec were
+// previously plain per-hook-instance useState, populated only by the stats-
+// polling timers running inside the ONE component instance that happened to
+// win Case C (the original WHEP negotiation) below. A second consumer of the
+// same shared session (Case A: an already-connected stream, e.g. opening a
+// camera's fullscreen view while its grid tile is still mounted behind it —
+// see App.tsx's `overlays` fragment, rendered alongside the grid, not in
+// place of it) never ran those timers itself, so its own iceStats/rxHistory/
+// rxCodec state stayed null/empty forever — confirmed live: the ICE panel
+// showed "Collecting stats…" indefinitely after switching to fullscreen on a
+// WebRTC-mode camera, even though the connection itself was healthy. Fix:
+// store the latest stats on the shared SessionEntry and broadcast to every
+// subscriber (mirrors the existing `callbacks` Set used to hand a Case B
+// waiter its stream once ontrack fires).
+export interface SharedStats {
+  iceStats:  IceStats | null;
+  rxHistory: RxSample[];
+  rxCodec:   RxCodecInfo;
+}
+
+const EMPTY_RX_CODEC: RxCodecInfo = { video: '', audio: '', videoDetail: '', audioDetail: '' };
+const EMPTY_STATS: SharedStats = { iceStats: null, rxHistory: [], rxCodec: EMPTY_RX_CODEC };
+
 interface SessionEntry {
-  pc:        RTCPeerConnection | null;   // null while negotiating
-  stream:    MediaStream | null;         // null until ontrack fires
-  hasAudio:  boolean;
-  refCount:  number;
-  callbacks: Set<(stream: MediaStream, hasAudio: boolean) => void>;
+  pc:             RTCPeerConnection | null;   // null while negotiating
+  stream:         MediaStream | null;         // null until ontrack fires
+  hasAudio:       boolean;
+  refCount:       number;
+  callbacks:      Set<(stream: MediaStream, hasAudio: boolean) => void>;
+  stats:          SharedStats;
+  statsCallbacks: Set<(stats: SharedStats) => void>;
 }
 
 const sessionRegistry = new Map<string, SessionEntry>();
+
+function broadcastStats(cameraId: string, patch: Partial<SharedStats>) {
+  const e = sessionRegistry.get(cameraId);
+  if (!e) return;
+  e.stats = { ...e.stats, ...patch };
+  for (const cb of e.statsCallbacks) cb(e.stats);
+}
 
 function detachVideo(videoRef: React.RefObject<HTMLVideoElement>) {
   if (!videoRef.current) return;
@@ -279,9 +313,12 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
   // srflx vs relay candidate, real bytes sent/received). The stall-watchdog
   // below already parses the nominated candidate-pair on every poll; it just
   // never got stored anywhere. Populated from that same loop now.
-  const [iceStats, setIceStats] = useState<IceStats | null>(null);
-  const [rxHistory, setRxHistory] = useState<RxSample[]>([]);
-  const [rxCodec, setRxCodec] = useState<RxCodecInfo>({ video: '', audio: '', videoDetail: '', audioDetail: '' });
+  const [iceStats, setIceStats] = useState<IceStats | null>(
+    () => sessionRegistry.get(cameraId)?.stats.iceStats ?? null);
+  const [rxHistory, setRxHistory] = useState<RxSample[]>(
+    () => sessionRegistry.get(cameraId)?.stats.rxHistory ?? []);
+  const [rxCodec, setRxCodec] = useState<RxCodecInfo>(
+    () => sessionRegistry.get(cameraId)?.stats.rxCodec ?? EMPTY_RX_CODEC);
 
   const retry = useCallback(() => {
     setRetryCount(0);
@@ -313,6 +350,17 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
 
     const existingEntry = sessionRegistry.get(cameraId);
 
+    // Shared ICE/rx stats subscription (2026-07-23) — see SharedStats' comment
+    // above. Registered identically regardless of which case below actually
+    // runs, since any of them may end up as the long-lived consumer of a
+    // session a DIFFERENT case/instance originally created.
+    const handleStatsUpdate = (s: SharedStats) => {
+      if (cancelled) return;
+      setIceStats(s.iceStats);
+      setRxHistory(s.rxHistory);
+      setRxCodec(s.rxCodec);
+    };
+
     // ── Case A: active stream already in registry ──────────────────────────
     if (existingEntry?.stream?.active) {
       existingEntry.refCount++;
@@ -328,10 +376,13 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
         if (!cancelled) { setState('connecting'); setRetryNonce(n => n + 1); }
       };
       existingEntry.stream.addEventListener('inactive', handleInactive);
+      existingEntry.statsCallbacks.add(handleStatsUpdate);
+      handleStatsUpdate(existingEntry.stats);
 
       return () => {
         cancelled = true;
         existingEntry.stream!.removeEventListener('inactive', handleInactive);
+        existingEntry.statsCallbacks.delete(handleStatsUpdate);
         detachVideo(videoRef);
         setState('idle');
         setHasAudio(false);
@@ -354,11 +405,16 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
         setHasAudio(ha);
       };
       existingEntry.callbacks.add(onStream);
+      existingEntry.statsCallbacks.add(handleStatsUpdate);
+      handleStatsUpdate(existingEntry.stats);
 
       return () => {
         cancelled = true;
         const e = sessionRegistry.get(cameraId);
-        if (e) e.callbacks.delete(onStream);
+        if (e) {
+          e.callbacks.delete(onStream);
+          e.statsCallbacks.delete(handleStatsUpdate);
+        }
         detachVideo(videoRef);
         setState('idle');
         setHasAudio(false);
@@ -368,8 +424,12 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
 
     // ── Case C: start a fresh WHEP negotiation ─────────────────────────────
     // Create a placeholder entry immediately to block duplicate negotiations.
-    const entry: SessionEntry = { pc: null, stream: null, hasAudio: false, refCount: 1, callbacks: new Set() };
+    const entry: SessionEntry = {
+      pc: null, stream: null, hasAudio: false, refCount: 1,
+      callbacks: new Set(), stats: EMPTY_STATS, statsCallbacks: new Set(),
+    };
     sessionRegistry.set(cameraId, entry);
+    entry.statsCallbacks.add(handleStatsUpdate);
     setState('connecting');
 
     const connectTimeoutId = setTimeout(() => {
@@ -658,7 +718,13 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
                 // separate rateTimer below (1s cadence) — this loop only
                 // needs the nominated pair's rttMs for the rx graph.
                 const rttMs = extractNominatedPair(stats)?.rttMs ?? 0;
-                if (!cancelled) {
+                // Not gated on `cancelled` (2026-07-23) — see broadcastStats'
+                // comment: this must keep updating the shared entry for any
+                // OTHER still-mounted consumer even after the instance that
+                // originally started this timer unmounts. The entry-liveness
+                // check at the top of statsTimer already stops the interval
+                // once no consumer is left.
+                {
                   const vCodecInfo = codecById.get(vCodecId);
                   const aCodecInfo = codecById.get(aCodecId);
                   const videoCodec = shortCodecName(vCodecInfo?.mimeType ?? '');
@@ -676,11 +742,11 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
                     ? [`pt${aCodecInfo.payloadType ?? '?'}`, aCodecInfo.clockRate ? `${aCodecInfo.clockRate}Hz` : null, aCodecInfo.channels ? `${aCodecInfo.channels}ch` : null]
                         .filter(Boolean).join(' · ')
                     : '';
-                  setRxCodec(prev =>
-                    prev.video === videoCodec && prev.audio === audioCodec
-                    && prev.videoDetail === videoDetail && prev.audioDetail === audioDetail
-                      ? prev
-                      : { video: videoCodec, audio: audioCodec, videoDetail, audioDetail });
+                  const prevCodec = sessionRegistry.get(cameraId)?.stats.rxCodec ?? EMPTY_RX_CODEC;
+                  if (prevCodec.video !== videoCodec || prevCodec.audio !== audioCodec
+                      || prevCodec.videoDetail !== videoDetail || prevCodec.audioDetail !== audioDetail) {
+                    broadcastStats(cameraId, { rxCodec: { video: videoCodec, audio: audioCodec, videoDetail, audioDetail } });
+                  }
                 }
                 // Buffer ms: mean jitter-buffer hold time accrued since the last poll
                 // (see prevJitterDelay/-Count declaration above). 0 on the first tick
@@ -883,6 +949,7 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
             // deltas over their own window — no shared mutable state).
             let ratePrevVideoBytes  = -1;
             let ratePrevAudioBytes  = -1;
+            let ratePrevVideoFrames = -1;
             let ratePrevJitterDelay = -1;
             let ratePrevJitterCount = -1;
             // Carries the last successfully-computed bufferMs forward across
@@ -896,7 +963,16 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
               try {
                 const stats    = await pc.getStats();
                 const nominated = extractNominatedPair(stats);
-                if (!nominated || cancelled) return;
+                // Not gated on `cancelled` (2026-07-23 fix — see broadcastStats'
+                // comment above) — this loop must keep running for as long as
+                // the entry-liveness check above keeps it alive, i.e. for as
+                // long as ANY consumer (this instance or another, e.g. a
+                // fullscreen view of the same camera) still needs live stats.
+                // Previously bailing out here the moment the instance that
+                // started this timer unmounted meant the ICE panel froze (or
+                // for a brand-new consumer, never populated at all) for every
+                // remaining viewer of the same shared session.
+                if (!nominated) return;
                 const now     = Date.now();
                 const elapsed = (now - ratePrevAt) / 1000;
                 const sentBps     = ratePrevBytesTx >= 0 && elapsed > 0
@@ -906,16 +982,18 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
                 ratePrevBytesTx = nominated.bytesSent;
                 ratePrevBytesRx = nominated.bytesReceived;
                 ratePrevAt      = now;
-                setIceStats({
-                  localType:     nominated.local.type,
-                  localProtocol: nominated.local.protocol,
-                  localAddress:  nominated.local.address,
-                  localPort:     nominated.local.port,
-                  remoteType:    nominated.remote.type,
-                  remoteAddress: nominated.remote.address,
-                  remotePort:    nominated.remote.port,
-                  sentBps,
-                  receivedBps,
+                broadcastStats(cameraId, {
+                  iceStats: {
+                    localType:     nominated.local.type,
+                    localProtocol: nominated.local.protocol,
+                    localAddress:  nominated.local.address,
+                    localPort:     nominated.local.port,
+                    remoteType:    nominated.remote.type,
+                    remoteAddress: nominated.remote.address,
+                    remotePort:    nominated.remote.port,
+                    sentBps,
+                    receivedBps,
+                  },
                 });
 
                 const rtp = extractInboundRtp(stats);
@@ -948,15 +1026,33 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
                 // bufferMs (playout hold), understates true latency but
                 // tracks relative changes faithfully.
                 const latencyMs = nominated.rttMs / 2 + bufferMs;
-                if (ratePrevVideoBytes >= 0 && elapsed > 0 && !cancelled) {
+                // fps (2026-07-22) — was the raw RTCInboundRtpStreamStats.framesPerSecond
+                // stat (rtp.vFps), a browser-computed running average whose exact update
+                // cadence/window is implementation-defined and NOT guaranteed to line up
+                // with this 1s poll — confirmed live: reads a flickering/sticky 0 on a
+                // healthy connection where framesDecoded (rtp.vFrames) is climbing every
+                // tick with 0 dropped, i.e. decode never actually stalled. Mirrors the
+                // bufferMs fix above (§buffer-oscillation) — computing our own rate from
+                // the cumulative framesDecoded counter delta over the ACTUAL elapsed time
+                // between polls is immune to whatever internal cadence the browser's own
+                // stat uses. Falls back to the raw stat only on the very first tick
+                // (no prior frame count to diff against yet).
+                const fps = ratePrevVideoFrames >= 0 && elapsed > 0
+                  ? Math.max(0, (rtp.vFrames - ratePrevVideoFrames) / elapsed)
+                  : rtp.vFps;
+                ratePrevVideoFrames = rtp.vFrames;
+                if (ratePrevVideoBytes >= 0 && elapsed > 0) {
                   const videoKbps = Math.max(0, ((rtp.vBytesRx - ratePrevVideoBytes) * 8) / 1000 / elapsed);
                   const audioKbps = Math.max(0, ((rtp.aBytesRx - ratePrevAudioBytes) * 8) / 1000 / elapsed);
-                  setRxHistory(h => [...h, {
+                  const prevHistory = sessionRegistry.get(cameraId)?.stats.rxHistory ?? [];
+                  const nextHistory = [...prevHistory, {
                     t: now, videoKbps, audioKbps,
-                    resWidth: rtp.vWidth, resHeight: rtp.vHeight, fps: rtp.vFps,
+                    resWidth: rtp.vWidth, resHeight: rtp.vHeight, fps,
                     bufferMs, rttMs: nominated.rttMs, lossPct, latencyMs,
+                    sentBps, receivedBps,
                     framesDecoded: rtp.vFrames, framesReceived: rtp.vFramesReceived,
-                  }].slice(-RX_HISTORY_MAX));
+                  }].slice(-RX_HISTORY_MAX);
+                  broadcastStats(cameraId, { rxHistory: nextHistory });
                 }
                 ratePrevVideoBytes = rtp.vBytesRx;
                 ratePrevAudioBytes = rtp.aBytesRx;
@@ -1044,6 +1140,7 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
 
       const e = sessionRegistry.get(cameraId);
       if (e) {
+        e.statsCallbacks.delete(handleStatsUpdate);
         e.refCount--;
         if (e.refCount <= 0) {
           if (e.pc) { try { e.pc.close(); } catch (_) {} }
