@@ -3,6 +3,7 @@ import { AlertTriangle, Search } from 'lucide-react';
 import { useCameraStore } from '../stores/cameraStore';
 import { useChannelConfigStore } from '../stores/channelConfigStore';
 import { ChannelSlotPicker } from './ChannelSlotPicker';
+import { StreamingModeSelector } from './StreamingModeSelector';
 import { channelRtspUrl } from '../utils/channelRtsp';
 import type { Camera, NvrProfile, ProbeChannelsResult } from '../types';
 
@@ -120,12 +121,15 @@ export default function CameraEditModal({ camera, onClose }: Props) {
   };
 
   // ── RTSP form state ────────────────────────────────────────────────────────
+  // streamingMode ('jpeg'|'webrtc'|'ump') replaces the old binary webrtcEnabled toggle —
+  // see Design_UMP_Player_RTSP_over_WebSocket.md §7. Falls back to deriving from
+  // webrtcEnabled for cameras fetched before the server started returning streamingMode.
   const [rtspForm, setRtspForm] = useState({
     name:          camera.name,
     rtspUrl:       camera.rtspUrl,
     username:      '',
     password:      '',
-    webrtcEnabled: !!(camera.webrtcEnabled),
+    streamingMode: camera.streamingMode ?? (camera.webrtcEnabled ? 'webrtc' : 'jpeg') as 'jpeg' | 'webrtc' | 'ump',
   });
 
   // ── Thermal sensor calibration state — native sensor resolution (e.g. 160x120)
@@ -171,7 +175,7 @@ export default function CameraEditModal({ camera, onClose }: Props) {
           rtspUrl:       finalRtspUrl,
           username:      rtspForm.username || undefined,
           password:      rtspForm.password || undefined,
-          webrtcEnabled: rtspForm.webrtcEnabled,
+          streamingMode: rtspForm.streamingMode,
           channelSlot:   channelSlot ?? undefined,
           channelIndex:  hasNvrChannels ? (nvrChannel ?? undefined) : undefined,
           // Only overwrite persisted NVR metadata when a fresh "Re-detect" ran this session.
@@ -558,28 +562,11 @@ export default function CameraEditModal({ camera, onClose }: Props) {
                 )}
               </div>
 
-              {/* WebRTC toggle */}
-              <div className="flex items-center justify-between py-2 border-t border-gray-700 mt-1">
-                <div>
-                  <p className="text-xs text-gray-200 font-medium">WebRTC Streaming</p>
-                  <p className="text-[10px] text-gray-500 mt-0.5">
-                    {rtspForm.webrtcEnabled
-                      ? 'Video via WebRTC (H.264 + Audio) — requires SERVER_IP in .env'
-                      : 'Video via JPEG / Socket.IO (default)'}
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setRtspForm((p) => ({ ...p, webrtcEnabled: !p.webrtcEnabled }))}
-                  className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors duration-200 ${
-                    rtspForm.webrtcEnabled ? 'bg-blue-600' : 'bg-gray-600'
-                  }`}
-                >
-                  <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform duration-200 ${
-                    rtspForm.webrtcEnabled ? 'translate-x-4' : 'translate-x-0.5'
-                  }`} />
-                </button>
-              </div>
+              {/* Streaming mode — JPEG(Default) / WebRTC / UMP (Design_UMP_Player_RTSP_over_WebSocket.md §7) */}
+              <StreamingModeSelector
+                value={rtspForm.streamingMode}
+                onChange={(mode) => setRtspForm((p) => ({ ...p, streamingMode: mode }))}
+              />
 
               {/* Thermal Sensor Coordinate calibration — scales onvif:temperature raw
                   coordinates (native sensor resolution) onto the actual video resolution */}

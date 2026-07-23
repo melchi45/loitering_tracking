@@ -5,6 +5,7 @@ import { useCameraStore } from '../stores/cameraStore';
 import { useDiscoveryStore } from '../stores/discoveryStore';
 import { useChannelConfigStore } from '../stores/channelConfigStore';
 import { ChannelSlotPicker } from './ChannelSlotPicker';
+import { StreamingModeSelector } from './StreamingModeSelector';
 import CameraEditModal from './CameraEditModal';
 import type { Camera, DiscoveredCamera, ProbeChannelsResult } from '../types';
 
@@ -13,7 +14,7 @@ interface AddCameraForm {
   rtspUrl: string;
   username: string;
   password: string;
-  webrtcEnabled: boolean;
+  streamingMode: 'jpeg' | 'webrtc' | 'ump';
 }
 
 interface AddYouTubeForm {
@@ -27,7 +28,7 @@ interface AddYouTubeForm {
 
 type AddSourceType = 'rtsp' | 'youtube';
 
-const DEFAULT_FORM: AddCameraForm = { name: '', rtspUrl: '', username: '', password: '', webrtcEnabled: false };
+const DEFAULT_FORM: AddCameraForm = { name: '', rtspUrl: '', username: '', password: '', streamingMode: 'jpeg' };
 const DEFAULT_YT_FORM: AddYouTubeForm = { name: '', youtubeUrl: '', resolution: '1080p', bitrate: 2000, repeatPlayback: false, webrtcEnabled: false };
 
 function StatusDot({ status }: { status: Camera['status'] }) {
@@ -453,7 +454,7 @@ export default function CameraList() {
           rtspUrl:       form.rtspUrl,
           username:      form.username || undefined,
           password:      form.password || undefined,
-          webrtcEnabled: form.webrtcEnabled,
+          streamingMode: form.streamingMode,
           channelSlot:   pickedChannelSlot ?? undefined,
           channelIndex:  hasDetectedChannels ? (detectedChannel ?? undefined) : undefined,
           maxChannel:    hasDetectedChannels ? detected!.maxChannel : undefined,
@@ -939,28 +940,11 @@ export default function CameraList() {
                     />
                   </div>
 
-                  {/* WebRTC toggle */}
-                  <div className="flex items-center justify-between py-2 border-t border-gray-700 mt-1">
-                    <div>
-                      <p className="text-xs text-gray-200 font-medium">WebRTC Streaming</p>
-                      <p className="text-[10px] text-gray-500 mt-0.5">
-                        {form.webrtcEnabled
-                          ? 'Video via WebRTC (H.264 + Audio) — requires SERVER_IP in .env'
-                          : 'Video via JPEG / Socket.IO (default)'}
-                      </p>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setForm((p) => ({ ...p, webrtcEnabled: !p.webrtcEnabled }))}
-                      className={`relative inline-flex h-5 w-9 flex-shrink-0 items-center rounded-full transition-colors duration-200 ${
-                        form.webrtcEnabled ? 'bg-blue-600' : 'bg-gray-600'
-                      }`}
-                    >
-                      <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white shadow transition-transform duration-200 ${
-                        form.webrtcEnabled ? 'translate-x-4' : 'translate-x-0.5'
-                      }`} />
-                    </button>
-                  </div>
+                  {/* Streaming mode — JPEG(Default) / WebRTC / UMP (Design_UMP_Player_RTSP_over_WebSocket.md §7) */}
+                  <StreamingModeSelector
+                    value={form.streamingMode}
+                    onChange={(mode) => setForm((p) => ({ ...p, streamingMode: mode }))}
+                  />
 
                   {formError && <p className="text-xs text-red-400">{formError}</p>}
                 </div>
