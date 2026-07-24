@@ -8,6 +8,7 @@ const { validateChannelSlot, nextFreeChannelSlot } = require('../services/channe
 const { querySunapiMaxChannel, querySunapiRtspPort, getDiscoveryService } = require('../services/discoveryService');
 const { enrichDeviceAutoScheme } = require('../services/onvifDiscovery');
 const { channelRtspUrl, defaultSunapiRtspUrl } = require('../utils/channelRtsp');
+const { verifyAccessToken } = require('../middleware/auth');
 
 // POST /api/cameras/probe-channels — best-effort, both branches independently
 // time-boxed so a hung/unreachable device can't stall the request indefinitely.
@@ -22,6 +23,24 @@ function withTimeout(promise, ms, fallback) {
 const SERVER_MODE      = process.env.SERVER_MODE      || 'combined';
 const CAPTURE_BACKEND  = (process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase();
 const WEBRTC_ENGINE    = (process.env.WEBRTC_ENGINE   || 'mediamtx').toLowerCase();
+
+// streamingMode ('jpeg'|'webrtc'|'ump') is a UI-facing convenience on top of the
+// existing webrtcEnabled boolean + new umpEnabled boolean (2026-07-22,
+// Design_UMP_Player_RTSP_over_WebSocket.md §7.2). Kept as a derivation rather than
+// a stored field so pipelineManager.js's existing webrtcEnabled-based logic (pipeline
+// restart detection, addCameraStream() calls) stays completely untouched — umpEnabled
+// is a brand new flag that only the UMP fan-out code path reads.
+function streamingModeToFlags(streamingMode) {
+  if (streamingMode === 'ump')    return { webrtcEnabled: false, umpEnabled: true };
+  if (streamingMode === 'webrtc') return { webrtcEnabled: true,  umpEnabled: false };
+  return { webrtcEnabled: false, umpEnabled: false }; // 'jpeg' (default)
+}
+
+function deriveStreamingMode(camera) {
+  if (camera.umpEnabled)    return 'ump';
+  if (camera.webrtcEnabled) return 'webrtc';
+  return 'jpeg';
+}
 
 // Fire-and-forget notification to the remote analysis server on camera deletion
 // (2026-07-21, §6.29.11/§6.29.12) — mirrors the pattern faceSearchSync.js
@@ -181,12 +200,14 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
         const bitrate = cam.type === 'youtube' && cam.bitrate
           ? Math.round(cam.bitrate / 1000)
           : cam.bitrate;
+        const webrtcOverride = FORCE_NO_WEBRTC ? { webrtcEnabled: false, umpEnabled: false } : {};
         return {
           ...cam,
           bitrate,
           password:       undefined, // Never expose password in list
           pipelineStatus: pipelineStatus || null,
-          ...(FORCE_NO_WEBRTC && { webrtcEnabled: false }),
+          ...webrtcOverride,
+          streamingMode: deriveStreamingMode({ ...cam, ...webrtcOverride }),
         };
       });
       res.json({ success: true, data: result });
@@ -448,6 +469,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       const {
         name, rtspUrl, username, password, ip, mac, httpPort, channelIndex,
         maxChannel, supportSunapi, nvrProfiles, thermalSensorWidth, thermalSensorHeight,
+        streamingMode,
       } = req.body;
       let { channelSlot } = req.body;
       if (!name || !rtspUrl) {
@@ -485,12 +507,15 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
         thermalSensorWidth:  thermalSensorWidth  ? parseInt(thermalSensorWidth, 10)  : null,
         thermalSensorHeight: thermalSensorHeight ? parseInt(thermalSensorHeight, 10) : null,
         status:        'offline',
+        // streamingMode ('jpeg'|'webrtc'|'ump') is a UI convenience, not stored directly —
+        // see streamingModeToFlags() above (Design_UMP_Player_RTSP_over_WebSocket.md §7.2).
+        ...streamingModeToFlags(streamingMode),
       });
 
       const camera = db.findOne('cameras', { id });
       res.status(201).json({
         success: true,
-        data: { ...camera, password: undefined },
+        data: { ...camera, password: undefined, streamingMode: deriveStreamingMode(camera) },
         warning: normalizedRtsp.correctedFromRtps ? 'rtps:// was corrected to rtsp:// automatically' : undefined,
       });
     } catch (err) {
@@ -508,15 +533,40 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
 
       const pipelineStatus = pipelineManager.getCameraStatus(camera.id);
+      const webrtcOverride = FORCE_NO_WEBRTC ? { webrtcEnabled: false, umpEnabled: false } : {};
       res.json({
         success: true,
         data: {
           ...camera,
           password:       undefined,
           pipelineStatus: pipelineStatus || null,
-          ...(FORCE_NO_WEBRTC && { webrtcEnabled: false }),
+          ...webrtcOverride,
+          streamingMode: deriveStreamingMode({ ...camera, ...webrtcOverride }),
         },
       });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * GET /api/cameras/:id/ump-credentials
+   * Returns this camera's raw RTSP username/password so the browser's
+   * <ump-player> can complete the RTSP Digest challenge issued by
+   * /StreamingServer (server/src/services/umpStreamingServer.js verifyDigest()
+   * checks against these exact same stored values). Every other camera
+   * endpoint deliberately strips password — this is the one exception, so it
+   * requires a valid JWT (unlike the rest of this router, which currently has
+   * no auth gate) rather than following that precedent. Same reasoning as the
+   * admin:subscribe-ingest-stats Socket.IO gate (utils/logger.js) — anything
+   * that hands back stored RTSP credentials must be authenticated.
+   * See docs/design/Design_UMP_Player_RTSP_over_WebSocket.md §4.2/§8.
+   */
+  router.get('/:id/ump-credentials', verifyAccessToken, (req, res) => {
+    try {
+      const camera = db.findOne('cameras', { id: req.params.id });
+      if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
+      res.json({ success: true, data: { username: camera.username || '', password: camera.password || '' } });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }
@@ -535,7 +585,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       const {
         name, rtspUrl, username, password, webrtcEnabled, channelSlot, channelIndex,
         maxChannel, supportSunapi, nvrProfiles, thermalSensorWidth, thermalSensorHeight,
-        webrtcVideoOnly,
+        webrtcVideoOnly, streamingMode,
       } = req.body;
       let normalizedRtsp = null;
       if (rtspUrl !== undefined) {
@@ -552,12 +602,19 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
         }
       }
 
+      // streamingMode ('jpeg'|'webrtc'|'ump') is the preferred UI field (CameraEditModal) and,
+      // when present, takes priority over the legacy raw webrtcEnabled (still accepted for
+      // other callers — MCP tools, scripts). See streamingModeToFlags() above.
+      const streamingFlags = streamingMode !== undefined
+        ? streamingModeToFlags(streamingMode)
+        : (webrtcEnabled !== undefined ? { webrtcEnabled: !!webrtcEnabled } : {});
+
       const updates = {};
       if (name          !== undefined) updates.name          = name;
       if (rtspUrl       !== undefined) updates.rtspUrl       = normalizedRtsp.value;
       if (username      !== undefined) updates.username      = username || null;
       if (password      !== undefined) updates.password      = password || null;
-      if (webrtcEnabled !== undefined) updates.webrtcEnabled = !!webrtcEnabled;
+      Object.assign(updates, streamingFlags);
       if (channelSlot   !== undefined) updates.channelSlot   = parseInt(channelSlot, 10);
       if (channelIndex  !== undefined) updates.channelIndex  = parseInt(channelIndex, 10);
       // maxChannel/supportSunapi/nvrProfiles: populated by POST /api/cameras/probe-channels
@@ -580,18 +637,25 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       // Only restart pipeline when a value that actually affects the stream changed.
       // Checking presence (webrtcEnabled !== undefined) was wrong — CameraEditModal
       // always sends webrtcEnabled, causing a ByteTracker reset on every save.
+      // umpEnabled now also triggers a restart (2026-07-24) — pipelineManager.js's
+      // needsMediaMTX started registering a camera.id-keyed MediaMTX path for UMP-only
+      // cameras too, so umpStreamingServer.js's MediaMTX-direct-path preference can
+      // actually find it (Design_RTSP_Capture_Backend.md §6.38); toggling umpEnabled
+      // must now (de)register that path, not just flip the on-demand WS bridge's own
+      // fan-out (Design_UMP_Player_RTSP_over_WebSocket.md §4.2).
       const needsRestart =
-        (rtspUrl       !== undefined && normalizedRtsp.value    !== camera.rtspUrl) ||
-        (webrtcEnabled !== undefined && !!webrtcEnabled        !== !!camera.webrtcEnabled) ||
-        (username      !== undefined && (username || null)     !== camera.username) ||
-        (password      !== undefined && (password || null)     !== camera.password) ||
-        (webrtcVideoOnly !== undefined && !!webrtcVideoOnly    !== !!camera.webrtcVideoOnly);
+        (rtspUrl       !== undefined && normalizedRtsp.value            !== camera.rtspUrl) ||
+        (streamingFlags.webrtcEnabled !== undefined && !!streamingFlags.webrtcEnabled !== !!camera.webrtcEnabled) ||
+        (streamingFlags.umpEnabled    !== undefined && !!streamingFlags.umpEnabled    !== !!camera.umpEnabled) ||
+        (username      !== undefined && (username || null)             !== camera.username) ||
+        (password      !== undefined && (password || null)             !== camera.password) ||
+        (webrtcVideoOnly !== undefined && !!webrtcVideoOnly            !== !!camera.webrtcVideoOnly);
 
       // Respond immediately so the browser does not time out while waiting for
       // ONNX model load / RTSP negotiation (can take several seconds).
       res.json({
         success: true,
-        data: { ...updated, password: undefined },
+        data: { ...updated, password: undefined, streamingMode: deriveStreamingMode(updated) },
         restarted: needsRestart,
         warning: normalizedRtsp?.correctedFromRtps ? 'rtps:// was corrected to rtsp:// automatically' : undefined,
       });

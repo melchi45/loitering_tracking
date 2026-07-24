@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-SA-01 |
-| **Version** | 1.6 |
+| **Version** | 1.7 |
 | **Status** | Active |
 | **Date** | 2026-07-08 |
 | **Author** | LTS-2026 Engineering |
@@ -880,7 +880,7 @@ if (subscribedRef.current.size > 0 && !subscribedRef.current.has(ev.cameraId)) r
 | 포트 | 프로토콜 | 컴포넌트 | 용도 |
 |---|---|---|---|
 | 3080 | HTTP | Node.js | REST API (HTTP) |
-| 3443 | HTTPS | Node.js | REST API + Socket.IO + WHEP 프록시 |
+| 3443 | HTTPS | Node.js | REST API + Socket.IO + WHEP 프록시 + WSS `/StreamingServer`(UMP RTSP-over-WebSocket, `umpStreamingServer.js`) |
 | 3100 | HTTP | mcp-server | MCP HTTP+SSE 모드 |
 | 8554 | RTSP | MediaMTX | RTSP 재발행 (로컬 루프백) |
 | 8889 | HTTP | MediaMTX | WebRTC WHEP 시그널링 (로컬 루프백) |
@@ -930,3 +930,4 @@ if (subscribedRef.current.size > 0 && !subscribedRef.current.has(ev.cameraId)) r
 | 1.4 | 2026-06-17 | analysis 모드 불필요 서비스 억제: MediaMTX(CAPTURE_BACKEND 무관), YouTubeStream 바이너리 탐색, UDPDiscovery 서브모듈 로그 모두 비활성화 |
 | 1.5 | 2026-06-23 | Section 4 DB 아키텍처 업데이트: 플러그어블 백엔드(BaseDatabase/JsonDatabase/MongoDatabase), server/src/db/ 구조, MongoDB 모드 lts.json 완전 제거 반영 |
 | 1.6 | 2026-07-08 | §3.4 신규 — 얼굴 등록 위임(`/api/analysis/face-embed`) + Face Search Condition 동기화(push+5s poll, `faceGalleries`/`faceGalleryFaces`의 `source` 태그) 추가; §10 기능 매트릭스에 2행 추가; 상세는 [Design_Face_Search_Condition_Sync.md](Design_Face_Search_Condition_Sync.md) |
+| 1.7 | 2026-07-24 | §9 포트 요약 3443 행에 WSS `/StreamingServer`(UMP RTSP-over-WebSocket) 누락 반영 — 상세는 [Design_UMP_Player_RTSP_over_WebSocket.md](Design_UMP_Player_RTSP_over_WebSocket.md) |

@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAPTURE-002 |
-| **Version** | 1.51 |
+| **Version** | 1.64 |
 | **Status** | Active |
-| **Date** | 2026-07-23 |
+| **Date** | 2026-07-24 |
 | **Ops Guide** | [RTSP_Capture_Backend_Setup.md](../ops/RTSP_Capture_Backend_Setup.md) |
 | **Related Design** | [Design_FFmpeg_RTSP_Capture.md](../design/Design_FFmpeg_RTSP_Capture.md) · [Design_RTSP_WebRTC_Architecture.md](../design/Design_RTSP_WebRTC_Architecture.md) |
 
@@ -503,6 +503,8 @@ ctx.frameWatchdogTimer = setInterval(async () => {
 - 배포 후 13개 카메라+YouTube 전체 재등록 시 로그에 `Combined RTSP loop starting`이 카메라당 1줄만 나타남(과거처럼 `AI loop`/`Video RTP loop`/`Audio RTP loop`/`App RTP loop` 4줄이 아님) — "RTSP 1개" 요구가 코드 레벨에서 충족됨을 로그로 직접 확인
 
 **§6.8 배포 직후 남아있던 미해결 항목** (아래 §6.9에서 실제 근본 원인 확정·수정됨): 위 3개 부수 수정(join 타임아웃/ThreadingHTTPServer/공유 풀) 배포 후에도 데몬 스레드 수는 안정적(393개 고정, 성장 없음)이었지만, `curl http://127.0.0.1:7070/health`가 간헐적으로 수십초~2분 이상 응답하지 않는 현상이 남아있고, 이 창에서는 Node.js의 watchdog 재등록(`_ingestRemoveCamera`/`_ingestRegisterCamera`, 5초 타임아웃)이 실제로 반복 실패함(YouTube 채널 다수에서 로그로 확인). `av.open()`/`demux()`가 블로킹 구간에서 GIL을 정상적으로 반환하는지는 별도 스크립트로 검증해 문제 없음을 확인했으므로(카운터 스레드가 6개의 동시 PyAV 연결 중에도 베이스라인 속도 그대로 유지), GIL 경합은 원인이 아니었음.
+
+> **(2026-07-24, §6.37로 정정)** 이 결론은 **읽기 쪽**(`av.open()`으로 여는 입력 컨테이너의 `demux()`)에 한정된 것으로, 여전히 유효하다. 그러나 **쓰기 쪽**(`av.open(..., "w", format="rtsp")`로 여는 출력 컨테이너의 `mux()`)은 별도로 검증된 적이 없었고, §6.37에서 실측한 결과 RTSP `mux()`는 블로킹 네트워크 쓰기 동안 GIL을 놓지 않는 것으로 확인됨 — "PyAV는 GIL 경합이 없다"가 아니라 "읽기는 안전, RTSP 쓰기는 안전하지 않다"로 정정.
 
 #### §6.9 진짜 근본 원인 — `mediasoupEngine.js`의 무제한 대기 HTTP 요청이 카메라를 영구히 잠금 (2026-07-16)
 
@@ -1117,6 +1119,7 @@ function _withIpcTimeout(promise, label) {
 - 새 데몬(신선한 프로세스)으로 교체 후 `/health`가 즉시 응답, 9개 카메라 전부 정상 재등록, WebRTC self-heal 스윕(§6.29.6)이 30초 안에 나머지 카메라를 수동 개입 없이 자동 복구.
 
 CPython GIL 경합(다중 카메라의 PyAV 디코드 스레드가 HTTP 서버 스레드를 계속 밀어냄)이 유력한 메커니즘으로 의심되나, 이번 세션에서 `ingest_daemon.py` 내부까지는 프로파일링하지 못했다 — py-spy로 확인하려면 `ptrace_scope=1` 때문에 root 권한이 필요해 차단됨(§6.29.7 참고). 근본적인 Python 쪽 수정(HTTP 서버를 별도 프로세스/스레드풀로 분리 등)은 후속 과제로 남는다.
+> **(2026-07-24) §6.37에서 py-spy 없이 격리 실험으로 확정**: PyAV RTSP `mux()`(디코드가 아니라 카메라 fan-out의 네트워크 쓰기)가 블로킹 동안 GIL을 놓지 않음을 실측 — 여기서 의심한 "디코드 스레드가 HTTP 서버를 밀어낸다"는 메커니즘 자체는 디코드가 아니라 **쓰기(mux)** 쪽이 원인이었을 가능성이 높음(디코드/읽기 쪽은 §6.8 각주에서 이미 GIL 반환 정상 확인됨). `rtsp_publish_worker.py`로 mux를 별도 프로세스로 분리해 해결.
 
 부수적으로, 같은 시간대에 사용자가 보고한 고해상도 열상 카메라(2560×1920, 2048×1536) 2대의 Buffer/Latency 급상승(991ms/2575ms)도 이 ingest-daemon 응답 불능 상태와 겹쳐 있었다 — RTP가 고르게 전달되지 못하고 버스트로 전달되면서 지터 버퍼가 누적됐을 가능성이 있으나, ingest-daemon 재시작 후 재현 여부는 사용자 확인 대기 중(미확정).
 
@@ -1224,6 +1227,141 @@ UDP 탐색 로그 스팸(`UdpResponse from ... { nMode=12, ... }` 콘솔 도배)
 **검증**: 동일 레이스 컨디션을 실측 재현 — 테스트 카메라 생성 → `DELETE` 호출("success":true 확인) → **지연 없이 즉시** `SIGTERM` 전송 → 재시작 → `GET /api/cameras/:id` 조회. 수정 전 로직이었다면 되살아났을 상황에서, 수정 후에는 `{"success":false,"error":"Camera not found"}` — 삭제가 재시작을 확실히 견뎌내는 것을 확인했다. 수정 배포 이전에 유실됐던 테스트 카메라 잔여분(4건)은 수정이 살아있는 상태에서 재삭제해 이번엔 영구히 정리됨을 재확인.
 
 이 버그는 카메라 삭제에 국한되지 않는다 — `db.delete()`/`db.update()`를 쓰는 모든 테이블(zones, alerts, missing persons 등)이 동일한 유실 위험에 노출되어 있었다. `flushNow()` 수정으로 이 클래스의 데이터 유실 전체가 함께 닫혔다.
+
+### 6.30 WebRTC 통계 패널의 "0fps 반복" — 실제 프리즈가 아니라 raw `framesPerSecond` 통계 표시 결함 (2026-07-22)
+
+사용자가 5MP(2560×1920) 카메라에서 통계 패널에 "0fps"가 반복적으로 표시된다고 보고. 함께 제공된 스냅샷을 보면 `framesDecoded`가 1200으로 healthy하게 증가 중이고 `dropped=0`, `Rate ↓1.4Mbps`(데이터 계속 수신), `Buffer 139ms`/`Latency 140ms`(둘 다 `BAD` 임계치의 절반 이하), `RTT 1ms`, `Loss 1.8%` — 기존 스톨 워치독의 발동 조건(§6.20의 `FRAME_STALL_MS=20s` 프레임 정체, `BUFFER_SATURATED_TICKS_LIMIT`의 `bufferMs≥300ms` 2틱 연속)에는 전혀 해당하지 않는, 겉보기엔 건강한 연결 상태였다.
+
+**근본 원인**: `useWebRTC.ts`의 `rateTimer`(1초 폴링)가 화면에 표시하는 `fps` 값으로 `RTCInboundRtpStreamStats.framesPerSecond`(브라우저가 내부적으로 계산하는 running average, 정확한 갱신 주기/윈도우는 스펙에 명시되지 않은 구현 종속 값)를 그대로 사용하고 있었다 — 이 폴링 주기(1s)와 브라우저 내부 계산 주기가 반드시 일치한다는 보장이 없어, 실제 디코딩은 정상 진행 중인데도 이 stat 자체가 0으로 깜빡이거나 고정되어 보일 수 있다. `bufferMs`가 이미 §buffer-oscillation(2026-07-21, §6.27)에서 동일한 클래스의 문제 — 원본 누적 카운터를 매 틱 순진하게 나누면 진동하는 값이 나옴 — 를 "직전 성공적으로 계산된 값을 이월"하는 방식으로 해결한 전례가 있다.
+
+**수정**: `rtp.vFps`(raw stat) 대신, 이미 매 틱 추적 중인 `framesDecoded` 누적 카운터(`rtp.vFrames`)의 델타를 실제 경과 시간(`elapsed`)으로 나눠 자체 계산한 fps를 사용하도록 `client/src/hooks/useWebRTC.ts`의 `rateTimer` 콜백을 수정 — `ratePrevVideoFrames` 신규 추적 변수 추가, 첫 틱(비교 기준 없음)에서만 raw stat로 폴백. 브라우저의 내부 집계 주기와 무관하게 이 폴링 자체의 실측 프레임 처리율을 반영하므로, decode가 실제로는 정상인데 raw stat만 0을 보고하는 표시 결함을 제거한다.
+
+**영향 범위**: 표시(display) 전용 수정 — 스톨 워치독·재연결 로직(`FRAME_STALL_MS`/`STALL_MS`/`bufferSaturatedTicks`)은 이미 `framesDecoded` 원본 카운터를 직접 비교하고 있어 이번 수정과 무관하게 그대로 유지됨. 즉 이번 건은 재연결 정책의 변경이 아니라 순수히 패널에 찍히는 숫자의 정확도 개선.
+
+`npx tsc --noEmit`/`npm run build` 클린 통과.
+
+#### 6.30.1 재현 확인 — 이번엔 진짜 프리즈, 그리고 재연결 워치독이 "재연결 폭풍" 상태로 이미 상시 작동 중이었음을 로그로 확정 (2026-07-22)
+
+위 수정 배포 직후 사용자가 동일 카메라(2560×1920)에서 재차 보고: `framesDecoded`가 2949에서 완전히 고정, 반면 `Rate`(↓6.3Mbps)·`Speed`(2594kbps)는 계속 상승, `Buffer`/`Latency`/`RTT`/`Loss`도 함께 고정 — §6.30과 달리 이번엔 raw stat 표시 결함이 아니라 **디코더가 실제로 멈춘 상태**임을 다음 근거로 확정:
+- `videoKbps`/`audioKbps`(따라서 Rate/Speed)는 `inbound-rtp`의 `bytesReceived` 델타로 계산됨 — 계속 오른다는 것은 RTP 패킷이 계속 도착 중이라는 뜻.
+- `framesDecoded`가 안 오른다는 것은 그 패킷들을 디코더가 프레임으로 조립 못하고 있다는 뜻 — 전형적인 "참조하는 키프레임을 못 받은 P-프레임들"(mid-GOP join, `mediasoupEngine.js:1421-1424`의 기존 주석과 동일 클래스) 증상.
+- `ingest_daemon.py` 전체를 재확인했으나 RTCP 수신/처리 코드가 전혀 없음 — 카메라→ingest-daemon→mediasoup은 RTP만 한 방향으로 릴레이하는 구조. 즉 브라우저가 디코드 실패 시 자동으로 보내는 RTCP PLI나 `mediasoupEngine.js:1427`의 `videoConsumer.requestKeyFrame()`이 만드는 PLI 모두, 실제 카메라(유일하게 새 키프레임을 만들 수 있는 주체)까지 도달할 경로가 아예 없음 — 구조적 한계.
+
+사용자에게 "20~30초 후 자동 재연결되어 복구되는지"를 물었더니 "재연결 없이 계속 멈춰있다"는 답변 — 그런데 `GET /api/client-logs`로 실제 브라우저 콘솔 로그를 직접 조회한 결과는 그와 달랐다: 카메라 `61813f62`/`4e562747`와 YouTube 스트림 `yt-9bb39`에서 **78분간(01:13~02:31) 총 104건**의 `framesDecoded stuck at N ... reconnecting in 3s` 로그가 25~45초 간격으로 끊임없이 발생 중이었다 — 즉 §6.20의 프레임 스톨 워치독은 정상 작동하며 실제로 재연결을 계속 시도하고 있었다. 다만:
+- `stuck at 0`이 절대다수(재연결 직후 다음 키프레임을 못 만나 즉시 재고착)이고, 드물게 `stuck at 26/201/671/2709`처럼 잠깐 디코딩에 성공했다가 다시 고착되는 경우가 섞여 있음 — 재연결이 카메라의 다음 예정 키프레임 타이밍과 우연히 맞아떨어질 때만 일시적으로 회복.
+- `CameraView.tsx`는 `webrtcState==='connected'`일 때만 `<video>`를 표시하고, 재연결 중(`connecting`)엔 스피너로 잠깐 전환되지만 매번 수백ms~수초 내로 다시 `connected`로 넘어가 버려 사용자가 "재연결이 일어났다"고 인지하기 어렵고, 재연결 후에도 곧바로 다시 고착되는 경우가 대부분이라 체감상 "계속 멈춰있다"로 보이는 것 — 실제로는 초당 수준으로 빠르게 실패를 반복하는 폭풍 상태.
+
+**결론**: 클라이언트 재연결 로직 자체는 결함이 아니다 — 근본 문제는 (1) 5MP 스트림의 손실률(5.3%)이 커서 키프레임 버스트가 자주 유실되고, (2) 유실된 키프레임을 복구할 RTCP PLI 경로가 이 파이프라인에 구조적으로 없어, 재연결이 사실상 "카메라의 다음 키프레임 타이밍에 운 좋게 걸리길 기다리는" 것 외에는 할 수 있는 게 없다는 점이다. 이는 §6.13/§6.17에 오래 남아있던 "고해상도 카메라 정지 구간 — 카메라측 인코더/대역폭 한계 추정" 미해결 항목의 정확한 메커니즘을 확정한 것이기도 하다.
+
+**검토한 대응 방안** (사용자 결정 대기 — 각각 트레이드오프가 달라 코드만으로 결정할 사안이 아님):
+- **(A) 카메라 자체의 키프레임 간격(GOP) 단축** — 카메라 관리자 설정(웹UI/ONVIF)에서 I-frame 주기를 짧게(예: 1~2초) 재설정. 코드 변경 없이 가장 근본적으로 유실 시 복구 윈도우를 줄이는 방법이지만, 대역폭 사용량이 늘고 카메라 접근 권한이 필요.
+- **(B) `ingest_daemon.py`에 실제 RTCP PLI/FIR 포워딩 구현** — mediasoup Consumer의 키프레임 요청을 카메라의 RTSP/RTP 세션까지 실제로 전달. 근본적 수정이지만 신규 엔지니어링 범위가 크고, 카메라가 RTP/AVPF(RFC 4585) 피드백을 실제로 지원·반응하는지 사전 확인 없이는 성공을 보장할 수 없음.
+- **(C) 클라이언트 상태 표시 개선** — 재연결이 실패를 반복하는 동안 마지막 프레임을 계속 보여주는 대신 "재연결 중" 상태를 더 명확히 노출(현재도 `connecting` 상태에 스피너가 있지만 전환이 너무 빨라 인지하기 어려움). 근본 수정은 아니지만 사용자가 실제 상태를 오인하지 않도록 함.
+
+`npx tsc --noEmit`/`npm run build` 클린 통과(§6.30 자체 수정분). §6.30.1은 진단·근거 기록이며 신규 코드 변경 없음 — 대응 방안 선택은 후속 과제로 남김.
+
+#### 6.30.2 실측으로 확정 — 손실이 "브라우저 쪽 네트워크"가 아니라 ingest-daemon→mediasoup 릴레이 파이프라인 안에서도 발생 중임을 직접 확인, 송신측 버퍼 대칭 수정 (2026-07-22)
+
+사용자가 "RTSP에서는 I-frame을 정상 수신하고 있는데, WebRTC 파이프라인(ingest-daemon→mediasoup→클라이언트) 어딘가에서 프레임이 새는 것 아니냐"는 가설을 제기 — 라이브 호스트에서 직접 검증한 결과 사실로 확인됨:
+
+- `/proc/net/snmp`의 `Udp: RcvbufErrors`를 15초 간격 두 번 샘플링 — 12,468,787 → 12,468,892 (15초간 105건, **초당 ~7건씩 지금도 계속 증가 중**). §6.18에서 고쳤던 것과 같은 클래스의 문제가 여전히 실시간으로 발생하고 있었음.
+- `ss -u -a -n -p`로 mediasoup-worker(단일 프로세스) 자신의 UDP 소켓들을 직접 조회 — 여러 소켓의 Recv-Q(커널에 도착했지만 worker가 아직 못 읽은 바이트)가 **최대 3.8MB**까지 쌓여 있었고, 3초 뒤 재조회에도 여러 소켓이 수백KB~3MB대를 유지 — mediasoup-worker가 일부 소켓의 수신 속도를 실시간으로 못 따라가고 있다는 직접 증거. 큐가 소켓 버퍼 상한에 닿으면 그 이후 도착 패킷은 mediasoup가 보기도 전에 커널에서 드롭됨(=`RcvbufErrors`).
+- 원인 후보: 이 서버는 `mediasoupEngine.js:252`의 `mediasoup.createWorker()` 호출이 코드 전체에 **단 1회**뿐 — 모든 카메라의 RTP 릴레이·WebRTC 트랜스포트가 하나의 싱글스레드 mediasoup-worker(C++ 프로세스)에 몰려있음. 실측 시점 worker 자체 CPU는 13~14%(호스트는 40코어, `mpstat` 유휴 80%)로 "CPU가 부족해서"는 아니고, 한 카메라(특히 5MP 키프레임처럼 짧은 시간에 대량 패킷이 몰리는 버스트)의 순간 처리가 다른 소켓 읽기를 지연시켜 큐가 쌓이는 구조적 병목으로 추정.
+- 비대칭 발견: mediasoup 수신측(video/audio PlainTransport)은 이미 §6.18에서 `recvBufferSize: 8MB`로 키워져 있었지만, 그 반대편 송신자인 `ingest_daemon.py`의 `av.open("rtp://...", format="rtp", ...)` 호출(비디오 RTP 패스스루 2곳, 오디오 패스스루/트랜스코드 각 1곳, 총 4곳)에는 버퍼 크기 옵션이 전혀 없어 OS 기본값(`net.core.wmem_default` ≈ 208KB)을 그대로 쓰고 있었음.
+
+**수정**: `ingest_daemon.py`에 `_RTP_SEND_BUFFER_SIZE = 8*1024*1024` 신규 상수 추가, 비디오/오디오 RTP 출력 4곳의 `av.open()` `options`에 `"buffer_size": str(_RTP_SEND_BUFFER_SIZE)`(ffmpeg `udp` 프로토콜 옵션 → 출력 소켓의 `SO_SNDBUF`) 추가 — `net.core.wmem_max`(16MB 실측)로 커널이 요청을 그대로 허용함을 확인. 옵션 키 유효성은 로컬 `av.open()` 스모크 테스트로 사전 확인, `ingest:restart`로 배포 후 모든 카메라 재등록 및 "Video RTP: ... ssrc=... pt=96" 로그 정상 확인, 에러 없음.
+
+**미해결로 남기는 부분**: 이번 수정은 송신측 버퍼만 대칭으로 키운 것 — mediasoup-worker가 단일 스레드로 모든 카메라를 처리하는 구조적 병목(멀티 Worker 미사용, 40코어 중 1개만 활용) 자체는 그대로다. 사용자와 논의 후 이 구조적 병목은 별도 설계 문서(`docs/design/Design_Mediasoup_Multi_Worker.md`)로 분리해 다루기로 결정 — Producer/Consumer가 반드시 같은 Router에 있어야 하는 mediasoup 제약 때문에 카메라를 여러 Worker/Router에 분산시키려면 라우팅 구조 재설계가 필요해 스코프가 크다. **(2026-07-22 후속) 이 구조적 병목은 같은 날 실제로 구현 완료됨** — `mediasoupEngine.js`를 단일 `_worker`/`_router`에서 8개 Worker 풀(`MEDIASOUP_NUM_WORKERS`, 카메라 ID 해시 배정)로 전환, `npm run stop`/`start`로 배포·정상 복구 확인. 상세는 `Design_Mediasoup_Multi_Worker.md` v2.0 §6 참고.
+
+또한 이 세션 중 사용자가 별도로 "Ctrl+Shift+R 강제 새로고침 후에도 Codec 정보가 `-`로 표시된다"고 보고 — 이 심볼톰 자체는 §6.27 v1.40 "최종 근본 원인 확정" 항목에 이미 `Codec: – / opus`로 한 차례 관찰·기록된 바 있고(원인: `profileLevelId` 캐시가 ingest-daemon 다운 중 Baseline 폴백으로 고착), 이번 세션의 새 가설(릴레이 구간 패킷 손실로 비디오 트랙에 패킷이 전혀 도착 못 해 `RTCStats` `codec` 리포트 자체가 안 생김)도 동일 증상을 설명할 수 있어 — 두 메커니즘 중 어느 쪽인지(혹은 둘 다인지) 이번 세션만으로는 확정하지 못했다. 마침 이번 §6.30.2 수정 배포를 위한 `ingest:restart`가 모든 카메라의 `addCameraStream()`을 새로 실행시켜 `profileLevelId` 캐시도 함께 새로고침됐으므로, 사용자가 다시 새로고침해 재현되는지 확인 필요 — 재현되면 릴레이 손실 쪽에, 재현 안 되면 캐시 고착 쪽에 무게가 실린다.
+
+### 6.31 mediasoup 멀티 Worker 분리 — §6.30.2 구조적 병목의 실제 구현 (2026-07-22)
+
+§6.30.2에서 실측 확정한 mediasoup 단일 Worker 병목을 사용자 요청으로 같은 날 구현. 상세 설계·옵션 비교·검증 결과는 `docs/design/Design_Mediasoup_Multi_Worker.md`(v2.0)에 전담 — 여기서는 요약만 남긴다.
+
+- `mediasoupEngine.js`의 전역 `_worker`/`_router` 싱글턴을 `_workerPool[]`(Worker 풀, 기본 `min(os.cpus().length, 8)` = 8개, `MEDIASOUP_NUM_WORKERS`로 조정 가능)로 교체.
+- 카메라는 `cameraId` 문자열 해시로 특정 Worker에 결정적으로 배정되고(`_cameras` 엔트리에 `workerIndex` 저장, negotiate() 등 이후 조회는 재해시하지 않고 저장값 사용 — Producer/Consumer가 같은 Router에 있어야 하는 mediasoup 제약 충족), §6.26의 PT별 alt-Router 캐시도 Worker별로 분리(`workerIndex:videoPt` 복합 키).
+- Worker `died` 복구 범위를 죽은 Worker의 카메라만으로 축소(기존 싱글톤은 Worker 1개 죽으면 전체 카메라가 리셋됐음).
+- `server/.env`/`.env.example` 3종에 `MEDIASOUP_NUM_WORKERS` 문서화, 이 호스트는 `8`로 명시 설정.
+- 검증: 독립 스모크 테스트(8-Worker 정상 부팅, 카메라 5개 여러 Worker 분산 확인 — 테스트 중 실수로 등록된 ingest-daemon 테스트 카메라는 즉시 정리), 실서버 `npm run stop`→`start` 배포 후 전체 카메라 정상 복구(`GET /api/webrtc/monitor` `running:true`), 배포 후 첫 ~3분 관측에서 문제의 5MP 카메라(`61813f62`) 스톨 1건(이전보다 훨씬 건강한 상태에서 발생)·`4e562747` 0건으로 초기 긍정 신호(표본 작음, 장기 관측 필요).
+
+#### 6.31.1 배포 몇 분 뒤 재현 — CPU는 여유로운데 여전히 Worker 하나가 못 따라감, 스케줄링 우선순위로 접근 전환 (2026-07-22)
+
+§6.31 배포 후 다른 고해상도 카메라(`61813f62`, 2048×1536)에서 사용자가 재현 보고(Res 0fps, Frames 22 decoded/0 dropped, Loss 13.7%, Rate는 15.2Mbps로 정상 수신, Buffer/Latency는 14ms로 건강). 실측으로 두 가지를 확정:
+
+- `/proc/net/snmp`의 `Udp.RcvbufErrors` 증가율이 멀티 Worker 적용 전(초당 ~7건)과 적용 후(초당 ~9.8건)가 비슷하거나 오히려 약간 높음.
+- `ss -u -a -n -p`로 8개 mediasoup-worker 각각의 Recv-Q/CPU를 대조한 결과, 여전히 최대 4MB Recv-Q가 쌓인 Worker가 있었는데 그 Worker의 CPU는 **2.9~4.7%뿐** — `61813f62`를 해시로 배정받은 Worker(index 3)를 직접 계산해보니 다른 카메라와 전혀 공유하지 않는 **단독 배정**인데도 동일 증상 재현. 즉 "여러 카메라가 한 Worker를 두고 경합"이 아니라 **카메라 하나의 순간적 버스트만으로도, CPU 여유가 충분한 단독 Worker조차 못 따라가는** 근본적으로 다른 문제.
+
+**해석**: CPU 총사용량이 낮다는 것과 "필요한 순간에 즉시 스케줄링된다"는 것은 다른 문제다. 이 호스트는 27명이 동시 로그인한 공유 서버(load average 10~15/40코어)라, 평소엔 거의 유휴 상태인 mediasoup-worker가 5MP 키프레임처럼 수 ms 안에 몰아치는 UDP 패킷 버스트를 처리하려는 바로 그 순간, 커널 스케줄러가 다른 프로세스들과의 경합 속에서 이 프로세스를 충분히 빨리 깨우지 못하면 커널 소켓 버퍼가 먼저 차버릴 수 있다 — CPU 사용량 통계(초 단위 평균)에는 거의 안 잡히는 종류의 지연이다.
+
+**조치**: `_bootWorkerSlot()`에 `os.setPriority(worker.pid, WORKER_NICE_PRIORITY)`(기본 `-5`, `MEDIASOUP_WORKER_PRIORITY`로 조정 가능) 추가 — Worker가 실행 가능한 상태가 됐을 때 커널이 더 우선적으로 스케줄링하도록 요청. 직접 `renice -5`를 시도해본 결과 `Permission denied`(`ulimit -e`도 0)로 확인됐듯, `mediasoup-worker` 바이너리에 `CAP_SYS_NICE`가 없으면 무력화됨 — `sudo setcap cap_sys_nice+ep <mediasoup-worker 바이너리 경로>`를 1회 실행해야 실제로 적용된다(사용자 sudo 필요, 이 세션은 비대화형이라 직접 실행 불가 — 명령어만 안내). 권한이 없을 때는 매 Worker마다 경고 로그만 남기고 조용히 무시하도록 구현(부팅 자체를 막지 않음). 최대치인 `-20`이 아니라 `-5`로 보수적으로 설정한 이유는 이 호스트가 다른 27명과 공유하는 서버라, 모든 카메라 Worker에 실시간급 우선순위를 기본값으로 주는 것은 다른 사용자에게 불친절한 조치이기 때문.
+
+**아직 미결**: setcap 적용 및 재시작 후 실측 재검증 대기 중. 이 조치로도 재현된다면, §6.30.2/§6.31에서부터 이어진 "원인 1 — RTCP PLI 경로 부재"(카메라까지 키프레임 재요청이 도달 못 함)가 여전히 남아있는 진짜 근본 문제라는 뜻 — 손실 자체를 줄이는 접근(스케줄링/버퍼)에는 한계가 있고, 손실 후 빠른 복구(카메라 GOP 단축 또는 RTCP PLI 실제 구현) 쪽으로 넘어가야 한다.
+
+#### 6.31.2 진짜 급성 원인 확정 — NIC 링버퍼 조정 이후에도 재생이 계속 안 되던 것은 ingest-daemon이 조사 도중 완전히 다운돼 있었기 때문 (2026-07-22)
+
+§6.31.1의 setcap 적용 후에도 사용자가 "영상이 안 나온다"고 반복 보고(Loss 76.6%, Codec 완전 공백 `– / –`, Frames 0 decoded 지속) — 3분간 라이브 관측으로 실제로 단 한 프레임도 디코딩되지 않음을 재확인했다. 원인 규명을 위해 다음을 순차로 실측:
+
+1. **NIC 레벨 재확인**: `ethtool -G eth1 rx 4096`(사용자가 sudo로 적용) 이후 `/proc/net/dev`의 eth1 drop 카운터를 재샘플링 — 링버퍼 확장 자체는 drop 발생률을 유의미하게 줄이지 못함(적용 전후 모두 초당 ~10건대) → NIC 링버퍼가 유일한 원인은 아니었음을 확인.
+2. **mediasoup 서버측 통계 직접 조회** (`GET /api/webrtc/monitor`의 `producerStats`): 문제 카메라들의 mediasoup Producer `videoScore`가 **완벽한 10점**이고 `videoBytesRx`가 수백MB 단위로 정상 누적 중임을 확인 — ingest-daemon→mediasoup 구간은 실제로는 완전히 건강했다는 뜻. 이는 그동안의 "손실률" 중심 진단(NIC/Worker/스케줄링)이 애초에 잘못된 방향이었을 가능성을 시사.
+3. **`LTS_DEBUG_SDP=true`로 실제 SDP 확인 시도** — 예상과 달리 로그에 전혀 안 찍힘. 원인을 추적한 결과 `utils/logger.js`의 `makeLineRelay()`가 라인 텍스트에서 `\bdebug\b`(대소문자 무관, 단어 경계 매칭)를 발견하면 자동으로 DEBUG 레벨로 강등하는 휴리스틱이 있는데, 진단용 로그 태그 이름 자체가 `[SDP-DEBUG]`라 하이픈 경계 때문에 "debug" 단어로 인식되어 `LOG_LEVEL=INFO`(기본값) 하에서 조용히 필터링되고 있었다 — 이름과 로깅 인프라의 우연한 충돌. `LOG_LEVEL=DEBUG`로 낮추고 재시작해 확인 절차를 이어갔다.
+4. **재시작 직후 로그에서 결정적 단서 발견**: `ingest-daemon DELETE/register ... failed: fetch failed`, `addCameraStream failed: connect ECONNREFUSED 127.0.0.1:7070`가 연쇄적으로 발생 — **ingest-daemon 프로세스가 조사 도중 완전히 죽어 있었다**(`ps aux`에 프로세스 자체가 없음, `curl :7070/health` connection refused). `/tmp/ingest-daemon.log`의 가장 최근 구간을 대조한 결과, 정상 시에는 `Camera added: <id> [AI+vRTP:PORT+aRTP:PORT+appRTP]`로 video RTP 포트가 함께 등록되는데, 다운 직후의 재등록 시도들은 `[AI+appRTP]`뿐 — **video RTP fan-out 자체가 아예 요청되지 못하고 있었다.** 즉 이번 세션 후반부에 조사했던 "0 프레임 디코딩" 현상 대부분은 mediasoup/Worker/스케줄링 문제가 아니라, **ingest-daemon 자체가 다운되어 있었던 것**이 진짜 원인이었다 — §6.30.2/§6.31에서 조사·수정한 항목들이 무의미했다는 뜻은 아니지만(멀티 Worker/스케줄링 우선순위는 그 자체로 유효한 개선), 최근 수십 분간의 "재생 완전 불가" 급성 증상의 직접 원인은 아니었다.
+5. **ingest-daemon 다운 원인**: 확정하지 못함 — 이 세션에서 반복한 짧은 간격의 서버 재시작·파이프라인 재연결 트리거(`/stream/reconnect`)가 ingest-daemon에 누적 부하를 줬을 가능성이 높다(§6.29.5/§6.29.9에 이미 기록된 "반복적으로 응답 불능에 빠지는" 기존 미해결 문제와 같은 계열일 수 있음). `npm run ingest:restart`로 즉시 복구.
+6. **복구 검증**: `ingest:restart` 직후 실시간 관측으로 `yt-9bb39`(232프레임), `61813f62`(49프레임, 계속 증가), `4e562747`(재연결 1회 후 19프레임)까지 **3개 카메라 전부 정상 디코딩 재개**를 직접 확인. `4e562747`은 재등록 직후 한 차례 Consumer `bytesSent=0`가 지속되는 잔여 증상을 보였으나(Producer는 정상 수신 중이었음 — Consumer만 0바이트, 원인 미확정, 반복된 재연결의 타이밍 경합 가능성) `/stream/reconnect` 1회로 해소.
+7. **후속 정리**: `LOG_LEVEL=DEBUG`/`LTS_DEBUG_SDP=true`는 진단 완료 후 원복(`LOG_LEVEL=INFO`, `LTS_DEBUG_SDP` 주석 처리), 서버 재시작으로 반영 완료.
+
+**교훈**: 이번 세션 후반부의 "재생 완전 불가" 급성 증상은 그 이전까지 조사하던 만성 문제(mediasoup Worker 병목, 손실률)와 **다른 사건**이었다 — 라이브 디버깅 중 반복 재시작 자체가 ingest-daemon을 다운시켰을 가능성이 있고, 이후 몇 시간의 조사가 실제로는 "다운된 daemon에 대고 계속 재시도"를 관측한 것이었다. 서버측(`GET /api/webrtc/monitor`)과 ingest-daemon측(`GET /cameras/stats`, `/tmp/ingest-daemon.log`)을 **양쪽 다** 대조 확인하는 것이 이런 "여러 계층이 동시에 문제처럼 보이는" 상황에서 핵심 진단 수단이었다 — 다음에 유사 증상이 재현되면 mediasoup 통계부터 보지 말고 `curl :7070/health`로 ingest-daemon 생존부터 먼저 확인할 것.
+
+#### 6.31.3 재발 — 서버 재시작 직후 재현, 두 가지 별개의 사소한 원인으로 확정 (2026-07-22)
+
+§6.31.2 복구 후 사용자가 "여전히 영상이 안 나온다"고 재차 보고. 서버(`GET /health`)·ingest-daemon(`GET :7070/health`) 둘 다 정상이었고(uptime 8377s, 크래시 없음) — 이번엔 §6.31.2의 "daemon 다운"과는 다른 사건임을 먼저 확인. `GET /api/webrtc/monitor`의 producerStats로 카메라별 상태를 대조:
+
+- `61813f62`: `videoScore: []`(빈 배열, 수신 이력 전무), `videoBytesRx: 0` — 로그 확인 결과 **물리 카메라(192.168.214.40) 자체가 RTSP 연결을 거부**하고 있었음(`Connection refused`). 코드/인프라 문제가 아니라 카메라 자체의 문제 — 잠시 후 카메라가 스스로 복구되며 자동 재생 재개.
+- `4e562747`/`yt-9bb39`: Producer(score 10, GB 단위 정상 수신)·Consumer(수십~수백MB 정상 송신) 둘 다 완벽한데 클라이언트 `vFrames`가 300초 이상 0에 고정 — 서버측 관점에선 "완벽히 정상"인데 실제로는 재생이 안 되는, 가장 헷갈리는 패턴.
+
+**SDP 직접 확인 재시도**: 지난번 `LTS_DEBUG_SDP=true`가 로거의 `\bdebug\b` 자동 강등(§6.31.2에서 발견)에 걸려 안 보였던 문제를 근본적으로 고침 — `console.log()` 대신 `fs.appendFile()`로 `<repo-root>/sdp-debug.log`에 직접 쓰도록 `negotiate()` 수정(`mediasoupEngine.js`). `LOG_LEVEL=DEBUG` 없이도 항상 보이므로 향후 재사용 가능. 재시작 후 확인한 실제 SDP는 `4e562747`(profile-level-id=640032, sprop 정상) 완벽했고, 그 직후 클라이언트가 실제로 프레임을 디코딩하기 시작함(수백 프레임까지 정상 증가) — **직전의 "0프레임" 상태는 재시작으로 정리된, 특정 PeerConnection 인스턴스가 어쩌다 나쁜 상태에 갇힌 일시적 현상**이었음을 시사(코드 결함이라기보다 §6.30/6.30.1에서부터 지적해온 "손실 후 복구 경로 부재"의 또 다른 발현).
+
+**`yt-9bb39` 전용 원인**: ingest-daemon 로그(`server/logs/lts-*.log`의 `[Ingest]` 접두사 — **주의: `npm run start`로 전체 스택을 띄우면 ingest-daemon 출력이 `/tmp/ingest-daemon.log`가 아니라 이 통합 로그로 감** — `npm run ingest:restart` 단독 실행 시에만 `/tmp/ingest-daemon.log` 사용, 두 경로를 혼동하지 말 것)를 대조한 결과: 브라우저가 협상을 시도한 시점(07:20:53)에 YouTube RTSP 루프가 마침 URL 갱신 재시도 중(404 반복, §6.16에 이미 기록된 기존 이슈)이라 `negotiate()`의 지연 등록(lazy fan-out, §6.27) POST가 카메라 미준비 상태와 겹쳐 실패 → `cam.videoFanoutRegistered`가 `false`로 롤백 → 이후 카메라 연결이 실제로 성공한 뒤(07:21:06) 약 82초 뒤인 07:22:28에야 fan-out이 최종 등록됨. 그 사이 뷰어는 0바이트 상태로 대기 — 코드가 완전히 고장난 게 아니라 "지연 등록 재시도"가 예상보다 오래 걸린 타이밍 이슈. 등록 완료 후 정상 재생 확인.
+
+**교훈 추가**: (1) 로그 상 `[Ingest]`가 통합 로그와 `/tmp/ingest-daemon.log` 두 곳에 나뉘어 쓰일 수 있다는 것 — 실행 방식(`npm run start` 전체 vs `npm run ingest:restart` 단독)에 따라 확인할 파일이 다르다. (2) `_ingestPost(...).catch(() => { cam.videoFanoutRegistered = false; })`(negotiate()의 지연 등록)가 실패를 완전히 침묵 처리(`console.error` 없음)해 이런 타이밍 문제를 진단하기 어렵게 만듦 — 후속 과제로 최소한 실패 시 경고 로그 추가를 고려할 것.
+
+### 6.32 ingest-daemon RTP 송신 소켓 `buffer_size`가 조용히 무시되던 버그 — 만성 패킷 손실의 진짜 근본 원인 (2026-07-22)
+
+§6.31.3까지의 "재시작하면 낫는다" 패턴 자체를 의심해 재조사. TID-A800(§6.28 이후 videoOnly, alt-PT 파이프라인 사용)에서 사용자가 브라우저 탭을 Chrome+Edge 2개 동시에 띄운 상태로 재현 보고 — 처음엔 "같은 mediasoup Worker를 공유하는 두 Consumer의 경합"으로 가설을 세웠으나, Edge를 닫고 Chrome 단독으로 재확인해도 `packetsLost`/`packetsReceived` 비율이 그대로 55~60%대(`framesReceived=0` 고정)로 나타나 **이 가설은 즉시 기각** — 연결 개수와 무관한, 단일 연결 자체의 구조적 문제임을 확인.
+
+`GET /api/client-logs/webrtc`의 raw `RTCStatsReport`를 시계열로 대조한 결과: `nackCount`가 수천 회 발생하는데도 `packetsLost` 비율이 전혀 개선되지 않음 — RTX(`enableRtx`)는 alt-PT 파이프라인에서도 정상적으로 `true`였음(browser가 offer한 RTX-PT=114가 라우터 선언과 일치, `rtxMatched` 확인됨). NACK을 아무리 보내도 회복이 안 된다는 것은 **mediasoup이 애초에 그 패킷을 받은 적이 없어 재전송할 대상 자체가 없다**는 뜻 — 즉 손실이 mediasoup→브라우저(WebRtcTransport) 구간이 아니라 **ingest-daemon→mediasoup(PlainTransport) 수신 구간**에서 이미 발생하고 있다는 결론에 도달.
+
+**근본 원인**: §6.18에서 도입한 `_RTP_SEND_BUFFER_SIZE`(8MB, ingest-daemon의 RTP 송신 소켓 SO_SNDBUF)가 `av.open(..., format="rtp", options={"buffer_size": ...})` 형태로 전달되고 있었는데, 실제 라이브 로그에 `Some options were not used: {'buffer_size': '8388608'}` 경고가 계속 찍히고 있음을 발견 — **§6.18 커밋 이후 지금까지 단 한 번도 실제로 적용된 적이 없었다.** 같은 딕셔너리의 `ssrc`/`payload_type`은 정상 적용되는 것으로 보아, libav의 "rtp" 먹서(muxer)가 이 옵션들은 자신의 AVOption으로 소비하지만 `buffer_size`는 내부적으로 별도로 여는 "udp" 프로토콜 컨텍스트로 전달하지 않는 것으로 확인 — muxer-level 옵션과 protocol-level 옵션이 섞인 딕셔너리를 `av.open()`에 넘길 때 흔히 발생하는 FFmpeg/libav의 알려진 함정. 결과적으로 이 소켓은 지금까지 계속 OS 기본 SO_SNDBUF(~208KB, `net.core.wmem_default`)로 동작해왔고, 5MP 카메라의 키프레임이 만드는 촘촘한 UDP 패킷 버스트를 송신 시점에 이미 커널이 드롭하고 있었다 — §6.18에서 고쳤다고 여겼던 "송신측" 절반이 실제로는 전혀 적용되지 않은 채, 그동안 관측해온 만성적 손실·재생 정지의 실질적 근본 원인이었던 것으로 확인됨.
+
+**수정**: `buffer_size`를 `options` 딕셔너리에서 제거하고, `rtp://127.0.0.1:{port}?buffer_size={_RTP_SEND_BUFFER_SIZE}` 형태로 URL 쿼리스트링에 직접 포함 — FFmpeg URL 레이어는 쿼리 파라미터를 muxer의 옵션 전달 방식과 무관하게 대상 프로토콜(이 경우 "udp")의 AVOption으로 직접 파싱하므로 이 경로는 항상 적용된다. `ingest_daemon.py`의 4곳(video 기본 fan-out, video 추가 fan-out `add_video_fanout()`, audio passthrough, audio transcode) 전부 동일하게 수정.
+
+**검증**: `npm run ingest:restart`로 적용 후 `Some options were not used` 경고가 완전히 사라짐을 확인(재시작 전에는 매 fan-out 등록마다 반복 출력). 다만 ingest-daemon만 재시작하면 mediasoup 쪽 alt-PT 파이프라인 캐시(`_altPipelines`, 카메라+PT별로 한 번만 빌드되고 재사용됨)는 새 ingest-daemon 프로세스를 모른 채 예전 fan-out 등록 상태를 그대로 신뢰하므로 — `addCameraStream()` 안에 이미 있던 "기존 alt 파이프라인 재-fan-out" 로직(§6.26, fire-and-forget)에 의존해 `POST /api/internal/ingest/reregister`를 별도 호출해야 실제로 반영됨을 확인. 그 직후에도 해당 카메라의 **이미 열려있던** 브라우저 탭은 서버 변경 이전 상태로 굳어있어 Consumer `bytesSent=0`(DTLS는 connected인데 전송 0바이트)로 멈춰있었고, 브라우저 새로고침(완전히 새 `RTCPeerConnection` 생성) 후에야 정상화 — 새로고침 전: `packetsLost`/`packetsReceived` 비율 55~63%, `framesDecoded=0` 고정. 새로고침 후 40초 관측: 손실률 **0.2~0.4%**, `framesDecoded`/`framesReceived`가 초당 프레임 수만큼 정상적으로 계속 증가, PLI 0회. 이번 세션에서 추적해온 "패킷 손실 계열" 문제의 진짜 근본 원인으로 확정.
+
+**교훈**: (1) `av.open()`의 `options` 딕셔너리에 muxer 옵션과 protocol 옵션을 섞어 넘기면 일부가 조용히 무시될 수 있다 — 반드시 라이브 로그에서 `Some options were not used` 경고 유무로 실제 적용 여부를 확인할 것, 코드가 "그렇게 짜여 있다"는 것과 "실제로 적용되고 있다"는 것은 별개다. (2) ingest-daemon을 단독 재시작(`npm run ingest:restart`)하면 mediasoup 쪽에 캐시된 alt-PT 파이프라인의 fan-out 등록이 새 프로세스 기준으로 깨지므로, 재시작 직후에는 `POST /api/internal/ingest/reregister`를 함께 호출해야 한다 — 이 문서 §6.31.2에서 이미 "daemon 다운→복구" 케이스에 대해 `reregisterAllWithIngestDaemon()`이 존재하는 이유가 바로 이것이며, 수동 `ingest:restart` 후에도 동일하게 호출이 필요하다는 점은 이번에 처음 명시적으로 확인됨. (3) 서버측 변경(ingest-daemon 재시작, 파이프라인 재등록) 도중 이미 연결되어 있던 브라우저 탭은 그 변경 이전 상태에 고정될 수 있으므로, 진단 중 서버측을 건드렸다면 클라이언트도 반드시 새로고침해서 재검증할 것.
+
+### 6.33 §6.32 배포 후에도 손실 재발 — 호스트 부하 급증(다른 사용자) + Worker 스케줄링 한계, ingest-daemon 자체 우선순위 부스트는 원인 불명으로 미적용 (2026-07-22)
+
+§6.32 배포·검증 직후(재시작 후 새로고침, 손실 0.2~0.4%) 정상 확인했으나, 약 10~15분 뒤 사용자가 다시 "영상이 안 나온다"고 재보고. 단일 연결이 시간이 지나며 손실이 서서히 증가(0.2%→2.5%→12%)하다 정지되는 패턴과, 재연결해도 즉시 45~60%대로 시작하는 패턴이 반복 관측됨 — 여러 가설을 실측으로 순차 배제:
+
+1. **Chrome+Edge 동시 시청(같은 Worker 경합) 가설** — Edge를 닫고 Chrome 단독으로도 동일하게 재현되어 기각.
+2. **탭 백그라운드 가설** — 사용자가 탭이 최상단(포그라운드)에 있다고 확인해 기각.
+3. **ingest-daemon 장시간 구동 누적 열화 가설** — `npm run ingest:restart`로 완전히 새 프로세스를 띄운 직후에도 즉시 45~50%대로 시작해 기각.
+4. **호스트 부하(다른 20명 사용자) 가설** — `uptime`의 load average가 5.3~8.1 사이로 오르내렸지만, 부하가 낮을 때(5.26)도 손실이 오히려 최고치(61%)를 기록해 **단독 원인으로는** 기각. 다만 완전히 무관하지는 않음(아래 §6.33.1 참고).
+5. **mediasoup-worker 자체 큐 확인** — 이 시점 처음으로 `ss -u -a -n -p`가 (이전 세션들에서 겪은 `ptrace_scope` 차단과 달리) 정상 동작함을 확인 — 환경이 언제 바뀌었는지는 불명. `127.0.0.1` 소켓(ingest-daemon→mediasoup PlainTransport 구간) 중 하나에서 Recv-Q 약 80만 바이트(823552B) 확인 — mediasoup-worker가 자기 수신 큐를 실시간으로 못 비우고 있다는 직접 증거. 이미 nice=-5로 스케줄링 우선순위를 올려둔 상태에서도 부족했다는 뜻.
+
+사용자 승인 하에 `MEDIASOUP_WORKER_PRIORITY`를 -5→**-15**로 상향(`.env`에 이미 반영되어 있었으나, 이 값을 로드한 시점 이후 프로세스가 재시작되지 않아 미반영 상태였음 — `.env`는 프로세스 시작 시 1회만 읽히므로 파일만 고쳐서는 실행 중 프로세스에 반영되지 않는다는 점 재확인). `npm run stop && npm run start`로 전체 재기동 후 8개 Worker 전부 `ni=-15` 확인. 재시작 직후 손실이 즉시 17~24%로 개선(기존 45~60%대 대비)됐으나 여전히 `framesDecoded`가 거의 멈춰있는("거의 정지") 수준 — **완전 해결은 아님, 그러나 유의미한 개선.**
+
+#### 6.33.1 ingest-daemon이 mediasoup-worker보다 더 뜨거운 프로세스임을 발견 — 동일 우선순위 부스트를 ingest-daemon에도 적용 시도, 원인 불명의 실패로 미적용 확정
+
+`ps -eo pid,pcpu,ni,comm --sort=-pcpu`로 확인한 결과 이 시점 ingest-daemon(python3, PID 가변)이 CPU 299%로 **mediasoup-worker 전체를 합친 것보다 훨씬 뜨거운, 호스트에서 가장 바쁜 프로세스**였음 — `MEDIASOUP_WORKER_PRIORITY`는 mediasoup-worker에만 적용되고 ingest-daemon 자신에는 아무 우선순위 조치가 없었다는 것을 재확인. 병목이 mediasoup-worker에서 ingest-daemon 쪽으로 한 단계 더 상류로 옮겨갔을 가능성이 높다고 판단.
+
+기존 `tools/mediasoup-worker-priority-wrapper`(§6.31.1) 바이너리를 재빌드·재setcap 없이 그대로 재사용(env var `MEDIASOUP_WORKER_REAL_BIN`/`MEDIASOUP_WORKER_PRIORITY`를 읽는 범용 동작이므로, 이름은 mediasoup 전용처럼 보이지만 실제로는 어떤 대상이든 감쌀 수 있음 — capability는 setcap이 적용된 바이너리 파일(inode) 자체에 귀속되므로 재빌드 없이도 유효) — `startServer.js`(2곳)/`startIngestDaemon.js`/`restartIngestDaemon.js` 4개 spawn 지점 전부에 wrapper 적용 로직 추가, `INGEST_DAEMON_PRIORITY` 환경변수(기본 -5) 신설, `.env`/`.env.example`/`.env.streaming.example`에 문서화.
+
+**실측 결과 — 적용되지 않음**: 코드 배포 후 반복 재시작하며 검증한 결과, wrapper가 올바른 인자로 호출되는 것(`spawnExec`/`MEDIASOUP_WORKER_REAL_BIN` 디버그 로그로 직접 확인)까지는 맞지만, 실제로 살아남아 포트 7070을 리슨하는 최종 ingest-daemon 프로세스는 매번 `ni=0`이었다 — 심지어 Node의 spawn() 호출부가 기록한 `child.pid`와 실제 리슨 중인 PID가 매번 다른(오프셋 100+) 현상까지 재현됨(원인 미확정 — 동일 포트를 두고 경합하는 별도 자동복구 경로가 있는 것으로 추정되나 특정하지 못함). 반면 완전히 동일한 wrapper 바이너리를 **bash에서 직접**(`timeout ... env MEDIASOUP_WORKER_REAL_BIN=... wrapper -c "print nice"`) 호출하면 매번 정확히 `-15`가 적용됨을 반복 확인 — wrapper 자체·capability(getcap으로 `cap_sys_nice+ep` 유지 확인)·`NoNewPrivs`(0, 정상) 전부 문제없음.
+
+**결론(잠정)**: mediasoup-worker는 mediasoup 자신의 네이티브(C++) 프로세스 생성 코드가 직접 fork/exec하는 반면, ingest-daemon은 Node.js의 `child_process.spawn()`(내부적으로 libuv의 `posix_spawn()` 경로를 탈 가능성)을 통해 띄워진다 — 이 두 경로가 동일한 `setcap` 파일 capability에 대해 다르게 동작하는 것으로 보이나, 정확한 메커니즘(예: `posix_spawn`이 capability 계산에 관여하는 특정 조건)은 root 권한 없이 `strace`/`capsh` 등으로 더 깊이 파지 못해 **확정하지 못함**. 코드(spawn 4곳의 wrapper 적용 로직·`INGEST_DAEMON_PRIORITY` 환경변수)는 실해가 없으므로(wrapper 미작동 시 기존과 동일하게 우선순위 없이 정상 기동) 그대로 남겨두되, **현재 상태로는 효과가 없다는 것을 명시**한다. 후속 조사 시 `strace -f`(sudo 필요) 또는 `capsh --print`를 ingest-daemon 프로세스 자체에서 실행해 실제 effective capability set을 직접 확인하는 것이 다음 단계.
+
+**최종 상태**: `MEDIASOUP_WORKER_PRIORITY=-15`(mediasoup-worker, 정상 작동)만으로 재확인한 직후 손실률은 카메라별로 2.4~5%, `framesDecoded`가 초당 약 30프레임 페이스로 정상 증가 — 실사용 가능한 수준으로 복구. `buffer_size` 수정(§6.32)과 Worker 우선순위 상향(§6.31.1, 이번에 -15로 강화)의 조합이 실질적 개선을 만들었으나, 공유 호스트의 순간적 부하 스파이크에 따라 재발 가능성은 여전히 남아있다.
 
 #### 6.29.8 최종 결론 — 고해상도 카메라 Buffer/Latency 급상승의 진짜 원인은 수동 jitterBufferTarget 제어 자체
 
@@ -1410,6 +1548,50 @@ WHEP 세션을 90초간 관찰한 결과, 특정 카메라(특히 2048×1536 이
 
 ---
 
+### 6.36 `startServer.js`의 크래시 자동재시작 루프에도 동일한 `fuser`/ptrace_scope 결함 발견·수정 (2026-07-23)
+
+§6.35에서 `restartIngestDaemon.js`(수동 `npm run ingest:restart` 경로)는 고쳤지만, ingest-daemon이 예기치 않게 죽었을 때 자동으로 재기동하는 **별도의** 코드 경로 — `startServer.js`의 `_respawnIngest()` → `_killPortOrphan()` — 는 `fuser -k ${port}/tcp` 한 줄만으로 orphan을 정리하고 있었다. `fuser`도 `lsof`와 동일하게 소켓→PID 매핑에 `/proc/<pid>/fd` 읽기가 필요해 같은 `ptrace_scope=1` 제약을 받는다 — 실측으로 `fuser 7070/tcp`가 실제 LISTEN 소켓이 있는데도 종료 코드 1(찾지 못함)을 반환함을 확인했다. 그 결과 `_killPortOrphan()`이 조용히 no-op하고, `_respawnIngest()`가 매 30초(지수 백오프, 최대치)마다 이미 점유된 포트로 새 daemon을 spawn → `OSError: [Errno 98] Address already in use`로 즉시 크래시 → 재시도, 를 무한 반복하는 것을 실제 로그(`attempt #14`)로 확인. 당시 포트를 쥐고 있던 프로세스 자체도 §6.29.5와 동일한 GIL 경합성 응답 불능 상태(`/health`가 200 → 무응답으로 수 초 만에 전환, CPU 232%)였어서, 자동 복구가 사실상 완전히 무력화되어 있었다.
+
+**수정**: `_killPortOrphan()`을 §6.35와 동일한 패턴으로 교체 — `fuser -k`는 유지하되(효과가 있을 때는 더 빠름) 실패를 가정하고 `pkill -f 'ingest_daemon.py'`(cmdline 매칭, ptrace 무관)를 항상 함께 실행한다. 종료 확인은 고정 sleep 대신 `_isPortFree(port)`(실제 bind 시도) 폴링으로 교체(8초 유예), 그래도 안 풀리면 `pkill -9 -f`로 SIGKILL 에스컬레이션 후 3초 추가 폴링. 세 함수(`restartIngestDaemon.js`/`startServer.js`/`ingestDaemonWatchdog.js`가 spawn하는 것도 결국 이 둘 중 하나) 모두 이제 동일한 ptrace-무관 판단 기준을 쓴다.
+
+**검증**: 실제로 재현된 크래시 루프(위 attempt #14 상태) 대상 — 좀비 프로세스를 수동으로 `SIGTERM`→(무응답)→`SIGKILL`로 제거하자 `startServer.js`의 자체 supervisor가 다음 spawn에서 바로 정상 bind, `/health` 200 확인. 코드 수정은 `_killPortOrphan()`이 향후 이 개입을 자동으로 수행하도록 함 — `node --check`로 구문 검증 완료, 라이브 크래시 루프 재현을 통한 종단 검증은 후속 발생 시 확인 예정.
+
+---
+
+### 6.37 §6.29.5의 미해결 GIL 경합 가설을 실측으로 확정 — PyAV RTSP `mux()`는 블로킹 쓰기 동안 GIL을 놓지 않는다 (2026-07-24)
+
+§6.29.5는 "CPython GIL 경합이 유력한 메커니즘으로 의심되나... py-spy로 확인하려면 root 권한이 필요해 차단됨"이라며 미확정으로 남겼던 사안이다. UMP(`/StreamingServer`) 채널6 재생 처리량을 조사하던 중(전체 경위는 `Design_UMP_Player_RTSP_over_WebSocket.md` §8.12 참고) 같은 벽(`ptrace_scope=1`, `perf_event_paranoid=3` 모두 sudo 없이 차단)에 다시 부딪혔으나, **py-spy 없이도 확정 가능한 격리 실험**으로 우회했다:
+
+같은 프로세스에서 (1) 아무 것도 안 읽는 소켓을 만들고, (2) pure-Python 카운터를 계속 증가시키기만 하는 스레드를 하나 띄운 뒤, (3) 다른 스레드에서 그 소켓으로 `av.open(..., format="rtsp").mux(큰_packet)`을 호출해 블로킹시켰다. 결과: 카운터 스레드가 `mux()` 호출이 끝날 때까지 **완전히 정지**했다(`time.sleep(3)` 한 줄만 있는 메인 스레드조차 3초를 못 끝냄). CPython의 GIL은 프로세스 전체에 하나뿐이므로, **PyAV의 RTSP `mux()`가 블로킹 네트워크 쓰기 동안 GIL을 놓지 않는 한, 그 호출을 어느 OS 스레드에서 실행하든 같은 프로세스의 다른 모든 파이썬 스레드가 함께 멈춘다** — §6.29.5가 의심했던 것과 정확히 같은 메커니즘이 카메라 fan-out(mux 쓰기) 경로에도 있었음을 실측으로 확정.
+
+실제 영향(채널6, UMP rtsp-publish fan-out): 이 fan-out 엔트리 하나가 붙어있는 동안 **그 카메라 자신의 원본 RTSP 읽기 루프**(`video_packets_total`, 어떤 fan-out과도 무관하게 매 패킷 증가하는 카운터)가 카메라 실측 30fps 대비 6fps 안팎까지 떨어졌다 — 엔트리를 떼면 즉시 회복. 별도 스레드로 옮겨도(순수 threading, GIL은 공유) 효과가 없었던 이유가 이걸로 설명된다.
+
+**해결**: `rtsp_publish_worker.py`라는 완전히 별도의 OS 프로세스(자체 GIL)를 신설해 실제 `av.open()`/`add_stream()`/`mux()`를 전담시키고, ingest-daemon은 stdin 파이프로 raw 패킷 바이트만 전달한다. **이 패턴은 채널6/UMP에 국한되지 않는 일반적인 교훈이다** — ingest-daemon이 앞으로 카메라 데이터를 네트워크로 쓰는(mux하는) 새 fan-out을 추가할 때마다, 그 쓰기가 io 스레드나 다른 어떤 파이썬 스레드와도 GIL을 공유하지 않도록 프로세스 경계로 격리해야 한다는 것 — 스레드 분리만으로는 원천적으로 불충분하다. §6.29.5/§6.29.9의 "ingest-daemon이 반복적으로 응답 불능에 빠진다"는 미해결 문제도 (다중 카메라의 mux 쓰기 경합이 HTTP 서버 스레드까지 밀어내는) 같은 근본 메커니즘일 가능성이 높다 — 후속 조사 시 이 항목부터 검증 권장.
+
+전체 조사 경위(실험 스크립트 포함), `rtsp_publish_worker.py`의 정확한 wire 프로토콜, 그리고 이후 발견한 §6.38(다음 항목)의 상위 아키텍처 변경은 `Design_UMP_Player_RTSP_over_WebSocket.md` §8.12/§8.13에 기록.
+
+### 6.38 아키텍처 변경 — fleet 부하가 근본 원인일 때는 GIL 회피가 아니라 ingest-daemon 자체를 우회 (2026-07-24)
+
+§6.37로 개별 fan-out의 GIL 블로킹은 없앴지만, 카메라 10대의 RTSP 읽기+AI 디코드를 여전히 **하나의 파이썬 프로세스(하나의 GIL)**가 처리하는 이상 fleet 전체 부하가 개별 카메라의 실효 프레임레이트를 깎아먹는 현상은 남았다(실측: 채널6 raw 읽기 속도가 카메라 실제 전송량의 40~63%, AI 디코드를 꺼도 63%까지만 회복 — 나머지는 다른 9개 카메라의 io/AI 스레드와의 경합). §6.29.5/§6.31.2~6.31.3에서 반복 관찰된 "ingest-daemon이 부하 상황에서 응답성을 잃는다"는 패턴과 같은 계열의 제약이다.
+
+`WEBRTC_ENGINE=mediamtx` 배포에서는 `mediamtxManager.addCameraPath()`가 `webrtcEnabled` 카메라마다 **MediaMTX 자신의(Go, non-GIL) RTSP 클라이언트로 카메라를 직접 pull**해 상시 서빙 중이라는 점에 착안 — 이 경로는 ingest-daemon의 파이썬 프로세스를 전혀 거치지 않으므로 fleet 부하와 무관하게 항상 안정적이다(실측: WebRTC 뷰어가 이 경로로 `framesPerSecond: 30`, 손실 0.01% 미만 확인). UMP(`umpStreamingServer.js`)가 ingest-daemon에 재발행을 요청하기 전에 이 기존 경로가 이미 준비돼 있는지 먼저 확인하고, 있으면 그대로 재사용하도록 변경 — ingest-daemon 완전 우회. 상세는 `Design_UMP_Player_RTSP_over_WebSocket.md` §8.13.
+
+**일반화 가능한 원칙**: ingest-daemon의 GIL 경합이 근본 원인으로 의심되는 다른 증상(§6.29.5의 반복적 응답 불능 등)에서도, "그 데이터를 이미 GIL과 무관한 다른 컴포넌트(MediaMTX 등)가 갖고 있는가"를 먼저 확인하는 것이 스레드/프로세스 최적화보다 우선순위가 높은 해결책일 수 있다.
+
+### 6.39 §6.38 우회 경로가 UMP 전용 카메라에는 적용되지 않던 결함 (2026-07-24)
+
+**증상**: §6.38의 MediaMTX 직접 우회를 배포한 당일, `webrtcEnabled`도 함께 켜진 카메라에서는 30fps가 확인됐지만, **UMP만 켜고 WebRTC는 꺼둔 카메라**(channelSlot 6)에서 다시 ~13.5fps로 저하됨을 실측(ffmpeg로 MediaMTX loopback에 직접 붙어 15초 측정, 187 frames/13.84s).
+
+**원인**: `pipelineManager.js`의 `needsMediaMTX` 조건이 `camera.webrtcEnabled`만 보고 있었다 — `camera.umpEnabled`는 전혀 고려되지 않았다. 즉 §6.38의 우회가 전제하는 "MediaMTX가 이미 이 카메라를 pull하고 있다"는 조건 자체가, WebRTC를 안 쓰는 순수 UMP 카메라에서는 **애초에 성립하지 않았다** — `mediamtxManager.addCameraPath(camera.id, ...)`가 한 번도 호출되지 않으므로 `umpStreamingServer.js`의 `waitForPathReady(camera.id, ...)`가 항상 실패하고, 매번 ingest-daemon의 (느린) 재발행 폴백으로 떨어지고 있었다.
+
+**수정**: `needsMediaMTX`를 `(requestedWebRTC || requestedUmp) && WEBRTC_ENGINE === 'mediamtx'`로 확장 — UMP 전용 카메라도 `camera.id` 경로가 등록되도록 함. 브라우저에 WHEP를 노출할지 여부(`useWebRTC`)는 `requestedWebRTC`만으로 별도 게이트되어 있어(§4.3 아키텍처상 이미 분리됨) 이 변경이 WebRTC 노출 범위에는 영향 없음을 코드 확인. `server/src/api/cameras.js`의 `needsRestart`도 `umpEnabled` 변경 시 재시작하도록 함께 수정 — 이제 `umpEnabled` 토글이 MediaMTX 등록 여부에 실질적으로 영향을 주므로 "재시작 불필요"였던 기존 예외가 더는 성립하지 않음.
+
+재시작 후 재측정: 카메라 자신의 `camera.id` 경로로 정상 전환(`6/media.smp` ingest-daemon 폴백 경로는 더 이상 사용되지 않음), 424 frames/15.00s ≈ 28~31fps로 복구 확인.
+
+**교훈**: "이미 GIL과 무관한 컴포넌트가 데이터를 갖고 있는가"(§6.38 원칙)를 적용할 때는, 그 전제 조건이 **이번에 문제가 된 카메라/모드 조합에도 실제로 성립하는지**까지 확인해야 한다 — 다른 조합(webrtcEnabled 카메라)에서 성립을 확인한 것만으로는 부족하다.
+
+---
+
 ### 12.3 스트림별 타임아웃 전략
 
 | 스트림 | 방식 | 타임아웃 | 근거 |
@@ -1478,8 +1660,20 @@ WHEP 세션을 90초간 관찰한 결과, 특정 카메라(특히 2048×1536 이
 | 1.40 | 2026-07-21 | §6.27 최종 결론 — 이번 세션 전체를 관통한 재생 불가 증상의 실제 근본 원인 2건 확정: (1) `ingest-daemon` 프로세스가 완전히 다운되어 있어(포트 7070 connection refused) 서버 재시작마다 카메라가 mediasoup에 등록 안 되고 "WebRTC disabled"로 시작(`npm run ingest:start`로 복구), (2) `profileLevelId`가 `addCameraStream()` 시점 1회만 캐싱되는 구조라 ingest-daemon 다운 중 폴링 예산(5초) 초과 시 폴백값 Baseline(`42e01f`)이 영구 고착 — 실제로는 High Profile(`640032`)인데도 낮은 Level(3.1)로 협상되어 고해상도 카메라가 일부 프레임만 디코드하다 멈춤(`POST /stream/reconnect`로 캐시 재고침해 미봉책 적용, 근본 수정은 후속 과제로 명시). 조사용 임시 SDP 디버그 로그 제거 |
 | 1.41 | 2026-07-21 | §6.27 재재보완 — "데이터 수신은 정상인데 Buffer만 주기적으로 900ms+" 현상의 진짜 근본 원인 확정: 프로액티브 jitterBufferTarget escalation이 `bufferMs`(우리가 `videoReceiver.jitterBufferTarget`으로 직접 명령한 결과가 그대로 반영되는 지표)를 트리거로 삼아 자기강화 피드백 루프를 형성 — STEP_UP/STEP_DOWN 5~10배 비대칭 때문에 정상적인 지터 한 번만으로도 15~20초 만에 상한(1000ms)까지 폭주. `useWebRTC.ts` escalation 트리거에서 `bufferMs` 조건 제거, 우리가 직접 조작하지 않는 `freezeDelta`/`lossDeltaForAdapt`(진짜 프리즈·패킷손실)만으로 판단하도록 수정 — 데이터 수신량과 무관했던 자기유발 문제였음을 확정. 별도로 Node.js 이벤트 루프 지연 모니터(`eventLoopLag.js`) 신규 추가(200ms+ 블로킹 시 로그, 실측 233ms/217ms 확인). `npx tsc --noEmit`/`npm run build` 클린 통과 |
 | 1.42 | 2026-07-21 | §6.27 재재재보완 — `profile-level-id=42e01f`가 재연결마다 무작위로 재발하던 진짜 원인 확정: `negotiate()`가 WHEP 재협상마다 매번 `_ingestGetVideoParams()`를 재시도 없이 2초 타임아웃으로 단발 호출하는데, ingest-daemon이 바쁠 때(250%+ CPU) 실패하면(로그 `video-params not available yet` 하루 133회 확인) Producer의 하드코딩 Baseline(`42e01f`) 기본값으로 조용히 폴백하던 구조 — `addCameraStream()` 시점 1회 캐싱이라는 v1.40의 이해는 부정확했음, 실제로는 매 negotiate마다 fresh fetch. `mediasoupEngine.js`에 `_lastKnownVideoParams` 캐시 신규 추가 — fetch 성공 시 갱신, 실패 시 Baseline이 아니라 마지막 성공값으로 폴백(카메라 실제 프로파일은 재연결 사이 안 바뀌므로), 기존 H.265 진단용 `_pollVideoCodec()`도 성공 시 같은 캐시를 선제 예열, `removeCameraStream()`에서 캐시 정리 추가 |
-| 1.51 | 2026-07-23 | §6.35 신규 — `restartIngestDaemon.js`의 포트-해제 확인이 `_getPortPid()`(`lsof`)에 의존해, `kernel.yama.ptrace_scope=1` 호스트에서 다른 세션이 기동한 좀비 daemon을 `lsof`가 못 찾아 "포트 해제됨"으로 즉시 오판 → SIGKILL 에스컬레이션이 건너뛰어져 새 daemon이 `EADDRINUSE`로 무한 재시작 크래시하던 결함 수정. `isPortFree()`(실제 bind 시도, ptrace 무관·크로스플랫폼)로 판단 기준 교체, SIGKILL 단계에 `pkill -9 -f` 폴백 추가. 재발한 좀비 daemon 대상 실측 검증(SIGKILL 정상 에스컬레이션, 카메라 9대 전부 재등록·`streaming` 복구 확인) — `ingestDaemonWatchdog.js`(§6.29.9)의 자동 복구 경로도 동일하게 정상화됨. daemon 자체가 왜 반복 좀비화되는지(§6.29.5/§6.34)는 여전히 미해결 |
-| 1.50 | 2026-07-23 | §6.34 신규 — `AI_DECODE_THREADS`가 카메라 대수만큼 곱해져(9대×8=72 네이티브 디코드 스레드, 전체 140 OS 스레드) `/health`가 8~10초+ 무응답이 되고 재시작이 SIGKILL 에스컬레이션에 상시 의존하던 결함을 SIGUSR1 스택 덤프(프로세스 kill 없이 진단)로 확정 — `AI_DECODE_THREADS_TOTAL`(기본값 `os.cpu_count()`) 신규 도입, 카메라별 `thread_count`를 고정값 대신 `max(1, min(AI_DECODE_THREADS, AI_DECODE_THREADS_TOTAL // 활성_카메라수))`로 매 (재)연결마다 동적 계산해 fleet-wide 네이티브 스레드 총수를 카메라 대수·설정값과 무관하게 상한. `ingest_daemon.py` + `.env`/`.env.example`/`.env.streaming.example`/`.env.analysis.example` 4종 동시 수정 |
+| 1.64 | 2026-07-24 | §6.39 신규 — §6.38의 MediaMTX 직접 우회가 `webrtcEnabled` 카메라에만 적용되고 UMP 전용(`umpEnabled`, `webrtcEnabled=false`) 카메라에는 적용되지 않던 결함 수정. `needsMediaMTX`에 `umpEnabled` 반영, `cameras.js`의 `needsRestart`도 `umpEnabled` 변경 시 재시작하도록 동기화. 재측정 ~13.5fps → 28~31fps 복구 확인 |
+| 1.63 | 2026-07-24 | §6.38 신규(아키텍처) — fleet 부하로 인한 개별 카메라 프레임레이트 저하가 §6.37 이후에도 잔존(GIL 경합은 fan-out 하나만의 문제가 아니었음). `WEBRTC_ENGINE=mediamtx`가 이미 만들어둔 MediaMTX 직접(non-GIL) 경로를 UMP가 우선 재사용하도록 변경 — ingest-daemon 완전 우회. "GIL 회피보다 우회가 우선일 수 있다"는 일반 원칙으로 정리 |
+| 1.62 | 2026-07-24 | §6.37 신규 — §6.29.5에서 미확정으로 남겼던 CPython GIL 경합 가설을 실측으로 확정: PyAV RTSP `mux()`가 블로킹 네트워크 쓰기 동안 GIL을 놓지 않아, 스레드 분리만으로는 카메라 자신의 읽기 루프를 못 지킴(py-spy 없이 spin-counter 스레드로 격리 실험). `rtsp_publish_worker.py` 별도 프로세스로 근본 해결 — 향후 유사 fan-out 추가 시 일반 원칙으로 기록 |
+| 1.61 | 2026-07-23 | §6.36 신규 — §6.35과 동일한 `fuser`/`lsof` ptrace_scope 결함이 `startServer.js`의 크래시 자동재시작 경로(`_killPortOrphan()`)에도 남아있어 무한 재시작 크래시 루프를 실측(`attempt #14`)로 확인, `restartIngestDaemon.js`와 동일하게 `pkill -f`/`isPortFree()` 폴링/`pkill -9 -f` 에스컬레이션으로 교체 |
+| 1.60 | 2026-07-23 | §6.35 신규 — `restartIngestDaemon.js`의 포트-해제 확인이 `_getPortPid()`(`lsof`)에 의존해, `kernel.yama.ptrace_scope=1` 호스트에서 다른 세션이 기동한 좀비 daemon을 `lsof`가 못 찾아 "포트 해제됨"으로 즉시 오판 → SIGKILL 에스컬레이션이 건너뛰어져 새 daemon이 `EADDRINUSE`로 무한 재시작 크래시하던 결함 수정. `isPortFree()`(실제 bind 시도, ptrace 무관·크로스플랫폼)로 판단 기준 교체, SIGKILL 단계에 `pkill -9 -f` 폴백 추가. 재발한 좀비 daemon 대상 실측 검증(SIGKILL 정상 에스컬레이션, 카메라 9대 전부 재등록·`streaming` 복구 확인) — `ingestDaemonWatchdog.js`(§6.29.9)의 자동 복구 경로도 동일하게 정상화됨. daemon 자체가 왜 반복 좀비화되는지(§6.29.5/§6.34)는 여전히 미해결 |
+| 1.59 | 2026-07-23 | §6.34 신규 — `AI_DECODE_THREADS`가 카메라 대수만큼 곱해져(9대×8=72 네이티브 디코드 스레드, 전체 140 OS 스레드) `/health`가 8~10초+ 무응답이 되고 재시작이 SIGKILL 에스컬레이션에 상시 의존하던 결함을 SIGUSR1 스택 덤프(프로세스 kill 없이 진단)로 확정 — `AI_DECODE_THREADS_TOTAL`(기본값 `os.cpu_count()`) 신규 도입, 카메라별 `thread_count`를 고정값 대신 `max(1, min(AI_DECODE_THREADS, AI_DECODE_THREADS_TOTAL // 활성_카메라수))`로 매 (재)연결마다 동적 계산해 fleet-wide 네이티브 스레드 총수를 카메라 대수·설정값과 무관하게 상한. `ingest_daemon.py` + `.env`/`.env.example`/`.env.streaming.example`/`.env.analysis.example` 4종 동시 수정 |
+| 1.57 | 2026-07-22 | §6.32 신규 — ingest-daemon RTP 송신 소켓 `buffer_size` 옵션이 §6.18 이후 계속 조용히 무시되던 버그(muxer-vs-protocol 옵션 혼동) 발견·수정(URL 쿼리스트링 방식으로 전환), 4개 fan-out 지점 전부 적용. 만성 패킷 손실(NACK 무응답, framesDecoded=0)의 진짜 근본 원인으로 확정 — 수정 후 손실률 55~63%→0.2~0.4%. ingest-daemon 단독 재시작 후에는 `POST /api/internal/ingest/reregister` 호출이 필요함을 명시적으로 확인 |
+| 1.56 | 2026-07-22 | §6.31.3 신규 — §6.31.2 복구 후 재차 "영상 안 나옴" 보고, 이번엔 daemon 다운이 아님을 먼저 확인(둘 다 healthy). `LTS_DEBUG_SDP`를 `console.log` 대신 `fs.appendFile`로 직접 파일 기록하도록 수정(로거의 debug-강등 문제 근본 회피) — 실제 SDP 확인 결과 이상 없음, 재시작 자체가 "나쁜 상태에 갇힌 PeerConnection"을 정리하며 정상화. 두 가지 개별 원인 확정: (1) `61813f62` 물리 카메라가 일시적으로 RTSP 연결 거부(코드 무관, 카메라측), (2) `yt-9bb39`는 YouTube URL 갱신 재시도 타이밍과 브라우저 협상이 겹쳐 지연 fan-out 등록이 82초 지연됨(§6.16 기존 이슈와 연관). `npm run start`(전체 스택) 시 ingest-daemon 로그가 `/tmp/ingest-daemon.log`가 아니라 통합 로그의 `[Ingest]` 접두사로 감을 발견·기록(향후 진단 시 경로 혼동 방지) |
+| 1.55 | 2026-07-22 | §6.31.2 신규 — §6.31.1(스케줄링 우선순위) 적용 후에도 "영상 재생 완전 불가" 지속 보고. NIC 링버퍼 확장(사용자 sudo 적용)만으로는 drop률 개선 없음을 재확인 후, `GET /api/webrtc/monitor`의 서버측 통계로 mediasoup Producer가 실제로는 완벽(score 10, 수백MB 정상 수신)했음을 발견 — 진단 방향이 잘못됐을 가능성 포착. `LTS_DEBUG_SDP=true`가 로거의 `debug` 단어 자동 강등 휴리스틱(`[SDP-DEBUG]`의 하이픈 경계가 "debug" 단어로 인식됨)에 걸려 `LOG_LEVEL=INFO`에서 조용히 필터링되고 있었음을 발견, `LOG_LEVEL=DEBUG`로 전환해 재시작한 직후 진짜 원인 확정: **ingest-daemon 프로세스가 조사 도중 완전히 다운**(`ECONNREFUSED 127.0.0.1:7070`) — 재등록 로그에 video RTP 포트 자체가 빠져있었음(`[AI+appRTP]`만, `vRTP:PORT` 없음). 이번 세션 후반부의 "0 프레임" 급성 증상 대부분은 mediasoup/Worker 튜닝과 무관하게 **ingest-daemon 다운**이 직접 원인이었다는 뜻 — 다만 §6.30.2/§6.31의 멀티 Worker·스케줄링 개선 자체는 별도로 유효. `npm run ingest:restart`로 즉시 복구, 실시간 관측으로 3개 카메라 전부(`yt-9bb39` 232프레임, `61813f62` 740+프레임, `4e562747` 882+프레임, 모두 계속 증가) 정상 디코딩 재개 확인. 진단용 `LOG_LEVEL=DEBUG`/`LTS_DEBUG_SDP=true`는 원복(`INFO`/주석 처리) 후 재시작 반영 완료. 교훈: 이런 다계층 증상은 mediasoup 통계보다 `curl :7070/health`로 ingest-daemon 생존부터 먼저 확인할 것 |
+| 1.54 | 2026-07-22 | §6.31.1 신규 — §6.31 배포 후 재현된 `61813f62`(2048×1536) 스톨을 재조사, 해시 배정으로 해당 카메라가 Worker를 단독 사용 중인데도(경합 없음) CPU 2.9~4.7%에서 Recv-Q 적체 재현됨을 확인 — Worker 개수가 아니라 공유 호스트(27명)의 스케줄링 지연이 원인일 가능성으로 이동. `os.setPriority()`로 Worker 프로세스 nice값을 낮추는(`-5`, `MEDIASOUP_WORKER_PRIORITY`) 조치 추가, `CAP_SYS_NICE` 없이는 조용히 경고만 남기고 무해하게 스킵 — `sudo setcap` 1회 필요(비대화형 세션이라 사용자 실행 안내만). 검증은 setcap 적용 후 재시작 대기 중 |
+| 1.53 | 2026-07-22 | §6.31 신규 — §6.30.2에서 확정한 mediasoup 단일 Worker 병목을 사용자 요청으로 같은 날 구현: 전역 `_worker`/`_router`를 8-Worker 풀로 교체(카메라 해시 배정, `MEDIASOUP_NUM_WORKERS` 신규 env var, `.env`/`.env.example` 3종 문서화). 상세는 `Design_Mediasoup_Multi_Worker.md` v2.0. 스모크 테스트+실배포 검증, 초기 3분 관측에서 5MP 카메라 스톨 빈도 개선 신호(표본 작음) |
+| 1.52 | 2026-07-22 | §6.30.2 신규 — 사용자가 "ingest-daemon→mediasoup 릴레이에서 프레임이 새는 것 아니냐" 가설 제기, 라이브 검증으로 확정: `/proc/net/snmp`의 `Udp.RcvbufErrors`가 초당 ~7건씩 실시간 증가 중, `ss -u -a -n -p`로 mediasoup-worker 자신의 UDP 소켓 Recv-Q가 최대 3.8MB까지 쌓여있음을 직접 확인 — 단일 mediasoup Worker(40코어 중 1개만 사용)가 일부 소켓 처리를 못 따라가는 구조적 병목으로 추정. 비대칭 발견: mediasoup 수신측(§6.18에서 8MB로 확장)과 달리 `ingest_daemon.py`의 송신측 RTP 소켓 4곳은 OS 기본 버퍼(~208KB)를 그대로 사용 중이었음 — `_RTP_SEND_BUFFER_SIZE=8MB` 신규 상수로 대칭 수정, `ingest:restart`로 배포 및 정상 재등록 확인. 구조적 병목(멀티 Worker 미사용) 자체는 별도 설계 문서로 분리하기로 사용자와 합의(§6.31 예정). 사용자가 별도 보고한 "새로고침 후 Codec 정보 `-`" 증상은 이번 재시작으로 함께 새로고침된 §6.27의 기존 `profileLevelId` 캐시 고착 가설과 이번 세션의 릴레이 손실 가설이 모두 설명 가능해 원인 미확정 — 재현 여부 재확인 필요 |
+| 1.51 | 2026-07-22 | §6.30.1 신규 — §6.30 배포 직후 동일 카메라(2560×1920)에서 재현 보고, 이번엔 raw stat 표시 결함이 아니라 실제 디코더 정지임을 확정(bytesReceived는 계속 증가, framesDecoded만 고정). `ingest_daemon.py`에 RTCP 처리 코드가 전혀 없어 브라우저/mediasoup의 키프레임 재요청(PLI)이 실제 카메라까지 도달할 경로가 구조적으로 없음을 코드로 확인. `GET /api/client-logs` 실측 조회로 "재연결이 전혀 안 된다"는 사용자 체감과 달리 프레임 스톨 워치독이 78분간 104회, 25~45초 간격으로 이미 끊임없이 재연결을 시도 중이었음을 확정(대부분 재고착, 카메라의 다음 키프레임 타이밍과 우연히 맞을 때만 일시 회복) — 클라이언트 재연결 로직 자체는 결함이 아니라는 결론. 대응 방안 3가지(카메라 GOP 단축/ingest-daemon RTCP PLI 포워딩 신규 구현/클라이언트 상태 표시 개선) 제시, 사용자 결정 대기 — 신규 코드 변경 없음, 진단·근거 기록 |
+| 1.50 | 2026-07-22 | §6.30 신규 — 사용자가 5MP(2560×1920) 카메라에서 통계 패널 "0fps 반복" 보고, `framesDecoded` 정상 증가/`dropped=0`/Buffer·Latency 정상 범위로 미루어 실제 프리즈가 아니라 raw `RTCInboundRtpStreamStats.framesPerSecond`의 표시 결함으로 진단 — `useWebRTC.ts` `rateTimer`가 `framesDecoded` 델타/경과시간으로 fps를 직접 계산하도록 수정(§buffer-oscillation과 동일 패턴). 스톨 워치독은 이미 raw `framesDecoded` 카운터를 직접 비교해 이번 수정과 무관 — 순수 표시 정확도 개선. `npx tsc --noEmit`/`npm run build` 클린 통과, 실사용 재현 확인 대기 |
 | 1.49 | 2026-07-21 | §6.29.14/§6.29.15 신규 — v1.48 배포 직후 사용자가 "현재 WebRTC의 모든 채널이 0fps"라고 긴급 보고, 원인은 ingest-daemon에 34개(!) 카메라가 등록되어 과부하 상태였던 것 — 백그라운드에서 자동 실행 중이던 TC 스위트(TcRunnerService.runOnStartup)가 실제 카메라를 계속 생성/삭제하며 라이브 시청과 ingest-daemon 자원을 놓고 경쟁한 것이 원인. `TC_STARTUP_RUN=false`로 자동 실행을 끄고 잔여 테스트 카메라를 정리해 즉시 복구(§6.29.14). 복구 과정에서 사용자가 특정 채널의 `profile-level-id=42e01f`(Baseline 폴백) 재현을 보고해 SDP 변수 덤프로 재검증했으나 코드 자체는 정상 동작 확인(§6.29.14) — 그러나 삭제했던 테스트 카메라들이 재시작 후 원래 생성시각 그대로 되살아나는 것을 발견하며 훨씬 더 근본적인 버그를 확정: **`MongoDatabase.flushNow()`가 완전한 no-op**이었다 — `_persist()`가 `_mongo.remove()`/`upsert()`를 fire-and-forget으로 던지고 반환값을 아무도 추적하지 않아, `DELETE /api/cameras/:id`가 `{success:true}`를 응답한 직후(in-memory 제거는 동기 완료되지만 실제 MongoDB 네트워크 왕복은 미완료 상태) 서버가 재시작되면 그 삭제가 통째로 유실되고 다음 부팅 시 MongoDB의 예전 레코드가 그대로 재수화(hydrate)되던 구조 — 오늘 세션 내내 반복한 "delete 후 곧바로 재시작" 패턴이 정확히 이 조건을 매번 충족시키고 있었다(§6.29.15). `MongoDatabase`에 `_pendingWrites` Set으로 진행 중인 Mongo 쓰기를 추적하도록 추가하고 `flushNow()`를 실제로 `Promise.allSettled()`로 대기하는 async 함수로 교체, `BaseDatabase`/`db/index.js`의 인터페이스도 async로 통일, `index.js`의 graceful shutdown 핸들러가 `flushNow()`를 `await`하도록 수정. 동일 레이스 컨디션을 재현하는 실측 테스트(카메라 생성→즉시 삭제→즉시 SIGTERM→재시작)로 수정 전/후 대조 검증 완료 — 수정 후 삭제가 재시작을 확실히 견뎌냄을 확인 |
 | 1.48 | 2026-07-21 | §6.29.11/§6.29.12/§6.29.13 신규 — 사용자가 Analysis 서버에서 `tc009-cam-alpha`/`tc009-cam-beta`/`test-cam-distributed` 좀비 채널을 보고했다며 원인·방지책 조사 요청. 근본 원인 3건 확정 및 수정: (1) `distributed_pipeline.test.js`의 TC-DAP-005/009가 카메라 등록 없이 `POST /api/analysis/frame`에 cameraId만 실어 보내 Analysis 서버의 `_metrics.perCamera`에 만료 로직 없이 영구 누적되던 버그 — `_cameraContexts`와 같은 60초 프루닝 인터벌에 편입해 수정. (2) Streaming 서버 `pipelineManager.stopCamera()`가 in-memory 파이프라인이 없으면 ingest-daemon/mediasoup/mediamtx 정리를 전혀 시도하지 않고 조기 반환하던 버그(실제 등록된 카메라가 재시작 후 미기동 상태에서 삭제되면 ingest-daemon 쪽에 좀비 등록이 남을 수 있음) — ctx 유무와 무관하게 외부 시스템 정리를 항상 시도하도록 수정, 각 정리 함수가 미등록 상태에 대해 이미 안전한 no-op임을 코드 추적으로 확인. (3) `DELETE /api/cameras/:id`가 Analysis 서버에 삭제를 전혀 통지하지 않아 정상 삭제된 카메라도 5분 idle-prune 전까지는 Analysis 서버에 잔류하던 gap — `POST {ANALYSIS_SERVER_URL}/api/analysis/camera-removed` 신규 fire-and-forget 통지 추가(`faceSearchSync.js` 패턴 재사용, self-signed TLS 대응 위해 `https.Agent({rejectUnauthorized:false})` 필요함을 실측으로 확인 — 최초 구현은 기본 `fetch()`로 "fetch failed" 실패). 부수적으로 오늘 세션 중 반복 재시작이 서버 부팅 시 자동 실행되는 TC 스위트(`TcRunnerService.runOnStartup`)를 매번 중간에 끊어 `TC-B-*`/`TC-A-*` 등 14개 고아 테스트 카메라가 DB에 쌓인 것을 발견·정리(사용자 확인 후 삭제) — `TC_STARTUP_RUN=false`로 끌 수 있음을 확인, `api-testing/SKILL.md`(.claude+.github)에 예방법 기록 |
 | 1.47 | 2026-07-21 | §6.29.10 신규 — Streaming Dashboard Channel Group nav 우측에 ingest-daemon/Analysis 서버 연결 상태 배지 추가. 서버에 `GET /api/ingest-status`(§6.29.9의 watchdog 헬스체크 로직 재사용) 신규 추가, 기존 `GET /api/analysis/client-status`(streaming 모드 전용)와 함께 5초 폴링. `DashboardDetectionPanel.tsx`에 있던 `useAnalysisClientStatus` 훅을 `hooks/useSystemStatus.ts`로 추출해 `SystemStatusBadges.tsx`와 공유(중복 제거) — §6.29.5의 ingest-daemon 응답 불능이 지금까지는 WebRTC 증상으로만 간접 드러났는데, 이제 대시보드에서 직접 확인 가능 |

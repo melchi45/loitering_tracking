@@ -98,8 +98,16 @@ async function main() {
 
   // ── ffmpeg availability check (not required in analysis-only mode or ingest-daemon mode) ───────
   const CAPTURE_BACKEND_CHECK = (process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase();
-  if (CAPTURE_BACKEND_CHECK === 'ingest-daemon') {
+  // INGEST_WATCHDOG_ENABLED (default true) — set to false only while actively
+  // debugging a live-hanging ingest-daemon: the watchdog force-restarts the
+  // daemon after 2 failed /health checks (~40s), which tears down any
+  // in-flight repro/diagnostic session (e.g. a SIGUSR1 stack-dump capture)
+  // before it can be inspected. Leave enabled in normal operation.
+  const INGEST_WATCHDOG_ENABLED = (process.env.INGEST_WATCHDOG_ENABLED || 'true').toLowerCase() !== 'false';
+  if (CAPTURE_BACKEND_CHECK === 'ingest-daemon' && INGEST_WATCHDOG_ENABLED) {
     startIngestDaemonWatchdog();
+  } else if (CAPTURE_BACKEND_CHECK === 'ingest-daemon') {
+    console.warn('[Server] INGEST_WATCHDOG_ENABLED=false — ingest-daemon watchdog disabled (debugging only, re-enable for normal operation)');
   }
   if (SERVER_MODE !== 'analysis' && CAPTURE_BACKEND_CHECK !== 'ingest-daemon') {
     const hasFfmpeg = await checkFfmpeg();
@@ -271,6 +279,13 @@ async function main() {
     const { attachUmpStreamingServer } = require('./services/umpStreamingServer');
     attachUmpStreamingServer(httpServer, db);
   }
+
+  // TEMP DIAGNOSTIC (2026-07-24) — serves the ump-player submodule's own example
+  // harness (ump-player-example.html) at this server's own origin, so it can hit
+  // /StreamingServer over the same already-trusted TLS cert instead of needing a
+  // separate self-signed-cert exception on another port. Remove once the UMP
+  // SPS/PPS crash investigation is done: https://dev.hanwhavision.com:3443/ump-player/ump-player-example.html
+  app.use('/ump-player', express.static(path.join(__dirname, '..', '..', 'submodules', 'ump-player', 'app')));
 
   // ── Auth / Admin Routes ───────────────────────────────────────────────────
   app.use('/auth',  authRouter);

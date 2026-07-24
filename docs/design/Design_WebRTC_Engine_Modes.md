@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-WRTC-03 |
-| **Version** | 1.2 |
+| **Version** | 1.5 |
 | **Status** | Active |
-| **Date** | 2026-07-23 |
+| **Date** | 2026-07-24 |
 | **Parent SRS** | [srs/SRS_WebRTC_Media_Gateway.md](../srs/SRS_WebRTC_Media_Gateway.md) |
 | **Parent TC** | [tc/TC_WebRTC_Media_Gateway.md](../tc/TC_WebRTC_Media_Gateway.md) |
 | **Related** | [Design_RTSP_Capture_Backend.md](Design_RTSP_Capture_Backend.md) · [Design_DataChannel_CameraEvents.md](Design_DataChannel_CameraEvents.md) · [Design_ONVIF_Metadata_Pipeline.md](Design_ONVIF_Metadata_Pipeline.md) |
@@ -68,6 +68,8 @@ ingest-daemon (PyAV)
 브라우저 ← Socket.IO appRtp (ONVIF 메타데이터, DataChannel 없음)
 ```
 
+> **2026-07-24 갱신 — UMP(RTSP-over-WebSocket) 경로도 이 루프백을 재사용.** `server/src/services/umpStreamingServer.js`가 뷰어 연결 시 `mediamtxManager.waitForPathReady(cameraId, ...)`로 MediaMTX 경로(`:8554`)가 이미 떠 있는지 먼저 확인하고, 준비돼 있으면 ingest-daemon RTSP 팬아웃(`rtsp_publish_worker.py` subprocess, §Design_UMP_Player_RTSP_over_WebSocket.md §8.13)을 거치지 않고 `rtsp://127.0.0.1:{MEDIAMTX_RTSP_PORT}/{cameraId}`에 직접 붙는다. 이 루프백 자체는 `WEBRTC_ENGINE=mediamtx`이고 카메라의 `webrtcEnabled` **또는** `umpEnabled`가 켜져 있을 때 등록된다(`pipelineManager.js`의 `needsMediaMTX`, 2026-07-24 §8.14 수정 — 최초 구현 당시엔 `webrtcEnabled`만 봐서 UMP 전용 카메라가 항상 폴백을 타던 결함이 있었음). 두 플래그 중 하나라도 켜진 카메라는 사실상 항상 이 경로를 타며, ingest-daemon 팬아웃은 둘 다 꺼져 있거나(`streamingMode: 'jpeg'`인 카메라를 UMP 뷰어로 임시 접속하는 등) MediaMTX 경로가 아직 준비되지 않았을 때만(예: `WEBRTC_ENGINE=mediasoup` 배포, 또는 카메라 등록 직후 400ms 이내) 쓰이는 폴백이다. 상세 배경은 [Design_RTSP_Capture_Backend.md](Design_RTSP_Capture_Backend.md) §6.38-§6.39 참고.
+
 ### 3.2 환경 설정
 
 ```bash
@@ -92,6 +94,7 @@ MEDIAMTX_URL=http://localhost:8889  # MediaMTX HTTP API
 | `server/src/services/webrtc/mediamtxEngine.js` | WHEP 프록시·상태 관리 |
 | `mediamtx.yml` | MediaMTX 미디어 서버 설정 |
 | `server/src/scripts/startServer.js` | MediaMTX 자동 시작 |
+| `server/src/services/umpStreamingServer.js` | UMP 뷰어 연결 시 이 RTSP loopback을 우선 소비(직접 경로), 준비 안 됐을 때만 ingest-daemon 팬아웃 폴백 (2026-07-24) |
 
 ### 3.5 버그 수정 — YouTube 카메라 WebRTC 연결 실패 (2026-07-23)
 
@@ -382,3 +385,5 @@ cd server && npm run stop:streaming && npm run streaming
 | 1.1 | 2026-06-16 | §4.6 RTP PT 제약 추가 (PT=109 선택 근거, Edge/Chrome 비교, 진단 방법), §4.7 ICE loopback 방지 `_getListenIps()` 추가 |
 | 1.2 | 2026-07-23 | §2 비교표에 카메라 접속 방식·오디오 트랜스코드·PT 매칭 방식·HEVC 지원 여부 컬럼 추가; §4.6 PT=109 고정 방식을 폐기하고 §4.6a 동적 alt-PT Router 캐시로 대체(구버전은 §4.6-구버전으로 이력 보존); §4.8 Worker Pool(§6.31), §4.9 H.265 미지원(§6.25) 신설; §9 운영 비교 결론 신설 — 실측상 mediamtx가 안정적이었고 mediasoup은 dormant 상태임을 명문화, MRD/RFP/PRD/SRS/ops/TC 신규 문서 세트로 연결 |
 | 1.3 | 2026-07-23 | §3.5 신설 — YouTube 카메라 WebRTC 연결 실패 버그 수정(WHEP 협상이 `yt/{cameraId}` 대신 `{cameraId}`로 요청되던 경로 불일치, `pipelineManager.js`의 `mediamtxReady`가 YouTube 카메라에서 항상 false였던 문제 포함) |
+| 1.4 | 2026-07-24 | 헤더 Version을 이력 표 최신값(1.3)과 불일치하던 것을 정정하며 갱신; §3.1에 UMP(`umpStreamingServer.js`)가 이 MediaMTX RTSP loopback을 직접 소비하는 우선 경로 신설 사실 반영(§3.4 관련 파일 표에도 추가) — Design_UMP_Player_RTSP_over_WebSocket.md §8.13 / Design_RTSP_Capture_Backend.md §6.38과 교차 참조 |
+| 1.5 | 2026-07-24 | §3.1의 UMP 교차 참조 블록쿼트 정정 — "webrtcEnabled 카메라는 항상 이 경로" 서술이 부정확했음(`needsMediaMTX`가 원래 `webrtcEnabled`만 검사해 UMP 전용 카메라는 이 경로를 못 탔던 결함, 같은 날 발견·수정). `webrtcEnabled` **또는** `umpEnabled`로 정정, Design_RTSP_Capture_Backend.md §6.39 교차 참조 추가 |

@@ -7,6 +7,7 @@ import { useI18n } from '../i18n';
 import ZoneEditor from './ZoneEditor';
 import ThermalOverlay from './ThermalOverlay';
 import WebRtcStatsPanel from './WebRtcStatsPanel';
+import UmpPlayerView from './UmpPlayerView';
 import type { Detection, Zone } from '../types';
 
 interface Props {
@@ -318,9 +319,13 @@ function drawOverlay(
 export default function CameraView({ cameraId, cameraName }: Props) {
   const cameras        = useCameraStore((s) => s.cameras);
   const camera         = cameras.find((c) => c.id === cameraId);
-  // Per-camera webrtcEnabled flag alone gates WebRTC mode.
+  // streamingMode ('jpeg'|'webrtc'|'ump') selects one of three delivery paths —
+  // see Design_UMP_Player_RTSP_over_WebSocket.md §7. Falls back to deriving
+  // from webrtcEnabled for cameras fetched before the server returned it.
+  const streamingMode = camera?.streamingMode ?? (camera?.webrtcEnabled ? 'webrtc' : 'jpeg');
   // STUN/TURN settings come from useWebRTC hook via webrtcConfigStore.
-  const useWebRTCMode  = !!camera?.webrtcEnabled;
+  const useWebRTCMode  = streamingMode === 'webrtc';
+  const useUmpMode      = streamingMode === 'ump';
 
   // JPEG path (always active for AI detections; frame only used when not WebRTC)
   const { frame, detections, frameWidth, frameHeight } = useCamera(cameraId);
@@ -383,7 +388,10 @@ export default function CameraView({ cameraId, cameraName }: Props) {
 
   return (
     <div className="relative w-full h-full bg-gray-900 overflow-hidden rounded-lg">
-      {useWebRTCMode ? (
+      {useUmpMode && camera ? (
+        /* ── UMP path: RTSP-over-WebSocket via <ump-player> ── */
+        <UmpPlayerView camera={camera} />
+      ) : useWebRTCMode ? (
         /* ── WebRTC path: native <video> element ── */
         <>
           <video

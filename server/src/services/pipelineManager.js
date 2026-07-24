@@ -490,6 +490,7 @@ class PipelineManager {
 
     const rtspUrl  = this._buildRtspUrl(camera);
     const requestedWebRTC = !!camera.webrtcEnabled;
+    const requestedUmp = !!camera.umpEnabled;
     const captureFps = parseInt(process.env.CAPTURE_FPS, 10) || 10;
 
     // YouTube cameras publish their stream via FFmpeg → MediaMTX at /yt/<id>.
@@ -500,13 +501,19 @@ class PipelineManager {
 
     // Register with MediaMTX when:
     //   (a) WEBRTC_ENGINE=mediamtx and browser WebRTC delivery is requested, OR
-    //   (b) the mediamtx capture backend is active.
+    //   (b) WEBRTC_ENGINE=mediamtx and UMP delivery is requested — umpStreamingServer.js
+    //       prefers this pre-existing camera.id-keyed MediaMTX pull over ingest-daemon's
+    //       own on-demand rtsp-publish subprocess fan-out (Design_RTSP_Capture_Backend.md
+    //       §6.38) whenever it's available; without this, UMP-only cameras never get a
+    //       camera.id path and always pay the slower fan-out path (2026-07-24, measured
+    //       ~13.5fps vs the camera's real 30fps under load), OR
+    //   (c) the mediamtx capture backend is active.
     // WEBRTC_ENGINE=mediasoup does NOT need MediaMTX: ingest-daemon opens a single
     // PyAV session directly to the camera and fans out AI JPEG, H.264/Opus RTP for
     // mediasoup, and App RTP (ONVIF) from that one connection — no relay needed.
     // YouTube cameras are excluded: their RTSP URL IS already a MediaMTX path.
     const needsMediaMTX = !isYouTube && (
-      (requestedWebRTC && WEBRTC_ENGINE === 'mediamtx')
+      ((requestedWebRTC || requestedUmp) && WEBRTC_ENGINE === 'mediamtx')
       || CAPTURE_BACKEND === 'mediamtx'
     );
     let mediamtxReady = false;

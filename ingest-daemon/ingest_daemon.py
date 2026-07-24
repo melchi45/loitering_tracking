@@ -44,6 +44,11 @@ HTTP API (default :7070):
   GET    /health    → { "status": "ok", "cameras": N }
   POST   /cameras/:id/video-fanout   { "port" }  # add extra video RTP fan-out destination (§6.26)
   GET    /cameras/:id/video-params   → codec/sprop info (see CameraSession docstring)
+  POST   /cameras/:id/rtsp-publish   { "channelSlot" }  # on-demand: start publishing this
+                      camera's video to local MediaMTX at rtsp://127.0.0.1:{MEDIAMTX_RTSP_PORT}
+                      /{channelSlot}/media.smp — feeds the UMP Player RTSP-over-WebSocket
+                      /StreamingServer bridge (Design_UMP_Player_RTSP_over_WebSocket.md §4.1)
+  DELETE /cameras/:id/rtsp-publish   # stop the on-demand RTSP-publish fan-out above
 
 Environment:
   AI_FRAME_INTERVAL — push every Nth decoded frame to AI (default: 3, overridden per-camera by captureFps)
@@ -54,6 +59,8 @@ Environment:
                       docs/design/Design_RTSP_Capture_Backend.md for why an unbounded
                       per-camera thread count (scaling with nproc) made the daemon's
                       own HTTP server unresponsive under a real multi-camera fleet.
+  MEDIAMTX_RTSP_PORT — local MediaMTX RTSP port for the on-demand rtsp-publish fan-out
+                      above (default: 8554). Must match MEDIAMTX_RTSP_PORT in server/.env.
 
 AI frames are sent at native/decoded resolution (no resize) — this is the sole
 source buffer for both AI inference and detectionSnapshots crop extraction on
@@ -74,6 +81,9 @@ import re
 import signal
 import socket
 import ssl
+import struct
+import subprocess
+import sys
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -151,6 +161,15 @@ APP_RTP_READ_TIMEOUT  = float(os.environ.get("APP_RTP_READ_TIMEOUT", "60"))
 # RTP mux — is never blocked waiting on a slow decode.
 _WORKER_QUEUE_MAXSIZE = int(os.environ.get("INGEST_WORKER_QUEUE_MAXSIZE", "60"))
 
+# RTSP-publish subprocess wire format (2026-07-24) — see
+# rtsp_publish_worker.py's module docstring and
+# CameraSession._rtsp_publish_writer() for why this moved out of ingest-
+# daemon's own process entirely (PyAV's RTSP mux() does not release the GIL
+# during its blocking network write). Must match _HEADER in that script
+# exactly: pts(8) dts(8) time_base_num(4) time_base_den(4), big-endian.
+_RTSP_PUBLISH_HEADER = struct.Struct("!qqii")
+_RTSP_PUBLISH_WORKER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rtsp_publish_worker.py")
+
 # Shared JPEG/App-RTP push pool (2026-07-15) — was previously one
 # ThreadPoolExecutor(max_workers=4) PER CAMERA (up to 4 × camera-count threads,
 # e.g. 52 for a 13-camera fleet, on top of every camera's own io/AI-decode
@@ -176,6 +195,66 @@ _SHARED_PUSH_SEMAPHORE = threading.Semaphore(_PUSH_WORKERS)
 # on the Future) while capping how many stop() calls can be in flight at once.
 _STOP_WORKERS         = int(os.environ.get("INGEST_STOP_WORKERS", "8"))
 _SHARED_STOP_EXECUTOR = ThreadPoolExecutor(max_workers=_STOP_WORKERS, thread_name_prefix="stopper")
+
+
+def _close_ignoring_errors(out) -> None:
+    """Runs a PyAV output container's close() (TEARDOWN handshake) on
+    _SHARED_STOP_EXECUTOR — see _close_and_drop_rtsp_publish_entries()."""
+    try:
+        out.close()
+    except Exception:
+        pass
+
+
+def _stop_rtsp_publish_writer(q: "queue.Queue", thread: threading.Thread, proc: "subprocess.Popen") -> None:
+    """Runs on _SHARED_STOP_EXECUTOR (2026-07-24) — stops an RTSP-publish
+    entry's writer thread (see _rtsp_publish_writer()) and its dedicated
+    rtsp_publish_worker.py subprocess. `None` is the queue's sentinel for
+    "stop"; the writer's blocking q.get() only ever returns once that's
+    been pushed, so this never busy-waits. The writer thread already closes
+    proc.stdin in its own finally block once it exits, which is the
+    subprocess's sole shutdown signal (EOF on stdin) — this just waits for
+    it to actually finish, escalating to SIGKILL if it doesn't within a few
+    seconds (mirrors _killPortOrphan()'s escalation pattern elsewhere in
+    this project for the same "don't leave orphans" reason)."""
+    try:
+        q.put(None)
+    except Exception:
+        pass
+    thread.join(timeout=2)
+    try:
+        proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        try:
+            proc.kill()
+            proc.wait(timeout=2)
+        except Exception:
+            pass
+
+
+def _spawn_rtsp_publish_worker(pub_url: str, vs) -> "subprocess.Popen | None":
+    """Spawns rtsp_publish_worker.py (2026-07-24) — see its module docstring
+    and _rtsp_publish_writer()'s for why the RTSP-publish mux() must run in
+    a fully separate process, not just a separate thread. Only plain values
+    extracted from `vs` cross the process boundary (as argv strings), never
+    a live PyAV object — avoids the whole use-after-free category the
+    thread-based version was still exposed to. Returns None (logged by the
+    caller) if the subprocess fails to even start."""
+    cc = vs.codec_context
+    extradata_b64 = base64.b64encode(cc.extradata).decode("ascii") if cc.extradata else "-"
+    try:
+        # stdout/stderr deliberately NOT redirected — inheriting this
+        # process's own fds means the worker's error output still reaches
+        # /tmp/ingest-daemon.log via startServer.js's existing stdout/stderr
+        # relay on the parent ingest_daemon.py process (same underlying
+        # pipe), instead of vanishing silently.
+        return subprocess.Popen(
+            [sys.executable, _RTSP_PUBLISH_WORKER_SCRIPT, pub_url, cc.name,
+             str(cc.width), str(cc.height), str(cc.pix_fmt), extradata_b64],
+            stdin=subprocess.PIPE,
+        )
+    except Exception:
+        return None
 
 # Connection-establishment gate (2026-07-16, see _combined_ingest_once) — caps
 # how many cameras can be inside av.open()+probe+worker-thread-startup at the
@@ -203,6 +282,38 @@ _MEDIASOUP_VIDEO_SSRC = 573785173   # 0x22334455
 _MEDIASOUP_AUDIO_SSRC = 860116326   # 0x33445566
 _MEDIASOUP_VIDEO_PT   = 96          # must match VIDEO_PT constant in mediasoupEngine.js
 _MEDIASOUP_AUDIO_PT   = 111         # must match AUDIO_PT constant in mediasoupEngine.js
+
+# Outbound RTP UDP send buffer (2026-07-22, §6.30.2) — the OS default (~208KB,
+# net.core.wmem_default) is what these sockets used before this fix. Live
+# diagnosis of a persistent 5MP-camera decode freeze found `ss -u -a -n -p`
+# showing multi-megabyte unread Recv-Q backlogs on mediasoup-worker's PlainTransport
+# sockets and /proc/net/snmp's Udp.RcvbufErrors actively incrementing — the
+# RECEIVE side of this same hop was already sized to 8MB in mediasoupEngine.js
+# (§6.18), but this SEND side (ingest-daemon's own ffmpeg/libav "rtp" muxer
+# output, which is what actually emits the tight UDP packet burst a 5MP
+# keyframe produces) never got the matching fix. libav's "rtp" muxer does NOT
+# forward an av.open() `options` dict entry named `buffer_size` down to the
+# nested "udp" protocol context it opens internally (confirmed live via the
+# "Some options were not used: {'buffer_size': ...}" warning — ssrc/
+# payload_type in the same dict ARE muxer-level AVOptions and DO apply, so
+# this silent drop is specific to protocol-level options passed this way).
+# The working form is a `?buffer_size=N` query parameter appended to the
+# `rtp://` URL itself — FFmpeg's URL layer parses query params directly into
+# the target protocol's AVOptions regardless of muxer option-forwarding, and
+# libav's underlying "udp" protocol maps `buffer_size` to SO_SNDBUF for an
+# output socket. Matches net.core.wmem_max (16MB measured) so the kernel
+# honors it rather than silently capping it — see mediasoupEngine.js's
+# recvBufferSize comment for the same reasoning applied to the receive side.
+_RTP_SEND_BUFFER_SIZE = 8 * 1024 * 1024
+
+# Local MediaMTX RTSP port (2026-07-23, UMP Player RTSP-over-WebSocket 6th
+# fan-out — see docs/design/Design_UMP_Player_RTSP_over_WebSocket.md §4.1).
+# Must match MEDIAMTX_RTSP_PORT in server/.env (mediamtxManager.js reads the
+# same variable). YouTube ingestion already publishes to this same local
+# MediaMTX instance (rtsp://127.0.0.1:8554/yt/<id>) — this fan-out follows
+# the identical loopback-publish pattern, just sourced from this daemon's
+# own already-open RTSP session instead of yt-dlp/ffmpeg.
+MEDIAMTX_RTSP_PORT = int(os.environ.get("MEDIAMTX_RTSP_PORT", "8554"))
 
 # Reusable SSL context for loopback HTTPS callbacks (self-signed cert OK).
 _SSL_CTX_NOVERIFY = ssl.create_default_context()
@@ -473,6 +584,21 @@ class CameraSession:
         self._video_fanout_ports    = []   # persistent across RTSP reconnects: [port, ...]
         self._video_template_stream = None
 
+        # RTSP-publish fan-out to local MediaMTX (2026-07-23, UMP Player
+        # RTSP-over-WebSocket — see Design_UMP_Player_RTSP_over_WebSocket.md
+        # §4.1). On-demand: only requested while at least one UMP viewer has
+        # this camera's channel open (LTS server calls POST
+        # /cameras/:id/rtsp-publish / DELETE .../rtsp-publish, mirroring the
+        # existing add_video_fanout() pattern). Reuses the same
+        # self._video_fanout list/mux loop as the UDP RTP fan-outs above —
+        # _mux_passthrough() is muxer-format-agnostic — so no changes needed
+        # to the packet-forwarding loop itself, only to how this one extra
+        # entry gets opened/closed. Persists across RTSP reconnects like
+        # _video_fanout_ports; None means "not requested". Guarded by the
+        # same self._video_fanout_lock (not a separate lock) since both the
+        # flag and the list entry it controls must change atomically together.
+        self._rtsp_publish_requested = None   # channelSlot (int) or None
+
         # JPEG/App-RTP push uses the module-level _SHARED_PUSH_EXECUTOR /
         # _SHARED_PUSH_SEMAPHORE (bounded pool shared by the whole daemon, not
         # one per camera — see their definitions for why).
@@ -646,7 +772,14 @@ class CameraSession:
 
             try:
                 vs = next((s for s in container.streams if s.type == "video"), None)
-                self._video_template_stream = vs
+                # Lock-protected (2026-07-24 segfault fix, see
+                # _open_rtsp_publish_async()'s docstring) — every reader of
+                # self._video_template_stream must observe this assignment
+                # (and the disconnect-path reset to None below) through the
+                # same self._video_fanout_lock for the use-after-free guard
+                # there to actually hold.
+                with self._video_fanout_lock:
+                    self._video_template_stream = vs
                 if vs is None:
                     raise RuntimeError("No video stream in RTSP source")
 
@@ -719,16 +852,74 @@ class CameraSession:
                         # which is not guaranteed to match (unlike the audio branch
                         # below, which already sets this explicitly).
                         out = av.open(
-                            f"rtp://127.0.0.1:{port}",
+                            f"rtp://127.0.0.1:{port}?buffer_size={_RTP_SEND_BUFFER_SIZE}",
                             "w", format="rtp",
-                            options={"ssrc": str(_MEDIASOUP_VIDEO_SSRC), "payload_type": str(_MEDIASOUP_VIDEO_PT)},
+                            options={
+                                "ssrc": str(_MEDIASOUP_VIDEO_SSRC), "payload_type": str(_MEDIASOUP_VIDEO_PT),
+                            },
                         )
                         out_stream = out.add_stream(template=vs)
-                        self._video_fanout.append({"port": port, "out": out, "stream": out_stream, "last_dts": None})
+                        # needsKeyframe (2026-07-23): even though this entry is
+                        # created before the packet loop's own idr_seen gate
+                        # opens (so it can never receive a genuinely mid-GOP
+                        # packet), it still needs the synthetic parameter-set
+                        # injection below on its first delivery — these cameras
+                        # never send VPS/SPS/PPS in-band at all (see
+                        # _build_param_set_prefix()), so "the loop only starts
+                        # at a keyframe" was never sufficient by itself. Every
+                        # entry gets this uniformly regardless of when/how it
+                        # was created (connect-time here, or dynamically via
+                        # add_rtsp_publish()/add_video_fanout() below).
+                        self._video_fanout.append({
+                            "port": port, "out": out, "stream": out_stream,
+                            "last_dts": None, "needsKeyframe": True,
+                        })
                         log.info("[%s] Video RTP: %s → rtp://127.0.0.1:%d (ssrc=0x%08x pt=%d) time_base in=%s out=%s",
                                  self.id[:8], vs.codec_context.name,
                                  port, _MEDIASOUP_VIDEO_SSRC, _MEDIASOUP_VIDEO_PT,
                                  vs.time_base, out_stream.time_base)
+
+                    # RTSP-publish fan-out to local MediaMTX, video-only for now
+                    # (2026-07-23, UMP Player RTSP-over-WebSocket §4.1) — only opened
+                    # when a channel was requested via add_rtsp_publish() before this
+                    # (re)connect. Different av.open() shape than the UDP RTP fan-outs
+                    # above (format="rtsp", no ssrc/payload_type — those are RTP-muxer-
+                    # specific), but appended into the SAME self._video_fanout list so
+                    # the packet loop's existing generic _mux_passthrough() dispatch
+                    # picks it up with no further changes. Best-effort: a publish
+                    # failure (e.g. MediaMTX not running) is logged and skipped rather
+                    # than aborting the camera's whole RTSP connection.
+                    if self._rtsp_publish_requested is not None:
+                        _channel = self._rtsp_publish_requested
+                        try:
+                            _pub_url = f"rtsp://127.0.0.1:{MEDIAMTX_RTSP_PORT}/{_channel}/media.smp"
+                            # 2026-07-24: av.open()/add_stream()/mux() all now run
+                            # inside a dedicated rtsp_publish_worker.py subprocess
+                            # (see _spawn_rtsp_publish_worker()), not on this io
+                            # thread at all — confirmed live that PyAV's RTSP mux()
+                            # does not release the GIL for its blocking network
+                            # write, so even running it on a same-process *thread*
+                            # (the previous fix) still stalled this camera's own
+                            # read loop (and every consumer depending on it) for the
+                            # write's full duration. A separate process has its own
+                            # GIL; nothing here can block on it again.
+                            _pub_proc = _spawn_rtsp_publish_worker(_pub_url, vs)
+                            if _pub_proc is None:
+                                raise RuntimeError("failed to spawn rtsp_publish_worker.py")
+                            _pub_queue = queue.Queue(maxsize=_WORKER_QUEUE_MAXSIZE)
+                            _pub_thread = threading.Thread(
+                                target=self._rtsp_publish_writer,
+                                args=(_pub_queue, _pub_proc),
+                                daemon=True, name=f"rtsppubw-{self.id[:8]}",
+                            )
+                            _pub_thread.start()
+                            self._video_fanout.append({
+                                "port": f"rtsp:{_channel}", "needsKeyframe": True,
+                                "queue": _pub_queue, "_thread": _pub_thread, "_proc": _pub_proc,
+                            })
+                            log.info("[%s] RTSP publish: %s → %s (pid=%d)", self.id[:8], vs.codec_context.name, _pub_url, _pub_proc.pid)
+                        except Exception as e:
+                            log.warning("[%s] RTSP publish to channel %s failed: %s", self.id[:8], _channel, e)
 
                 # AI decode worker — owns an independent CodecContext (seeded with the
                 # extradata/SPS-PPS this container already probed) and receives raw
@@ -754,9 +945,11 @@ class CameraSession:
                     if codec_name == "opus":
                         audio_mode = "passthrough"
                         audio_out = av.open(
-                            f"rtp://127.0.0.1:{self.mediasoup_audio_port}",
+                            f"rtp://127.0.0.1:{self.mediasoup_audio_port}?buffer_size={_RTP_SEND_BUFFER_SIZE}",
                             "w", format="rtp",
-                            options={"ssrc": str(_MEDIASOUP_AUDIO_SSRC), "payload_type": str(_MEDIASOUP_AUDIO_PT)},
+                            options={
+                                "ssrc": str(_MEDIASOUP_AUDIO_SSRC), "payload_type": str(_MEDIASOUP_AUDIO_PT),
+                            },
                         )
                         audio_out_stream = audio_out.add_stream(template=as_)
                         log.info("[%s] Audio RTP passthrough opus → rtp://127.0.0.1:%d",
@@ -818,8 +1011,49 @@ class CameraSession:
                         # true source timing.
                         orig_pts, orig_dts, orig_time_base = packet.pts, packet.dts, packet.time_base
                         for _o in self._video_fanout:
-                            packet.pts, packet.dts, packet.time_base = orig_pts, orig_dts, orig_time_base
-                            _o["last_dts"] = self._mux_passthrough(packet, _o["out"], _o["stream"], _o["last_dts"])
+                            if _o.get("needsKeyframe"):
+                                if not packet.is_keyframe:
+                                    continue  # mid-GOP join — wait for this entry's own next keyframe
+                                _o["needsKeyframe"] = False
+                                # This camera never repeats VPS/SPS/PPS in-band
+                                # (see _build_param_set_prefix() docstring) — a
+                                # keyframe packet alone still carries none, so
+                                # inject a synthetic parameter-set packet ahead
+                                # of it, same timestamp (monotonic-dts fixup in
+                                # _mux_passthrough() below bumps the real
+                                # packet by 1 if needed).
+                                param_prefix = self._build_param_set_prefix()
+                                if param_prefix:
+                                    log.info("[%s] fan-out %s: injecting %dB synthetic parameter-set packet ahead of first keyframe",
+                                             self.id[:8], _o["port"], len(param_prefix))
+                                    if "queue" in _o:
+                                        try:
+                                            _o["queue"].put_nowait((param_prefix, orig_pts, orig_dts, orig_time_base))
+                                        except queue.Full:
+                                            pass
+                                    else:
+                                        param_packet = av.Packet(param_prefix)
+                                        param_packet.pts, param_packet.dts, param_packet.time_base = orig_pts, orig_dts, orig_time_base
+                                        _o["last_dts"] = self._mux_passthrough(
+                                            param_packet, _o["out"], _o["stream"], _o["last_dts"],
+                                            label=f"fan-out {_o['port']} param-set inject",
+                                        )
+                                else:
+                                    log.warning("[%s] fan-out %s: no parameter-set prefix available (codec=%s) — first frame will likely fail to decode downstream",
+                                                 self.id[:8], _o["port"], self.video_codec_name)
+                            # RTSP-publish entries hand off to their own dedicated
+                            # writer thread (queue present — see _rtsp_publish_writer(),
+                            # 2026-07-24) instead of muxing inline here, so a slow
+                            # publish can never throttle this camera's own read loop
+                            # (which every other fan-out destination also depends on).
+                            if "queue" in _o:
+                                try:
+                                    _o["queue"].put_nowait((raw, orig_pts, orig_dts, orig_time_base))
+                                except queue.Full:
+                                    pass  # publish writer behind — drop; self-heals at next IDR
+                            else:
+                                packet.pts, packet.dts, packet.time_base = orig_pts, orig_dts, orig_time_base
+                                _o["last_dts"] = self._mux_passthrough(packet, _o["out"], _o["stream"], _o["last_dts"])
                         try:
                             ai_queue.put_nowait(raw)
                         except queue.Full:
@@ -850,13 +1084,24 @@ class CameraSession:
                 if audio_worker_thread is not None:
                     audio_worker_thread.join(timeout=2)
                 with self._video_fanout_lock:
+                    # Deferred to _SHARED_STOP_EXECUTOR — see
+                    # _close_and_drop_rtsp_publish_entries()'s docstring. This
+                    # runs on every (re)connect teardown, so for a camera that
+                    # reconnects frequently a slow/unresponsive close() here
+                    # would repeatedly block anything else waiting on this
+                    # same lock (e.g. add_rtsp_publish()'s HTTP handler).
                     for _o in self._video_fanout:
-                        try:
-                            _o["out"].close()
-                        except Exception:
-                            pass
+                        if "queue" in _o:
+                            _SHARED_STOP_EXECUTOR.submit(_stop_rtsp_publish_writer, _o["queue"], _o["_thread"], _o["_proc"])
+                        else:
+                            _SHARED_STOP_EXECUTOR.submit(_close_ignoring_errors, _o["out"])
                     self._video_fanout = []
-                self._video_template_stream = None
+                    # Lock-protected reset (2026-07-24 segfault fix) — see the
+                    # matching connect-path assignment above. Must happen
+                    # before container.close() below actually frees the
+                    # AVStream this pointed to, and while holding the same
+                    # lock _open_rtsp_publish_async() re-checks against.
+                    self._video_template_stream = None
                 if audio_out is not None:
                     try:
                         audio_out.close()
@@ -870,8 +1115,13 @@ class CameraSession:
             if not _setup_sem_released:
                 _INGEST_SETUP_SEMAPHORE.release()
 
-    def _mux_passthrough(self, packet, out, out_stream, last_dts):
-        """Forward one demuxed packet to an RTP output muxer, no decode involved."""
+    def _mux_passthrough(self, packet, out, out_stream, last_dts, label=None):
+        """Forward one demuxed packet to an RTP output muxer, no decode involved.
+        `label`, when given, logs a warning on mux failure instead of silently
+        dropping it — used for the rare, diagnostically-important synthetic
+        parameter-set injection packet (see _build_param_set_prefix()); left
+        None (silent) for the hot per-frame path, which already logs nothing
+        on purpose to avoid flooding on a single malformed packet."""
         # Rescale PTS/DTS from the SOURCE stream's time_base to the RTP output
         # stream's time_base (2026-07-16, §6.13) — av.Packet has no rescale_ts()
         # helper in this PyAV version, and neither add_stream(template=vs) nor
@@ -907,9 +1157,107 @@ class CameraSession:
         packet.stream = out_stream
         try:
             out.mux(packet)
-        except av.AVError:
-            pass  # Skip malformed packet; keep stream alive
+            if label:
+                log.info("[%s] %s: muxed OK (%dB, pts=%s dts=%s)",
+                         self.id[:8], label, packet.size, packet.pts, packet.dts)
+        except av.AVError as e:
+            if label:
+                log.warning("[%s] %s: mux failed: %r", self.id[:8], label, e)
+            # Skip malformed packet; keep stream alive
         return last_dts
+
+    def _rtsp_publish_writer(self, q: "queue.Queue", proc: "subprocess.Popen") -> None:
+        """Runs on its own thread — forwards queued packets to a dedicated
+        rtsp_publish_worker.py *subprocess* (2026-07-24 rewrite) that owns
+        the actual av.open()/add_stream()/mux() calls in its own process.
+
+        A same-process worker *thread* (the previous version of this method)
+        was NOT enough: confirmed empirically (2026-07-24) that PyAV's
+        RTSP/TCP mux() does not release the GIL for the duration of its
+        blocking network write — a plain Python spin-counter thread in the
+        same process measured a complete stall (near-zero throughput) for
+        the entire span of one mux() call blocked on a non-draining socket.
+        Since CPython's GIL is process-wide, moving the call to a different
+        *thread* changes nothing; every other thread in this process
+        (including the camera's own io/read thread, which every consumer —
+        WebRTC included — depends on) stalls right along with it regardless
+        of which thread issued the call. Only a separate OS process has its
+        own GIL. See rtsp_publish_worker.py's module docstring for the wire
+        protocol this writes over `proc.stdin`, and _open_rtsp_publish_async()
+        for why it's fed (codec_name, width, height, pix_fmt, extradata)
+        instead of a live vs/av.Stream object (that was also the 2026-07-24
+        segfault's root cause — a live PyAV object crossing threads/processes
+        unsafely; this rewrite avoids the whole category by construction,
+        since only plain values cross the process boundary now).
+
+        `None` is the stop sentinel (see _stop_rtsp_publish_writer()); a
+        bounded, drop-if-full queue means a slow/backed-up publish can only
+        ever fall behind here — never on the camera read — same
+        self-healing-at-next-IDR philosophy as the AI decode queue. A dead
+        subprocess (BrokenPipeError on write) ends this thread quietly; the
+        entry gets cleaned up the normal way on next reconnect/removal."""
+        try:
+            while True:
+                item = q.get()
+                if item is None:
+                    return  # sentinel — this entry is being torn down
+                raw, pts, dts, time_base = item
+                tb_num = time_base.numerator if time_base is not None else 0
+                tb_den = time_base.denominator if time_base is not None else 0
+                header = _RTSP_PUBLISH_HEADER.pack(pts or 0, dts or 0, tb_num, tb_den)
+                try:
+                    proc.stdin.write(header)
+                    proc.stdin.write(struct.pack("!I", len(raw)))
+                    proc.stdin.write(raw)
+                    proc.stdin.flush()
+                except (BrokenPipeError, OSError):
+                    return  # subprocess died — nothing more to do here
+        finally:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
+
+    def _build_param_set_prefix(self) -> bytes | None:
+        """
+        Reconstructs an Annex-B byte string (VPS+SPS+PPS for H.265, SPS+PPS for
+        H.264, each start-code-prefixed) from the sprop_* fields already parsed
+        out of codec_context.extradata at connect time (see the "sprop-vps/sps/
+        pps ready" / "sprop-parameter-sets ready" log lines above) — the SAME
+        data mediasoupEngine.js already injects into the WHEP SDP answer for
+        WebRTC viewers, because (per that code's own 2026-07-16 finding) these
+        cameras send VPS/SPS/PPS ONLY via the RTSP SDP, never in-band in the RTP
+        payload. RTP/RTSP-based consumers of this fan-out (UMP Player over
+        add_rtsp_publish()/add_video_fanout()) don't speak SDP the same way and
+        instead seed their decoder purely from in-band NAL units (confirmed via
+        submodules/ump-player's h264Session.js/h265Session.js — no SDP sprop
+        fallback) — so a destination that joins after the camera's own single
+        parameter-set transmission (i.e. any dynamically-added fan-out entry,
+        which by definition joins well after the initial connect) would never
+        see them at all, no matter how long it waits for a "real" keyframe.
+        Confirmed live (2026-07-23): waiting for packet.is_keyframe alone
+        (§8.9) was NOT sufficient fix — the keyframe packets themselves carry
+        no parameter sets either, for exactly this reason.
+        Returns None if this camera's codec isn't h264/hevc or no usable
+        parameter sets were ever extracted.
+        """
+        def _decode_units(comma_joined: str | None) -> bytes:
+            if not comma_joined:
+                return b""
+            out = bytearray()
+            for unit in comma_joined.split(","):
+                if not unit:
+                    continue
+                out += b"\x00\x00\x00\x01" + base64.b64decode(unit)
+            return bytes(out)
+
+        if self.video_codec_name == "hevc":
+            prefix = _decode_units(self.sprop_vps) + _decode_units(self.sprop_sps) + _decode_units(self.sprop_pps)
+        elif self.video_codec_name == "h264":
+            prefix = _decode_units(self.sprop_parameter_sets)
+        else:
+            return None
+        return prefix or None
 
     def stats_dict(self) -> dict:
         """
@@ -947,6 +1295,7 @@ class CameraSession:
             "videoFanoutPorts":     list(self._video_fanout_ports),
             "mediasoupVideoPort":   self.mediasoup_video_port,
             "mediasoupAudioPort":   self.mediasoup_audio_port,
+            "rtspPublishChannel":   self._rtsp_publish_requested,
         }
 
     def add_video_fanout(self, port: int) -> bool:
@@ -972,13 +1321,165 @@ class CameraSession:
             if vs is None:
                 return True  # not connected yet — will be created on next connect
             out = av.open(
-                f"rtp://127.0.0.1:{port}", "w", format="rtp",
-                options={"ssrc": str(_MEDIASOUP_VIDEO_SSRC), "payload_type": str(_MEDIASOUP_VIDEO_PT)},
+                f"rtp://127.0.0.1:{port}?buffer_size={_RTP_SEND_BUFFER_SIZE}", "w", format="rtp",
+                options={
+                    "ssrc": str(_MEDIASOUP_VIDEO_SSRC), "payload_type": str(_MEDIASOUP_VIDEO_PT),
+                },
             )
             out_stream = out.add_stream(template=vs)
-            self._video_fanout.append({"port": port, "out": out, "stream": out_stream, "last_dts": None})
+            # needsKeyframe: same mid-GOP-join gate as add_rtsp_publish() below —
+            # this entry joins after the session's own idr_seen gate already
+            # passed, so it must wait for its own next keyframe too.
+            self._video_fanout.append({
+                "port": port, "out": out, "stream": out_stream,
+                "last_dts": None, "needsKeyframe": True,
+            })
         log.info("[%s] Video RTP fan-out added → rtp://127.0.0.1:%d", self.id[:8], port)
         return True
+
+    def add_rtsp_publish(self, channel_slot: int) -> bool:
+        """
+        Start (on-demand) publishing this camera's video to local MediaMTX at
+        rtsp://127.0.0.1:{MEDIAMTX_RTSP_PORT}/{channel_slot}/media.smp (2026-07-23,
+        UMP Player RTSP-over-WebSocket — Design_UMP_Player_RTSP_over_WebSocket.md
+        §4.1/§4.2). Called by the LTS server when the first `/StreamingServer` WS
+        viewer opens this camera's channel. Mirrors add_video_fanout()'s
+        immediate-open-if-connected / defer-to-next-connect behavior, but there is
+        at most one RTSP-publish target per camera (one channelSlot), unlike the
+        unbounded video_fanout port list — a second call just overwrites the
+        requested channel if it somehow differs, closing the old one first.
+
+        The actual av.open() publish handshake runs on _SHARED_STOP_EXECUTOR
+        (2026-07-23 fix) rather than inline on this HTTP request handler thread —
+        confirmed live that a slow/hung MediaMTX ANNOUNCE handshake (no timeout on
+        the publish-side av.open(), unlike the read-side stimeout used elsewhere in
+        this file) blocked this thread long enough that even the daemon's own
+        /health endpoint started failing on the ingest-daemon watchdog. This method
+        now returns as soon as the (fast, lock-only) bookkeeping is done; the LTS
+        server already tolerates the publish becoming ready slightly later via
+        mediamtxManager.waitForPathReady() polling.
+        """
+        with self._video_fanout_lock:
+            if self._rtsp_publish_requested == channel_slot and \
+                    any(o["port"] == f"rtsp:{channel_slot}" for o in self._video_fanout):
+                return True  # already live for this exact channel
+            self._close_and_drop_rtsp_publish_entries()  # e.g. channelSlot changed
+            self._rtsp_publish_requested = channel_slot
+            vs = self._video_template_stream
+            if vs is None:
+                return True  # not connected yet — opened on next connect (see io loop)
+        _SHARED_STOP_EXECUTOR.submit(self._open_rtsp_publish_async, channel_slot, vs)
+        return True
+
+    def _open_rtsp_publish_async(self, channel_slot: int, vs) -> None:
+        """Runs on _SHARED_STOP_EXECUTOR — see add_rtsp_publish() for why this
+        isn't inline on the io thread.
+
+        2026-07-24 rewrite: the actual av.open()/add_stream()/mux() now run
+        entirely inside a dedicated rtsp_publish_worker.py *subprocess* (see
+        _spawn_rtsp_publish_worker() and _rtsp_publish_writer()'s docstrings
+        for why — PyAV's RTSP mux() doesn't release the GIL during its
+        blocking write, so nothing short of a separate process can keep a
+        slow publish from stalling this camera's own read loop). Spawning a
+        subprocess only forks+execs — it does not wait for the child's own
+        av.open() handshake — so unlike the previous version, this whole
+        method is cheap and non-blocking and can just run under
+        self._video_fanout_lock for its entire body; no more two-phase
+        "open outside the lock, validate+add_stream inside it" split.
+
+        `vs` is a PyAV Stream object owned by the io thread's *current* RTSP
+        container — _spawn_rtsp_publish_worker() reads its codec parameters
+        (name/width/height/pix_fmt/extradata) to pass to the subprocess as
+        plain argv strings, and never touches the live object again after
+        that. A rapid reconnect on the io thread can call container.close()
+        (freeing the underlying AVStream `vs` points to) while this method
+        was still queued/running on a different thread — reading `vs` after
+        that segfaulted inside libavformat (confirmed live via dmesg,
+        2026-07-24, one instance per rapid Play/reconnect cycle against the
+        same camera). Fixed the same way as before: re-validate
+        self._video_template_stream is vs *before* touching `vs` at all, all
+        under the one lock the io thread's connect/disconnect assignments
+        also hold (see those for the matching fix there)."""
+        pub_url = f"rtsp://127.0.0.1:{MEDIAMTX_RTSP_PORT}/{channel_slot}/media.smp"
+        with self._video_fanout_lock:
+            # Re-validate against current state BEFORE touching `vs` — a
+            # reconnect or a newer add_rtsp_publish()/remove_rtsp_publish()
+            # call may have superseded (and freed) this one while it was
+            # queued on _SHARED_STOP_EXECUTOR.
+            if self._rtsp_publish_requested != channel_slot or self._video_template_stream is not vs:
+                return
+            pub_proc = _spawn_rtsp_publish_worker(pub_url, vs)
+            if pub_proc is None:
+                log.warning("[%s] RTSP publish to channel %s failed to spawn worker", self.id[:8], channel_slot)
+                return
+            # needsKeyframe (2026-07-23) — this entry joins mid-loop, after the
+            # session's own idr_seen gate has long since passed, so it must wait
+            # for its OWN next keyframe before receiving anything: an H.265
+            # RTSP source packetizes VPS/SPS/PPS as separate NAL units bundled
+            # into the same libav packet as the following IDR slice, so
+            # starting mid-GOP means MediaMTX (and thus <ump-player>, which
+            # seeds its H265SPSParser purely from in-band VPS/SPS/PPS NALs —
+            # confirmed via submodules/ump-player MediaSession/VideoSession/
+            # h265Session.js, no SDP sprop-vps/sprop-sps/sprop-pps fallback)
+            # would relay bare slice NALs with no parameter sets at all,
+            # crashing the player on the very first frame with "Cannot read
+            # properties of null (reading 'byteLength')" (confirmed live).
+            pub_queue = queue.Queue(maxsize=_WORKER_QUEUE_MAXSIZE)
+            pub_thread = threading.Thread(
+                target=self._rtsp_publish_writer,
+                args=(pub_queue, pub_proc),
+                daemon=True, name=f"rtsppubw-{self.id[:8]}",
+            )
+            pub_thread.start()
+            self._video_fanout.append({
+                "port": f"rtsp:{channel_slot}", "needsKeyframe": True,
+                "queue": pub_queue, "_thread": pub_thread, "_proc": pub_proc,
+            })
+        log.info("[%s] RTSP publish added → %s (pid=%d)", self.id[:8], pub_url, pub_proc.pid)
+
+    def remove_rtsp_publish(self) -> bool:
+        """Stop the on-demand RTSP-publish fan-out (last UMP viewer for this camera left)."""
+        with self._video_fanout_lock:
+            self._rtsp_publish_requested = None
+            removed = self._close_and_drop_rtsp_publish_entries()
+        if removed:
+            log.info("[%s] RTSP publish removed", self.id[:8])
+        return True
+
+    def _close_and_drop_rtsp_publish_entries(self) -> bool:
+        """Removes any RTSP-publish entries from self._video_fanout — caller
+        must already hold self._video_fanout_lock. Returns True if anything
+        was removed.
+
+        The actual out.close() (a TEARDOWN handshake with MediaMTX — a
+        blocking network call, same class of hazard as add_rtsp_publish()'s
+        av.open() ANNOUNCE handshake, see its docstring) is deferred to
+        _SHARED_STOP_EXECUTOR rather than run inline here. Confirmed live
+        (2026-07-23): running it inline, while holding self._video_fanout_lock,
+        let a slow/unresponsive MediaMTX TEARDOWN block every other caller of
+        that lock — including add_rtsp_publish()'s own quick bookkeeping and
+        the io thread's per-(re)connect fan-out rebuild — reproducing the
+        exact "whole daemon unresponsive" symptom §8.7 already fixed for the
+        open() side, just on the close() side instead. list removal itself
+        stays inline (pure in-memory, fast); only the network teardown moves
+        off-thread.
+        """
+        kept, to_close, removed = [], [], False
+        for o in self._video_fanout:
+            if str(o["port"]).startswith("rtsp:"):
+                to_close.append(o)
+                removed = True
+            else:
+                kept.append(o)
+        self._video_fanout = kept
+        for o in to_close:
+            # Every rtsp:-prefixed entry has its own writer thread/queue and
+            # subprocess (2026-07-24 — see _rtsp_publish_writer()); must be
+            # stopped in order (queue sentinel -> thread join -> subprocess
+            # wait/kill), not just killed directly, or the writer thread
+            # could still be writing to proc.stdin when this reaps it.
+            _SHARED_STOP_EXECUTOR.submit(_stop_rtsp_publish_writer, o["queue"], o["_thread"], o["_proc"])
+        return removed
 
     def _ai_decode_worker(self, q: "queue.Queue", stop_evt: threading.Event,
                            codec_name: str, extradata):
@@ -1048,9 +1549,11 @@ class CameraSession:
         """Own thread, own CodecContext/resampler/output muxer — isolated from the io thread."""
         ctx = av.CodecContext.create(codec_name, "r")
         out = av.open(
-            f"rtp://127.0.0.1:{self.mediasoup_audio_port}",
+            f"rtp://127.0.0.1:{self.mediasoup_audio_port}?buffer_size={_RTP_SEND_BUFFER_SIZE}",
             "w", format="rtp",
-            options={"ssrc": str(_MEDIASOUP_AUDIO_SSRC), "payload_type": str(_MEDIASOUP_AUDIO_PT)},
+            options={
+                "ssrc": str(_MEDIASOUP_AUDIO_SSRC), "payload_type": str(_MEDIASOUP_AUDIO_PT),
+            },
         )
         try:
             out_as = out.add_stream("libopus", rate=48000)
@@ -1521,12 +2024,33 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 sess.add_video_fanout(port)
                 self._json(200, {"ok": True})
+            elif len(parts) == 3 and parts[0] == "cameras" and parts[2] == "rtsp-publish":
+                sess = _manager.get(parts[1])
+                if sess is None:
+                    self._json(404, {"error": "camera not found"})
+                    return
+                length = int(self.headers.get("Content-Length", 0))
+                try:
+                    body = json.loads(self.rfile.read(length))
+                    channel_slot = int(body["channelSlot"])
+                except Exception:
+                    self._json(400, {"error": "invalid JSON or missing/non-numeric 'channelSlot'"})
+                    return
+                ok = sess.add_rtsp_publish(channel_slot)
+                self._json(200 if ok else 502, {"ok": ok})
             else:
                 self._json(404, {"error": "not found"})
 
     def do_DELETE(self):
         parts = urlparse(self.path).path.strip("/").split("/")
-        if len(parts) == 2 and parts[0] == "cameras":
+        if len(parts) == 3 and parts[0] == "cameras" and parts[2] == "rtsp-publish":
+            sess = _manager.get(parts[1])
+            if sess is None:
+                self._json(404, {"error": "camera not found"})
+                return
+            sess.remove_rtsp_publish()
+            self._json(200, {"ok": True})
+        elif len(parts) == 2 and parts[0] == "cameras":
             ok = _manager.remove(parts[1])
             log.info("Camera removed: %s (found=%s)", parts[1][:8], ok)
             self._json(200, {"ok": ok})
@@ -1553,6 +2077,32 @@ def _handle_sigterm(signum, frame):
 
 def main():
     global _manager
+
+    # Scheduling priority (2026-07-22, Design_RTSP_Capture_Backend.md §6.33.1) —
+    # live diagnosis found this process at ~300% CPU, the single busiest
+    # process on this shared 20-user host, even after mediasoup-worker's own
+    # priority boost (Design_Mediasoup_Multi_Worker.md §7); `ss -u -a -n`
+    # showed real Recv-Q backlog on this process's own RTP output sockets,
+    # consistent with the OS not scheduling it fast enough under contention.
+    # The C wrapper binary used for mediasoup-worker (a prebuilt binary we
+    # can't add code to) was tried here too by routing this process's spawn
+    # through it, but the resulting process consistently came up at the
+    # default niceness when launched via Node's child_process.spawn() (works
+    # fine when the identical wrapper is invoked directly from a shell) —
+    # root cause not identified without strace/sudo access. Self-targeting
+    # setpriority() sidesteps that entirely: it only requires CAP_SYS_NICE on
+    # THIS process (via `setcap cap_sys_nice+ep` on the real python3 binary —
+    # `realpath $(which python3)`, since capabilities don't follow symlinks),
+    # not on whatever spawned it. Best-effort — silently stays at default
+    # niceness if the capability hasn't been granted yet.
+    _priority_env = os.environ.get("INGEST_DAEMON_PRIORITY", "").strip()
+    if _priority_env:
+        try:
+            os.setpriority(os.PRIO_PROCESS, 0, int(_priority_env))
+        except (ValueError, PermissionError, OSError) as e:
+            print(f"[ingest-daemon] setpriority({_priority_env}) failed: {e} "
+                  f"(run 'sudo setcap cap_sys_nice+ep' on the real python3 binary once) "
+                  f"— continuing at default priority", flush=True)
 
     signal.signal(signal.SIGTERM, _handle_sigterm)
 

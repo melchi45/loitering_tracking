@@ -36,9 +36,23 @@ const httpsConfig = httpsEnabled && fs.existsSync(path.join(certDir, 'server.key
     }
   : undefined;
 
+// Exposed to client runtime code (build-time constants, not env files) so the
+// browser bundle can know this deployment's actual configured ports without
+// guessing — see UmpPlayerView.tsx, which needs the real HTTPS_PORT/HTTP_PORT
+// as a fallback for window.location.port (empty only when the page itself is
+// served on the protocol-default port 443/80, e.g. behind a reverse proxy —
+// hardcoding 443/80 as that fallback would be wrong for this project, whose
+// actual defaults are 3443/3080).
+const httpsPort = senv.HTTPS_PORT || '3443';
+const httpPort  = senv.HTTP_PORT || senv.PORT || '3080';
+
 export default defineConfig({
   plugins: [react()],
   base: '/',
+  define: {
+    __LTS_HTTPS_PORT__: JSON.stringify(httpsPort),
+    __LTS_HTTP_PORT__: JSON.stringify(httpPort),
+  },
   build: {
     outDir: 'dist',
   },
@@ -74,6 +88,15 @@ export default defineConfig({
         secure: false,
       },
       '/socket.io': {
+        target: backendTarget,
+        ws: true,
+        changeOrigin: true,
+        secure: false,
+      },
+      // UMP Player RTSP-over-WebSocket bridge (2026-07-23) — see
+      // server/src/services/umpStreamingServer.js /
+      // docs/design/Design_UMP_Player_RTSP_over_WebSocket.md §4.2.
+      '/StreamingServer': {
         target: backendTarget,
         ws: true,
         changeOrigin: true,
