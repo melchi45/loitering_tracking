@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UMP-WS-001 |
-| **Version** | 2.7 |
+| **Version** | 2.9 |
 | **Status** | Active (구현 완료, 라이브 검증 완료 — channelSlot=6 실 카메라 30fps 확인) |
 | **Date** | 2026-07-24 |
 | **Related Design** | [Design_RTSP_Capture_Backend.md](Design_RTSP_Capture_Backend.md) · [Design_Server_Architecture.md](Design_Server_Architecture.md) |
@@ -348,6 +348,26 @@ python3[<pid>]: segfault ... in libavformat.so.58.76.100
 
 관련 파일: `client/src/components/UmpPlayerView.tsx`
 
+### 8.16 기능 추가 — WS 브릿지에 H.264 키프레임 게이팅 추가 (신규 뷰어 접속 시 SPS 대기 에러 노이즈 제거, 2026-07-24)
+
+**증상**: §8.9/§8.15와는 별개의 경로에서 재확인된 동일 계열 증상 — 이미 라이브 중인 스트림에 신규 UMP WS 뷰어(예: channelSlot=5)가 접속하면 `umpError {message: 'SPS payload is not available for channel 5. ...', errorCode: 772, place: 'mediaRouter.js:spsParse'}`가 수차례 반복된 뒤 정상 재생됨.
+
+**원인**: `umpStreamingServer.js`는 신규 WS 뷰어가 붙을 때마다 MediaMTX RTSP 포트에 **새 TCP 리더 세션**을 열고(`_connectBackend`), 인증 이후로는 `backendSocket`의 데이터를 그대로 `ws.send()`하는 순수 바이트 릴레이였다(RTP/NAL을 전혀 들여다보지 않음). MediaMTX는 신규 리더의 PLAY에 대해 다음 키프레임을 기다리지 않고 "지금" 흐르는 GOP 중간부터 곧바로 데이터를 흘려보내므로, 신규 뷰어는 SPS/PPS가 캐시되기 전에 non-IDR 슬라이스부터 받게 되어 인코더의 다음 GOP 경계(키프레임)가 올 때까지 위 에러가 반복된다. §8.9의 `needsKeyframe` 게이트는 "카메라→MediaMTX 최초 발행" 구간에만 적용되고, 이 "MediaMTX→신규 WS 뷰어" 구간은 커버하지 않는다.
+
+**수정**: `umpStreamingServer.js`의 backend→client 릴레이를 RTSP-over-TCP interleaved framing(RFC 7826 §10.12) 인식 파서로 교체(`_connectBackend()`의 콜백 내부):
+- DESCRIBE 응답의 SDP 본문을 파싱(`parseSdpVideoTrack()`)해 비디오 트랙의 `a=control:` 값과 코덱(H264 또는 H265 — rtpmap의 `H264`/`H265`/`HEVC` 이름으로 판별)을 확인.
+- 해당 트랙의 SETUP 요청/응답을 CSeq로 상관관계 매칭해 `Transport: ...;interleaved=X-Y` 헤더에서 비디오 RTP 인터리브 채널 번호를 확정.
+- 그 채널의 RTP 패킷만 코덱별 분류기로 검사(`classifyVideoRtpPacket()` → `classifyH264RtpPacket()`/`classifyH265RtpPacket()` 디스패치):
+  - **H.264(RFC 6184)**: 단일 NAL·FU-A 프래그먼트·STAP-A 집합 모두 처리 — non-IDR 슬라이스(타입 1/2/3/4/19/20 및 그 FU-A 프래그먼트)는 첫 IDR(타입 5, 또는 IDR을 포함한 STAP-A)이 지나갈 때까지 드롭.
+  - **H.265(RFC 7798, 2026-07-24 추가)**: NAL 헤더가 2바이트이고 타입 번호 체계·집계/분할 패킷 포맷이 H.264와 전혀 다름 — non-IRAP VCL 슬라이스(타입 0~15 및 그 FU 프래그먼트)는 첫 IRAP(타입 16~23 — BLA/IDR/CRA, 또는 IRAP을 포함한 Aggregation Packet, 타입 48)이 지나갈 때까지 드롭.
+  - 두 코덱 모두 VPS/SPS/PPS/SEI/미지 타입은 항상 통과시켜 클라이언트의 캐시를 미리 채운다.
+- 첫 키프레임을 통과시킨 순간 게이트를 영구 오픈 — 이후는 다시 순수 릴레이.
+- Fail-open 설계: 비디오 트랙 코덱이 H264/H265 어느 쪽으로도 확인되지 않거나(예: MJPEG), 채널 매핑을 못 찾거나(SETUP Transport 파싱 실패 등), 4초(`KEYFRAME_GATE_TIMEOUT_MS`) 안에 키프레임을 못 찾으면 게이팅을 포기하고 바로 통과 — 재생 자체를 막는 하드 요구사항이 아니라 노이즈/지연 최적화이므로 실패 시 예전 동작(순수 릴레이)으로 완전히 되돌아간다.
+
+순수 함수(`extractRtspResponseText`/`parseSdpVideoTrack`/`rtpPayload`/`classifyH264RtpPacket`/`classifyH265RtpPacket`/`classifyVideoRtpPacket`)는 단위 테스트 가능하도록 `module.exports`에 포함, `server/src/services/umpStreamingServer.test.js`(Jest, 30 케이스 — H264/H265 양쪽 커버)로 검증.
+
+관련 파일: `server/src/services/umpStreamingServer.js`, `server/src/services/umpStreamingServer.test.js`
+
 ---
 
 ## Revision History
@@ -374,4 +394,6 @@ python3[<pid>]: segfault ... in libavformat.so.58.76.100
 | 2.4 | 2026-07-24 | §8.12 추가(아키텍처) — PyAV RTSP `mux()`가 블로킹 네트워크 쓰기 동안 GIL을 놓지 않아, 스레드로 분리해도 카메라 자신의 읽기 루프가 멈추는 문제를 실험으로 확정. `rtsp_publish_worker.py` 별도 프로세스로 이전해 GIL 공유 자체를 제거 — §4.1 설명 갱신 |
 | 2.7 | 2026-07-24 | §8.15 추가 — `UmpPlayerView.tsx`가 회복 가능한 `error` 이벤트(SPS-not-available, video-element-not-found — 둘 다 `ump-player.js`의 `onUmpError()`에서 전용 case 없이 `default:`로 dispatch됨)에도 `<ump-player>`를 영구 언마운트하던 결함 수정. `error`(치명적)와 `playerNotice`(런타임 비차단 알림) 분리, `statechange`의 `PLAYING` 신호로 알림 자동 해제 |
 | 2.6 | 2026-07-24 | §8.14 추가 — §8.13의 MediaMTX 직접 우회가 `webrtcEnabled` 카메라에만 적용되고 UMP 전용(`umpEnabled`, `webrtcEnabled=false`) 카메라에는 적용되지 않던 결함 수정. `pipelineManager.js`의 `needsMediaMTX`에 `umpEnabled` 반영, `cameras.js`의 `needsRestart`도 동기화. 재측정 ~13.5fps → 28~31fps 복구 확인 |
+| 2.8 | 2026-07-24 | §8.16 추가(기능) — 신규 UMP WS 뷰어 접속 시 반복되던 "SPS payload is not available"(errorCode 772) 노이즈 원인 확정(MediaMTX가 신규 RTSP 리더에게 키프레임을 기다리지 않고 GOP 중간부터 전달) 및 수정: `umpStreamingServer.js`의 backend→client 릴레이에 RTSP interleaved framing 파싱 + H.264 RTP 키프레임 게이팅 추가(DESCRIBE SDP로 비디오 트랙 확인 → SETUP Transport로 인터리브 채널 확정 → 첫 IDR 전까지 non-IDR 슬라이스만 드롭, fail-open). 순수 함수 단위로 분리해 Jest 유닛 테스트 18건 추가(`umpStreamingServer.test.js`) |
+| 2.9 | 2026-07-24 | §8.16 갱신 — 코드 리뷰 지적으로 H.265(HEVC) 카메라가 키프레임 게이팅 대상에서 빠져 있던 것을 확인(2바이트 NAL 헤더, IRAP 타입 번호 체계, AP(48)/FU(49) 패킷 포맷이 H.264와 전혀 다름). `parseSdpVideoTrack()`이 코덱을 `'H264'`/`'H265'`로 구분해 반환하도록 변경, `classifyH265RtpPacket()` 추가 + `classifyVideoRtpPacket()` 디스패처로 통합. H264 전용이던 기존 필드명(`isH264Confirmed`)도 `videoCodec`으로 일반화. Jest 유닛 테스트 18→30건으로 확장 |
 | 2.5 | 2026-07-24 | §8.13 추가(아키텍처) — fleet 부하로 인한 개별 카메라 프레임레이트 저하가 §8.12 이후에도 잔존(GIL 경합은 fan-out 하나만의 문제가 아니었음). `WEBRTC_ENGINE=mediamtx`가 이미 만들어둔, MediaMTX 자신이 카메라를 직접 pull하는 non-GIL 경로를 UMP가 우선 재사용하도록 변경 — ingest-daemon 완전 우회, WebRTC와 동일한 안정성 확보. §3/§4.2 갱신, channelSlot=6 실 카메라 30fps 최종 확인 |
