@@ -76,6 +76,7 @@ test/
 | `nvr_channel_discovery.test.js` | NVR MaxChannel 탐색 | capture 백엔드 없음 |
 | `channel_slot.test.js` | Dashboard Channel Slot 매핑 (FR-CH-001~062) | capture 백엔드 없음 |
 | `capture-backend.test.js` | RTSP Capture Backend | 캡처 클래스 테스트 |
+| `ingest_daemon_control.test.js` | Ingest Daemon Control Start/Stop/Restart (FR-IDC-001~012) | `CAPTURE_BACKEND=ingest-daemon` 없이는 대상 자체가 없음 — Stop/Restart 실제 실행은 `LTS_TEST_INGEST_DESTRUCTIVE=true` 명시 없이는 기본 스킵(라이브 카메라 캡처 중단 방지) |
 | `onvif_metadata_pipeline.test.js` | ONVIF 메타데이터 파이프라인 | ONVIF 구독 없음 |
 | `onvif_apprtp.test.js` | ONVIF App-RTP | capture 파이프라인 없음 |
 | `youtube_streams.test.js` | YouTube 스트림 수집 | YouTubeStreamService 비활성 |

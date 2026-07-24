@@ -1,6 +1,6 @@
 # Design: Admin Dashboard
 
-**Version:** 1.7
+**Version:** 1.8
 **Status:** Implemented
 **Related:** [Design_ONVIF_Timeline.md](Design_ONVIF_Timeline.md) · [SRS_User_Authentication.md](../srs/SRS_User_Authentication.md) · [Design_AI_Model_Catalog.md](Design_AI_Model_Catalog.md)
 
@@ -220,6 +220,8 @@ type AdminSection = 'users' | 'ai-models' | 'webrtc' | 'ingest' | 'onvif' | 'aud
 
 **연동 포인트:** Streaming Dashboard 하단 `SystemStatusBadges.tsx`의 Ingest-Daemon 배지를 admin 계정으로 클릭 시 이 섹션으로 이동(`authStore.pendingAdminSection` 경유).
 
+**Start/Stop/Restart 컨트롤 (Proposed):** 모니터링 전용이던 이 섹션에 Administrator가 ingest-daemon 프로세스를 직접 시작/정지/재시작할 수 있는 버튼 추가 예정 — 상세 설계·API·미결정 사항은 [Design_Ingest_Daemon_Control.md](Design_Ingest_Daemon_Control.md) 참고 (2026-07-23, 사용자 결정 대기, 구현 미착수).
+
 ---
 
 ## 5. 공유 서브컴포넌트
@@ -308,6 +310,7 @@ client/src/pages/admin/
 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
+| 1.8 | 2026-07-23 | §4.6에 Start/Stop/Restart 컨트롤 추가 예정 명시(Proposed) — 상세 설계는 [Design_Ingest_Daemon_Control.md](Design_Ingest_Daemon_Control.md)로 분리, 구현 착수 전 사용자 결정 대기 |
 | 1.7 | 2026-07-21 | §4.6 Ingest Daemon 섹션 구현 완료로 갱신 — Proposed 표기 제거, 실측 검증 결과는 [Design_Ingest_Daemon_Monitoring.md](Design_Ingest_Daemon_Monitoring.md) §8 참고 |
 | 1.6 | 2026-07-21 | §3 nav 표에 `ingest`(Proposed) 행 추가, §4.6 Ingest Daemon 섹션 신규(미구현 — [Design_Ingest_Daemon_Monitoring.md](Design_Ingest_Daemon_Monitoring.md)로 상세 설계 분리, 구현 착수 전 사용자 확인 대기) |
 | 1.0 | 2026-06-16 | 초기 작성 — Admin Dashboard 좌측 사이드바 구조, Users/ONVIF/Audit 3개 섹션 설계 문서화 |

@@ -82,6 +82,7 @@ loitering_tracking/
 │   │   ├── faceSearchSync.js       # streaming→analysis 갤러리/얼굴 스냅샷 push+5s poll (streaming 서버 전용)
 │   │   ├── systemMetrics.js        # CPU·메모리·GPU·디스크 I/O 수집 (admin/system)
 │   │   ├── TcRunnerService.js      # TC-ID 단위 테스트 실행기 (admin/tc-results)
+│   │   ├── ingestDaemonControl.js  # ingest-daemon start/stop/restart 공용 로직 — CLI 스크립트(ingest:start/stop/restart)와 Admin API(/admin/ingest/*) 공동 사용, 포트 bind 테스트 기반 좀비 데몬 감지
 │   │   └── channelSlotService.js   # Dashboard Channel Slot 검증·자동배정·시작 시 backfill 마이그레이션 (MAX_CHANNEL_NUM)
 │   ├── api/                        # REST 리소스 라우터 (팩토리 함수, db/pipelineManager 주입)
 │   │   ├── cameras.js              # /api/cameras — CRUD·probe-channels·stream start/stop/reconnect·ai/toggle
@@ -261,17 +262,20 @@ loitering_tracking/
 | POST | `/admin/tc-results/run` | TC 테스트 수동 재실행 트리거 (body: { port? }) |
 | GET | `/admin/logs/recent` | 최근 서버 로그 조회 (query: source=server\|ingest\|mediamtx\|build, limit) |
 | PATCH | `/admin/logs/level` | Socket.IO 릴레이 로그 레벨 런타임 변경 (body: { level } — 파일 로깅 불변) |
+| POST | `/admin/ingest/start` | ingest-daemon 프로세스 시작 (이미 실행 중이면 no-op) — `CAPTURE_BACKEND=ingest-daemon`이 아니면 501, Design_Ingest_Daemon_Control.md |
+| POST | `/admin/ingest/stop` | ingest-daemon 프로세스 종료 (좀비 상태 포함 — `/health` 아닌 실제 포트 점유 여부로 판단) |
+| POST | `/admin/ingest/restart` | ingest-daemon 종료 후 재시작 + 카메라 재등록 (동기 응답, 최대 ~11초) |
 
 ### 카메라 (`/api/cameras`)
 
 | 메서드 | 경로 | 설명 |
 |--------|------|------|
 | GET | `/api/cameras` | 카메라 목록 조회 (password 제외, pipelineStatus 포함) |
-| POST | `/api/cameras` | 카메라 추가 (body: channelSlot — Dashboard Channel Slot 1..MAX_CHANNEL_NUM, 생략 시 최저 빈 슬롯 자동 배정; maxChannel/supportSunapi/nvrProfiles — SUNAPI/ONVIF NVR 채널 정보) |
+| POST | `/api/cameras` | 카메라 추가 (body: channelSlot — Dashboard Channel Slot 1..MAX_CHANNEL_NUM, 생략 시 최저 빈 슬롯 자동 배정; maxChannel/supportSunapi/nvrProfiles — SUNAPI/ONVIF NVR 채널 정보; streamingMode? — `'jpeg'\|'webrtc'\|'ump'`, UI 편의 필드로 저장 시 `webrtcEnabled`/`umpEnabled`(신규) 두 boolean으로 파생됨, 생략 시 `webrtcEnabled` raw 값도 그대로 허용(하위호환) — Design_UMP_Player_RTSP_over_WebSocket.md §7.2) |
 | POST | `/api/cameras/discover` | ONVIF/UDP 자동 탐색 트리거 (결과는 Socket.IO `discovery:result`) |
 | POST | `/api/cameras/probe-channels` | 단일 IP SUNAPI/ONVIF MaxChannel 온디맨드 재탐지 (body: ip, httpPort?, onvifPort?, username?, password?, baseRtspUrl?, cameraId?) |
-| GET | `/api/cameras/:id` | 카메라 상세 조회 |
-| PUT | `/api/cameras/:id` | 카메라 설정 수정 (body: channelSlot?, channelIndex?, thermalSensorWidth?/thermalSensorHeight? — 열상 센서 네이티브 해상도, 예: 160x120, ThermalOverlay 좌표 calibration용, null이면 미보정 / webrtcVideoOnly? — true 시 ingest-daemon audio+App RTP 세션 생략(mediasoup fan-out 4→2), RTSP 세션 부하가 큰 카메라의 안정성 개선용, Design_RTSP_Capture_Backend.md §6.7 참고) 포함 — 409: 이미 사용 중인 channelSlot; rtspUrl/자격증명/webrtcEnabled/webrtcVideoOnly 변경 시 파이프라인 자동 재시작) |
+| GET | `/api/cameras/:id` | 카메라 상세 조회 — 응답에 `streamingMode`(`webrtcEnabled`/`umpEnabled`로부터 역산) 포함 |
+| PUT | `/api/cameras/:id` | 카메라 설정 수정 (body: channelSlot?, channelIndex?, thermalSensorWidth?/thermalSensorHeight? — 열상 센서 네이티브 해상도, 예: 160x120, ThermalOverlay 좌표 calibration용, null이면 미보정 / webrtcVideoOnly? — true 시 ingest-daemon audio+App RTP 세션 생략(mediasoup fan-out 4→2), RTSP 세션 부하가 큰 카메라의 안정성 개선용, Design_RTSP_Capture_Backend.md §6.7 참고 / streamingMode? — POST와 동일, `webrtcEnabled` raw 필드도 하위호환으로 계속 허용) 포함 — 409: 이미 사용 중인 channelSlot; rtspUrl/자격증명/webrtcEnabled/umpEnabled/webrtcVideoOnly 변경 시 파이프라인 자동 재시작 — umpEnabled도 2026-07-24부터 재시작 트리거(UMP 전용 카메라의 MediaMTX 직접 경로 등록에 영향, Design_RTSP_Capture_Backend.md §6.39)) |
 | POST | `/api/cameras/:id/stream/reconnect` | 파이프라인 중지 후 재시작 |
 | DELETE | `/api/cameras/:id` | 카메라 삭제 (YouTube 카메라는 yt-dlp/ffmpeg 프로세스도 중지) |
 | POST | `/api/cameras/:id/ai/toggle` | AI 추론 ON/OFF 토글 (파이프라인 재시작 없이) |
