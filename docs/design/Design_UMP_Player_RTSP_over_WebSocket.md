@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UMP-WS-001 |
-| **Version** | 2.9 |
+| **Version** | 3.2 |
 | **Status** | Active (구현 완료, 라이브 검증 완료 — channelSlot=6 실 카메라 30fps 확인) |
 | **Date** | 2026-07-24 |
 | **Related Design** | [Design_RTSP_Capture_Backend.md](Design_RTSP_Capture_Backend.md) · [Design_Server_Architecture.md](Design_Server_Architecture.md) |
@@ -368,6 +368,24 @@ python3[<pid>]: segfault ... in libavformat.so.58.76.100
 
 관련 파일: `server/src/services/umpStreamingServer.js`, `server/src/services/umpStreamingServer.test.js`
 
+### 8.17 기능 추가 — UMP 통계 패널 (WebRTC ICE 버튼과 동일한 UX, 2026-07-24)
+
+**요청**: `ump-player.js`의 `onUmpStatistics()`(벤더 자신의 내장 통계 오버레이를 채우는 콜백, `app/ump-player-example.html`이 `elements[i].addEventListener('statistics', onstatistics)`로 구독하는 것과 동일한 공개 이벤트)를 분석해, WebRTC 경로의 "ICE" 배지/토글 버튼과 같은 UX로 UMP 경로에도 통계를 표시.
+
+**분석**: `onUmpStatistics(statistics)`는 `statistics.type`이 `'rtp'`(트랙별 코덱/fps/누적 프레임 수, 세션당 트랙 하나씩 ~1초 간격 — `rtpSession.js`의 `statisticsTimer`)일 때와 `'fps'`(디코드 측 fps/평균 fps/바이트레이트/드롭 프레임/해상도/레이턴시/청크 크기, 마찬가지로 ~1초 간격)일 때 각각 `this[dispatch]("statistics", {statistics})`로 **무조건** 재발행함 — `<ump-player statistics>` 속성이 켜져 있는지 여부는 벤더 자신의 내장 오버레이 DOM 엘리먼트(`this.videoCodecElement` 등, `_statistics`가 true일 때만 생성됨)를 채울지만 결정할 뿐, 이벤트 발행 자체는 막지 않음 — 즉 `statistics` 속성 없이도 `addEventListener('statistics', ...)`로 동일 데이터를 받을 수 있음(벤더 예제와 동일 패턴).
+
+**구현**: WebRTC 경로가 `useWebRTC` 훅(`iceStats`/`rxHistory`/`rxCodec`)으로 `CameraView.tsx`에 통계를 공급하고 `WebRtcStatsPanel.tsx`로 렌더링하는 것과 동일한 구조를 UMP 경로에 이식:
+- `client/src/hooks/useUmpStats.ts`(신규) — `<ump-player>`의 `'statistics'` CustomEvent 페이로드(`type: 'rtp'`/`'fps'`)를 누적해 `WebRtcStatsPanel`과 동형인 스냅샷(`UmpStatsSnapshot`) + ~2분 샘플 히스토리(`UmpSample[]`, `'fps'` 틱에서만 샘플링 — 트랙별 `'rtp'` 틱마다 중복 샘플링되지 않도록)를 반환.
+- `client/src/components/UmpStatsPanel.tsx`(신규) — `WebRtcStatsPanel.tsx`와 동일한 label:value 그리드 + `Sparkline`/`HeatStrip` 레이아웃으로 해상도/코덱/프레임/비트레이트/fps/레이턴시/드롭/청크 표시.
+- `UmpPlayerView.tsx`에 `onStatistics?: (raw: unknown) => void` prop 추가 — 기존 `error`/`statechange` 리스너와 같은 effect에서 `'statistics'` 리스너도 등록해 `e.detail.statistics`를 그대로 부모로 전달.
+- `CameraView.tsx`가 `useUmpStats()`를 호출하고 `onStatistics`를 `UmpPlayerView`에 내려줌. 상단 우측 코너에 WebRTC와 동일한 구조(배지 + 토글 버튼 + Zone 버튼이 같은 `flex-col` 안에 세로로 쌓임)로 "UMP" 배지와 "STATS" 토글 버튼을 렌더링 — 토글은 `webrtcState === 'connected'` 같은 연결 상태 enum이 UMP 쪽엔 없어서, 첫 `'statistics'` 틱을 받았는지(`umpStats !== null`)로 게이팅. 기존에는 `CameraView.tsx`가 `!useWebRTCMode`(=UMP 포함) 조건으로 자체 Zone 버튼을 렌더링했으나, UMP 배지 컨테이너 안으로 옮기면서 조건을 `!useWebRTCMode && !useUmpMode`로 좁힘 — WebRTC와 완전히 대칭인 구조.
+
+관련 파일: `client/src/hooks/useUmpStats.ts`, `client/src/components/UmpStatsPanel.tsx`, `client/src/components/UmpPlayerView.tsx`, `client/src/components/CameraView.tsx`
+
+**후속 버그 수정 (같은 날 배포 직후)**: 실제 카메라로 STATS 패널을 열자마자 `TypeError: e.decodedFpsMean.toFixed is not a function`로 전체 페이지가 크래시. 원인은 벤더 라이브러리 자체의 타입 비일관성 — `app/media/ump/Util/util.js`의 `Mean.prototype.mean()`이 `return this.count ? (this.sum / this.count).toFixed(3) : 0;`로 정의돼 있어, 표본이 하나라도 쌓이면(count > 0) **숫자가 아니라 문자열**을 반환함(count===0일 때만 진짜 숫자 `0`). `videoTagPlayer.js`(카메라가 실제로 사용하는 `<video>` + MSE blob 재생 경로 — DOM에서 `<video src="blob:...">` 확인됨, canvas 렌더러가 아님)의 `'fps'` 이벤트가 이 `mean()` 반환값을 그대로 `decodedFramesMean`/`decodedBytesMean`/`dropFramesMean`에 담고, `latency` 필드도 별도로 항상 `latency.toFixed(4)`(역시 문자열)로 채움. `useUmpStats.ts`가 이 필드들을 `number` 타입으로 그대로 받아, `UmpStatsPanel.tsx`가 그 위에 `.toFixed()`를 다시 호출하면서 크래시(문자열엔 `.toFixed`가 없음 — `stats.dropFramesMean.toFixed(2)`는 가드조차 없어 표본이 하나만 쌓여도 항상 실패). **수정**: 벤더 페이로드 타입을 `number` 대신 `unknown`으로 선언하고, `toNum(v, fallback)` 헬퍼(문자열이든 숫자든 `Number()`로 강제 변환, `NaN`이면 이전 값 유지)를 모든 수신 필드에 일괄 적용 — 신뢰할 수 없는 외부 라이브러리 데이터를 소비 경계에서 방어적으로 정규화.
+
+**후속 버그 수정 2 — Rate 그래프가 우상향 직선으로만 표시됨 (같은 날, 사용자 확인)**: STATS 패널의 "Rate" 스파크라인이 오르내림 없이 계속 우상향하는 직선으로만 그려짐. 원인은 필드 하나 더 있던 벤더의 오해의 소지가 있는 네이밍 — `videoTagPlayer.js`가 보내는 `decodedBytesDecodedPerSec` 필드는 이름과 달리 초당 값(rate)이 아니라 `videoElement.webkitVideoDecodedByteCount`(재생 시작 이후 누적 총 디코드 바이트 수)를 그대로 담고 있음 — 진짜 초당 델타(`videoBytesDecodedPerSec = webkitVideoDecodedByteCount - <이전 값>`)는 `videoMean.record()`로 `decodedBytesMean`(= 진짜 평균 bps)에만 반영되고 별도 필드로는 전송되지 않음. `useUmpStats.ts`가 이 누적 카운터를 그래프 값으로 사용하고 있었으니 우상향 직선이 나오는 게 당연했음. **수정**: `decodedBytesPerSec` 필드를 `decodedBytesTotal`로 이름을 바로잡아 "누적 총량 — 그래프 대상 아님"으로 명확히 하고, `UmpStatsPanel.tsx`의 Rate 행을 재구성 — 실제로 값이 오르내리는 `decodedBpsMean`(평균 bps)을 헤드라인 숫자 + 스파크라인으로, `decodedBytesTotal`은 그래프 없이 "Total 1.2 GB" 같은 정적 숫자로만 별도 표시.
+
 ---
 
 ## Revision History
@@ -397,3 +415,6 @@ python3[<pid>]: segfault ... in libavformat.so.58.76.100
 | 2.8 | 2026-07-24 | §8.16 추가(기능) — 신규 UMP WS 뷰어 접속 시 반복되던 "SPS payload is not available"(errorCode 772) 노이즈 원인 확정(MediaMTX가 신규 RTSP 리더에게 키프레임을 기다리지 않고 GOP 중간부터 전달) 및 수정: `umpStreamingServer.js`의 backend→client 릴레이에 RTSP interleaved framing 파싱 + H.264 RTP 키프레임 게이팅 추가(DESCRIBE SDP로 비디오 트랙 확인 → SETUP Transport로 인터리브 채널 확정 → 첫 IDR 전까지 non-IDR 슬라이스만 드롭, fail-open). 순수 함수 단위로 분리해 Jest 유닛 테스트 18건 추가(`umpStreamingServer.test.js`) |
 | 2.9 | 2026-07-24 | §8.16 갱신 — 코드 리뷰 지적으로 H.265(HEVC) 카메라가 키프레임 게이팅 대상에서 빠져 있던 것을 확인(2바이트 NAL 헤더, IRAP 타입 번호 체계, AP(48)/FU(49) 패킷 포맷이 H.264와 전혀 다름). `parseSdpVideoTrack()`이 코덱을 `'H264'`/`'H265'`로 구분해 반환하도록 변경, `classifyH265RtpPacket()` 추가 + `classifyVideoRtpPacket()` 디스패처로 통합. H264 전용이던 기존 필드명(`isH264Confirmed`)도 `videoCodec`으로 일반화. Jest 유닛 테스트 18→30건으로 확장 |
 | 2.5 | 2026-07-24 | §8.13 추가(아키텍처) — fleet 부하로 인한 개별 카메라 프레임레이트 저하가 §8.12 이후에도 잔존(GIL 경합은 fan-out 하나만의 문제가 아니었음). `WEBRTC_ENGINE=mediamtx`가 이미 만들어둔, MediaMTX 자신이 카메라를 직접 pull하는 non-GIL 경로를 UMP가 우선 재사용하도록 변경 — ingest-daemon 완전 우회, WebRTC와 동일한 안정성 확보. §3/§4.2 갱신, channelSlot=6 실 카메라 30fps 최종 확인 |
+| 3.0 | 2026-07-24 | §8.17 추가(기능) — WebRTC ICE 배지/토글과 동일한 UX로 UMP 통계 패널 추가. `onUmpStatistics()`가 `statistics` 속성과 무관하게 `'statistics'` CustomEvent를 무조건 재발행함을 확인(벤더 예제와 동일 구독 패턴), `useUmpStats.ts`/`UmpStatsPanel.tsx` 신규 + `UmpPlayerView.tsx`에 `onStatistics` prop 추가 + `CameraView.tsx` 상단 우측 코너를 WebRTC와 대칭 구조로 재구성(Zone 버튼을 UMP 배지 컨테이너 안으로 이동) |
+| 3.1 | 2026-07-24 | §8.17 후속 수정 — STATS 패널을 열자마자 "e.decodedFpsMean.toFixed is not a function"로 크래시하던 버그. 원인은 벤더 `Util/util.js`의 `Mean.mean()`이 표본 1개 이상부터 문자열(`.toFixed(3)`)을 반환하는 타입 비일관성(count===0일 때만 진짜 숫자) — `videoTagPlayer.js`가 이를 `decodedFramesMean`/`decodedBytesMean`/`dropFramesMean`/`latency`에 그대로 흘려보냄. `useUmpStats.ts`의 벤더 페이로드 타입을 `unknown`으로 바꾸고 `toNum()` 헬퍼로 전 필드 방어적 정규화 |
+| 3.2 | 2026-07-24 | §8.17 후속 수정 2 — Rate 스파크라인이 오르내림 없이 우상향 직선으로만 그려지던 버그(사용자 확인). `decodedBytesDecodedPerSec` 필드가 이름과 달리 누적 총 바이트 카운터였음(진짜 초당 델타는 `decodedBytesMean`에만 반영됨) — `decodedBytesPerSec`를 `decodedBytesTotal`로 재명명하고 Rate 행을 재구성: `decodedBpsMean`(평균 bps)을 헤드라인+그래프로, `decodedBytesTotal`은 그래프 없이 정적 숫자("Total X GB")로 분리 |

@@ -4,6 +4,13 @@ import type { Camera } from '../types';
 
 type Props = {
   camera: Camera;
+  // Forwards the raw payload of <ump-player>'s 'statistics' CustomEvent
+  // (e.detail.statistics — see ump-player.js's onUmpStatistics()/[dispatch]())
+  // up to CameraView.tsx, which owns the UMP stats badge/toggle/panel (same
+  // pattern as useWebRTC's iceStats/rxHistory) so it can sit in the same
+  // top-right corner flex column as the WebRTC/Zone rows instead of a
+  // second, overlapping absolutely-positioned block. See useUmpStats.ts.
+  onStatistics?: (raw: unknown) => void;
 };
 
 // UmpPlayerElement is the subset of the custom element's instance API this
@@ -169,7 +176,7 @@ function loadUmpPlayerScript(): Promise<void> {
  * attribute race), and the package's own app/*.html examples all drive
  * playback via an explicit `.play()` call instead of relying on it.
  */
-export default function UmpPlayerView({ camera }: Props) {
+export default function UmpPlayerView({ camera, onStatistics }: Props) {
   const accessToken = useAuthStore((s) => s.accessToken);
   const [scriptReady, setScriptReady] = useState(false);
   const [creds, setCreds] = useState<{ username: string; password: string } | null>(null);
@@ -256,8 +263,20 @@ export default function UmpPlayerView({ camera }: Props) {
         setPlayerNotice('');
       }
     };
+    // 'statistics' fires ~1/sec regardless of the (unused here) `statistics`
+    // attribute — that attribute only gates the vendor's own built-in overlay
+    // DOM elements, not the event dispatch itself (confirmed against
+    // ump-player.js's onUmpStatistics(): the internal element updates are
+    // individually guarded by `this.videoCodecElement !== null` etc., but
+    // `this[dispatch]("statistics", ...)` runs unconditionally). Matches the
+    // vendor's own reference example (app/ump-player-example.html), which
+    // wires the identical `elements[i].addEventListener('statistics', ...)`.
+    const onStatisticsEvent = (e: Event) => {
+      onStatistics?.((e as CustomEvent).detail?.statistics);
+    };
     el.addEventListener('error', onError);
     el.addEventListener('statechange', onStateChange);
+    el.addEventListener('statistics', onStatisticsEvent);
     try {
       el.play();
     } catch (err) {
@@ -266,8 +285,9 @@ export default function UmpPlayerView({ camera }: Props) {
     return () => {
       el.removeEventListener('error', onError);
       el.removeEventListener('statechange', onStateChange);
+      el.removeEventListener('statistics', onStatisticsEvent);
     };
-  }, [scriptReady, creds, camera.id]);
+  }, [scriptReady, creds, camera.id, onStatistics]);
 
   if (camera.channelSlot == null) {
     return (

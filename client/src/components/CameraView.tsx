@@ -2,11 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Volume2, VolumeX } from 'lucide-react';
 import { useCamera } from '../hooks/useCamera';
 import { useWebRTC } from '../hooks/useWebRTC';
+import { useUmpStats } from '../hooks/useUmpStats';
 import { useCameraStore } from '../stores/cameraStore';
 import { useI18n } from '../i18n';
 import ZoneEditor from './ZoneEditor';
 import ThermalOverlay from './ThermalOverlay';
 import WebRtcStatsPanel from './WebRtcStatsPanel';
+import UmpStatsPanel from './UmpStatsPanel';
 import UmpPlayerView from './UmpPlayerView';
 import type { Detection, Zone } from '../types';
 
@@ -331,12 +333,17 @@ export default function CameraView({ cameraId, cameraName }: Props) {
   const { frame, detections, frameWidth, frameHeight } = useCamera(cameraId);
   // WebRTC path (active only when webrtcEnabled + global WebRTC enabled)
   const { videoRef, state: webrtcState, hasAudio, retry: retryWebRTC, iceStats, rxHistory, rxCodec } = useWebRTC(cameraId, useWebRTCMode);
+  // UMP path stats (active only when streamingMode === 'ump') — fed by
+  // UmpPlayerView's 'statistics' listener via onStatistics, same shape of
+  // wiring as useWebRTC's iceStats/rxHistory above. See useUmpStats.ts.
+  const { stats: umpStats, history: umpHistory, onStatistics: onUmpStatistics } = useUmpStats();
 
   const imgRef    = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const [isMuted,      setIsMuted]      = useState(true);
   const [showIcePanel, setShowIcePanel] = useState(false);
+  const [showUmpPanel, setShowUmpPanel] = useState(false);
 
   // Sync muted state when WebRTC reconnects (stream re-attached).
   // Note: user-initiated unmute must be set synchronously in the click handler (not here)
@@ -390,7 +397,52 @@ export default function CameraView({ cameraId, cameraName }: Props) {
     <div className="relative w-full h-full bg-gray-900 overflow-hidden rounded-lg">
       {useUmpMode && camera ? (
         /* ── UMP path: RTSP-over-WebSocket via <ump-player> ── */
-        <UmpPlayerView camera={camera} />
+        <>
+          <UmpPlayerView camera={camera} onStatistics={onUmpStatistics} />
+          {/* UMP badge + stats toggle + Zone button — same stacked top-right
+              corner layout as the WebRTC badge/ICE/Zone rows below, so the
+              two streaming modes read as the same UI. Toggle gates on
+              umpStats !== null (first 'statistics' tick received) rather
+              than a connection-state enum — UmpPlayerView doesn't expose
+              one, and "has produced at least one stat sample" is an
+              equivalent proxy for "connected enough to show". */}
+          <div className="absolute top-2 right-2 flex flex-col items-end gap-1 z-10">
+            <div className="flex items-center gap-1">
+              <div className="bg-purple-900/70 rounded px-1.5 py-0.5 text-[9px] font-bold text-purple-300">
+                UMP
+              </div>
+              {umpStats && (
+                <button
+                  onClick={() => setShowUmpPanel((v) => !v)}
+                  title="UMP statistics"
+                  className={`rounded px-1.5 py-0.5 text-[9px] font-bold transition-colors ${
+                    showUmpPanel
+                      ? 'bg-cyan-600/80 text-white'
+                      : 'bg-gray-700/70 text-gray-400 hover:text-cyan-300'
+                  }`}
+                >
+                  STATS
+                </button>
+              )}
+            </div>
+            {!editZones && (
+              <button
+                onClick={() => setEditZones(true)}
+                className="bg-black/60 hover:bg-black/80 rounded px-2 py-1 text-[10px] text-gray-300 hover:text-white transition-colors"
+                title={t.zoneEdit}
+              >
+                {zones.length > 0 ? `Zone ${zones.length}` : t.zoneAdd}
+              </button>
+            )}
+          </div>
+          {/* UMP stats panel — same position/sizing/scroll behavior as the
+              WebRTC ICE panel below (see its comment for rationale). */}
+          {showUmpPanel && umpStats && (
+            <div className="absolute top-9 right-2 max-h-[calc(100%-3rem)] overflow-y-auto bg-black/85 rounded-lg p-1.5 text-[9px] font-mono text-gray-200 z-20 w-[220px] border border-gray-700/60">
+              <UmpStatsPanel stats={umpStats} history={umpHistory} />
+            </div>
+          )}
+        </>
       ) : useWebRTCMode ? (
         /* ── WebRTC path: native <video> element ── */
         <>
@@ -558,9 +610,9 @@ export default function CameraView({ cameraId, cameraName }: Props) {
         <span className={`text-[10px] font-bold ${statusColor.replace('bg-', 'text-')} ml-1`}>{statusLabel}</span>
       </div>
 
-      {/* Zone edit button (top-right) — shown for non-WebRTC cameras only;
-          WebRTC cameras render this button inside the WebRTC badge container above */}
-      {!editZones && !useWebRTCMode && (
+      {/* Zone edit button (top-right) — shown for the JPEG path only; WebRTC
+          and UMP cameras render this button inside their own badge container above */}
+      {!editZones && !useWebRTCMode && !useUmpMode && (
         <button
           onClick={() => setEditZones(true)}
           className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 rounded px-2 py-1 text-[10px] text-gray-300 hover:text-white transition-colors z-10"
