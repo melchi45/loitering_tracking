@@ -287,6 +287,17 @@ async function main() {
   // SPS/PPS crash investigation is done: https://dev.hanwhavision.com:3443/ump-player/ump-player-example.html
   app.use('/ump-player', express.static(path.join(__dirname, '..', '..', 'submodules', 'ump-player', 'app')));
 
+// TEMP DIAGNOSTIC (2026-07-24) — serves the ump-player submodule's React port
+  // (app-react) build output at this server's own origin, so it can hit
+  // /StreamingServer over the same already-trusted TLS cert instead of needing a
+  // separate self-signed-cert exception on another port. Must serve `dist/`
+  // (built via `npm run build` in app-react), not the raw project — the dev
+  // index.html references /src/main.tsx and other paths only a Vite dev
+  // server can resolve, and vite.config.ts's `base: '/ump-react/'` only takes
+  // effect in the built output. Remove once the UMP React port is done:
+  // https://dev.hanwhavision.com:3443/ump-react/
+  app.use('/ump-react', express.static(path.join(__dirname, '..', '..', 'submodules', 'ump-player', 'app-react', 'dist')));
+
   // ── Auth / Admin Routes ───────────────────────────────────────────────────
   app.use('/auth',  authRouter);
   app.use('/admin', adminRouter);

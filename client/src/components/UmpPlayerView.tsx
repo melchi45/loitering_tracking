@@ -319,6 +319,16 @@ export default function UmpPlayerView({ camera }: Props) {
             // since this project's real defaults are 3443/3080.
             port={window.location.port || (secure ? __LTS_HTTPS_PORT__ : __LTS_HTTP_PORT__)}
             secure={secure ? 'true' : 'false'}
+            // This page is always served BY the LTS server itself (see
+            // hostname/proxy above), never by the device being connected to
+            // — so the /StreamingServer WS address must never derive a path
+            // suffix from window.location.pathname (streamPlayer.js's
+            // open()/startStreaming()). Currently harmless only because this
+            // view happens to always render at "/", but any future nested
+            // route would reproduce the bug fixed in app-react's App.tsx
+            // (a bogus "/StreamingServer/<route>" suffix). See
+            // docs/design/Design_UMP_Player_RTSP_over_WebSocket.md.
+            // use_pathname="false"
             device="nvr"
             // ump-player's NVR mode treats `channel` as 1-based and subtracts 1
             // internally to build the outgoing RTSP path (ump-player.js:626-627,

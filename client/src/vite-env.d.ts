@@ -25,6 +25,7 @@ declare namespace JSX {
       proxy?: string;
       port?: string;
       secure?: string;
+      use_pathname?: string;
       device?: string;
       channel?: string;
       profile_number?: string;
