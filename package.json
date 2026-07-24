@@ -29,6 +29,7 @@
     "check:gpu": "cd server && npm run check:gpu",
     "build-ort:auto": "cd server && npm run build-ort:auto",
     "build-ort:auto:dry": "cd server && npm run build-ort:auto:dry",
+    "build:mediasoup-wrapper": "cd server && npm run build:mediasoup-wrapper",
     "test:all": "node test/run_all.js --skip e2e",
     "test:tc": "node test/tc_runner_cli.js",
     "test:report": "node test/generate_report.js --skip e2e"

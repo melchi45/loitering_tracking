@@ -1,6 +1,16 @@
 node_modules/
 .env
 .env_*
+# npm.pkg.github.com auth token for @melchi45/ump-player (2026-07-23,
+# docs/ops/UMP_Player_Streaming_Setup.md §2) — per-developer secret, never commit.
+client/.npmrc
+
+# ump-player runtime assets — postinstall-generated symlinks into
+# submodules/ump-player (client/scripts/copyUmpPlayerAssets.js, 2026-07-24).
+# Never commit: symlink targets are relative to this checkout's layout and
+# assume the submodule is initialized.
+client/public/media/
+client/public/ump-player/
 server/storage/
 client/dist/
 *.db
@@ -26,8 +36,16 @@ auto.key
 
 # Runtime log files (production log output — written to /var/log/lts or server/logs/)
 server/logs/
+sdp-debug.log
 
 # Python bytecode cache
 ingest-daemon/__pycache__/
 **/__pycache__/
 *.pyc
+
+# mediasoup-worker priority wrapper — machine/architecture-specific compiled
+# binary + CMake scratch dir, rebuilt locally via `npm run build:mediasoup-wrapper`
+# (server/src/scripts/buildMediasoupWorkerWrapper.js). Source (wrapper.c,
+# CMakeLists.txt) is committed; build output is not.
+tools/mediasoup-worker-priority-wrapper/build/
+tools/mediasoup-worker-priority-wrapper/bin/

@@ -4,7 +4,13 @@
  * mediasoup WebRTC engine — Audio + Video + DataChannel.
  *
  * Architecture:
- *   - One mediasoup Worker + Router (shared across all cameras and viewers)
+ *   - A pool of mediasoup Workers (MEDIASOUP_NUM_WORKERS, default
+ *     min(cpuCount, 8)), each with its own default Router — cameras are
+ *     assigned to a Worker via a deterministic hash of cameraId (2026-07-22,
+ *     §6.31 — see docs/design/Design_Mediasoup_Multi_Worker.md). Was a
+ *     single global Worker/Router for the whole server; see that design doc
+ *     for the live evidence (mediasoup-worker's own UDP Recv-Q backing up
+ *     multiple megabytes under load) that motivated splitting it.
  *   - Per-camera PlainTransports:
  *       videoPlain ← H.264 RTP from ingest-daemon UDP:{mediasoupPort}
  *       audioPlain ← Opus  RTP from ingest-daemon UDP:{mediasoupAudioPort}
@@ -15,6 +21,9 @@
  * Env vars consumed:
  *   SERVER_IP            — local IP announced to browsers in ICE candidates
  *   SERVER_PUBLIC_IP     — public IP announced (falls back to SERVER_IP)
+ *   MEDIASOUP_NUM_WORKERS — size of the Worker pool (default min(os.cpus().length, 8))
+ *   MEDIASOUP_WORKER_PRIORITY — nice value applied to each Worker process, -20..19 (default -5;
+ *                       requires CAP_SYS_NICE on the mediasoup-worker binary, see _applyWorkerPriority())
  *   MEDIASOUP_MIN_PORT   — start of RTC UDP port range (default 40000)
  *   MEDIASOUP_MAX_PORT   — end of RTC UDP port range   (default 49999)
  *   INGEST_DAEMON_URL    — ingest-daemon base URL (default http://127.0.0.1:7070)
@@ -27,6 +36,8 @@
 const mediasoup = require('mediasoup');
 const http      = require('http');
 const os        = require('os');
+const fs        = require('fs');
+const path      = require('path');
 
 const ENGINE_NAME       = 'mediasoup';
 const ANNOUNCED_IP      = (process.env.SERVER_PUBLIC_IP || process.env.SERVER_IP || '127.0.0.1').trim();
@@ -57,10 +68,26 @@ const AUDIO_PT   = 111;
 const VIDEO_SSRC = 0x22334455;  // 573785173 decimal
 const AUDIO_SSRC = 0x33445566;  // 860116326 decimal
 
-// ── Singleton worker / router ─────────────────────────────────────────────────
-let _worker = null;
-let _router = null;
-let _initP  = null;
+// ── Worker pool (2026-07-22, §6.31 — see docs/design/Design_Mediasoup_Multi_Worker.md) ──
+// Was a single global Worker/Router handling every camera on one OS thread.
+// Live diagnosis (Design_RTSP_Capture_Backend.md §6.30.2) found mediasoup-
+// worker's own UDP sockets carrying multi-MB unread Recv-Q backlogs and
+// /proc/net/snmp's Udp.RcvbufErrors actively climbing in real time, while the
+// Worker's own CPU stayed at 13-14% on a 40-core host — a single-threaded
+// processing-order bottleneck, not a CPU-capacity one (mediasoup's own docs
+// recommend one Worker per core; this deployment used exactly one, period).
+// Each pool slot now owns its own Worker (real OS thread) + a default Router
+// mirroring the old single `_router`. Camera → Worker assignment is a
+// deterministic hash of cameraId, computed once in addCameraStream() and
+// stored on that camera's `_cameras` entry (`workerIndex`) rather than
+// re-hashed later — Producer and Consumer for one camera MUST end up on the
+// same Router (mediasoup's own hard constraint: transport.consume() requires
+// the Producer to live on the calling Router), so every later lookup for an
+// existing camera (negotiate(), alt-pipeline) reads the stored index instead
+// of trusting a fresh hash to agree.
+const NUM_WORKERS = Math.max(1, parseInt(process.env.MEDIASOUP_NUM_WORKERS, 10) || Math.min(os.cpus().length, 8));
+let _workerPool = []; // index → { worker, router } | null (null = not yet booted or died, pending rebuild)
+let _initP  = null;   // guards the initial whole-pool boot only; a single dead slot rebuilds via _ensureWorkerSlot()
 
 // Per-camera state map
 // cameraId → { videoPlain, videoProducer, audioPlain, audioProducer, directTransport, dataProducer }
@@ -241,47 +268,91 @@ function _buildVideoRtpParameters() {
 
 // ── Router boot ───────────────────────────────────────────────────────────────
 
-async function _ensureRouter() {
-  if (_router && !_router.closed) return _router;
-  if (_initP) return _initP;
-  _initP = _boot().catch(err => { _initP = null; throw err; });
-  return _initP;
+// Deterministic camera → Worker-pool-index hash — see the pool comment above
+// state decl for why this must be stable per camera rather than re-derived
+// per call. `undefined`/empty cameraId (only used by isHealthy()'s generic
+// liveness probe, which has no specific camera in mind) always lands on
+// slot 0 rather than hashing garbage.
+function _workerIndexFor(cameraId) {
+  if (!cameraId) return 0;
+  let h = 0;
+  for (let i = 0; i < cameraId.length; i++) h = (h * 31 + cameraId.charCodeAt(i)) | 0;
+  return Math.abs(h) % NUM_WORKERS;
 }
 
-async function _boot() {
-  _worker = await mediasoup.createWorker({
-    logLevel:   'warn',
-    rtcMinPort: RTC_MIN_PORT,
-    rtcMaxPort: RTC_MAX_PORT,
-  });
+// Guards concurrent rebuild of the SAME slot (initial boot of all slots, or a
+// single slot rebuilding after its Worker died) — mirrors the original
+// singleton's `_initP` in-flight-promise pattern, just keyed per slot instead
+// of once globally.
+const _slotBootP = new Map(); // index → Promise<{worker, router}>
 
-  _worker.on('died', () => {
-    console.error('[WebRTC][mediasoup] worker died — resetting and re-registering cameras');
-    // Save camera list before clearing so we can restore streams after reboot
-    const toRestore = [..._cameras.entries()]
-      .filter(([, cam]) => cam.rtspUrl)
-      .map(([id, cam]) => ({ id, rtspUrl: cam.rtspUrl }));
-    _worker = null;
-    _router = null;
-    _initP  = null;
-    for (const [id, cam] of _cameras.entries()) _closeCam(cam, id);
-    _cameras.clear();
-    // Alt-PT routers/pipelines (2026-07-20, §6.26) live on the same dead
-    // Worker — stale either way; self-heal lazily on each camera's next
-    // negotiate() against the new worker/router, no need to actively rebuild.
-    for (const id of _altPipelines.keys()) _closeAltPipelines(id);
-    _ptRouters.clear();
-    if (toRestore.length > 0) {
-      setTimeout(async () => {
-        console.log(`[WebRTC][mediasoup] re-registering ${toRestore.length} cameras after worker restart`);
-        for (const { id, rtspUrl } of toRestore) {
-          try { await addCameraStream(id, rtspUrl); }
-          catch (e) { console.error(`[WebRTC][mediasoup] re-register failed ${id.slice(0,8)}: ${e.message}`); }
-        }
-      }, 2000);
-    }
-  });
+async function _ensureWorkerSlot(index) {
+  const existing = _workerPool[index];
+  if (existing && !existing.worker.closed && !existing.router.closed) return existing;
+  if (_slotBootP.has(index)) return _slotBootP.get(index);
+  const p = _bootWorkerSlot(index)
+    .then(slot => { _workerPool[index] = slot; _slotBootP.delete(index); return slot; })
+    .catch(err => { _slotBootP.delete(index); throw err; });
+  _slotBootP.set(index, p);
+  return p;
+}
 
+async function _ensureRouter(cameraId) {
+  if (_workerPool.length === 0) {
+    if (!_initP) _initP = _bootPool().catch(err => { _initP = null; throw err; });
+    await _initP;
+  }
+  const slot = await _ensureWorkerSlot(_workerIndexFor(cameraId));
+  return slot.router;
+}
+
+async function _bootPool() {
+  _workerPool = new Array(NUM_WORKERS).fill(null);
+  await Promise.all(Array.from({ length: NUM_WORKERS }, (_, i) => _ensureWorkerSlot(i)));
+  const listenIps = _getListenIps().map(x => x.announcedIp).join(', ');
+  console.log(
+    `[WebRTC][mediasoup] ready  workers=${NUM_WORKERS}  announcedIps=[${listenIps}]  rtcPorts=${RTC_MIN_PORT}-${RTC_MAX_PORT}`
+  );
+}
+
+function _handleWorkerDied(index) {
+  console.error(`[WebRTC][mediasoup] worker[${index}] died — resetting and re-registering its cameras`);
+  // Only this slot's own cameras are affected — the other slots (and their
+  // Workers/cameras) are untouched, unlike the pre-§6.31 singleton where any
+  // Worker death reset every camera on the server.
+  const affected = [..._cameras.entries()].filter(([, cam]) => cam.workerIndex === index);
+  const toRestore = affected.filter(([, cam]) => cam.rtspUrl).map(([id, cam]) => ({ id, rtspUrl: cam.rtspUrl }));
+  for (const [id, cam] of affected) {
+    _closeCam(cam, id);
+    _cameras.delete(id);
+    // Alt-PT pipelines (2026-07-20, §6.26) for this camera live on the same
+    // dead Worker — stale either way; self-heal lazily on the camera's next
+    // negotiate() against the rebuilt slot, no need to actively rebuild here.
+    _closeAltPipelines(id);
+  }
+  for (const key of [..._ptRouters.keys()]) {
+    if (key.startsWith(`${index}:`)) _ptRouters.delete(key);
+  }
+  _workerPool[index] = null; // _ensureWorkerSlot() rebuilds this slot lazily on next access
+  if (toRestore.length > 0) {
+    setTimeout(async () => {
+      console.log(`[WebRTC][mediasoup] re-registering ${toRestore.length} cameras after worker[${index}] restart`);
+      for (const { id, rtspUrl } of toRestore) {
+        try { await addCameraStream(id, rtspUrl); }
+        catch (e) { console.error(`[WebRTC][mediasoup] re-register failed ${id.slice(0,8)}: ${e.message}`); }
+      }
+    }, 2000);
+  }
+}
+
+// _buildDefaultMediaCodecs() — extracted (2026-07-22, §6.31) so every Worker
+// in the pool boots a Router with the IDENTICAL codec/PT declarations; a
+// mismatch between Workers would make a camera's negotiated PT depend on
+// which Worker it happened to hash to, defeating the whole point of §6.26's
+// PT-router cache being per-Worker. Called fresh per Worker (not shared/
+// memoized) since `.map()` below allocates new objects each call — safe to
+// call N times with no shared mutable state between Workers.
+function _buildDefaultMediaCodecs() {
   // (2026-07-16, §6.14) PT=109 was previously assumed to be Edge's plain-H264 PT,
   // matching what its own offer allegedly used ("Edge offers PT=109=H264/42e01f/pm=1").
   // Direct inspection of a real Chrome offer's rtpmap/fmtp lines shows the actual
@@ -335,9 +406,8 @@ async function _boot() {
     { mimeType: 'audio/SILK',  clockRate: 8000  },
   ].map((c, i) => ({ kind: 'audio', preferredPayloadType: 100 + i, ...c }));
 
-  _router = await _worker.createRouter({
-    mediaCodecs: [
-      ..._rtxPtReservations,
+  return [
+    ..._rtxPtReservations,
       {
         kind:      'video',
         mimeType:  'video/H264',
@@ -400,14 +470,94 @@ async function _boot() {
         clockRate: 48000,
         channels:  2,
       },
-    ],
-  });
+  ];
+}
 
-  const listenIps = _getListenIps().map(x => x.announcedIp).join(', ');
-  console.log(
-    `[WebRTC][mediasoup] ready  announcedIps=[${listenIps}]  rtcPorts=${RTC_MIN_PORT}-${RTC_MAX_PORT}`
-  );
-  return _router;
+// Scheduling priority (2026-07-22, §6.31 follow-up) — live diagnosis on this
+// shared 27-user host found individual mediasoup-worker processes with
+// multi-MB unread UDP Recv-Q backlogs (and climbing Udp.RcvbufErrors) WHILE
+// sitting at 2-5% CPU — even a Worker with exactly one camera and zero
+// contention from other cameras. Since CPU headroom clearly isn't the
+// constraint, the remaining plausible cause is OS scheduling latency: a
+// single-threaded process idle most of the time still needs to be woken and
+// actually run within a few milliseconds of a burst arriving (a 5MP
+// keyframe's UDP packet train), and on a busy shared host the kernel isn't
+// guaranteed to schedule it that promptly against everyone else's load.
+// os.setPriority() (SCHED_OTHER nice value, -20 highest .. 19 lowest) asks
+// the kernel to prefer scheduling a process sooner when runnable. Deliberately
+// NOT the maximum (-20): this host is shared with ~27 other logged-in users,
+// and a realtime-adjacent priority for every camera's Worker would be an
+// inconsiderate default. -5 is a moderate boost — noticeably above default
+// niceness without approaching real-time starvation risk for others.
+const WORKER_NICE_PRIORITY = parseInt(process.env.MEDIASOUP_WORKER_PRIORITY, 10) || -5;
+
+// First attempt (2026-07-22) called os.setPriority(workerPid, ...) directly
+// from THIS process (Node's main process) against the mediasoup-worker
+// CHILD's pid, with CAP_SYS_NICE granted via `setcap` on the mediasoup-worker
+// BINARY. Confirmed live this does nothing: setpriority() targeting another
+// process checks the CALLER's capabilities, not the target's — the capability
+// was on the wrong binary. Fixed (still same day) with
+// tools/mediasoup-worker-priority-wrapper/wrapper.c — a tiny binary that
+// receives CAP_SYS_NICE on ITSELF, raises its OWN priority post-execve (a
+// process's nice value survives execve unchanged), then chain-execs into the
+// real mediasoup-worker, which inherits the already-elevated priority without
+// ever needing the capability itself. Optional/Linux-only — see that file's
+// own comment and Design_Mediasoup_Multi_Worker.md §7 for the full story,
+// including why Windows/macOS don't need or can't use this wrapper. Built via
+// `npm run build:mediasoup-wrapper`; simply absent (this resolves to false)
+// until that's been run, in which case _applyWorkerPriorityFallback() below
+// is used instead.
+const _WRAPPER_BIN = path.resolve(
+  __dirname, '../../../../tools/mediasoup-worker-priority-wrapper/bin',
+  process.platform === 'win32' ? 'mediasoup-worker-wrapper.exe' : 'mediasoup-worker-wrapper'
+);
+const _WRAPPER_AVAILABLE = process.platform !== 'win32' && (() => {
+  try { return fs.statSync(_WRAPPER_BIN).isFile(); } catch { return false; }
+})();
+
+// Fallback used when the wrapper isn't built: a direct parent-side
+// os.setPriority(workerPid, ...) call. This is NOT just a weaker version of
+// the wrapper — on Windows it's actually sufficient on its own (Win32's
+// SetPriorityClass lets a process raise ITS OWN children up to
+// HIGH_PRIORITY_CLASS without extra privilege, unlike POSIX setpriority()'s
+// CAP_SYS_NICE requirement), so Windows deliberately never uses the wrapper
+// path at all (see _WRAPPER_AVAILABLE) and relies on this every time. On
+// Linux/macOS without the wrapper built, this will typically fail and just
+// warn — harmless, matches the pre-wrapper graceful-degradation behavior.
+function _applyWorkerPriorityFallback(worker) {
+  if (!worker.pid) return;
+  try {
+    os.setPriority(worker.pid, WORKER_NICE_PRIORITY);
+  } catch (err) {
+    console.warn(
+      `[WebRTC][mediasoup] could not raise worker[pid=${worker.pid}] scheduling priority ` +
+      `(${err.message}) — on Linux, run 'npm run build:mediasoup-wrapper' once (see ` +
+      `docs/design/Design_Mediasoup_Multi_Worker.md §7) to enable this properly`
+    );
+  }
+}
+
+async function _bootWorkerSlot(index) {
+  const createOpts = {
+    logLevel:   'warn',
+    rtcMinPort: RTC_MIN_PORT,
+    rtcMaxPort: RTC_MAX_PORT,
+  };
+  if (_WRAPPER_AVAILABLE) {
+    // Read by wrapper.c itself (see that file) — process.env is inherited by
+    // whatever child mediasoup.createWorker() spawns next. Safe to set on
+    // every call even though _bootWorkerSlot() runs concurrently for all
+    // pool slots at initial boot (Promise.all) — every writer sets the exact
+    // same value, so there's no meaningful race.
+    process.env.MEDIASOUP_WORKER_REAL_BIN = mediasoup.workerBin;
+    process.env.MEDIASOUP_WORKER_PRIORITY = String(WORKER_NICE_PRIORITY);
+    createOpts.workerBin = _WRAPPER_BIN;
+  }
+  const worker = await mediasoup.createWorker(createOpts);
+  worker.on('died', () => _handleWorkerDied(index));
+  if (!_WRAPPER_AVAILABLE) _applyWorkerPriorityFallback(worker);
+  const router = await worker.createRouter({ mediaCodecs: _buildDefaultMediaCodecs() });
+  return { worker, router };
 }
 
 // ── Per-PT alternate Router/pipeline cache (2026-07-20, §6.26) ───────────────
@@ -440,10 +590,13 @@ async function _boot() {
 // random per-connection, so this stays small and stable in practice without
 // ever needing to hardcode which values to expect.
 //
-// PT=108 (DEFAULT_VIDEO_PT) keeps using the existing shared `_router` /
-// `_cameras` map unchanged — zero extra cost for whatever fraction of
-// viewers happen to match it. Only a genuinely different PT triggers this
-// additional machinery.
+// PT=108 (DEFAULT_VIDEO_PT) keeps using that camera's existing default
+// Router/`_cameras` entry unchanged — zero extra cost for whatever fraction
+// of viewers happen to match it. Only a genuinely different PT triggers this
+// additional machinery. (2026-07-22, §6.31 — "existing shared _router" above
+// is now per-Worker-pool-slot rather than a single global one; every alt-PT
+// Router this section builds is pinned to the SAME Worker as the camera's
+// own default pipeline — see _ensurePtRouter()'s workerIndex parameter.)
 
 const DEFAULT_VIDEO_PT = 108;
 
@@ -468,19 +621,24 @@ function _computeRtxPlaceholderPts(claimedPts, targetRtxPt) {
   return placeholders;
 }
 
-// videoPt → Promise<Router>, cached/idempotent.
+// "workerIndex:videoPt" → Promise<Router>, cached/idempotent. Composite key
+// (2026-07-22, §6.31 — was plain videoPt) because each Worker in the pool
+// needs its OWN alt-PT Router; a camera's alt pipeline must land on the same
+// Worker as that camera's default pipeline (see the pool comment near the
+// state decls), not a shared global one.
 const _ptRouters = new Map();
 
-function _ensurePtRouter(videoPt, videoRtxPt) {
-  if (videoPt === DEFAULT_VIDEO_PT) return _ensureRouter();
-  if (_ptRouters.has(videoPt)) return _ptRouters.get(videoPt);
-  const p = _bootPtRouter(videoPt, videoRtxPt).catch(err => { _ptRouters.delete(videoPt); throw err; });
-  _ptRouters.set(videoPt, p);
+function _ensurePtRouter(workerIndex, videoPt, videoRtxPt) {
+  if (videoPt === DEFAULT_VIDEO_PT) return _ensureWorkerSlot(workerIndex).then(slot => slot.router);
+  const key = `${workerIndex}:${videoPt}`;
+  if (_ptRouters.has(key)) return _ptRouters.get(key);
+  const p = _bootPtRouter(workerIndex, videoPt, videoRtxPt).catch(err => { _ptRouters.delete(key); throw err; });
+  _ptRouters.set(key, p);
   return p;
 }
 
-async function _bootPtRouter(videoPt, videoRtxPt) {
-  await _ensureRouter(); // guarantees _worker exists — Routers share one Worker
+async function _bootPtRouter(workerIndex, videoPt, videoRtxPt) {
+  const slot = await _ensureWorkerSlot(workerIndex); // guarantees this pool slot's Worker exists
   // Opus MUST be claimed before the RTX-placeholder computation below, not
   // just excluded from it conceptually — mediasoup's real free-list walk
   // only skips a PT once something EARLIER in the mediaCodecs array explicitly
@@ -513,8 +671,8 @@ async function _bootPtRouter(videoPt, videoRtxPt) {
     },
   });
 
-  const router = await _worker.createRouter({ mediaCodecs });
-  console.log(`[WebRTC][mediasoup] alt-PT router ready videoPt=${videoPt}${videoRtxPt != null ? ` rtxPt=${videoRtxPt}` : ' (rtxPt unknown — RTX disabled for this PT)'}`);
+  const router = await slot.worker.createRouter({ mediaCodecs });
+  console.log(`[WebRTC][mediasoup] alt-PT router ready worker=${workerIndex} videoPt=${videoPt}${videoRtxPt != null ? ` rtxPt=${videoRtxPt}` : ' (rtxPt unknown — RTX disabled for this PT)'}`);
   return router;
 }
 
@@ -540,7 +698,9 @@ function _ensureAltPipeline(cameraId, videoPt, videoRtxPt) {
 }
 
 async function _buildAltPipeline(cameraId, cam, videoPt, videoRtxPt) {
-  const router = await _ensurePtRouter(videoPt, videoRtxPt);
+  // Pinned to the same Worker as this camera's default pipeline (2026-07-22,
+  // §6.31) — see _ensurePtRouter()'s comment.
+  const router = await _ensurePtRouter(cam.workerIndex, videoPt, videoRtxPt);
 
   const videoPlain = await router.createPlainTransport({
     listenInfo: { protocol: 'udp', ip: '127.0.0.1', recvBufferSize: 8 * 1024 * 1024 },
@@ -634,7 +794,12 @@ async function addCameraStream(cameraId, rtspUrl, appRtpRtspUrl = undefined, cap
   let audioPlain = null, audioProducer = null, audioPort = null;
   let directTransport = null, dataProducer = null;
   try {
-    const router = await _ensureRouter();
+    // Deterministic per-camera Worker assignment (2026-07-22, §6.31) — stored
+    // on the _cameras entry below and reused as-is by negotiate()/alt-pipeline
+    // for this camera's whole lifetime; see the pool comment near the state
+    // decls for why this must NOT be re-hashed independently later.
+    const workerIndex = _workerIndexFor(cameraId);
+    const router = await _ensureRouter(cameraId);
 
     // ── Video PlainTransport ─────────────────────────────────────────────────
     // recvBufferSize (2026-07-16, §6.18) — `cat /proc/net/snmp | grep Udp:`
@@ -810,6 +975,7 @@ async function addCameraStream(cameraId, rtspUrl, appRtpRtspUrl = undefined, cap
       captureFps: _captureFps,
       videoOnly,
       videoFanoutRegistered,
+      workerIndex,
       videoPlain, videoProducer,
       audioPlain, audioProducer,
       directTransport, dataProducer,
@@ -1278,7 +1444,7 @@ async function negotiate(cameraId, sdpOffer) {
     const targetVideoPt = parsed.videoPt ?? DEFAULT_VIDEO_PT;
     let router, videoProducer, audioProducer, dataProducer, rtxMatched;
     if (targetVideoPt === DEFAULT_VIDEO_PT) {
-      router        = await _ensureRouter();
+      router        = await _ensureRouter(cameraId); // same Worker this camera was assigned in addCameraStream()
       videoProducer = cam.videoProducer;
       audioProducer = cam.audioProducer;
       dataProducer  = cam.dataProducer;
@@ -1536,9 +1702,19 @@ async function negotiate(cameraId, sdpOffer) {
     // turned out to correlate with the §6.29.5 ingest-daemon overload window
     // (see Design_RTSP_Capture_Backend.md §6.29.14) rather than a code defect —
     // kept as a standing tool since this class of question recurs.
+    // Writes directly to its own file (2026-07-22, §6.31.2 follow-up) — NOT
+    // console.log(). Confirmed live that a plain console.log() line here was
+    // silently dropped under LOG_LEVEL=INFO: startServer.js pipes this
+    // process's own stdout through makeLineRelay(), whose _detectLevel()
+    // downgrades any line matching /\bdebug\b/i to DEBUG level — and the tag
+    // "[SDP-DEBUG]" itself matches that regex (hyphen is a word boundary), so
+    // this diagnostic was defeating itself by name. Bypassing console.log
+    // entirely sidesteps that heuristic instead of requiring LOG_LEVEL=DEBUG
+    // (which floods the log with unrelated verbose output — confirmed live).
     if (process.env.LTS_DEBUG_SDP === 'true') {
       const vLine = sdpAnswer.split('\r\n').filter(l => /^(m=video|a=rtpmap|a=fmtp|a=ssrc|m=audio)/.test(l)).join(' | ');
-      console.log(`[SDP-DEBUG][${cameraId.slice(0,8)}] vars: sprop=${JSON.stringify(spropParameterSets)} profileLevelId=${JSON.stringify(profileLevelId)} | sdp: ${vLine}`);
+      const line = `${new Date().toISOString()} [${cameraId.slice(0,8)}] sprop=${JSON.stringify(spropParameterSets)} profileLevelId=${JSON.stringify(profileLevelId)} | sdp: ${vLine}\n`;
+      fs.appendFile(path.resolve(__dirname, '../../../../sdp-debug.log'), line, () => {});
     }
 
     return { status: 201, sdpAnswer, headers: {} };
@@ -1552,8 +1728,13 @@ async function negotiate(cameraId, sdpOffer) {
 
 async function isHealthy() {
   try {
-    await _ensureRouter();
-    return !_worker?.closed && !_router?.closed;
+    await _ensureRouter(); // boots the pool (or slot 0) if not already — no specific camera in mind
+    // Pool-level liveness (2026-07-22, §6.31 — was a single Worker/Router
+    // not-closed check). Individual dead slots self-heal lazily via
+    // _ensureWorkerSlot() on next use and don't need to fail this check —
+    // matches this function's original intent of "is the engine bootable/
+    // operational", not "is every single Worker currently alive".
+    return _workerPool.length > 0;
   } catch {
     return false;
   }
@@ -1565,6 +1746,7 @@ function getEngineInfo() {
     announcedIp: ANNOUNCED_IP,
     rtcPorts:    `${RTC_MIN_PORT}-${RTC_MAX_PORT}`,
     cameras:     _cameras.size,
+    numWorkers:  NUM_WORKERS,
   };
 }
 
