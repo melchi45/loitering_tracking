@@ -1,6 +1,7 @@
 'use strict';
 
 const path = require('path');
+const fs = require('fs');
 const http = require('http');
 const https = require('https');
 const { spawn } = require('child_process');
@@ -186,6 +187,20 @@ async function main() {
         ingestArgs = ['--addr', ingestAddr];
       }
 
+      // Scheduling priority for ingest-daemon itself (2026-07-22,
+      // Design_RTSP_Capture_Backend.md §6.33.1) — live diagnosis found
+      // ingest-daemon at ~300% CPU (the single busiest process on this
+      // shared host) while WebRTC loss persisted even after
+      // mediasoup-worker's own priority boost. Routing this process's spawn
+      // through the same C wrapper binary used for mediasoup-worker was
+      // tried and abandoned — it consistently came up at default niceness
+      // when launched via this spawn() call (works fine invoked directly
+      // from a shell; root cause not identified). ingest_daemon.py now
+      // self-targets setpriority() at its own startup instead (only needs
+      // CAP_SYS_NICE on itself via `setcap` on the real python3 binary, not
+      // on whatever spawns it) — this just needs to pass the env var through.
+      const ingestChildEnv = childEnv;
+
       let _ingestRestartAttempts = 0;
 
       // Attach stdout/stderr relay and exit-based auto-restart to a spawned ingest-daemon process.
@@ -211,14 +226,54 @@ async function main() {
         });
       }
 
+      async function _isPortFree(port) {
+        return new Promise((resolve) => {
+          const tester = net.createServer();
+          tester.once('error', () => resolve(false));
+          tester.once('listening', () => tester.close(() => resolve(true)));
+          tester.listen(port, '0.0.0.0');
+        });
+      }
+
       async function _killPortOrphan() {
         // Kill any process still holding ingestPort so the fresh spawn can bind.
-        // fuser -k is Linux-only; safe to ignore on other platforms or if nothing occupies the port.
+        // `fuser -k` resolves the listening socket to a PID via /proc/<pid>/fd,
+        // which requires ptrace permission on the target — on hosts with
+        // kernel.yama.ptrace_scope=1 (Ubuntu default) this silently fails for
+        // any orphan started outside our ptrace tree (e.g. a previous
+        // supervisor generation's child, or one wedged from a crashed prior
+        // run), leaving the orphan alive and every subsequent spawn attempt
+        // looping forever on EADDRINUSE. `pkill -f` matches via
+        // /proc/<pid>/cmdline instead, which is NOT ptrace-gated, so it still
+        // reaches the orphan even when fuser/lsof can't see it (same fix
+        // already applied to restartIngestDaemon.js's killExistingDaemon(),
+        // 2026-07-23). Linux-only; safe to ignore on other platforms.
         try {
           const { execSync } = require('child_process');
           execSync(`fuser -k ${ingestPort}/tcp`, { stdio: 'ignore' });
-          await new Promise(r => setTimeout(r, 300));
         } catch (_) {}
+        try {
+          const { execSync } = require('child_process');
+          execSync("pkill -f 'ingest_daemon.py'", { stdio: 'ignore' });
+        } catch (_) {}
+
+        const deadline = Date.now() + 8_000;
+        while (Date.now() < deadline) {
+          if (await _isPortFree(ingestPort)) return;
+          await new Promise(r => setTimeout(r, 250));
+        }
+        if (await _isPortFree(ingestPort)) return;
+
+        console.warn(`[Start] ingest-daemon orphan still holding :${ingestPort} after SIGTERM — escalating to SIGKILL`);
+        try {
+          const { execSync } = require('child_process');
+          execSync("pkill -9 -f 'ingest_daemon.py'", { stdio: 'ignore' });
+        } catch (_) {}
+        const killDeadline = Date.now() + 3_000;
+        while (Date.now() < killDeadline) {
+          if (await _isPortFree(ingestPort)) return;
+          await new Promise(r => setTimeout(r, 250));
+        }
       }
 
       async function _respawnIngest() {
@@ -235,7 +290,7 @@ async function main() {
         try {
           const proc = spawn(ingestExec, ingestArgs, {
             stdio: ['ignore', 'pipe', 'pipe'],
-            env: childEnv,
+            env: ingestChildEnv,
           });
           ingestDaemonChild = proc;
           _attachIngestHandlers(proc);
@@ -294,7 +349,7 @@ async function main() {
       try {
         ingestDaemonChild = spawn(ingestExec, ingestArgs, {
           stdio: ['ignore', 'pipe', 'pipe'],
-          env: childEnv,
+          env: ingestChildEnv,
         });
         _attachIngestHandlers(ingestDaemonChild);
         console.log(`[Start] ingest-daemon starting on ${ingestAddr}`);

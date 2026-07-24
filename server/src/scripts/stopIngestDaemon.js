@@ -4,8 +4,12 @@
 /**
  * stopIngestDaemon.js — ingest daemon 종료.
  *
- * 포트 7070 프로세스 kill → pkill -f ingest_daemon.py 순서로 종료.
- * 이미 실행 중이 아니어도 오류 없이 종료된다.
+ * 포트 점유 여부(실제 bind 시도, §6.36)로 실행 중인지 판단 — 과거에는
+ * `/health` 응답만으로 판단해 "좀비" 상태(프로세스는 살아있지만 HTTP API가
+ * 무응답)를 "실행 중 아님"으로 오판해 kill 로직 자체를 건너뛰는 버그가 있었다
+ * (Design_Ingest_Daemon_Control.md §2.2). 핵심 로직은
+ * server/src/services/ingestDaemonControl.js — 이 파일은 .env 로드 + CLI
+ * 출력만 담당하는 얇은 래퍼.
  *
  * Usage:
  *   cd server && npm run ingest:stop
@@ -13,10 +17,7 @@
 
 const path = require('path');
 const fs   = require('fs');
-const http = require('http');
-const { execSync } = require('child_process');
 
-// ── 환경 변수 로드 ────────────────────────────────────────────────────────────
 const envFile = process.env.LTS_ENV_FILE
   ? path.resolve(__dirname, '../../', process.env.LTS_ENV_FILE)
   : path.resolve(__dirname, '../../.env');
@@ -34,46 +35,21 @@ try {
   }
 } catch (_) { /* .env not found */ }
 
-const DAEMON_ADDR = (process.env.INGEST_DAEMON_ADDR || ':7070').trim();
-const DAEMON_URL  = (process.env.INGEST_DAEMON_URL  || 'http://127.0.0.1:7070').replace(/\/$/, '');
-
-// ── 실행 중 여부 확인 ─────────────────────────────────────────────────────────
-async function isRunning() {
-  const u = new URL(`${DAEMON_URL}/health`);
-  return new Promise((resolve) => {
-    const req = http.get({ hostname: u.hostname, port: u.port || 7070, path: u.pathname, timeout: 1500 }, (res) => {
-      res.resume();
-      resolve(res.statusCode >= 200 && res.statusCode < 300);
-    });
-    req.on('error', () => resolve(false));
-    req.on('timeout', () => { req.destroy(); resolve(false); });
-  });
-}
+const { getConfig, stopDaemon } = require('../services/ingestDaemonControl');
+const cfg = getConfig();
 
 (async () => {
-  const running = await isRunning();
-  if (!running) {
-    console.log(`[ingest:stop] daemon이 실행 중이지 않습니다 (${DAEMON_URL}).`);
+  const result = await stopDaemon();
+
+  if (!result.wasRunning) {
+    console.log(`[ingest:stop] daemon이 실행 중이지 않습니다 (${cfg.daemonUrl}).`);
     process.exit(0);
   }
 
   console.log('[ingest:stop] daemon 종료 중…');
-  const addrPort = DAEMON_ADDR.replace(':', '');
-  try { execSync(`fuser -k ${addrPort}/tcp 2>/dev/null; true`, { shell: true, stdio: 'ignore' }); } catch (_) {}
-  try { execSync("pkill -f 'ingest_daemon.py' 2>/dev/null; true", { shell: true, stdio: 'ignore' }); } catch (_) {}
-
-  // 포트 해제 확인 (최대 3초)
-  const deadline = Date.now() + 3000;
-  while (Date.now() < deadline) {
-    if (!(await isRunning())) break;
-    await new Promise(r => setTimeout(r, 300));
-  }
-
-  const stillRunning = await isRunning();
-  if (stillRunning) {
-    console.warn('[ingest:stop] daemon이 아직 실행 중입니다. 수동으로 확인하세요.');
+  if (!result.ok) {
+    console.warn(`[ingest:stop] ${result.error}`);
     process.exit(1);
   }
-
   console.log('[ingest:stop] daemon 종료 완료.');
 })();

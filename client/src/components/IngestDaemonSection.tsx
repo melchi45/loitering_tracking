@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Wifi, WifiOff, RefreshCw, Video, Volume2, Cpu, Send, ArrowDownToLine } from 'lucide-react';
+import { Wifi, WifiOff, RefreshCw, Video, Volume2, Cpu, Send, ArrowDownToLine, Play, Square, RotateCw } from 'lucide-react';
 import { getSocket } from '../hooks/useSocket';
 import Sparkline from './Sparkline';
 
@@ -93,13 +93,27 @@ function fmtBytes(bytes: number | null): string {
   return `${bytes} B`;
 }
 
-interface Props {
-  accessToken: string | null;
+interface ControlResult {
+  ok: boolean;
+  alreadyRunning?: boolean;
+  wasRunning?: boolean;
+  pid?: number;
+  error?: string;
+  cameras?: Record<string, { ok: boolean; error?: string; status?: number }>;
 }
 
-export default function IngestDaemonSection({ accessToken }: Props) {
+interface Props {
+  accessToken: string | null;
+  apiFetch: (path: string, opts?: RequestInit) => Promise<unknown>;
+}
+
+type ControlAction = 'start' | 'stop' | 'restart';
+
+export default function IngestDaemonSection({ accessToken, apiFetch }: Props) {
   const [payload, setPayload] = useState<IngestStatsPayload | null>(null);
   const [connected, setConnected] = useState(false);
+  const [pending, setPending] = useState<ControlAction | null>(null);
+  const [lastResult, setLastResult] = useState<{ action: ControlAction; result: ControlResult } | null>(null);
   // Client-side rolling history per camera — the server pushes a snapshot each
   // tick, not a time series (2026-07-21, see Design_Ingest_Daemon_Monitoring.md
   // §7 decision #5). Mirrors useWebRTC.ts's rxHistory pattern: accumulate here,
@@ -143,6 +157,21 @@ export default function IngestDaemonSection({ accessToken }: Props) {
 
   const ac = payload?.analysisClient;
 
+  async function handleControl(action: ControlAction) {
+    if (action === 'stop' && !confirm('Stop ingest-daemon? All camera capture (RTSP/WebRTC/AI) will be interrupted until it is started again.')) return;
+    if (action === 'restart' && !confirm('Restart ingest-daemon? All cameras will disconnect briefly and reconnect automatically (usually within ~10s).')) return;
+
+    setPending(action);
+    try {
+      const result = await apiFetch(`/admin/ingest/${action}`, { method: 'POST' }) as ControlResult;
+      setLastResult({ action, result });
+    } catch (e: unknown) {
+      setLastResult({ action, result: { ok: false, error: (e as Error).message } });
+    } finally {
+      setPending(null);
+    }
+  }
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
@@ -151,6 +180,44 @@ export default function IngestDaemonSection({ accessToken }: Props) {
           <span className={`w-2 h-2 rounded-full ${connected ? 'bg-green-500 animate-pulse' : 'bg-red-500'}`} />
           {connected ? 'Live' : 'Disconnected'}
         </div>
+      </div>
+
+      <div className="flex items-center gap-2 px-3 py-2 bg-gray-800/60 border border-gray-700 rounded-lg">
+        <button
+          onClick={() => handleControl('start')}
+          disabled={pending !== null}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-green-700/80 hover:bg-green-600 disabled:opacity-50
+                     disabled:cursor-not-allowed text-white rounded-md text-xs font-medium transition-colors"
+        >
+          <Play className="w-3.5 h-3.5" /> {pending === 'start' ? 'Starting…' : 'Start'}
+        </button>
+        <button
+          onClick={() => handleControl('stop')}
+          disabled={pending !== null}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-red-800/80 hover:bg-red-700 disabled:opacity-50
+                     disabled:cursor-not-allowed text-white rounded-md text-xs font-medium transition-colors"
+        >
+          <Square className="w-3.5 h-3.5" /> {pending === 'stop' ? 'Stopping…' : 'Stop'}
+        </button>
+        <button
+          onClick={() => handleControl('restart')}
+          disabled={pending !== null}
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-blue-700/80 hover:bg-blue-600 disabled:opacity-50
+                     disabled:cursor-not-allowed text-white rounded-md text-xs font-medium transition-colors"
+        >
+          <RotateCw className={`w-3.5 h-3.5 ${pending === 'restart' ? 'animate-spin' : ''}`} /> {pending === 'restart' ? 'Restarting…' : 'Restart'}
+        </button>
+
+        {lastResult && (
+          <span className={`text-xs ml-1 ${lastResult.result.ok ? 'text-green-400' : 'text-red-400'}`}>
+            {lastResult.action === 'start' && lastResult.result.ok &&
+              (lastResult.result.alreadyRunning ? 'Already running' : `Started (PID ${lastResult.result.pid})`)}
+            {lastResult.action === 'stop' && lastResult.result.ok &&
+              (lastResult.result.wasRunning ? 'Stopped' : 'Was not running')}
+            {lastResult.action === 'restart' && lastResult.result.ok && `Restarted (PID ${lastResult.result.pid})`}
+            {!lastResult.result.ok && (lastResult.result.error || 'Failed')}
+          </span>
+        )}
       </div>
 
       {ac && (

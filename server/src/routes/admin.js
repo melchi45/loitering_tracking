@@ -7,6 +7,7 @@ const UserService    = require('../services/UserService');
 const TokenService   = require('../services/TokenService');
 const AuditService   = require('../services/AuditService');
 const TcRunnerService = require('../services/TcRunnerService');
+const ingestDaemonControl = require('../services/ingestDaemonControl');
 const { verifyAccessToken } = require('../middleware/auth');
 const { requireRole }       = require('../middleware/role');
 const { getSystemMetrics }  = require('../services/systemMetrics');
@@ -196,6 +197,57 @@ router.patch('/logs/level', (req, res) => {
   });
 
   res.json({ ok: true, level: getLogLevel() });
+});
+
+// ── ingest-daemon control (Design_Ingest_Daemon_Control.md) ──────────────────
+// Streaming + Combined 모드에서 사용 가능 — CAPTURE_BACKEND=ingest-daemon이
+// 유일한 게이팅 조건(§6 Q1 확정, analysis 모드는 이 백엔드를 쓰지 않으므로
+// 자연히 제외됨). 동기 응답(§6 Q2 확정) — restart는 최대 ~11초 걸릴 수 있다.
+function requireIngestDaemonBackend(req, res, next) {
+  const backend = (process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase();
+  if (backend !== 'ingest-daemon') {
+    return res.status(501).json({ error: 'ingest-daemon backend not active (CAPTURE_BACKEND != ingest-daemon)' });
+  }
+  next();
+}
+
+// ── POST /admin/ingest/start ──────────────────────────────────────────────────
+router.post('/ingest/start', requireIngestDaemonBackend, async (req, res) => {
+  try {
+    const result = await ingestDaemonControl.startDaemon();
+    AuditService.log({ event: 'ingest_daemon_start', actorId: req.user.sub, detail: result });
+    res.status(result.ok ? 200 : 500).json(result);
+  } catch (err) {
+    console.error('[admin/ingest/start]', err);
+    AuditService.log({ event: 'ingest_daemon_start', actorId: req.user.sub, detail: { ok: false, error: err.message } });
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── POST /admin/ingest/stop ───────────────────────────────────────────────────
+router.post('/ingest/stop', requireIngestDaemonBackend, async (req, res) => {
+  try {
+    const result = await ingestDaemonControl.stopDaemon();
+    AuditService.log({ event: 'ingest_daemon_stop', actorId: req.user.sub, detail: result });
+    res.status(result.ok ? 200 : 500).json(result);
+  } catch (err) {
+    console.error('[admin/ingest/stop]', err);
+    AuditService.log({ event: 'ingest_daemon_stop', actorId: req.user.sub, detail: { ok: false, error: err.message } });
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── POST /admin/ingest/restart ────────────────────────────────────────────────
+router.post('/ingest/restart', requireIngestDaemonBackend, async (req, res) => {
+  try {
+    const result = await ingestDaemonControl.restartDaemon();
+    AuditService.log({ event: 'ingest_daemon_restart', actorId: req.user.sub, detail: result });
+    res.status(result.ok ? 200 : 500).json(result);
+  } catch (err) {
+    console.error('[admin/ingest/restart]', err);
+    AuditService.log({ event: 'ingest_daemon_restart', actorId: req.user.sub, detail: { ok: false, error: err.message } });
+    res.status(500).json({ ok: false, error: err.message });
+  }
 });
 
 module.exports = router;

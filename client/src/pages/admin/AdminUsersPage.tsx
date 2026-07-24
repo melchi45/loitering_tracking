@@ -293,7 +293,7 @@ export default function AdminUsersPage() {
           {section === 'users'     && <UsersSection apiFetch={apiFetch} />}
           {section === 'ai-models' && <AiModelsSection />}
           {section === 'webrtc'    && <WebRTCSection />}
-          {section === 'ingest'    && <IngestDaemonSection accessToken={accessToken} />}
+          {section === 'ingest'    && <IngestDaemonSection accessToken={accessToken} apiFetch={apiFetch} />}
           {section === 'onvif'     && <OnvifSection apiFetch={apiFetch} />}
           {section === 'audit'     && <AuditSection apiFetch={apiFetch} />}
           {section === 'system'    && <SystemSection apiFetch={apiFetch} />}
