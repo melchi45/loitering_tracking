@@ -45,8 +45,22 @@ LTS-2026은 ONNX Runtime 소스 빌드 자동화 스크립트를 제공합니다
 2. Python 3.x
 3. CMake 3.28+
 4. Node.js / npm
-5. CUDA Toolkit 13.3
-6. cuDNN 9.x 이상 (CUDA 13.3 호환)
+5. CUDA Toolkit (cuDNN 호환 버전 — 버전 불일치 시 `npm run ensure-cuda` 자동 설치)
+6. cuDNN 9.x 이상 (미설치 시 `npm run ensure-cuda` 가 pip 패키지로 자동 설치 시도 — NVIDIA 로그인 불필요)
+
+> **⚠️ cuDNN-CUDA 버전 일치 확인 필수**
+> cuDNN EXE 인스톨러는 특정 CUDA 버전 전용(`bin/{cudaVer}/x64/`)으로 설치됩니다.
+> CUDA Toolkit 버전과 cuDNN 지원 버전이 다르면 ORT 링크 단계에서 실패합니다.
+>
+> 버전 확인 및 자동 설치:
+> ```powershell
+> # 버전 불일치 확인 (dry-run)
+> npm run build-ort:auto:dry
+>
+> # 필요한 CUDA Toolkit 자동 설치 후 빌드
+> npm run ensure-cuda
+> npm run build-ort:auto
+> ```
 
 ### Windows 추가
 
@@ -160,7 +174,157 @@ npm run restart
 
 ---
 
+## cuDNN-CUDA 버전 불일치 해결 (`ensure-cuda`)
+
+### 증상
+
+- `build-ort:auto` 실행 시 다음 오류 출력:
+
+```
+  ⚠️  [cuDNN-CUDA 버전 불일치]
+     설치된 CUDA Toolkit : v12.8
+     cuDNN 호환 CUDA 버전 : v12.9
+     cuDNN이 CUDA 12.9 전용으로 설치되어 있어 빌드가 실패합니다.
+```
+
+### 원인
+
+cuDNN EXE 인스톨러는 CUDA 버전별 서브디렉토리 구조로 설치됩니다.
+
+```
+C:\Program Files\NVIDIA\CUDNN\v9.23\bin\12.9\x64\cudnn64_9.dll  ← CUDA 12.9 전용
+```
+
+설치된 CUDA Toolkit 버전(예: 12.8)과 다른 경우 링크에 실패합니다.
+
+### 해결 방법
+
+**A. 자동 설치 (권장)**
+
+```powershell
+npm run ensure-cuda
+```
+
+설치 순서: winget(`Nvidia.CUDA.12.9`) → NVIDIA 네트워크 인스톨러 직접 다운로드
+
+URL 확인만:
+
+```powershell
+npm run ensure-cuda:dry
+```
+
+**B. 수동: cuDNN을 현재 CUDA 버전으로 재설치**
+
+`https://developer.nvidia.com/cudnn` → 현재 CUDA Toolkit 버전에 맞는 cuDNN 다운로드 → 재설치
+
+**C. 수동: CUDA Toolkit 업그레이드**
+
+```powershell
+# 다운로드 URL 확인
+npm run ensure-cuda:urls
+
+# 수동 설치 후 빌드
+npm run build-ort:auto
+```
+
+### `ensure-cuda-toolkit.windows.ps1` 직접 실행
+
+```powershell
+# 특정 버전 설치
+powershell -ExecutionPolicy Bypass -File server/src/scripts/ensure-cuda-toolkit.windows.ps1 -RequiredVersion 12.9
+
+# 다운로드만
+powershell -ExecutionPolicy Bypass -File server/src/scripts/ensure-cuda-toolkit.windows.ps1 -RequiredVersion 12.9 -DownloadOnly
+
+# URL 목록
+powershell -ExecutionPolicy Bypass -File server/src/scripts/ensure-cuda-toolkit.windows.ps1 -RequiredVersion 12.9 -ShowUrls
+```
+
+설치 후 `CUDA_HOME=<경로>` 를 stdout에 출력합니다. `buildOrtWithCuda.js`는 이 값을 파싱하여 빌드 파라미터로 자동 적용합니다.
+
+---
+
+## cuDNN 미설치 자동 설치 (`ensure-cuda`, pip 방식)
+
+### 증상
+
+- `build-ort:auto` 실행 시 다음 경고 출력:
+
+```
+  ⚠️  cuDNN    : 미감지 — cuDNN 없이 빌드됩니다 (일부 연산 성능 저하)
+```
+
+### 원인
+
+NVIDIA 공식 cuDNN 배포판(zip/EXE)은 `https://developer.nvidia.com/cudnn` 로그인이 필요하여
+CUDA Toolkit 네트워크 인스톨러처럼 완전 자동화할 수 없습니다.
+
+### 해결 방법 — pip 패키지 자동 설치 (권장, 로그인 불필요)
+
+PyTorch/JAX 등이 사용하는 것과 동일한 NVIDIA 공식 PyPI 재배포 채널(`nvidia-cudnn-cuXX`)을
+pip로 설치하여 cuDNN 헤더/라이브러리/DLL을 확보합니다. `--ensure-cuda` 플래그가 CUDA Toolkit
+자동 설치와 함께 cuDNN 자동 설치도 시도합니다.
+
+```powershell
+npm run ensure-cuda
+# 또는
+npm run build-ort:auto -- --ensure-cuda
+```
+
+URL/패키지명만 확인(설치 없음):
+
+```powershell
+npm run build-ort:auto -- --ensure-cuda:dry
+```
+
+`ensure-cudnn.windows.ps1` 직접 실행도 가능합니다:
+
+```powershell
+# 설치 (venv 활성화된 상태 권장 — python -m pip 사용)
+powershell -ExecutionPolicy Bypass -File server/src/scripts/ensure-cudnn.windows.ps1 -CudaMajorMinor 12.9
+
+# 패키지명/URL만 확인
+powershell -ExecutionPolicy Bypass -File server/src/scripts/ensure-cudnn.windows.ps1 -CudaMajorMinor 12.9 -ShowUrls
+```
+
+설치 후 `CUDNN_HOME=<pip 패키지 경로>` 를 stdout에 출력하며(`<site-packages>\nvidia\cudnn`),
+`buildOrtWithCuda.js`가 이를 파싱해 `-CudnnHome` 인자로 직접 전달합니다(레지스트리/기본 경로 유도 불필요).
+`providerDiagnostics.js`도 이 pip 설치 경로를 이후 실행에서 자동 재감지합니다.
+
+cuDNN은 선택적 의존성이므로 pip 설치가 실패해도(오프라인 등) 빌드는 cuDNN 없이 계속 진행됩니다.
+실패 시 수동 설치만 남습니다: `https://developer.nvidia.com/cudnn` (NVIDIA 계정 필요).
+
+---
+
 ## 장애 대응 가이드
+
+### 증상 A-0: cuDNN-CUDA 버전 불일치 (`cuDNN이 CUDA X.Y 전용으로 설치되어 있어 빌드가 실패합니다`)
+
+대표 출력:
+
+```
+  ⚠️  [cuDNN-CUDA 버전 불일치]
+     설치된 CUDA Toolkit : v12.8
+     cuDNN 호환 CUDA 버전 : v12.9
+```
+
+원인:
+
+- cuDNN EXE 인스톨러는 CUDA 버전별 서브디렉토리(`bin/12.9/x64/`) 구조로 설치됩니다.
+- CUDA Toolkit 버전(예: 12.8)과 cuDNN 지원 버전(예: 12.9)이 다를 때 발생합니다.
+
+조치:
+
+```powershell
+# 방법 A: 자동 설치 (권장, 관리자 권한 필요)
+npm run ensure-cuda
+
+# 방법 B: 다운로드 URL 확인 후 수동 설치
+npm run ensure-cuda:dry
+
+# 방법 C: cuDNN을 현재 CUDA 버전용으로 재설치
+# https://developer.nvidia.com/cudnn 에서 CUDA 12.8용 cuDNN 다운로드
+```
 
 ### 증상 A: `MODULE_NOT_FOUND` 연쇄 발생
 
@@ -317,3 +481,6 @@ powershell -ExecutionPolicy Bypass -File server/src/scripts/build-onnxruntime-so
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-06-05 | LTS Engineering Team | Initial release — CUDA 13.3 source build automation guide for onnxruntime-node |
+| 1.1 | 2026-07-27 | LTS Engineering Team | cuDNN-CUDA 버전 불일치 해결 섹션 추가 (`ensure-cuda` 스크립트, 자동 설치 옵션, 직접 실행 예시, 증상 A-0 장애 대응) |
+| 1.1 | 2026-07-27 | LTS Engineering Team | cuDNN-CUDA 버전 불일치 해결 섹션 추가 (`ensure-cuda` 스크립트, 자동 설치 옵션, 직접 실행 예시) |
+| 1.2 | 2026-07-27 | LTS Engineering Team | cuDNN 미설치 자동 설치 섹션 추가 (`ensure-cudnn.windows.ps1`, pip `nvidia-cudnn-cuXX` 패키지 기반, NVIDIA 로그인 불필요) |

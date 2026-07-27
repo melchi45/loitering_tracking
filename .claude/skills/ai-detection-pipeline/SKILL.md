@@ -116,6 +116,8 @@ gcc -O2 -fPIC -shared \
 
 **PromptPAR용 Windows CUDA 설치 자동화 (`setup-cuda.windows.ps1`, 2026-07-14)**: PromptPAR export(`exportPromptPAR.py`)는 OpenPAR 모델 코드가 `.cuda()`를 하드코딩해 CPU 폴백이 없음 — NVIDIA GPU가 있는 Windows 머신에서 `powershell -ExecutionPolicy Bypass -File server/src/scripts/setup-cuda.windows.ps1`(관리자 권한 필요)를 실행하면 nvidia-smi로 드라이버 확인 → CUDA Toolkit network installer 자동 다운로드·설치(기본 12.4.1, 드라이버는 이미 있다고 가정하고 기본적으로 건드리지 않음, `-IncludeDriver`로 opt-in) → 매칭되는 CUDA 지원 PyTorch wheel 설치 → `torch.cuda.is_available()` 검증까지 자동화합니다. GPU가 없는 머신에서는 애초에 동작하지 않으므로(CUDA는 NVIDIA 하드웨어 필수), 그 경우 GPU 머신에서 한 번 export한 `openpar_pa100k.onnx`를 대상 서버 `server/models/`에 복사하거나 `openpar-resnet50-pa100k`(manualOnly) 대안을 사용.
 
+**ORT CUDA 소스 빌드용 CUDA Toolkit 자동 설치 (`ensure-cuda-toolkit.windows.ps1`, 2026-07-27)**: cuDNN EXE 인스톨러는 CUDA 버전별 서브디렉토리(`bin/{cudaVer}/x64/`) 구조로 설치되므로, 설치된 CUDA Toolkit 버전과 cuDNN이 지원하는 CUDA 버전이 다를 경우 ORT 소스 빌드 링크 단계에서 실패합니다. `npm run build-ort:auto`는 이제 이 불일치를 자동 감지하고(`cudnnCudaVersion` 필드, `deriveCudnnCudaVersion()`) 해결 방법을 안내합니다. `--ensure-cuda` 옵션 또는 `npm run ensure-cuda`를 실행하면 `ensure-cuda-toolkit.windows.ps1`이 winget(`Nvidia.CUDA.{ver}`) → NVIDIA CDN 직접 다운로드 순서로 필요한 CUDA Toolkit을 자동 설치합니다 (5 MB 단위 ASCII 진행 표시). `--ensure-cuda:dry` / `npm run ensure-cuda:dry`는 설치 없이 다운로드 URL만 출력합니다. `npm run ensure-cuda:urls`는 모든 CUDA 버전의 다운로드 URL 목록을 출력합니다. 설치 완료 후 `CUDA_HOME=<경로>`를 stdout에 출력하면 `buildOrtWithCuda.js`가 파싱하여 빌드 파라미터로 자동 적용합니다.
+
 #### YOLO26 지원 모델 (mAP COCO val2017 50-95, 2026 출시 — NMS-free 엔드투엔드)
 
 | ID | mAP | CPU (ms) | T4 (ms) | Params |

@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | Document ID | DESIGN-LTS-AI-CUDA-01 |
-| Version | 1.2 |
+| Version | 1.3 |
 | Status | Active |
-| Date | 2026-06-26 |
+| Date | 2026-07-27 |
 | Parent SRS | srs/SRS_AI_CUDA_Acceleration.md |
 
 ---
@@ -198,6 +198,106 @@ npm run check:gpu
 | FR-CUDA-011 | TC-CUDA-E-001 | listSupportedBackends visibility at boot |
 | FR-CUDA-012 | TC-CUDA-E-003 | Windows DML-first provider policy |
 | FR-CUDA-013 | TC-CUDA-E-004 | DML pre-disable + CPU fallback continuity |
+
+---
+
+## 11. CUDA Toolkit 자동 설치 지원 (v1.3)
+
+### 11.1 배경 및 문제
+
+Windows에서 cuDNN을 EXE 인스톨러로 설치하면 **CUDA 버전별 서브디렉토리** 구조로 라이브러리가 배치됩니다.
+
+```
+C:\Program Files\NVIDIA\CUDNN\v9.23\
+  ├── bin\12.9\x64\cudnn64_9.dll    ← CUDA 12.9 전용
+  ├── include\12.9\cudnn.h
+  └── lib\12.9\x64\cudnn.lib
+```
+
+이 경우 CUDA Toolkit 버전(예: 12.8)과 cuDNN이 지원하는 CUDA 버전(예: 12.9)이 다르면 ORT CUDA 소스 빌드가 링크 단계에서 실패합니다. 기존 `build-ort:auto` 는 이 불일치를 감지하지 못하고 빌드를 시작했다가 실패했습니다.
+
+### 11.2 변경 사항
+
+#### `providerDiagnostics.js` — `cudnnCudaVersion` 필드 추가
+
+Windows EXE 설치 방식 cuDNN 감지 시 `bin/{cudaVer}/{arch}/` 경로에서 CUDA 버전을 추출하여 반환 구조체에 `cudnnCudaVersion` 필드로 추가합니다.
+
+```js
+// 변경 전
+{ available: true, path: 'C:/..../bin/12.9/x64/cudnn64_9.dll', version: '9.x' }
+
+// 변경 후
+{ available: true, path: '...', version: '9.x', cudnnCudaVersion: '12.9' }
+```
+
+#### `buildOrtWithCuda.js` — 버전 불일치 감지 + `--ensure-cuda` 옵션
+
+`getProviderDiagnostics()` 실행 후 cuDNN의 CUDA 버전과 설치된 Toolkit 버전을 비교합니다.
+
+```
+cuDNN cudnnCudaVersion   vs   CUDA Toolkit version
+      "12.9"             vs         "12.8"         → ⚠️ 불일치 감지
+```
+
+불일치 감지 시 동작:
+
+| 옵션 | 동작 |
+|---|---|
+| (없음) | 오류 메시지 + 해결 방법 3가지 출력 후 종료 |
+| `--ensure-cuda` | `ensure-cuda-toolkit.windows.ps1` 자동 실행 → 필요 버전 설치 |
+| `--ensure-cuda:dry` | `ensure-cuda-toolkit.windows.ps1 -ShowUrls` → 다운로드 URL 목록 출력 후 종료 |
+
+`deriveCudnnCudaVersion()` 헬퍼도 추가하여 `cudnnCudaVersion` 필드가 없는 경우 경로 패턴에서 CUDA 버전을 fallback 추출합니다.
+
+#### `ensure-cuda-toolkit.windows.ps1` — 신규 스크립트
+
+| 기능 | 설명 |
+|---|---|
+| 이미 설치된 경우 | `CUDA_PATH_V{major}_{minor}` 환경변수/기본 경로 확인 후 바로 `CUDA_HOME=<경로>` 출력 |
+| winget 설치 | `winget install Nvidia.CUDA.{major}.{minor} --silent` 시도 |
+| 직접 다운로드 | NVIDIA CDN에서 네트워크 인스톨러 다운로드 (진행 표시 막대 포함) |
+| 자동 설치 | `-s cuda_nvcc cuda_cudart cuda_cublas ...` 무인 설치 |
+| 완료 출력 | `CUDA_HOME=<경로>` 를 stdout 마지막 줄에 출력 → `buildOrtWithCuda.js` 파싱 |
+
+지원 옵션:
+
+- `-RequiredVersion "12.9"` — 필수, 설치할 CUDA 버전
+- `-DownloadOnly` — 설치 없이 인스톨러만 다운로드
+- `-ShowUrls` — URL 목록만 출력 후 종료
+- `-WingetOnly` — winget 방식만 시도
+- `-AllowInsecureTls` — 사내망 TLS 우회
+
+### 11.3 다운로드 진행 표시
+
+`Invoke-WebRequest`(진행 표시 없음) 대신 `System.Net.HttpWebRequest` 스트림 직접 읽기로 5 MB 단위 ASCII 막대를 출력합니다.
+
+```
+  총 파일 크기: 13.9 MB
+  ┌─────────────────────────────────────────────────────┐
+  │  진행     다운로드량           속도         ETA     │
+  ├─────────────────────────────────────────────────────┤
+  │  36% [███████░░░░░░░░░░░░░]   5.0/ 13.9 MB    908 KB/s     10s │
+  │  72% [██████████████░░░░░░]  10.0/ 13.9 MB   1.12 MB/s      3s │
+  │ 100% [████████████████████]  13.9 MB   1.21 MB/s  완료  │
+  └─────────────────────────────────────────────────────┘
+  ✅ 다운로드 완료: 13.9 MB / 11.5초
+```
+
+### 11.4 npm 스크립트
+
+| 스크립트 | 설명 |
+|---|---|
+| `npm run ensure-cuda` | cuDNN 호환 CUDA 버전 자동 탐지 + 설치 |
+| `npm run ensure-cuda:dry` | 설치 없이 URL 목록만 출력 |
+| `npm run ensure-cuda:urls` | 모든 버전의 NVIDIA 다운로드 URL 출력 |
+
+### 11.5 추가된 파일
+
+| 파일 | 역할 |
+|---|---|
+| `server/src/scripts/ensure-cuda-toolkit.windows.ps1` | CUDA Toolkit 버전별 자동 설치 (Windows 전용) |
+
+---
 | FR-CUDA-014 | TC-GPU-001, TC-GPU-002, TC-GPU-003 | Provider 가용성 진단 구조 검증 |
 | FR-CUDA-015 | TC-GPU-004 | 배치 추론 환경변수 반영 |
 | FR-CUDA-016 | TC-GPU-005 | checkGpuProviders CLI 스크립트 정상 실행 |
@@ -216,3 +316,4 @@ npm run check:gpu
 | 1.0 | 2026-06-05 | 초기 작성 |
 | 1.1 | 2026-06-05 | 시작 진단 흐름, provider pre-disable, Windows DML 정책 추가 |
 | 1.2 | 2026-06-26 | 멀티카메라 배치 추론 아키텍처 (§9), Provider 가용성 진단 (§10), providerDiagnostics.js·batchDetectionQueue.js 파일 설계 추가, 배치 환경변수 문서화, RTM 확장 (FR-CUDA-014~021) |
+| 1.3 | 2026-07-27 | CUDA Toolkit 자동 설치 지원 (§11): cudnnCudaVersion 필드, --ensure-cuda 옵션, ensure-cuda-toolkit.windows.ps1, 다운로드 진행 표시 설계 추가 |

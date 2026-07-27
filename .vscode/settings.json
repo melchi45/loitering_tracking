@@ -10,6 +10,7 @@
 
   // ── Terminal ─────────────────────────────────────────────────────────────
   "terminal.integrated.env.linux": {},
+  "chat.tools.global.autoApprove": true,
   "chat.tools.terminal.autoApprove": {
     "mv": true,
     "cp": true,
@@ -247,11 +248,109 @@
     "/^cd c:\\\\workspace\\\\loitering_tracking ; & 'C:\\\\Program Files\\\\nodejs\\\\node\\.exe' \\.\\\\server\\\\src\\\\scripts\\\\startServer\\.js$/": {
       "approve": true,
       "matchCommandLine": true
-    }
+    },
+    "/^cd e:\\\\workspace\\\\loitering_tracking\\\\server; powershell -NoProfile -Command \"Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue \\| Where-Object \\{ \\$_\\.LocalPort -in @\\(3080,3443\\) \\} \\| Select-Object LocalAddress,LocalPort,State,OwningProcess \\| Format-Table -AutoSize \\| Out-String\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cd e:\\\\workspace\\\\loitering_tracking\\\\server; netstat -ano -p tcp$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^& 'C:\\\\Program Files\\\\nodejs\\\\npm\\.cmd' --prefix 'e:\\\\workspace\\\\loitering_tracking\\\\server' install$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^& 'C:\\\\Program Files\\\\nodejs\\\\npm\\.cmd' --prefix 'e:\\\\workspace\\\\loitering_tracking\\\\server' ls qs express$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^& 'C:\\\\Program Files\\\\nodejs\\\\node\\.exe' -e \"const path='e:/workspace/loitering_tracking/server/node_modules/qs'; const pkg=require\\(path \\+ '/package\\.json'\\); const main=require\\(path\\); console\\.log\\(pkg\\.version\\); console\\.log\\(typeof main\\.stringify\\);\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^\"C:\\\\Program Files\\\\nodejs\\\\node\\.exe\" -e \"require\\('e:/workspace/loitering_tracking/server/node_modules/qs'\\); require\\('e:/workspace/loitering_tracking/server/node_modules/express'\\); console\\.log\\('ok'\\)\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^& 'C:\\\\Program Files\\\\nodejs\\\\node\\.exe' -e \"console\\.log\\('PYTHON=' \\+ \\(process\\.env\\.PYTHON\\|\\|''\\)\\); console\\.log\\('npm_config_python=' \\+ \\(process\\.env\\.npm_config_python\\|\\|''\\)\\); console\\.log\\('NODE_TLS_REJECT_UNAUTHORIZED=' \\+ \\(process\\.env\\.NODE_TLS_REJECT_UNAUTHORIZED\\|\\|''\\)\\);\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^& 'C:\\\\Program Files\\\\nodejs\\\\npm\\.cmd' config get python$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^& 'C:\\\\Users\\\\young\\.ho\\.kim\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Launcher\\\\py\\.exe' -3\\.12 -c \"import sys; print\\(sys\\.executable\\)\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^& 'C:\\\\Program Files\\\\nodejs\\\\node\\.exe' -e \"const fs=require\\('fs'\\); const cp=require\\('child_process'\\); const env=\\{\\.\\.\\.process\\.env, PYTHON:'C:/Users/young\\.ho\\.kim/AppData/Local/Programs/Python/Python312/python\\.exe', NODE_TLS_REJECT_UNAUTHORIZED:'0'\\}; for \\(const p of \\['e:/workspace/loitering_tracking/server/node_modules/mediasoup'\\]\\) \\{ try \\{ fs\\.rmSync\\(p,\\{recursive:true,force:true\\}\\); console\\.log\\('removed', p\\); \\} catch \\(err\\) \\{ console\\.error\\('remove failed', p, err\\.message\\); \\} \\} const result=cp\\.spawnSync\\('C:/Program Files/nodejs/npm\\.cmd',\\['--prefix','e:/workspace/loitering_tracking/server','install'\\],\\{stdio:'inherit',shell:true,env\\}\\); process\\.exit\\(result\\.status \\?\\? 1\\);\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^& 'C:\\\\Program Files\\\\nodejs\\\\npm\\.cmd' --prefix 'e:\\\\workspace\\\\loitering_tracking\\\\server' ls mediasoup qs express --depth=0$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^& 'C:\\\\Program Files\\\\nodejs\\\\node\\.exe' -e \"try \\{ const m=require\\('e:/workspace/loitering_tracking/server/node_modules/mediasoup/package\\.json'\\); console\\.log\\(m\\.version\\); \\} catch \\(e\\) \\{ console\\.error\\(e\\.message\\); process\\.exit\\(1\\); \\}\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cmd /d /s /c \"set PYTHON=C:\\\\Users\\\\young\\.ho\\.kim\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python\\.exe&& set NODE_TLS_REJECT_UNAUTHORIZED=0&& \\\\\"C:\\\\Program Files\\\\nodejs\\\\npm\\.cmd\\\\\" --prefix e:\\\\workspace\\\\loitering_tracking\\\\server install mediasoup@3\\.20\\.3 --no-save\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^cmd /d /s /c \"set \\\\\"PYTHON=C:\\\\Users\\\\young\\.ho\\.kim\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python\\.exe\\\\\" ; set \\\\\"NODE_TLS_REJECT_UNAUTHORIZED=0\\\\\" ; \\\\\"C:\\\\Program Files\\\\nodejs\\\\npm\\.cmd\\\\\" --prefix e:\\\\workspace\\\\loitering_tracking\\\\server install mediasoup@3\\.20\\.3 --no-save\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^C:\\\\Windows\\\\System32\\\\cmd\\.exe /d /s /c echo ok$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^C:\\\\Users\\\\young\\.ho\\.kim\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python\\.exe --version$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^C:\\\\Windows\\\\System32\\\\cmd\\.exe /d /s /c \"set \\\\\"PYTHON=C:\\\\Users\\\\young\\.ho\\.kim\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python\\.exe\\\\\" ; set \\\\\"NODE_TLS_REJECT_UNAUTHORIZED=0\\\\\" ; call \\\\\"C:\\\\Program Files\\\\nodejs\\\\npm\\.cmd\\\\\" --prefix e:\\\\workspace\\\\loitering_tracking\\\\server install mediasoup@3\\.20\\.3 --no-save\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^C:\\\\Windows\\\\System32\\\\WindowsPowerShell\\\\v1\\.0\\\\powershell\\.exe -NoProfile -ExecutionPolicy Bypass -Command \"\\$env:PYTHON='C:\\\\Users\\\\young\\.ho\\.kim\\\\AppData\\\\Local\\\\Programs\\\\Python\\\\Python312\\\\python\\.exe'; \\$env:NODE_TLS_REJECT_UNAUTHORIZED='0'; & 'C:\\\\Program Files\\\\nodejs\\\\npm\\.cmd' --prefix 'e:\\\\workspace\\\\loitering_tracking\\\\server' install mediasoup@3\\.20\\.3 --no-save\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe": true,
+    "/^C:\\\\Windows\\\\System32\\\\cmd\\.exe /d /s /c \"\\\\\"C:\\\\Program Files\\\\nodejs\\\\npm\\.cmd\\\\\" --prefix e:\\\\workspace\\\\loitering_tracking\\\\server ls mediasoup qs express --depth=0\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^C:\\\\Windows\\\\System32\\\\cmd\\.exe /d /s /c dir /od /b C:\\\\Users\\\\young\\.ho\\.kim\\\\AppData\\\\Local\\\\npm-cache\\\\_logs$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^C:\\\\Windows\\\\System32\\\\cmd\\.exe /d /s /c dir /b e:\\\\workspace\\\\loitering_tracking\\\\server\\\\node_modules \\| findstr /i \"mediasoup mongodb qs express\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "/^C:\\\\Program Files\\\\nodejs\\\\node\\.exe -e \"console\\.log\\('node-ok'\\)\"$/": {
+      "approve": true,
+      "matchCommandLine": true
+    },
+    "C:\\Program": true,
+    "f.getEngine()": true,
+    "console.log('unexpected')": true,
+    "process.exit(1)": true,
+    "e": true,
+    "console.log(e.message)": true,
+    "e.message": true,
+    "&": true
   },
   "chat.agent.maxRequests": 1000,
   // settings.json
   "browser.startUrl": "https://dev.hanwhavision.com:3443",
   "browser.useExternalBrowser": true,
-  "workbench.editorLargeFileConfirmation": 500
+  "workbench.editorLargeFileConfirmation": 500,
+  "cmake.sourceDirectory": "E:/workspace/loitering_tracking/tools/mediasoup-worker-priority-wrapper"
 }

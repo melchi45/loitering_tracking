@@ -198,6 +198,80 @@ function Resolve-CudnnHome([string]$requested) {
     return ""
 }
 
+# VS 2022 MSVC 도구체인 내 dumpbin.exe / lib.exe 등을 검색 (여러 Edition 대응)
+function Find-VsDevBinTool([string]$toolName) {
+    $vsRoot = "C:\Program Files\Microsoft Visual Studio\2022"
+    foreach ($edition in @('Enterprise', 'Professional', 'Community', 'BuildTools')) {
+        $msvcRoot = Join-Path $vsRoot "$edition\VC\Tools\MSVC"
+        if (-not (Test-Path $msvcRoot -PathType Container)) { continue }
+        $verDir = Get-ChildItem $msvcRoot -Directory -ErrorAction SilentlyContinue |
+            Sort-Object Name -Descending | Select-Object -First 1
+        if (-not $verDir) { continue }
+        $candidate = Join-Path $verDir.FullName "bin\Hostx64\x64\$toolName"
+        if (Test-Path $candidate -PathType Leaf) { return $candidate }
+    }
+    return $null
+}
+
+# NVIDIA 공식 Windows pip 배포판(nvidia-cudnn-cu{ver})은 런타임용 .dll 만 포함하고
+# 링크 단계에 필요한 .lib(import library) 은 제공하지 않습니다
+# (PyTorch/JAX 등은 ctypes/delay-load 로 .dll 을 직접 로드하므로 .lib 이 불필요).
+# ONNX Runtime 소스 빌드는 CMake find_library(cudnn_LIBRARY) 로 .lib 을 요구하므로,
+# dumpbin.exe 로 cudnn64_9.dll 의 export 심볼을 추출해 .def 파일을 만들고
+# lib.exe 로 import library(.lib) 를 직접 생성합니다. developer.nvidia.com 로그인 불필요.
+function Ensure-CudnnImportLib([string]$cudnnHome) {
+    $existingCandidates = @(
+        (Join-Path $cudnnHome "lib\x64\cudnn.lib"),
+        (Join-Path $cudnnHome "lib\cudnn.lib")
+    )
+    foreach ($c in $existingCandidates) {
+        if (Test-Path $c -PathType Leaf) { return $c }
+    }
+
+    $binDir = Join-Path $cudnnHome "bin"
+    if (-not (Test-Path $binDir -PathType Container)) { return $null }
+    $dll = Get-ChildItem $binDir -Filter "cudnn64_*.dll" -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending | Select-Object -First 1
+    if (-not $dll) { return $null }
+
+    $dumpbin = Find-VsDevBinTool "dumpbin.exe"
+    $libExe  = Find-VsDevBinTool "lib.exe"
+    if (-not $dumpbin -or -not $libExe) {
+        Write-Warning "  [cuDNN] dumpbin.exe/lib.exe 를 찾지 못해 pip cuDNN용 링크 라이브러리를 생성할 수 없습니다."
+        return $null
+    }
+
+    Write-Host "  [cuDNN] pip 배포판에 cudnn.lib 이 없어 $($dll.Name) 로부터 생성합니다 (dumpbin+lib.exe)..."
+    $outDir = Join-Path $cudnnHome "lib\x64"
+    New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+
+    $exportsOutput = & $dumpbin "/exports" $dll.FullName
+    $defLines = @("LIBRARY $($dll.BaseName)", "EXPORTS")
+    foreach ($line in $exportsOutput) {
+        # dumpbin /exports 데이터 행 형식: "  <ordinal>  <hint>  <RVA>  <symbol>"
+        if ($line -match '^\s*(\d+)\s+[0-9A-Fa-f]+\s+[0-9A-Fa-f]+\s+(\S+)\s*$') {
+            $defLines += "    $($Matches[2])"
+        }
+    }
+    if ($defLines.Count -le 2) {
+        Write-Warning "  [cuDNN] $($dll.Name) 에서 내보낸 심볼을 찾지 못했습니다 — dumpbin 출력 형식을 확인하세요."
+        return $null
+    }
+
+    $defFile = Join-Path $outDir "cudnn.def"
+    $defLines | Set-Content -Path $defFile -Encoding ASCII
+
+    $libOut = Join-Path $outDir "cudnn.lib"
+    & $libExe "/def:$defFile" "/out:$libOut" "/machine:x64" | Out-Null
+
+    if (Test-Path $libOut -PathType Leaf) {
+        Write-Host "  [cuDNN] cudnn.lib 생성 완료 ($($defLines.Count - 2)개 심볼): $libOut"
+        return $libOut
+    }
+    Write-Warning "  [cuDNN] cudnn.lib 생성 실패 (lib.exe 종료 코드 $LASTEXITCODE)"
+    return $null
+}
+
 # deps.txt 에서 태그를 읽으려다 실패하면 $null 반환 (안전 래퍼)
 function Get-DepTagOrNull([string]$ortRepoDir, [string]$depName) {
     try { return Get-DepTagFromDeps $ortRepoDir $depName }
@@ -499,6 +573,36 @@ Require-Command npm
 $CudaHome  = Resolve-CudaHome  $CudaHome
 $CudnnHome = Resolve-CudnnHome $CudnnHome
 
+# CUDA 버전 문자열 추출 (예: "...\CUDA\v12.9" → "12.9")
+# ORT build.py 는 --cuda_version 이 주어지면 CMake 생성기 툴셋을
+# "-T host=x64,cuda=<version>" 형태로 구성합니다 (버전 문자열만 사용, 공백 없음).
+# --cuda_version 없이 --cuda_home 만 주어지면 "-T host=x64,cuda=<CudaHome 전체 경로>" 로 구성되는데,
+# CUDA 기본 설치 경로("C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.9")는
+# 공백을 포함하므로 CMake 의 VS 생성기 툴셋 파서가 이를 파싱하지 못해
+# "CMake Error: Error: generator toolset: host=x64,cuda=C:\Program Files\..." 오류가 발생합니다.
+# (VS 의 CUDA 12.9 BuildCustomizations 통합 파일이 정상 설치되어 있어도 발생하는, 경로 공백 자체의 문제)
+$CudaVersionStr = $null
+if ($CudaHome -match 'v(\d+\.\d+)(\.\d+)?\s*$') {
+    $CudaVersionStr = $Matches[1]
+}
+
+# MSBuild 의 CUDA X.Y.targets 파일은 CudaToolkitDir 속성을 환경변수 CUDA_PATH_V<major>_<minor>
+# (없으면 CUDA_PATH) 로부터 읽습니다. 이 값들은 CUDA Toolkit 설치 시 Machine 레벨에 기록되지만,
+# 이미 실행 중인 셸 세션은 그 이후 갱신되지 않으므로(터미널이 CUDA 설치보다 먼저 열린 경우 등)
+# "The CUDA Toolkit vX.Y directory '' does not exist." 오류가 발생할 수 있습니다.
+# 현재 프로세스 범위에서 명시적으로 재설정하여 이 문제를 회피합니다.
+if ($CudaVersionStr -and ($CudaVersionStr -match '^(\d+)\.(\d+)$')) {
+    $cudaEnvVarName = "CUDA_PATH_V$($Matches[1])_$($Matches[2])"
+    if (-not (Test-Path "env:$cudaEnvVarName") -or ((Get-Item "env:$cudaEnvVarName").Value -ne $CudaHome)) {
+        Write-Host "  [env] $cudaEnvVarName 이(가) 현재 셸 세션에 없어 설정합니다: $CudaHome"
+        Set-Item -Path "env:$cudaEnvVarName" -Value $CudaHome
+    }
+}
+if (-not $env:CUDA_PATH -or ($env:CUDA_PATH -ne $CudaHome)) {
+    Write-Host "  [env] CUDA_PATH 이(가) 현재 셸 세션에 없어 설정합니다: $CudaHome"
+    $env:CUDA_PATH = $CudaHome
+}
+
 Write-Host ""
 Write-Host "================================================================"
 Write-Host "   ONNX Runtime Source Build + Local onnxruntime-node Link"
@@ -507,6 +611,7 @@ Write-Host "  ServerDir : $ServerDir"
 Write-Host "  OrtRepo   : $OrtRepoDir"
 Write-Host "  OrtRef    : $OrtRef"
 Write-Host "  CudaHome  : $CudaHome"
+Write-Host "  CudaVersion : $(if ($CudaVersionStr) { $CudaVersionStr } else { '(경로 기반 툴셋 — 공백 포함 시 CMake 오류 위험)' })"
 Write-Host "  CudnnHome : $(if ($CudnnHome) { $CudnnHome } else { '(CUDA 경로에서 탐색)' })"
 Write-Host "  CmakePath : $CmakePath"
 Write-Host "  InsecureTLSForFetch : $AllowInsecureTlsForFetch"
@@ -751,6 +856,17 @@ if (-not $SkipBuild) {
             if (-not ($cmakeDefines -match 'CUDNN_INCLUDE_DIR=')) {
                 Write-Warning "  [cuDNN] cudnn.h 를 CUDNN_HOME=$CudnnHome 에서 찾지 못했습니다. cmake 가 직접 탐색합니다."
             }
+        } else {
+            # flat 레이아웃 (pip nvidia-cudnn-cu{ver} 패키지: include\cudnn.h, bin\cudnn64_9.dll)
+            # NVIDIA 공식 Windows pip wheel 은 런타임용 .dll 만 포함하고 링크용 .lib 은 없습니다
+            # (PyTorch 등은 ctypes/delay-load 로 .dll 을 직접 로드하므로 .lib 이 불필요).
+            # ORT cmake 소스 빌드는 링크 단계에서 cudnn_LIBRARY(.lib) 이 반드시 필요하므로,
+            # dumpbin(.exe)+lib(.exe) 로 .dll 의 export 심볼을 추출해 .lib 을 직접 생성합니다.
+            $generatedLib = Ensure-CudnnImportLib $CudnnHome
+            if ($generatedLib) {
+                $cmakeDefines += "CUDNN_INCLUDE_DIR=$(($CudnnHome -replace '\\','/'))/include"
+                $cmakeDefines += "cudnn_LIBRARY=$($generatedLib -replace '\\','/')"
+            }
         }
     }
 
@@ -766,12 +882,33 @@ if (-not $SkipBuild) {
         "--cmake_path", $cmakeExe
     )
 
+    if ($CudaVersionStr) {
+        # CMake 생성기 툴셋을 버전 문자열 기반("cuda=12.9")으로 구성시켜
+        # CudaHome 경로 내 공백(Program Files 등)으로 인한 툴셋 파싱 오류를 회피합니다.
+        $buildArgs += @("--cuda_version", $CudaVersionStr)
+    }
+
     if ($CudnnHome) {
         $buildArgs += @("--cudnn_home", $CudnnHome)
     }
 
     $buildArgs += @("--cmake_extra_defines")
     $buildArgs += $cmakeDefines
+
+    # 이전 실행에서 남은 CMakeCache.txt 가 다른 CUDA_HOME/툴셋으로 생성된 경우
+    # ("generator toolset ... Does not match the toolset used previously") CMake 가
+    # 재구성을 거부하므로, 캐시에 기록된 CUDA 툴셋 값이 현재 값과 다르면 캐시를 지웁니다.
+    $buildCacheFile = Join-Path $OrtRepoDir "build\Windows\Release\CMakeCache.txt"
+    if (Test-Path $buildCacheFile) {
+        $cachedToolset = Select-String -Path $buildCacheFile -Pattern '^CMAKE_GENERATOR_TOOLSET:' -ErrorAction SilentlyContinue |
+            ForEach-Object { ($_ -split '=', 2)[1] }
+        $desiredCudaToolsetVal = if ($CudaVersionStr) { $CudaVersionStr } else { $CudaHome }
+        if ($cachedToolset -and ($cachedToolset -notmatch [regex]::Escape("cuda=$desiredCudaToolsetVal"))) {
+            Write-Host "  [cleanup] CMakeCache 툴셋 불일치 감지 (cached: $cachedToolset) — 빌드 트리 재생성..."
+            $buildWindowsDir = Join-Path $OrtRepoDir "build\Windows"
+            Remove-Item -Recurse -Force $buildWindowsDir -ErrorAction SilentlyContinue
+        }
+    }
 
     # 이전 cmake 실패로 남은 stale *-subbuild 디렉토리 정리
     # FETCHCONTENT_SOURCE_DIR_* 변수는 subbuild CMakeLists.txt 가 새로 생성될 때만 반영됩니다.

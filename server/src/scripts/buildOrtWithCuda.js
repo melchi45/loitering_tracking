@@ -20,6 +20,11 @@
  *   --insecure-tls        CMAKE_TLS_VERIFY=0 (기업 프록시 환경용, Windows 전용)
  *   --dry-run             감지 결과 출력 후 실제 빌드 없이 종료
  *   --no-report           빌드 로그를 LTS 서버로 전송하지 않음 (기본: 전송)
+ *   --ensure-cuda         CUDA Toolkit 미설치/버전 불일치 및 cuDNN 미설치 시 자동 설치
+ *                         (ensure-cuda-toolkit.windows.ps1 / ensure-cudnn.windows.ps1 를
+ *                         내부 호출, Windows 전용. cuDNN 은 NVIDIA 로그인 없이 받을 수
+ *                         있는 pip 패키지(nvidia-cudnn-cuXX)로 설치합니다.)
+ *   --ensure-cuda:dry     설치 없이 필요 버전과 다운로드 URL/패키지명만 출력
  *
  * 원격 로그 확인:
  *   이 스크립트는 자체 프로세스로 실행되어 서버 콘솔과 stdio 를 공유하지 않으므로,
@@ -181,6 +186,8 @@ function parseCli() {
     insecureTls:    args.includes('--insecure-tls'),
     dryRun:         args.includes('--dry-run'),
     noReport:       args.includes('--no-report'),
+    ensureCuda:     args.includes('--ensure-cuda'),
+    ensureCudaDry:  args.includes('--ensure-cuda:dry'),
   };
 }
 
@@ -243,6 +250,20 @@ function deriveCudnnHome(cudnnPath) {
 }
 
 /**
+ * cuDNN 경로에서 cuDNN이 빌드된 CUDA 버전 추출
+ *   EXE 설치: ...CUDNN\v9.23\bin\12.9\x64\cudnn64_9.dll → "12.9"
+ *   providerDiagnostics.js 가 cudnnCudaVersion 필드를 이미 추출하지만,
+ *   fallback 으로 경로 패턴에서도 유도합니다.
+ */
+function deriveCudnnCudaVersion(cudnnPath, diagCudnnCudaVersion) {
+  if (diagCudnnCudaVersion) return diagCudnnCudaVersion;
+  if (!cudnnPath) return '';
+  // EXE 설치 패턴: ...\bin\12.9\x64\... 또는 ...\include\12.9\...
+  const m = cudnnPath.match(/[/\\](?:bin|include|lib)[/\\]([\d]+\.[\d]+)[/\\]/i);
+  return m ? m[1] : '';
+}
+
+/**
  * nvidia-smi 로 GPU compute capability 조회
  * "8.9" → "89"   (RTX 4090 / RTX 2000 Ada)
  * "8.6" → "86"   (RTX 3080)
@@ -295,27 +316,312 @@ async function main() {
 
   // ── CUDA Toolkit 확인 ─────────────────────────────────────────────────────
   if (!diag.cudaToolkit.available) {
-    console.error(`[ERROR] CUDA Toolkit 미감지: ${diag.cudaToolkit.reason}`);
-    if (diag.cudaToolkit.installCmds) {
-      console.error('  설치 방법:');
-      diag.cudaToolkit.installCmds.forEach(l => console.error('  ' + l));
+    if (opts.ensureCuda || opts.ensureCudaDry) {
+      // --ensure-cuda: CUDA 자체가 없는 경우 cuDNN이 요구하는 버전으로 자동 설치 시도
+      if (!IS_WIN) {
+        console.error('[ERROR] --ensure-cuda 는 Windows 에서만 지원됩니다.');
+        console.error(`        Linux: sudo apt-get install cuda-toolkit-12-9`);
+        exitWithFlush(1);
+        return;
+      }
+
+      // cuDNN 에서 필요 CUDA 버전 추출, 없으면 기본값 12.9
+      const cudnnCudaVer = deriveCudnnCudaVersion(
+        diag.cudnn?.path || '', diag.cudnn?.cudnnCudaVersion || ''
+      );
+      const targetVer = cudnnCudaVer
+        ? cudnnCudaVer.split('.').slice(0, 2).join('.')
+        : '12.9';
+
+      if (cudnnCudaVer) {
+        console.log(`  ℹ️  cuDNN 감지 — CUDA ${targetVer} 필요 (cuDNN 호환 버전)`);
+      } else {
+        console.log(`  ℹ️  cuDNN 미감지 — 기본 버전 CUDA ${targetVer} 설치 시도`);
+      }
+
+      const ensurePs1 = path.join(SCRIPT_DIR, 'ensure-cuda-toolkit.windows.ps1');
+      const ensureArgs = ['-ExecutionPolicy', 'Bypass', '-File', ensurePs1, '-RequiredVersion', targetVer];
+      if (opts.insecureTls) ensureArgs.push('-AllowInsecureTls');
+
+      if (opts.ensureCudaDry) {
+        ensureArgs.push('-ShowUrls');
+        console.log(`  [--ensure-cuda:dry] CUDA ${targetVer} 인스톨러 URL 확인 중...`);
+        await runStreamed('powershell.exe', ensureArgs, {});
+        exitWithFlush(0);
+        return;
+      }
+
+      console.log(`  [--ensure-cuda] CUDA Toolkit ${targetVer} 자동 설치 중...`);
+      console.log('  (관리자 권한이 없으면 UAC 팝업이 표시될 수 있습니다.)');
+      console.log('');
+
+      let ensureOutput = '';
+      const ensureResult = await new Promise((resolve) => {
+        const { spawn } = require('child_process');
+        const child = spawn('powershell.exe', ensureArgs, { stdio: ['inherit', 'pipe', 'pipe'] });
+        const relay = (stream, isErr) => {
+          let buf = '';
+          stream.on('data', (chunk) => {
+            buf += chunk.toString();
+            const parts = buf.split('\n');
+            buf = parts.pop();
+            for (const line of parts) {
+              (isErr ? process.stderr : process.stdout).write(line + '\n');
+              _reportLine(line);
+              ensureOutput += line + '\n';
+            }
+          });
+          stream.on('end', () => {
+            if (buf) {
+              (isErr ? process.stderr : process.stdout).write(buf + '\n');
+              ensureOutput += buf + '\n';
+            }
+          });
+        };
+        relay(child.stdout, false);
+        relay(child.stderr, true);
+        child.on('close', (code) => resolve(code ?? 1));
+        child.on('error', (err) => { process.stderr.write(`${err.message}\n`); resolve(1); });
+      });
+
+      if (ensureResult === 3 || ensureResult !== 0) {
+        // 인스톨러 실패 — PS1 이 상세 안내를 이미 출력했으므로 짧게 마무리
+        if (ensureResult !== 3) {
+          console.error(`[ERROR] CUDA Toolkit ${targetVer} 설치 실패 (종료 코드: ${ensureResult}).`);
+        }
+        console.error('');
+        console.error('  설치 완료 후 새 PowerShell 창에서 다시 실행하세요:');
+        console.error('    npm run build-ort:auto');
+        exitWithFlush(1);
+        return;
+      }
+
+      // 설치 후 CUDA_HOME 파싱 → 이후 로직에서 사용하도록 diag 패치
+      const cudaHomeLine = ensureOutput.split('\n').find(l => l.trim().startsWith('CUDA_HOME='));
+      if (cudaHomeLine) {
+        const installedHome = cudaHomeLine.trim().replace(/^CUDA_HOME=/, '');
+        console.log(`  ✅ 설치 완료 — CUDA_HOME=${installedHome}`);
+        // diag 에 반영하여 이후 CUDA_HOME 유도 로직이 사용하도록 패치
+        diag.cudaToolkit.available = true;
+        diag.cudaToolkit.version   = targetVer;
+        diag.cudaToolkit.path      = require('path').join(installedHome, 'bin', IS_WIN ? 'nvcc.exe' : 'nvcc');
+      } else {
+        console.warn('  ⚠️  설치 후 CUDA_HOME 을 확인할 수 없습니다. 새 터미널을 열어 다시 시도하세요.');
+        exitWithFlush(1);
+        return;
+      }
+      console.log('');
+    } else {
+      console.error(`[ERROR] CUDA Toolkit 미감지: ${diag.cudaToolkit.reason}`);
+      if (diag.cudaToolkit.installCmds) {
+        console.error('  설치 방법:');
+        diag.cudaToolkit.installCmds.forEach(l => console.error('  ' + l));
+      }
+      console.error('');
+      console.error('  --ensure-cuda 플래그를 사용하면 자동 설치를 시도합니다:');
+      console.error('    npm run ensure-cuda');
+      console.error('    npm run build-ort:auto -- --ensure-cuda');
+      exitWithFlush(1);
+      return;
     }
-    exitWithFlush(1);
-    return;
   }
   console.log(`  ✅ CUDA      : v${diag.cudaToolkit.version}  (${diag.cudaToolkit.path})`);
 
   // ── cuDNN 확인 ────────────────────────────────────────────────────────────
+  let effectiveCudnnHome = null;  // --ensure-cuda 로 pip 설치된 cuDNN 홈 (nvidia\cudnn 디렉토리)
   if (diag.cudnn.available) {
     const verStr = diag.cudnn.version ? `cuDNN ${diag.cudnn.version}  ` : '';
     console.log(`  ✅ cuDNN     : ${verStr}→ ${diag.cudnn.path}`);
+  } else if (opts.ensureCuda || opts.ensureCudaDry) {
+    // --ensure-cuda: cuDNN 미설치 시 pip 패키지(nvidia-cudnn-cuXX)로 자동 설치 시도
+    // (NVIDIA 공식 zip/EXE 는 developer.nvidia.com 로그인이 필요해 완전 자동화 불가)
+    if (!IS_WIN) {
+      console.warn('  ⚠️  cuDNN    : 미감지 — --ensure-cuda 의 cuDNN 자동 설치는 Windows 전용입니다.');
+      console.warn('             Linux: sudo apt-get install libcudnn9-cuda-12 libcudnn9-dev-cuda-12');
+    } else {
+      const cudaMajorMinor = (diag.cudaToolkit.version || '12.9').split('.').slice(0, 2).join('.');
+      const ensureCudnnPs1 = path.join(SCRIPT_DIR, 'ensure-cudnn.windows.ps1');
+      const ensureCudnnArgs = ['-ExecutionPolicy', 'Bypass', '-File', ensureCudnnPs1, '-CudaMajorMinor', cudaMajorMinor];
+      if (opts.insecureTls) ensureCudnnArgs.push('-AllowInsecureTls');
+
+      if (opts.ensureCudaDry) {
+        ensureCudnnArgs.push('-ShowUrls');
+        console.log(`  [--ensure-cuda:dry] cuDNN(CUDA ${cudaMajorMinor}) pip 패키지 확인 중...`);
+        await runStreamed('powershell.exe', ensureCudnnArgs, {});
+      } else {
+        console.log(`  [--ensure-cuda] cuDNN 자동 설치 중 (pip, CUDA ${cudaMajorMinor})...`);
+        console.log('');
+
+        let ensureCudnnOutput = '';
+        const ensureCudnnResult = await new Promise((resolve) => {
+          const child = spawn('powershell.exe', ensureCudnnArgs, { stdio: ['inherit', 'pipe', 'pipe'] });
+          const relay = (stream, isErr) => {
+            let buf = '';
+            stream.on('data', (chunk) => {
+              buf += chunk.toString();
+              const parts = buf.split('\n');
+              buf = parts.pop();
+              for (const line of parts) {
+                (isErr ? process.stderr : process.stdout).write(line + '\n');
+                _reportLine(line);
+                ensureCudnnOutput += line + '\n';
+              }
+            });
+            stream.on('end', () => {
+              if (buf) {
+                (isErr ? process.stderr : process.stdout).write(buf + '\n');
+                ensureCudnnOutput += buf + '\n';
+              }
+            });
+          };
+          relay(child.stdout, false);
+          relay(child.stderr, true);
+          child.on('close', (code) => resolve(code ?? 1));
+          child.on('error', (err) => { process.stderr.write(`${err.message}\n`); resolve(1); });
+        });
+
+        const cudnnHomeLine = ensureCudnnOutput.split('\n').find(l => l.trim().startsWith('CUDNN_HOME='));
+        if (ensureCudnnResult === 0 && cudnnHomeLine) {
+          effectiveCudnnHome = cudnnHomeLine.trim().replace(/^CUDNN_HOME=/, '');
+          diag.cudnn.available = true;
+          diag.cudnn.path = effectiveCudnnHome;
+          console.log(`  ✅ cuDNN 설치 완료(pip) — CUDNN_HOME=${effectiveCudnnHome}`);
+        } else {
+          console.warn(`  ⚠️  cuDNN    : pip 자동 설치 실패 — cuDNN 없이 빌드됩니다 (일부 연산 성능 저하)`);
+        }
+      }
+    }
   } else {
     console.warn(`  ⚠️  cuDNN    : 미감지 — cuDNN 없이 빌드됩니다 (일부 연산 성능 저하)`);
+    console.warn('             --ensure-cuda 플래그로 pip 패키지(nvidia-cudnn-cuXX) 자동 설치 가능:');
+    console.warn('               npm run build-ort:auto -- --ensure-cuda');
+  }
+
+  // ── cuDNN-CUDA 버전 호환성 검사 ───────────────────────────────────────────
+  // cuDNN EXE 설치 방식은 CUDA 버전별 서브디렉토리를 사용하므로 불일치 감지 가능.
+  // 예) cuDNN v9.23 → CUDA 12.9 전용 설치, CUDA Toolkit 12.8 만 있을 때 빌드 실패.
+  let effectiveCudaHome = null;  // --ensure-cuda 로 교체된 CUDA 홈
+  if (diag.cudnn.available) {
+    const cudnnCudaVer = deriveCudnnCudaVersion(diag.cudnn.path || '', diag.cudnn.cudnnCudaVersion || '');
+    const installedCudaVer = diag.cudaToolkit.version || '';
+
+    if (cudnnCudaVer && installedCudaVer) {
+      // major.minor 비교 ("12.9" vs "12.8")
+      const cudnnMinor     = cudnnCudaVer.split('.').slice(0, 2).join('.');
+      const installedMinor = installedCudaVer.split('.').slice(0, 2).join('.');
+
+      if (cudnnMinor !== installedMinor) {
+        console.warn('');
+        console.warn('  ⚠️  [cuDNN-CUDA 버전 불일치]');
+        console.warn(`     설치된 CUDA Toolkit : v${installedMinor}`);
+        console.warn(`     cuDNN 호환 CUDA 버전 : v${cudnnMinor}`);
+        console.warn(`     cuDNN이 CUDA ${cudnnMinor} 전용으로 설치되어 있어 빌드가 실패합니다.`);
+        console.warn('');
+
+        if (opts.ensureCudaDry || opts.ensureCuda) {
+          if (!IS_WIN) {
+            console.error('[ERROR] --ensure-cuda 는 Windows 에서만 지원됩니다.');
+            console.error(`        Linux: sudo apt-get install cuda-toolkit-${cudnnMinor.replace('.', '-')}`);
+            exitWithFlush(1);
+            return;
+          }
+
+          const ensurePs1 = path.join(SCRIPT_DIR, 'ensure-cuda-toolkit.windows.ps1');
+          const ensureArgs = ['-ExecutionPolicy', 'Bypass', '-File', ensurePs1, '-RequiredVersion', cudnnMinor];
+          if (opts.insecureTls) ensureArgs.push('-AllowInsecureTls');
+
+          if (opts.ensureCudaDry) {
+            // URL 출력만
+            ensureArgs.push('-ShowUrls');
+            console.log(`  [--ensure-cuda:dry] CUDA ${cudnnMinor} 인스톨러 URL 확인 중...`);
+            await runStreamed('powershell.exe', ensureArgs, {});
+            exitWithFlush(0);
+            return;
+          }
+
+          console.log(`  [--ensure-cuda] CUDA Toolkit ${cudnnMinor} 자동 설치 중...`);
+          console.log('  (관리자 권한이 없으면 UAC 팝업이 표시될 수 있습니다.)');
+          console.log('');
+
+          // ensure 스크립트 실행 + 출력에서 CUDA_HOME 파싱
+          let ensureOutput = '';
+          const ensureResult = await new Promise((resolve) => {
+            const { spawn } = require('child_process');
+            const child = spawn('powershell.exe', ensureArgs, { stdio: ['inherit', 'pipe', 'pipe'] });
+            const relay = (stream, isErr) => {
+              let buf = '';
+              stream.on('data', (chunk) => {
+                buf += chunk.toString();
+                const parts = buf.split('\n');
+                buf = parts.pop();
+                for (const line of parts) {
+                  (isErr ? process.stderr : process.stdout).write(line + '\n');
+                  _reportLine(line);
+                  ensureOutput += line + '\n';
+                }
+              });
+              stream.on('end', () => {
+                if (buf) {
+                  (isErr ? process.stderr : process.stdout).write(buf + '\n');
+                  ensureOutput += buf + '\n';
+                }
+              });
+            };
+            relay(child.stdout, false);
+            relay(child.stderr, true);
+            child.on('close', (code) => resolve(code ?? 1));
+            child.on('error', (err) => { process.stderr.write(`${err.message}\n`); resolve(1); });
+          });
+
+          if (ensureResult === 3 || ensureResult !== 0) {
+            // 인스톨러 실패 — PS1 이 상세 안내를 이미 출력했으므로 짧게 마무리
+            if (ensureResult !== 3) {
+              console.error(`[ERROR] CUDA Toolkit ${cudnnMinor} 설치 실패 (종료 코드: ${ensureResult}).`);
+            }
+            console.error('');
+            console.error('  설치 완료 후 새 PowerShell 창에서 다시 실행하세요:');
+            console.error('    npm run build-ort:auto');
+            exitWithFlush(1);
+            return;
+          }
+
+          // ensure 스크립트 출력에서 "CUDA_HOME=<path>" 파싱
+          const cudaHomeLine = ensureOutput.split('\n').find(l => l.trim().startsWith('CUDA_HOME='));
+          if (cudaHomeLine) {
+            effectiveCudaHome = cudaHomeLine.trim().replace(/^CUDA_HOME=/, '');
+            console.log(`  ✅ 설치 완료 — CUDA_HOME=${effectiveCudaHome}`);
+          } else {
+            console.warn('  ⚠️  설치 후 CUDA_HOME 을 확인할 수 없습니다. 기존 감지 경로를 사용합니다.');
+          }
+          console.log('');
+
+        } else {
+          // --ensure-cuda 없음 → 오류 + 가이드 출력
+          console.error(`[ERROR] CUDA Toolkit ${cudnnMinor} 이 필요하지만 설치되지 않았습니다.`);
+          console.error('');
+          console.error('  해결 방법 (하나 선택):');
+          console.error('');
+          console.error('  A) 자동 설치 (권장)');
+          console.error(`     npm run build-ort:auto -- --ensure-cuda`);
+          console.error(`     (또는 npm run ensure-cuda)`);
+          console.error('');
+          console.error('  B) URL 확인 후 수동 설치');
+          console.error(`     npm run build-ort:auto -- --ensure-cuda:dry`);
+          console.error('');
+          console.error('  C) cuDNN을 현재 CUDA 버전에 맞게 재설치');
+          console.error(`     https://developer.nvidia.com/cudnn 에서 CUDA ${installedMinor} 용 cuDNN 을 다운로드`);
+          exitWithFlush(1);
+          return;
+        }
+      } else {
+        console.log(`  ✅ cuDNN-CUDA 호환  : cuDNN(CUDA ${cudnnMinor}) ↔ Toolkit(${installedMinor}) 일치`);
+      }
+    }
   }
 
   // ── 경로 유도 ─────────────────────────────────────────────────────────────
-  const cudaHome  = deriveCudaHome(diag.cudaToolkit.path, diag.cudaToolkit.version);
-  const cudnnHome = deriveCudnnHome(diag.cudnn.path || '');
+  const cudaHome  = effectiveCudaHome || deriveCudaHome(diag.cudaToolkit.path, diag.cudaToolkit.version);
+  const cudnnHome = effectiveCudnnHome || diag.cudnn.cudnnHome || deriveCudnnHome(diag.cudnn.path || '');
   const cudaArch  = detectCudaArch();
 
   if (!cudaHome) {

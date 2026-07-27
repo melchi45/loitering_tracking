@@ -35,6 +35,53 @@ function _run(cmd, timeoutMs = 5000) {
   }
 }
 
+/**
+ * pip 로 설치된 nvidia-cudnn-cuXX 휠 패키지의 설치 디렉토리를 탐색합니다.
+ *
+ * NVIDIA 공식 cuDNN 다운로드(zip/EXE)는 개발자 계정 로그인이 필요하지만,
+ * PyPI 의 nvidia-cudnn-cuXX 패키지는 로그인 없이 pip install 만으로 받을 수
+ * 있어(PyTorch/JAX 등이 사용하는 것과 동일한 공식 재배포 채널) 자동화에 적합합니다.
+ * 휠 레이아웃: <site-packages>/nvidia/cudnn/{bin,include,lib}
+ *
+ * @returns {string|null} nvidia/cudnn 패키지 디렉토리 (bin/include/lib 상위) 또는 null
+ */
+function _findPipCudnnDir() {
+  if (!IS_WIN) return null;
+  const path = require('path');
+  // 저장소 루트 .venv (VIRTUAL_ENV 미설정 터미널에서도 프로젝트 venv를 찾기 위함)
+  const repoRootVenvPy = path.join(__dirname, '..', '..', '..', '.venv', 'Scripts', 'python.exe');
+  const pyCandidates = [
+    process.env.PYTHON_EXEC,
+    process.env.PYTHON_EXEC_WINDOWS,
+    process.env.VIRTUAL_ENV ? path.join(process.env.VIRTUAL_ENV, 'Scripts', 'python.exe') : null,
+    fs.existsSync(repoRootVenvPy) ? repoRootVenvPy : null,
+    'python',
+    'py',
+  ].filter(Boolean);
+
+  const probe = "import importlib.util; s=importlib.util.find_spec('nvidia.cudnn'); print(s.submodule_search_locations[0] if s else '')";
+
+  for (const py of pyCandidates) {
+    const out = _run(`"${py}" -c "${probe}"`, 4000);
+    if (out && fs.existsSync(out)) return out;
+  }
+  return null;
+}
+
+/**
+ * pip 로 설치된 cuDNN 패키지 디렉토리에서 bin/*.dll 존재 여부 확인
+ */
+function _pipCudnnBinHit(baseDir) {
+  const path = require('path');
+  const binDir = path.join(baseDir, 'bin');
+  if (!fs.existsSync(binDir)) return null;
+  try {
+    const dll = fs.readdirSync(binDir).find(f => /^cudnn.*\.dll$/i.test(f));
+    if (dll) return path.join(binDir, dll);
+  } catch { /* ignore */ }
+  return null;
+}
+
 // ── GPU ───────────────────────────────────────────────────────────────────────
 
 async function detectNvidiaGpu() {
@@ -307,6 +354,16 @@ async function detectCuDNN() {
       return null;
     }
 
+    // 0) pip 설치 cuDNN 패키지 탐색 (nvidia-cudnn-cuXX, NVIDIA 로그인 불필요)
+    //    ensure-cudnn.windows.ps1 로 자동 설치된 경우 이 경로로 재감지됨
+    const pipCudnnBase = _findPipCudnnDir();
+    if (pipCudnnBase) {
+      const dllPath = _pipCudnnBinHit(pipCudnnBase);
+      if (dllPath) {
+        return { available: true, path: dllPath, version: '9.x', cudnnHome: pipCudnnBase, pipInstalled: true };
+      }
+    }
+
     // 1) CUDA_PATH 환경변수 → bin/ 탐색
     const cudaEnvCandidates = [
       process.env.CUDA_PATH,
@@ -351,14 +408,16 @@ async function detectCuDNN() {
             : path.join(basePath, 'bin', cudaVer);
           for (const dll of CUDNN9_DLLS) {
             const r = _checkWinDll(binDir, dll);
-            if (r) return r;
+            // cudnnCudaVersion: cuDNN 라이브러리가 빌드된 CUDA 버전 (예: "12.9")
+            // EXE 설치 시 bin\{cudaVer}\ 서브디렉토리에서 버전을 확정할 수 있음
+            if (r) return { ...r, cudnnCudaVersion: cudaVer };
           }
         }
       }
-      // bin\ 직접 (일부 zip 설치)
+      // bin\ 직접 (일부 zip 설치) — CUDA 버전을 경로에서 추론할 수 없음
       for (const dll of CUDNN9_DLLS) {
         const r = _checkWinDll(path.join(basePath, 'bin'), dll);
-        if (r) return r;
+        if (r) return r;  // cudnnCudaVersion 없음 (zip 방식은 CUDA 버전 서브디렉토리 없음)
       }
       return null;
     }
@@ -403,9 +462,12 @@ async function detectCuDNN() {
       reason: 'cudnn64_9.dll / cudnn_ops.dll / cudnn64_8.dll 미감지 (cuDNN 9.x 또는 8.x)',
       installCmds: [
         '# ── Windows cuDNN 설치 ──',
-        '# NVIDIA 계정 필요: https://developer.nvidia.com/cudnn',
         '',
-        '# 방법 A: zip 파일 (수동 복사 — 전통적 방식):',
+        '# 방법 A (권장, NVIDIA 로그인 불필요): pip 패키지 자동 설치',
+        '#   npm run ensure-cuda   (cuDNN 도 함께 자동 설치 시도)',
+        '#   또는 수동: pip install nvidia-cudnn-cu12',
+        '',
+        '# 방법 B: zip 파일 (수동 복사 — NVIDIA 계정 필요: https://developer.nvidia.com/cudnn):',
         '#  1. "Local Installer for Windows (Zip)" 다운로드',
         '#  2. 압축 해제 후 아래 경로로 파일 복사:',
         '#     cudnn-windows-x86_64-9.x.x_cuda12-archive\\bin\\*',
@@ -415,7 +477,7 @@ async function detectCuDNN() {
         '#     cudnn-windows-x86_64-9.x.x_cuda12-archive\\lib\\*',
         '#       → C:\\Program Files\\NVIDIA GPU Computing Toolkit\\CUDA\\v12.8\\lib\\',
         '',
-        '# 방법 B: EXE 설치 관리자 (cuDNN 9.x 권장):',
+        '# 방법 C: EXE 설치 관리자 (cuDNN 9.x 권장, NVIDIA 계정 필요):',
         '#  1. "Local Installer for Windows (Exe)" 다운로드',
         '#  2. 설치 후 DLL 경로가 PATH에 포함되는지 확인:',
         '#     C:\\Program Files\\NVIDIA\\CUDNN\\v9.x.x\\bin\\12.8\\',
