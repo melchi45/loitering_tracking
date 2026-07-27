@@ -1592,6 +1592,25 @@ WHEP 세션을 90초간 관찰한 결과, 특정 카메라(특히 2048×1536 이
 
 ---
 
+### 6.40 `INGEST_WATCHDOG_ENABLED=false`가 디버깅 세션 종료 후에도 방치되어 자동 복구가 무력화된 결함 (2026-07-27)
+
+**증상**: Streaming Dashboard 카메라 리스트의 8개 IP 카메라가 전부 RETRY/Offline으로 표시됨. 그런데 사용자가 실제로 확인한 바로는 **WebRTC 영상 재생 자체는 계속 정상**이었다 — 상태 배지만 잘못된 값을 보이고 있었던 것.
+
+**진단**:
+- `curl --max-time 5 http://127.0.0.1:7070/health`가 timeout — ingest-daemon 프로세스는 살아있고 CPU도 도는데(12%) HTTP 스레드만 응답 불능인, §6.29.5/§6.29.9와 동일한 패턴.
+- `GET /api/ingest-status`도 `{"enabled":true,"healthy":false,"error":"timeout"}` 확인, 서버 로그에는 `pipelineManager.js`의 프레임 정체 워치독(`FRAME_STALL_MS=45s`)이 "no frame for Ns — restarting capture" → "ingest-daemon re-registration failed"를 684회 이상 반복 중이었음(재등록 HTTP 호출도 같은 wedged daemon을 향하므로 매번 실패).
+- "영상은 재생되는데 상태만 RETRY"였던 이유: WebRTC 비디오/오디오 RTP는 mediasoup을 통해 한 번 established되면 **UDP 소켓 기반으로 HTTP 제어 평면과 완전히 독립**되어 유지된다(architecture invariant, §4.3). 대시보드의 `status` 필드는 AI JPEG 프레임 경로의 정체 여부만 반영하는 별도 신호(`_updateCameraStatus()`, `pipelineManager.js`)라서, ingest-daemon의 HTTP 스레드만 wedged되어도 "영상은 정상, 상태는 RETRY"라는 조합이 그대로 나타난다.
+- **핵심 원인**: §6.29.9에서 이미 도입한 `ingestDaemonWatchdog.js`(20초 간격 `/health` 폴링, 연속 2회 실패 시 `restartIngestDaemon.js` 자동 트리거)가 있었음에도 자동 복구가 전혀 작동하지 않았다 — `server/.env`의 `INGEST_WATCHDOG_ENABLED=false`가 과거의 라이브 디버깅 세션(주석: "temporarily... 이후 재활성화") 이후 원복되지 않고 그대로 방치되어 있었다. `index.js`는 이 값이 `false`면 `console.warn` 한 줄만 남기고 워치독을 아예 기동하지 않으므로, 자동 복구 경로 자체가 존재하지 않는 상태로 최소 수일간 운영되고 있었다.
+
+**수정**:
+1. `server/.env`의 `INGEST_WATCHDOG_ENABLED`를 `true`로 원복.
+2. `ingestDaemonWatchdog.js`에 `armDebugDisableSafetyNet()` 신규 추가 — `INGEST_WATCHDOG_ENABLED=false`로 기동될 때 `index.js`가 이 함수를 대신 호출한다. 5분마다 "아직 비활성화됨" 경고를 반복 출력하고, **30분이 지나면 값과 무관하게 강제로 `startIngestDaemonWatchdog()`를 기동**시킨다. `.env` 주석이 명시한 "임시" 전제를 코드로 강제해, 디버깅 세션을 정리하지 않고 넘어가도 자동 복구가 영구적으로 무력화되는 일이 재발하지 않도록 함.
+3. `npm run ingest:restart`로 wedged된 daemon 즉시 복구 — 10개 카메라(IP 8대 + YouTube 2개) 전부 재등록, IP 카메라 8대는 `streaming` 상태로 정상 복귀 확인. YouTube 2개(`yt-1a647`, `yt-e54f2`)는 MediaMTX 경로 404로 남았는데, 이는 §6.16의 기존 YouTube URL 갱신 이슈와 동일한 계열로 이번 wedge와는 무관한 별도 사안.
+
+**교훈**: 자동 복구 워치독 자체가 정상 작동해도, "디버깅용 임시 비활성화" 플래그처럼 사람이 되돌려야 하는 수동 스텝이 남아있으면 그 워치독은 언제든 조용히 무력화될 수 있다 — 이런 종류의 플래그에는 처음부터 자동 만료(TTL)를 넣어 "임시"라는 전제를 코드가 스스로 강제하도록 설계하는 편이 안전하다. 또한 "영상 재생"과 "대시보드 상태 배지"가 서로 다른 독립 경로(WebRTC RTP vs AI JPEG 프레임)에서 나온다는 것은 이 코드베이스의 근본적인 아키텍처 특성이므로, 유사 증상(영상은 정상인데 상태만 이상) 진단 시 참고할 것.
+
+---
+
 ### 12.3 스트림별 타임아웃 전략
 
 | 스트림 | 방식 | 타임아웃 | 근거 |
@@ -1660,6 +1679,7 @@ WHEP 세션을 90초간 관찰한 결과, 특정 카메라(특히 2048×1536 이
 | 1.40 | 2026-07-21 | §6.27 최종 결론 — 이번 세션 전체를 관통한 재생 불가 증상의 실제 근본 원인 2건 확정: (1) `ingest-daemon` 프로세스가 완전히 다운되어 있어(포트 7070 connection refused) 서버 재시작마다 카메라가 mediasoup에 등록 안 되고 "WebRTC disabled"로 시작(`npm run ingest:start`로 복구), (2) `profileLevelId`가 `addCameraStream()` 시점 1회만 캐싱되는 구조라 ingest-daemon 다운 중 폴링 예산(5초) 초과 시 폴백값 Baseline(`42e01f`)이 영구 고착 — 실제로는 High Profile(`640032`)인데도 낮은 Level(3.1)로 협상되어 고해상도 카메라가 일부 프레임만 디코드하다 멈춤(`POST /stream/reconnect`로 캐시 재고침해 미봉책 적용, 근본 수정은 후속 과제로 명시). 조사용 임시 SDP 디버그 로그 제거 |
 | 1.41 | 2026-07-21 | §6.27 재재보완 — "데이터 수신은 정상인데 Buffer만 주기적으로 900ms+" 현상의 진짜 근본 원인 확정: 프로액티브 jitterBufferTarget escalation이 `bufferMs`(우리가 `videoReceiver.jitterBufferTarget`으로 직접 명령한 결과가 그대로 반영되는 지표)를 트리거로 삼아 자기강화 피드백 루프를 형성 — STEP_UP/STEP_DOWN 5~10배 비대칭 때문에 정상적인 지터 한 번만으로도 15~20초 만에 상한(1000ms)까지 폭주. `useWebRTC.ts` escalation 트리거에서 `bufferMs` 조건 제거, 우리가 직접 조작하지 않는 `freezeDelta`/`lossDeltaForAdapt`(진짜 프리즈·패킷손실)만으로 판단하도록 수정 — 데이터 수신량과 무관했던 자기유발 문제였음을 확정. 별도로 Node.js 이벤트 루프 지연 모니터(`eventLoopLag.js`) 신규 추가(200ms+ 블로킹 시 로그, 실측 233ms/217ms 확인). `npx tsc --noEmit`/`npm run build` 클린 통과 |
 | 1.42 | 2026-07-21 | §6.27 재재재보완 — `profile-level-id=42e01f`가 재연결마다 무작위로 재발하던 진짜 원인 확정: `negotiate()`가 WHEP 재협상마다 매번 `_ingestGetVideoParams()`를 재시도 없이 2초 타임아웃으로 단발 호출하는데, ingest-daemon이 바쁠 때(250%+ CPU) 실패하면(로그 `video-params not available yet` 하루 133회 확인) Producer의 하드코딩 Baseline(`42e01f`) 기본값으로 조용히 폴백하던 구조 — `addCameraStream()` 시점 1회 캐싱이라는 v1.40의 이해는 부정확했음, 실제로는 매 negotiate마다 fresh fetch. `mediasoupEngine.js`에 `_lastKnownVideoParams` 캐시 신규 추가 — fetch 성공 시 갱신, 실패 시 Baseline이 아니라 마지막 성공값으로 폴백(카메라 실제 프로파일은 재연결 사이 안 바뀌므로), 기존 H.265 진단용 `_pollVideoCodec()`도 성공 시 같은 캐시를 선제 예열, `removeCameraStream()`에서 캐시 정리 추가 |
+| 1.65 | 2026-07-27 | §6.40 신규 — Streaming Dashboard 8개 카메라가 RETRY/Offline(WebRTC 영상 자체는 정상 재생 중)이던 원인 확정: ingest-daemon HTTP 스레드 wedged(§6.29.5 계열) + 이미 있던 자동 복구 `ingestDaemonWatchdog.js`(§6.29.9)가 `server/.env`의 `INGEST_WATCHDOG_ENABLED=false`(과거 디버깅 세션 후 원복 누락)로 비활성화돼 있어 자동 복구가 무력화된 상태로 최소 수일 방치. `.env` 원복 + `ingest:restart`로 즉시 복구, `armDebugDisableSafetyNet()` 신규 추가로 디버깅용 비활성화가 30분 후 자동 강제 재활성화되도록 안전장치 도입 |
 | 1.64 | 2026-07-24 | §6.39 신규 — §6.38의 MediaMTX 직접 우회가 `webrtcEnabled` 카메라에만 적용되고 UMP 전용(`umpEnabled`, `webrtcEnabled=false`) 카메라에는 적용되지 않던 결함 수정. `needsMediaMTX`에 `umpEnabled` 반영, `cameras.js`의 `needsRestart`도 `umpEnabled` 변경 시 재시작하도록 동기화. 재측정 ~13.5fps → 28~31fps 복구 확인 |
 | 1.63 | 2026-07-24 | §6.38 신규(아키텍처) — fleet 부하로 인한 개별 카메라 프레임레이트 저하가 §6.37 이후에도 잔존(GIL 경합은 fan-out 하나만의 문제가 아니었음). `WEBRTC_ENGINE=mediamtx`가 이미 만들어둔 MediaMTX 직접(non-GIL) 경로를 UMP가 우선 재사용하도록 변경 — ingest-daemon 완전 우회. "GIL 회피보다 우회가 우선일 수 있다"는 일반 원칙으로 정리 |
 | 1.62 | 2026-07-24 | §6.37 신규 — §6.29.5에서 미확정으로 남겼던 CPython GIL 경합 가설을 실측으로 확정: PyAV RTSP `mux()`가 블로킹 네트워크 쓰기 동안 GIL을 놓지 않아, 스레드 분리만으로는 카메라 자신의 읽기 루프를 못 지킴(py-spy 없이 spin-counter 스레드로 격리 실험). `rtsp_publish_worker.py` 별도 프로세스로 근본 해결 — 향후 유사 fan-out 추가 시 일반 원칙으로 기록 |

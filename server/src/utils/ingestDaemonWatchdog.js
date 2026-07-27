@@ -25,6 +25,15 @@ const STARTUP_GRACE_MS    = 30_000; // let the daemon finish its own boot first
 const RESTART_COOLDOWN_MS = 90_000; // restartIngestDaemon.js itself takes ~10s;
                                      // give re-registration time before re-arming
 
+// 2026-07-27 incident (Design_RTSP_Capture_Backend.md §6.40): INGEST_WATCHDOG_ENABLED=false
+// was left set from a past debugging session and stayed off for days, silently disabling
+// auto-recovery while ingest-daemon was HTTP-wedged — cameras sat in RETRY/Offline with no
+// automatic fix. The debug-disable is meant to be short-lived (comment in server/.env says
+// "temporarily... re-enable afterward"), so this safety net makes that assumption
+// self-enforcing instead of relying on someone remembering to flip the flag back.
+const DEBUG_DISABLE_REMINDER_MS = 5 * 60_000;  // loud reminder every 5 min while disabled
+const DEBUG_DISABLE_MAX_MS      = 30 * 60_000; // force re-enable after 30 min regardless
+
 // Fetches and parses ingest-daemon's own /health body (e.g. {"status":"ok","cameras":9})
 // — used by both the watchdog loop (boolean-only) and the dashboard status API
 // (wants the camera count too). Never rejects; timeout/parse/connection errors
@@ -107,4 +116,23 @@ function startIngestDaemonWatchdog() {
   cooldownUntil = Date.now() + STARTUP_GRACE_MS;
 }
 
-module.exports = { startIngestDaemonWatchdog, fetchIngestDaemonHealth };
+// Called instead of startIngestDaemonWatchdog() when INGEST_WATCHDOG_ENABLED=false.
+// Reminds loudly every 5 min that auto-recovery is off, and force-starts the real
+// watchdog after 30 min so a debug session that was never cleaned up can't leave
+// ingest-daemon unrecoverable indefinitely.
+function armDebugDisableSafetyNet() {
+  const startedAt = Date.now();
+  const timer = setInterval(() => {
+    const elapsedMin = Math.round((Date.now() - startedAt) / 60_000);
+    if (Date.now() - startedAt >= DEBUG_DISABLE_MAX_MS) {
+      clearInterval(timer);
+      console.warn(`[IngestWatchdog] INGEST_WATCHDOG_ENABLED=false for ${elapsedMin}min — safety net timeout reached, force-enabling watchdog now (set INGEST_WATCHDOG_ENABLED=true in server/.env to silence this)`);
+      startIngestDaemonWatchdog();
+      return;
+    }
+    console.warn(`[IngestWatchdog] still disabled via INGEST_WATCHDOG_ENABLED=false (${elapsedMin}min elapsed) — auto-recovery is OFF, will force re-enable at 30min`);
+  }, DEBUG_DISABLE_REMINDER_MS);
+  timer.unref();
+}
+
+module.exports = { startIngestDaemonWatchdog, fetchIngestDaemonHealth, armDebugDisableSafetyNet };

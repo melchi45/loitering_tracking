@@ -302,6 +302,8 @@ ingest-daemon crash
 
 **버그 수정 — 계층 2 watchdog 재진입 가드 누락으로 인한 restart storm (2026-07-15):** `frameWatchdogTimer`의 `setInterval(async () => {...}, 8_000)` 콜백에 재진입 가드가 없어, `_ingestRemoveCamera()`+`_ingestRegisterCamera()` 재등록 왕복(재시도 포함 최대 ~15.5s)이 8초 폴링 주기보다 오래 걸리면 다음 tick이 이전 복구가 끝나기 전에 또 발동 — 같은 카메라에 remove+register를 중복 실행해 연결이 안정화되기도 전에 스스로 다시 끊는 무한 루프가 발생했음. TID-A800(`192.168.214.32`, RTSP 핸드셰이크 자체가 15초 이상 소요)에서 실측·재현, 로그상 "Stopped → removed → AI loop starting"이 8~25초 주기로 끝없이 반복되고 `AI frame #1`을 넘기지 못하는 패턴으로 나타남 — WebRTC "연결 안 됨"·전반적 "재생 끊김" 증상의 공통 원인이었음(재등록 왕복이 순간적으로 8초를 넘기면 어느 카메라에서도 재현 가능). 수정: `ctx._watchdogBusy` 재진입 가드 추가 + `capture.start()` 이후 `lastFrameAt`을 재시작 완료 시점 기준으로 재갱신(재등록 소요 시간만큼 유예가 깎이지 않도록). 소스: `server/src/services/pipelineManager.js`. 상세: `docs/design/Design_RTSP_Capture_Backend.md` §6.7.
 
+**버그 수정 — `INGEST_WATCHDOG_ENABLED=false`가 디버깅 세션 종료 후에도 방치되어 자동 복구가 무력화됨 (2026-07-27):** Streaming Dashboard 카메라가 전부 RETRY/Offline인데 실제 WebRTC 영상은 정상 재생 중이라면, `curl --max-time 5 http://127.0.0.1:7070/health`로 ingest-daemon HTTP 응답 여부부터 확인할 것 — WebRTC 비디오/오디오 RTP는 mediasoup을 통해 한 번 established되면 UDP 소켓 기반으로 HTTP 제어 평면과 완전히 독립되어 유지되므로(§4.3), ingest-daemon의 HTTP 스레드만 wedged돼도 "영상은 정상, 대시보드 상태만 RETRY"라는 조합이 그대로 나타난다(상태 배지는 AI JPEG 프레임 경로 정체 여부만 반영). 이번엔 `ingestDaemonWatchdog.js`(§6.29.9, 20초 간격 `/health` 폴링→2회 연속 실패 시 자동 `ingest:restart`)가 이미 있었는데도 전혀 동작하지 않았던 이유가 `server/.env`의 `INGEST_WATCHDOG_ENABLED=false`(과거 라이브 디버깅 세션 후 원복 누락)였음 — 최소 수일간 자동 복구 경로 자체가 꺼져 있었다. `npm run ingest:restart`로 즉시 복구 가능하지만, 근본 예방으로 `ingestDaemonWatchdog.js`에 `armDebugDisableSafetyNet()` 추가 — 비활성 상태에서도 5분마다 경고 로그를 남기고, 30분이 지나면 값과 무관하게 강제로 워치독을 재기동한다. 소스: `server/src/utils/ingestDaemonWatchdog.js`, `server/src/index.js`. 상세: `docs/design/Design_RTSP_Capture_Backend.md` §6.40.
+
 **신규 — `Camera.webrtcVideoOnly` (세션 부하 완화, 2026-07-15):** 위 재진입 가드 수정 후에도 TID-A800은 stall이 완전히 사라지지 않았음 — ping(0% 손실)과 AI 디코딩 멀티스레드화(`thread_type=AUTO`)로도 해결 안 됨, 진짜 원인은 카메라 자체의 동시 RTSP 세션 처리 한계였음(실측: 물리 카메라 1대당 세션 총량을 8→6으로 줄이자 양쪽 채널 모두 안정화). `PUT /api/cameras/:id { webrtcVideoOnly: true }`로 카메라별 audio+App RTP RTP 세션을 생략하고 AI+video만 유지(카메라당 세션 4→2) — mediasoup WHEP 소비자 쪽엔 오디오/데이터채널이 없다는 것만 다를 뿐 영상 재생엔 영향 없음. RTSP 세션 부하가 큰(동시 채널 다수 등록·저사양 인코더) 카메라에 적용. 소스: `server/src/services/webrtc/mediasoupEngine.js` `addCameraStream()` opts.videoOnly. 상세: `docs/design/Design_RTSP_Capture_Backend.md` §6.7.
 
 ### 환경변수
@@ -309,6 +311,7 @@ ingest-daemon crash
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `RTSP_READ_TIMEOUT` | `5` | PyAV 내부 watchdog 타임아웃(초). 불안정 네트워크에서는 10–15로 증가 |
+| `INGEST_WATCHDOG_ENABLED` | `true` | ingest-daemon `/health` 자동 감시(20초 간격, 2회 실패 시 자동 `ingest:restart`) 활성화 여부. **라이브 디버깅 목적으로만 일시적으로 `false`로** — 30분 지나면 `armDebugDisableSafetyNet()`이 값과 무관하게 강제 재활성화하므로 되돌리는 걸 잊어도 영구 방치되지는 않음(2026-07-27, §6.40) |
 
 ### 수동 진단
 
