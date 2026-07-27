@@ -49,6 +49,13 @@ const UMP_PLAYER_SCRIPTS = [
   '/ump-player/crypto.js',
   '/ump-player/sylvester.js',
   '/ump-player/glUtils.js',
+  // Populates `window.parser` (fast-xml-parser) — Util/metaDataParser.js needs
+  // it to fill in meta.json, and ump-player.js's onUmpMeta() only dispatches
+  // the public 'meta' CustomEvent once both meta.json AND meta.xml are set.
+  // Without this, 'meta' never fires no matter what listens for it. Vendored
+  // from the sibling WiseNetChromeIPInstaller submodule by
+  // copyUmpPlayerAssets.js — see that script's comment for why.
+  '/ump-player/parser.min.js',
   // util.js assigns `window.log` (used by every other ump/ file's own
   // top-level `log.getLogger(...)` call, confirmed live 2026-07-23:
   // "Cannot read properties of undefined (reading 'getLogger')" at
@@ -200,6 +207,13 @@ export default function UmpPlayerView({ camera, onStatistics }: Props) {
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
   const elementRef = useRef<UmpPlayerElement | null>(null);
   const containerRef = useRef<HTMLDivElement | null>(null);
+  // Client-side floor on how often 'meta' relays to the server — a busy
+  // metadata track (e.g. thermal BoxTemperatureReading, sent on every RTP
+  // packet) would otherwise fire one POST per packet. The server's own
+  // per-camera+topic+state dedup (onvifParser.js's ingestOnvifEvents) already
+  // absorbs unchanged-state repeats into a no-op DB write, so this is purely
+  // a request-rate safety valve, not a correctness requirement.
+  const lastMetaRelayRef = useRef(0);
 
   // <ump-player> requires explicit numeric width/height attributes — per the
   // package's own JSDoc ("width of HTML element {optional, but element can
@@ -263,6 +277,25 @@ export default function UmpPlayerView({ camera, onStatistics }: Props) {
         setPlayerNotice('');
       }
     };
+    // 'waiting' is dispatched by the exact same onUmpError() switch as 'error'
+    // (see the playerNotice comment above) — errorCode 0x0107, raised from
+    // mediaRouter.js:onWaiting on every RTP packet-loss/recovery transition
+    // (rtpSession.js's statisticsTimer). It's a sibling case of the same
+    // switch, just split into its own CustomEvent by the vendor rather than
+    // going through the 'error' default branch — same transient, self-
+    // recovering category, so it shares playerNotice instead of a second
+    // banner. detail.waiting is `waiting.islost`: true while packets are
+    // being lost, false on the matching recovery tick — reference example
+    // (app/ump-player-example.html's onwaiting()) only logs this to a debug
+    // textarea and drives no UI, unlike every other case in that switch.
+    const onWaiting = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      if (detail?.waiting === true) {
+        setPlayerNotice(`${detail.media || 'stream'} packet loss — recovering…`);
+      } else if (detail?.waiting === false) {
+        setPlayerNotice('');
+      }
+    };
     // 'statistics' fires ~1/sec regardless of the (unused here) `statistics`
     // attribute — that attribute only gates the vendor's own built-in overlay
     // DOM elements, not the event dispatch itself (confirmed against
@@ -274,9 +307,38 @@ export default function UmpPlayerView({ camera, onStatistics }: Props) {
     const onStatisticsEvent = (e: Event) => {
       onStatistics?.((e as CustomEvent).detail?.statistics);
     };
+    // 'meta' carries the RTSP session's own metadata track (ONVIF
+    // MetadataStream XML — motion/analytics events, the same class of data
+    // server/src/services/onvifParser.js already parses from ingest-daemon's
+    // Application RTP fan-out for JPEG/WebRTC-mode cameras). UMP mode bypasses
+    // ingest-daemon entirely (Design_UMP_Player_RTSP_over_WebSocket.md §8.13),
+    // so for a UMP-only camera (webrtcEnabled=false) this browser-side event
+    // is otherwise the only place that XML ever surfaces — relay it to the
+    // server so it lands in the same onvif_events timeline/Socket.IO stream
+    // as every other camera. Requires window.parser to be loaded (see the
+    // parser.min.js entry above) — onUmpMeta() only dispatches this event
+    // once both meta.json and meta.xml are populated.
+    const onMeta = (e: Event) => {
+      const detail = (e as CustomEvent).detail;
+      const xml = detail?.xml;
+      if (typeof xml !== 'string' || xml.length === 0) return;
+      const now = Date.now();
+      if (now - lastMetaRelayRef.current < 500) return;
+      lastMetaRelayRef.current = now;
+      fetch(`/api/cameras/${camera.id}/ump-meta`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        },
+        body: JSON.stringify({ xml }),
+      }).catch(() => { /* best-effort relay — never block playback on a failed POST */ });
+    };
     el.addEventListener('error', onError);
     el.addEventListener('statechange', onStateChange);
+    el.addEventListener('waiting', onWaiting);
     el.addEventListener('statistics', onStatisticsEvent);
+    el.addEventListener('meta', onMeta);
     try {
       el.play();
     } catch (err) {
@@ -285,9 +347,11 @@ export default function UmpPlayerView({ camera, onStatistics }: Props) {
     return () => {
       el.removeEventListener('error', onError);
       el.removeEventListener('statechange', onStateChange);
+      el.removeEventListener('waiting', onWaiting);
       el.removeEventListener('statistics', onStatisticsEvent);
+      el.removeEventListener('meta', onMeta);
     };
-  }, [scriptReady, creds, camera.id, onStatistics]);
+  }, [scriptReady, creds, camera.id, onStatistics, accessToken]);
 
   if (camera.channelSlot == null) {
     return (

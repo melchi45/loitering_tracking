@@ -37,6 +37,7 @@ const fs = require('fs');
 const path = require('path');
 
 const SUBMODULE_ROOT = path.resolve(__dirname, '..', '..', 'submodules', 'ump-player');
+const WISENET_ROOT = path.resolve(__dirname, '..', '..', 'submodules', 'WiseNetChromeIPInstaller');
 const PUBLIC_ROOT = path.resolve(__dirname, '..', 'public');
 const APP_MEDIA = path.join(SUBMODULE_ROOT, 'app', 'media');
 const UMP_CUSTOM_OVERRIDE = path.join(SUBMODULE_ROOT, 'src', 'ump', 'custom', 'ump-player.js');
@@ -96,6 +97,17 @@ const EXTERNAL_LIBS = [
   { from: path.join(SUBMODULE_ROOT, 'app', 'external-lib', 'util', 'sylvester.js'), to: path.join(PUBLIC_ROOT, 'ump-player', 'sylvester.js') },
   { from: path.join(SUBMODULE_ROOT, 'app', 'external-lib', 'util', 'glUtils.js'), to: path.join(PUBLIC_ROOT, 'ump-player', 'glUtils.js') },
   { from: path.join(SUBMODULE_ROOT, 'app', 'external-lib', 'log4javascript', 'log4javascript.js'), to: path.join(PUBLIC_ROOT, 'ump-player', 'log4javascript.js') },
+  // ump-player's own reference example loads this from external-lib/fast-xml-parser/
+  // (commented-out CDN fallback in app/ump-player-example.html — the local file
+  // doesn't exist in this checkout at all) to populate `window.parser`, which
+  // Util/metaDataParser.js requires before it will ever set meta.json — and
+  // ump-player.js's onUmpMeta() only dispatches the public 'meta' CustomEvent
+  // once BOTH meta.json and meta.xml are set. Without this, 'meta' silently
+  // never fires. Reused verbatim from the sibling WiseNetChromeIPInstaller
+  // submodule (same vendor family, same exact fast-xml-parser build) rather
+  // than adding an npm dependency, matching this project's existing policy of
+  // vendoring the exact version the reference example actually runs against.
+  { from: path.join(WISENET_ROOT, 'external-lib', 'fast-xml-parser', 'parser.min.js'), to: path.join(PUBLIC_ROOT, 'ump-player', 'parser.min.js') },
 ];
 
 for (const { from, to } of EXTERNAL_LIBS) {

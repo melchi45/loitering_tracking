@@ -9,6 +9,7 @@ const { querySunapiMaxChannel, querySunapiRtspPort, getDiscoveryService } = requ
 const { enrichDeviceAutoScheme } = require('../services/onvifDiscovery');
 const { channelRtspUrl, defaultSunapiRtspUrl } = require('../utils/channelRtsp');
 const { verifyAccessToken } = require('../middleware/auth');
+const { parseOnvifXml, ingestOnvifEvents } = require('../services/onvifParser');
 
 // POST /api/cameras/probe-channels — best-effort, both branches independently
 // time-boxed so a hung/unreachable device can't stall the request indefinitely.
@@ -178,9 +179,12 @@ function resolveProbeChannelsDecision({ onvifMax, onvifProfiles, sunapiMax, suna
  * @param {import('better-sqlite3').Database} db
  * @param {import('../services/pipelineManager')} pipelineManager
  * @param {import('../services/youtubeStreamService')|null} [youtubeSvc]
+ * @param {import('socket.io').Server|null} [io] used by POST /:id/ump-meta to
+ *   broadcast onvif:event/onvif:type-registered/onvif:temperature the same
+ *   way internalApi.js's apprtp route does — see onvifParser.js's ingestOnvifEvents()
  * @returns {Router}
  */
-function camerasRouter(db, pipelineManager, youtubeSvc = null) {
+function camerasRouter(db, pipelineManager, youtubeSvc = null, io = null) {
   const router = Router();
 
   /**
@@ -567,6 +571,55 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null) {
       const camera = db.findOne('cameras', { id: req.params.id });
       if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
       res.json({ success: true, data: { username: camera.username || '', password: camera.password || '' } });
+    } catch (err) {
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  /**
+   * POST /api/cameras/:id/ump-meta
+   * Body: { xml: string } — one <ump-player> 'meta' CustomEvent's detail.xml
+   * (see client/src/components/UmpPlayerView.tsx's onMeta relay).
+   *
+   * UMP-mode cameras bypass ingest-daemon's Application RTP fan-out entirely
+   * (Design_UMP_Player_RTSP_over_WebSocket.md §8.13), so for a UMP-only camera
+   * the RTSP session's own metadata track — parsed browser-side by
+   * metaSession.js/metaDataParser.js into ump-player.js's public 'meta' event —
+   * is otherwise the only place its ONVIF MetadataStream XML ever surfaces.
+   * This relays that XML here so it lands in the exact same onvif_events
+   * storage/dedup/Socket.IO stream as the ingest-daemon path
+   * (server/src/routes/internalApi.js's /apprtp/:cameraId — see
+   * onvifParser.js's shared ingestOnvifEvents()/parseOnvifXml(), split out
+   * 2026-07-27 specifically to support this second ingestion path).
+   *
+   * Requires a valid JWT (like ump-credentials above) — unauthenticated
+   * clients must not be able to inject arbitrary events into a camera's
+   * ONVIF timeline. Malformed/non-ONVIF XML is not an error: parseOnvifXml()
+   * returns null and this is a silent no-op, since a busy metadata track
+   * (e.g. non-MetadataStream housekeeping packets) is expected traffic, not
+   * a client bug.
+   */
+  router.post('/:id/ump-meta', verifyAccessToken, (req, res) => {
+    try {
+      const camera = db.findOne('cameras', { id: req.params.id });
+      if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
+
+      const { xml } = req.body || {};
+      if (typeof xml !== 'string' || xml.length === 0) {
+        return res.status(400).json({ success: false, error: 'xml is required' });
+      }
+
+      const parsedList = parseOnvifXml(xml);
+      if (parsedList) {
+        ingestOnvifEvents(camera.id, parsedList, {
+          db,
+          io,
+          pipelineManager,
+          rawPayload: Buffer.from(xml, 'utf-8').toString('base64'),
+        });
+      }
+
+      res.sendStatus(204);
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }

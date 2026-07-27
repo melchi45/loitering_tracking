@@ -18,7 +18,7 @@ const session      = require('express-session');
 const { Server: SocketIOServer } = require('socket.io');
 
 const { startEventLoopLagMonitor } = require('./utils/eventLoopLag');
-const { startIngestDaemonWatchdog, fetchIngestDaemonHealth } = require('./utils/ingestDaemonWatchdog');
+const { startIngestDaemonWatchdog, fetchIngestDaemonHealth, armDebugDisableSafetyNet } = require('./utils/ingestDaemonWatchdog');
 const { initDB, flushNow }    = require('./db');
 const { ensureMongoDB }       = require('./scripts/ensureMongodb');
 const PipelineManager     = require('./services/pipelineManager');
@@ -108,6 +108,9 @@ async function main() {
     startIngestDaemonWatchdog();
   } else if (CAPTURE_BACKEND_CHECK === 'ingest-daemon') {
     console.warn('[Server] INGEST_WATCHDOG_ENABLED=false — ingest-daemon watchdog disabled (debugging only, re-enable for normal operation)');
+    // Safety net (2026-07-27, §6.40): forces the real watchdog on after 30 min so a
+    // debug session that forgot to flip this back doesn't disable auto-recovery forever.
+    armDebugDisableSafetyNet();
   }
   if (SERVER_MODE !== 'analysis' && CAPTURE_BACKEND_CHECK !== 'ingest-daemon') {
     const hasFfmpeg = await checkFfmpeg();
@@ -306,7 +309,7 @@ async function main() {
   app.use('/api/client-logs', buildClientLogsRouter(db));
 
   // ── REST API Routes ───────────────────────────────────────────────────────
-  app.use('/api/cameras', camerasRouter(db, pipelineManager, youtubeSvc));
+  app.use('/api/cameras', camerasRouter(db, pipelineManager, youtubeSvc, io));
   app.use('/api/cameras/:cameraId/zones', zonesRouter(zoneManager));
   const { eventsRouter: eRouter, alertsRouter: aRouter } = buildEventsRouters(db, alertService);
   app.use('/api/events', eRouter);

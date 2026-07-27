@@ -283,6 +283,8 @@ loitering_tracking/
 | POST | `/api/cameras/:id/stream/stop` | 파이프라인 중지 |
 | POST | `/api/cameras/:id/stream/pause` | 카메라 레코드는 유지한 채 수집 연결만 일시정지 (RTSP는 ingest-daemon 세션 해제, YouTube는 yt-dlp/ffmpeg 프로세스 종료) — `status`를 `paused`로 저장, 서버 재시작 후에도 자동 재개되지 않음. Design_RTSP_Capture_Backend.md §6.28 참고 |
 | POST | `/api/cameras/:id/stream/resume` | `/stream/pause`로 일시정지된 카메라의 수집 연결 재개 |
+| GET | `/api/cameras/:id/ump-credentials` | UMP Player RTSP Digest 인증용 저장된 username/password 조회 (JWT 필수 — password를 반환하는 유일한 카메라 엔드포인트) |
+| POST | `/api/cameras/:id/ump-meta` | UMP 전용 카메라(ingest-daemon 미경유)의 브라우저 측 `<ump-player>` `'meta'` 이벤트(ONVIF MetadataStream XML) relay (JWT 필수, body: `{ xml }`) — `onvifParser.js`의 `parseOnvifXml`/`ingestOnvifEvents`로 ingest-daemon 경로와 동일한 `onvif_events` 저장·dedup·Socket.IO 브로드캐스트 수행, Design_UMP_Player_RTSP_over_WebSocket.md §8.19 |
 
 ### 구역 (`/api/cameras/:cameraId/zones`)
 

@@ -1,5 +1,7 @@
 'use strict';
 
+const { v4: uuidv4 } = require('uuid');
+
 /**
  * ONVIF MetadataStream XML parser — lightweight regex-based, no external deps.
  *
@@ -224,17 +226,23 @@ function parseSingleNotification(blockXml) {
 }
 
 /**
- * Parse base64 ONVIF payload.
- * Returns ParsedOnvifEvent[] (one per NotificationMessage), or null if not
- * a MetadataStream or on error.
+ * Parse a complete ONVIF MetadataStream XML document (already decoded text —
+ * not base64/RTP-framed). Returns ParsedOnvifEvent[] (one per
+ * NotificationMessage), or null if not a MetadataStream or on error.
  *
  * A MetadataStream packet typically batches multiple NotificationMessage
  * blocks together. Each is parsed independently so no data is lost.
+ *
+ * Split out from parseOnvifPayload() (2026-07-27) so callers that already
+ * have plain XML text — e.g. UmpPlayerView.tsx's browser-side relay of
+ * <ump-player>'s 'meta' CustomEvent, which decodes the RTP payload itself
+ * client-side via metaSession.js/metaDataParser.js — don't need to
+ * re-encode it to base64 just to satisfy this function's original
+ * ingest-daemon-shaped signature.
  */
-function parseOnvifPayload(base64Payload) {
+function parseOnvifXml(xml) {
   try {
-    const xml = Buffer.from(base64Payload, 'base64').toString('utf-8');
-    if (!xml.includes('MetadataStream')) return null;
+    if (typeof xml !== 'string' || !xml.includes('MetadataStream')) return null;
 
     // Extract each NotificationMessage block individually
     const notifRe = /<(?:[^:>\s]+:)?NotificationMessage>([\s\S]*?)<\/(?:[^:>\s]+:)?NotificationMessage>/g;
@@ -253,6 +261,20 @@ function parseOnvifPayload(base64Payload) {
     }
 
     return results;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Parse base64 ONVIF payload (ingest-daemon's Application RTP framing).
+ * Returns ParsedOnvifEvent[] (one per NotificationMessage), or null if not
+ * a MetadataStream or on error.
+ */
+function parseOnvifPayload(base64Payload) {
+  try {
+    const xml = Buffer.from(base64Payload, 'base64').toString('utf-8');
+    return parseOnvifXml(xml);
   } catch {
     return null;
   }
@@ -346,4 +368,140 @@ function parseLogstringPayload(base64Payload) {
   }
 }
 
-module.exports = { parseOnvifPayload, parseLogstringPayload, parseRadiometryReadings, TOPIC_MAP };
+// ── Shared storage/broadcast for parsed ONVIF events ──────────────────────────
+// Extracted from server/src/routes/internalApi.js (2026-07-27) so a second
+// ingestion path — the browser-side relay of <ump-player>'s 'meta' event
+// (server/src/api/cameras.js's POST /:id/ump-meta, for UMP-mode cameras that
+// bypass ingest-daemon's Application RTP fan-out entirely) — converges on the
+// exact same onvif_events storage, snapshot capture, type registry, and
+// Socket.IO broadcast as the ingest-daemon path, instead of duplicating this
+// logic. Sharing the same _lastStates map also means a camera reachable via
+// both paths at once (webrtcEnabled + umpEnabled both true) still dedupes
+// correctly across them.
+
+// Per-camera+topic+sourceToken+ruleName last known state — prevents storing
+// periodic heartbeats that repeat the same state (State=false every 30ms).
+const _lastStates = new Map();
+
+/**
+ * Store + broadcast a batch of already-parsed ONVIF events for one camera.
+ * Mirrors the exact behavior internalApi.js's /apprtp/:cameraId handler used
+ * to implement inline: per-event radiometry live-broadcast (never deduped),
+ * state-change dedup, onvif_events insert, onvif_snapshots capture on event
+ * start, first-seen topicType registration, and onvif:event/onvif:type-
+ * registered/onvif:temperature Socket.IO emits.
+ *
+ * @param {string} cameraId
+ * @param {Array|null} parsedList  result of parseOnvifXml()/parseOnvifPayload()/parseLogstringPayload()
+ * @param {object} ctx
+ * @param {object} ctx.db               required — DB instance (insert/all/flushNow)
+ * @param {object} [ctx.io]             Socket.IO server — broadcasts skipped if omitted
+ * @param {object} [ctx.pipelineManager] used for onvif_snapshots capture — skipped if omitted
+ * @param {string|null} [ctx.rawPayload] stored verbatim on the event row (base64, source-format-agnostic)
+ */
+function ingestOnvifEvents(cameraId, parsedList, { db, io, pipelineManager, rawPayload = null } = {}) {
+  if (!db || !Array.isArray(parsedList)) return;
+
+  for (const parsed of parsedList) {
+    // Radiometry (thermal camera): emit real-time temperature event every reading.
+    // Do NOT dedup — the live overlay needs every update.
+    if (parsed.radiometry && parsed.radiometry.length > 0 && io) {
+      io.emit('onvif:temperature', {
+        cameraId,
+        utcTime:  parsed.utcTime,
+        readings: parsed.radiometry,
+      });
+    }
+
+    // Dedup: only store when state actually changes for this camera+topic+sourceToken+ruleName.
+    // RuleName distinguishes multiple analytics rules on the same source — each rule is
+    // an independent event stream and must not be collapsed across rule boundaries.
+    const dedupKey = `${cameraId}:${parsed.topic}:${parsed.sourceToken}:${parsed.ruleName ?? ''}`;
+    const lastState = _lastStates.get(dedupKey);
+    if (lastState === parsed.state) continue;
+    _lastStates.set(dedupKey, parsed.state);
+
+    const now = new Date().toISOString();
+    const event = {
+      id:          uuidv4(),
+      cameraId,
+      topic:       parsed.topic,
+      topicType:   parsed.topicType,
+      topicLabel:  parsed.topicLabel,
+      severity:    parsed.severity,
+      utcTime:     parsed.utcTime,
+      operation:   parsed.operation,
+      sourceToken: parsed.sourceToken,
+      ruleName:    parsed.ruleName ?? null,
+      state:       parsed.state,
+      items:       JSON.stringify(parsed.items),
+      rawPayload,
+      serverTs:    now,
+    };
+    db.insert('onvif_events', event);
+    // Flush immediately so the event survives a crash/reboot within the 2-second debounce window
+    if (typeof db.flushNow === 'function') db.flushNow();
+
+    // On state=true (event START) or point events (no state), capture snapshot
+    if ((parsed.state === 'true' || parsed.state == null) && pipelineManager) {
+      setImmediate(() => {
+        try {
+          const frame = pipelineManager.getLatestFrame(cameraId);
+          if (frame && frame.buf) {
+            db.insert('onvif_snapshots', {
+              id:          uuidv4(),
+              eventId:     event.id,
+              cameraId,
+              topicType:   parsed.topicType,
+              timestamp:   now,
+              frameData:   frame.buf.toString('base64'),
+              frameWidth:  frame.fw,
+              frameHeight: frame.fh,
+              createdAt:   now,
+            });
+          }
+        } catch (_e) { /* never block ONVIF path */ }
+      });
+    }
+
+    // Register topicType globally if first time seen
+    const knownTypes = db.all('onvif_event_types');
+    if (!knownTypes.some(r => r.topicType === parsed.topicType)) {
+      const typeEntry = {
+        id:          parsed.topicType,
+        topicType:   parsed.topicType,
+        topicLabel:  parsed.topicLabel,
+        topic:       parsed.topic,
+        severity:    parsed.severity,
+        firstSeenAt: now,
+      };
+      db.insert('onvif_event_types', typeEntry);
+      if (io) io.emit('onvif:type-registered', typeEntry);
+    }
+
+    // Notify connected clients of the new event
+    if (io) io.emit('onvif:event', event);
+  }
+}
+
+/**
+ * Clear dedup state for a camera (e.g. on disconnect) so the next
+ * reconnect/relay starts fresh instead of silently suppressing the first
+ * real event because it happens to match a stale last-known state.
+ */
+function clearDedupStateForCamera(cameraId) {
+  const prefix = `${cameraId}:`;
+  for (const key of _lastStates.keys()) {
+    if (key.startsWith(prefix)) _lastStates.delete(key);
+  }
+}
+
+module.exports = {
+  parseOnvifPayload,
+  parseOnvifXml,
+  parseLogstringPayload,
+  parseRadiometryReadings,
+  ingestOnvifEvents,
+  clearDedupStateForCamera,
+  TOPIC_MAP,
+};

@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UMP-WS-001 |
-| **Version** | 3.2 |
+| **Version** | 3.4 |
 | **Status** | Active (구현 완료, 라이브 검증 완료 — channelSlot=6 실 카메라 30fps 확인) |
 | **Date** | 2026-07-24 |
 | **Related Design** | [Design_RTSP_Capture_Backend.md](Design_RTSP_Capture_Backend.md) · [Design_Server_Architecture.md](Design_Server_Architecture.md) |
@@ -386,6 +386,35 @@ python3[<pid>]: segfault ... in libavformat.so.58.76.100
 
 **후속 버그 수정 2 — Rate 그래프가 우상향 직선으로만 표시됨 (같은 날, 사용자 확인)**: STATS 패널의 "Rate" 스파크라인이 오르내림 없이 계속 우상향하는 직선으로만 그려짐. 원인은 필드 하나 더 있던 벤더의 오해의 소지가 있는 네이밍 — `videoTagPlayer.js`가 보내는 `decodedBytesDecodedPerSec` 필드는 이름과 달리 초당 값(rate)이 아니라 `videoElement.webkitVideoDecodedByteCount`(재생 시작 이후 누적 총 디코드 바이트 수)를 그대로 담고 있음 — 진짜 초당 델타(`videoBytesDecodedPerSec = webkitVideoDecodedByteCount - <이전 값>`)는 `videoMean.record()`로 `decodedBytesMean`(= 진짜 평균 bps)에만 반영되고 별도 필드로는 전송되지 않음. `useUmpStats.ts`가 이 누적 카운터를 그래프 값으로 사용하고 있었으니 우상향 직선이 나오는 게 당연했음. **수정**: `decodedBytesPerSec` 필드를 `decodedBytesTotal`로 이름을 바로잡아 "누적 총량 — 그래프 대상 아님"으로 명확히 하고, `UmpStatsPanel.tsx`의 Rate 행을 재구성 — 실제로 값이 오르내리는 `decodedBpsMean`(평균 bps)을 헤드라인 숫자 + 스파크라인으로, `decodedBytesTotal`은 그래프 없이 "Total 1.2 GB" 같은 정적 숫자로만 별도 표시.
 
+### 8.18 기능 추가 — RTP 패킷 손실/복구 알림 (`'waiting'` 이벤트, 2026-07-24)
+
+**요청**: `app/ump-player-example.html`이 구독하는 `elements[i].addEventListener(...)` 전체 목록(`error`/`meta`/`close`/`resize`/`statechange`/`timestamp`/`capture`/`statistics`/`backupstatechange`/`changeplayermode`/`instantplayback`/`waiting`/`networkstate`/`metaImage`/`rtsp`/`changedevicetype`/`changeprofilenumber`/`changeprofile`/`changechannel`/`changehostname`/`changevolume`/`changeport`/`changefullscreen`/`changesunapiclient`/`changebestshotfilter`/`changebestshot`/`stream`/`changetimezone`, 26종)를 분석해 필요한 것을 구현.
+
+**분석**: `src/ump/custom/ump-player.js`(우리가 실제로 쓰는 소스)가 `this[dispatch](...)`로 실제 발행하는 이벤트 이름을 전수 조사한 결과 — 예제가 구독하는 26종 중 **`close`/`networkstate`/`stream`은 이 버전에서 아예 발행되지 않음**(예제는 다른 벤더 버전 기준으로 작성된 것으로 보임 — 리스너를 달아도 죽은 코드가 됨). 나머지 대부분(`meta`/`metaImage`/`rtsp`/`timestamp`/`capture`/`change*` 계열 12종)은 예제 자신도 디버그 textarea에 JSON을 덤프하는 것 외에 기능적으로 하는 일이 없거나(속성 변경 echo — 우리는 마운트 후 속성을 다시 바꾸지 않으므로 해당 없음), 우리 UI에 대응되는 기능이 없음(backup/instant playback 모드 전용, snapshot capture 버튼 없음 등). `resize`는 디코드된 실제 해상도를 주지만 이미 `'statistics'`의 `'fps'` 틱(`statistics.width`/`height`)으로 동일 정보를 받고 있어 중복.
+
+유일하게 **실제로 발행되면서도 우리 UI에 아직 대응이 없던** 이벤트는 `'waiting'` — `mediaRouter.js:onWaiting()`이 RTP 패킷 손실/복구를 감지할 때마다(`rtpSession.js`의 `statisticsTimer`, ~1초 간격) errorCode `0x0107`로 발행하며, `onUmpError()`의 switch문 안에서 `error`와 완전히 동일한 코드 경로를 타지만 별도 CustomEvent(`'waiting'`)로 분리 발행됨 — 즉 §8.15에서 다룬 "일시적·자연 회복되는 상태"와 개념적으로 같은 부류인데, 지금까지는 `'error'`만 구독하고 있어서 패킷 손실이 발생해도 UI에 아무 신호가 없었음.
+
+**구현**: `UmpPlayerView.tsx`에 `'waiting'` 리스너 추가 — 기존 `'error'`/`'statechange'`와 같은 effect, 같은 정리(cleanup) 구조. `detail.waiting`(= `waiting.islost`)이 `true`면 `${media} packet loss — recovering…`를 기존 `playerNotice` 배너에 표시(§8.15의 배너를 재사용 — 같은 "치명적이지 않은 일시적 상태" 카테고리이므로 새 배너를 따로 만들지 않음), `false`(복구 완료 신호)면 지움.
+
+관련 파일: `client/src/components/UmpPlayerView.tsx`
+
+### 8.19 기능 추가 — UMP 'meta' 이벤트 → 서버 ONVIF 이벤트 relay (2026-07-27)
+
+**배경**: §8.18 조사 중 발견한 `'meta'`(json/xml)는 RTSP 세션 자체의 메타데이터 트랙(`metaSession.js`가 별도 RTP Application 트랙을 직접 depacketize)으로, `server/src/services/onvifParser.js`가 ingest-daemon의 Application RTP fan-out에서 파싱하는 것과 **같은 부류의 ONVIF MetadataStream XML**. UMP 모드는 ingest-daemon을 완전히 우회하므로(§8.13) UMP 전용 카메라(`webrtcEnabled=false`, `umpEnabled=true`)는 지금까지 ONVIF 이벤트를 서버 쪽에서 전혀 받지 못하고 있었음 — `'meta'`가 그 유일한 경로.
+
+**1차 확인 — 이벤트가 발행조차 안 되고 있었음**: `Util/metaDataParser.js`는 `window.parser`(fast-xml-parser)가 있어야 `meta.json`을 채우는데, `ump-player.js`의 `onUmpMeta()`는 `meta.json`과 `meta.xml`이 **둘 다** 있어야 공개 `'meta'` CustomEvent를 dispatch한다. 우리 `UMP_PLAYER_SCRIPTS` 목록엔 XML 파서가 없었고 `ump-player` 서브모듈에도 해당 파일 자체가 없어(예제 HTML의 CDN 로드도 주석 처리돼 죽어있음) `'meta'`가 원천적으로 한 번도 발행되지 않고 있었음. 같은 저장소의 형제 서브모듈 `submodules/WiseNetChromeIPInstaller/external-lib/fast-xml-parser/parser.min.js`(동일 벤더 계열, `window.parser` 전역을 그대로 노출하는 UMD 빌드)를 재사용 — `copyUmpPlayerAssets.js`에 심링크 항목 추가, `UmpPlayerView.tsx`의 `UMP_PLAYER_SCRIPTS`에 `/ump-player/parser.min.js` 추가.
+
+**구현**:
+- `server/src/services/onvifParser.js` — `parseOnvifPayload(base64Payload)`에서 base64 디코드 이후 로직을 `parseOnvifXml(xml)`로 분리(이미 디코딩된 평문 XML을 받는 새 진입점 — 브라우저가 이미 UTF-8 텍스트로 디코딩해서 주므로 base64 재인코딩 없이 바로 사용). `server/src/routes/internalApi.js`의 `/apprtp/:cameraId` 핸들러에 인라인돼 있던 dedup+저장+스냅샷+타입등록+브로드캐스트 로직을 `ingestOnvifEvents(cameraId, parsedList, {db, io, pipelineManager, rawPayload})`로 추출(같은 모듈의 `_lastStates` dedup 맵을 공유 — 카메라가 두 경로 모두에 동시 노출돼도 dedup이 어긋나지 않음), `clearDedupStateForCamera(cameraId)`도 함께 export해 `closeOpenEventsForCamera()`가 재사용.
+- `server/src/api/cameras.js` — 신규 `POST /:id/ump-meta`(JWT 인증, `ump-credentials`와 동일한 인증 근거) 추가: `{ xml }` 바디를 `parseOnvifXml()`로 파싱 후 `ingestOnvifEvents()`로 저장/브로드캐스트. 라우터 팩토리에 `io` 파라미터 추가(`server/src/index.js`의 `camerasRouter(db, pipelineManager, youtubeSvc, io)` 호출부 갱신) — 기존엔 Socket.IO 인스턴스에 접근할 수 없었음.
+- `client/src/components/UmpPlayerView.tsx` — 기존 error/statechange/waiting/statistics와 같은 effect에 `'meta'` 리스너 추가, `detail.xml`을 위 엔드포인트로 POST. 요청 빈도는 500ms 클라이언트 사이드 스로틀로 제한(서버의 상태-변화 dedup이 최종 안전장치이므로 순전히 요청량 방어 목적).
+
+**검증**: 신규 `test/api/onvif_ump_meta_relay.test.js`(9케이스) — `parseOnvifXml`/`ingestOnvifEvents`/`clearDedupStateForCamera`를 직접 호출(재구현이 아닌 실제 export 함수 대상)하고, `camerasRouter`가 등록한 실제 라우트 핸들러를 `router.stack`에서 추출해 404/400/204 경로까지 검증. 기존 `test/api/onvif_apprtp.test.js`(13케이스)·`test/api/onvif_metadata_pipeline.test.js`(11케이스) 전부 재통과 확인 — 리팩터링이 ingest-daemon 경로의 기존 동작을 깨지 않았음을 확인.
+
+**보류**: `'metaImage'`/`bestshot`/`bestshotfilter`(카메라 온보드 AI — Person/Face/FaceRecognition/Vehicle/LicensePlate bestshot 이미지)는 실카메라 라이선스 검증 없이는 얼굴 갤러리/detectionSnapshots 중 어디에 연동할지 결정하기 위험이 커서 이번 범위에서 제외(사용자 확인).
+
+관련 파일: `client/scripts/copyUmpPlayerAssets.js`, `client/src/components/UmpPlayerView.tsx`, `server/src/services/onvifParser.js`, `server/src/routes/internalApi.js`, `server/src/api/cameras.js`, `server/src/index.js`, `test/api/onvif_ump_meta_relay.test.js`
+
 ---
 
 ## Revision History
@@ -418,3 +447,5 @@ python3[<pid>]: segfault ... in libavformat.so.58.76.100
 | 3.0 | 2026-07-24 | §8.17 추가(기능) — WebRTC ICE 배지/토글과 동일한 UX로 UMP 통계 패널 추가. `onUmpStatistics()`가 `statistics` 속성과 무관하게 `'statistics'` CustomEvent를 무조건 재발행함을 확인(벤더 예제와 동일 구독 패턴), `useUmpStats.ts`/`UmpStatsPanel.tsx` 신규 + `UmpPlayerView.tsx`에 `onStatistics` prop 추가 + `CameraView.tsx` 상단 우측 코너를 WebRTC와 대칭 구조로 재구성(Zone 버튼을 UMP 배지 컨테이너 안으로 이동) |
 | 3.1 | 2026-07-24 | §8.17 후속 수정 — STATS 패널을 열자마자 "e.decodedFpsMean.toFixed is not a function"로 크래시하던 버그. 원인은 벤더 `Util/util.js`의 `Mean.mean()`이 표본 1개 이상부터 문자열(`.toFixed(3)`)을 반환하는 타입 비일관성(count===0일 때만 진짜 숫자) — `videoTagPlayer.js`가 이를 `decodedFramesMean`/`decodedBytesMean`/`dropFramesMean`/`latency`에 그대로 흘려보냄. `useUmpStats.ts`의 벤더 페이로드 타입을 `unknown`으로 바꾸고 `toNum()` 헬퍼로 전 필드 방어적 정규화 |
 | 3.2 | 2026-07-24 | §8.17 후속 수정 2 — Rate 스파크라인이 오르내림 없이 우상향 직선으로만 그려지던 버그(사용자 확인). `decodedBytesDecodedPerSec` 필드가 이름과 달리 누적 총 바이트 카운터였음(진짜 초당 델타는 `decodedBytesMean`에만 반영됨) — `decodedBytesPerSec`를 `decodedBytesTotal`로 재명명하고 Rate 행을 재구성: `decodedBpsMean`(평균 bps)을 헤드라인+그래프로, `decodedBytesTotal`은 그래프 없이 정적 숫자("Total X GB")로 분리 |
+| 3.3 | 2026-07-24 | §8.18 추가(기능) — `app/ump-player-example.html`의 `addEventListener` 26종 전수 분석. `close`/`networkstate`/`stream`은 우리가 쓰는 소스에서 아예 발행되지 않음을 확인(죽은 이벤트), 대부분은 디버그 전용이거나 해당 없는 모드용. 유일하게 실제 발행되면서 미대응이던 `'waiting'`(RTP 패킷 손실/복구, errorCode 0x0107 — `'error'`와 같은 switch의 sibling case)을 `UmpPlayerView.tsx`에 추가, §8.15의 `playerNotice` 배너 재사용 |
+| 3.4 | 2026-07-27 | §8.19 추가(기능) — UMP `'meta'` 이벤트(ONVIF MetadataStream XML) → 서버 relay. fast-xml-parser 미탑재로 이벤트가 원천 발행조차 안 되던 것을 확인해 벤더링(WiseNetChromeIPInstaller 서브모듈 재사용), `onvifParser.js`에 `parseOnvifXml`/`ingestOnvifEvents`/`clearDedupStateForCamera` 분리(ingest-daemon 경로와 dedup 상태 공유), `POST /api/cameras/:id/ump-meta` 신설. `bestshot`/`metaImage`(카메라 온보드 AI)는 실카메라 검증 필요로 보류(사용자 확인). 신규 테스트 9건 + 기존 onvif 테스트 24건 재통과 확인 |
