@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-INGEST-MONITOR-001 |
-| **Version** | 2.0 |
+| **Version** | 2.1 |
 | **Status** | Implemented — verified live end-to-end (§8) |
 | **Date** | 2026-07-21 |
 | **Related Design** | [Design_RTSP_Capture_Backend.md](Design_RTSP_Capture_Backend.md) §6.29 (ingest-daemon reliability findings this doc builds on) |
@@ -193,12 +193,21 @@ Admin Dashboard 신규 'ingest' 섹션 — 소켓 구독, 카메라별 카드 + 
 - `db.all('cameras')`를 1.5초마다 동기 호출 — `MongoDatabase`는 in-memory mirror 읽기라 저렴하지만, 카메라 수가 매우 많아지면 이 폴링 비용을 재검토할 필요가 있음.
 - 원격 Analysis 서버(192.168.214.254) 자체의 지표는 이번 범위에 포함하지 않음(스트리밍 서버 관점의 회로차단기 통계만) — 필요 시 별도 논의.
 
+### 8.5 버그 수정 — streaming 모드에서 `framesProcessed`/`detectionsTotal` 등이 항상 0으로 표시되던 문제 (2026-07-28)
+
+**증상**: `SERVER_MODE=streaming` 배포에서 ingest-daemon과 원격 Analysis 서버 모두 정상 동작 중임에도 Admin Dashboard의 Ingest Daemon 패널(`IngestDaemonSection.tsx`)이 모든 카메라에 대해 "Analysis: 0 frames" / "Detections: 0"을 표시.
+
+**근본 원인**: §3 표 6/7 항목·§8.2에서 "부분 존재"로 기록했던 `pipelineManager` ctx의 `framesProcessed`/`detectionsTotal`/`trackedTotal`/`facesTotal`/`fireSmokeTotal`/`loiteringTotal` 카운터는 2026-07-21 구현 당시 로컬 추론 경로(combined/analysis 모드, `pipelineManager.js`의 "Accumulate per-camera analytics stats" 블록)에서만 증가하도록 구현되었고, streaming 모드가 원격 Analysis 서버 응답을 처리하는 `_processRemoteResult()`에는 연동되지 않은 채로 남아 있었다 — §8.1의 "실측 검증"은 ingest-daemon 자체 필드(videoBps/connectionState 등)만 실 카메라로 확인했고, 이 Node 측 카운터는 streaming 모드로 실측 검증되지 않았음.
+
+**수정**: `pipelineManager.js`의 `_processRemoteResult()` 끝에 동일한 6개 카운터 증가 로직 추가(`framesProcessed++`, `detectionsTotal`/`trackedTotal += remoteTracked.length`, `facesTotal += faceDetObjects.length`, `fireSmokeTotal += remoteFireSmoke.length`, `loiteringTotal`은 `result.behaviors`의 loitering 항목 수). streaming 모드에는 로컬 raw-detection-count 개념이 없어 `detectionsTotal`과 `trackedTotal`은 동일하게 원격 tracked 배열 길이를 사용(로컬 모드처럼 raw detector 출력과 tracked 출력을 구분하지 않는 근사치).
+
 ---
 
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
+| 2.1 | 2026-07-28 | §8.5 추가 — streaming 모드에서 `_processRemoteResult()`가 framesProcessed/detectionsTotal 등을 갱신하지 않아 Admin 패널이 항상 0을 표시하던 버그 수정 |
 | 2.0 | 2026-07-21 | §8 구현 결과 추가 — Python 계측, Node 집계/Socket.IO(admin 검증 포함), 클라이언트 UI 전부 구현 완료 및 실측 검증(실 카메라 데이터, admin/viewer 권한 분리 확인) |
 | 1.0 | 2026-07-21 | §7 결정 사항 확정(전체 파이프라인 통합/Socket.IO push/IP 표시/그래프 포함), 아키텍처 갱신 |
 | 0.1 | 2026-07-21 | 초기 작성 — 요구사항 조사, 현재 ingest-daemon API 실태 파악, 요청 항목별 데이터 출처 매핑, 아키텍처 초안, 사용자 확인 필요 사항 정리. 구현 미착수. |

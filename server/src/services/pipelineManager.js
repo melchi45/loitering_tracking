@@ -2369,6 +2369,24 @@ class PipelineManager {
         }
       });
     }
+
+    // ── Per-camera analytics counters (streaming mode) ────────────────────────
+    // Mirrors the local-inference accumulation (see the combined/analysis-mode
+    // "Accumulate per-camera analytics stats" block above) so getIngestMonitorStats()
+    // — and therefore the Admin Dashboard's Ingest Daemon panel (framesProcessed/
+    // detectionsTotal etc.) — reflects real remote-analysis activity in streaming
+    // mode instead of staying at 0 regardless of whether the analysis server is
+    // actually processing frames.
+    const ctx = this._pipelines.get(_cameraId);
+    if (ctx) {
+      ctx.framesProcessed++;
+      ctx.detectionsTotal += remoteTracked.length;
+      ctx.trackedTotal    += remoteTracked.length;
+      ctx.facesTotal       += faceDetObjects.length;
+      ctx.fireSmokeTotal   += remoteFireSmoke.length;
+      ctx.loiteringTotal   += (result.behaviors || [])
+        .filter(b => b.isLoitering || b.type === 'loitering').length;
+    }
   }
 
   /**
