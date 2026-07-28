@@ -289,8 +289,9 @@ function Get-DepRefFromDeps([string]$ortRepoDir, [string]$depName) {
     # refs/tags 패턴
     $m = [regex]::Match($url, 'refs/tags/([^/]+)\.(zip|tar\.gz)$')
     if ($m.Success) { return $m.Groups[1].Value }
-    # 커밋 해시 패턴 (/archive/40hexchars.zip)
-    $m = [regex]::Match($url, '/archive/([0-9a-f]{40})\.(zip|tar\.gz)$')
+    # 커밋 해시 패턴 (/archive/40hexchars.zip 또는 /archive/40hexchars/repo-40hexchars.zip —
+    # GitHub archive URL 은 종종 해시 뒤에 "repo-해시.zip" 경로 세그먼트가 하나 더 붙음, 예: eigen deps.txt 항목)
+    $m = [regex]::Match($url, '/archive/([0-9a-f]{40})(?:/[^/]+)?\.(zip|tar\.gz)$')
     if ($m.Success) { return $m.Groups[1].Value }
     return $null
 }
@@ -768,12 +769,20 @@ if (-not $SkipBuild) {
     }
 
     # eigen3 — cmake FetchContent 이름이 "eigen3" (not "eigen"), cmake/external/eigen.cmake 에 별도 선언
-    # deps.txt 에 없으므로 알려진 버전 3.4.0 을 fallback 으로 사용
+    # deps.txt 의 "eigen" 항목은 gitlab.com/libeigen/eigen 의 3.4.0 태그가 아니라
+    # github.com/eigen-mirror/eigen 의 특정 커밋(NaN 전파 min/max<NaNPropagationOptions> 등 백포트 포함,
+    # onnxruntime/core/providers/cpu/math/element_wise_ops.cc 가 이 오버로드를 사용)을 고정합니다.
+    # 커밋 해시로 확인되면 반드시 같은 미러(eigen-mirror)에서 clone 해야 그 커밋이 실제로 존재합니다 —
+    # gitlab.com/libeigen/eigen.git 에는 동일 해시가 없을 수 있습니다(다른 리포지토리).
     $eigenRef = Get-DepRefFromDeps $OrtRepoDir "eigen3"
     if (-not $eigenRef) { $eigenRef = Get-DepRefFromDeps $OrtRepoDir "eigen" }
+    $eigenGitUrl = "https://gitlab.com/libeigen/eigen.git"
+    if ($eigenRef -and ($eigenRef -match '^[0-9a-f]{40}$')) {
+        $eigenGitUrl = "https://github.com/eigen-mirror/eigen.git"
+    }
     if (-not $eigenRef) { $eigenRef = "3.4.0" }
-    Write-Host "  [eigen3] ref: $eigenRef"
-    $eigenSourceDir = Ensure-DepGitSource $OrtRepoDir "eigen3" "https://gitlab.com/libeigen/eigen.git" $eigenRef
+    Write-Host "  [eigen3] ref: $eigenRef (source: $eigenGitUrl)"
+    $eigenSourceDir = Ensure-DepGitSource $OrtRepoDir "eigen3" $eigenGitUrl $eigenRef
     $cmakeDefines += "FETCHCONTENT_SOURCE_DIR_EIGEN3=$($eigenSourceDir -replace '\\','/')"
 
     # wil (Windows Implementation Library)
@@ -874,12 +883,33 @@ if (-not $SkipBuild) {
         $cmakeDefines += "CMAKE_CUDA_ARCHITECTURES=$CudaArch"
     }
 
+    # ORT cmake/CMakeLists.txt 는 onnxruntime_BUILD_UNIT_TESTS 기본값이 ON 이며, build.py 의
+    # --skip_tests 플래그는 빌드 후 ctest 실행만 건너뛸 뿐 테스트 타겟(onnxruntime_test_all,
+    # onnxruntime_shared_lib_test 등 수백 개 파일) 자체는 여전히 빌드합니다. onnxruntime-node
+    # 통합에는 이 테스트 바이너리가 전혀 필요 없고, onnxruntime_shared_lib_test 의
+    # test/shared_lib/cuda_ops.cu 컴파일이 MSBuild CudaCompile 규칙 문제로 "nvcc fatal: A single
+    # input file is required..." 를 내며 전체 빌드를 실패시키므로, 테스트 타겟 자체를 CMake 구성
+    # 단계에서 끕니다.
+    $cmakeDefines += "onnxruntime_BUILD_UNIT_TESTS=OFF"
+
     $buildArgs = @(
         "--config", "Release",
         "--build_shared_lib",
         "--use_cuda",
         "--cuda_home", $CudaHome,
-        "--cmake_path", $cmakeExe
+        "--cmake_path", $cmakeExe,
+        # ORT 소스 빌드는 기본적으로 CMake의 --compile-no-warning-as-error 미적용(dev mode) 상태로
+        # nvcc 에 "-Werror all-warnings" 를 주입합니다. GSL v4.0.0의 [[gsl::suppress(...)]] 속성이나
+        # abseil-cpp 헤더의 EDG 프런트엔드 경고(부호 변환/절단 등)가 이로 인해 하드 에러로 승격되어
+        # onnxruntime_providers_cuda 컴파일이 실패하므로, 경고를 오류로 취급하지 않도록 명시적으로 끕니다.
+        "--compile_no_warning_as_error",
+        # onnxruntime-node 통합에는 ORT 자체 유닛테스트 바이너리(onnxruntime_test_all,
+        # onnxruntime_shared_lib_test 등 수백 개 .cc/.cu 파일)가 전혀 필요 없고, 빌드 시간만 크게
+        # 늘어납니다. 또한 onnxruntime_shared_lib_test 의 cuda_ops.cu 컴파일이 MSBuild
+        # CudaCompile 커스텀 빌드 규칙 문제로 "nvcc fatal: A single input file is required for a
+        # non-link phase when an outputfile is specified" 를 내며 전체 빌드를 실패시키는 것이 확인되어,
+        # 테스트 타겟 자체를 빌드 대상에서 제외합니다.
+        "--skip_tests"
     )
 
     if ($CudaVersionStr) {
@@ -975,7 +1005,26 @@ if (-not $SkipNodePackageBuild) {
         throw "ONNX Runtime node package dir not found: $nodePkgDir"
     }
 
-    Write-Host "[3/4] Building js/node package..."
+    # js/node, js/common 은 자체 typescript devDependency 를 선언하지 않고, js/ 워크스페이스
+    # 루트의 typescript(js/package-lock.json 에 5.2.2 로 고정)가 js/node_modules 로 설치된 뒤
+    # Node 의 상위 디렉터리 node_modules 탐색 규칙으로 tsc 를 찾는 구조입니다. js/ 루트 설치를
+    # 건너뛰면 tsc 가 시스템에 남아있는 호환되지 않는 다른 버전으로 해석되어 tsconfig.json 의
+    # moduleResolution=node10 / esModuleInterop=false 옵션이 "제거된 옵션(TS5108/TS5011)"
+    # 오류를 내며 js/common 빌드가 실패하므로, js/ 루트에서 락파일 고정 버전을 먼저 설치합니다.
+    $jsRootDir = Join-Path $OrtRepoDir "js"
+    Write-Host "[3a/4] Installing js/ workspace root devDependencies (pinned typescript)..."
+    Push-Location $jsRootDir
+    try {
+        npm ci
+        if ($LASTEXITCODE -ne 0) {
+            throw "onnxruntime js/ root npm ci failed with exit code $LASTEXITCODE"
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    Write-Host "[3b/4] Building js/node package..."
     Push-Location $nodePkgDir
     try {
         npm install
@@ -986,6 +1035,81 @@ if (-not $SkipNodePackageBuild) {
     finally {
         Pop-Location
     }
+
+    # "npm install" 의 postinstall/prepare 스크립트는 TypeScript 컴파일(tsc)만 수행하고,
+    # 실제 N-API 네이티브 애드온(onnxruntime_binding.node)을 CUDA 를 링크해서 컴파일하는
+    # cmake-js 단계("npm run build" = "tsc && node ./script/build")는 별도로 호출해야 합니다.
+    Write-Host "[3c/4] Compiling js/node native addon with CUDA support (cmake-js)..."
+    $ortWinBuildDir = (Join-Path $OrtRepoDir "build\Windows\Release") -replace '\\', '/'
+    $ortBinDir = Join-Path $OrtRepoDir "build\Windows\Release\Release"
+
+    # 과거 시도에서 --dll_deps/--onnxruntime-generator 값이 깨진 채로 CMake 캐시(CMakeCache.txt)에
+    # 저장되었을 수 있으므로, 매번 cmake-js 의 build 출력 폴더를 지우고 새로 configure 합니다.
+    $addonCmakeBuildDir = Join-Path $nodePkgDir "build"
+    if (Test-Path $addonCmakeBuildDir) {
+        Write-Host "  [clean] 이전 cmake-js build 캐시 삭제: $addonCmakeBuildDir"
+        Remove-Item $addonCmakeBuildDir -Recurse -Force
+    }
+
+    # 주의: node ./script/build 는 내부적으로 spawnSync(..., { shell: true }) 를 두 단계
+    # (npx cmake-js -> cmake) 거치면서 인자 배열을 공백으로만 join 하고 별도 quoting 을 하지
+    # 않습니다. "C:\Program Files\..." 처럼 공백이 들어간 경로를 --dll_deps/--onnxruntime-generator
+    # 값으로 넘기면 중간에 잘려서 cmake 에 깨진 인자로 전달됩니다(실제로 재현 확인됨:
+    # "-DORT_NODEJS_DLL_DEPS=...;C:\Program" 뒤에 "Files\NVIDIA" 가 별개 인자로 분리됨).
+    # 그래서 여기서는 --dll_deps/--onnxruntime-generator 를 아예 넘기지 않고, cmake-js 빌드가
+    # 끝난 뒤 CUDA/cuDNN 관련 dll 들을 우리 스크립트가 직접 bin 폴더로 복사합니다.
+    $addonBuildArgs = @(
+        "./script/build",
+        "--config=Release",
+        "--use_cuda",
+        "--onnxruntime-build-dir=$ortWinBuildDir"
+    )
+    Push-Location $nodePkgDir
+    try {
+        # cmake-js 는 자체적으로 설치된 Visual Studio 중 "가장 최신" 버전을 자동 탐지합니다.
+        # 이 머신에는 VS2022 Professional 외에 C++ 워크로드가 없는 VS2026 Insiders 미리보기도
+        # 설치되어 있어, cmake-js 가 이를 먼저 골라 "There is no Visual C++ compiler installed"
+        # 오류를 내며 실패합니다. cmake-js 는 npm config 값(npm_config_msvs_version 환경변수)으로
+        # 강제 지정하는 것을 지원하므로(node-gyp 관례와 동일), 여기서 2022 를 명시적으로 설정합니다.
+        $env:npm_config_msvs_version = "2022"
+        & node @addonBuildArgs
+        if ($LASTEXITCODE -ne 0) {
+            throw "onnxruntime-node native addon build (cmake-js, CUDA) failed with exit code $LASTEXITCODE"
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    # js/node/CMakeLists.txt 는 onnxruntime.dll 만 자동으로 bin 폴더에 복사하므로,
+    # CUDA EP 로딩에 필요한 onnxruntime_providers_cuda.dll/onnxruntime_providers_shared.dll
+    # 및 그 런타임 의존 dll(CUDA/cuDNN) 들은 여기서 직접 복사합니다.
+    $addonDistDir = Join-Path $nodePkgDir "bin\napi-v6\win32\x64"
+    if (-not (Test-Path $addonDistDir -PathType Container)) {
+        throw "onnxruntime-node native addon 출력 폴더를 찾지 못했습니다: $addonDistDir"
+    }
+    Write-Host "  [dll_deps] CUDA/cuDNN 런타임 dll 을 $addonDistDir 로 복사합니다..."
+    $extraDlls = New-Object System.Collections.Generic.List[string]
+    foreach ($extraDll in @("onnxruntime_providers_cuda.dll", "onnxruntime_providers_shared.dll")) {
+        $extraDllPath = Join-Path $ortBinDir $extraDll
+        if (Test-Path $extraDllPath -PathType Leaf) {
+            $extraDlls.Add($extraDllPath)
+        }
+        else {
+            Write-Warning "  [dll_deps] 찾지 못함: $extraDllPath"
+        }
+    }
+    $cudaBinDir = Join-Path $CudaHome "bin"
+    if (Test-Path $cudaBinDir) {
+        Get-ChildItem $cudaBinDir -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object { $extraDlls.Add($_.FullName) }
+    }
+    if ($CudnnHome -and (Test-Path $CudnnHome)) {
+        Get-ChildItem $CudnnHome -Recurse -Filter "*.dll" -ErrorAction SilentlyContinue | ForEach-Object { $extraDlls.Add($_.FullName) }
+    }
+    foreach ($dllPath in ($extraDlls | Select-Object -Unique)) {
+        Copy-Item -Path $dllPath -Destination $addonDistDir -Force
+    }
+    Write-Host "  [dll_deps] $($extraDlls.Count)개 dll 복사 완료."
 }
 
 if (-not $SkipProjectInstall) {

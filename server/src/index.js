@@ -7,6 +7,10 @@ try {
   // Continue with existing process env when dotenv is unavailable.
 }
 
+// Windows CUDA EP: must run before any onnxruntime-node InferenceSession is created
+// with ONNX_CUDA=1 (see server/src/utils/onnxDllPath.js for why).
+require('./utils/onnxDllPath').ensureOnnxCudaDllPath();
+
 const http         = require('http');
 const https        = require('https');
 const fs           = require('fs');

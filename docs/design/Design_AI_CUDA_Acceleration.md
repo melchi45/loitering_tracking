@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | Document ID | DESIGN-LTS-AI-CUDA-01 |
-| Version | 1.3 |
+| Version | 1.4 |
 | Status | Active |
-| Date | 2026-07-27 |
+| Date | 2026-07-28 |
 | Parent SRS | srs/SRS_AI_CUDA_Acceleration.md |
 
 ---
@@ -40,6 +40,8 @@ server/src/index.js
 - server/src/utils/providerDiagnostics.js
   - getProviderDiagnostics(): CUDA/DML/CPU 가용성 상태 구조체 반환
   - getBatchInferenceInfo(): 배치 추론 환경변수(BATCH_MAX_SIZE, BATCH_MAX_WAIT_MS) 설정값 반환
+- server/src/utils/onnxDllPath.js (v1.4)
+  - ensureOnnxCudaDllPath(): Windows CUDA EP가 cudnn/cuda 런타임 dll을 LoadLibrary로 찾도록 addon bin 폴더를 PATH 맨 앞에 추가 (§12.3). server/src/index.js 최상단(dotenv 로드 직후)에서 1회 호출.
 - server/src/services/detection.js
   - detectBatch(jpegBuffers[]): [B,3,640,640] 배치 텐서 단일 session.run()
   - supportsBatch getter: 배치 추론 지원 여부
@@ -309,6 +311,47 @@ cuDNN cudnnCudaVersion   vs   CUDA Toolkit version
 
 ---
 
+## 12. Windows CUDA 소스 빌드 및 런타임 DLL 검색 경로 (v1.4)
+
+### 12.1 배경
+
+공식 onnxruntime-node npm 사전 빌드 바이너리는 Windows에서 WebGPU/DirectML만 제공하고 CUDA 실행 프로바이더는 포함하지 않는다(Linux x64 사전 빌드에만 CUDA 포함). C++ 애드온 소스 자체에는 플랫폼 제외 조건이 없고 `USE_CUDA` 컴파일 플래그로만 게이팅되므로, `build-onnxruntime-source.windows.ps1`로 ORT를 CUDA와 함께 소스 빌드하면 Windows에서도 동작 가능한 CUDA EP를 얻을 수 있다(실제 세션 생성 + 추론 성공으로 검증 완료).
+
+### 12.2 빌드 파이프라인 (`build-onnxruntime-source.windows.ps1`)
+
+```text
+[1/4] ORT 소스 clone/checkout (v1.26.0)
+[2/4] 네이티브 ORT 빌드 (CMake + CUDA, onnxruntime.dll / onnxruntime_providers_cuda.dll 등)
+[3a/4] js/ 워크스페이스 루트 npm ci (핀된 typescript 설치 — TS5108/TS5011 방지)
+[3b/4] js/node npm install (TypeScript 컴파일만 수행, 네이티브 애드온은 미컴파일)
+[3c/4] js/node 네이티브 N-API 애드온 CUDA 빌드
+         - node ./script/build --config=Release --use_cuda --onnxruntime-build-dir=<path>
+         - cmake-js 내부 VS 자동탐지가 최신 버전(예: VS Insiders 프리뷰)을 우선 선택해
+           C++ 툴셋 누락으로 실패할 수 있으므로, $env:npm_config_msvs_version="2022" 로
+           강제 지정 (cmake-js는 npm_config_* 환경변수를 npm config로 읽음)
+         - --dll_deps/--onnxruntime-generator CLI 플래그는 공백 포함 경로("C:\Program Files\...")에서
+           깨지므로(spawnSync shell:true 가 공백 기준으로 재분해) 사용하지 않고,
+           빌드 성공 후 스크립트가 직접 Copy-Item 으로 onnxruntime_providers_cuda.dll /
+           onnxruntime_providers_shared.dll / CUDA·cuDNN 런타임 dll 을
+           js/node/bin/napi-v6/win32/x64/ 에 복사
+[4/4] server/node_modules 에 로컬 onnxruntime-node 설치 (--no-save)
+```
+
+### 12.3 런타임 DLL 검색 경로 문제 (실행 시점, 빌드 시점 아님)
+
+애드온 빌드와 dll 복사가 모두 성공해도, `onnxruntime_providers_cuda.dll`이 실행 중 `LoadLibrary("cudnn64_9.dll")`처럼 파일명만으로 동적 로드할 때 Windows 기본 DLL 검색 순서는 **프로세스 실행 파일(node.exe)의 폴더**와 PATH부터 시작하며, 애드온 자신이 위치한 폴더(`bin/napi-v6/win32/x64/`)는 포함하지 않는다. 그 결과 dll이 물리적으로 존재해도 `InferenceSession.create()`가 `Invalid handle. Cannot load symbol cudnnCreate`로 실패한다.
+
+**해결**: `server/src/utils/onnxDllPath.js`의 `ensureOnnxCudaDllPath()`가 `require.resolve('onnxruntime-node/package.json')` 기준으로 애드온 dll 폴더를 계산해 `process.env.PATH` 맨 앞에 추가한다. `server/src/index.js`에서 dotenv 로드 직후, 다른 모든 require보다 먼저(어떤 서비스가 CUDA 세션을 생성하기 전에) 1회 호출한다.
+
+### 12.4 검증 방법
+
+빌드 성공 여부는 `npm install` 종료 코드만으로 판단하지 말고 반드시 다음을 확인한다:
+
+- `server/node_modules/onnxruntime-node/bin/napi-v6/win32/x64/onnxruntime_binding.node` 존재 여부
+- 실제 `ort.InferenceSession.create(model, {executionProviders:['cuda','cpu']})` + `session.run()` 스모크 테스트 성공 여부 (CPU로 조용히 폴백하거나 크래시할 수 있으므로 세션 생성 성공만으로는 불충분)
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
@@ -317,3 +360,4 @@ cuDNN cudnnCudaVersion   vs   CUDA Toolkit version
 | 1.1 | 2026-06-05 | 시작 진단 흐름, provider pre-disable, Windows DML 정책 추가 |
 | 1.2 | 2026-06-26 | 멀티카메라 배치 추론 아키텍처 (§9), Provider 가용성 진단 (§10), providerDiagnostics.js·batchDetectionQueue.js 파일 설계 추가, 배치 환경변수 문서화, RTM 확장 (FR-CUDA-014~021) |
 | 1.3 | 2026-07-27 | CUDA Toolkit 자동 설치 지원 (§11): cudnnCudaVersion 필드, --ensure-cuda 옵션, ensure-cuda-toolkit.windows.ps1, 다운로드 진행 표시 설계 추가 |
+| 1.4 | 2026-07-28 | Windows CUDA 소스 빌드 파이프라인 및 런타임 DLL 검색 경로 이슈 (§12) 추가: cmake-js VS 자동탐지 강제 지정, --dll_deps 인자 손상 우회(직접 Copy-Item), onnxDllPath.js 런타임 PATH 보정 |
