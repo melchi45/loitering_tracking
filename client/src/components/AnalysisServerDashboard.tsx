@@ -233,6 +233,25 @@ function TrendGraph({
   );
 }
 
+/** Response cell — AI processing latency (ms, the actual "response time" per frame)
+ *  plus the derived throughput (1000 / avg latency, i.e. "response fps" — how many
+ *  frames per second this camera's pipeline can return at that latency), each with
+ *  its own ~60s HeatStrip trend. Complements the "Input" column (capture-side fps)
+ *  with the processing/response side of the pipeline. */
+function ResponseCell({ avgMsHistory }: { avgMsHistory: number[] }) {
+  const latestMs = avgMsHistory.length > 0 ? avgMsHistory[avgMsHistory.length - 1] : 0;
+  const latestFps = latestMs > 0 ? 1000 / latestMs : 0;
+  const fpsHistory = avgMsHistory.map((ms) => (ms > 0 ? 1000 / ms : 0));
+  return (
+    <div className="flex min-w-[76px] flex-col gap-1">
+      <span className="text-xs tabular-nums text-amber-300">{latestMs.toFixed(1)} ms</span>
+      <HeatStrip values={avgMsHistory} colorClass="text-amber-400" height={4} />
+      <span className="text-xs tabular-nums text-cyan-300">{latestFps.toFixed(1)} fps</span>
+      <HeatStrip values={fpsHistory} colorClass="text-cyan-400" height={4} />
+    </div>
+  );
+}
+
 type ResultCategory = 'det' | 'face' | 'loiter' | 'fire';
 
 const RESULT_CATEGORY_META: Record<ResultCategory, { label: string; rgb: string; textClass: string }> = {
@@ -844,7 +863,7 @@ export default function AnalysisServerDashboard({
               <span>Idle</span>
               <span>Frames</span>
               <span>Traffic</span>
-              <span>Avg ms</span>
+              <span>Response</span>
               <span>Result</span>
             </div>
             <div className="divide-y divide-slate-800/80">
@@ -874,11 +893,7 @@ export default function AnalysisServerDashboard({
                     format={formatBytes}
                     textClass="text-emerald-400"
                   />
-                  <TrendGraph
-                    data={loadHistory.get(camera.cameraId)?.avgMs ?? []}
-                    format={(v) => `${v.toFixed(1)}ms`}
-                    textClass="text-amber-400"
-                  />
+                  <ResponseCell avgMsHistory={loadHistory.get(camera.cameraId)?.avgMs ?? []} />
                   <ResultIntensity
                     values={{
                       det: camera.detectionsTotal,
