@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAPTURE-002 |
-| **Version** | 1.64 |
+| **Version** | 1.67 |
 | **Status** | Active |
-| **Date** | 2026-07-24 |
+| **Date** | 2026-07-28 |
 | **Ops Guide** | [RTSP_Capture_Backend_Setup.md](../ops/RTSP_Capture_Backend_Setup.md) |
 | **Related Design** | [Design_FFmpeg_RTSP_Capture.md](../design/Design_FFmpeg_RTSP_Capture.md) · [Design_RTSP_WebRTC_Architecture.md](../design/Design_RTSP_WebRTC_Architecture.md) |
 
@@ -1611,6 +1611,57 @@ WHEP 세션을 90초간 관찰한 결과, 특정 카메라(특히 2048×1536 이
 
 ---
 
+### 6.41 고아 `startServer.js`가 정상 데몬을 반복적으로 죽이던 결함 — 복구 로직에 헬스체크 없이 무조건 kill (2026-07-28)
+
+**증상**: analysis 서버(streaming 모드)가 보고하는 카메라별 수신 fps가 간헐적으로 0이 되는 현상. 처음엔 YouTube 스트림에서만 관찰됐지만, 실제로는 IP 카메라 8대를 포함한 전체 fleet이 동시에 영향받고 있었다. `/tmp/ingest-daemon.log`를 보면 ingest-daemon 전체가 ~6분 간격으로 정상적으로("Shutting down…" → "Ingest daemon stopped") 죽었다 재시작되길 반복하고 있었고, 그 사이 수 분간 전 카메라의 프레임 공급이 완전히 끊겼다.
+
+**진단**: 같은 워킹 디렉토리에 `startServer.js` 슈퍼바이저 프로세스가 **2개** 떠 있었다 — 하나는 실제로 서비스 중인 최신 인스턴스(`:3443`/`:7070` 보유), 다른 하나는 자신의 `index.js`/`mediamtx` 자식은 이미 죽고 ingest-daemon 자식만 좀비로 남은 5일 전 고아 인스턴스(`child.on('exit')`가 관리 중인 index.js 종료 시 자기 자신도 함께 종료하도록 되어 있어 현재 코드 기준으로는 이런 고아가 새로 생기지 않지만, 그 보장이 없던 더 오래된 코드가 메모리에 올라간 채 실행 중이었던 것으로 추정). 이 고아 인스턴스의 `_respawnIngest()`는 자신의 ingest-daemon 자식이 죽을 때마다 재시작을 시도하는데, 그 안의 `_killPortOrphan()`이 **포트를 점유 중인 프로세스가 실제로 정상 동작 중인지 전혀 확인하지 않고 `pkill -f 'ingest_daemon.py'`로 무조건 죽인 뒤** 자신의 새 자식을 스폰하고 있었다 — 이 pkill은 이름 기반이라 PID·소유 인스턴스와 무관하게 매칭되는 모든 프로세스를 죽인다. 결과적으로 고아 인스턴스가 재시도할 때마다 실제 서비스 중인 건강한 데몬을 죽이고, 두 인스턴스가 서로 자기 자식으로 교체하려 경쟁하면서 fleet 전체의 프레임 공급이 반복적으로 끊겼다.
+
+**수정**: `startServer.js`의 `_respawnIngest()`에 `_isIngestHealthy()`(`GET /health` 실제 응답 확인) 게이트를 추가 — 재시작 시도 직전 포트의 데몬이 이미 정상 응답하면(다른 슈퍼바이저가 서비스 중이라는 뜻) 이 인스턴스는 그 데몬을 죽이지 않고 즉시 물러난다(`_ingestRestartAttempts` 리셋 후 return — 이후 이 인스턴스는 ingest-daemon을 더 이상 관리하지 않음). 아무도 없어 헬스체크가 실패하는 정상적인 단일-인스턴스 크래시 복구 시나리오는 기존과 동일하게 동작하므로 회귀 없음.
+
+**주의(중요)**: 이 수정은 코드 레벨 재발 방지일 뿐, **이미 메모리에 구버전 코드를 올려둔 채 실행 중이던 기존 고아 프로세스에는 적용되지 않는다** — 그 프로세스를 직접 종료해야 지금 당장의 flapping이 멈춘다. 이후 동일 유형(원인 불문, `startServer.js`의 관리 대상 `index.js`는 죽고 슈퍼바이저만 남는 경우)이 재발해도, 이 수정 이후에는 그 슈퍼바이저가 건강한 데몬을 죽이지 않고 스스로 물러나므로 fleet 전체 장애로 번지지 않는다.
+
+`ingestDaemonControl.js`(Admin API·CLI `ingest:restart`가 쓰는 별도 경로)의 `killDaemon()`은 의도적으로 헬스체크에 의존하지 않는다(§6.29.5의 "zombie 데몬은 포트는 잡고 있지만 `/health`가 응답하지 않을 수 있다" 문제 때문) — 이 경로는 호출부(watchdog의 연속 2회 실패 확인, 또는 사람이 명시적으로 요청한 restart)가 이미 "죽여야 한다"는 판단을 끝낸 뒤에만 호출되므로 이번 결함과는 다른 계열이라 손대지 않았다.
+
+**교훈**: 여러 슈퍼바이저 세대가 같은 리소스(포트)를 두고 경쟁할 수 있는 구조에서는, "내가 관리하던 게 죽었으니 재시작한다"는 판단과 "지금 그 자리에 있는 게 실제로 건강한지" 확인이 분리되어 있으면 안 된다 — 후자를 먼저 확인하지 않는 복구 로직은 정상 인스턴스를 반복적으로 몰아내는 자기 자신보다 더 위험한 장애 유발원이 될 수 있다.
+
+---
+
+### 6.42 고아 프로세스 정리 이후에도 남아있던 ingest-daemon 자체의 주기적 응답 불능 — 실증 GIL 테스트 + HTTP 컨트롤플레인 프로세스 분리 (2026-07-28)
+
+**증상**: §6.41의 고아 `startServer.js`를 종료한 뒤에도, 단일 정상 인스턴스 상태에서 `IngestWatchdog`이 `/health` 2회 연속 실패 → 재시작을 **~2.3분 간격으로 계속** 반복. 이번엔 중복 슈퍼바이저 문제가 아니라 ingest-daemon 프로세스 자체가 주기적으로 실제 응답 불능 상태에 빠지는 것으로 확인됨 (CPU 245%, NLWP 127, 공유 호스트 load average 16~18).
+
+**실증 진단 (라이브 SIGUSR1 스택 덤프)**: 헬스체크를 초 단위로 폴링하다 실제 무응답 순간을 잡아 `kill -USR1`로 전체 스레드 스택을 떴다 — accept 루프를 도는 메인 스레드는 `select()`에서 완전히 유휴 상태였고(데드락 아님), 반면 카메라 io 스레드 다수가 `container.demux()`(§979)에 몰려 있었다. 이는 §6.10에서 실측된 "accept 스레드는 idle인데 /health만 무응답"과 동일한 패턴.
+
+**가설 검증 — PyAV read측(demux/decode)이 mux()처럼 GIL을 계속 쥐고 있는가**: 실제 라이브 카메라 스트림을 대상으로 3단계 합성 테스트를 진행 (메인 스레드에서 순수 Python 카운팅 루프를 돌리며 처리량으로 GIL 점유를 간접 측정):
+1. `demux()` 1개, 블로킹 대기 위주(5초간 패킷 1개) → 처리량 99.6% 유지
+2. `demux()` 7개 동시(실제 패킷 흐르는 상태) → 처리량 90.6%, 초 단위 정지 없음
+3. 대형 프레임(2560x1920, 2048x1536) 실제 디코드+PIL 변환(프레임당 최대 224~314ms) 3개 동시 → 처리량 87.7%, 최대 배치 지연 20ms
+
+세 테스트 모두 초 단위로 GIL을 통째로 쥐는 지점을 찾지 못함 — **mux()(쓰기, §6.24 이전에 이미 서브프로세스로 분리됨)와 달리 demux()/decode()(읽기) 개별 호출은 이 PyAV 11.0.0 빌드에서 GIL을 정상적으로 놓아준다.** 단, 이 테스트는 실제 운영 중인 동시성 규모(스레드 127개)를 재현하지 못했으므로 "다수 스레드의 GIL 획득 경합 누적 효과(convoy effect)" 자체를 완전히 배제하지는 못함 — 더 이상의 재현은 라이브 시스템에 위험 부하를 추가해야 해서 중단.
+
+**수정 — 근본 메커니즘을 확정하지 못해도 구조적으로 면역이 되는 길을 선택**:
+
+1. **`ingest_health_proxy.py`(신규)** — `/health`만 담당하는 완전히 별도의 OS 프로세스. `ingest_daemon.py`의 기존 API 서버는 이제 외부 포트가 아니라 `127.0.0.1:<내부 포트>`(기본 외부 포트+1, `INGEST_INTERNAL_HTTP_PORT`로 override)에서만 리슨하고, 이 프록시가 외부 포트를 대신 리슨한다.
+   - `/health`: `_stats_sampler()`(1초 주기, 기존 스레드)가 매 tick 원자적으로(temp+`os.replace`) 남기는 heartbeat 파일(`{"ts", "cameras"}`, `INGEST_HEARTBEAT_FILE`)의 신선도만으로 즉답 — 실제 daemon의 GIL/스케줄링 상태와 완전히 무관. 5초(`HEARTBEAT_STALE_S`) 넘게 갱신 안 되면 503 반환 → 기존 Node측 watchdog(`ingestDaemonWatchdog.js`, 변경 없음)이 그대로 "진짜 죽었다"고 판단해 재시작 — 일시적 스케줄링 지연과 실제 다운을 구분하되, 진짜 다운일 때의 기존 복구 경로는 그대로 유지.
+   - 나머지 모든 경로(`/cameras`, `/cameras/stats`, `POST/DELETE /cameras/...`)는 내부 포트로 투명 프록시. 이 경로들은 daemon이 실제로 바쁘면 여전히 느려질 수 있음 — 의도된 트레이드오프(watchdog이 보는 건 `/health`뿐).
+   - 부모(`ingest_daemon.py`) 프로세스가 사라지면(`--parent-pid` 폴링, 2초 주기) 프록시도 몇 초 안에 스스로 종료 — 죽은 daemon이 외부 포트를 물고 있는 좀비 프록시를 남기지 않음. `start_new_session=True`로 별도 세션에 스폰해 부모의 프로세스 그룹에 무슨 일이 생겨도 안전.
+   - **검증(라이브 시뮬레이션)**: 별도 포트로 독립 인스턴스를 띄워 (a) 평시 프록시 정상 동작, (b) `SIGSTOP`으로 메인 프로세스를 인위로 얼린 뒤 5초 후 503 확인 → `SIGCONT` 후 즉시 200 복귀, (c) `SIGKILL`로 메인 프로세스 종료 후 프록시가 ~2~3초 내 자체 종료+포트 반환 — 세 시나리오 모두 의도대로 동작 확인.
+   - Node 측(`ingestDaemonWatchdog.js`, `ingestDaemonControl.js`, Admin API)은 **전혀 수정 불필요** — 외부에서 보는 포트·응답 형식이 그대로이므로 완전히 하위 호환.
+
+2. **스레드 수 자체 축소** (§6.10/§6.34에서 이미 도입된 상한값들이 방치돼 있었음):
+   - `AI_DECODE_THREADS_TOTAL`이 `server/.env`에서 주석 처리된 채라 기본값 `os.cpu_count()=40`이 그대로 적용 중 — 카메라 10대 기준 카메라당 4개(=40/10) 네이티브 디코드 스레드 허용. `20`으로 명시(카메라당 2개)해 ~20개 절감.
+   - `INGEST_PUSH_WORKERS`(16→10)/`INGEST_STOP_WORKERS`(8→4) — 라이브 스택 덤프에서 두 풀 합쳐 idle 스레드 22개가 상시 대기 중임을 확인, 실사용량 대비 여유가 과했음.
+   - `server/.env`·`.env.example`·`.env.streaming.example`·`.env.analysis.example` 전부 동기화.
+
+**교훈**: "어느 한 줄이 GIL을 오래 쥐고 있는가"를 실증적으로 반증했다고 해서 문제가 사라지는 건 아니다 — 스레드 수 자체(합성 테스트로는 재현 못 한 규모)나 호스트 스케줄링 경합처럼 한 줄로 특정할 수 없는 누적 원인일 수 있고, 이런 경우 원인을 100% 특정하기보다 **원인과 무관하게 면역이 되는 구조(프로세스 경계)**를 세우는 편이 실용적이다. 단, 헬스체크만 우회하고 끝내면 "겉보기엔 건강한데 실제로는 서비스 불능"이 될 위험이 있으므로, 반드시 heartbeat처럼 실제 작업 루프에 연동된 살아있음 신호를 근거로 삼아야 한다(단순 프로세스 존재 여부만 확인하는 얕은 헬스체크였다면 오히려 상황을 악화시켰을 것).
+
+**배포 직후 회귀 — 중복 `Content-Length` 헤더로 인한 실제 카메라 등록/삭제 전면 장애 (2026-07-28, 배포 당일 발견·즉시 수정)**: 이 daemon은 재시작할 때마다 디스크의 최신 코드를 그대로 로드하므로, 코드를 커밋한 직후 (아직 라이브 검증 전에) 진행 중이던 정상적인 watchdog 재시작 사이클을 통해 프록시가 프로덕션에 그대로 적용돼버렸다. 그 직후 `DELETE /cameras/:id`/`POST /cameras`가 대량으로 `fetch failed`(Node 측)/`ConnectionResetError`(내부 서버 측)로 실패하기 시작 — `curl`로는 재현되지 않아(관대한 파서) 처음엔 원인이 안 보였으나, 문제의 Node `fetch()` 패턴을 그대로 재현하는 별도 스크립트로 즉시 재현됨(격리 환경에서, 프로덕션은 그 사이 프록시를 `INGEST_HEALTH_PROXY_ENABLED=false`로 즉시 되돌려 정상화). 원인: `_proxy()`가 내부 서버 응답의 모든 헤더를 그대로 복사하면서 내부 서버 자신의 `Content-Length`까지 같이 복사하고, 그 뒤에 자기 `Content-Length`를 또 추가 — 응답에 `Content-Length`가 두 번 들어감(RFC 7230 위반). `curl`은 이를 관대하게 넘어가지만 Node의 `http`/`fetch`(undici) 파서는 `Parse Error: Duplicate Content-Length`로 하드 실패 — **curl로 프록시를 검증한 것은 이 버그를 놓치는 가짜 통과(false pass)였다.** 수정: 헤더 복사 시 `content-length`도 함께 제외. 격리 환경에서 Node `fetch()`/`http.request` 양쪽으로 20회 반복 재현 테스트 통과 확인 후 재배포.
+
+**교훈**: 실제 소비자(Node)가 아니라 `curl`로만 새 HTTP 경로를 검증하면 클라이언트별 파서 엄격도 차이로 인한 버그를 놓칠 수 있다 — 프록시/게이트웨이류를 검증할 때는 반드시 실제 호출자가 쓰는 것과 동일한 클라이언트 라이브러리(여기서는 Node의 `fetch`)로 재현해야 한다. 또한 이번 배포 경로 자체가 "커밋 직후, 아직 아무도 재시작을 트리거하지 않았는데 daemon의 자체 watchdog 사이클이 알아서 최신 코드를 라이브에 실어 날랐다"는 것을 보여준다 — 이런 자동 재시작형 데몬에 코드를 수정할 때는 "다음 자연 재시작에서 바로 라이브에 적용된다"는 전제하에 작업해야 한다.
+
+---
+
 ### 12.3 스트림별 타임아웃 전략
 
 | 스트림 | 방식 | 타임아웃 | 근거 |
@@ -1679,6 +1730,8 @@ WHEP 세션을 90초간 관찰한 결과, 특정 카메라(특히 2048×1536 이
 | 1.40 | 2026-07-21 | §6.27 최종 결론 — 이번 세션 전체를 관통한 재생 불가 증상의 실제 근본 원인 2건 확정: (1) `ingest-daemon` 프로세스가 완전히 다운되어 있어(포트 7070 connection refused) 서버 재시작마다 카메라가 mediasoup에 등록 안 되고 "WebRTC disabled"로 시작(`npm run ingest:start`로 복구), (2) `profileLevelId`가 `addCameraStream()` 시점 1회만 캐싱되는 구조라 ingest-daemon 다운 중 폴링 예산(5초) 초과 시 폴백값 Baseline(`42e01f`)이 영구 고착 — 실제로는 High Profile(`640032`)인데도 낮은 Level(3.1)로 협상되어 고해상도 카메라가 일부 프레임만 디코드하다 멈춤(`POST /stream/reconnect`로 캐시 재고침해 미봉책 적용, 근본 수정은 후속 과제로 명시). 조사용 임시 SDP 디버그 로그 제거 |
 | 1.41 | 2026-07-21 | §6.27 재재보완 — "데이터 수신은 정상인데 Buffer만 주기적으로 900ms+" 현상의 진짜 근본 원인 확정: 프로액티브 jitterBufferTarget escalation이 `bufferMs`(우리가 `videoReceiver.jitterBufferTarget`으로 직접 명령한 결과가 그대로 반영되는 지표)를 트리거로 삼아 자기강화 피드백 루프를 형성 — STEP_UP/STEP_DOWN 5~10배 비대칭 때문에 정상적인 지터 한 번만으로도 15~20초 만에 상한(1000ms)까지 폭주. `useWebRTC.ts` escalation 트리거에서 `bufferMs` 조건 제거, 우리가 직접 조작하지 않는 `freezeDelta`/`lossDeltaForAdapt`(진짜 프리즈·패킷손실)만으로 판단하도록 수정 — 데이터 수신량과 무관했던 자기유발 문제였음을 확정. 별도로 Node.js 이벤트 루프 지연 모니터(`eventLoopLag.js`) 신규 추가(200ms+ 블로킹 시 로그, 실측 233ms/217ms 확인). `npx tsc --noEmit`/`npm run build` 클린 통과 |
 | 1.42 | 2026-07-21 | §6.27 재재재보완 — `profile-level-id=42e01f`가 재연결마다 무작위로 재발하던 진짜 원인 확정: `negotiate()`가 WHEP 재협상마다 매번 `_ingestGetVideoParams()`를 재시도 없이 2초 타임아웃으로 단발 호출하는데, ingest-daemon이 바쁠 때(250%+ CPU) 실패하면(로그 `video-params not available yet` 하루 133회 확인) Producer의 하드코딩 Baseline(`42e01f`) 기본값으로 조용히 폴백하던 구조 — `addCameraStream()` 시점 1회 캐싱이라는 v1.40의 이해는 부정확했음, 실제로는 매 negotiate마다 fresh fetch. `mediasoupEngine.js`에 `_lastKnownVideoParams` 캐시 신규 추가 — fetch 성공 시 갱신, 실패 시 Baseline이 아니라 마지막 성공값으로 폴백(카메라 실제 프로파일은 재연결 사이 안 바뀌므로), 기존 H.265 진단용 `_pollVideoCodec()`도 성공 시 같은 캐시를 선제 예열, `removeCameraStream()`에서 캐시 정리 추가 |
+| 1.67 | 2026-07-28 | §6.42 신규 — §6.41 조치 후에도 남아있던 ingest-daemon 자체의 주기적(~2.3분) 응답 불능을 라이브 SIGUSR1 스택 덤프 + 실증 GIL 테스트(demux/decode는 GIL을 정상적으로 놓아줌을 확인)로 진단. `ingest_health_proxy.py` 신규(HTTP 컨트롤플레인을 별도 프로세스로 분리, heartbeat 파일 기반 /health 즉답 + 나머지 경로 투명 프록시), `AI_DECODE_THREADS_TOTAL`/`INGEST_PUSH_WORKERS`/`INGEST_STOP_WORKERS`로 스레드 수 자체도 축소 |
+| 1.66 | 2026-07-28 | §6.41 신규 — 고아 `startServer.js`(관리 대상 index.js는 죽고 슈퍼바이저만 잔존)가 재시작 시도마다 헬스체크 없이 `pkill -f 'ingest_daemon.py'`로 정상 데몬을 죽여 fleet 전체 fps가 간헐적으로 0이 되던 결함 수정. `_respawnIngest()`에 `_isIngestHealthy()` 게이트 추가 — 포트의 데몬이 이미 healthy면 죽이지 않고 물러남 |
 | 1.65 | 2026-07-27 | §6.40 신규 — Streaming Dashboard 8개 카메라가 RETRY/Offline(WebRTC 영상 자체는 정상 재생 중)이던 원인 확정: ingest-daemon HTTP 스레드 wedged(§6.29.5 계열) + 이미 있던 자동 복구 `ingestDaemonWatchdog.js`(§6.29.9)가 `server/.env`의 `INGEST_WATCHDOG_ENABLED=false`(과거 디버깅 세션 후 원복 누락)로 비활성화돼 있어 자동 복구가 무력화된 상태로 최소 수일 방치. `.env` 원복 + `ingest:restart`로 즉시 복구, `armDebugDisableSafetyNet()` 신규 추가로 디버깅용 비활성화가 30분 후 자동 강제 재활성화되도록 안전장치 도입 |
 | 1.64 | 2026-07-24 | §6.39 신규 — §6.38의 MediaMTX 직접 우회가 `webrtcEnabled` 카메라에만 적용되고 UMP 전용(`umpEnabled`, `webrtcEnabled=false`) 카메라에는 적용되지 않던 결함 수정. `needsMediaMTX`에 `umpEnabled` 반영, `cameras.js`의 `needsRestart`도 `umpEnabled` 변경 시 재시작하도록 동기화. 재측정 ~13.5fps → 28~31fps 복구 확인 |
 | 1.63 | 2026-07-24 | §6.38 신규(아키텍처) — fleet 부하로 인한 개별 카메라 프레임레이트 저하가 §6.37 이후에도 잔존(GIL 경합은 fan-out 하나만의 문제가 아니었음). `WEBRTC_ENGINE=mediamtx`가 이미 만들어둔 MediaMTX 직접(non-GIL) 경로를 UMP가 우선 재사용하도록 변경 — ingest-daemon 완전 우회. "GIL 회피보다 우회가 우선일 수 있다"는 일반 원칙으로 정리 |

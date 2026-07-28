@@ -84,6 +84,7 @@ import ssl
 import struct
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
@@ -195,6 +196,13 @@ _SHARED_PUSH_SEMAPHORE = threading.Semaphore(_PUSH_WORKERS)
 # on the Future) while capping how many stop() calls can be in flight at once.
 _STOP_WORKERS         = int(os.environ.get("INGEST_STOP_WORKERS", "8"))
 _SHARED_STOP_EXECUTOR = ThreadPoolExecutor(max_workers=_STOP_WORKERS, thread_name_prefix="stopper")
+
+# Health-proxy heartbeat file (2026-07-28) — see ingest_health_proxy.py's module
+# docstring for the full story. Written every _STATS_SAMPLE_INTERVAL_S tick by
+# _stats_sampler(), which already runs as a single lightweight thread doing
+# nothing but cheap counter arithmetic — the actual write is one small
+# atomic-rename JSON file, negligible cost added to an already-cheap loop.
+_HEARTBEAT_FILE = os.environ.get("INGEST_HEARTBEAT_FILE", os.path.join(tempfile.gettempdir(), "ingest-daemon-heartbeat.json"))
 
 
 def _close_ignoring_errors(out) -> None:
@@ -1834,10 +1842,26 @@ class CameraSession:
 _STATS_SAMPLE_INTERVAL_S = 1.0
 
 
+def _write_heartbeat(camera_count: int) -> None:
+    """Atomic write (temp file + os.replace) so ingest_health_proxy.py never
+    reads a half-written file. Best-effort — a failed write just means the
+    proxy sees one stale tick and, if writes keep failing, eventually reports
+    unhealthy, which is the correct fallback (see that script's docstring)."""
+    try:
+        tmp = _HEARTBEAT_FILE + f".tmp{os.getpid()}"
+        with open(tmp, "w") as f:
+            json.dump({"ts": time.monotonic(), "cameras": camera_count}, f)
+        os.replace(tmp, _HEARTBEAT_FILE)
+    except Exception:
+        pass
+
+
 def _stats_sampler(manager: "CameraManager", stop_evt: threading.Event) -> None:
     while not stop_evt.wait(_STATS_SAMPLE_INTERVAL_S):
         now = time.monotonic()
-        for sess in manager.all():
+        sessions = manager.all()
+        _write_heartbeat(len(sessions))
+        for sess in sessions:
             st = sess.stats
             dt = now - st._prev_sample_at
             if dt <= 0:
@@ -2117,6 +2141,20 @@ def main():
         h, p = raw.rsplit(":", 1)
         host, port = h, int(p)
 
+    # Health-proxy split (2026-07-28, Design_RTSP_Capture_Backend.md §6.41) —
+    # this process's own ThreadingHTTPServer keeps binding the *external* port
+    # for backward compatibility with every existing caller (Node's
+    # ingestDaemonWatchdog.js, ingestDaemonControl.js, Admin Dashboard — none
+    # need to change), but now on loopback-only at an *internal* port.
+    # ingest_health_proxy.py binds the real external `host:port` instead and
+    # forwards everything except /health there — see that script's docstring
+    # for why: this process can go real-but-transiently unresponsive under
+    # fleet-wide thread-count/scheduling pressure (§6.10, §6.29.5 — confirmed
+    # live, not a deadlock, just OS-scheduling starvation of the accept-loop
+    # thread) even though it never released the GIL pathologically in any
+    # single call (verified empirically, §6.41). A process boundary is the
+    # only thing that's immune to that regardless of root cause.
+    internal_port = int(os.environ.get("INGEST_INTERNAL_HTTP_PORT", str(port + 1)))
     _manager = CameraManager()
 
     # Stats sampler (2026-07-21) — see its own comment above for why this is
@@ -2128,6 +2166,25 @@ def main():
         daemon=True, name="stats-sampler",
     ).start()
 
+    proxy_proc = None
+    if os.environ.get("INGEST_HEALTH_PROXY_ENABLED", "true").lower() != "false":
+        proxy_script = os.path.join(os.path.dirname(os.path.abspath(__file__)), "ingest_health_proxy.py")
+        try:
+            proxy_proc = subprocess.Popen([
+                sys.executable, proxy_script,
+                "--external-host", host, "--external-port", str(port),
+                "--internal-port", str(internal_port),
+                "--heartbeat-file", _HEARTBEAT_FILE,
+                "--parent-pid", str(os.getpid()),
+            ], start_new_session=True)  # own process group/session — the whole
+            # point is that this must keep answering even if something acts on
+            # this (the real daemon's) process group; --parent-pid is its own,
+            # independent mechanism for noticing this process is actually gone.
+            log.info("Health proxy started (pid %d) on %s:%d → forwarding to 127.0.0.1:%d",
+                      proxy_proc.pid, host, port, internal_port)
+        except Exception as e:
+            log.warning("Could not start health proxy, falling back to direct binding on %s:%d: %s", host, port, e)
+
     # ThreadingHTTPServer (2026-07-15): the plain single-threaded HTTPServer
     # processes one request at a time — a slow POST/DELETE (blocked inside
     # CameraSession.stop()'s thread join, see _join_threads) stalled every
@@ -2138,8 +2195,14 @@ def main():
     # threads piled up. Each request now runs on its own thread so a slow
     # stop() for one camera no longer blocks any other camera's add/remove or
     # health checks.
-    server = ThreadingHTTPServer((host, port), Handler)
-    log.info("Ingest daemon listening on %s:%d", host, port)
+    #
+    # Binds 127.0.0.1 (not `host`) whenever the proxy is running: `host` is
+    # frequently 0.0.0.0 (external-facing), and this internal server has no
+    # business being reachable from anywhere but the proxy on the same box.
+    bind_host = "127.0.0.1" if proxy_proc else host
+    bind_port = internal_port if proxy_proc else port
+    server = ThreadingHTTPServer((bind_host, bind_port), Handler)
+    log.info("Ingest daemon internal API listening on %s:%d", bind_host, bind_port)
 
     try:
         server.serve_forever()
@@ -2152,6 +2215,19 @@ def main():
         except KeyboardInterrupt:
             pass  # second SIGINT during stop_all — ignore
         server.server_close()
+        if proxy_proc is not None:
+            # Belt-and-suspenders: the proxy also self-exits within a couple
+            # seconds of noticing this PID is gone (see its docstring), but
+            # terminating it here avoids that grace-period gap entirely on a
+            # clean shutdown, which is by far the common case.
+            try:
+                proxy_proc.terminate()
+                proxy_proc.wait(timeout=3)
+            except Exception:
+                try:
+                    proxy_proc.kill()
+                except Exception:
+                    pass
         log.info("Ingest daemon stopped")
 
 

@@ -212,12 +212,30 @@ class AnalysisClient {
     };
   }
 
+  // A keep-alive socket pulled from the pool can already have been closed by
+  // the remote side (idle timeout on the analysis server, or a NAT/firewall
+  // conntrack entry expiring between the two hosts) without Node's Agent
+  // knowing — the first write on it fails immediately with ECONNRESET/EPIPE
+  // or a bare "socket hang up", before the analysis server ever saw the
+  // request. This is a transport-layer artifact of connection reuse timing,
+  // not a real per-frame failure, and was previously counted as one anyway —
+  // observed live (2026-07-28) as recurring bursts of dropped frames across
+  // multiple cameras roughly every 2–3 minutes, which is what actually showed
+  // up as the Analysis Server Dashboard's per-camera fps dipping/fluctuating
+  // rather than holding steady. A single immediate retry on a fresh socket
+  // resolves it in practice (confirmed against the bursts above) without
+  // masking a genuinely dead analysis server — the circuit breaker still
+  // opens normally once retries themselves start failing.
+  _isRetryableTransportError(err) {
+    return err?.code === 'ECONNRESET' || err?.code === 'EPIPE' || /socket hang up/i.test(err?.message || '');
+  }
+
   /**
    * POST raw JPEG binary to pathname.
    * metaJson is a small JSON string sent in the X-LTS-Meta header.
    * Avoids base64 encoding and large JSON.stringify on the main thread.
    */
-  _postJpeg(pathname, jpegBuffer, metaJson) {
+  _postJpeg(pathname, jpegBuffer, metaJson, attempt = 0) {
     return new Promise((resolve, reject) => {
       const mod  = this._httpModule();
       const opts = {
@@ -246,7 +264,13 @@ class AnalysisClient {
         });
       });
       req.on('timeout', () => { req.destroy(); reject(new Error(`Request timeout (${this._timeout}ms)`)); });
-      req.on('error', reject);
+      req.on('error', (err) => {
+        if (attempt === 0 && this._isRetryableTransportError(err)) {
+          this._postJpeg(pathname, jpegBuffer, metaJson, attempt + 1).then(resolve, reject);
+          return;
+        }
+        reject(err);
+      });
       req.write(jpegBuffer);
       req.end();
     });

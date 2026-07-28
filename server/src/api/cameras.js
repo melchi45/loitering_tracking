@@ -61,31 +61,45 @@ function deriveStreamingMode(camera) {
 const _analysisNotifyHttpsAgent = new https.Agent({ keepAlive: true, rejectUnauthorized: false });
 const _analysisNotifyHttpAgent  = new http.Agent({ keepAlive: true });
 
+// Returns a Promise so callers that need to know the outcome (e.g. the admin
+// force-cleanup route below, for a channel with no local Camera record to hang
+// success/failure off of) can await it — existing DELETE /api/cameras/:id call
+// sites intentionally don't await this (fire-and-forget) and are unaffected.
 function _notifyAnalysisCameraRemoved(cameraId) {
-  if (SERVER_MODE !== 'streaming' || !process.env.ANALYSIS_SERVER_URL) return;
+  if (SERVER_MODE !== 'streaming' || !process.env.ANALYSIS_SERVER_URL) {
+    return Promise.resolve({ ok: false, error: 'not in streaming mode or ANALYSIS_SERVER_URL unset' });
+  }
   let base;
-  try { base = new URL(process.env.ANALYSIS_SERVER_URL); } catch { return; }
+  try { base = new URL(process.env.ANALYSIS_SERVER_URL); } catch { return Promise.resolve({ ok: false, error: 'invalid ANALYSIS_SERVER_URL' }); }
   const isHttps = base.protocol === 'https:';
   const mod     = isHttps ? https : http;
   const body    = JSON.stringify({ cameraId });
-  const req = mod.request({
-    hostname: base.hostname,
-    port:     base.port || (isHttps ? 443 : 80),
-    path:     '/api/analysis/camera-removed',
-    method:   'POST',
-    headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
-    timeout:  4000,
-    agent:    isHttps ? _analysisNotifyHttpsAgent : _analysisNotifyHttpAgent,
-  }, (res) => {
-    res.resume();
-    if (res.statusCode >= 400) {
-      console.warn(`[cameras] camera-removed notify to analysis server returned HTTP ${res.statusCode} for ${cameraId}`);
-    }
+  return new Promise((resolve) => {
+    const req = mod.request({
+      hostname: base.hostname,
+      port:     base.port || (isHttps ? 443 : 80),
+      path:     '/api/analysis/camera-removed',
+      method:   'POST',
+      headers:  { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+      timeout:  4000,
+      agent:    isHttps ? _analysisNotifyHttpsAgent : _analysisNotifyHttpAgent,
+    }, (res) => {
+      res.resume();
+      if (res.statusCode >= 400) {
+        console.warn(`[cameras] camera-removed notify to analysis server returned HTTP ${res.statusCode} for ${cameraId}`);
+        resolve({ ok: false, error: `HTTP ${res.statusCode}` });
+      } else {
+        resolve({ ok: true });
+      }
+    });
+    req.on('error', (err) => {
+      console.warn(`[cameras] camera-removed notify to analysis server failed for ${cameraId}: ${err.message}`);
+      resolve({ ok: false, error: err.message });
+    });
+    req.on('timeout', () => { req.destroy(); resolve({ ok: false, error: 'timeout' }); });
+    req.write(body);
+    req.end();
   });
-  req.on('error',   (err) => console.warn(`[cameras] camera-removed notify to analysis server failed for ${cameraId}: ${err.message}`));
-  req.on('timeout', () => req.destroy());
-  req.write(body);
-  req.end();
 }
 
 // ingest-daemon now supports RTP fan-out for mediasoup (mediasoupPort / mediasoupAudioPort).
@@ -889,3 +903,7 @@ module.exports = camerasRouter;
 // still works as a bare factory function for index.js's existing usage, while
 // tests can also reach the pure decision function directly (no live server needed).
 module.exports.resolveProbeChannelsDecision = resolveProbeChannelsDecision;
+// Reused by routes/admin.js's force-cleanup endpoint for analysis-server channels
+// that never had a local Camera record (DELETE /api/cameras/:id 404s before ever
+// reaching this call for those — see the admin route's own comment).
+module.exports.notifyAnalysisCameraRemoved = _notifyAnalysisCameraRemoved;

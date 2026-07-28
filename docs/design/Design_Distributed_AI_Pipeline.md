@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-DAP-01 |
-| **Version** | 1.1 |
+| **Version** | 1.3 |
 | **Status** | Active |
-| **Date** | 2026-06-08 |
+| **Date** | 2026-07-28 |
 | **Parent SRS** | [srs/SRS_Distributed_AI_Pipeline.md](../srs/SRS_Distributed_AI_Pipeline.md) |
 | **Parent PRD** | [prd/PRD_Distributed_AI_Pipeline.md](../prd/PRD_Distributed_AI_Pipeline.md) |
 
@@ -822,6 +822,16 @@ AnalysisServer
       │ → objectId 1번부터 재시작
 ```
 
+**정리 경로 3가지 (2026-07-28 정리):**
+
+| 경로 | 트리거 | 조건 | 즉시성 |
+|---|---|---|---|
+| 위 60초 idle-prune | 시간 경과(`CONTEXT_EXPIRY_MS`=5분) | 항상 적용(모든 cameraId) | 최대 5분 지연 |
+| `DELETE /api/cameras/:id` → `_notifyAnalysisCameraRemoved()` (`server/src/api/cameras.js`) | 실제 카메라 삭제 | streaming 서버에 해당 cameraId의 Camera 레코드가 있어야 함 — 없으면 404로 끝나 이 호출에 도달조차 못함 | 즉시(fire-and-forget) |
+| `POST /admin/analysis/camera-removed`(신규) | 관리자 수동 요청(body: `{cameraId}`) | 로컬 Camera 레코드 존재 불필요 — 임의 cameraId 지정 가능 | 즉시(결과 대기 후 반환) |
+
+세 번째 경로는 TC 스위트(`test/api/distributed_pipeline.test.js`의 TC-DAP-005/009 등)가 `POST /api/analysis/frame`에 `tc009-cam-alpha`처럼 등록되지 않은 cameraId를 직접 보내는 경우를 겨냥한다 — 이런 채널은 streaming 서버에 대응하는 Camera 레코드가 아예 없어 두 번째 경로(`DELETE /api/cameras/:id`)로는 절대 정리할 수 없었고, 첫 번째 경로(5분 idle-prune)만으로는 그 사이 Analysis Server Dashboard에 남아있어야 했다. 해당 테스트는 이제 자체적으로 이 엔드포인트를 호출해 즉시 정리하지만(테스트 파일 자체 주석 참고), 그 외 어떤 경로로든 생긴 미등록 잔여 채널도 관리자가 이 엔드포인트로 즉시 지울 수 있다. `_notifyAnalysisCameraRemoved()`는 이제 결과(`{ok, error?}`)를 반환하는 Promise로 변경되어(기존 `DELETE` 호출부는 여전히 await하지 않음, 동작 불변) 이 admin 엔드포인트가 성공/실패를 그대로 응답할 수 있다.
+
 ---
 
 ## 8. File & Module Layout
@@ -957,3 +967,4 @@ Browser
 | 1.0 | 2026-06-08 | 초기 작성 |
 | 1.1 | 2026-06-17 | 섹션 11 추가: DetectionTrack 생명주기, _trackMeta 구조, streaming 모드 시퀀스, fallback 흐름 |
 | 1.2 | 2026-06-23 | 섹션 4.4 추가: DetectionService 동시 추론 채널 격리 설계 (_float32Buf 공유 버퍼 레이스 컨디션 수정) |
+| 1.3 | 2026-07-28 | 섹션 7.4에 정리 경로 3가지 표 추가 — 로컬 Camera 레코드 없는 cameraId(TC 스위트 등)를 위한 신규 `POST /admin/analysis/camera-removed` 관리자 강제 정리 엔드포인트, `_notifyAnalysisCameraRemoved()` Promise 반환으로 변경 |

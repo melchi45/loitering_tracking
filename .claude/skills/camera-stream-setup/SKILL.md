@@ -135,6 +135,7 @@ JPEG Capture(Socket.IO)/WebRTC에 이어 **세 번째 카메라 재생 경로**�
 - **신규 뷰어 접속 시 "SPS payload is not available"(errorCode 772)가 수차례 반복되다 재생되던 노이즈 — WS 브릿지에 키프레임 게이팅 추가로 해결(2026-07-24, §8.16, H265 지원은 2026-07-24 후속 갱신)**: MediaMTX는 이미 라이브 중인 스트림에 신규 RTSP 리더가 붙어도 다음 키프레임을 기다려주지 않고 GOP 중간부터 즉시 데이터를 흘려보낸다 — §8.9의 `needsKeyframe` 게이트는 "카메라→MediaMTX 최초 발행" 구간 전용이라 이 "MediaMTX→신규 WS 뷰어" 구간은 커버하지 않았음. `umpStreamingServer.js`의 backend→client 릴레이가 RTSP interleaved framing을 인식하도록 확장: DESCRIBE 응답 SDP로 비디오 트랙과 코덱(`H264`/`H265`, rtpmap의 `HEVC` 이름도 인식) 식별 → SETUP 응답의 `Transport: interleaved=X-Y`로 비디오 RTP 채널 확정 → 그 채널의 non-키프레임 슬라이스만 첫 키프레임이 지나갈 때까지 드롭. H.264(RFC 6184, 단일 NAL·FU-A·STAP-A)와 H.265(RFC 7798, 2바이트 NAL 헤더·IRAP 타입 16~23·AP(48)/FU(49) — 번호 체계와 패킷 포맷이 H.264와 전혀 다름)를 `classifyVideoRtpPacket()`이 코덱별로 디스패치해 각각 처리. 판단 불가 시(코덱 H264/H265 둘 다 아님/채널 매핑 실패/4초 타임아웃) 항상 fail-open. 순수 함수 단위 Jest 테스트 30건 추가(`umpStreamingServer.test.js`). **RTSP-over-WS 릴레이 같은 "거의 투명한 프록시" 계층에 특정 트랙만 예외 처리를 추가할 땐, 그 계층이 원래 하지 않던 프로토콜 파싱(SDP/Transport 상관관계, RTP/NAL)을 최소한으로 새로 들여야 하며, 실패 시 반드시 예전 동작(순수 릴레이)으로 되돌아가도록(fail-open) 설계할 것 — 그리고 코덱마다 NAL 레이아웃이 다르므로, 애초에 H.264 하나만 보고 설계하면 H.265 카메라가 조용히 게이팅 없이 동작(fail-open이라 크래시는 안 나지만 원래 고치려던 노이즈는 그대로 남음)한다는 점을 처음부터 감안할 것.**
 - `supportSunapi`(SUNAPI 지원 여부)와 무관하게 모든 카메라에 UMP 옵션 노출. YouTube 카메라는 UMP 대상에서 제외(2-way JPEG/WebRTC 그대로).
 - 서브모듈(`submodules/ump-player`, 프로토콜 분석 참고용, 클라이언트가 실제 로드하는 건 아님)과 그 중첩 서브모듈(`app/media`, `app/external-lib`)은 `.gitmodules`가 private repo HTTPS URL이라 `git submodule update --init`이 "Repository not found"로 실패함 — `git config submodule.<path>.url git@github.com:melchi45/<repo>.git` 로컬 override 후 재시도 필요.
+- **`submodules/ump-player` 내부 TypeScript/ESM 마이그레이션 진행 중(2026-07-27~)** — 레거시 `app/media/ump/`(87개 JS 파일, 수정 안 함)를 `src/player/`에 병행 TS 구현으로 점진 포팅하는 별도 작업. LTS-2026이 실제로 로드하는 건 npm `@melchi45/ump-player` 패키지(위 항목들)이지 이 서브모듈 자체가 아니므로, 이 skill의 "실 카메라 라이브 테스트" 항목들과는 무관 — 상세는 `submodules/ump-player/docs/{mrd,prd,srs,design,ops,tc}/*_TypeScript_Migration.md`. 그중 `angularInterface/`(레거시 AngularJS 연동 글루, `streamInterface.js`+`streamCanvas.js`)는 로드맵상 최하위 우선순위였으나 저장소 소유자 요청으로 조기 포팅 완료 — 이 레이어가 의존하는 AngularJS 서비스(Attributes/UniversialManagerService 등)는 그 저장소 어디에도 정의돼 있지 않아 실사용 여부가 여전히 불명(이 skill이 다루는 UMP 소비 경로와는 별개). 포팅 과정에서 `updatePlayer()`의 zipPassword 삭제가 실제로는 원본이 아닌 복사본에 적용되지 않아 값이 그대로 새는 레거시 버그를 발견(Design 문서 §6) — 보안 관점 후속 확인 대상으로 기록만 하고 미수정.
 
 ## 핵심 파일 위치
 
@@ -306,12 +307,25 @@ ingest-daemon crash
 
 **신규 — `Camera.webrtcVideoOnly` (세션 부하 완화, 2026-07-15):** 위 재진입 가드 수정 후에도 TID-A800은 stall이 완전히 사라지지 않았음 — ping(0% 손실)과 AI 디코딩 멀티스레드화(`thread_type=AUTO`)로도 해결 안 됨, 진짜 원인은 카메라 자체의 동시 RTSP 세션 처리 한계였음(실측: 물리 카메라 1대당 세션 총량을 8→6으로 줄이자 양쪽 채널 모두 안정화). `PUT /api/cameras/:id { webrtcVideoOnly: true }`로 카메라별 audio+App RTP RTP 세션을 생략하고 AI+video만 유지(카메라당 세션 4→2) — mediasoup WHEP 소비자 쪽엔 오디오/데이터채널이 없다는 것만 다를 뿐 영상 재생엔 영향 없음. RTSP 세션 부하가 큰(동시 채널 다수 등록·저사양 인코더) 카메라에 적용. 소스: `server/src/services/webrtc/mediasoupEngine.js` `addCameraStream()` opts.videoOnly. 상세: `docs/design/Design_RTSP_Capture_Backend.md` §6.7.
 
+**버그 수정 — 고아 `startServer.js`가 정상 ingest-daemon을 반복적으로 죽이던 결함 (2026-07-28, §6.41):** 같은 워킹 디렉토리에 구버전 코드를 메모리에 올린 채 실행 중이던 `startServer.js` 고아 인스턴스가 있으면, 그 인스턴스의 재시작 로직(`_killPortOrphan()`)이 포트 점유 프로세스의 헬스체크 없이 `pkill -f 'ingest_daemon.py'`로 무조건 죽여 실제 서비스 중인 정상 데몬까지 반복적으로 죽이는 flapping이 발생할 수 있었음 — 수정: `_respawnIngest()`가 죽이기 전에 `GET /health` 실응답을 먼저 확인, 이미 건강하면 이 인스턴스는 물러남. **단, 이미 떠 있던 구버전 고아 프로세스에는 이 코드 수정이 적용되지 않으므로 직접 종료해야 함.**
+
+**아키텍처 변경 — HTTP 컨트롤플레인 프로세스 분리 + 스레드 수 축소 (2026-07-28, §6.42):** 위 수정 후에도 단일 정상 인스턴스에서 ingest-daemon 자체가 ~2.3분 간격으로 주기적 응답 불능(§6.10/§6.29.5 계열의 재발, 실측 CPU 245%·NLWP 127)에 빠지는 현상이 남아있었음. 라이브 SIGUSR1 스택 덤프로 확인한 결과 accept 스레드는 `select()`에서 유휴 상태(데드락 아님) — 그리고 실제 라이브 카메라로 demux()/decode() 개별 호출이 GIL을 정상적으로 놓아주는지 합성 테스트로 검증했으나(처리량 87~99% 유지, 초 단위 정지 없음) 단일 GIL 홀더는 찾지 못함(단, 실제 스레드 127개 규모의 GIL convoy 효과까지는 재현 못 함 — 원인 미확정). **근본 메커니즘을 확정 못해도 구조적으로 면역이 되는 길**을 택함:
+- **`ingest_health_proxy.py`(신규)** — `/health`만 담당하는 완전히 별도 프로세스가 외부 포트를 리슨. `ingest_daemon.py`의 기존 API 서버는 `127.0.0.1:<외부 포트+1>`(내부 전용, `INGEST_INTERNAL_HTTP_PORT`로 override)로 이동. `/health`는 daemon이 1초마다 갱신하는 heartbeat 파일 신선도만으로 즉답(daemon의 GIL/스케줄링 상태와 무관), 5초 넘게 stale이면 503(기존 watchdog의 재시작 로직 그대로 작동). 나머지 경로는 내부 포트로 투명 프록시. daemon 프로세스가 사라지면 프록시도 ~2~3초 내 자동 종료. **Node 측 코드 변경 전혀 불필요** — 외부 포트·응답 형식 100% 하위 호환.
+- **스레드 수 축소** — `AI_DECODE_THREADS_TOTAL`(주석 처리돼 사실상 무제한 `os.cpu_count()=40`이던 것을 `20`으로 명시), `INGEST_PUSH_WORKERS`(16→10), `INGEST_STOP_WORKERS`(8→4). `server/.env`+3개 `.env*.example` 전부 동기화.
+- 진단·수정 상세: `docs/design/Design_RTSP_Capture_Backend.md` §6.42.
+
 ### 환경변수
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `RTSP_READ_TIMEOUT` | `5` | PyAV 내부 watchdog 타임아웃(초). 불안정 네트워크에서는 10–15로 증가 |
 | `INGEST_WATCHDOG_ENABLED` | `true` | ingest-daemon `/health` 자동 감시(20초 간격, 2회 실패 시 자동 `ingest:restart`) 활성화 여부. **라이브 디버깅 목적으로만 일시적으로 `false`로** — 30분 지나면 `armDebugDisableSafetyNet()`이 값과 무관하게 강제 재활성화하므로 되돌리는 걸 잊어도 영구 방치되지는 않음(2026-07-27, §6.40) |
+| `AI_DECODE_THREADS_TOTAL` | `os.cpu_count()` | fleet-wide 네이티브 AI 디코드 스레드 총수 상한 — 카메라당 실제 thread_count = `min(AI_DECODE_THREADS, 이 값/활성 카메라수)`. 주석 처리 시 기본값이 그대로 코어 수라 카메라가 늘수록 비례 증가 — 명시적으로 낮춰 켤 것 권장 (2026-07-28, §6.42) |
+| `INGEST_PUSH_WORKERS` | `16` | 공유 JPEG/App-RTP push `ThreadPoolExecutor` 크기. 실사용량 대비 여유가 과한 편(2026-07-28, §6.42) |
+| `INGEST_STOP_WORKERS` | `8` | 카메라 teardown("stopper") `ThreadPoolExecutor` 크기 (2026-07-28, §6.42) |
+| `INGEST_HEALTH_PROXY_ENABLED` | `true` | `ingest_health_proxy.py` 분리 실행 여부. `false`면 예전처럼 ingest_daemon.py가 직접 외부 포트를 리슨(§6.42) |
+| `INGEST_INTERNAL_HTTP_PORT` | 외부 포트+1 | 프록시 활성 시 실제 API 서버가 리슨하는 loopback 전용 내부 포트 (2026-07-28, §6.42) |
+| `INGEST_HEARTBEAT_FILE` | `$TMPDIR/ingest-daemon-heartbeat.json` | `_stats_sampler()`가 1초마다 갱신하는 heartbeat 파일 경로 — 프록시의 `/health` 판단 근거 (2026-07-28, §6.42) |
 
 ### 수동 진단
 

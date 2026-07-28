@@ -235,6 +235,31 @@ async function main() {
         });
       }
 
+      // Whether the daemon holding ingestPort right now actually answers /health.
+      // _respawnIngest() only fires reactively from THIS instance's own spawned
+      // child exiting — if this instance is itself an orphan (its managed
+      // index.js already gone, e.g. a leftover generation of startServer.js
+      // from a prior deploy that was never fully stopped), it would otherwise
+      // retry forever and, on every attempt, unconditionally pkill whatever is
+      // on the port — including a perfectly healthy daemon that a DIFFERENT,
+      // live supervisor generation is actively serving traffic through. That
+      // exact scenario was reproduced live (2026-07-28): an orphaned
+      // 5-day-old startServer.js kept killing the current daemon out from
+      // under every camera every time its own dead child triggered a retry,
+      // producing a repeating full-fleet 0 fps outage. Checking health first
+      // and standing down when it's already good is what actually fixes the
+      // recovery process, rather than just killing today's specific orphan.
+      async function _isIngestHealthy() {
+        return new Promise((resolve) => {
+          const req = http.get(
+            { hostname: '127.0.0.1', port: ingestPort, path: '/health', timeout: 1500 },
+            (res) => { res.resume(); resolve(res.statusCode === 200); }
+          );
+          req.on('timeout', () => { req.destroy(); resolve(false); });
+          req.on('error', () => resolve(false));
+        });
+      }
+
       async function _killPortOrphan() {
         // Kill any process still holding ingestPort so the fresh spawn can bind.
         // `fuser -k` resolves the listening socket to a PID via /proc/<pid>/fd,
@@ -283,6 +308,16 @@ async function main() {
         console.warn(`[Start] ingest-daemon crashed — restarting in ${(delay / 1000).toFixed(1)}s (attempt #${_ingestRestartAttempts})`);
         await new Promise(r => setTimeout(r, delay));
         if (_shuttingDown) return;
+
+        // Another supervisor generation is already serving a healthy daemon on
+        // this port — stand down instead of killing it and racing to replace
+        // it with our own. See _isIngestHealthy() above for why this check
+        // exists at all.
+        if (await _isIngestHealthy()) {
+          console.warn(`[Start] ingest-daemon on :${ingestPort} is healthy (owned by another supervisor) — standing down, this instance will not manage it further`);
+          _ingestRestartAttempts = 0;
+          return;
+        }
 
         // Evict any orphan process left on the port before spawning a fresh daemon.
         await _killPortOrphan();

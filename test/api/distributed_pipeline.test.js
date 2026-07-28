@@ -39,6 +39,20 @@ async function post(path, payload) {
   return { status: res.status, body };
 }
 
+// TC-DAP-005/009 POST ad-hoc cameraIds straight to /api/analysis/frame without
+// ever registering a real Camera — analysisApi.js has no DELETE /api/cameras/:id
+// to hang cleanup off of for these, so without this call they sit in
+// _cameraContexts/_metrics.perCamera (visible on the Analysis Server Dashboard)
+// until the passive 5-minute idle-prune sweep catches them. Harmless against a
+// disposable test fixture, but this suite can also be pointed at a shared/live
+// analysis server (LTS_URL) — in that case those minutes are real pollution on
+// someone else's dashboard. /api/analysis/camera-removed already deletes both
+// maps by cameraId with no requirement that a Camera record ever existed, so
+// reusing it here closes the gap its own code comment calls out.
+async function cleanupCamera(cameraId) {
+  try { await post('/api/analysis/camera-removed', { cameraId }); } catch (_) { /* best-effort */ }
+}
+
 async function test(id, description, fn) {
   try {
     await fn();
@@ -112,18 +126,23 @@ async function main() {
     const tinyJpegBase64 =
       '/9j/4AAQSkZJRgABAQAAAQABAAD/2wCEAAkGBxAQEBAQEBAVFhUVFRUVFRUVFRUVFRUVFRUWFhUVFRUYHSggGBolGxUVITEhJSkrLi4uFx8zODMsNygtLisBCgoKDg0OGhAQGi0lHyUtLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLS0tLf/AABEIAAEAAQMBIgACEQEDEQH/xAAbAAABBQEBAAAAAAAAAAAAAAAFAAMEBgcBAv/EADgQAAIBAwMCBAMHAwQDAAAAAAECAwAEEQUSITEGE0FRImFxgZEykaGxwQcjQlJy0fAkQ2OC/8QAGQEBAQEBAQEAAAAAAAAAAAAAAAEDAgQF/8QAHxEBAQEBAQACAwEAAAAAAAAAAAERAhIhMUEDE1EU/9oADAMBAAIRAxEAPwD8NREQEREBERAREQEREBERAREQEREBERAREQEREBERAREQEREH//2Q==';
 
+    const cameraId = 'test-cam-distributed';
     const payload = {
-      cameraId: 'test-cam-distributed',
+      cameraId,
       frameId: 1,
       timestamp: new Date().toISOString(),
       frame: tinyJpegBase64,
       zones: [],
     };
-    const r = await post('/api/analysis/frame', payload);
-    assertEq(r.status, 200, 'analysis frame status');
-    assert(Array.isArray(r.body.detectedFaces), 'detectedFaces must be an array');
-    assert(Array.isArray(r.body.tracked), 'tracked must be an array');
-    assert(Array.isArray(r.body.behaviors), 'behaviors must be an array');
+    try {
+      const r = await post('/api/analysis/frame', payload);
+      assertEq(r.status, 200, 'analysis frame status');
+      assert(Array.isArray(r.body.detectedFaces), 'detectedFaces must be an array');
+      assert(Array.isArray(r.body.tracked), 'tracked must be an array');
+      assert(Array.isArray(r.body.behaviors), 'behaviors must be an array');
+    } finally {
+      await cleanupCamera(cameraId);
+    }
   });
 
   await test('TC-DAP-009', '다중 채널 동시 추론 시 cameraId 격리 (FR-DAP-027)', async () => {
@@ -144,27 +163,31 @@ async function main() {
       zones: [],
     });
 
-    // Send two frames from different cameras concurrently — validates that
-    // DetectionService._preprocess() does not share a mutable Float32Array
-    // buffer between concurrent requests (FR-DAP-027).
-    const [rA, rB] = await Promise.all([
-      post('/api/analysis/frame', makePayload(camAId, 1)),
-      post('/api/analysis/frame', makePayload(camBId, 1)),
-    ]);
+    try {
+      // Send two frames from different cameras concurrently — validates that
+      // DetectionService._preprocess() does not share a mutable Float32Array
+      // buffer between concurrent requests (FR-DAP-027).
+      const [rA, rB] = await Promise.all([
+        post('/api/analysis/frame', makePayload(camAId, 1)),
+        post('/api/analysis/frame', makePayload(camBId, 1)),
+      ]);
 
-    assertEq(rA.status, 200, 'camera A response status');
-    assertEq(rB.status, 200, 'camera B response status');
+      assertEq(rA.status, 200, 'camera A response status');
+      assertEq(rB.status, 200, 'camera B response status');
 
-    // Each response must echo back the cameraId that was sent —
-    // cross-channel contamination would cause a mismatch here.
-    assertEq(rA.body.cameraId, camAId, 'camera A response cameraId must match request');
-    assertEq(rB.body.cameraId, camBId, 'camera B response cameraId must match request');
+      // Each response must echo back the cameraId that was sent —
+      // cross-channel contamination would cause a mismatch here.
+      assertEq(rA.body.cameraId, camAId, 'camera A response cameraId must match request');
+      assertEq(rB.body.cameraId, camBId, 'camera B response cameraId must match request');
 
-    // Both responses must contain independent result arrays (not shared references)
-    assert(Array.isArray(rA.body.tracked), 'camera A tracked must be array');
-    assert(Array.isArray(rB.body.tracked), 'camera B tracked must be array');
-    assert(Array.isArray(rA.body.behaviors), 'camera A behaviors must be array');
-    assert(Array.isArray(rB.body.behaviors), 'camera B behaviors must be array');
+      // Both responses must contain independent result arrays (not shared references)
+      assert(Array.isArray(rA.body.tracked), 'camera A tracked must be array');
+      assert(Array.isArray(rB.body.tracked), 'camera B tracked must be array');
+      assert(Array.isArray(rA.body.behaviors), 'camera A behaviors must be array');
+      assert(Array.isArray(rB.body.behaviors), 'camera B behaviors must be array');
+    } finally {
+      await Promise.all([cleanupCamera(camAId), cleanupCamera(camBId)]);
+    }
   });
 
   console.log('\n─────────────────────────────────────────────────────');

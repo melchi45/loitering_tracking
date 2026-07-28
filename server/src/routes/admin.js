@@ -8,6 +8,7 @@ const TokenService   = require('../services/TokenService');
 const AuditService   = require('../services/AuditService');
 const TcRunnerService = require('../services/TcRunnerService');
 const ingestDaemonControl = require('../services/ingestDaemonControl');
+const { notifyAnalysisCameraRemoved } = require('../api/cameras');
 const { verifyAccessToken } = require('../middleware/auth');
 const { requireRole }       = require('../middleware/role');
 const { getSystemMetrics }  = require('../services/systemMetrics');
@@ -247,6 +248,39 @@ router.post('/ingest/restart', requireIngestDaemonBackend, async (req, res) => {
     console.error('[admin/ingest/restart]', err);
     AuditService.log({ event: 'ingest_daemon_restart', actorId: req.user.sub, detail: { ok: false, error: err.message } });
     res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// ── POST /admin/analysis/camera-removed ───────────────────────────────────────
+// Force-clears a channel from the remote Analysis server's per-camera state
+// (_cameraContexts/_metrics.perCamera in analysisApi.js) by cameraId, without
+// requiring a local Camera record to exist. DELETE /api/cameras/:id already
+// does this same notify as a side effect (server/src/api/cameras.js
+// _notifyAnalysisCameraRemoved) — but it 404s before ever reaching that call
+// when there's no matching local Camera, which is exactly the case for
+// ad-hoc/synthetic cameraIds a TC suite (or any other direct
+// POST /api/analysis/frame caller) may have pushed straight to the Analysis
+// server. Those previously had no operator-facing cleanup path short of
+// waiting out the Analysis server's 5-minute idle-prune sweep or a raw curl
+// against the remote host directly. Same underlying HTTP call as the DELETE
+// path, just reachable independently of local Camera existence, and awaited
+// here (unlike the fire-and-forget DELETE path) so the admin gets a real
+// success/failure result. streaming-mode only (mirrors
+// _notifyAnalysisCameraRemoved's own gate) — combined/analysis modes don't
+// forward to a separate Analysis server.
+router.post('/analysis/camera-removed', async (req, res) => {
+  const cameraId = req.body?.cameraId;
+  if (!cameraId || typeof cameraId !== 'string') {
+    return res.status(400).json({ success: false, error: 'cameraId is required' });
+  }
+  try {
+    const result = await notifyAnalysisCameraRemoved(cameraId);
+    AuditService.log({ event: 'analysis_camera_removed_forced', actorId: req.user.sub, detail: { cameraId, ...result } });
+    res.status(result.ok ? 200 : 502).json({ success: result.ok, cameraId, error: result.error });
+  } catch (err) {
+    console.error('[admin/analysis/camera-removed]', err);
+    AuditService.log({ event: 'analysis_camera_removed_forced', actorId: req.user.sub, detail: { cameraId, ok: false, error: err.message } });
+    res.status(500).json({ success: false, error: err.message });
   }
 });
 

@@ -712,18 +712,26 @@ class YouTubeStreamService {
         // empirically to eliminate the 403s entirely over a 60s continuous capture
         // that previously died within seconds without this.
         //
-        // -reconnect_on_network_error / -http_persistent 0 (2026-07-14): production
-        // logs showed recurring "[hls] keepalive request failed for
-        // https://...googlevideo.com/videoplayback/..." on long-lived captures — a
-        // TCP/TLS-level failure reusing a persistent connection for the next segment,
-        // NOT accompanied by an HTTP status code, so -reconnect_on_http_error above
-        // never catches it. The outer ffmpeg does -c:v copy (no re-encode), so any
-        // frame(s) lost/truncated at that segment boundary pass straight through as
-        // visible macroblock noise until the next I-frame. -http_persistent 0 removes
-        // the failure mode entirely (every segment gets a fresh connection, no
-        // keep-alive reuse to fail); -reconnect_on_network_error 1 is a safety net for
-        // any other connect-time TCP/TLS error.
-        '--downloader-args', 'ffmpeg_i:-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -reconnect_on_http_error 403,404,5xx -reconnect_on_network_error 1 -http_persistent 0',
+        // -reconnect_on_network_error (2026-07-14): production logs showed recurring
+        // "[hls] keepalive request failed for https://...googlevideo.com/videoplayback/..."
+        // on long-lived captures — a TCP/TLS-level failure reusing a persistent
+        // connection for the next segment, NOT accompanied by an HTTP status code, so
+        // -reconnect_on_http_error above never catches it. -reconnect_on_network_error 1
+        // is a safety net for that and any other connect-time TCP/TLS error.
+        //
+        // NOTE: this list originally also carried `-http_persistent 0` (meant to force
+        // fresh connections per segment and sidestep the keepalive failure above), but
+        // that broke every non-live video whose format selector resolves to separate
+        // video+audio (the `bestvideo+bestaudio` DASH branches above — the common case
+        // for VOD ≥480p) — for those, yt-dlp's ffmpeg downloader opens BOTH inputs in
+        // one process to mux them to our stdout pipe, and in that two-input shape
+        // `-http_persistent` fails hard with "Option http_persistent not found" instead
+        // of applying to either input (reproduced directly with yt-dlp 2026.07.04;
+        // indexed `ffmpeg_i1:`/`ffmpeg_i2:` targeting made no difference). Single-input
+        // is_live/HLS captures were never affected — only the dual-input DASH merge
+        // path is. Removed rather than reintroduced conditionally: no live probe exists
+        // before this yt-dlp invocation to gate it on is_live safely.
+        '--downloader-args', 'ffmpeg_i:-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5 -reconnect_on_http_error 403,404,5xx -reconnect_on_network_error 1',
         '-o', '-',           // output binary stream to stdout
         '--no-progress',     // suppress progress bars (keep errors/warnings visible)
         '--newline',         // one status line per update (easier parsing)

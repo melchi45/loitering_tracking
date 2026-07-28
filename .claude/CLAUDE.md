@@ -265,6 +265,7 @@ loitering_tracking/
 | POST | `/admin/ingest/start` | ingest-daemon 프로세스 시작 (이미 실행 중이면 no-op) — `CAPTURE_BACKEND=ingest-daemon`이 아니면 501, Design_Ingest_Daemon_Control.md |
 | POST | `/admin/ingest/stop` | ingest-daemon 프로세스 종료 (좀비 상태 포함 — `/health` 아닌 실제 포트 점유 여부로 판단) |
 | POST | `/admin/ingest/restart` | ingest-daemon 종료 후 재시작 + 카메라 재등록 (동기 응답, 최대 ~11초) |
+| POST | `/admin/analysis/camera-removed` | 원격 Analysis 서버의 특정 cameraId 채널을 강제 정리 (body: { cameraId }) — `DELETE /api/cameras/:id`도 같은 통지를 하지만 로컬에 Camera 레코드가 없으면 404로 끝나 절대 도달하지 못함(TC 스위트 등이 `POST /api/analysis/frame`에 임의 cameraId로 직접 보낸 채널이 대표 사례). streaming 모드 전용, 결과를 기다려 성공/실패 반환(`DELETE`의 fire-and-forget과 다름) |
 
 ### 카메라 (`/api/cameras`)
 
