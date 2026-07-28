@@ -48,7 +48,11 @@ const httpPort  = senv.HTTP_PORT || senv.PORT || '3080';
 
 export default defineConfig({
   plugins: [react()],
-  base: '/',
+  // GitHub Pages project pages are served from https://<user>.github.io/<repo>/,
+  // not the domain root, so asset URLs need the /<repo>/ prefix — only applied
+  // when building via .github/workflows/deploy-pages.yml (GITHUB_PAGES=true).
+  // Local dev and self-hosted production builds keep root-relative '/'.
+  base: process.env.GITHUB_PAGES === 'true' ? '/loitering_tracking/' : '/',
   define: {
     __LTS_HTTPS_PORT__: JSON.stringify(httpsPort),
     __LTS_HTTP_PORT__: JSON.stringify(httpPort),
