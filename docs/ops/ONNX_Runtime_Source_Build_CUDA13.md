@@ -457,6 +457,77 @@ powershell -ExecutionPolicy Bypass -File server/src/scripts/build-onnxruntime-so
 2. 스크립트가 `protobuf`를 git tag clone한 로컬 경로로 강제 주입하므로, 일반적으로 `protobuf-populate` patch 단계 자체를 우회
 3. 과거 실패 캐시가 남아 있으면 `onnxruntime/build/Windows/Release`를 정리 후 재시도
 
+### 증상 H: `js/node` 네이티브 애드온 빌드 단계에서 `Visual Studio 17 2022 could not find any instance` 또는 잘못된 VS 버전이 선택됨
+
+대표 로그:
+
+```
+cmake-js ... generator="Visual Studio 17 2022"
+... could not find any instance of Visual Studio.
+```
+
+원인:
+
+- `[3c/4]` 단계(`node ./script/build --config=Release --use_cuda ...`)는 `cmake-js`를 내부적으로 호출하며, `cmake-js`는 VS 설치 버전을 자동 탐지합니다.
+- 호스트에 VS 2022 외에 다른 버전(예: VS Insiders 미리보기)이 함께 설치된 경우, 자동 탐지가 C++ 툴셋이 미설치된 버전을 우선 선택해 실패할 수 있습니다.
+
+조치:
+
+1. 빌드 단계 진입 전 `npm_config_msvs_version` 환경변수를 `2022`로 강제 지정(`cmake-js`는 `npm_config_*` 환경변수를 npm config로 읽음):
+
+```powershell
+$env:npm_config_msvs_version = "2022"
+npm run build-ort:auto
+```
+
+2. `buildOrtWithCuda.js`/`build-onnxruntime-source.windows.ps1`의 최신 버전은 이 환경변수를 `[3c/4]` 단계 진입 전에 자동으로 설정합니다 — 별도 조치 없이 최신 스크립트를 사용하면 자동 해결됩니다.
+
+### 증상 I: `--dll_deps`/`--onnxruntime-generator` 인자 전달 시 경로가 손상되거나 공백 포함 경로에서 CLI 파싱 실패
+
+대표 증상: `CUDA_HOME`이 `C:\Program Files\NVIDIA GPU Computing Toolkit\...`처럼 공백을 포함하는 경우, `js/node`의 네이티브 빌드 CLI에 `--dll_deps=<...>` 같은 인자를 그대로 전달하면 Node의 `spawnSync(..., { shell: true })`가 내부적으로 공백 기준 토큰화를 수행해 경로가 잘리며(따옴표로 감싸지 않음) CLI 파싱이 깨집니다.
+
+조치:
+
+- 최신 Windows 빌드 스크립트는 이 인자를 사용하지 않고, 빌드 성공 후 스크립트가 직접 `Copy-Item`으로 `onnxruntime_providers_cuda.dll` / `onnxruntime_providers_shared.dll` / CUDA·cuDNN 런타임 dll을 `js/node/bin/napi-v6/win32/x64/`에 복사합니다(설계 근거: `docs/design/Design_AI_CUDA_Acceleration.md` §12.2).
+- 직접 CLI를 호출해야 하는 커스텀 스크립트를 작성한다면, 공백이 포함된 경로는 `spawnSync(cmd, args, { shell: false })`로 호출하거나 8.3 단축 경로(`C:\PROGRA~1\...`)를 사용해 회피합니다.
+
+### 증상 J: 재빌드 시 이전 실패의 stale CMakeCache로 인해 옵션 변경이 반영되지 않음
+
+증상:
+
+- `CudaArch`, `-DCMAKE_CUDA_ARCHITECTURES` 등 옵션을 변경해도 이전 실패 시점의 설정이 계속 적용됨
+
+원인:
+
+- `onnxruntime/build/Windows/Release/CMakeCache.txt`가 이전 실패한 구성을 그대로 보존하며, CMake는 기본적으로 캐시된 값을 우선합니다.
+
+조치:
+
+1. 재시도 전 빌드 디렉토리를 정리:
+
+```powershell
+Remove-Item -Recurse -Force "D:\src\onnxruntime\build\Windows\Release"
+```
+
+2. 그 후 `npm run build-ort:auto` 또는 `build-ort-source:windows`를 다시 실행합니다.
+
+### 증상 K: 빌드/링크는 성공했으나 실행 시 `InferenceSession.create()`가 `Invalid handle. Cannot load symbol cudnnCreate`로 실패
+
+증상:
+
+- 빌드 로그에 오류 없이 종료되고 `onnxruntime_providers_cuda.dll` 및 모든 CUDA/cuDNN dll이 `bin/napi-v6/win32/x64/`에 물리적으로 존재함에도, `ONNX_CUDA=1`로 서버를 시작하면 세션 생성 시점에 `Invalid handle. Cannot load symbol cudnnCreate` 오류가 발생
+
+원인:
+
+- `onnxruntime_providers_cuda.dll`은 실행 중 `LoadLibrary("cudnn64_9.dll")`처럼 파일명만으로 종속 dll을 동적 로드합니다.
+- Windows 기본 DLL 검색 순서는 프로세스 실행 파일(node.exe)의 폴더와 PATH부터 시작하며, 애드온 자신이 위치한 폴더(`bin/napi-v6/win32/x64/`)는 포함하지 않습니다 — 이는 빌드 시점이 아닌 **실행 시점**의 문제입니다.
+
+조치:
+
+- `server/src/utils/onnxDllPath.js`의 `ensureOnnxCudaDllPath()`가 `server/src/index.js`에서 dotenv 로드 직후, 다른 모든 서비스가 ONNX 세션을 생성하기 전에 1회 호출되어야 합니다 — 이 함수가 `require.resolve('onnxruntime-node/package.json')` 기준으로 애드온 dll 폴더를 계산해 `process.env.PATH` 맨 앞에 추가합니다.
+- 이미 최신 `server/src/index.js`에 반영되어 있으므로, 이 증상이 재발하면 먼저 `server/src/index.js` 상단에서 `ensureOnnxCudaDllPath()` 호출 순서(다른 require보다 먼저인지)를 확인합니다.
+- 검증: `npm run restart` 후 시작 로그에서 `[onnxOptions] mode=cuda ... providers=["cuda","cpu"]`가 모든 AI 서비스(detection/face/ppe/fire-smoke/cloth/appearance-reid/age/gender)에 대해 출력되는지 확인합니다.
+
 ---
 
 ## 운영 권장사항
@@ -484,3 +555,4 @@ powershell -ExecutionPolicy Bypass -File server/src/scripts/build-onnxruntime-so
 | 1.1 | 2026-07-27 | LTS Engineering Team | cuDNN-CUDA 버전 불일치 해결 섹션 추가 (`ensure-cuda` 스크립트, 자동 설치 옵션, 직접 실행 예시, 증상 A-0 장애 대응) |
 | 1.1 | 2026-07-27 | LTS Engineering Team | cuDNN-CUDA 버전 불일치 해결 섹션 추가 (`ensure-cuda` 스크립트, 자동 설치 옵션, 직접 실행 예시) |
 | 1.2 | 2026-07-27 | LTS Engineering Team | cuDNN 미설치 자동 설치 섹션 추가 (`ensure-cudnn.windows.ps1`, pip `nvidia-cudnn-cuXX` 패키지 기반, NVIDIA 로그인 불필요) |
+| 1.3 | 2026-07-28 | LTS Engineering Team | Windows 네이티브 애드온 빌드/실행 장애 대응 4건 추가 — 증상 H(cmake-js VS 버전 오탐지), 증상 I(`--dll_deps` 인자 공백 경로 손상), 증상 J(stale CMakeCache 미반영), 증상 K(빌드 성공 후에도 실행 시 CUDA EP 로드 실패 — onnxDllPath.js 런타임 DLL 검색 경로 보정) |

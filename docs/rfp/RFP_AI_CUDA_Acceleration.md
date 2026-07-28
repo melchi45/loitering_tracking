@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | Document ID | RFP-LTS-AI-CUDA-01 |
-| Version | 1.2 |
+| Version | 1.3 |
 | Status | Approved |
-| Date | 2026-06-26 |
+| Date | 2026-07-28 |
 | Program | LTS-2026 |
 
 ---
@@ -51,6 +51,7 @@ Current deployments require lower end-to-end inference latency and higher concur
 - FR-07: System shall provide a CLI script (`npm run check:gpu`) that diagnoses CUDA/DML/CPU provider availability and prints a structured report with a recommended provider.
 - FR-08: System shall support multi-camera batch inference by grouping concurrent JPEG frames into a single `detectBatch()` call, controlled by `BATCH_MAX_SIZE` and `BATCH_MAX_WAIT_MS` environment variables.
 - FR-09: If batch inference fails, system shall fall back to per-frame inference without service interruption.
+- FR-10: On Windows, where the official prebuilt `onnxruntime-node` package does not expose a CUDA execution provider, the system shall provide a documented, repeatable source-build procedure that produces a CUDA-enabled native addon, and the runtime shall correctly resolve that addon's CUDA/cuDNN dynamic-link dependencies so the resulting build is actually usable (not merely present on disk).
 
 ---
 
@@ -60,6 +61,7 @@ Current deployments require lower end-to-end inference latency and higher concur
 - NFR-02: Startup logs shall show selected provider mode.
 - NFR-03: Error messages shall clearly identify CUDA failure and fallback behavior.
 - NFR-04: Startup diagnostics shall prevent repeated provider failure noise by pre-disabling unavailable providers.
+- NFR-05: The Windows CUDA source-build procedure shall be verifiable by a real inference smoke test, not solely by a successful build exit code.
 
 ---
 
@@ -82,6 +84,7 @@ Current deployments require lower end-to-end inference latency and higher concur
 - AC-05: `npm run check:gpu` executes successfully (exit code 0) and outputs CUDA/DML/CPU provider status with a recommended provider string.
 - AC-06: With `BATCH_MAX_SIZE=4`, four concurrent camera frames are processed in a single `detectBatch()` call.
 - AC-07: `detectBatch()` failure triggers automatic per-frame fallback with no service downtime.
+- AC-08: A Windows host without a CUDA-capable `onnxruntime-node` prebuilt can follow the documented source-build procedure and, after a runtime DLL-search-path correction, load an ONNX session with `providers=["cuda","cpu"]` and successfully execute real inference.
 
 ---
 
@@ -97,6 +100,10 @@ Current deployments require lower end-to-end inference latency and higher concur
 - Added multi-camera batch inference requirement (FR-08, AC-06).
 - Added batch fallback requirement (FR-09, AC-07).
 
+## SDLC Amendment (v1.3)
+
+- Added Windows CUDA source-build and runtime DLL-search-path requirement (FR-10, NFR-05, AC-08), reflecting the custom `onnxruntime-node` build pipeline and `onnxDllPath.js` runtime fix validated via a live analysis-mode server run (all AI services confirmed `providers=["cuda","cpu"]`).
+
 ---
 
 ## Revision History
@@ -106,3 +113,4 @@ Current deployments require lower end-to-end inference latency and higher concur
 | 1.0 | 2026-06-05 | 초기 작성 |
 | 1.1 | 2026-06-05 | 시작 진단(FR-05), Windows DML 자동 선택(FR-06), provider 사전 비활성화(NFR-04) 추가 |
 | 1.2 | 2026-06-26 | Provider 진단 CLI(FR-07, AC-05), 멀티카메라 배치 추론(FR-08, AC-06), 배치 fallback(FR-09, AC-07) 추가 |
+| 1.3 | 2026-07-28 | Windows CUDA 소스 빌드 및 런타임 DLL 경로 보정 요구사항(FR-10, NFR-05, AC-08) 추가 |

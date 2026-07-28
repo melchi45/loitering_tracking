@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | Document ID | TC-LTS-AI-CUDA-01 |
-| Version | 1.2 |
+| Version | 1.3 |
 | Status | Active |
-| Date | 2026-06-26 |
+| Date | 2026-07-28 |
 | Parent SRS | srs/SRS_AI_CUDA_Acceleration.md |
 
 ---
@@ -80,15 +80,23 @@ Validate provider selection and fallback behavior with environment-driven startu
 
 ---
 
-## 9. Exit Criteria
+## 9. Test Group H - Windows CUDA Source Build & Runtime DLL Path
 
-- All A/B/C/D/E/F/G groups pass in at least one Windows and one Linux validation environment.
-- No REST/Socket contract regressions in smoke tests.
-- TC-BATCH 그룹은 `test/api/batch_inference.test.js`로 Jest 자동화 실행.
+- TC-CUDA-H-001: `ensureOnnxCudaDllPath()` — Windows에서 `onnxruntime-node` 애드온 폴더(`bin/napi-v6/win32/x64`)를 `process.env.PATH` 맨 앞에 정확히 1회 추가(2회 호출해도 중복 삽입되지 않음, idempotent). non-Windows 플랫폼 또는 `onnxruntime-node` 미설치 시 no-op.
+- TC-CUDA-H-002 (수동/현장 검증, Jest 미자동화): Windows CUDA 소스 빌드(`npm run build-ort:auto` 또는 `build-ort-source:windows`)로 생성된 `onnxruntime-node` 애드온으로 `InferenceSession.create(model, {executionProviders:['cuda','cpu']})` + `session.run()` 실제 추론이 성공하고, 서버 부팅 로그에 모든 AI 서비스 `providers=["cuda","cpu"]`가 표시됨을 확인.
 
 ---
 
-## 10. SDLC Amendment (v1.1)
+## 10. Exit Criteria
+
+- All A/B/C/D/E/F/G/H groups pass in at least one Windows and one Linux validation environment (H group's TC-CUDA-H-002 is Windows-only by definition).
+- No REST/Socket contract regressions in smoke tests.
+- TC-BATCH 그룹은 `test/api/batch_inference.test.js`로 Jest 자동화 실행.
+- TC-CUDA-H-001은 `test/api/onnx_dll_path.test.js`로 Jest 자동화 실행(비-Windows 실행 환경에서는 no-op 분기만 검증). TC-CUDA-H-002는 실제 CUDA GPU가 있는 Windows 호스트에서 수동/현장 검증으로 수행.
+
+---
+
+## 11. SDLC Amendment (v1.1)
 
 - Added startup diagnostics verification coverage (TC-CUDA-E-001/002).
 - Added Windows DML policy verification coverage (TC-CUDA-E-003/004).
@@ -101,9 +109,15 @@ Validate provider selection and fallback behavior with environment-driven startu
 - Updated exit criteria to include F/G groups and Jest automation note.
 - Updated SRS-to-TC mapping for FR-CUDA-014..021.
 
+## SDLC Amendment (v1.3)
+
+- Added TC-CUDA-H group for Windows CUDA source-build verification and `onnxDllPath.js` runtime DLL-search-path correction (FR-CUDA-022/023).
+- Added Jest automation reference `test/api/onnx_dll_path.test.js` and clarified TC-CUDA-H-002 as a manual/field Windows-only verification step.
+- Updated exit criteria and SRS-to-TC mapping.
+
 ---
 
-## 11. SRS-to-TC Mapping
+## 12. SRS-to-TC Mapping
 
 | SRS Requirement | Mapped TC(s) |
 |---|---|
@@ -128,6 +142,8 @@ Validate provider selection and fallback behavior with environment-driven startu
 | FR-CUDA-019 | TC-BATCH-005 |
 | FR-CUDA-020 | TC-BATCH-006, TC-BATCH-007 |
 | FR-CUDA-021 | TC-BATCH-008 |
+| FR-CUDA-022 | TC-CUDA-H-002 |
+| FR-CUDA-023 | TC-CUDA-H-001 |
 
 ---
 
@@ -138,3 +154,4 @@ Validate provider selection and fallback behavior with environment-driven startu
 | 1.0 | 2026-06-05 | 초기 작성 |
 | 1.1 | 2026-06-05 | TC-CUDA-E 그룹(시작 진단, DML 정책) 추가, 종료 기준 업데이트 |
 | 1.2 | 2026-06-26 | TC-BATCH 그룹(F, TC-BATCH-001~008), TC-GPU 그룹(G, TC-GPU-001~005) 추가, SRS-to-TC 매핑 확장 (FR-CUDA-014~021) |
+| 1.3 | 2026-07-28 | TC-CUDA-H 그룹(Windows CUDA 소스 빌드 검증, onnxDllPath.js 런타임 DLL 경로 보정, FR-CUDA-022~023) 추가, test/api/onnx_dll_path.test.js Jest 자동화 참조 추가 |

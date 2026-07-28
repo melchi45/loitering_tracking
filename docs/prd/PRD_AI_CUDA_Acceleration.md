@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | Document ID | PRD-LTS-AI-CUDA-01 |
-| Version | 1.2 |
+| Version | 1.3 |
 | Status | Active |
-| Date | 2026-06-26 |
+| Date | 2026-07-28 |
 | Parent RFP | rfp/RFP_AI_CUDA_Acceleration.md |
 
 ---
@@ -35,6 +35,7 @@ Provide a stable CUDA acceleration path for ONNX inference in LTS-2026 video ana
 - PR-07: A CLI tool (`npm run check:gpu`) shall diagnose GPU provider availability and print a recommended provider without requiring server startup.
 - PR-08: Multi-camera batch inference shall group concurrent JPEG frames into a single `detectBatch()` call, reducing GPU kernel invocation overhead.
 - PR-09: Batch inference failure shall fall back gracefully to per-frame inference with no service downtime.
+- PR-10: On Windows hosts where the official `onnxruntime-node` prebuilt package lacks a CUDA execution provider, a documented source-build procedure shall produce a CUDA-enabled native addon, and the runtime shall be corrected so that addon's CUDA/cuDNN dependencies actually load (not merely exist on disk).
 
 ---
 
@@ -47,6 +48,7 @@ Provide a stable CUDA acceleration path for ONNX inference in LTS-2026 video ana
 - SM-05: `npm run check:gpu` completes with exit code 0 and displays CUDA/DML/CPU status and a recommended provider.
 - SM-06: With `BATCH_MAX_SIZE=4`, four concurrent camera frames are processed in a single `detectBatch()` call.
 - SM-07: `detectBatch()` failure triggers automatic single-frame fallback without service interruption.
+- SM-08: Following the documented Windows source-build procedure, every AI service (detection, face, PPE, fire/smoke, cloth, appearance Re-ID, age, gender) reports `providers=["cuda","cpu"]` at startup and produces real inference output on a live server run.
 
 ---
 
@@ -78,6 +80,10 @@ Provide a stable CUDA acceleration path for ONNX inference in LTS-2026 video ana
 - Added multi-camera batch inference product requirement (PR-08, SM-06).
 - Added batch fallback product requirement (PR-09, SM-07).
 
+## SDLC Amendment (v1.3)
+
+- Added Windows CUDA source-build product requirement (PR-10, SM-08), confirmed via a live analysis-mode server run showing `providers=["cuda","cpu"]` across all AI services.
+
 ---
 
 ## Revision History
@@ -87,3 +93,4 @@ Provide a stable CUDA acceleration path for ONNX inference in LTS-2026 video ana
 | 1.0 | 2026-06-05 | 초기 작성 |
 | 1.1 | 2026-06-05 | provider-aware 시작 진단 범위 확장, Windows DML 자동 선택, 시작 로그 가시성 추가 |
 | 1.2 | 2026-06-26 | Provider 진단 CLI(PR-07, SM-05), 멀티카메라 배치 추론(PR-08, SM-06), 배치 fallback(PR-09, SM-07) 추가 |
+| 1.3 | 2026-07-28 | Windows CUDA 소스 빌드 제품 요구사항(PR-10, SM-08) 추가 |

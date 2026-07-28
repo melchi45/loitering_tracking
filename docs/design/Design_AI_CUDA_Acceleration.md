@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | Document ID | DESIGN-LTS-AI-CUDA-01 |
-| Version | 1.4 |
+| Version | 1.6 |
 | Status | Active |
 | Date | 2026-07-28 |
 | Parent SRS | srs/SRS_AI_CUDA_Acceleration.md |
@@ -28,6 +28,57 @@ server/src/index.js
   -> enumerate listSupportedBackends once
   -> pre-disable unavailable CUDA/DML providers
 ```
+
+### 1.1 Provider 선택 흐름도 (CPU / DML / CUDA) — v1.4
+
+`getOnnxSessionOptions()` / `createOnnxSession()` (server/src/utils/onnxOptions.js)의 실제 분기 로직을 그대로 반영한 흐름도입니다.
+
+```mermaid
+flowchart TD
+    Start([서버 시작 / 세션 생성 요청]) --> Boot{"index.js 시작 시\nrunOnnxStartupDiagnostics()\n1회 실행"}
+
+    Boot --> BootCudaCheck{"ONNX_CUDA=1\n이고\nlistSupportedBackends()에\ncuda 없음?"}
+    BootCudaCheck -- Yes --> DisableCuda["_cudaDisabledForRuntime = true\n(이후 모든 세션 CUDA 건너뜀)"]
+    BootCudaCheck -- No --> BootDmlCheck
+
+    BootDmlCheck{"ONNX_CUDA≠1\n이고 Windows\n이고 dml 없음?"}
+    DisableCuda --> BootDmlCheck
+    BootDmlCheck -- Yes --> DisableDml["_dmlDisabledForRuntime = true\n(이후 모든 세션 DML 건너뜀)"]
+    BootDmlCheck -- No --> Ready
+
+    DisableDml --> Ready(["세션 생성 준비 완료"])
+
+    Ready --> ReqCuda{"ONNX_CUDA=1 ?"}
+
+    ReqCuda -- Yes --> CudaDisabled{"_cudaDisabledForRuntime\n== true ?"}
+    CudaDisabled -- No --> UseCuda["providers = ['cuda','cpu']\nmode=cuda"]
+    CudaDisabled -- Yes --> UseCpuOnly1["providers = ['cpu']\nmode=cpu(cuda-disabled)"]
+
+    ReqCuda -- No --> IsWin{"process.platform\n== 'win32' ?"}
+    IsWin -- No --> UseCpuOnly2["providers = ['cpu']\nmode=dev/prod"]
+    IsWin -- Yes --> DmlDisabled{"_dmlDisabledForRuntime\n== true ?"}
+    DmlDisabled -- No --> UseDml["providers = ['dml','cpu']\nmode=dml"]
+    DmlDisabled -- Yes --> UseCpuOnly2
+
+    UseCuda --> Create["ort.InferenceSession.create(model, options)"]
+    UseDml --> Create
+    UseCpuOnly1 --> Create
+    UseCpuOnly2 --> Create
+
+    Create --> CreateOk{"create() 성공?\n(활성 EP에 cuda/dml 포함?)"}
+    CreateOk -- "성공 + 요청 EP 그대로 활성" --> Done(["세션 반환 — 요청한 EP로 추론"])
+    CreateOk -- "성공하지만 EP가\n조용히 cpu로 교체됨" --> MarkDisabled["해당 EP를 Disabled로 표시\n(다음 세션부터 즉시 cpu 분기)"] --> Done
+    CreateOk -- "예외 발생" --> Strict{"ONNX_CUDA_STRICT=1\n이고 CUDA 요청?"}
+    Strict -- Yes --> Throw(["예외 재발생 — 서비스 로드 실패"])
+    Strict -- No --> Retry["CPU provider로만 재시도\n('[logTag] Retrying with CPU provider')"] --> Done
+```
+
+**핵심 포인트**
+
+- 백엔드 가용성 점검은 서버 시작 시 **1회**(`runOnnxStartupDiagnostics`)만 수행되고, 이후 모든 세션 생성은 그 결과(`_cudaDisabledForRuntime`/`_dmlDisabledForRuntime` 플래그)를 재사용한다 — 매 세션마다 반복 진단하지 않는다.
+- `ONNX_CUDA=1`이 최우선이며, Windows에서 `ONNX_CUDA`가 설정되지 않은 경우에만 DML이 기본으로 선택된다. CUDA와 DML을 동시에 시도하지는 않는다.
+- `InferenceSession.create()`가 예외 없이 성공해도 ORT 빌드에 따라 요청한 EP가 조용히 cpu로 대체될 수 있어, 활성 `session.executionProviders`를 확인해 실제로 EP가 적용됐는지 재검증한다.
+- `ONNX_CUDA_STRICT=1`은 CUDA 요청이 실패했을 때만 의미가 있으며, 이 경우 CPU 폴백 없이 즉시 예외를 던져 운영자가 명시적으로 실패를 인지하도록 한다.
 
 ---
 
@@ -200,6 +251,16 @@ npm run check:gpu
 | FR-CUDA-011 | TC-CUDA-E-001 | listSupportedBackends visibility at boot |
 | FR-CUDA-012 | TC-CUDA-E-003 | Windows DML-first provider policy |
 | FR-CUDA-013 | TC-CUDA-E-004 | DML pre-disable + CPU fallback continuity |
+| FR-CUDA-014 | TC-GPU-001, TC-GPU-002, TC-GPU-003 | Provider 가용성 진단 구조 검증 |
+| FR-CUDA-015 | TC-GPU-004 | 배치 추론 환경변수 반영 |
+| FR-CUDA-016 | TC-GPU-005 | checkGpuProviders CLI 스크립트 정상 실행 |
+| FR-CUDA-017 | TC-BATCH-001, TC-BATCH-002, TC-BATCH-003 | BatchDetectionQueue enqueue/flush 동작 |
+| FR-CUDA-018 | TC-BATCH-004 | BATCH_MAX_WAIT_MS 타임아웃 플러시 |
+| FR-CUDA-019 | TC-BATCH-005 | detectBatch() 실패 시 단건 fallback |
+| FR-CUDA-020 | TC-BATCH-006, TC-BATCH-007 | detectBatch() 배치 텐서 shape 및 결과 수 검증 |
+| FR-CUDA-021 | TC-BATCH-008 | supportsBatch 초기값 |
+| FR-CUDA-022 | TC-CUDA-H-002 | Windows CUDA 소스 빌드 파이프라인 (§12.2) |
+| FR-CUDA-023 | TC-CUDA-H-001 | onnxDllPath.js 런타임 DLL 검색 경로 보정 (§12.3, §1.1) |
 
 ---
 
@@ -300,16 +361,6 @@ cuDNN cudnnCudaVersion   vs   CUDA Toolkit version
 | `server/src/scripts/ensure-cuda-toolkit.windows.ps1` | CUDA Toolkit 버전별 자동 설치 (Windows 전용) |
 
 ---
-| FR-CUDA-014 | TC-GPU-001, TC-GPU-002, TC-GPU-003 | Provider 가용성 진단 구조 검증 |
-| FR-CUDA-015 | TC-GPU-004 | 배치 추론 환경변수 반영 |
-| FR-CUDA-016 | TC-GPU-005 | checkGpuProviders CLI 스크립트 정상 실행 |
-| FR-CUDA-017 | TC-BATCH-001, TC-BATCH-002, TC-BATCH-003 | BatchDetectionQueue enqueue/flush 동작 |
-| FR-CUDA-018 | TC-BATCH-004 | BATCH_MAX_WAIT_MS 타임아웃 플러시 |
-| FR-CUDA-019 | TC-BATCH-005 | detectBatch() 실패 시 단건 fallback |
-| FR-CUDA-020 | TC-BATCH-006, TC-BATCH-007 | detectBatch() 배치 텐서 shape 및 결과 수 검증 |
-| FR-CUDA-021 | TC-BATCH-008 | supportsBatch 초기값 |
-
----
 
 ## 12. Windows CUDA 소스 빌드 및 런타임 DLL 검색 경로 (v1.4)
 
@@ -361,3 +412,5 @@ cuDNN cudnnCudaVersion   vs   CUDA Toolkit version
 | 1.2 | 2026-06-26 | 멀티카메라 배치 추론 아키텍처 (§9), Provider 가용성 진단 (§10), providerDiagnostics.js·batchDetectionQueue.js 파일 설계 추가, 배치 환경변수 문서화, RTM 확장 (FR-CUDA-014~021) |
 | 1.3 | 2026-07-27 | CUDA Toolkit 자동 설치 지원 (§11): cudnnCudaVersion 필드, --ensure-cuda 옵션, ensure-cuda-toolkit.windows.ps1, 다운로드 진행 표시 설계 추가 |
 | 1.4 | 2026-07-28 | Windows CUDA 소스 빌드 파이프라인 및 런타임 DLL 검색 경로 이슈 (§12) 추가: cmake-js VS 자동탐지 강제 지정, --dll_deps 인자 손상 우회(직접 Copy-Item), onnxDllPath.js 런타임 PATH 보정 |
+| 1.5 | 2026-07-28 | CPU/DML/CUDA Provider 선택 흐름도(§1.1, Mermaid) 추가 — onnxOptions.js의 실제 분기 로직(startup diagnostics, 세션별 provider 결정, 조용한 EP 교체 감지, strict 모드) 반영. analysis 모드 서버 실제 기동으로 CUDA EP 정상 동작 재검증(모든 AI 서비스 providers=["cuda","cpu"]) |
+| 1.6 | 2026-07-28 | RTM(§8)에 흩어져 있던 FR-CUDA-014~021 행을 §8 표로 통합 정리하고 FR-CUDA-022(Windows CUDA 소스 빌드)·FR-CUDA-023(onnxDllPath.js 런타임 DLL 경로 보정) 행 추가(§12 연결). SRS v1.3·RFP v1.3·PRD v1.3·TC v1.3(신규 TC-CUDA-H 그룹) 상위 문서 동기화 |
