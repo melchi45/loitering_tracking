@@ -1,0 +1,71 @@
+name: Deploy client to GitHub Pages
+
+# Builds client/ (Vite/React) and publishes the static bundle to GitHub Pages.
+# NOTE: this only hosts the static UI shell — the Node.js backend (Express API,
+# Socket.IO, MediaMTX/WebRTC, MongoDB/JSON DB) is NOT deployed by this workflow.
+# GitHub Pages can only serve static files, so every relative `/api/*` and
+# `/socket.io` call the client makes will 404 unless a real LTS-2026 backend is
+# reachable and the client is reconfigured (VITE_API_URL, CORS) to call it.
+# See docs/ops/ for backend deployment options (docker-deploy skill).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'client/**'
+      - '.github/workflows/deploy-pages.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Allow only one concurrent deployment, skipping runs queued between the run
+# in-progress and the latest queued.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Build (project-page base path)
+        working-directory: client
+        env:
+          GITHUB_PAGES: 'true'
+        run: npm run build
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: client/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
