@@ -99,6 +99,44 @@ function LayoutPicker({ current, onChange }: { current: LayoutId; onChange: (id:
   );
 }
 
+// ── ICE Test Result intensity graph ─────────────────────────────────────────
+// Same visual idiom as AnalysisServerDashboard's det/face/loiter/fire cells — each
+// category's opacity is scaled against its own max-plausible value so the four
+// counts (local/STUN/TURN candidates + unreachable servers) are readable at a glance.
+const ICE_RESULT_META: Record<'host' | 'srflx' | 'relay' | 'failed', { label: string; rgb: string; title: string }> = {
+  host:   { label: 'H', rgb: '56,189,248',  title: 'host (local)' },
+  srflx:  { label: 'S', rgb: '52,211,153',  title: 'srflx (STUN)' },
+  relay:  { label: 'R', rgb: '167,139,250', title: 'relay (TURN)' },
+  failed: { label: '!', rgb: '244,63,94',   title: 'unreachable server(s)' },
+};
+
+function IceResultIntensity({ stats }: { stats: { host: number; srflx: number; relay: number; failed: number } }) {
+  // Reasonable per-category ceilings for opacity scaling (candidate counts rarely exceed these)
+  const maxima = { host: 6, srflx: 4, relay: 4, failed: 3 };
+  return (
+    <div className="flex items-center gap-1.5">
+      {(Object.keys(ICE_RESULT_META) as Array<keyof typeof ICE_RESULT_META>).map((key) => {
+        const meta = ICE_RESULT_META[key];
+        const value = stats[key];
+        const max = maxima[key];
+        const intensity = max > 0 ? Math.min(1, value / max) : 0;
+        const alpha = value > 0 ? 0.18 + intensity * 0.72 : 0.05;
+        return (
+          <div key={key} className="flex flex-col items-center gap-0.5" title={`${meta.title}: ${value}`}>
+            <div
+              className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-[10px] font-semibold text-slate-100"
+              style={{ backgroundColor: `rgba(${meta.rgb},${alpha})`, border: '1px solid rgba(255,255,255,0.08)' }}
+            >
+              {meta.label}
+            </div>
+            <span className="text-[9px] tabular-nums text-gray-400">{value}</span>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function SettingsModal({ onClose, serverMode }: { onClose: () => void; serverMode: string | null }) {
   const { lang, setLang, t } = useI18n();
   const webrtcStore = useWebRTCConfigStore();
@@ -117,6 +155,10 @@ function SettingsModal({ onClose, serverMode }: { onClose: () => void; serverMod
   const [iceRunning,    setIceRunning]    = useState(false);
   const [iceLog,        setIceLog]        = useState<string[]>([]);
   const [iceFailedUrls, setIceFailedUrls] = useState<string[]>([]);  // STUN URLs that errored
+  // Phase 1 candidate counts, lifted into state so the Result can be rendered as an
+  // intensity graph (same visual idiom as the Analysis Server Dashboard's det/face/loiter cells)
+  // instead of only appearing as plain-text log lines.
+  const [iceCandidateStats, setIceCandidateStats] = useState<{ host: number; srflx: number; relay: number; failed: number } | null>(null);
   const iceLogRef   = useRef<HTMLTextAreaElement>(null);
   const iceAbortRef = useRef(false);
 
@@ -159,6 +201,7 @@ function SettingsModal({ onClose, serverMode }: { onClose: () => void; serverMod
   async function runIceTest() {
     setIceRunning(true);
     setIceFailedUrls([]);
+    setIceCandidateStats(null);
     iceAbortRef.current = false;
     const lines: string[] = [];
     const ts = () => new Date().toISOString().slice(11, 23);
@@ -237,6 +280,7 @@ function SettingsModal({ onClose, serverMode }: { onClose: () => void; serverMod
       const hostN  = gathered.filter(c => c.type === 'host').length;
       const srflxN = gathered.filter(c => c.type === 'srflx').length;
       const relayN = gathered.filter(c => c.type === 'relay').length;
+      setIceCandidateStats({ host: hostN, srflx: srflxN, relay: relayN, failed: dedupedFailed.length });
 
       log('');
       log('--- Phase 1 Summary ---');
@@ -487,7 +531,7 @@ function SettingsModal({ onClose, serverMode }: { onClose: () => void; serverMod
                     {t.settingsIceTestDownload}
                   </button>
                   <button
-                    onClick={() => setIceLog([])}
+                    onClick={() => { setIceLog([]); setIceCandidateStats(null); }}
                     className="text-[10px] px-2 py-0.5 rounded bg-gray-700 hover:bg-gray-600 text-gray-400 transition-colors"
                   >
                     {t.settingsIceTestClear}
@@ -507,6 +551,14 @@ function SettingsModal({ onClose, serverMode }: { onClose: () => void; serverMod
             >
               {iceRunning ? t.settingsIceTestRunning : t.settingsIceTestRun}
             </button>
+
+            {/* Result intensity graph — host/STUN/TURN candidate counts + unreachable servers */}
+            {iceCandidateStats && (
+              <div className="flex items-center justify-between rounded-lg border border-gray-700 bg-black/30 px-3 py-2 mb-2">
+                <span className="text-[10px] uppercase tracking-wide text-gray-500">Result</span>
+                <IceResultIntensity stats={iceCandidateStats} />
+              </div>
+            )}
 
             {/* Banner: remove unreachable servers */}
             {iceFailedUrls.length > 0 && (

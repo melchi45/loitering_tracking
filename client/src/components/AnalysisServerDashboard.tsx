@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ChevronRight } from 'lucide-react';
 import AnalysisDetectionPanel from './AnalysisDetectionPanel';
 import AnalysisLivePanel from './AnalysisLivePanel';
 import FaceSearchConditionPanel from './FaceSearchConditionPanel';
+import HeatStrip from './HeatStrip';
 import { useI18n } from '../i18n';
 import type { Translations } from '../i18n/translations/en';
 import type { GalleryType } from '../types';
@@ -209,6 +210,69 @@ function FpsSparkline({ data }: { data: number[] }) {
   );
 }
 
+/** Small rolling-history cell — label with the latest value, plus a HeatStrip
+ *  (opacity-coded bar strip, see HeatStrip.tsx) showing the last ~60s of samples.
+ *  This is the same idiom WebRtcStatsPanel uses for its Rate/Timing groups —
+ *  reused here instead of a bespoke line graph so per-camera load history reads
+ *  the same way across the app. */
+function TrendGraph({
+  data,
+  format,
+  textClass,
+}: {
+  data: number[];
+  format: (v: number) => string;
+  textClass: string;
+}) {
+  const latest = data.length > 0 ? data[data.length - 1] : 0;
+  return (
+    <div className="flex min-w-[64px] flex-col gap-1">
+      <span className="text-xs tabular-nums text-slate-200">{format(latest)}</span>
+      <HeatStrip values={data} colorClass={textClass} height={6} />
+    </div>
+  );
+}
+
+type ResultCategory = 'det' | 'face' | 'loiter' | 'fire';
+
+const RESULT_CATEGORY_META: Record<ResultCategory, { label: string; rgb: string; textClass: string }> = {
+  det:    { label: 'D', rgb: '56,189,248',  textClass: 'text-sky-400' },    // sky   — detections
+  face:   { label: 'F', rgb: '167,139,250', textClass: 'text-violet-400' }, // violet — faces
+  loiter: { label: 'L', rgb: '251,191,36',  textClass: 'text-amber-400' },  // amber  — loitering
+  fire:   { label: 'S', rgb: '244,63,94',   textClass: 'text-rose-500' },   // rose   — fire/smoke (기타 result)
+};
+
+/** Result graph — det/face/loiter/fire(smoke) each as its own HeatStrip row (same
+ *  grouped opacity-bar style as WebRtcStatsPanel's Rate/Timing sections): a colored
+ *  dot + latest count above, and a ~60s history strip below, one row per category. */
+function ResultIntensity({
+  values,
+  history,
+}: {
+  values: Record<ResultCategory, number>;
+  history: Record<ResultCategory, number[]>;
+}) {
+  return (
+    <div className="flex min-w-[96px] flex-col gap-1">
+      <div className="flex flex-wrap gap-x-1.5 text-[10px] text-slate-300">
+        {(Object.keys(RESULT_CATEGORY_META) as ResultCategory[]).map((key) => {
+          const meta = RESULT_CATEGORY_META[key];
+          return (
+            <span key={key} title={`${key}: ${values[key]}`}>
+              <span className={meta.textClass}>●</span> {values[key]}
+            </span>
+          );
+        })}
+      </div>
+      <div className="flex flex-col gap-y-0.5">
+        {(Object.keys(RESULT_CATEGORY_META) as ResultCategory[]).map((key) => (
+          <HeatStrip key={key} values={history[key]} colorClass={RESULT_CATEGORY_META[key].textClass} height={4} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function StatCard({
   label,
   value,
@@ -282,6 +346,12 @@ export default function AnalysisServerDashboard({
   const [metrics, setMetrics] = useState<MetricsResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [fpsHistory, setFpsHistory] = useState<Map<string, number[]>>(new Map());
+  // Rolling per-camera history for the Frames / Traffic / Avg ms / Result trend graphs.
+  // frames/bytes/det/face/loiter/fire are stored as per-poll deltas (rate), not
+  // cumulative totals, so each HeatStrip shows recent activity level rather than an
+  // ever-rising straight run of values.
+  const [loadHistory, setLoadHistory] = useState<Map<string, { frames: number[]; bytes: number[]; avgMs: number[]; det: number[]; face: number[]; loiter: number[]; fire: number[] }>>(new Map());
+  const prevTotalsRef = useRef<Map<string, { frames: number; bytes: number; det: number; face: number; loiter: number; fire: number }>>(new Map());
   const [showEventHistory,   setShowEventHistory]   = useState(false);
   const [showLiveDetections, setShowLiveDetections] = useState(false);
   const [showFaceSearch,     setShowFaceSearch]     = useState(false);
@@ -305,6 +375,33 @@ export default function AnalysisServerDashboard({
           }
           return next;
         });
+        setLoadHistory(prev => {
+          const next = new Map(prev);
+          for (const cam of data.cameras) {
+            const prevTotals = prevTotalsRef.current.get(cam.cameraId);
+            const frameDelta  = prevTotals ? Math.max(0, cam.framesTotal - prevTotals.frames) : 0;
+            const byteDelta   = prevTotals ? Math.max(0, cam.bytesReceivedTotal - prevTotals.bytes) : 0;
+            const detDelta    = prevTotals ? Math.max(0, cam.detectionsTotal - prevTotals.det) : 0;
+            const faceDelta   = prevTotals ? Math.max(0, cam.facesTotal - prevTotals.face) : 0;
+            const loiterDelta = prevTotals ? Math.max(0, cam.loiteringTotal - prevTotals.loiter) : 0;
+            const fireDelta   = prevTotals ? Math.max(0, cam.fireSmokeTotal - prevTotals.fire) : 0;
+            const hist = next.get(cam.cameraId) ?? { frames: [], bytes: [], avgMs: [], det: [], face: [], loiter: [], fire: [] };
+            next.set(cam.cameraId, {
+              frames: [...hist.frames, frameDelta].slice(-FPS_HISTORY_MAX),
+              bytes:  [...hist.bytes, byteDelta].slice(-FPS_HISTORY_MAX),
+              avgMs:  [...hist.avgMs, cam.avgProcessingMs].slice(-FPS_HISTORY_MAX),
+              det:    [...hist.det, detDelta].slice(-FPS_HISTORY_MAX),
+              face:   [...hist.face, faceDelta].slice(-FPS_HISTORY_MAX),
+              loiter: [...hist.loiter, loiterDelta].slice(-FPS_HISTORY_MAX),
+              fire:   [...hist.fire, fireDelta].slice(-FPS_HISTORY_MAX),
+            });
+          }
+          return next;
+        });
+        prevTotalsRef.current = new Map(data.cameras.map(cam => [cam.cameraId, {
+          frames: cam.framesTotal, bytes: cam.bytesReceivedTotal,
+          det: cam.detectionsTotal, face: cam.facesTotal, loiter: cam.loiteringTotal, fire: cam.fireSmokeTotal,
+        }]));
         setError(null);
       } catch (err) {
         if (!active) return;
@@ -723,7 +820,20 @@ export default function AnalysisServerDashboard({
               <p className="text-xs uppercase tracking-[0.24em] text-slate-500">Per source</p>
               <h3 className="mt-1 text-lg font-semibold text-slate-100">{t.dashConnectedStreamLoad}</h3>
             </div>
-            <span className="text-xs text-slate-400">{t.dashSortedByRecentActivity}</span>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-1.5 text-[10px] text-slate-500">
+                {(Object.keys(RESULT_CATEGORY_META) as ResultCategory[]).map((key) => (
+                  <span key={key} className="flex items-center gap-1">
+                    <span
+                      className="inline-block h-2.5 w-2.5 rounded-sm"
+                      style={{ backgroundColor: `rgba(${RESULT_CATEGORY_META[key].rgb},0.7)` }}
+                    />
+                    {key}
+                  </span>
+                ))}
+              </div>
+              <span className="text-xs text-slate-400">{t.dashSortedByRecentActivity}</span>
+            </div>
           </div>
 
           <div className="mt-4 overflow-hidden rounded-2xl border border-slate-800">
@@ -754,12 +864,35 @@ export default function AnalysisServerDashboard({
                     <FpsSparkline data={fpsHistory.get(camera.cameraId) ?? []} />
                   </div>
                   <span>{camera.idleSec}s</span>
-                  <span>{camera.framesTotal}</span>
-                  <span>{formatBytes(camera.bytesReceivedTotal)}</span>
-                  <span>{camera.avgProcessingMs.toFixed(1)}</span>
-                  <span className="text-xs text-slate-400">
-                    det {camera.detectionsTotal} / face {camera.facesTotal} / loiter {camera.loiteringTotal}
-                  </span>
+                  <TrendGraph
+                    data={loadHistory.get(camera.cameraId)?.frames ?? []}
+                    format={(v) => `${v}`}
+                    textClass="text-sky-400"
+                  />
+                  <TrendGraph
+                    data={loadHistory.get(camera.cameraId)?.bytes ?? []}
+                    format={formatBytes}
+                    textClass="text-emerald-400"
+                  />
+                  <TrendGraph
+                    data={loadHistory.get(camera.cameraId)?.avgMs ?? []}
+                    format={(v) => `${v.toFixed(1)}ms`}
+                    textClass="text-amber-400"
+                  />
+                  <ResultIntensity
+                    values={{
+                      det: camera.detectionsTotal,
+                      face: camera.facesTotal,
+                      loiter: camera.loiteringTotal,
+                      fire: camera.fireSmokeTotal,
+                    }}
+                    history={{
+                      det: loadHistory.get(camera.cameraId)?.det ?? [],
+                      face: loadHistory.get(camera.cameraId)?.face ?? [],
+                      loiter: loadHistory.get(camera.cameraId)?.loiter ?? [],
+                      fire: loadHistory.get(camera.cameraId)?.fire ?? [],
+                    }}
+                  />
                 </div>
               )) : (
                 <div className="px-4 py-6 text-sm text-slate-400">{t.dashNoRequestsYet}</div>
