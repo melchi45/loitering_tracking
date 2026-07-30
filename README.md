@@ -749,7 +749,7 @@ graph TB
 
     subgraph ANALYSDASH2["Analysis Dashboard  analysis 모드"]
         ANALIVE["AnalysisLivePanel\n실시간 감지 피드\nbbox 오버레이"]
-        ANAEVT["AnalysisEventsTab\n이벤트 이력\n배회 · 화재 · 연기"]
+        ANAEVT["AnalysisDetectionPanel\n이벤트 이력 오버레이\n배회 · 화재 · 연기"]
         ANAMTX["서버 메트릭\n처리 FPS · 큐 깊이\n카메라별 입력 상태 · 연결 수"]
     end
 

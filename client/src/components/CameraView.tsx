@@ -399,6 +399,20 @@ export default function CameraView({ cameraId, cameraName }: Props) {
         /* ── UMP path: RTSP-over-WebSocket via <ump-player> ── */
         <>
           <UmpPlayerView camera={camera} onStatistics={onUmpStatistics} />
+          {/* Detection bbox overlay — same canvas + drawOverlay() as the JPEG/
+              WebRTC paths (2026-07-30 fix: this canvas was previously missing
+              from the UMP branch entirely, so canvasRef.current stayed null
+              and drawOverlay() silently no-op'd on every detections update
+              even though frame/detections data was flowing normally — UMP
+              mode doesn't change how capture images reach the AI pipeline,
+              only how the browser plays the video back). Sizing is CSS-driven
+              (canvas.clientWidth/clientHeight) and scaled against frameWidth/
+              frameHeight from useCamera(), not tied to <ump-player>'s own
+              native resolution, so no UMP-specific scaling data is needed. */}
+          <canvas
+            ref={canvasRef}
+            className="absolute top-0 left-0 w-full h-full pointer-events-none"
+          />
           {/* UMP badge + stats toggle + Zone button — same stacked top-right
               corner layout as the WebRTC badge/ICE/Zone rows below, so the
               two streaming modes read as the same UI. Toggle gates on

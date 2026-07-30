@@ -28,8 +28,7 @@ client/src/
 │   ├── DashboardDetectionPanel.tsx — 실시간 감지 피드 (combined/streaming + analysis 모드 오버레이)
 │   ├── AnalysisServerDashboard.tsx — analysis 모드 메인 대시보드 (stat 카드·오버레이 제어)
 │   ├── AnalysisLivePanel.tsx       — 실시간 감지 피드 오버레이 (analysis 모드, "감지 이벤트" 카드)
-│   ├── AnalysisDetectionPanel.tsx  — 이벤트 히스토리 오버레이 (analysisEvents DB, "알림" 카드)
-│   ├── AnalysisEventsTab.tsx       — Detections 탭 이벤트 히스토리 (analysis 모드)
+│   ├── AnalysisDetectionPanel.tsx  — 이벤트 히스토리 오버레이 (analysisEvents DB, "알림" 카드, analysis 모드 유일 접근 경로 — AnalysisEventsTab 삭제됨 2026-07-30)
 │   ├── AnalysisHistoryTab.tsx      — 저장된 분석 이벤트 이력 (레거시 — FullscreenCameraView에서 미사용)
 │   ├── OnvifTimelineInline.tsx     — ONVIF 이벤트 Gantt 타임라인 + 커스텀 날짜 범위 (FullscreenCameraView ONVIF 탭)
 │   ├── DetectionsTimelineInline.tsx — ByteTracker 트랙 Gantt 타임라인 (FullscreenCameraView Detections 탭)
@@ -391,17 +390,22 @@ Sign Out → auth.logout()
 > On/Off·Appearance Weights·Tracker/Kalman·Fire/Smoke Sensitivity가 모두 Admin Dashboard → AI Models
 > (`AiModelsSection`)로 이관되었다. 아래는 현재 동작 기준.
 
-- 기준 위치: `client/src/App.tsx` (`serverMode`, `isAnalysis`, `TAB_ITEMS`, `ANALYSIS_TABS`)
+> **2026-07-30 (같은 날 후속 변경)**: analysis 모드에 마지막까지 남아있던 `detections` 단일 탭
+> (`AnalysisEventsTab.tsx`)도 완전히 제거되었다 — `AnalysisServerDashboard`의 "Cumulative Analysis
+> Results → Detections" 카드 클릭 시 열리는 `AnalysisDetectionPanel` 오버레이와 완전히 중복되는
+> 기능이었기 때문. 아래는 그 이후 현재 동작 기준.
+
+- 기준 위치: `client/src/App.tsx` (`serverMode`, `isAnalysis`, `TAB_ITEMS`)
 - `combined`/`streaming`: Cameras/Alerts/Zones/Detections/Face Gallery 탭 표시 (Analytics 탭 없음)
-- `analysis`: 메인 영역은 `AnalysisServerDashboard.tsx`, 우측/모바일 탭은 **`detections` 단일 탭**만 표시:
-  - `detections` (**AnalysisEventsTab** — 이벤트 히스토리 날짜 그룹)
+- `analysis`: **사이드바·모바일 하단 nav 자체가 렌더링되지 않음** (`TAB_ITEMS`가 빈 배열) —
+  데스크톱·모바일 모두 `AnalysisServerDashboard.tsx`가 전체 영역을 차지
   - 실시간 감지 피드는 대시보드 "감지 이벤트" 카드 클릭 → `AnalysisLivePanel` 오버레이로 표시
-  - 이벤트 히스토리는 대시보드 "알림" 카드 클릭 → `AnalysisDetectionPanel` 오버레이로 표시
-- 모드 변경으로 현재 활성 탭이 유효하지 않으면 `detections`로 자동 전환
+  - 이벤트 히스토리(구 Detections 탭 대체)는 대시보드 "Detections"/"알림" 카드 클릭 →
+    `AnalysisDetectionPanel` 오버레이로 표시
 
 ```typescript
-// renderTabContent — analysis 분기
-if (tab === 'detections') return isAnalysis ? <AnalysisEventsTab /> : <DashboardDetectionPanel />;
+// renderTabContent — analysis 모드는 탭이 없으므로 이 분기 자체에 도달하지 않음
+if (tab === 'detections') return <DashboardDetectionPanel />;
 ```
 
 ## Analysis Mode Dashboard

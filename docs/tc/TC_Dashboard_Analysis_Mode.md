@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-DAM-01 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Active |
 | **Date** | 2026-07-30 |
 | **Parent SRS** | [srs/SRS_Dashboard_Analysis_Mode.md](../srs/SRS_Dashboard_Analysis_Mode.md) |
@@ -246,19 +246,18 @@
 
 ---
 
-### TC-D-002: analysis 모드 나머지 탭 정상 동작 (2026-07-30 갱신)
+### TC-D-002: analysis 모드에 탭이 전혀 없음 (2026-07-30 재갱신)
 **SRS:** FR-DAM-031
 
-> 원문(alerts/zones/detections/analytics/faces 5개 탭 유지)은 최초 설계 당시 기준이며, 이후 여러
-> 차례 개정을 거쳐 analysis 모드 사이드바는 현재 `detections` 단일 탭만 유지한다(`analytics` 탭은
-> Admin Dashboard → AI Models로 완전히 이관, `alerts`/`zones`/`faces`도 이후 개정에서 제거됨). 아래는
-> 현재 동작으로 갱신.
+> 원문(alerts/zones/detections/analytics/faces 5개 탭 유지)은 최초 설계 당시 기준. 이후 여러 차례
+> 개정을 거쳐 한때 `detections` 단일 탭만 남았으나(직전 갱신), 그마저도 `AnalysisDetectionPanel`
+> 오버레이(TC-D-004)와 완전히 중복되어 2026-07-30에 제거되었다. 아래는 현재 동작으로 갱신.
 
 | 항목 | 내용 |
 |---|---|
-| **목적** | analysis 모드에서 유일하게 남은 Detections 탭이 클릭 가능하고 `AnalysisEventsTab`이 렌더링되는지 확인 |
+| **목적** | analysis 모드에서 사이드바 자체가 렌더링되지 않는지 확인 |
 | **전제 조건** | `SERVER_MODE=analysis` |
-| **기대 결과** | Detections 탭 클릭 시 `AnalysisEventsTab` 렌더링; 사이드바에 다른 탭(Alerts/Zones/Analytics/Face Gallery)은 존재하지 않음 |
+| **기대 결과** | 데스크톱: `<aside>` 사이드바·리사이즈 핸들이 DOM에 없음, `AnalysisServerDashboard`가 전체 너비 차지. 모바일: 하단 내비게이션 바가 없고, 콘텐츠 영역에 `AnalysisServerDashboard`가 표시됨(이전에는 탭 콘텐츠만 보이고 이 패널 자체가 노출되지 않았음 — 이번 변경으로 모바일도 처음 표시됨) |
 
 ---
 
@@ -273,6 +272,18 @@
 | **목적** | combined 모드에서 카메라 탭이 포함된 탭들이 표시되는지 확인 |
 | **전제 조건** | `SERVER_MODE=combined` |
 | **기대 결과** | 탭 바에 📷🔔🗺👁🪪 5개 탭 존재 (🤖 Analytics 탭은 없음) |
+
+---
+
+### TC-D-004: analysis 모드 "Cumulative Analysis Results → Detections" 클릭 시 이벤트 히스토리 확인 가능 (2026-07-30 신규)
+**SRS:** FR-DAM-033
+
+| 항목 | 내용 |
+|---|---|
+| **목적** | 사이드바 Detections 탭 제거 후에도 동일한 이벤트 히스토리를 `AnalysisServerDashboard`에서 계속 확인할 수 있는지 회귀 검증 |
+| **전제 조건** | `SERVER_MODE=analysis`, 배회/화재/연기 이벤트 1건 이상 존재 |
+| **단계** | 1. `AnalysisServerDashboard`의 "Cumulative Analysis Results" 카드에서 "Detections" 행 클릭 |
+| **기대 결과** | `AnalysisDetectionPanel` 오버레이가 열리고 날짜·시간별로 그룹핑된 이벤트 히스토리(배회/화재/연기, 크롭 이미지 포함)가 표시됨 — 제거된 사이드바 `AnalysisEventsTab`이 보여주던 것과 동일한 데이터 |
 
 ---
 
@@ -369,3 +380,4 @@ TC-F-003 (빌드 확인) → TC-A-001 → TC-A-002 → TC-A-003 → TC-A-004
 |---|---|---|
 | 1.0 | 2026-06-08 | 초기 작성 |
 | 1.1 | 2026-07-30 | TC-D-002/TC-D-003 갱신 — `analytics` 탭이 전 모드에서 제거되고 Admin Dashboard → AI Models로 이관되었음을 반영, 이 문서에 최초로 Revision History 표 추가 |
+| 1.2 | 2026-07-30 | TC-D-002 재갱신 — `detections` 탭도 완전 제거 반영(사이드바/모바일 하단바 미렌더링). TC-D-004 신규 — Cumulative Analysis Results → Detections 클릭 회귀 테스트 (FR-DAM-033) |

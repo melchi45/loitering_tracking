@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-010 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Draft |
 | **Date** | 2026-07-30 |
 | **Related RFP** | RFP_Dashboard_Layout.md (LTS-2026-010 v2.0) |
@@ -101,11 +101,14 @@ Fixed `w-72` right panel with mode-dependent tabs. The Alerts tab shows a red ba
 **Mode policy (`SERVER_MODE`):**
 - `combined`: CAMERAS, ALERTS, ZONES, DETECTIONS, 🪪 FACE ID
 - `streaming`: CAMERAS, ALERTS, ZONES, DETECTIONS, 🪪 FACE ID
-- `analysis`: DETECTIONS only
+- `analysis`: no tabs — no right panel is rendered at all
 
-> **2026-07-30**: The `analytics`/ANALYTICS tab (`VideoAnalyticsTab`) has been removed from all modes.
-> Its AI enable/disable content now lives in Admin Dashboard → AI Models — see
-> `SRS_Admin_Dashboard.md` §4.2/§4.3.
+> **2026-07-30**: The `analytics`/ANALYTICS tab (`VideoAnalyticsTab`) was removed from all modes
+> first. Its AI enable/disable content now lives in Admin Dashboard → AI Models — see
+> `SRS_Admin_Dashboard.md` §4.2/§4.3. Later the same day, analysis mode's last remaining tab
+> (DETECTIONS, `AnalysisEventsTab`) was also removed — it duplicated the "Cumulative Analysis
+> Results → Detections" card in `AnalysisServerDashboard`. `SERVER_MODE=analysis` now shows no
+> right panel/tabs at all, on desktop or mobile — the status dashboard takes the full area.
 
 | Tab ID | Label | Component | Notes |
 |---|---|---|---|
@@ -279,3 +282,4 @@ An `absolute`-positioned overlay above the Camera Grid, shown when a device from
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for Dashboard Layout |
 | 1.1 | 2026-07-30 | LTS Engineering Team | §2.2/§4.4 updated — Analytics tab removed from all modes, content moved to Admin Dashboard → AI Models |
+| 1.2 | 2026-07-30 | LTS Engineering Team | §4.4 re-updated — analysis mode's last remaining tab (Detections) also removed; no right panel/tabs render at all in analysis mode, on desktop or mobile |

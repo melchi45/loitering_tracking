@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UI-DAM-01 |
-| **Version** | 2.0 |
+| **Version** | 2.1 |
 | **Status** | Active |
 | **Date** | 2026-07-30 |
 | **Parent SRS** | [srs/SRS_Dashboard_Analysis_Mode.md](../srs/SRS_Dashboard_Analysis_Mode.md) |
@@ -657,7 +657,7 @@ app.get(/^(?!\/api|\/auth|...).*/, (req, res) => res.sendFile(indexHtml));
 
 Analysis 모드에서 AI가 감지한 이벤트(화재, 연기, 배회)를 영구 저장하고, 대시보드 카드 클릭 시 날짜·시간 그룹별 이벤트 히스토리를 오버레이로 표시합니다. 크롭 이미지도 함께 저장·표시됩니다.
 
-### 10.2 사이드바 탭 — analysis 모드 (v2.0 변경)
+### 10.2 사이드바 탭 — analysis 모드 (v2.1 변경 — 탭 전체 제거)
 
 **변경 이력**:
 ```
@@ -665,32 +665,27 @@ v1.5: [ 🤖 Analytics ] [ 👁 Detections ] [ 🔔 Alerts ]
 v1.7: [ 🤖 Analytics ]                   ← Analytics 탭 1개만
 v1.8: [ 🤖 Analytics ] [ 👁 Detections ] ← Detections 탭 재도입 (실시간 감지)
 v2.0: [ 👁 Detections ]                  ← Analytics 탭 완전 제거, Admin AI Models로 통합
+v2.1: (탭 없음)                          ← Detections 탭도 제거, 사이드바/모바일 하단바 자체를 렌더링하지 않음
 ```
 
-**v2.0 (2026-07-30)**: Analytics 탭(`VideoAnalyticsTab.tsx`)이 완전히 삭제되었다 — 카테고리 On/Off 토글 전체 카탈로그(COCO 80종 포함), Appearance Weights, Tracker/Kalman Settings, Fire/Smoke Sensitivity가 모두 Admin Dashboard → AI Models(`AiModelsSection`)로 이관되어, model Active/Deactivate(어떤 ONNX가 각 family를 담당하는지)와 명확히 분리된 "Analytics Categories (On/Off)" 섹션·"Tracking & Sensitivity Tuning" 섹션으로 재구성되었다. analysis 모드 사이드바는 이제 Detections 탭 하나만 남는다. 상세: `docs/design/Design_Admin_Dashboard.md` §4.2 (v1.1), `docs/design/Design_AI_Model_Catalog.md`.
+**v2.1 (2026-07-30)**: analysis 모드 사이드바의 마지막 남은 탭이었던 Detections(`AnalysisEventsTab.tsx`)도 완전히 제거되었다 — `AnalysisServerDashboard`의 "Cumulative Analysis Results" 카드에서 "Detections" 항목을 클릭하면 이미 동일한 이벤트 히스토리가 `AnalysisDetectionPanel` 오버레이로 열리므로(§10.3, §10.4), 사이드바의 `AnalysisEventsTab`은 완전한 중복이었다(같은 `/api/analysis/events` API, 같은 날짜/시간 그룹핑, 같은 배지 색상 — 구현이 사실상 두 번). `ANALYSIS_TABS` 상수 자체를 제거하고 `TAB_ITEMS`를 `isAnalysis`일 때 빈 배열로 만들었으며, 데스크톱의 사이드바(`<aside>`)·리사이즈 핸들·hover flyout과 모바일의 하단 내비게이션 바(`<nav>`)를 전부 `!isAnalysis` 조건으로 감싸 analysis 모드에서는 렌더링 자체를 하지 않는다. `<main>`(`AnalysisServerPanel`)이 전체 너비를 차지한다. `AnalysisEventsTab.tsx` 파일은 완전 삭제, 그 전용 i18n 키 8종(`evt*Short`)도 15개 언어 파일에서 제거. **모바일 analysis 모드도 이번에 처음으로 `AnalysisServerDashboard`를 보여주도록 변경됨** — 이전에는 모바일 analysis 모드가 사이드바 유일 탭(Detections) 콘텐츠만 전체 화면으로 보여주고 `AnalysisServerDashboard` 자체는 데스크톱 전용이었으나, 이 변경으로 탭이 없어지면서 모바일도 데스크톱과 동일한 상태 패널을 보게 되었다(기존엔 몰랐던 gap이었음 — 모바일 analysis 사용자는 트래픽/GPU 등 지표를 아예 볼 수 없었다).
 
-`App.tsx` (v2.0):
+`App.tsx` (v2.1):
 ```typescript
-const ANALYSIS_TABS: SidebarTab[] = ['detections'];
 const TAB_ITEMS = isAnalysis
-  ? [
-      { id: 'detections' as SidebarTab, icon: '👁',  label: t.tabDetections },
-    ]
-  : [...]; // combined/streaming 탭
-```
+  ? []
+  : [...]; // combined/streaming 탭만 유지
 
-`renderTabContent()` (analysis 분기, v1.9):
-```typescript
 function renderTabContent(overrideTab?: SidebarTab) {
   const tab = overrideTab ?? sidebarTab;
-  if (tab === 'detections') return isAnalysis ? <AnalysisEventsTab /> : <DashboardDetectionPanel />;
+  if (tab === 'detections') return <DashboardDetectionPanel />;  // analysis 분기 없음 — 이 코드 경로 자체가 analysis 모드에서 호출되지 않음
   // ...
 }
 ```
 
-**Detections 탭 동작 (analysis 모드, v1.9)**:
-- `AnalysisEventsTab`이 `/api/analysis/events` 폴링 → 날짜·시간별 이벤트 히스토리 표시 (배회/화재/연기)
-- 실시간 감지 피드(`DashboardDetectionPanel`)는 **별도 UI**로 이동 → `AnalysisLivePanel` 오버레이 참조 (Section 10.4a)
+**analysis 모드 이벤트 히스토리 접근 경로 (v2.1 이후)**:
+- 사이드바/탭 없음 — `AnalysisServerDashboard`의 "Cumulative Analysis Results → Detections" 클릭 → `AnalysisDetectionPanel` 오버레이 (날짜·시간별 히스토리, §10.3)
+- 실시간 감지 피드는 여전히 별도 UI — "감지 이벤트 (누적)" 카드 클릭 → `AnalysisLivePanel` 오버레이 (Section 10.4a)
 
 ### 10.3 AnalysisDetectionPanel — 이벤트 히스토리 브라우저 (v1.7 재작성)
 
@@ -890,4 +885,5 @@ if (db) {
 | 1.8 | 2026-06-10 | Section 10.2 업데이트: analysis 모드에 Detections 탭 재도입 (`DashboardDetectionPanel` + global `io.emit()` 수신) |
 | 1.9 | 2026-06-10 | Section 10.2/10.4/10.4a 업데이트: 실시간 감지 피드를 Detections 탭에서 분리 — `AnalysisLivePanel` 신규 컴포넌트 도입, "감지 이벤트 (누적)" 카드 클릭 시 오버레이로 표시. Detections 탭은 `AnalysisEventsTab` (히스토리)으로 복귀 |
 | 2.0 | 2026-07-30 | Section 5.5/10.2 갱신 — Analytics 탭(`VideoAnalyticsTab.tsx`) 완전 제거, 내용 전부(카테고리 On/Off 전체 카탈로그·Appearance Weights·Tracker/Kalman·Fire/Smoke Sensitivity) Admin Dashboard → AI Models(`AiModelsSection`)로 이관 및 Active/Deactivate와 명확히 분리. analysis 모드 사이드바는 Detections 탭 1개만 남음 |
+| 2.1 | 2026-07-30 | Section 10.2 갱신 — 마지막 남은 Detections 탭도 제거(`AnalysisEventsTab.tsx` 삭제, `AnalysisDetectionPanel` 오버레이와 완전 중복이었음). analysis 모드는 사이드바/모바일 하단바 없이 `AnalysisServerPanel`만 전체 너비로 표시 — 모바일도 이번에 처음으로 동일 패널을 보게 됨 |
 

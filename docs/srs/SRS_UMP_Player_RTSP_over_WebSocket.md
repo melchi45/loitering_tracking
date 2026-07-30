@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-UMP-WS-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-07-22 |
 | **Parent PRD** | [prd/PRD_UMP_Player_RTSP_over_WebSocket.md](../prd/PRD_UMP_Player_RTSP_over_WebSocket.md) |
@@ -212,6 +212,10 @@ YouTube Add/Edit 폼은 동일한 3-way 컨트롤 대신, UMP 옵션이 제외�
 
 `streamingMode === 'ump'`인 카메라를 표시할 때 `CameraGrid.tsx`/`CameraView.tsx`는 기존 `<img>`(JPEG) 또는 WebRTC `<video>` 대신 `<ump-player>` 컴포넌트를 렌더링해야 한다(SHALL), `proxy`/`hostname`을 LTS 서버 주소로, `username`/`password`를 해당 카메라의 저장 자격증명으로 설정한다.
 
+### FR-UMP-043 — Detection Bounding Box 오버레이 (2026-07-30 추가)
+
+`streamingMode === 'ump'`인 카메라도 JPEG/WebRTC 모드와 동일하게 `<ump-player>` 위에 detection bounding box/라벨 오버레이를 표시해야 한다(SHALL) — `CameraView.tsx`는 UMP 분기에도 다른 재생 모드와 동일한 `<canvas>` 엘리먼트를 렌더링하고, 동일한 `drawOverlay()`/`frameWidth`/`frameHeight` 스케일링 로직을 재사용한다. capture image가 analysis 파이프라인에 정상 입력되고 있다면(재생 모드와 무관하게 항상 동일 경로), 오버레이도 항상 함께 표시되어야 한다. 상세: `Design_UMP_Player_RTSP_over_WebSocket.md` §8.20.
+
 ---
 
 ## 8. 비기능 요구사항
@@ -269,3 +273,4 @@ POST /cameras/:id/video-fanout   (ingest-daemon API, 기존)
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-22 | 초기 작성 |
+| 1.1 | 2026-07-30 | FR-UMP-043 추가 — UMP 모드 detection bounding box 오버레이 요구사항 (버그 수정 반영) |

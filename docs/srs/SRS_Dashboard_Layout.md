@@ -4,7 +4,7 @@
 | Field          | Value                                                      |
 |----------------|------------------------------------------------------------|
 | Document ID    | SRS-DLY-001                                                |
-| Version        | 1.1                                                        |
+| Version        | 1.2                                                        |
 | Date           | 2026-07-30                                                 |
 | Parent RFP     | RFP_Dashboard_Layout.md                                    |
 | Parent PRD     | PRD_Dashboard_Layout.md                                    |
@@ -58,12 +58,18 @@ A 4 px wide vertical divider between the main area and sidebar shall change colo
 The sidebar shall expose mode-dependent tabs based on `SERVER_MODE`:
 - `combined`: Cameras, Alerts, Zones, Detections, Face Gallery
 - `streaming`: Cameras, Alerts, Zones, Detections, Face Gallery
-- `analysis`: Detections only
+- `analysis`: no tabs — no sidebar is rendered at all
 
-> **2026-07-30**: The Analytics tab (`VideoAnalyticsTab.tsx`) has been removed from every mode — its
-> content (category on/off toggles, appearance weights, tracker/Kalman settings, fire/smoke
-> sensitivity) is now exclusively in Admin Dashboard → AI Models. See `SRS_Admin_Dashboard.md`
-> §4.2/§4.3.
+> **2026-07-30**: The Analytics tab (`VideoAnalyticsTab.tsx`) was removed from every mode first —
+> its content (category on/off toggles, appearance weights, tracker/Kalman settings, fire/smoke
+> sensitivity) is now exclusively in Admin Dashboard → AI Models (`SRS_Admin_Dashboard.md`
+> §4.2/§4.3). Later the same day, the last remaining analysis-mode tab (Detections,
+> `AnalysisEventsTab.tsx`) was also removed — it duplicated the "Cumulative Analysis Results →
+> Detections" card in `AnalysisServerDashboard`, which opens the same event history via
+> `AnalysisDetectionPanel`. As a result, `SERVER_MODE=analysis` now renders **no sidebar and no
+> mobile bottom nav at all** — the status panel (`AnalysisServerDashboard`) takes the full area on
+> both desktop and mobile (mobile previously showed only tab content, never this panel — see
+> FR-DLY-012).
 
 The active tab shall be visually distinguished by a blue bottom border and blue text color. The Alerts tab shall display an unread count badge (red circle) when unacknowledged alerts exist.
 
@@ -87,6 +93,10 @@ Double-clicking a camera cell in the grid shall open `FullscreenCameraView` as a
 
 ### FR-DLY-012 — Mobile Bottom Navigation
 On mobile the bottom navigation bar shall be 52 px high and display icon+label buttons corresponding to the mode-dependent sidebar tab policy defined in FR-DLY-006. The active tab shall show a blue indicator bar at the top of the button.
+
+> **2026-07-30**: In `analysis` mode the bottom navigation bar SHALL NOT render at all (FR-DLY-006
+> update) — the content area shows `AnalysisServerDashboard` unconditionally instead of tab
+> content, since there is no longer any tab to select.
 
 ### FR-DLY-013 — Mobile Camera Tab Layout
 When the active mobile tab is "Cameras," the screen shall be divided vertically: camera grid occupying 58% and camera list occupying 42% of the content area height.
@@ -196,3 +206,4 @@ When a discovered camera device is selected in the Found tab, a `DiscoveredCamer
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for Dashboard Layout |
 | 1.1 | 2026-07-30 | LTS Engineering Team | FR-DLY-006 updated — Analytics tab removed from all modes, content moved to Admin Dashboard → AI Models |
+| 1.2 | 2026-07-30 | LTS Engineering Team | FR-DLY-006/FR-DLY-012 re-updated — analysis mode's last remaining tab (Detections) also removed; no sidebar or mobile bottom nav renders in analysis mode at all, `AnalysisServerDashboard` takes the full area on both desktop and mobile |

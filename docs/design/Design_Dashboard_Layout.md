@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UI-DL-01 |
-| **Version** | 1.3 |
+| **Version** | 1.4 |
 | **Status** | Active |
 | **Date** | 2026-07-30 |
 | **Parent SRS** | srs/SRS_Dashboard_Layout.md |
@@ -136,16 +136,21 @@ App.tsx
 
 ### 3.1 Mode-Dependent Navigation Policy
 
-> **2026-07-30 갱신**: Analytics 탭(`VideoAnalyticsTab.tsx`)이 모든 모드에서 완전히 제거되었다 — 모듈 설정(카테고리 On/Off), Appearance Weights, Tracker/Kalman Settings, Fire/Smoke Sensitivity가 전부 Admin Dashboard → AI Models로 이관되었다. 아래 표는 갱신 전 정책을 반영한 것으로, "Analytics Tab" 열은 더 이상 유효하지 않다 — 상세: `docs/design/Design_Dashboard_Analysis_Mode.md` §10.2 (v2.0), `docs/design/Design_Admin_Dashboard.md` §4.2 (v1.9).
+> **2026-07-30 갱신 (2차)**: Analytics 탭(`VideoAnalyticsTab.tsx`)이 모든 모드에서 완전히 제거된 데 이어,
+> analysis 모드에 마지막으로 남아있던 Detections 탭(`AnalysisEventsTab.tsx`)도 같은 날 제거되었다 —
+> `AnalysisServerDashboard`의 "Cumulative Analysis Results → Detections" 클릭으로 여는 `AnalysisDetectionPanel`
+> 오버레이와 완전히 중복이었기 때문. **analysis 모드는 이제 사이드바/모바일 하단바 자체를 렌더링하지 않는다.**
+> 아래 표는 갱신 전 정책을 반영한 것으로, "Analytics Tab" 열은 더 이상 유효하지 않다 — 상세:
+> `docs/design/Design_Dashboard_Analysis_Mode.md` §10.2 (v2.1), `docs/design/Design_Admin_Dashboard.md` §4.2 (v1.9).
 
 | SERVER_MODE | Cameras Tab | Analytics Tab (제거됨) | Main Area |
 |---|---|---|---|
 | `combined` | 표시 | ~~표시~~ | CameraGrid |
 | `streaming` | 표시 | ~~숨김~~ | CameraGrid |
-| `analysis` | 숨김 | ~~Analytics + Detections~~ → Detections만 | AnalysisServerDashboard |
+| `analysis` | 숨김 | ~~Analytics + Detections~~ → **탭 없음** | AnalysisServerDashboard (전체 너비) |
 
 - `analysis` 모드에서 카메라 레이아웃은 렌더링하지 않으며 메인 영역에 AnalysisServerDashboard를 표시합니다.
-- `analysis` 모드의 우측/모바일 탭은 (2026-07-30부로) `Detections`(실시간 감지 이력) 단일 탭만 제공합니다. 이전에 여기 있던 모듈 설정은 Admin Dashboard → AI Models에서 관리합니다.
+- `analysis` 모드는 (2026-07-30부로) 사이드바/탭 바 자체가 없습니다 — 데스크톱은 `AnalysisServerDashboard`가 전체 너비를 차지하고, 모바일도 하단 내비게이션 바 없이 동일 패널을 표시합니다(이전에는 모바일에서 이 패널 자체를 볼 수 없었던 gap이 이번에 함께 해소됨). 이전에 사이드바에 있던 모듈 설정은 Admin Dashboard → AI Models, 이벤트 히스토리는 "Cumulative Analysis Results → Detections" 클릭(`AnalysisDetectionPanel` 오버레이)에서 확인합니다.
 - `analysis` 모드에서 우측 상단 `Statistics` 버튼은 `AnalysisStatsModal`을 열어 `/api/analysis/metrics` 기반 지표만 표시합니다.
 - `analysis` 모드에서 `SettingsModal`은 언어 선택만 제공하고 WebRTC/ICE 설정 섹션은 숨깁니다.
 
@@ -498,3 +503,4 @@ ESC keydown || close button click
 | 1.1 | 2026-06-10 | Youngho Kim | 사이드바 Collapse/Expand 기능 추가 — ✕ 버튼으로 아이콘 스트립 축소, 클릭 시 복원, hover flyout 패널 |
 | 1.2 | 2026-06-10 | Youngho Kim | analysis 모드에 Detections 탭 추가 — `DashboardDetectionPanel` 전역 `detections` 이벤트 수신 |
 | 1.3 | 2026-07-30 | Youngho Kim | Analytics 탭(`VideoAnalyticsTab.tsx`) 전 모드에서 완전 제거 — 내용 전부 Admin Dashboard → AI Models로 이관. §3.1 Mode-Dependent Navigation Policy, 파일 트리, 컴포넌트 트리, `SidebarTab` 타입 정의 갱신 |
+| 1.4 | 2026-07-30 | Youngho Kim | §3.1 재갱신 — analysis 모드에 마지막까지 남아있던 Detections 탭도 제거(`AnalysisDetectionPanel` 오버레이와 중복), 사이드바/모바일 하단바 완전 미렌더링으로 변경, 모바일도 `AnalysisServerDashboard` 표시하도록 변경 |

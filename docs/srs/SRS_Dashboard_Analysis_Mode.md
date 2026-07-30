@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-DAM-01 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Active |
 | **Date** | 2026-07-30 |
 | **Parent PRD** | [prd/PRD_Dashboard_Analysis_Mode.md](../prd/PRD_Dashboard_Analysis_Mode.md) |
@@ -149,17 +149,25 @@ isAnalysis = true
 ## 6. Functional Requirements — 사이드바 탭 필터링
 
 ### FR-DAM-030: analysis 모드 카메라 탭 제거
+
+> **2026-07-30 갱신**: `isAnalysis === true`일 때 `TAB_ITEMS`는 이제 완전히 빈 배열이다(FR-DAM-031 참고) —
+> `cameras`만 개별 제외하던 이 요구사항은 이후 개정으로 사실상 흡수되었다(제외할 다른 탭 자체가 남아있지
+> 않음). 원문은 배경 이해용으로만 유지.
+
 `isAnalysis === true`인 경우 `TAB_ITEMS` 배열에서 `id === 'cameras'` 항목을 제외해야 한다.
 
 데스크톱 사이드바 탭 바 및 모바일 하단 내비게이션 바 모두 적용된다.
 
-### FR-DAM-031: analysis 모드 유지 탭
+### FR-DAM-031: analysis 모드 유지 탭 (2026-07-30부로 전면 개정 — 탭 전체 제거)
 
 > **2026-07-30 갱신**: 이 요구사항은 최초 설계 당시(analysis 모드가 여러 탭을 유지하던 초기 반복) 기준이다.
-> 이후 여러 차례 개정을 거쳐(Design_Dashboard_Analysis_Mode.md §10.2 v1.5~v2.0), 실제로는
-> `alerts`/`zones`/`faces` 탭이 사라지고 analysis 모드 사이드바에는 `detections` 단일 탭만 남았으며,
-> `analytics` 탭도 완전히 제거되어 그 내용이 Admin Dashboard → AI Models로 이관되었다. 원문은
-> 배경 이해용으로만 유지한다 — 상세: `SRS_Admin_Dashboard.md` §4.2/§4.3.
+> 이후 여러 차례 개정을 거쳐(Design_Dashboard_Analysis_Mode.md §10.2 v1.5~v2.1), `alerts`/`zones`/`faces`
+> 탭이 먼저 사라졌고, `analytics` 탭은 Admin Dashboard → AI Models로 완전히 이관되었으며, 마지막까지 남아있던
+> `detections` 탭조차 `AnalysisServerDashboard`의 "Cumulative Analysis Results → Detections" 클릭 시 열리는
+> `AnalysisDetectionPanel` 오버레이와 완전히 중복되는 기능이라 2026-07-30에 제거되었다. **analysis 모드는
+> 이제 사이드바 자체를 렌더링하지 않으며(데스크톱), 모바일 하단 내비게이션 바도 렌더링하지 않는다** — `TAB_ITEMS`는
+> `isAnalysis === true`일 때 빈 배열. 원문은 배경 이해용으로만 유지한다 — 상세: `SRS_Admin_Dashboard.md`
+> §4.2/§4.3, `Design_Dashboard_Analysis_Mode.md` §10.2 (v2.1).
 
 `isAnalysis === true`인 경우 다음 탭은 변경 없이 유지되어야 한다:
 `alerts`, `zones`, `detections`, `analytics`, `faces`
@@ -168,6 +176,17 @@ isAnalysis = true
 `isAnalysis === false`인 경우 기존 6개 탭(`cameras`, `alerts`, `zones`, `detections`, `analytics`, `faces`) 모두 표시되어야 한다.
 
 > **2026-07-30**: `analytics` 탭은 `combined` 모드를 포함해 전 모드에서 제거되었다.
+
+### FR-DAM-033: analysis 모드 탭 없음 (2026-07-30 신규 — 현재 유효 요구사항)
+
+`isAnalysis === true`인 경우 `TAB_ITEMS`는 SHALL 빈 배열이어야 하며, 데스크톱의 사이드바(`<aside>`)·사이드바
+리사이즈 핸들·hover flyout과 모바일의 하단 내비게이션 바(`<nav>`)를 전부 렌더링하지 않아야 한다(SHALL NOT).
+`<main>`(`AnalysisServerPanel`)이 남은 전체 너비/영역을 차지해야 한다. 모바일에서도 analysis 모드일 때는
+탭 콘텐츠 대신 `AnalysisServerPanel`을 표시해야 한다(SHALL) — 이전에는 모바일 analysis 모드가 사이드바
+탭 콘텐츠만 전체 화면으로 보여주고 상태 패널 자체를 노출하지 않았던 gap을 이 요구사항이 함께 해소한다.
+
+**Acceptance**: `SERVER_MODE=analysis`(또는 combined `/analysis` 경로)에서 데스크톱/모바일 어느 뷰포트에서도
+탭 바·사이드바가 화면에 존재하지 않고, `AnalysisServerDashboard`만 전체 영역에 표시된다.
 
 ---
 
@@ -245,6 +264,7 @@ i18n 파일 변경 후 `npm run build`가 TypeScript 타입 오류 없이 성공
 | FR-DAM-030 | TC-D-001 |
 | FR-DAM-031 | TC-D-002 |
 | FR-DAM-032 | TC-D-003 |
+| FR-DAM-033 | TC-D-004 |
 | FR-DAM-040 | TC-E-001 |
 | FR-DAM-041 | TC-E-002 |
 | FR-DAM-050 | TC-F-001 |
@@ -259,3 +279,4 @@ i18n 파일 변경 후 `npm run build`가 TypeScript 타입 오류 없이 성공
 |---|---|---|
 | 1.0 | 2026-06-08 | 초기 작성 |
 | 1.1 | 2026-07-30 | FR-DAM-031/032에 갱신 노트 추가 — `analytics` 탭이 이후 전 모드에서 완전히 제거되고 Admin Dashboard → AI Models로 이관되었음을 명시 (원문은 배경 이해용으로 유지). 이 문서에 최초로 Revision History 표 추가 |
+| 1.2 | 2026-07-30 | FR-DAM-033 신규 — analysis 모드 탭 완전 제거(사이드바/모바일 하단바 미렌더링, 모바일도 AnalysisServerPanel 표시)를 현재 유효 요구사항으로 명문화 |

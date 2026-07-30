@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | TC-DLY-001 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Active |
 | **Date** | 2026-07-30 |
 | **Parent SRS** | srs/SRS_Dashboard_Layout.md |
@@ -120,11 +120,11 @@
 
 ### TC-B-003 — Sidebar Tabs (Mode-Dependent)
 - **Input:** Desktop sidebar (`SERVER_MODE`별 확인)
-- **Expected:** (2026-07-30 — Analytics 탭 전 모드에서 제거됨)
+- **Expected:** (2026-07-30 재갱신 — Analytics 탭에 이어 analysis 모드의 Detections 탭도 제거됨)
   - combined: Cameras, Alerts, Zones, Detections, Face Gallery
   - streaming: Cameras, Alerts, Zones, Detections, Face Gallery
-  - analysis: Detections only
-- **Acceptance:** 각 모드별 탭 노출 정책 일치; unacknowledged alert badge visible when count > 0; Analytics 탭이 어느 모드에서도 렌더링되지 않음
+  - analysis: 탭 없음 — `<aside>` 사이드바 자체가 DOM에 렌더링되지 않고, `AnalysisServerDashboard`가 전체 너비 차지
+- **Acceptance:** 각 모드별 탭 노출 정책 일치; unacknowledged alert badge visible when count > 0; Analytics 탭이 어느 모드에서도 렌더링되지 않음; analysis 모드에서 사이드바 엘리먼트 자체가 존재하지 않음
 
 ---
 
@@ -174,7 +174,7 @@
 
   > Note: SRS_Dashboard_Layout specifies 6 tabs but SRS_Mobile_Layout specifies 5; defer to Mobile_Layout SRS for tab count.
 
-- **Acceptance:** Bottom bar present and fixed at bottom; 탭 개수는 mode-dependent 정책을 따른다 (2026-07-30 — Analytics 탭은 전 모드에서 제거됨, analysis 모드는 Detections 단일 탭)
+- **Acceptance:** Bottom bar present and fixed at bottom for `combined`/`streaming` mode; 탭 개수는 mode-dependent 정책을 따른다 (2026-07-30 — Analytics 탭은 전 모드에서 제거됨). **analysis 모드에서는 하단 내비게이션 바 자체가 렌더링되지 않으며(2026-07-30 재갱신, Detections 탭도 제거됨), 콘텐츠 영역 전체에 `AnalysisServerDashboard`가 표시됨**
 
 ### TC-E-003 — Mobile Cameras Tab Split
 - **Input:** Mobile viewport; Cameras tab active
@@ -299,3 +299,4 @@ Group A (shell) → Group B (sidebar) → Group C (grid) → Group D (fullscreen
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for Dashboard Layout |
 | 1.1 | 2026-07-30 | LTS Engineering Team | TC-B-003/TC-E-002 updated — Analytics tab removed from all modes (content moved to Admin Dashboard → AI Models) |
+| 1.2 | 2026-07-30 | LTS Engineering Team | TC-B-003/TC-E-002 re-updated — analysis mode's last remaining tab (Detections) also removed; no sidebar or mobile bottom nav renders at all in analysis mode |

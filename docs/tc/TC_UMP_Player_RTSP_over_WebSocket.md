@@ -2,8 +2,8 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** UMP Player RTSP-over-WebSocket (3번째 카메라 재생 경로)
-**Version:** 1.0
-**Date:** 2026-07-23
+**Version:** 1.1
+**Date:** 2026-07-30
 **SRS Reference:** [SRS_UMP_Player_RTSP_over_WebSocket.md](../srs/SRS_UMP_Player_RTSP_over_WebSocket.md)
 **Design Reference:** [Design_UMP_Player_RTSP_over_WebSocket.md](../design/Design_UMP_Player_RTSP_over_WebSocket.md)
 
@@ -204,8 +204,23 @@
 
 ---
 
+#### TC-UMP-043: UMP 재생 화면에 detection bounding box 오버레이가 표시됨 (2026-07-30 회귀 테스트)
+
+**SRS:** FR-UMP-043
+**Precondition:** `streamingMode='ump'` 카메라가 실제로 감지 대상(사람 등)을 촬영 중이고, ingest-daemon → analysis 파이프라인이 정상 동작 중(analysis 서버에 capture image가 입력되고 있음)
+**Steps:**
+1. Streaming Dashboard에서 해당 카메라 타일을 확인
+2. `<ump-player>` 영상 위에 bounding box가 그려지는지 관찰
+3. 브라우저 개발자 도구로 `CameraView.tsx`의 `canvasRef` DOM 노드가 UMP 분기에도 존재하는지 확인(Elements 탭에서 `<ump-player>` 형제로 `<canvas>` 존재 확인)
+
+**Expected:** WebRTC/JPEG 모드와 동일하게 bounding box, 라벨, 신뢰도가 영상 위에 실시간으로 그려짐
+**자동화**: 불가(실 브라우저+실 카메라+실제 감지 대상 필요) — 수동 확인 필요. 회귀 방지 목적으로는 `canvasRef` 엘리먼트가 UMP 분기 JSX에 존재하는지를 컴포넌트 스냅샷/렌더 테스트로 자동화하는 것도 고려 가능(현재 미구현)
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-23 | 초기 작성 — SRS FR-UMP-NNN 전체 항목 대응 테스트 케이스 정의 |
+| 1.1 | 2026-07-30 | TC-UMP-043 추가 — UMP 재생 시 detection bounding box 미표시 버그 회귀 테스트 (Design §8.20) |

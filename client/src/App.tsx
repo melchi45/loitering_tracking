@@ -17,7 +17,6 @@ import DiscoveredCameraPanel from './components/DiscoveredCameraPanel';
 import FullscreenCameraView from './components/FullscreenCameraView';
 import { DashboardDetectionPanel } from './components/DashboardDetectionPanel';
 import { SystemStatusBadges } from './components/SystemStatusBadges';
-import AnalysisEventsTab from './components/AnalysisEventsTab';
 import ZonesPanel from './components/ZonesPanel';
 import FaceGalleryTab from './components/FaceGalleryTab';
 import AnalysisServerDashboard from './components/AnalysisServerDashboard';
@@ -707,7 +706,6 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
         if (data.serverMode) {
           const normalizedMode = data.serverMode.trim().toLowerCase();
           setServerMode(normalizedMode);
-          if (normalizedMode === 'analysis') setSidebarTab('detections');
         }
         if (typeof data.maxChannelNum === 'number') setMaxChannelNum(data.maxChannelNum);
       })
@@ -921,14 +919,14 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
   }
 
   // ── Shared: tab nav items ───────────────────────────────────────────────────
-  // Analysis mode: Analytics category on/off + model Active/Deactivate config
-  // moved to Admin Dashboard → AI Models (2026-07-30) — this sidebar now only
-  // shows Detections history.
-  const ANALYSIS_TABS: SidebarTab[] = ['detections'];
+  // Analysis mode: no sidebar tabs at all (2026-07-30) — Analytics config moved
+  // to Admin Dashboard → AI Models, and the Detections event-history tab was
+  // removed as a duplicate of the "Cumulative Analysis Results → Detections"
+  // card in AnalysisServerDashboard, which already opens the same history via
+  // AnalysisDetectionPanel. The analysis-mode main area (AnalysisServerPanel)
+  // takes the full width with no sidebar/bottom-nav rendered at all.
   const TAB_ITEMS = isAnalysis
-    ? [
-        { id: 'detections' as SidebarTab, icon: Eye,  label: t.tabDetections },
-      ]
+    ? []
     : [
         { id: 'cameras'    as SidebarTab, icon: Camera, label: t.tabCameras },
         { id: 'alerts'     as SidebarTab, icon: Bell, label: t.tabAlerts },
@@ -936,16 +934,6 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
         { id: 'detections' as SidebarTab, icon: Eye,  label: t.tabDetections },
         { id: 'faces'      as SidebarTab, icon: ScanFace,  label: t.tabFaceGallery },
       ].filter(Boolean) as { id: SidebarTab; icon: LucideIcon; label: string }[];
-
-  // If dashboard context changes, reset to a valid tab. (Analysis mode's only
-  // valid tab, 'detections', is also valid outside analysis mode, so no
-  // reset is needed in that direction.)
-  useEffect(() => {
-    if (isAnalysis && !ANALYSIS_TABS.includes(sidebarTab)) {
-      setSidebarTab('detections');
-    }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isAnalysis, sidebarTab]);
 
   // ── Analysis server status panel (replaces camera grid in analysis mode) ────
   const AnalysisServerPanel = (
@@ -961,7 +949,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
     const tab = overrideTab ?? sidebarTab;
     if (tab === 'cameras')    return <CameraList />;
     if (tab === 'alerts')     return <AlertPanel />;
-    if (tab === 'detections') return isAnalysis ? <AnalysisEventsTab /> : <DashboardDetectionPanel />;
+    if (tab === 'detections') return <DashboardDetectionPanel />;
     if (tab === 'zones')      return <ZonesPanel onOpenCamera={setFullscreenCameraId} />;
     if (tab === 'faces')      return (
       <FaceGalleryTab
@@ -1156,7 +1144,10 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
 
         {/* Mobile content area */}
         <div className="flex-1 overflow-hidden">
-          {!isAnalysis && sidebarTab === 'cameras' ? (
+          {isAnalysis ? (
+            /* Analysis mode: no tabs at all (2026-07-30) — same status panel as desktop */
+            AnalysisServerPanel
+          ) : sidebarTab === 'cameras' ? (
             /* Cameras tab: full area swipeable (grid 58% + list 42%) */
             (() => {
               const def = LAYOUT_DEFS.find((d) => d.id === layout)!;
@@ -1246,29 +1237,31 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
           )}
         </div>
 
-        {/* Mobile bottom navigation */}
-        <nav className="flex border-t border-gray-700 bg-gray-900 flex-shrink-0" style={{ height: 52 }}>
-          {TAB_ITEMS.map(({ id, icon: Icon, label }) => (
-            <button
-              key={id}
-              onClick={() => setSidebarTab(id)}
-              className={`flex-1 flex flex-col items-center justify-center gap-0.5 relative transition-colors ${
-                sidebarTab === id ? 'text-blue-400' : 'text-gray-500 hover:text-gray-300'
-              }`}
-            >
-              {sidebarTab === id && (
-                <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 bg-blue-400 rounded-b" />
-              )}
-              <Icon className="w-4 h-4" />
-              <span className="text-[8px] font-semibold uppercase tracking-wide leading-none">{label}</span>
-              {id === 'alerts' && unreadAlerts > 0 && (
-                <span className="absolute top-1 right-2 w-3.5 h-3.5 text-[8px] font-bold bg-red-600 text-white rounded-full flex items-center justify-center">
-                  {unreadAlerts > 9 ? '9+' : unreadAlerts}
-                </span>
-              )}
-            </button>
-          ))}
-        </nav>
+        {/* Mobile bottom navigation — analysis mode has no tabs (2026-07-30) */}
+        {!isAnalysis && (
+          <nav className="flex border-t border-gray-700 bg-gray-900 flex-shrink-0" style={{ height: 52 }}>
+            {TAB_ITEMS.map(({ id, icon: Icon, label }) => (
+              <button
+                key={id}
+                onClick={() => setSidebarTab(id)}
+                className={`flex-1 flex flex-col items-center justify-center gap-0.5 relative transition-colors ${
+                  sidebarTab === id ? 'text-blue-400' : 'text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                {sidebarTab === id && (
+                  <span className="absolute top-0 left-1/2 -translate-x-1/2 w-8 h-0.5 bg-blue-400 rounded-b" />
+                )}
+                <Icon className="w-4 h-4" />
+                <span className="text-[8px] font-semibold uppercase tracking-wide leading-none">{label}</span>
+                {id === 'alerts' && unreadAlerts > 0 && (
+                  <span className="absolute top-1 right-2 w-3.5 h-3.5 text-[8px] font-bold bg-red-600 text-white rounded-full flex items-center justify-center">
+                    {unreadAlerts > 9 ? '9+' : unreadAlerts}
+                  </span>
+                )}
+              </button>
+            ))}
+          </nav>
+        )}
 
         {overlays}
       </div>
@@ -1350,29 +1343,33 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
 
       {/* Main content */}
       <div className="flex flex-1 overflow-hidden relative">
-        {/* Sidebar resize handle — hidden when collapsed */}
-        <div
-          className={`w-1 flex-shrink-0 bg-gray-700 hover:bg-blue-500 active:bg-blue-400 transition-colors z-10 order-last ${sidebarCollapsed ? 'cursor-default pointer-events-none opacity-0' : 'cursor-col-resize'}`}
-          onMouseDown={(e) => {
-            e.preventDefault();
-            isResizingRef.current = true;
-            const startX = e.clientX;
-            const startW = sidebarWidth;
-            const onMove = (ev: MouseEvent) => {
-              if (!isResizingRef.current) return;
-              const delta = startX - ev.clientX;
-              const next = Math.min(600, Math.max(180, startW + delta));
-              setSidebarWidth(next);
-            };
-            const onUp = () => {
-              isResizingRef.current = false;
-              window.removeEventListener('mousemove', onMove);
-              window.removeEventListener('mouseup', onUp);
-            };
-            window.addEventListener('mousemove', onMove);
-            window.addEventListener('mouseup', onUp);
-          }}
-        />
+        {/* Sidebar resize handle — hidden when collapsed. Analysis mode has no
+            sidebar at all (2026-07-30), so this and the <aside>/flyout below
+            are skipped entirely, letting <main> take the full width. */}
+        {!isAnalysis && (
+          <div
+            className={`w-1 flex-shrink-0 bg-gray-700 hover:bg-blue-500 active:bg-blue-400 transition-colors z-10 order-last ${sidebarCollapsed ? 'cursor-default pointer-events-none opacity-0' : 'cursor-col-resize'}`}
+            onMouseDown={(e) => {
+              e.preventDefault();
+              isResizingRef.current = true;
+              const startX = e.clientX;
+              const startW = sidebarWidth;
+              const onMove = (ev: MouseEvent) => {
+                if (!isResizingRef.current) return;
+                const delta = startX - ev.clientX;
+                const next = Math.min(600, Math.max(180, startW + delta));
+                setSidebarWidth(next);
+              };
+              const onUp = () => {
+                isResizingRef.current = false;
+                window.removeEventListener('mousemove', onMove);
+                window.removeEventListener('mouseup', onUp);
+              };
+              window.addEventListener('mousemove', onMove);
+              window.addEventListener('mouseup', onUp);
+            }}
+          />
+        )}
 
         {/* Main area — camera grid in combined mode, status panel in analysis mode */}
         <main className="flex-1 overflow-hidden p-2 relative">
@@ -1439,7 +1436,8 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
           })()}
         </main>
 
-        {/* Sidebar */}
+        {/* Sidebar — hidden entirely in analysis mode (no tabs to show) */}
+        {!isAnalysis && (
         <aside
           className="flex flex-col bg-gray-800 border-l border-gray-700 flex-shrink-0 overflow-hidden"
           style={{ width: sidebarCollapsed ? 44 : sidebarWidth }}
@@ -1510,9 +1508,10 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
             </>
           )}
         </aside>
+        )}
 
         {/* Hover flyout — rendered as sibling outside the aside so overflow-hidden doesn't clip it */}
-        {sidebarCollapsed && hoveredTab && (
+        {!isAnalysis && sidebarCollapsed && hoveredTab && (
           <div
             className="absolute top-0 bottom-0 right-[45px] bg-gray-800 border-l border-t border-b border-gray-700 shadow-2xl z-50 overflow-hidden flex flex-col"
             style={{ width: sidebarWidth }}

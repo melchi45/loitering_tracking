@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UMP-WS-001 |
-| **Version** | 3.4 |
+| **Version** | 3.5 |
 | **Status** | Active (구현 완료, 라이브 검증 완료 — channelSlot=6 실 카메라 30fps 확인) |
-| **Date** | 2026-07-24 |
+| **Date** | 2026-07-30 |
 | **Related Design** | [Design_RTSP_Capture_Backend.md](Design_RTSP_Capture_Backend.md) · [Design_Server_Architecture.md](Design_Server_Architecture.md) |
 | **Related Submodule** | [submodules/ump-player](../../submodules/ump-player) (`github.com/melchi45/ump-player`) |
 
@@ -415,6 +415,18 @@ python3[<pid>]: segfault ... in libavformat.so.58.76.100
 
 관련 파일: `client/scripts/copyUmpPlayerAssets.js`, `client/src/components/UmpPlayerView.tsx`, `server/src/services/onvifParser.js`, `server/src/routes/internalApi.js`, `server/src/api/cameras.js`, `server/src/index.js`, `test/api/onvif_ump_meta_relay.test.js`
 
+### 8.20 버그 수정 — Streaming Dashboard UMP 재생 시 detection bounding box가 전혀 표시되지 않던 결함 (2026-07-30)
+
+**증상**: `streamingMode='ump'`인 카메라에서 ingest-daemon → analysis 파이프라인의 capture image 전송·AI 추론은 정상 동작(analysis 서버에 프레임이 정상 입력됨)함에도, Streaming Dashboard의 `<ump-player>` 영상 위에 detection bounding box 오버레이가 전혀 그려지지 않았음.
+
+**근본 원인**: `client/src/components/CameraView.tsx`의 `useUmpMode` 분기(`<UmpPlayerView>`를 렌더링하는 JSX 블록)에 `<canvas ref={canvasRef}>` 요소 자체가 처음부터 없었음 — WebRTC/JPEG 분기는 각각 `<video>`/`<img>` 옆에 bbox용 `<canvas>`를 함께 렌더링하지만, UMP 분기는 `<UmpPlayerView>`와 배지/통계 UI만 렌더링하고 canvas를 빠뜨리고 있었음. `drawOverlay()`를 호출하는 `useEffect`(`detections`/`zones`/`hasVideo`/`frameWidth`/`frameHeight` 의존)는 UMP 모드에서도 정상적으로 매 detection 업데이트마다 실행되고 있었으나, `if (!canvas || !hasVideo) return;` 가드에서 `canvasRef.current`가 `null`이라 매번 조용히 no-op — 소켓 이벤트 수신(`useCamera.ts`의 `frame`/`detections` 핸들러)은 `streamingMode`와 무관하게 무조건 동작하므로 데이터 자체는 정상 도착하고 있었고, 오직 "그릴 대상 canvas가 애초에 없다"는 것이 유일한 문제였음.
+
+**수정**: UMP 분기에 `<canvas ref={canvasRef} className="absolute top-0 left-0 w-full h-full pointer-events-none" />`를 `<UmpPlayerView>` 바로 다음(배지/통계 UI보다 먼저, DOM 순서상 아래 z-index)에 추가 — WebRTC/JPEG 분기와 동일한 canvas 엘리먼트·동일한 `drawOverlay()` 로직을 그대로 재사용. `drawOverlay()`의 스케일링은 `canvas.clientWidth/clientHeight`(CSS 크기)와 `useCamera()`가 제공하는 `frameWidth`/`frameHeight`(AI JPEG 프레임의 원본 해상도, 스트리밍 모드와 무관하게 항상 동일 파이프라인에서 옴) 기준이라 `<ump-player>` 자체의 네이티브 디코드 해상도(`'resize'`/`'statistics'` 커스텀 이벤트로 노출됨, 현재는 UMP 통계 패널 표시에만 사용 중)를 별도로 읽어올 필요 없이 그대로 작동함.
+
+**미해결 참고**: `<ump-player>`가 노출하는 `'resize'` CustomEvent(네이티브 비디오 width/height)는 현재 어디서도 구독되지 않음 — 향후 UMP 재생 화면 종횡비가 AI 프레임 해상도와 다른 카메라가 생기면 이 이벤트를 canvas 스케일링에 반영하는 추가 작업이 필요할 수 있으나, 이번 수정 범위에서는 기존 JPEG/WebRTC와 동일한 `frameWidth`/`frameHeight` 기준으로 충분히 해결됨.
+
+관련 파일: `client/src/components/CameraView.tsx`
+
 ---
 
 ## Revision History
@@ -449,3 +461,4 @@ python3[<pid>]: segfault ... in libavformat.so.58.76.100
 | 3.2 | 2026-07-24 | §8.17 후속 수정 2 — Rate 스파크라인이 오르내림 없이 우상향 직선으로만 그려지던 버그(사용자 확인). `decodedBytesDecodedPerSec` 필드가 이름과 달리 누적 총 바이트 카운터였음(진짜 초당 델타는 `decodedBytesMean`에만 반영됨) — `decodedBytesPerSec`를 `decodedBytesTotal`로 재명명하고 Rate 행을 재구성: `decodedBpsMean`(평균 bps)을 헤드라인+그래프로, `decodedBytesTotal`은 그래프 없이 정적 숫자("Total X GB")로 분리 |
 | 3.3 | 2026-07-24 | §8.18 추가(기능) — `app/ump-player-example.html`의 `addEventListener` 26종 전수 분석. `close`/`networkstate`/`stream`은 우리가 쓰는 소스에서 아예 발행되지 않음을 확인(죽은 이벤트), 대부분은 디버그 전용이거나 해당 없는 모드용. 유일하게 실제 발행되면서 미대응이던 `'waiting'`(RTP 패킷 손실/복구, errorCode 0x0107 — `'error'`와 같은 switch의 sibling case)을 `UmpPlayerView.tsx`에 추가, §8.15의 `playerNotice` 배너 재사용 |
 | 3.4 | 2026-07-27 | §8.19 추가(기능) — UMP `'meta'` 이벤트(ONVIF MetadataStream XML) → 서버 relay. fast-xml-parser 미탑재로 이벤트가 원천 발행조차 안 되던 것을 확인해 벤더링(WiseNetChromeIPInstaller 서브모듈 재사용), `onvifParser.js`에 `parseOnvifXml`/`ingestOnvifEvents`/`clearDedupStateForCamera` 분리(ingest-daemon 경로와 dedup 상태 공유), `POST /api/cameras/:id/ump-meta` 신설. `bestshot`/`metaImage`(카메라 온보드 AI)는 실카메라 검증 필요로 보류(사용자 확인). 신규 테스트 9건 + 기존 onvif 테스트 24건 재통과 확인 |
+| 3.5 | 2026-07-30 | §8.20 버그 수정 추가 — UMP 재생 시 bounding box 오버레이가 전혀 표시되지 않던 결함. `CameraView.tsx`의 UMP 분기에 `<canvas>` 엘리먼트 자체가 누락돼 있었음(WebRTC/JPEG 분기는 있었음) — `drawOverlay()`는 정상 호출되고 있었으나 canvasRef.current가 null이라 매번 no-op. UMP 분기에 canvas 추가로 해결, 기존 JPEG/WebRTC와 동일한 frameWidth/frameHeight 스케일링 재사용 |
