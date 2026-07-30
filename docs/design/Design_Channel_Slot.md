@@ -2,8 +2,8 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Global Channel Slot Mapping for Cameras / YouTube Streams
-**Version:** 1.16
-**Date:** 2026-07-21
+**Version:** 1.17
+**Date:** 2026-07-30
 
 ---
 
@@ -741,6 +741,18 @@ This does not change `POST /api/cameras/probe-channels` itself — it remains us
 
 **Backend** — see `Design_RTSP_Capture_Backend.md` §6.9 for the ingest-daemon/YouTube pause implementation and the `POST /:id/stream/pause` / `/stream/resume` API contract.
 
+### 5.3c Bug fix — YouTube Add modal: `repeatPlayback`/`channelSlot` appeared not to be applied (2026-07-30)
+
+**Symptom**: after adding a YouTube channel via the "+ Add" modal (YouTube tab) with Repeat Playback checked, a specific Channel Slot picked, and/or WebRTC Streaming toggled, the newly created camera showed up in the Added list/dashboard grid as if none of the three settings had taken effect — reloading the page made them appear correctly. Editing the same camera via `CameraEditModal.tsx` and re-saving always worked.
+
+**Root cause**: server-side persistence was never broken — `youtubeStreamService.js`'s `createStream()`/`_toPublic()` write and return `repeatPlayback`/`webrtcEnabled`/`channelSlot` correctly from the moment the camera record is inserted, and `GET /api/youtube-streams/:id/status` (the endpoint the Add modal polls while the stream is starting) already includes all three fields. The bug was purely client-side: `CameraList.tsx`'s `startYtPoll()` — invoked once the poll observes `status === 'live'` — built a **new, hand-enumerated object** for `useCameraStore().addCamera()` instead of spreading the poll response, and that literal omitted `repeatPlayback` and `channelSlot` (it did include `webrtcEnabled`). `cameraStore.ts`'s `addCamera` pushes whatever object it is given without merging against any existing/fetched record, so the freshly-added camera sat in the Zustand store with those two fields `undefined` until the next full `GET /api/cameras` refresh (e.g. a page reload) replaced it with the real DB record via `setCameras()`.
+
+Edit Camera never had this bug: `handleYtSave()` (`CameraEditModal.tsx`) forwards the full `PATCH` response — `repeatPlayback`, `webrtcEnabled`, and `channelSlot` — into `updateCamera()`, which merges (`{...c, ...updates}`) rather than replacing.
+
+**Fix**: `startYtPoll()`'s `addCamera()` call now also passes `repeatPlayback: data.repeatPlayback` and `channelSlot: data.channelSlot` (`client/src/components/CameraList.tsx`). The RTSP Add path (`handleRtspAdd()`) was never affected — it already passes the server's full `result.data` object straight to `addCamera()`.
+
+**Lesson**: when reflecting a server response into a local store after an async create/poll flow, prefer passing the server object through as-is (or spreading it) rather than re-enumerating fields by hand — hand-enumeration silently drops any field added later and reintroduces this exact bug class. See also `.claude/skills/camera-stream-setup/SKILL.md` § YouTube WebRTC 토글 for the mirrored write-up.
+
 ### 5.4 `CameraEditModal.tsx` — Edit integration
 
 - `<ChannelSlotPicker>` pre-populated from `camera.channelSlot`
@@ -917,3 +929,4 @@ Added to the same `GET /health` fetch `App.tsx` already performs on mount for `s
 | 1.14 | 2026-07-02 | §4.6h 신규 추가 — probe-channels 결과가 discovery 레지스트리 값보다 높으면 `DiscoveryService.applyProbeResult()`로 레지스트리를 갱신하고 discovery:result 재브로드캐스트 (FR-CH-068) — UDP=1/attributes.cgi=2로 확인된 실 카메라(192.168.214.32)에서 Re-detect 정정이 패널을 닫으면 사라지던 문제 수정, 클라이언트 코드 변경 불필요(기존 addOrUpdate() 소켓 파이프 재사용) |
 | 1.15 | 2026-07-02 | §4.6i 신규 추가 — probe-channels가 이번 요청의 라이브 SUNAPI+ONVIF 쿼리 모두 실패했을 때 discovery 레지스트리에 이미 알려진 MaxChannel로 폴백해야 함 (FR-CH-069) — attributes.cgi/GetVideoSources를 못 찾으면 MaxChannel이 다시 1로 되돌아가던 문제 리포트로 도입. 결정 로직을 `resolveProbeChannelsDecision()`(순수 함수)으로 추출해 `test/api/channel_slot.test.js` TC-CH-F-013~013d로 자동화 |
 | 1.16 | 2026-07-21 | §5.3b 신규 추가 — Streaming Dashboard 사이드바 Added 탭을 `channelSlot` 오름차순으로 정렬(기존 삽입 순서), 각 행에 `#<slot>` 배지 및 Pause/Resume 버튼 추가. `Camera.status`에 `'paused'` 추가. 백엔드 구현은 `Design_RTSP_Capture_Backend.md` §6.9 참고 |
+| 1.17 | 2026-07-30 | §5.3c 신규 추가 — YouTube Add 모달에서 Repeat Playback/Channel Slot이 반영 안 되는 것처럼 보이던 버그(`CameraList.tsx` `startYtPoll()`이 poll 응답을 그대로 쓰지 않고 필드를 수동 나열하며 두 필드를 누락, `cameraStore.addCamera()`는 병합이 아닌 교체)의 근본원인·수정 기록 |
