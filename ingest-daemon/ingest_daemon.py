@@ -171,19 +171,49 @@ _WORKER_QUEUE_MAXSIZE = int(os.environ.get("INGEST_WORKER_QUEUE_MAXSIZE", "60"))
 _RTSP_PUBLISH_HEADER = struct.Struct("!qqii")
 _RTSP_PUBLISH_WORKER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "rtsp_publish_worker.py")
 
-# Shared JPEG/App-RTP push pool (2026-07-15) — was previously one
-# ThreadPoolExecutor(max_workers=4) PER CAMERA (up to 4 × camera-count threads,
-# e.g. 52 for a 13-camera fleet, on top of every camera's own io/AI-decode
-# threads). A fleet-wide daemon HTTP responsiveness stall (GET /health taking
-# minutes, Node.js's own re-registration calls timing out) was traced to the
-# process running with several hundred live threads at once — sharing one
-# bounded pool across all cameras keeps push concurrency the same in spirit
-# (still bounded, still non-blocking/drop-on-full for the decode thread) while
-# capping the daemon's total thread count regardless of fleet size. See
-# docs/design/Design_RTSP_Capture_Backend.md §6.8.
-_PUSH_WORKERS          = int(os.environ.get("INGEST_PUSH_WORKERS", "16"))
-_SHARED_PUSH_EXECUTOR  = ThreadPoolExecutor(max_workers=_PUSH_WORKERS, thread_name_prefix="push")
-_SHARED_PUSH_SEMAPHORE = threading.Semaphore(_PUSH_WORKERS)
+def _deprioritize_current_thread(nice_delta: int = 8) -> None:
+    """Lowers (deprioritizes) the CALLING thread's OS scheduling niceness —
+    2026-07-28, §6.43. Raising nice (giving up scheduler priority) is an
+    unprivileged operation on Linux; only *lowering* nice (raising priority)
+    needs CAP_SYS_NICE/root. Linux implements nice as a per-thread attribute
+    (via the numeric id from threading.get_native_id()) despite POSIX
+    specifying it as process-wide, so os.setpriority(PRIO_PROCESS, tid, ...)
+    correctly targets just this thread, not the whole daemon.
+
+    Used as a ThreadPoolExecutor `initializer=` for the two pools that are not
+    fps-critical (App RTP forwarding, camera teardown) so that AI JPEG push
+    (see _AI_PUSH_EXECUTOR below) relatively gets more scheduler attention
+    under host-wide thread-count pressure (§6.41/§6.42) — without needing root
+    to elevate AI push itself. Best-effort: silently no-ops if unsupported."""
+    try:
+        os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), nice_delta)
+    except (AttributeError, OSError):
+        pass  # get_native_id() missing (<3.8) or setpriority unsupported/denied
+
+# AI JPEG push pool (2026-07-28, §6.43 — supersedes the combined pool below,
+# which JPEG push and App RTP used to share). Split out on its own so an ONVIF
+# App-RTP burst can never sit ahead of an AI frame in a shared task queue and
+# delay it. Sized comfortably above expected fleet size: each camera submits
+# at most ONE in-flight drain task at a time (see CameraSession._push_jpeg /
+# _drain_ai_push's single-flight-with-coalescing design), so idle extra
+# workers cost nothing — they only matter as a ceiling on worst-case
+# simultaneous cameras.
+_AI_PUSH_WORKERS   = int(os.environ.get("INGEST_AI_PUSH_WORKERS", "24"))
+_AI_PUSH_EXECUTOR  = ThreadPoolExecutor(max_workers=_AI_PUSH_WORKERS, thread_name_prefix="ai-push")
+# Small shared overflow — should not normally be needed (each camera owns a
+# dedicated slot, see CameraSession._ai_own_slot), kept only as a safety
+# margin against a pathological case where a camera's own slot is stuck.
+_AI_PUSH_OVERFLOW  = threading.Semaphore(int(os.environ.get("INGEST_AI_PUSH_OVERFLOW", "4")))
+
+# App RTP (ONVIF metadata) push pool (2026-07-28, §6.43) — deliberately
+# separate from AI JPEG push above, and deprioritized (see
+# _deprioritize_current_thread) since ONVIF events are sparse/non-fps-critical
+# and must never compete with AI frame delivery for scheduler attention.
+_APP_RTP_WORKERS  = int(os.environ.get("INGEST_APP_RTP_WORKERS", "4"))
+_APP_RTP_EXECUTOR = ThreadPoolExecutor(
+    max_workers=_APP_RTP_WORKERS, thread_name_prefix="apprtp-push",
+    initializer=_deprioritize_current_thread,
+)
 
 # Shared "stopper" pool (2026-07-16) — CameraManager.add()/remove() used to
 # spawn a brand-new threading.Thread(...) per old-session teardown so the HTTP
@@ -194,8 +224,13 @@ _SHARED_PUSH_SEMAPHORE = threading.Semaphore(_PUSH_WORKERS)
 # threads. Routing teardown through a small bounded executor keeps the same
 # fire-and-forget behaviour (submit() returns immediately, callers never wait
 # on the Future) while capping how many stop() calls can be in flight at once.
+# Deprioritized (2026-07-28, §6.43) — teardown is not fps-critical, same
+# reasoning as App RTP above.
 _STOP_WORKERS         = int(os.environ.get("INGEST_STOP_WORKERS", "8"))
-_SHARED_STOP_EXECUTOR = ThreadPoolExecutor(max_workers=_STOP_WORKERS, thread_name_prefix="stopper")
+_SHARED_STOP_EXECUTOR = ThreadPoolExecutor(
+    max_workers=_STOP_WORKERS, thread_name_prefix="stopper",
+    initializer=_deprioritize_current_thread,
+)
 
 # Health-proxy heartbeat file (2026-07-28) — see ingest_health_proxy.py's module
 # docstring for the full story. Written every _STATS_SAMPLE_INTERVAL_S tick by
@@ -544,6 +579,18 @@ class CameraSession:
         self._ai_push_interval = (1.0 / float(_fps)) if _fps and float(_fps) > 0 else 0.0
         self._ai_last_push     = 0.0
 
+        # AI push: per-camera single-flight "latest frame wins" state (2026-07-28,
+        # §6.43) — see _push_jpeg()/_drain_ai_push() docstrings. Replaces the old
+        # "acquire a fleet-wide shared semaphore or drop the frame" model: this
+        # camera's _ai_own_slot is a guaranteed reservation that no other camera's
+        # push load can take away, and a push that falls behind its own interval
+        # coalesces to the newest frame instead of losing whichever frame lost a
+        # race for a shared slot.
+        self._ai_push_lock     = threading.Lock()
+        self._ai_pending_frame = None   # (raw_ndarray, count) or None
+        self._ai_push_inflight = False
+        self._ai_own_slot      = threading.Semaphore(1)
+
         self._stop = threading.Event()
 
         # Populated once the RTSP stream's SPS/PPS are probed (see
@@ -607,9 +654,10 @@ class CameraSession:
         # flag and the list entry it controls must change atomically together.
         self._rtsp_publish_requested = None   # channelSlot (int) or None
 
-        # JPEG/App-RTP push uses the module-level _SHARED_PUSH_EXECUTOR /
-        # _SHARED_PUSH_SEMAPHORE (bounded pool shared by the whole daemon, not
-        # one per camera — see their definitions for why).
+        # AI JPEG push uses this camera's own _ai_own_slot reservation plus the
+        # module-level _AI_PUSH_EXECUTOR/_AI_PUSH_OVERFLOW; App RTP push uses the
+        # separate module-level _APP_RTP_EXECUTOR (2026-07-28, §6.43 — previously
+        # both shared one pool, see that section for why they were split).
 
         # Real-time stats for GET /cameras/stats (2026-07-21, Admin Dashboard
         # Ingest Daemon monitoring — see docs/design/Design_Ingest_Daemon_Monitoring.md).
@@ -655,9 +703,13 @@ class CameraSession:
         self._threads.append(t)
 
     def _signal_stop(self):
-        """Phase 1 — set stop flag. The push executor is shared daemon-wide
-        (_SHARED_PUSH_EXECUTOR) and is not owned by any single camera, so it is
-        not shut down here — only the daemon process exit tears it down."""
+        """Phase 1 — set stop flag. The push executors (_AI_PUSH_EXECUTOR,
+        _APP_RTP_EXECUTOR) are shared daemon-wide and not owned by any single
+        camera, so they are not shut down here — only the daemon process exit
+        tears them down. This camera's _ai_own_slot reservation and pending-frame
+        state are simply garbage-collected with the CameraSession instance; any
+        in-flight _drain_ai_push() for this camera just exits on its next loop
+        iteration once _ai_pending_frame stays empty."""
         self._stop.set()
 
     def _join_threads(self, timeout: float = 8.0):
@@ -1643,73 +1695,110 @@ class CameraSession:
             except Exception as e:
                 log.debug("[%s] App RTP callback failed: %s", self.id[:8], e)
 
-        _SHARED_PUSH_EXECUTOR.submit(_post)
+        _APP_RTP_EXECUTOR.submit(_post)
 
     def _push_jpeg(self, frame: "av.VideoFrame"):
         """
-        Capture raw pixel data from the decoded frame (cheap memcopy), then
-        submit JPEG encoding + HTTP POST entirely to the thread pool so the
-        decode loop is never blocked by slow encoding or network latency.
+        Capture raw pixel data from the decoded frame (cheap memcopy) and hand
+        it to this camera's own single-flight drain loop (2026-07-28, §6.43).
 
-        Flow: decode thread captures ndarray → semaphore check → thread pool
-              (encode JPEG → POST /api/internal/frame → release semaphore).
-        Both the semaphore and the thread pool are shared daemon-wide
-        (_SHARED_PUSH_SEMAPHORE / _SHARED_PUSH_EXECUTOR) — see their
-        definitions for why this changed from one-per-camera.
+        Replaces the previous "acquire a fleet-wide shared semaphore or drop
+        the frame" model. Every call here either starts a fresh drain loop
+        (if none is running for this camera) or simply replaces whatever
+        frame was pending — the decode thread is never blocked either way,
+        and no camera can be starved of its push slot by another camera's
+        load (see _drain_ai_push / self._ai_own_slot).
         """
         if not hasattr(self, "_push_count"):
             self._push_count = 0
         self._push_count += 1
         count = self._push_count
 
-        # Semaphore check happens in the decode thread — fast, no I/O.
-        if not _SHARED_PUSH_SEMAPHORE.acquire(blocking=False):
-            log.debug("[%s] AI busy — dropping frame #%d", self.id[:8], count)
-            return
-
         # Capture raw pixels now (frame object may be recycled after this call
         # returns).  to_ndarray() is a fast C-level memcopy, not an encode.
         try:
             raw = frame.to_ndarray(format="rgb24")
-            orig_w, orig_h = frame.width, frame.height
         except Exception as e:
-            _SHARED_PUSH_SEMAPHORE.release()
             log.warning("[%s] frame capture failed: %s", self.id[:8], e)
             return
 
+        with self._ai_push_lock:
+            # Latest-frame-wins: overwrite whatever was pending — a drain loop
+            # already in flight for this camera will pick up this newer frame
+            # on its next iteration instead of the stale one it replaced.
+            self._ai_pending_frame = (raw, count)
+            if self._ai_push_inflight:
+                return
+            self._ai_push_inflight = True
+
+        _AI_PUSH_EXECUTOR.submit(self._drain_ai_push)
+
+    def _drain_ai_push(self):
+        """
+        Runs on _AI_PUSH_EXECUTOR (2026-07-28, §6.43). Holds this camera's
+        guaranteed reservation (_ai_own_slot) for its whole lifetime so no
+        other camera's push load can delay it; falls back to the small shared
+        _AI_PUSH_OVERFLOW pool only in the pathological case where this
+        camera's own slot is somehow already held (should not happen — at
+        most one _drain_ai_push runs per camera at a time by construction).
+
+        Drains self._ai_pending_frame in a loop until nothing new arrived
+        while encoding/posting the previous one, so a camera that falls
+        behind its own push interval always converges on its LATEST frame
+        rather than working through a backlog or losing frames to unrelated
+        fleet-wide contention.
+        """
+        got_own = self._ai_own_slot.acquire(blocking=False)
+        if not got_own and not _AI_PUSH_OVERFLOW.acquire(timeout=2.0):
+            # Neither this camera's own slot nor the shared overflow freed up
+            # within 2s — give up this round rather than block an executor
+            # thread indefinitely; the next _push_jpeg() call retries.
+            with self._ai_push_lock:
+                self._ai_push_inflight = False
+            log.debug("[%s] AI push: no slot available, deferring", self.id[:8])
+            return
+        try:
+            while True:
+                with self._ai_push_lock:
+                    item = self._ai_pending_frame
+                    self._ai_pending_frame = None
+                    if item is None:
+                        self._ai_push_inflight = False
+                        return
+                self._encode_and_post_ai(*item)
+        finally:
+            (self._ai_own_slot if got_own else _AI_PUSH_OVERFLOW).release()
+
+    def _encode_and_post_ai(self, raw, count: int) -> None:
+        """Encode one captured frame to JPEG and POST it to the AI callback URL.
+        Runs on _AI_PUSH_EXECUTOR via _drain_ai_push — never on the decode thread."""
         url      = self.callback_url
         is_https = url.startswith("https://")
+        try:
+            # Sent at native/decoded resolution — this is the sole source buffer
+            # for both AI inference and detectionSnapshots crop extraction on the
+            # Node.js side. Node.js (pipelineManager.js) downscales its own copy
+            # before forwarding to a remote analysis server (streaming mode) so
+            # that hop stays cheap while crops stay full-resolution.
+            img = Image.fromarray(raw)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=JPEG_QUALITY)
+            jpeg_bytes = buf.getvalue()
+            w, h = img.width, img.height
 
-        def _encode_and_post():
-            try:
-                # Sent at native/decoded resolution — this is the sole source buffer
-                # for both AI inference and detectionSnapshots crop extraction on the
-                # Node.js side. Node.js (pipelineManager.js) downscales its own copy
-                # before forwarding to a remote analysis server (streaming mode) so
-                # that hop stays cheap while crops stay full-resolution.
-                img = Image.fromarray(raw)
-                buf = io.BytesIO()
-                img.save(buf, format="JPEG", quality=JPEG_QUALITY)
-                jpeg_bytes = buf.getvalue()
-                w, h = img.width, img.height
-
-                req = Request(url, data=jpeg_bytes,
-                              headers={"Content-Type": "image/jpeg"}, method="POST")
-                ctx = _SSL_CTX_NOVERIFY if is_https else None
-                with urlopen(req, timeout=3, context=ctx) as resp:
-                    code = resp.getcode()
-                self.stats.ai_frames_total += 1
-                self.stats.ai_bytes_total  += len(jpeg_bytes)
-                self.stats.last_ai_push_at  = time.time()
-                if count == 1 or count % 100 == 0:
-                    log.info("[%s] AI frame #%d: %dx%d → %dB → HTTP %d",
-                             self.id[:8], count, w, h, len(jpeg_bytes), code)
-            except Exception as e:
-                log.warning("[%s] push_jpeg failed: %s", self.id[:8], e)
-            finally:
-                _SHARED_PUSH_SEMAPHORE.release()
-
-        _SHARED_PUSH_EXECUTOR.submit(_encode_and_post)
+            req = Request(url, data=jpeg_bytes,
+                          headers={"Content-Type": "image/jpeg"}, method="POST")
+            ctx = _SSL_CTX_NOVERIFY if is_https else None
+            with urlopen(req, timeout=3, context=ctx) as resp:
+                code = resp.getcode()
+            self.stats.ai_frames_total += 1
+            self.stats.ai_bytes_total  += len(jpeg_bytes)
+            self.stats.last_ai_push_at  = time.time()
+            if count == 1 or count % 100 == 0:
+                log.info("[%s] AI frame #%d: %dx%d → %dB → HTTP %d",
+                         self.id[:8], count, w, h, len(jpeg_bytes), code)
+        except Exception as e:
+            log.warning("[%s] push_jpeg failed: %s", self.id[:8], e)
 
     # ── App RTP path (RTSP data/subtitle track → server HTTP callback → DataChannel) ──
 
@@ -1951,6 +2040,27 @@ class CameraManager:
 
 _manager: CameraManager = None
 
+# TCP listen backlog (2026-07-28, §6.44) — socketserver.TCPServer defaults to
+# request_queue_size=5, which ThreadingHTTPServer inherits unchanged (moving
+# to a threaded handler in 2026-07-15 fixed serialized slow-request handling,
+# but never touched the *kernel accept queue* size). Confirmed live: `dmesg`
+# repeatedly logged "Possible SYN flooding on port 7070" during the exact
+# windows where /health went unresponsive for tens of seconds and py-spy
+# dumps taken 3s apart showed every single thread frozen at the identical
+# line (no thread "active" at all — not a GIL/scheduling contention pattern,
+# a stalled-accept pattern). A backlog of 5 fills almost instantly once
+# several clients hit this port back-to-back (Node's ingestDaemonWatchdog.js
+# health poll + ingestStatsAggregator.js's 1.5s /cameras/stats poll + any
+# in-flight camera add/remove/video-params calls), and an overflowing SYN
+# queue's cookie-retransmit overhead can itself further delay accept() —
+# self-reinforcing. Raising this is a plain kernel-queue-depth config change,
+# not a code-logic change.
+_LISTEN_BACKLOG = int(os.environ.get("INGEST_LISTEN_BACKLOG", "128"))
+
+
+class _BacklogThreadingHTTPServer(ThreadingHTTPServer):
+    request_queue_size = _LISTEN_BACKLOG
+
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
@@ -2128,6 +2238,22 @@ def main():
                   f"(run 'sudo setcap cap_sys_nice+ep' on the real python3 binary once) "
                   f"— continuing at default priority", flush=True)
 
+    # GIL switch interval (2026-07-28, §6.44) — live strace during an actual
+    # wedge (catch_wedge_strace.sh, 4s capture) showed ~22,000 futex() calls/sec
+    # across 96 threads with ZERO other syscalls (no connect/read/write) for
+    # the entire window — not blocked on real I/O, just GIL hand-off churn.
+    # CPython's default switchinterval (5ms) has every waiting thread wake and
+    # re-request the GIL that often; with dozens of io/apprtp/aiw/push threads
+    # all doing this simultaneously, the wake/re-acquire/re-sleep cycle itself
+    # can dominate over actually running Python bytecode — a "GIL thrashing"
+    # livelock, distinct from (and not caught by) the earlier synthetic
+    # demux()/decode() GIL-release tests in §6.42, which never reproduced this
+    # many concurrent waiters. Widening the interval means each thread holds
+    # the GIL longer once it gets it, so fewer wake/acquire cycles happen
+    # fleet-wide — a throughput/latency trade-off, not a functional change.
+    _switch_interval = float(os.environ.get("INGEST_GIL_SWITCH_INTERVAL", "0.05"))
+    sys.setswitchinterval(_switch_interval)
+
     signal.signal(signal.SIGTERM, _handle_sigterm)
 
     parser = argparse.ArgumentParser()
@@ -2201,8 +2327,9 @@ def main():
     # business being reachable from anywhere but the proxy on the same box.
     bind_host = "127.0.0.1" if proxy_proc else host
     bind_port = internal_port if proxy_proc else port
-    server = ThreadingHTTPServer((bind_host, bind_port), Handler)
-    log.info("Ingest daemon internal API listening on %s:%d", bind_host, bind_port)
+    server = _BacklogThreadingHTTPServer((bind_host, bind_port), Handler)
+    log.info("Ingest daemon internal API listening on %s:%d (listen backlog=%d)",
+             bind_host, bind_port, _LISTEN_BACKLOG)
 
     try:
         server.serve_forever()

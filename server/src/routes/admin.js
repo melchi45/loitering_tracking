@@ -212,10 +212,22 @@ function requireIngestDaemonBackend(req, res, next) {
   next();
 }
 
+// Optional body.instance (2026-07-28, §6.45 — multi-process ingest-daemon
+// fleet): targets one specific instance. Omitted ⇒ every configured instance
+// (today's exact single-instance behavior when INGEST_DAEMON_INSTANCES is
+// unset — ingestDaemonControl's *Daemon() functions unwrap to the same flat
+// {ok,...} shape in that case, so existing clients see zero change).
+function _parseInstanceParam(req) {
+  const raw = req.body?.instance;
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) ? n : undefined;
+}
+
 // ── POST /admin/ingest/start ──────────────────────────────────────────────────
 router.post('/ingest/start', requireIngestDaemonBackend, async (req, res) => {
   try {
-    const result = await ingestDaemonControl.startDaemon();
+    const result = await ingestDaemonControl.startDaemon(_parseInstanceParam(req));
     AuditService.log({ event: 'ingest_daemon_start', actorId: req.user.sub, detail: result });
     res.status(result.ok ? 200 : 500).json(result);
   } catch (err) {
@@ -228,7 +240,7 @@ router.post('/ingest/start', requireIngestDaemonBackend, async (req, res) => {
 // ── POST /admin/ingest/stop ───────────────────────────────────────────────────
 router.post('/ingest/stop', requireIngestDaemonBackend, async (req, res) => {
   try {
-    const result = await ingestDaemonControl.stopDaemon();
+    const result = await ingestDaemonControl.stopDaemon(_parseInstanceParam(req));
     AuditService.log({ event: 'ingest_daemon_stop', actorId: req.user.sub, detail: result });
     res.status(result.ok ? 200 : 500).json(result);
   } catch (err) {
@@ -241,7 +253,7 @@ router.post('/ingest/stop', requireIngestDaemonBackend, async (req, res) => {
 // ── POST /admin/ingest/restart ────────────────────────────────────────────────
 router.post('/ingest/restart', requireIngestDaemonBackend, async (req, res) => {
   try {
-    const result = await ingestDaemonControl.restartDaemon();
+    const result = await ingestDaemonControl.restartDaemon(_parseInstanceParam(req));
     AuditService.log({ event: 'ingest_daemon_restart', actorId: req.user.sub, detail: result });
     res.status(result.ok ? 200 : 500).json(result);
   } catch (err) {

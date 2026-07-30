@@ -2,15 +2,17 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Admin Dashboard Ingest Daemon Start/Stop/Restart Control  
-**Version:** 1.0  
-**Date:** 2026-07-23  
+**Version:** 1.1  
+**Date:** 2026-07-28  
 **Author:** LTS Engineering Team
 
 ---
 
 ## 1. Executive Summary
 
-`ingest_daemon.py` is the single RTSP capture process for every IP camera in streaming and combined server modes. It is known to occasionally wedge into an HTTP-unresponsive "zombie" state under sustained multi-camera load (Design_RTSP_Capture_Backend.md §6.29.5), and the only recovery paths today are an automatic watchdog or an administrator with shell access running `npm run ingest:restart`. Non-shell administrators have no way to intervene. This feature adds Start/Stop/Restart controls to the existing Admin Dashboard Ingest Daemon monitoring panel so an administrator can recover the capture pipeline from the browser.
+`ingest_daemon.py` is the RTSP capture process for every IP camera in streaming and combined server modes. It is known to occasionally wedge into an HTTP-unresponsive "zombie" state under sustained multi-camera load (Design_RTSP_Capture_Backend.md §6.29.5), and the only recovery paths today are an automatic watchdog or an administrator with shell access running `npm run ingest:restart`. Non-shell administrators have no way to intervene. This feature adds Start/Stop/Restart controls to the existing Admin Dashboard Ingest Daemon monitoring panel so an administrator can recover the capture pipeline from the browser.
+
+Since 2026-07-28 (Design_RTSP_Capture_Backend.md §6.45), the wedge was root-caused to GIL thrashing under a high thread count in a single process, and the capture layer moved to a fleet of `INGEST_DAEMON_INSTANCES` independent `ingest_daemon.py` processes (default 1, backward compatible). This feature's Start/Stop/Restart controls now operate per-instance or across the whole fleet — see BR-08.
 
 ---
 
@@ -46,6 +48,7 @@
 | BR-05 | Restart must re-register all active cameras with the daemon automatically, matching existing CLI behavior |
 | BR-06 | Stop/Restart must present a confirmation prompt warning that camera capture will be interrupted |
 | BR-07 | The underlying control logic must be shared between the CLI scripts (`npm run ingest:start/stop/restart`) and the new API — not duplicated |
+| BR-08 | When the ingest-daemon runs as a multi-instance fleet (`INGEST_DAEMON_INSTANCES > 1`), Start/Stop/Restart must support targeting a single instance or the whole fleet, and a fleet-wide action's response must clearly report per-instance outcomes |
 
 ---
 
@@ -60,7 +63,7 @@
 ## 6. Out of Scope
 
 - Automatic Start/Stop scheduling (e.g. cron-like maintenance windows)
-- Per-camera start/stop (this controls the whole daemon process, not individual camera pipelines — see existing `POST /api/cameras/:id/stream/start|stop`)
+- Per-camera start/stop (this controls whole ingest-daemon process(es), not individual camera pipelines — see existing `POST /api/cameras/:id/stream/start|stop`)
 - Analysis-mode support (analysis servers have no capture backend)
 - Replacing or modifying the existing automatic watchdog (`ingestDaemonWatchdog.js`) or `startServer.js`'s own crash-restart supervisor — both continue to operate independently of this feature
 
@@ -71,3 +74,4 @@
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-23 | 초기 작성 |
+| 1.1 | 2026-07-28 | 멀티 인스턴스 ingest-daemon 플릿(§6.45) 반영 — BR-08 추가, Out of Scope 문구 수정 |

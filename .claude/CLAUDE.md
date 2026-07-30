@@ -82,7 +82,8 @@ loitering_tracking/
 │   │   ├── faceSearchSync.js       # streaming→analysis 갤러리/얼굴 스냅샷 push+5s poll (streaming 서버 전용)
 │   │   ├── systemMetrics.js        # CPU·메모리·GPU·디스크 I/O 수집 (admin/system)
 │   │   ├── TcRunnerService.js      # TC-ID 단위 테스트 실행기 (admin/tc-results)
-│   │   ├── ingestDaemonControl.js  # ingest-daemon start/stop/restart 공용 로직 — CLI 스크립트(ingest:start/stop/restart)와 Admin API(/admin/ingest/*) 공동 사용, 포트 bind 테스트 기반 좀비 데몬 감지
+│   │   ├── ingestDaemonControl.js  # ingest-daemon start/stop/restart 공용 로직 — CLI 스크립트(ingest:start/stop/restart)와 Admin API(/admin/ingest/*) 공동 사용, 포트 bind 테스트 기반 좀비 데몬 감지, instanceIndex 인자로 멀티 인스턴스 지원(§6.45)
+│   │   ├── ingestDaemonPool.js     # 멀티 프로세스 ingest-daemon 플릿 단일 소스 — INGEST_DAEMON_INSTANCES개 인스턴스의 포트/URL, cameraId→인스턴스 해시 배정 (GIL 스래싱 완화, Design_RTSP_Capture_Backend.md §6.45)
 │   │   └── channelSlotService.js   # Dashboard Channel Slot 검증·자동배정·시작 시 backfill 마이그레이션 (MAX_CHANNEL_NUM)
 │   ├── api/                        # REST 리소스 라우터 (팩토리 함수, db/pipelineManager 주입)
 │   │   ├── cameras.js              # /api/cameras — CRUD·probe-channels·stream start/stop/reconnect·ai/toggle
@@ -120,7 +121,9 @@ loitering_tracking/
 │       ├── logger.js               # 프로덕션 로거 — [YY-MM-DD HH:mm:ss.sss] 타임스탬프, /var/log/lts 파일 저장, makeLineRelay
 │       ├── onvifParser.js          # ONVIF Application RTP 메타데이터 XML 파싱 (state-change dedup)
 │       ├── channelRtsp.js          # NVR 채널별 RTSP URL 치환 (SUNAPI/ONVIF 경로 규칙)
-│       └── kmeansColor.js          # K-Means 대표색 클러스터링 (Human Parsing 마스크 픽셀 대표색 추출용)
+│       ├── kmeansColor.js          # K-Means 대표색 클러스터링 (Human Parsing 마스크 픽셀 대표색 추출용)
+│       ├── cameraHash.js           # cameraId → 버킷 인덱스 결정론적 해시 — mediasoupEngine.js Worker pool·ingestDaemonPool.js 공용
+│       └── ingestDaemonWatchdog.js # ingest-daemon 인스턴스별 독립 /health 감시 + 자동 재시작 (§6.45부터 인스턴스별 타이머)
 ├── client/src/
 │   ├── App.tsx
 │   ├── components/
@@ -262,9 +265,9 @@ loitering_tracking/
 | POST | `/admin/tc-results/run` | TC 테스트 수동 재실행 트리거 (body: { port? }) |
 | GET | `/admin/logs/recent` | 최근 서버 로그 조회 (query: source=server\|ingest\|mediamtx\|build, limit) |
 | PATCH | `/admin/logs/level` | Socket.IO 릴레이 로그 레벨 런타임 변경 (body: { level } — 파일 로깅 불변) |
-| POST | `/admin/ingest/start` | ingest-daemon 프로세스 시작 (이미 실행 중이면 no-op) — `CAPTURE_BACKEND=ingest-daemon`이 아니면 501, Design_Ingest_Daemon_Control.md |
-| POST | `/admin/ingest/stop` | ingest-daemon 프로세스 종료 (좀비 상태 포함 — `/health` 아닌 실제 포트 점유 여부로 판단) |
-| POST | `/admin/ingest/restart` | ingest-daemon 종료 후 재시작 + 카메라 재등록 (동기 응답, 최대 ~11초) |
+| POST | `/admin/ingest/start` | ingest-daemon 프로세스 시작 (이미 실행 중이면 no-op) — `CAPTURE_BACKEND=ingest-daemon`이 아니면 501, Design_Ingest_Daemon_Control.md — body: `instance?`(멀티 인스턴스 플릿에서 특정 인스턴스만 타겟, 생략 시 전체, Design_RTSP_Capture_Backend.md §6.45) |
+| POST | `/admin/ingest/stop` | ingest-daemon 프로세스 종료 (좀비 상태 포함 — `/health` 아닌 실제 포트 점유 여부로 판단) — body: `instance?` (§6.45) |
+| POST | `/admin/ingest/restart` | ingest-daemon 종료 후 재시작 + 카메라 재등록 (동기 응답, 최대 ~11초) — body: `instance?` (§6.45); 인스턴스가 1개(기본)면 응답이 기존과 완전 동일한 flat `{ok,pid,cameras}`, 2개 이상이면 `{ok, instances:[...]}`로 래핑 |
 | POST | `/admin/analysis/camera-removed` | 원격 Analysis 서버의 특정 cameraId 채널을 강제 정리 (body: { cameraId }) — `DELETE /api/cameras/:id`도 같은 통지를 하지만 로컬에 Camera 레코드가 없으면 404로 끝나 절대 도달하지 못함(TC 스위트 등이 `POST /api/analysis/frame`에 임의 cameraId로 직접 보낸 채널이 대표 사례). streaming 모드 전용, 결과를 기다려 성공/실패 반환(`DELETE`의 fire-and-forget과 다름) |
 
 ### 카메라 (`/api/cameras`)

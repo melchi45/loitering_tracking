@@ -2,8 +2,8 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Admin Dashboard Ingest Daemon Start/Stop/Restart Control  
-**Version:** 1.0  
-**Date:** 2026-07-23
+**Version:** 1.1  
+**Date:** 2026-07-28
 
 ---
 
@@ -67,10 +67,18 @@ Reuses the existing `verifyAccessToken` + `requireRole('admin')` middleware chai
 
 ## 5. API Contracts
 
+All three endpoints accept an optional body field `instance?: number` (0-based) to target a single
+ingest-daemon instance in a multi-instance fleet (`INGEST_DAEMON_INSTANCES`, §6.45). When omitted,
+the action applies to every configured instance. With the default `INGEST_DAEMON_INSTANCES=1`
+(or when `instance` is explicitly given), the response is the original flat shape below, unchanged.
+When `instance` is omitted AND the fleet has more than one instance, the response wraps per-instance
+results in an `instances[]` array instead (see each contract below).
+
 ### POST /admin/ingest/start
 
 ```
-Response 200: { "ok": true, "alreadyRunning": boolean, "pid"?: number, "cameras"?: {...} }
+Response 200 (single instance): { "ok": true, "alreadyRunning": boolean, "pid"?: number, "cameras"?: {...} }
+Response 200 (fleet, N>1, no `instance`): { "ok": true, "instances": [ { "index": number, "port": number, "ok": true, "alreadyRunning": boolean, "pid"?: number }, ... ] }
 Response 500: { "ok": false, "error": string }
 Response 501: { "error": "ingest-daemon backend not active (CAPTURE_BACKEND != ingest-daemon)" }
 ```
@@ -78,7 +86,8 @@ Response 501: { "error": "ingest-daemon backend not active (CAPTURE_BACKEND != i
 ### POST /admin/ingest/stop
 
 ```
-Response 200: { "ok": true, "wasRunning": boolean }
+Response 200 (single instance): { "ok": true, "wasRunning": boolean }
+Response 200 (fleet, N>1, no `instance`): { "ok": true, "instances": [ { "index": number, "port": number, "ok": true, "wasRunning": boolean }, ... ] }
 Response 500: { "ok": false, "wasRunning": boolean, "error": string }
 Response 501: (same as above)
 ```
@@ -86,7 +95,8 @@ Response 501: (same as above)
 ### POST /admin/ingest/restart
 
 ```
-Response 200: { "ok": true, "pid": number, "cameras": { "<cameraId>": { "ok": boolean, "error"?: string } } }
+Response 200 (single instance): { "ok": true, "pid": number, "cameras": { "<cameraId>": { "ok": boolean, "error"?: string } } }
+Response 200 (fleet, N>1, no `instance`): { "ok": true, "instances": [ { "index": number, "port": number, "ok": true, "pid": number, "cameras": {...} }, ... ] }
 Response 500: { "ok": false, "error": string }
 Response 501: (same as above)
 ```
@@ -110,3 +120,4 @@ Admin Dashboard → Ingest Daemon section (existing) — new control row above t
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-23 | 초기 작성 |
+| 1.1 | 2026-07-28 | §5 API Contracts에 멀티 인스턴스 `instance` 파라미터 및 `instances[]` 응답 형태 추가 (§6.45) |

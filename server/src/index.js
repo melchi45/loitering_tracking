@@ -653,12 +653,18 @@ async function main() {
   // Ingest-daemon reregister — called by startServer.js auto-restart and `npm run ingest:restart`.
   // Re-registers all active cameras with ingest-daemon: mediamtx cameras via direct HTTP POST,
   // mediasoup cameras via engine.addCameraStream (which re-creates PlainTransports + RTP).
+  // body.instanceIndex (2026-07-28, §6.45 — multi-process ingest-daemon fleet): when a specific
+  // ingest-daemon instance restarted (not the whole fleet), only that instance's own cameras
+  // need re-registering — passing this through avoids redundantly re-registering every OTHER
+  // instance's still-healthy cameras on every single-instance restart. Omitted/undefined ⇒ all
+  // cameras (today's exact single-instance behavior, unchanged).
   app.post('/api/internal/ingest/reregister', async (req, res) => {
     const ip = req.ip || req.connection?.remoteAddress || '';
     const isLocal = ip === '127.0.0.1' || ip === '::1' || ip === '::ffff:127.0.0.1';
     if (!isLocal) return res.status(403).json({ error: 'localhost only' });
     try {
-      const results = await pipelineManager.reregisterAllWithIngestDaemon();
+      const { instanceIndex } = req.body || {};
+      const results = await pipelineManager.reregisterAllWithIngestDaemon(instanceIndex);
       res.json({ ok: true, cameras: results });
     } catch (e) {
       res.status(500).json({ error: e.message });

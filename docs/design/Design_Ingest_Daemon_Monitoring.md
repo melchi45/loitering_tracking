@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-INGEST-MONITOR-001 |
-| **Version** | 2.1 |
+| **Version** | 2.2 |
 | **Status** | Implemented — verified live end-to-end (§8) |
-| **Date** | 2026-07-21 |
+| **Date** | 2026-07-28 |
 | **Related Design** | [Design_RTSP_Capture_Backend.md](Design_RTSP_Capture_Backend.md) §6.29 (ingest-daemon reliability findings this doc builds on) |
 
 ---
@@ -201,12 +201,27 @@ Admin Dashboard 신규 'ingest' 섹션 — 소켓 구독, 카메라별 카드 + 
 
 **수정**: `pipelineManager.js`의 `_processRemoteResult()` 끝에 동일한 6개 카운터 증가 로직 추가(`framesProcessed++`, `detectionsTotal`/`trackedTotal += remoteTracked.length`, `facesTotal += faceDetObjects.length`, `fireSmokeTotal += remoteFireSmoke.length`, `loiteringTotal`은 `result.behaviors`의 loitering 항목 수). streaming 모드에는 로컬 raw-detection-count 개념이 없어 `detectionsTotal`과 `trackedTotal`은 동일하게 원격 tracked 배열 길이를 사용(로컬 모드처럼 raw detector 출력과 tracked 출력을 구분하지 않는 근사치).
 
+### 8.6 멀티 인스턴스 플릿 대응 + 카메라 카드 필드 추가 (2026-07-28, §6.45)
+
+**멀티 인스턴스 fan-out**: ingest-daemon이 `INGEST_DAEMON_INSTANCES`개의 독립 프로세스로 나뉘면서(Design_RTSP_Capture_Backend.md §6.45), `ingestStatsAggregator.js`의 1.5초 폴링 타이머가 단일 `GET /cameras/stats` 호출 대신
+`ingestDaemonPool.getAllInstanceConfigs()`가 반환하는 모든 인스턴스의 `statsUrl`에 병렬로(`Promise.all`) 요청한 뒤 `.flat()`으로 평탄화한다. 카메라는 이미 `id`로 유일하게 식별되므로 인스턴스 간 병합 로직(§3 표, 8.2의 merge loop) 자체는 변경 없음 — `INGEST_DAEMON_INSTANCES`가 미설정(기본값 1)이면 URL이 1개뿐이라 §6.45 이전과 동일하게 동작한다.
+
+**카메라 카드 페이로드 신규 필드 2종** (병합 루프, `ingestStatsAggregator.js`의 `merged.push({...})` 블록):
+- `instanceIndex: ingestDaemonPool.instanceIndexForCamera(id)` — 이 카메라를 담당하는 ingest-daemon 인스턴스 번호(기본 단일 인스턴스 배포에서는 항상 `0`)
+- `channelSlot: camera.channelSlot ?? null` — Dashboard Channel Slot 번호(미배정 시 `null`)
+
+**클라이언트 (`IngestDaemonSection.tsx`)**:
+- 각 카메라 카드에 `inst {N}` 배지(연결 상태 라벨 옆)와 `CH {N}` 배지(카메라 이름 왼쪽, `channelSlot`이 `null`이 아닐 때만 렌더)를 추가해 위 두 신규 필드를 표시.
+- 카메라 카드 목록을 `channelSlot` 오름차순으로 정렬해 렌더(`channelSlot`이 없는 카메라는 정렬 끝으로 밀림) — 이전에는 페이로드 도착 순서(안정적이지 않음) 그대로 렌더했음.
+- 패널 루트 컨테이너에 `p-5`(20px) 패딩 추가 — 이전에는 패딩이 전혀 없어 다른 Admin 탭(전부 `p-6`)과 달리 사이드바/헤더에 바로 붙어 있었음.
+
 ---
 
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
+| 2.2 | 2026-07-28 | §8.6 추가 — 멀티 인스턴스 fan-out(§6.45), `instanceIndex`/`channelSlot` 필드 신규, `IngestDaemonSection.tsx` inst/CH 배지·정렬·패딩 반영 |
 | 2.1 | 2026-07-28 | §8.5 추가 — streaming 모드에서 `_processRemoteResult()`가 framesProcessed/detectionsTotal 등을 갱신하지 않아 Admin 패널이 항상 0을 표시하던 버그 수정 |
 | 2.0 | 2026-07-21 | §8 구현 결과 추가 — Python 계측, Node 집계/Socket.IO(admin 검증 포함), 클라이언트 UI 전부 구현 완료 및 실측 검증(실 카메라 데이터, admin/viewer 권한 분리 확인) |
 | 1.0 | 2026-07-21 | §7 결정 사항 확정(전체 파이프라인 통합/Socket.IO push/IP 표시/그래프 포함), 아키텍처 갱신 |

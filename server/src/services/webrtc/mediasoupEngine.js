@@ -26,7 +26,10 @@
  *                       requires CAP_SYS_NICE on the mediasoup-worker binary, see _applyWorkerPriority())
  *   MEDIASOUP_MIN_PORT   — start of RTC UDP port range (default 40000)
  *   MEDIASOUP_MAX_PORT   — end of RTC UDP port range   (default 49999)
- *   INGEST_DAEMON_URL    — ingest-daemon base URL (default http://127.0.0.1:7070)
+ *   INGEST_DAEMON_URL, INGEST_DAEMON_INSTANCES, INGEST_DAEMON_BASE_PORT —
+ *                       ingest-daemon instance(s) this engine talks to; resolved
+ *                       per-camera via services/ingestDaemonPool.js (§6.45), not
+ *                       read directly by this file anymore
  *   MEDIAMTX_RTSP_PORT   — MediaMTX RTSP loopback port (default 8554)
  *   HTTP_PORT / PORT     — server HTTP port for callback URLs (default 3080)
  *   HTTPS_ENABLED        — 'true' to use HTTPS for callback URLs
@@ -38,6 +41,8 @@ const http      = require('http');
 const os        = require('os');
 const fs        = require('fs');
 const path      = require('path');
+const { indexForCamera } = require('../../utils/cameraHash');
+const ingestDaemonPool   = require('../ingestDaemonPool');
 
 const ENGINE_NAME       = 'mediasoup';
 const ANNOUNCED_IP      = (process.env.SERVER_PUBLIC_IP || process.env.SERVER_IP || '127.0.0.1').trim();
@@ -59,7 +64,6 @@ function _getListenIps() {
 }
 const RTC_MIN_PORT      = parseInt(process.env.MEDIASOUP_MIN_PORT || '40000', 10);
 const RTC_MAX_PORT      = parseInt(process.env.MEDIASOUP_MAX_PORT || '49999', 10);
-const INGEST_DAEMON_URL = (process.env.INGEST_DAEMON_URL || 'http://127.0.0.1:7070').replace(/\/$/, '');
 
 const VIDEO_PT   = 96;
 const AUDIO_PT   = 111;
@@ -130,10 +134,10 @@ function _withIpcTimeout(promise, label) {
   ]);
 }
 
-function _ingestPost(path, body) {
+function _ingestPost(cameraId, path, body) {
   return new Promise((resolve, reject) => {
     const data = JSON.stringify(body);
-    const url  = new URL(INGEST_DAEMON_URL + path);
+    const url  = new URL(ingestDaemonPool.urlForCamera(cameraId) + path);
     const req  = http.request(
       {
         hostname: url.hostname, port: url.port, path: url.pathname,
@@ -152,7 +156,7 @@ function _ingestPost(path, body) {
 
 function _ingestDelete(cameraId) {
   return new Promise((resolve) => {
-    const url = new URL(`${INGEST_DAEMON_URL}/cameras/${encodeURIComponent(cameraId)}`);
+    const url = new URL(`${ingestDaemonPool.urlForCamera(cameraId)}/cameras/${encodeURIComponent(cameraId)}`);
     const req = http.request(
       { hostname: url.hostname, port: url.port, path: url.pathname, method: 'DELETE', timeout: INGEST_HTTP_TIMEOUT_MS },
       res => {
@@ -199,7 +203,7 @@ const _lastKnownVideoParams = new Map(); // cameraId → { spropParameterSets, p
 
 function _ingestGetVideoParams(cameraId) {
   return new Promise((resolve) => {
-    const url = new URL(`${INGEST_DAEMON_URL}/cameras/${encodeURIComponent(cameraId)}/video-params`);
+    const url = new URL(`${ingestDaemonPool.urlForCamera(cameraId)}/cameras/${encodeURIComponent(cameraId)}/video-params`);
     const req = http.request(
       { hostname: url.hostname, port: url.port, path: url.pathname, method: 'GET', timeout: INGEST_VIDEO_PARAMS_TIMEOUT_MS },
       res => {
@@ -274,10 +278,7 @@ function _buildVideoRtpParameters() {
 // liveness probe, which has no specific camera in mind) always lands on
 // slot 0 rather than hashing garbage.
 function _workerIndexFor(cameraId) {
-  if (!cameraId) return 0;
-  let h = 0;
-  for (let i = 0; i < cameraId.length; i++) h = (h * 31 + cameraId.charCodeAt(i)) | 0;
-  return Math.abs(h) % NUM_WORKERS;
+  return indexForCamera(cameraId, NUM_WORKERS);
 }
 
 // Guards concurrent rebuild of the SAME slot (initial boot of all slots, or a
@@ -715,7 +716,7 @@ async function _buildAltPipeline(cameraId, cam, videoPt, videoRtxPt) {
   // Tell ingest-daemon to fan this camera's already-flowing video RTP out to
   // this new destination too — no second RTSP session (see
   // ingest_daemon.py's add_video_fanout() docstring).
-  const status = await _ingestPost(`/cameras/${cameraId}/video-fanout`, { port: videoPort });
+  const status = await _ingestPost(cameraId, `/cameras/${cameraId}/video-fanout`, { port: videoPort });
   if (status !== 200) {
     throw new Error(`ingest-daemon video-fanout registration returned HTTP ${status}`);
   }
@@ -904,7 +905,7 @@ async function addCameraStream(cameraId, rtspUrl, appRtpRtspUrl = undefined, cap
     const _captureFps = captureFps || parseInt(process.env.CAPTURE_FPS, 10) || 0;
     if (_captureFps > 0) ingestBody.captureFps = _captureFps;
 
-    const status = await _ingestPost('/cameras', ingestBody);
+    const status = await _ingestPost(cameraId, '/cameras', ingestBody);
 
     if (status !== 200 && status !== 201) {
       throw new Error(`ingest-daemon returned HTTP ${status}`);
@@ -925,7 +926,7 @@ async function addCameraStream(cameraId, rtspUrl, appRtpRtspUrl = undefined, cap
       for (const pPromise of camAlt.values()) {
         pPromise.then(alt => {
           const port = alt.videoPlain?.tuple?.localPort;
-          if (port) _ingestPost(`/cameras/${cameraId}/video-fanout`, { port }).catch(() => {});
+          if (port) _ingestPost(cameraId, `/cameras/${cameraId}/video-fanout`, { port }).catch(() => {});
         }).catch(() => {});
       }
     }
@@ -937,7 +938,7 @@ async function addCameraStream(cameraId, rtspUrl, appRtpRtspUrl = undefined, cap
     // go dark on the next reconnect/crash-recovery cycle.
     const videoFanoutRegistered = !!oldCam?.videoFanoutRegistered;
     if (videoFanoutRegistered) {
-      _ingestPost(`/cameras/${cameraId}/video-fanout`, { port: videoPort }).catch(() => {});
+      _ingestPost(cameraId, `/cameras/${cameraId}/video-fanout`, { port: videoPort }).catch(() => {});
     }
 
     // Diagnostic only (2026-07-20, §6.25) — fire-and-forget, does NOT gate
@@ -1459,7 +1460,7 @@ async function negotiate(cameraId, sdpOffer) {
       if (!cam.videoFanoutRegistered) {
         cam.videoFanoutRegistered = true;
         const port = cam.videoPlain?.tuple?.localPort;
-        if (port) _ingestPost(`/cameras/${cameraId}/video-fanout`, { port }).catch(() => { cam.videoFanoutRegistered = false; });
+        if (port) _ingestPost(cameraId, `/cameras/${cameraId}/video-fanout`, { port }).catch(() => { cam.videoFanoutRegistered = false; });
       }
     } else {
       const alt     = await _ensureAltPipeline(cameraId, targetVideoPt, parsed.videoRtxPt);
@@ -1835,7 +1836,7 @@ async function reregisterAllWithIngest() {
       if (cam.videoFanoutRegistered) reregBody.mediasoupPort = videoPort;
       if (cam.appRtpRtspUrl) reregBody.appRtpRtspUrl = cam.appRtpRtspUrl;
       if (cam.captureFps > 0) reregBody.captureFps = cam.captureFps;
-      const status = await _ingestPost('/cameras', reregBody);
+      const status = await _ingestPost(cameraId, '/cameras', reregBody);
       // Re-register alt-PT pipelines' video fan-out too (2026-07-20, §6.27) —
       // ingest-daemon's restart wipes ALL CameraSession state, so any alt-PT
       // viewer (the now-common case per §6.26's live evidence) would
@@ -1847,7 +1848,7 @@ async function reregisterAllWithIngest() {
         for (const pPromise of camAlt.values()) {
           pPromise.then(alt => {
             const port = alt.videoPlain?.tuple?.localPort;
-            if (port) _ingestPost(`/cameras/${cameraId}/video-fanout`, { port }).catch(() => {});
+            if (port) _ingestPost(cameraId, `/cameras/${cameraId}/video-fanout`, { port }).catch(() => {});
           }).catch(() => {});
         }
       }

@@ -2,8 +2,8 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Admin Dashboard Ingest Daemon Start/Stop/Restart Control  
-**Version:** 1.0  
-**Date:** 2026-07-23
+**Version:** 1.1  
+**Date:** 2026-07-28
 
 ---
 
@@ -48,7 +48,19 @@ Visible whenever the existing Ingest Daemon section itself is visible — i.e. `
 
 Stop and Restart must work even when the ingest-daemon is in the "zombie" state (process alive, CPU-busy, HTTP API completely unresponsive — see Design_RTSP_Capture_Backend.md §6.29.5). The backing logic determines "is it running" from actual port occupancy, not from a `/health` response, and escalates to SIGKILL after an 8-second grace period if the process does not exit on its own.
 
-### 3.4 Audit Trail
+### 3.4 Multi-Instance Fleet (§6.45)
+
+Since the ingest-daemon capture layer moved to a fleet of `INGEST_DAEMON_INSTANCES` independent
+processes (default 1, Design_RTSP_Capture_Backend.md §6.45), the three admin endpoints accept an
+optional `instance` body field to target one instance; the dashboard's three buttons still send no
+`instance` (no per-instance picker in the UI as of this revision), so each click continues to act on
+the whole fleet — Start/Stop/Restart all configured instances in one call, exactly as it does today
+with the default single instance. With `INGEST_DAEMON_INSTANCES=1` this is byte-for-byte the same
+behavior as before; with N>1 the "Result shown" text (US-05) reflects an aggregate outcome across
+instances rather than a single PID. A future revision may add a per-instance picker to the UI — not
+in scope for this revision.
+
+### 3.5 Audit Trail
 
 Every call — success or failure — is logged via `AuditService.log()`:
 
@@ -82,3 +94,4 @@ Visible in the existing Admin Dashboard → Audit Log section.
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-23 | 초기 작성 |
+| 1.1 | 2026-07-28 | §3.4 멀티 인스턴스 플릿(§6.45) 섹션 추가, 이후 섹션 번호 조정 |

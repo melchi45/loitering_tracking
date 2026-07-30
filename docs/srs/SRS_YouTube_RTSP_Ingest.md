@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-YT-01 |
-| **Version** | 1.0 |
+| **Version** | 1.2 |
 | **Status** | Active |
-| **Date** | 2026-05-26 |
+| **Date** | 2026-07-28 |
 | **Parent PRD** | prd/PRD_YouTube_RTSP_Ingest.md |
 | **Parent RFP** | rfp/RFP_YouTube_RTSP_Ingest.md |
 
@@ -446,6 +446,19 @@ Server start
 - Child processes must be spawned via `spawn()` with argument arrays; `exec()` is prohibited.
 - MediaMTX webhook endpoint must reject non-localhost requests.
 
+### FR-YT-068 — Process Tree Cleanup (No Orphaned Processes)
+
+- Stopping a stream (explicit `DELETE`, manual restart, or an automatic reconnect after FFmpeg/yt-dlp
+  exits) MUST terminate every process yt-dlp spawned, including its internal `ffmpeg` downloader
+  (used for HLS-live sources and for muxing separate DASH video+audio streams) — not just the
+  Node-tracked `ytdlpProcess`/`ffmpegProcess` handles.
+- Because Linux reparents an orphaned child to `init` the instant its parent exits (before the parent
+  process is even reaped), any child-process discovery (e.g. `pgrep -P <parentPid>`) used for cleanup
+  MUST run *before* the parent process is signaled — never after waiting for the parent's own exit —
+  or the discovery will find nothing and the child will leak indefinitely.
+- **Acceptance**: after any stream stop path (delete, manual/automatic restart, or graceful server
+  shutdown), zero processes descending from that stream's yt-dlp invocation may remain running.
+
 ---
 
 ## 10. Interface Requirements
@@ -521,3 +534,4 @@ interface StreamPublicRecord {
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for YouTube RTSP Ingest |
 | 1.1 | 2026-06-26 | LTS Engineering Team | §2.1-A YouTube 이중 경로 Mermaid 다이어그램 추가 (코드 라인 참조 포함) |
+| 1.2 | 2026-07-28 | LTS Engineering Team | FR-YT-068 추가 — 프로세스 트리 정리(고아 프로세스 금지) 요구사항, 헤더 Version 필드를 실제 최신 테이블 행과 일치하도록 정정 |

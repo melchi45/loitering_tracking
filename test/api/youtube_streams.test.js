@@ -19,6 +19,8 @@
  * Set YOUTUBE_TEST_URL to provide a real YouTube URL for TC-A-001.
  */
 
+const { execSync } = require('child_process');
+
 const BASE_URL = process.env.LTS_URL || 'http://localhost:3080';
 
 // A short, publicly available YouTube video for live testing.
@@ -106,6 +108,22 @@ async function createStream(overrides = {}) {
     return { status, body, id };
   }
   return { status, body, id: null };
+}
+
+function extractYoutubeId(url) {
+  const m = url.match(/(?:v=|youtu\.be\/|shorts\/)([A-Za-z0-9_-]{11})/);
+  return m ? m[1] : null;
+}
+
+// Host-level process check — requires the test to run on the same machine as
+// the server (already assumed elsewhere in this suite: yt-dlp/ffmpeg on PATH).
+function countMatchingProcesses(pattern) {
+  try {
+    const out = execSync(`pgrep -f "${pattern}" || true`, { encoding: 'utf8' });
+    return out.split('\n').map((s) => s.trim()).filter(Boolean).length;
+  } catch (_) {
+    return 0;
+  }
 }
 
 async function cleanupAll() {
@@ -241,6 +259,48 @@ async function runGroupD() {
     // Verify removed
     const check = await get(`/api/youtube-streams/${delId}/status`);
     assertEq(check.status, 404, 'GET deleted stream → 404');
+  });
+
+  // Regression test (2026-07-28): yt-dlp spawns its own internal ffmpeg downloader
+  // for HLS-live sources and for muxing separate DASH video+audio streams (a
+  // grandchild of the Node process, no direct handle). The original _stopEntry()
+  // scanned for that child via `pgrep -P <ytdlpPid>` only after yt-dlp itself had
+  // already exited — but Linux reparents an orphaned child to `init` the instant
+  // its parent exits, so the scan always ran too late and found nothing, leaking
+  // the internal ffmpeg process forever on every delete. Fixed by capturing child
+  // PIDs (findChildPids()) BEFORE signaling the parent. See TC-D-005b in
+  // docs/tc/TC_YouTube_RTSP_Ingest.md.
+  await test('TC-D-005b', 'DELETE leaves no orphaned ffmpeg process (yt-dlp internal downloader)', async () => {
+    const videoId = extractYoutubeId(YT_URL);
+    if (!videoId) { console.log('      (skipped: could not extract video id from YT_URL)'); return; }
+
+    // POST /api/youtube-streams already blocks until 'live' (or throws), so by
+    // the time this resolves, yt-dlp's internal ffmpeg (if this source needed
+    // one) should already be running.
+    const { status, id } = await createStream({ name: 'TC-D-005b Stream', youtubeUrl: YT_URL, resolution: '480p' });
+    if (status !== 201 || !id) { console.log(`      (skipped: stream did not go live, HTTP ${status})`); return; }
+
+    const before = countMatchingProcesses(`ffmpeg.*${videoId}`);
+    if (before === 0) {
+      // This source resolved to a combined format yt-dlp could stream without
+      // its own ffmpeg downloader — nothing to regress-test for this run.
+      console.log('      (skipped: source did not spawn an internal ffmpeg downloader)');
+      await del(`/api/youtube-streams/${id}`);
+      const skipIdx = createdStreamIds.indexOf(id);
+      if (skipIdx !== -1) createdStreamIds.splice(skipIdx, 1);
+      return;
+    }
+
+    const { status: delStatus } = await del(`/api/youtube-streams/${id}`);
+    assertEq(delStatus, 200, 'HTTP status');
+    const idx = createdStreamIds.indexOf(id);
+    if (idx !== -1) createdStreamIds.splice(idx, 1);
+
+    // _stopEntry() grace periods: up to 3s (yt-dlp) + up to 5s (ffmpeg) — wait past both.
+    await new Promise((resolve) => setTimeout(resolve, 9000));
+
+    const after = countMatchingProcesses(`ffmpeg.*${videoId}`);
+    assertEq(after, 0, `expected 0 orphaned ffmpeg processes for video ${videoId}, found ${after}`);
   });
 
   await test('TC-D-006', 'POST /api/youtube-streams/:id/restart — non-existent → 404', async () => {

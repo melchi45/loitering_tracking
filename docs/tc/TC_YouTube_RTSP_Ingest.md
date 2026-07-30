@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-YT-01 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Active |
-| **Date** | 2026-05-27 |
+| **Date** | 2026-07-28 |
 | **Parent SRS** | srs/SRS_YouTube_RTSP_Ingest.md |
 | **Test Scripts** | test/api/youtube_streams.test.js |
 | **TC Mode** | `captureOnly: true` — **`SERVER_MODE=analysis`에서 스킵** (YouTubeStreamService 비활성) |
@@ -223,6 +223,20 @@
 - **Expected:** HTTP 200; stream processes stopped and removed from list
 - **Acceptance:** `GET /api/youtube-streams/:id` returns 404 after deletion
 
+### TC-D-005b — Delete Stream Leaves No Orphaned Process (2026-07-28)
+- **Precondition:** Stream's source resolves to an HLS-live or DASH video+audio format, so yt-dlp
+  spawns its own internal `ffmpeg` downloader subprocess (grandchild, no Node-side handle)
+- **Input:** `DELETE /api/youtube-streams/:id` while the stream is `live`
+- **Expected:** HTTP 200; the tracked `ytdlpProcess` and `ffmpegProcess` exit; yt-dlp's internal
+  ffmpeg downloader (a grandchild of the Node process) also exits — it must not survive reparented
+  to `init`
+- **Acceptance:** `ps -ef | grep ffmpeg` (or equivalent PID tree walk from the pre-delete yt-dlp PID)
+  shows zero surviving processes for this stream a few seconds after the `200` response — regression
+  test for the fix in `youtubeStreamService.js`'s `findChildPids()`/`_stopEntry()` (Linux reparents an
+  orphaned child to `init` the instant its parent exits, so discovering children via `pgrep -P` after
+  waiting for the parent's own exit finds nothing and leaks the child forever; the fix captures child
+  PIDs before signaling the parent)
+
 ### TC-D-006 — Restart Stream (POST restart)
 - **Input:** `POST /api/youtube-streams/:id/restart` on stream in `error` state
 - **Expected:** HTTP 200; stream re-enters `starting` state; `restartCount` reset
@@ -355,3 +369,4 @@ Group A (validation/limits) → Group D (REST API) → Group B (processes) → G
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for YouTube RTSP Ingest |
 | 1.1 | 2026-06-26 | LTS Engineering Team | captureOnly 모드 표기 추가 (SERVER_MODE=analysis 스킵); _startStream() spawn 위치 명시 |
+| 1.2 | 2026-07-28 | LTS Engineering Team | TC-D-005b 추가 — 채널 삭제 시 yt-dlp 내부 ffmpeg 다운로더 고아 프로세스 잔존 방지 회귀 테스트 |

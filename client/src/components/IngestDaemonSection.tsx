@@ -11,6 +11,7 @@ interface CameraStat {
   id: string;
   name: string;
   type: string;
+  channelSlot: number | null;
   rtspUrl: string | null;
   youtubeUrl: string | null;
   webrtcEnabled: boolean;
@@ -42,6 +43,8 @@ interface CameraStat {
   mediasoupVideoBytesRx: number | null;
   mediasoupAudioBytesRx: number | null;
   mediasoupViewers: number;
+
+  instanceIndex: number;
 }
 
 interface AnalysisClientStats {
@@ -156,6 +159,9 @@ export default function IngestDaemonSection({ accessToken, apiFetch }: Props) {
   }, [accessToken]);
 
   const ac = payload?.analysisClient;
+  const sortedCameras = payload
+    ? [...payload.cameras].sort((a, b) => (a.channelSlot ?? Infinity) - (b.channelSlot ?? Infinity))
+    : [];
 
   async function handleControl(action: ControlAction) {
     if (action === 'stop' && !confirm('Stop ingest-daemon? All camera capture (RTSP/WebRTC/AI) will be interrupted until it is started again.')) return;
@@ -173,7 +179,7 @@ export default function IngestDaemonSection({ accessToken, apiFetch }: Props) {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="p-5 space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-lg font-semibold text-white">Ingest Daemon</h2>
         <div className="flex items-center gap-1.5 text-xs text-gray-400">
@@ -246,7 +252,7 @@ export default function IngestDaemonSection({ accessToken, apiFetch }: Props) {
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
-        {payload?.cameras.map((cam) => {
+        {sortedCameras.map((cam) => {
           const st = STATE_STYLE[cam.connectionState] ?? STATE_STYLE.unknown;
           const h = historyRef.current.get(cam.id);
           return (
@@ -254,10 +260,20 @@ export default function IngestDaemonSection({ accessToken, apiFetch }: Props) {
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${st.dot}`} />
+                  {cam.channelSlot != null && (
+                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-blue-900/60 text-blue-300 flex-shrink-0" title="Dashboard channel slot">
+                      CH {cam.channelSlot}
+                    </span>
+                  )}
                   <span className="font-medium text-white truncate">{cam.name}</span>
                   {!cam.webrtcEnabled && <span className="text-[10px] text-gray-500 flex-shrink-0">(WebRTC off)</span>}
                 </div>
-                <span className={`text-xs flex-shrink-0 ${st.text}`}>{st.label}</span>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-gray-700/80 text-gray-300" title="ingest-daemon instance handling this camera">
+                    inst {cam.instanceIndex}
+                  </span>
+                  <span className={`text-xs ${st.text}`}>{st.label}</span>
+                </div>
               </div>
 
               <div className="text-[11px] text-gray-500 truncate" title={cam.rtspUrl || cam.youtubeUrl || ''}>

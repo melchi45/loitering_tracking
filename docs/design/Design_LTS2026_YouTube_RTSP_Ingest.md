@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-YT-02 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
-| **Date** | 2026-05-27 |
+| **Date** | 2026-07-28 |
 | **Parent SRS** | srs/SRS_LTS2026_YouTube_RTSP_Ingest.md |
 | **Base Design** | design/Design_YouTube_RTSP_Ingest.md (DESIGN-LTS-YT-01) |
 
@@ -224,12 +224,30 @@ async stopAll() {
 
 ```
 1. pipelineManager.stopCamera(entry.id)
-2. entry.ytdlpProcess?.kill('SIGTERM')
-3. await sleep(3000)  OR  SIGKILL if still alive
-4. entry.ffmpegProcess?.kill('SIGTERM')
-5. await sleep(5000)  OR  SIGKILL if still alive
-6. entry.status = 'removed'
+2. orphanPids = findChildPids(entry.ytdlpProcess.pid)   // BEFORE any signal — see note below
+3. entry.ytdlpProcess?.kill('SIGTERM')
+4. await sleep(3000)  OR  SIGKILL if still alive
+5. killProcessTree(pid) for each pid in orphanPids       // sweeps yt-dlp's own internal ffmpeg
+6. entry.ffmpegProcess?.kill('SIGTERM')
+7. await sleep(5000)  OR  SIGKILL if still alive
+8. entry.status = 'removed'
 ```
+
+**2026-07-28 fix — process-tree reparenting race.** yt-dlp spawns its own internal `ffmpeg`
+subprocess for HLS-live sources and for muxing separate DASH video+audio streams (§7.1's format
+string routinely selects the DASH branch) — that grandchild has no Node-side handle. The original
+implementation scanned for it with `pgrep -P <ytdlpPid>` *after* step 4 (i.e. after yt-dlp had
+already exited and its `close` event had fired). On Linux, an orphaned child is reparented to `init`
+the instant its parent exits — well before Node ever observes the `close` event — so by the time the
+scan ran, the grandchild's `ppid` had already changed and `pgrep -P <ytdlpPid>` found nothing. The
+internal ffmpeg process leaked forever on every explicit stop/delete (reported as "ffmpeg process
+survives YouTube channel deletion"). Fix: capture the child PID list (`findChildPids()`, step 2)
+*before* sending any signal to yt-dlp — while it is still guaranteed alive — then kill those captured
+PIDs afterward (step 5) instead of re-deriving them from a parent that may already be dead. The same
+fix applies to the natural-restart path (`ffProc.on('close')`, triggered by 403-expiry/network-hiccup
+restarts, not just explicit stop) — see `server/src/services/youtubeStreamService.js`'s
+`findChildPids()` doc comment for the full rationale. TC coverage: TC-YT-D-005b in
+TC_YouTube_RTSP_Ingest.md.
 
 ---
 
@@ -359,4 +377,5 @@ Read-only internal RTSP URL field:
 
 | Version | Date | Author | Description |
 |---|---|---|---|
+| 1.1 | 2026-07-28 | LTS Engineering Team | §6 `_stopEntry()` kill sequence updated to capture yt-dlp's internal ffmpeg child PIDs before signaling the parent (fixes orphaned ffmpeg process on channel deletion — Linux reparenting race) |
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for LTS2026 YouTube RTSP Ingest |

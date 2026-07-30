@@ -17,6 +17,7 @@
  */
 
 const http = require('http');
+const ingestDaemonPool = require('./ingestDaemonPool');
 
 const POLL_INTERVAL_MS = 1500;
 const INGEST_STATS_TIMEOUT_MS = 3000;
@@ -45,7 +46,12 @@ function _fetchIngestStats(url) {
  */
 function startIngestStatsAggregator({ io, db, pipelineManager, getWebRTCEngine }) {
   const { verifySocketAdmin } = require('../middleware/auth');
-  const ingestUrl = `${(process.env.INGEST_DAEMON_URL || 'http://127.0.0.1:7070').replace(/\/$/, '')}/cameras/stats`;
+  // Multi-process ingest-daemon fleet (2026-07-28, §6.45) — fan out to every
+  // configured instance's /cameras/stats and flatten the results; with
+  // INGEST_DAEMON_INSTANCES unset (default 1) this is a single URL, same as
+  // before §6.45. Cameras are already uniquely keyed by id, so no per-
+  // instance disambiguation is needed once flattened.
+  const statsUrls = ingestDaemonPool.getAllInstanceConfigs().map((i) => i.statsUrl);
 
   // Admin-verified subscriber sockets — see module comment. A socket must
   // explicitly (re-)subscribe with a valid admin JWT; disconnecting or
@@ -68,10 +74,11 @@ function startIngestStatsAggregator({ io, db, pipelineManager, getWebRTCEngine }
   const timer = setInterval(async () => {
     if (adminSockets.size === 0) return; // nobody watching — skip the poll entirely
 
-    const [ingestCameras, cameras] = await Promise.all([
-      _fetchIngestStats(ingestUrl),
+    const [perInstance, cameras] = await Promise.all([
+      Promise.all(statsUrls.map(_fetchIngestStats)),
       Promise.resolve(db.all('cameras')),
     ]);
+    const ingestCameras = perInstance.flat();
     const ingestById = new Map(ingestCameras.map((c) => [c.id, c]));
     const cameraById  = new Map(cameras.map((c) => [c.id, c]));
     const nodeStats   = pipelineManager.getIngestMonitorStats();
@@ -99,6 +106,10 @@ function startIngestStatsAggregator({ io, db, pipelineManager, getWebRTCEngine }
         id,
         name:   camera.name,
         type:   camera.type || 'rtsp',
+        channelSlot: camera.channelSlot ?? null,
+        // Which ingest-daemon instance owns this camera (§6.45) — 0 in the
+        // default single-instance deployment.
+        instanceIndex: ingestDaemonPool.instanceIndexForCamera(id),
         rtspUrl:    camera.type === 'youtube' ? null : (camera.rtspUrl || null),
         youtubeUrl: camera.type === 'youtube' ? (camera.youtubeUrl || null) : null,
         webrtcEnabled: !!camera.webrtcEnabled,

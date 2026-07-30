@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-YT-02 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
-| **Date** | 2026-05-26 |
+| **Date** | 2026-07-28 |
 | **Parent PRD** | prd/PRD_LTS2026_YouTube_RTSP_Ingest.md |
 | **Parent RFP** | rfp/RFP_LTS2026_YouTube_RTSP_Ingest.md |
 | **Supersedes** | SRS-LTS-YT-01 (general YouTube RTSP Ingest) |
@@ -259,6 +259,19 @@ This fallback chain ensures playability across all YouTube content types.
 - Individual `_stopEntry` failures must be caught and ignored (best-effort cleanup).
 - After all entries are stopped, `this.streams` must be cleared.
 
+### FR-YT2-062 — Process Tree Cleanup (2026-07-28)
+
+- `_stopEntry()` must terminate not only the tracked `ytdlpProcess`/`ffmpegProcess` handles but also
+  yt-dlp's own internal `ffmpeg` downloader subprocess (spawned for HLS-live sources and DASH
+  video+audio muxing — see FR-YT-068 in SRS_YouTube_RTSP_Ingest.md, base doc).
+- Child PID discovery for this sweep must happen *before* `ytdlpProcess.kill('SIGTERM')` is called —
+  not after awaiting the process's `close` event — because Linux reparents an orphaned child to
+  `init` the instant its parent exits, which happens before `close` fires. Discovering children after
+  that point finds nothing and leaks the internal ffmpeg process permanently.
+- This applies to every `_stopEntry()` call site: explicit `DELETE`, `stopAll()` (FR-YT2-061,
+  server shutdown), and the natural-restart path (`ffProc.on('close')` after a 403-expiry or
+  network-hiccup restart).
+
 ---
 
 ## 10. LTS-2026-012 Specific Requirements — UI
@@ -334,3 +347,4 @@ All constraints from SRS-LTS-YT-01 (C-01 through C-09) apply.
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for LTS2026 YouTube RTSP Ingest |
+| 1.1 | 2026-07-28 | LTS Engineering Team | FR-YT2-062 추가 — 프로세스 트리 정리(고아 ffmpeg 프로세스 금지), _stopEntry() 전 경로에 적용 |

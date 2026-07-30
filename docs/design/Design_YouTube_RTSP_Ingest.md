@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-YT-01 |
-| **Version** | 1.4 |
+| **Version** | 1.5 |
 | **Status** | Active |
-| **Date** | 2026-06-18 |
+| **Date** | 2026-07-28 |
 | **Parent SRS** | srs/SRS_YouTube_RTSP_Ingest.md |
 
 ---
@@ -54,7 +54,9 @@
 │   │    ├─ START_TIMEOUT timer (30s)                              │
 │   │    └─ stderr monitor → _setLive() on RTSP_LIVE_RE match      │
 │   ├─ _setLive(entry)  → status:'live', start PipelineManager     │
-│   ├─ _stopEntry(entry) → kill yt-dlp → kill FFmpeg (grace)       │
+│   ├─ _stopEntry(entry) → sweep yt-dlp's internal ffmpeg child   │
+│   │    (findChildPids() BEFORE signaling — §10.2 note)          │
+│   │    → kill yt-dlp → kill FFmpeg (grace)                       │
 │   ├─ _scheduleRestart() → restartCount++, delay, restart        │
 │   ├─ stopAll()          → parallel _stopEntry for all           │
 │   └─ init()             → restore YouTube cameras from DB        │
@@ -635,6 +637,18 @@ OS              Node.js             YouTubeStreamService    yt-dlp/FFmpeg
 │               │──process.exit(0)──────>│                      │
 ```
 
+> **2026-07-28 fix — orphaned internal ffmpeg on stop/delete.** yt-dlp spawns its own internal
+> `ffmpeg` subprocess for HLS-live sources and for muxing separate DASH video+audio streams — a
+> grandchild Node never holds a handle to. The diagram above simplifies "SIGTERM yt-dlp/FFmpeg" as
+> one step, but the original implementation only scanned for that grandchild (`pgrep -P <ytdlpPid>`)
+> *after* yt-dlp had already exited — by then Linux had already reparented the orphan to `init`
+> (this happens the instant the parent exits, not when something eventually reaps it), so the scan
+> found nothing and the internal ffmpeg leaked forever. Fixed by capturing the child PID list
+> (`findChildPids()`) *before* sending SIGTERM to yt-dlp, then killing those captured PIDs
+> afterward instead of re-deriving them from an already-dead parent. See
+> Design_LTS2026_YouTube_RTSP_Ingest.md §6 for the corrected step-by-step sequence and
+> `server/src/services/youtubeStreamService.js`'s `findChildPids()` for the implementation.
+
 ---
 
 ## 11. Configuration & Environment
@@ -741,4 +755,5 @@ const CONSECUTIVE_403_WINDOW_MS = 15000;  // 15초 슬라이딩 윈도우
 | 1.2 | 2026-06-18 | LTS Engineering Team | YouTube 채널 UI에 WebRTC 토글 추가: Add/Edit 폼 모두 webrtcEnabled 필드 지원, API 명세 업데이트 |
 | 1.3 | 2026-07-14 | LTS Engineering Team | §12.4 신규 — HLS keep-alive 재접속 실패로 인한 I-frame 이후 노이즈 근본 원인 확정 및 수정(`-reconnect_on_network_error 1 -http_persistent 0` 추가), 실 운영 로그로 확인 |
 | 1.4 | 2026-07-14 | LTS Engineering Team | §12.5 신규 — §12.4 적용 후에도 노이즈 재발 보고를 계기로 재조사, 재생 URL 만료 시 무한 403 루프에 빠지는 더 심각한 실제 근본 원인 확정. 기존에 작성만 되고 연결되지 않았던 `HTTP_403_RE`/`URL_EXPIRED_RE` 죽은 코드를 실제 연속-403 감지+강제 재시작 로직(`_checkForExpiredUrl()`)으로 연결 |
+| 1.5 | 2026-07-28 | LTS Engineering Team | §10.2에 프로세스 트리 reparenting 레이스 수정 노트 추가 — yt-dlp의 내부 ffmpeg 다운로더가 채널 삭제 시 고아 프로세스로 영구 잔존하던 버그, `findChildPids()`를 부모 시그널 전송 전에 호출하도록 수정 |
 | 1.3 | 2026-06-26 | LTS Engineering Team | §5.1 YouTube 이중 경로 파이프라인 다이어그램 추가 (ASCII + Mermaid, 코드 라인 참조 포함) |

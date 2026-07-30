@@ -2,8 +2,8 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Admin Dashboard Ingest Daemon Start/Stop/Restart Control  
-**Version:** 1.0  
-**Date:** 2026-07-23  
+**Version:** 1.1  
+**Date:** 2026-07-28  
 **SRS Reference:** SRS_Ingest_Daemon_Control.md
 
 ---
@@ -171,8 +171,43 @@
 
 ---
 
+### TC-IDC-015: instance param targets a single instance without affecting others
+
+**SRS:** FR-IDC-013  
+**Precondition:** `INGEST_DAEMON_INSTANCES=3`; all 3 instances running and healthy; admin JWT  
+**Steps:**
+1. Note PIDs of all 3 instances (`ps -ef | grep ingest_daemon.py`)
+2. `POST /admin/ingest/restart` with body `{ instance: 1 }`
+
+**Expected:** `200` with the pre-existing flat single-instance shape (`{ ok, pid, cameras }`, no `instances[]` wrapper); only instance 1's PID changes; instances 0 and 2's PIDs and their cameras' connection state are undisturbed
+
+---
+
+### TC-IDC-016: Omitted instance targets the whole fleet
+
+**SRS:** FR-IDC-013  
+**Precondition:** `INGEST_DAEMON_INSTANCES=3`; all 3 instances running; admin JWT  
+**Steps:**
+1. `POST /admin/ingest/restart` with an empty body
+
+**Expected:** `200 { ok: true, instances: [ { index: 0, port, ok: true, pid, cameras }, { index: 1, ... }, { index: 2, ... } ] }`; all 3 processes are new PIDs; top-level `ok` is `true` only if every instance's own `ok` is `true`
+
+---
+
+### TC-IDC-017: Single-instance deployments are unaffected by the fleet feature
+
+**SRS:** FR-IDC-013  
+**Precondition:** `INGEST_DAEMON_INSTANCES` unset (defaults to 1); admin JWT  
+**Steps:**
+1. `POST /admin/ingest/start`, `/stop`, `/restart` with an empty body each
+
+**Expected:** All three responses are byte-for-byte identical in shape to TC-IDC-003 through TC-IDC-010 (flat shape, no `instances[]` wrapper) — this deployment mode must never observe a shape change from this feature
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-23 | 초기 작성 |
+| 1.1 | 2026-07-28 | TC-IDC-015~017 추가 (멀티 인스턴스 플릿 타겟팅, FR-IDC-013, §6.45) |

@@ -21,14 +21,18 @@ const net   = require('net');
 const http  = require('http');
 const https = require('https');
 const { spawn, execSync } = require('child_process');
+const ingestDaemonPool = require('./ingestDaemonPool');
 
-function getConfig() {
+// instanceIndex defaults to 0 — the single-instance / default-deployment case
+// (INGEST_DAEMON_INSTANCES unset) resolves to today's exact port/URL via
+// ingestDaemonPool.getInstanceConfig(0). Multi-instance callers (§6.45) pass
+// an explicit index; see startAllDaemons()/stopAllDaemons()/restartAllDaemons()
+// below for the "operate on every instance" aggregate path.
+function getConfig(instanceIndex = 0) {
   const PYAV_OS_KEY   = process.platform === 'win32' ? 'PYAV_PYTHON_BIN_WINDOWS' : 'PYAV_PYTHON_BIN_LINUX';
   const pythonBin      = (process.env[PYAV_OS_KEY] || '').trim() || (process.env.PYAV_PYTHON_BIN || '').trim() || 'python3';
   const daemonBinRaw   = (process.env.INGEST_DAEMON_BIN || '../ingest-daemon/ingest_daemon.py').trim();
-  const daemonAddr     = (process.env.INGEST_DAEMON_ADDR || ':7070').trim();
-  const daemonPort     = parseInt(daemonAddr.replace(':', '') || '7070', 10);
-  const daemonUrl      = (process.env.INGEST_DAEMON_URL || 'http://127.0.0.1:7070').replace(/\/$/, '');
+  const inst           = ingestDaemonPool.getInstanceConfig(instanceIndex);
   const httpsEnabled   = (process.env.HTTPS_ENABLED || '').toLowerCase() === 'true';
   const serverPort     = httpsEnabled
     ? parseInt(process.env.HTTPS_PORT || '3443', 10)
@@ -43,9 +47,14 @@ function getConfig() {
     : path.resolve(serverDir, 'storage');
   const dbPath = path.join(storagePath, 'lts.json');
 
-  const daemonLog = process.env.INGEST_DAEMON_LOG || path.join(os.tmpdir(), 'ingest-daemon.log');
-
-  return { pythonBin, daemonPath, daemonAddr, daemonPort, daemonUrl, httpsEnabled, serverPort, serverProto, dbPath, daemonLog };
+  return {
+    instanceIndex,
+    pythonBin, daemonPath,
+    daemonAddr: inst.addr, daemonPort: inst.port, daemonUrl: inst.url,
+    heartbeatFile: inst.heartbeatFile,
+    httpsEnabled, serverPort, serverProto, dbPath,
+    daemonLog: inst.logPath,
+  };
 }
 
 // Whether the daemon's HTTP API answers /health. NOTE: a "zombie" daemon
@@ -104,8 +113,14 @@ async function killDaemon({ daemonPort }) {
   const wasRunning = !(await isPortFree(daemonPort));
   if (!wasRunning) return { wasRunning: false };
 
+  // Matched on this instance's OWN `--addr :PORT` cmdline argument, not just
+  // the script name (2026-07-28, §6.45) — with multiple ingest-daemon
+  // instances running (one per port), a bare `pkill -f 'ingest_daemon.py'`
+  // would kill every instance indiscriminately, not just the one whose port
+  // this call is targeting.
+  const pattern = `ingest_daemon.py --addr :${daemonPort}`;
   try { execSync(`fuser -k ${daemonPort}/tcp`, { stdio: 'ignore' }); } catch (_) {}
-  try { execSync("pkill -f 'ingest_daemon.py'", { stdio: 'ignore' }); } catch (_) {}
+  try { execSync(`pkill -f '${pattern}'`, { stdio: 'ignore' }); } catch (_) {}
 
   const graceDeadline = Date.now() + 8_000;
   while (Date.now() < graceDeadline) {
@@ -114,7 +129,7 @@ async function killDaemon({ daemonPort }) {
   }
   if (await isPortFree(daemonPort)) return { wasRunning: true };
 
-  try { execSync("pkill -9 -f 'ingest_daemon.py'", { stdio: 'ignore' }); } catch (_) {}
+  try { execSync(`pkill -9 -f '${pattern}'`, { stdio: 'ignore' }); } catch (_) {}
   const killDeadline = Date.now() + 3_000;
   while (Date.now() < killDeadline) {
     if (await isPortFree(daemonPort)) return { wasRunning: true };
@@ -130,9 +145,18 @@ async function spawnDaemon(cfg) {
   // ingest_daemon.py self-targets setpriority() at startup using
   // INGEST_DAEMON_PRIORITY (Design_RTSP_Capture_Backend.md §6.33.1) — just
   // needs the env var passed through, no spawn-side wrapping.
+  //
+  // INGEST_HEARTBEAT_FILE is set per-instance (§6.45) — ingest_daemon.py
+  // already reads this env var itself (no Python code change needed) and
+  // passes it straight through to the ingest_health_proxy.py subprocess it
+  // spawns; without a unique path per instance, every instance's
+  // _stats_sampler() would overwrite the SAME heartbeat file and each
+  // instance's own health-proxy could end up reading a heartbeat written by
+  // a DIFFERENT instance.
   const child = spawn(cfg.pythonBin, [cfg.daemonPath, '--addr', cfg.daemonAddr], {
     stdio: ['ignore', logFd, logFd],
     detached: true,
+    env: { ...process.env, INGEST_HEARTBEAT_FILE: cfg.heartbeatFile },
   });
   child.unref();
   fs.closeSync(logFd);
@@ -151,11 +175,19 @@ async function reregisterCameras(cfg) {
   const sslCtx = cfg.httpsEnabled ? { rejectUnauthorized: false } : {};
 
   try {
+    // instanceIndex in the body (§6.45) tells the server's internal handler
+    // to only re-register cameras hashed to THIS instance — see
+    // POST /api/internal/ingest/reregister in index.js. Omitted (undefined
+    // instanceIndex serialized away by JSON.stringify) means "all cameras",
+    // preserving today's exact single-instance behavior.
+    const body = JSON.stringify({ instanceIndex: cfg.instanceIndex });
     const result = await new Promise((resolve, reject) => {
       const u = new URL(`${cfg.serverProto}://127.0.0.1:${cfg.serverPort}/api/internal/ingest/reregister`);
       const opts = {
         hostname: u.hostname, port: u.port || cfg.serverPort, path: u.pathname,
-        method: 'POST', headers: { 'Content-Length': '0' }, ...sslCtx,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) },
+        ...sslCtx,
       };
       const req = proto.request(opts, (res) => {
         let data = '';
@@ -167,6 +199,7 @@ async function reregisterCameras(cfg) {
       });
       req.on('error', reject);
       req.setTimeout(5000, () => { req.destroy(); reject(new Error('timeout')); });
+      req.write(body);
       req.end();
     });
     return { via: 'server', cameras: result.cameras || {} };
@@ -181,6 +214,11 @@ async function reregisterCameras(cfg) {
   } catch (e) {
     return { via: 'fallback', error: `DB read failed: ${e.message}`, cameras: {} };
   }
+
+  // Same per-instance filter as the primary path above — this fallback POSTs
+  // straight to cfg.daemonUrl (this instance's own URL), so it must only
+  // touch cameras that actually hash to this instance.
+  cameras = cameras.filter((cam) => ingestDaemonPool.instanceIndexForCamera(cam.id) === cfg.instanceIndex);
 
   const results = {};
   for (const cam of cameras) {
@@ -218,9 +256,16 @@ async function reregisterCameras(cfg) {
 }
 
 // ── High-level operations (used by both CLI wrappers and the Admin API) ────
+//
+// Each takes an optional `instanceIndex`. Omitted (undefined) means "every
+// configured instance" — see _runAllInstances() below, which is also the
+// exact fork point keeping a single-instance deployment's response shape
+// byte-for-byte identical to before §6.45 (one instance ⇒ the flat
+// per-instance result, unwrapped; more than one ⇒ `{ ok, instances: [...] }`).
 
-async function startDaemon() {
-  const cfg = getConfig();
+async function startDaemon(instanceIndex) {
+  if (instanceIndex === undefined) return _runAllInstances(startDaemon);
+  const cfg = getConfig(instanceIndex);
   if (!(await isPortFree(cfg.daemonPort))) {
     return { ok: true, alreadyRunning: true };
   }
@@ -232,8 +277,9 @@ async function startDaemon() {
   return { ok: true, alreadyRunning: false, pid: child.pid, cameras };
 }
 
-async function stopDaemon() {
-  const cfg = getConfig();
+async function stopDaemon(instanceIndex) {
+  if (instanceIndex === undefined) return _runAllInstances(stopDaemon);
+  const cfg = getConfig(instanceIndex);
   const { wasRunning, stillOccupied } = await killDaemon(cfg);
   if (stillOccupied) {
     return { ok: false, wasRunning, error: `port ${cfg.daemonPort} still occupied after SIGKILL` };
@@ -241,8 +287,9 @@ async function stopDaemon() {
   return { ok: true, wasRunning };
 }
 
-async function restartDaemon() {
-  const cfg = getConfig();
+async function restartDaemon(instanceIndex) {
+  if (instanceIndex === undefined) return _runAllInstances(restartDaemon);
+  const cfg = getConfig(instanceIndex);
   await killDaemon(cfg);
   const { child, ready } = await spawnDaemon(cfg);
   if (!ready) {
@@ -250,6 +297,21 @@ async function restartDaemon() {
   }
   const { cameras } = await reregisterCameras(cfg);
   return { ok: true, pid: child.pid, cameras };
+}
+
+// Runs `singleInstanceFn(index)` across every configured instance in
+// parallel. With exactly one instance (today's default), returns that one
+// result unwrapped — identical to calling singleInstanceFn(0) directly, so
+// existing no-arg callers (CLI scripts, Admin API routes) see no change at
+// all. With N>1, wraps results as `{ ok, instances: [{index, port, ...}] }`.
+async function _runAllInstances(singleInstanceFn) {
+  const configs = ingestDaemonPool.getAllInstanceConfigs();
+  const results = await Promise.all(configs.map((c) => singleInstanceFn(c.index)));
+  if (configs.length === 1) return results[0];
+  return {
+    ok: results.every((r) => r.ok),
+    instances: results.map((r, i) => ({ index: configs[i].index, port: configs[i].port, ...r })),
+  };
 }
 
 module.exports = {

@@ -2,7 +2,7 @@
 'use strict';
 
 /**
- * stopIngestDaemon.js — ingest daemon 종료.
+ * stopIngestDaemon.js — ingest daemon(들) 종료.
  *
  * 포트 점유 여부(실제 bind 시도, §6.36)로 실행 중인지 판단 — 과거에는
  * `/health` 응답만으로 판단해 "좀비" 상태(프로세스는 살아있지만 HTTP API가
@@ -11,8 +11,12 @@
  * server/src/services/ingestDaemonControl.js — 이 파일은 .env 로드 + CLI
  * 출력만 담당하는 얇은 래퍼.
  *
+ * 멀티 프로세스 ingest-daemon 플릿(2026-07-28, §6.45) — 특정 인스턴스만
+ * 종료하려면 --instance=<n>을 지정한다. 생략 시 설정된 전체 인스턴스를 종료한다.
+ *
  * Usage:
  *   cd server && npm run ingest:stop
+ *   cd server && npm run ingest:stop -- --instance=1
  */
 
 const path = require('path');
@@ -35,21 +39,36 @@ try {
   }
 } catch (_) { /* .env not found */ }
 
+const _instanceArg  = process.argv.find(a => a.startsWith('--instance='));
+const instanceIndex = _instanceArg ? parseInt(_instanceArg.split('=')[1], 10) : undefined;
+
 const { getConfig, stopDaemon } = require('../services/ingestDaemonControl');
-const cfg = getConfig();
+const ingestDaemonPool = require('../services/ingestDaemonPool');
+
+const configs = instanceIndex !== undefined
+  ? [getConfig(instanceIndex)]
+  : ingestDaemonPool.getAllInstanceConfigs().map((_, i) => getConfig(i));
+const showLabel = configs.length > 1 || instanceIndex !== undefined;
+const label = (idx) => showLabel ? `instance ${idx}: ` : '';
 
 (async () => {
-  const result = await stopDaemon();
+  const result = await stopDaemon(instanceIndex);
+  const perInstance = result.instances || [{ index: instanceIndex ?? 0, ...result }];
 
-  if (!result.wasRunning) {
-    console.log(`[ingest:stop] daemon이 실행 중이지 않습니다 (${cfg.daemonUrl}).`);
-    process.exit(0);
+  let anyFailed = false;
+  for (const r of perInstance) {
+    const cfg = configs.find(c => c.instanceIndex === r.index) || configs[0];
+    if (!r.wasRunning) {
+      console.log(`[ingest:stop] ${label(r.index)}daemon이 실행 중이지 않습니다 (${cfg.daemonUrl}).`);
+      continue;
+    }
+    console.log(`[ingest:stop] ${label(r.index)}daemon 종료 중…`);
+    if (!r.ok) {
+      anyFailed = true;
+      console.warn(`[ingest:stop] ${label(r.index)}${r.error}`);
+      continue;
+    }
+    console.log(`[ingest:stop] ${label(r.index)}daemon 종료 완료.`);
   }
-
-  console.log('[ingest:stop] daemon 종료 중…');
-  if (!result.ok) {
-    console.warn(`[ingest:stop] ${result.error}`);
-    process.exit(1);
-  }
-  console.log('[ingest:stop] daemon 종료 완료.');
+  if (anyFailed) process.exit(1);
 })();

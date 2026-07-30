@@ -17,6 +17,7 @@
 const http  = require('http');
 const path  = require('path');
 const { spawn } = require('child_process');
+const ingestDaemonPool = require('../services/ingestDaemonPool');
 
 const CHECK_INTERVAL_MS   = 20_000;
 const HEALTH_TIMEOUT_MS   = 3_000;
@@ -65,9 +66,15 @@ async function checkHealth(url) {
   return (await fetchIngestDaemonHealth(url)).ok;
 }
 
-function triggerRestart() {
+// instanceIndex is only passed through as --instance=<n> when there's more
+// than one configured instance (2026-07-28, §6.45) — restartIngestDaemon.js
+// only starts labeling its log lines "instance N: " once that flag is
+// present, so a single-instance deployment's log text is unaffected.
+function triggerRestart(instanceIndex, multiInstance) {
   const scriptPath = path.resolve(__dirname, '..', 'scripts', 'restartIngestDaemon.js');
-  console.error('[IngestWatchdog] ingest-daemon unresponsive for 2 consecutive checks — running restartIngestDaemon.js');
+  const label = multiInstance ? `instance ${instanceIndex} ` : '';
+  console.error(`[IngestWatchdog] ingest-daemon ${label}unresponsive for 2 consecutive checks — running restartIngestDaemon.js`);
+  const args = multiInstance ? [scriptPath, `--instance=${instanceIndex}`] : [scriptPath];
   // Resolve 'node' via PATH rather than process.execPath — on this host
   // process.execPath resolves to the glibc-compat ld-linux loader binary
   // itself (confirmed live: `ps aux` shows the running process as
@@ -77,7 +84,7 @@ function triggerRestart() {
   // to execve() the .js file itself as an ELF binary ("invalid ELF header").
   // The `node` on PATH is the wrapper script at ~/.local/bin/node that adds
   // those arguments correctly — the same one `npm run ingest:restart` uses.
-  const child = spawn('node', [scriptPath], {
+  const child = spawn('node', args, {
     cwd: path.resolve(__dirname, '..', '..'),
     stdio: ['ignore', 'pipe', 'pipe'],
     detached: false,
@@ -89,31 +96,39 @@ function triggerRestart() {
   });
 }
 
+// Multi-process ingest-daemon fleet (2026-07-28, §6.45) — one independent
+// watchdog timer PER instance (own closure-scoped consecutiveFailures/
+// cooldownUntil), so a failing instance's checks never delay or skip another
+// instance's cadence, and a restart only targets the instance that actually
+// failed. With INGEST_DAEMON_INSTANCES unset (default 1) this starts exactly
+// one timer against today's exact URL — identical to before §6.45.
 function startIngestDaemonWatchdog() {
-  const url = `${(process.env.INGEST_DAEMON_URL || 'http://127.0.0.1:7070').replace(/\/$/, '')}/health`;
-  let consecutiveFailures = 0;
-  let cooldownUntil = 0;
+  const instances = ingestDaemonPool.getAllInstanceConfigs();
+  const multiInstance = instances.length > 1;
 
-  const timer = setInterval(async () => {
-    if (Date.now() < cooldownUntil) return;
-    const ok = await checkHealth(url);
-    if (ok) {
-      consecutiveFailures = 0;
-      return;
-    }
-    consecutiveFailures += 1;
-    console.warn(`[IngestWatchdog] health check failed (${consecutiveFailures}/${FAILURE_THRESHOLD}) — ${url}`);
-    if (consecutiveFailures >= FAILURE_THRESHOLD) {
-      consecutiveFailures = 0;
-      cooldownUntil = Date.now() + RESTART_COOLDOWN_MS;
-      triggerRestart();
-    }
-  }, CHECK_INTERVAL_MS);
-  timer.unref();
+  for (const inst of instances) {
+    const url = inst.healthUrl;
+    let consecutiveFailures = 0;
+    let cooldownUntil = Date.now() + STARTUP_GRACE_MS;
 
-  // Delay the first check past STARTUP_GRACE_MS so a slow-but-normal boot
-  // (daemon still binding its port) isn't mistaken for the unresponsive state.
-  cooldownUntil = Date.now() + STARTUP_GRACE_MS;
+    const timer = setInterval(async () => {
+      if (Date.now() < cooldownUntil) return;
+      const ok = await checkHealth(url);
+      if (ok) {
+        consecutiveFailures = 0;
+        return;
+      }
+      consecutiveFailures += 1;
+      const label = multiInstance ? `instance ${inst.index} ` : '';
+      console.warn(`[IngestWatchdog] ${label}health check failed (${consecutiveFailures}/${FAILURE_THRESHOLD}) — ${url}`);
+      if (consecutiveFailures >= FAILURE_THRESHOLD) {
+        consecutiveFailures = 0;
+        cooldownUntil = Date.now() + RESTART_COOLDOWN_MS;
+        triggerRestart(inst.index, multiInstance);
+      }
+    }, CHECK_INTERVAL_MS);
+    timer.unref();
+  }
 }
 
 // Called instead of startIngestDaemonWatchdog() when INGEST_WATCHDOG_ENABLED=false.

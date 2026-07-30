@@ -2,8 +2,8 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Admin Dashboard Ingest Daemon Start/Stop/Restart Control  
-**Version:** 1.0  
-**Date:** 2026-07-23
+**Version:** 1.1  
+**Date:** 2026-07-28
 
 ---
 
@@ -36,21 +36,36 @@ Whether the daemon is "running" SHALL be determined by attempting a real TCP bin
 
 ### FR-IDC-003 — Kill Escalation
 
-Termination SHALL first attempt `fuser -k <port>/tcp` and `pkill -f 'ingest_daemon.py'` (SIGTERM-equivalent), then poll port occupancy for up to 8 seconds. If the port is still occupied after 8 seconds, SHALL escalate to `pkill -9 -f 'ingest_daemon.py'` (SIGKILL-equivalent) and poll for up to 3 more seconds.
+Termination SHALL first attempt `fuser -k <port>/tcp` and `pkill -f 'ingest_daemon.py --addr :<port>'` (SIGTERM-equivalent — the `--addr :<port>` cmdline match, not a bare name match, is REQUIRED so that killing one instance in a multi-instance fleet, FR-IDC-013, never affects another instance's process), then poll port occupancy for up to 8 seconds. If the port is still occupied after 8 seconds, SHALL escalate to `pkill -9 -f 'ingest_daemon.py --addr :<port>'` (SIGKILL-equivalent) and poll for up to 3 more seconds.
 
 ### FR-IDC-004 — POST /admin/ingest/start
 
-SHALL start the daemon if not already running (per FR-IDC-002) and re-register all active cameras via the existing internal reregister endpoint. If already running, SHALL return `{ ok: true, alreadyRunning: true }` without any side effects.
+SHALL start the targeted instance(s) (per FR-IDC-013) if not already running (per FR-IDC-002) and re-register that instance's active cameras via the existing internal reregister endpoint. If already running, SHALL return `{ ok: true, alreadyRunning: true }` for that instance without any side effects.
 
 **Acceptance**: Calling this endpoint while the daemon is already running SHALL NOT kill or restart it.
 
 ### FR-IDC-005 — POST /admin/ingest/stop
 
-SHALL terminate the daemon per FR-IDC-002/FR-IDC-003. SHALL return `{ ok: true, wasRunning: false }` (not an error) if the daemon was not running.
+SHALL terminate the targeted instance(s) (per FR-IDC-013) per FR-IDC-002/FR-IDC-003. SHALL return `{ ok: true, wasRunning: false }` (not an error) for any instance that was not running.
 
 ### FR-IDC-006 — POST /admin/ingest/restart
 
-SHALL terminate the daemon (per FR-IDC-003), start a fresh instance, wait for `/health` to respond (up to 10 seconds), and re-register all active cameras. SHALL return per-camera registration results.
+SHALL terminate the targeted instance(s) (per FR-IDC-013) (per FR-IDC-003), start a fresh instance, wait for `/health` to respond (up to 10 seconds), and re-register that instance's active cameras. SHALL return per-camera registration results.
+
+### FR-IDC-013 — Multi-Instance Fleet Targeting
+
+When the ingest-daemon runs as a fleet of `INGEST_DAEMON_INSTANCES` processes (default 1,
+Design_RTSP_Capture_Backend.md §6.45, `server/src/services/ingestDaemonPool.js`), all three endpoints
+SHALL accept an optional body field `instance: number` (0-based). When present, the action SHALL
+apply only to that instance and the response SHALL be the same flat shape as the single-instance
+case (FR-IDC-004/005/006). When omitted, the action SHALL apply to every configured instance; with
+exactly one instance configured the response SHALL remain the pre-existing flat shape unchanged
+(backward compatibility), and with more than one instance configured the response SHALL wrap
+per-instance results as `{ ok: boolean, instances: [ { index, port, ...single-instance result }, ... ] }`,
+where the top-level `ok` is `true` only if every instance's own `ok` is `true`.
+
+**Acceptance**: With `INGEST_DAEMON_INSTANCES` unset or `1`, every existing caller of these three
+endpoints SHALL observe byte-for-byte identical responses to before this requirement existed.
 
 ### FR-IDC-007 — Backend Availability Gating
 
@@ -70,7 +85,7 @@ Each endpoint SHALL hold the HTTP request open until the operation fully complet
 
 ### FR-IDC-011 — UI Control Row
 
-The Admin Dashboard's Ingest Daemon section SHALL render Start/Stop/Restart buttons above the per-camera monitoring grid. Stop and Restart SHALL require the user to confirm a browser prompt warning that camera capture will be interrupted before the request is sent. Buttons SHALL be disabled while any action is in flight. The outcome of the most recent action SHALL be shown inline (success message with PID, or error text).
+The Admin Dashboard's Ingest Daemon section SHALL render Start/Stop/Restart buttons above the per-camera monitoring grid. Stop and Restart SHALL require the user to confirm a browser prompt warning that camera capture will be interrupted before the request is sent. Buttons SHALL be disabled while any action is in flight. The outcome of the most recent action SHALL be shown inline (success message with PID, or error text). The UI SHALL NOT send an `instance` field (FR-IDC-013) — each click SHALL continue to target the whole fleet.
 
 **Acceptance**: Clicking Stop SHALL show a confirmation prompt; dismissing it SHALL NOT send any request.
 
@@ -112,6 +127,11 @@ interface StartResult {
   cameras?: Record<string, { ok: boolean; error?: string; status?: number }>;
   error?: string;
 }
+// Fleet-wide (no `instance` in request, INGEST_DAEMON_INSTANCES > 1):
+interface StartFleetResult {
+  ok: boolean;
+  instances: Array<{ index: number; port: number } & StartResult>;
+}
 ```
 
 ### Stop Response
@@ -121,6 +141,11 @@ interface StopResult {
   ok: boolean;
   wasRunning: boolean;
   error?: string;
+}
+// Fleet-wide (no `instance` in request, INGEST_DAEMON_INSTANCES > 1):
+interface StopFleetResult {
+  ok: boolean;
+  instances: Array<{ index: number; port: number } & StopResult>;
 }
 ```
 
@@ -133,6 +158,11 @@ interface RestartResult {
   cameras?: Record<string, { ok: boolean; error?: string; status?: number }>;
   error?: string;
 }
+// Fleet-wide (no `instance` in request, INGEST_DAEMON_INSTANCES > 1):
+interface RestartFleetResult {
+  ok: boolean;
+  instances: Array<{ index: number; port: number } & RestartResult>;
+}
 ```
 
 ---
@@ -142,6 +172,7 @@ interface RestartResult {
 | Component | File | Role |
 |---|---|---|
 | Shared control logic | `server/src/services/ingestDaemonControl.js` | `startDaemon()`/`stopDaemon()`/`restartDaemon()`, port-bind liveness check, kill escalation, camera re-registration |
+| Fleet config (§6.45) | `server/src/services/ingestDaemonPool.js` | Single source of truth for instance count/ports/`cameraId`→instance hashing (`INGEST_DAEMON_INSTANCES`) |
 | CLI wrappers | `server/src/scripts/{start,stop,restart}IngestDaemon.js` | `.env` load + CLI output only |
 | Admin API | `server/src/routes/admin.js` | `POST /ingest/{start,stop,restart}`, gating, audit logging |
 | Dashboard UI | `client/src/components/IngestDaemonSection.tsx` | Control buttons, confirmation prompts, result display |
@@ -154,3 +185,4 @@ interface RestartResult {
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-23 | 초기 작성 |
+| 1.1 | 2026-07-28 | FR-IDC-013 추가(멀티 인스턴스 플릿 타겟팅, §6.45), FR-IDC-003~006/011 인스턴스 반영, §5 Data Model에 Fleet 응답 타입 추가, §6 Component Map에 ingestDaemonPool.js 추가 |

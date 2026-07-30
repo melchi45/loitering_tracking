@@ -76,7 +76,7 @@ test/
 | `nvr_channel_discovery.test.js` | NVR MaxChannel 탐색 | capture 백엔드 없음 |
 | `channel_slot.test.js` | Dashboard Channel Slot 매핑 (FR-CH-001~062) | capture 백엔드 없음 |
 | `capture-backend.test.js` | RTSP Capture Backend | 캡처 클래스 테스트 |
-| `ingest_daemon_control.test.js` | Ingest Daemon Control Start/Stop/Restart (FR-IDC-001~012) | `CAPTURE_BACKEND=ingest-daemon` 없이는 대상 자체가 없음 — Stop/Restart 실제 실행은 `LTS_TEST_INGEST_DESTRUCTIVE=true` 명시 없이는 기본 스킵(라이브 카메라 캡처 중단 방지) |
+| `ingest_daemon_control.test.js` | Ingest Daemon Control Start/Stop/Restart (FR-IDC-001~013) | `CAPTURE_BACKEND=ingest-daemon` 없이는 대상 자체가 없음 — Stop/Restart 및 멀티 인스턴스 `instance` 파라미터(TC-IDC-015~017) 실제 실행은 `LTS_TEST_INGEST_DESTRUCTIVE=true` 명시 없이는 기본 스킵(라이브 카메라 캡처 중단 방지); `instance` 관련 케이스는 추가로 `INGEST_DAEMON_INSTANCES>1`이 아니면 스킵 |
 | `onvif_metadata_pipeline.test.js` | ONVIF 메타데이터 파이프라인 | ONVIF 구독 없음 |
 | `onvif_apprtp.test.js` | ONVIF App-RTP | capture 파이프라인 없음 |
 | `youtube_streams.test.js` | YouTube 스트림 수집 | YouTubeStreamService 비활성 |
@@ -297,7 +297,8 @@ npm test -- --testNamePattern="WebRTC ICE"
 | `webrtc_engine_modes.test.js` | `docs/tc/TC_WebRTC_Engine_Modes.md` |
 | `auth.test.js` | `docs/tc/TC_User_Authentication.md` |
 | `sidebar_alerts_zones.test.js` | `docs/tc/TC_Dashboard_Sidebar_Alerts_Zones.md` |
-| `youtube_streams.test.js` | `docs/tc/TC_LTS2026_YouTube_RTSP_Ingest.md` |
+| `youtube_streams.test.js` | `docs/tc/TC_YouTube_RTSP_Ingest.md` (TC-LTS-YT-01) |
+| `youtube_streams_lts2026.test.js` | `docs/tc/TC_LTS2026_YouTube_RTSP_Ingest.md` (TC-LTS-YT-02) |
 | `ai_detection_modules.test.js` | `docs/tc/TC_AI_Human_Detection.md`, `docs/tc/TC_AI_Fire_Smoke_Detection.md` 등 |
 | `stats_panel.test.js` | `docs/tc/TC_Stats_Panel.md` |
 | `detection_snapshot_search.test.js` | `docs/tc/TC_Detection_Snapshot_Search.md` |

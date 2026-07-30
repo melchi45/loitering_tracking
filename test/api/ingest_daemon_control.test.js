@@ -55,12 +55,26 @@ function assert(cond, msg) {
   if (!cond) throw new Error(msg);
 }
 
+// Reads INGEST_DAEMON_INSTANCES straight from server/.env — the multi-instance
+// fleet tests (TC-IDC-015~017) only make sense when N>1 is actually configured.
+function readEnvInt(envPath, name, defaultValue) {
+  try {
+    const content = fs.readFileSync(envPath, 'utf8');
+    const m = content.match(new RegExp(`^${name}=(.*)$`, 'm'));
+    const n = m ? parseInt(m[1].trim(), 10) : NaN;
+    return Number.isFinite(n) && n > 0 ? n : defaultValue;
+  } catch (_) {
+    return defaultValue;
+  }
+}
+
 // ── HTTP helper ───────────────────────────────────────────────────────────────
 
 const http  = require('http');
 const https = require('https');
 const { execSync } = require('child_process');
 const path = require('path');
+const fs = require('fs');
 
 function request(urlStr, opts = {}) {
   return new Promise((resolve, reject) => {
@@ -257,10 +271,55 @@ async function runAll() {
     });
   }
 
-  // ── TC-IDC-011: CLI --dry-run (always safe) ──────────────────────────────────
-  console.log('\n── TC-IDC-011: CLI --dry-run (no side effects) ──────────────');
+  // ── TC-IDC-015~017: multi-instance fleet targeting (destructive, opt-in) ────
+  console.log('\n── TC-IDC-015~017: instance param (destructive, opt-in) ──────');
 
   const serverDir = path.resolve(__dirname, '..', '..', 'server');
+  const instanceCount = readEnvInt(path.join(serverDir, '.env'), 'INGEST_DAEMON_INSTANCES', 1);
+
+  if (!DESTRUCTIVE) {
+    await skip('TC-IDC-015', 'instance param targets a single instance', 'set LTS_TEST_INGEST_DESTRUCTIVE=true to run — interrupts real camera capture');
+    await skip('TC-IDC-016', 'omitted instance targets the whole fleet', 'set LTS_TEST_INGEST_DESTRUCTIVE=true to run — interrupts real camera capture');
+    await skip('TC-IDC-017', 'single-instance deployments unaffected by the fleet feature', 'set LTS_TEST_INGEST_DESTRUCTIVE=true to run — interrupts real camera capture');
+  } else if (!adminToken || !backendEnabled) {
+    await skip('TC-IDC-015', 'instance param targets a single instance', !adminToken ? 'no admin token' : 'CAPTURE_BACKEND != ingest-daemon');
+    await skip('TC-IDC-016', 'omitted instance targets the whole fleet', !adminToken ? 'no admin token' : 'CAPTURE_BACKEND != ingest-daemon');
+    await skip('TC-IDC-017', 'single-instance deployments unaffected by the fleet feature', !adminToken ? 'no admin token' : 'CAPTURE_BACKEND != ingest-daemon');
+  } else if (instanceCount <= 1) {
+    await skip('TC-IDC-015', 'instance param targets a single instance', 'INGEST_DAEMON_INSTANCES <= 1 — set to 3+ in server/.env to exercise fleet targeting');
+    await skip('TC-IDC-016', 'omitted instance targets the whole fleet', 'INGEST_DAEMON_INSTANCES <= 1 — set to 3+ in server/.env to exercise fleet targeting');
+
+    await test('TC-IDC-017', 'Single-instance deployment: restart response has no instances[] wrapper', async () => {
+      const res = await post('/admin/ingest/restart', {}, { Authorization: `Bearer ${adminToken}` });
+      assert(res.status === 200, `Expected 200, got ${res.status}: ${res.body}`);
+      assert(res.json?.ok === true, `Expected ok:true, got ${res.body}`);
+      assert(res.json?.instances === undefined, `Expected no instances[] wrapper for single-instance deployment, got ${JSON.stringify(res.json)}`);
+      assert(typeof res.json?.pid === 'number', `Expected numeric pid, got ${JSON.stringify(res.json?.pid)}`);
+    });
+  } else {
+    await test('TC-IDC-015', 'instance:1 restarts only that instance (flat response, no instances[])', async () => {
+      const res = await post('/admin/ingest/restart', { instance: 1 }, { Authorization: `Bearer ${adminToken}` });
+      assert(res.status === 200, `Expected 200, got ${res.status}: ${res.body}`);
+      assert(res.json?.ok === true, `Expected ok:true, got ${res.body}`);
+      assert(res.json?.instances === undefined, `Expected flat single-instance shape when instance is specified, got ${JSON.stringify(res.json)}`);
+      assert(typeof res.json?.pid === 'number', `Expected numeric pid, got ${JSON.stringify(res.json?.pid)}`);
+    });
+
+    await test('TC-IDC-016', 'Omitted instance restarts the whole fleet (instances[] wrapper)', async () => {
+      const res = await post('/admin/ingest/restart', {}, { Authorization: `Bearer ${adminToken}` });
+      assert(res.status === 200, `Expected 200, got ${res.status}: ${res.body}`);
+      assert(res.json?.ok === true, `Expected ok:true, got ${res.body}`);
+      assert(Array.isArray(res.json?.instances), `Expected instances[] array for fleet-wide restart, got ${JSON.stringify(res.json)}`);
+      assert(res.json.instances.length === instanceCount, `Expected ${instanceCount} instances, got ${res.json.instances.length}`);
+      for (const inst of res.json.instances) {
+        assert(typeof inst.index === 'number', `Expected numeric index per instance, got ${JSON.stringify(inst)}`);
+        assert(typeof inst.port === 'number', `Expected numeric port per instance, got ${JSON.stringify(inst)}`);
+      }
+    });
+  }
+
+  // ── TC-IDC-011: CLI --dry-run (always safe) ──────────────────────────────────
+  console.log('\n── TC-IDC-011: CLI --dry-run (no side effects) ──────────────');
 
   await test('TC-IDC-011-start', 'npm run ingest:start -- --dry-run exits 0 and prints config', () => {
     const out = execSync('node src/scripts/startIngestDaemon.js --dry-run', { cwd: serverDir, encoding: 'utf8' });

@@ -34,12 +34,31 @@ function killProcessTree(pid) {
     });
   }
   return new Promise((resolve) => {
-    execFile('pgrep', ['-P', String(pid)], (_err, stdout) => {
-      const children = String(stdout || '').split('\n').map((s) => s.trim()).filter(Boolean);
+    findChildPids(pid).then((children) => {
       Promise.all(children.map((childPid) => killProcessTree(childPid))).then(() => {
         try { process.kill(pid, 'SIGKILL'); } catch (_) { /* already dead */ }
         resolve();
       });
+    });
+  });
+}
+
+// Snapshot a process's immediate children (POSIX only — Windows uses taskkill
+// /T in killProcessTree() and never needs this). MUST be called while `pid`
+// is still alive: Linux reparents orphaned children to init the instant the
+// parent exits, so calling this AFTER the parent has already been sent a
+// signal and awaited to close returns an empty list — the parent's own
+// internal ffmpeg downloader (see killProcessTree() comment above) has
+// already been silently reparented away and is unreachable via `pgrep -P`
+// from that point on. Callers that need to kill the whole tree of a process
+// they're about to terminate must call this FIRST, before touching the
+// parent at all, then kill the captured PIDs afterward — this was the exact
+// bug behind ffmpeg processes surviving explicit YouTube channel deletion.
+function findChildPids(pid) {
+  if (!pid) return Promise.resolve([]);
+  return new Promise((resolve) => {
+    execFile('pgrep', ['-P', String(pid)], (_err, stdout) => {
+      resolve(String(stdout || '').split('\n').map((s) => s.trim()).filter(Boolean));
     });
   });
 }
@@ -865,10 +884,15 @@ class YouTubeStreamService {
         // _stopEntry() does — see killProcessTree() comment for why a plain
         // .kill() never reaches yt-dlp's internal ffmpeg subprocess.
         if (entry.ytdlpProcess) {
-          const ytdlpPid = entry.ytdlpProcess.pid;
-          entry.ytdlpProcess.kill('SIGTERM');
+          const ytdlpProc = entry.ytdlpProcess;
+          const ytdlpPid  = ytdlpProc.pid;
           entry.ytdlpProcess = null;
-          killProcessTree(ytdlpPid).catch(() => {});
+          // Capture children BEFORE sending SIGTERM — see findChildPids()
+          // comment for why this must happen while ytdlp is still alive.
+          findChildPids(ytdlpPid).then((orphanPids) => {
+            ytdlpProc.kill('SIGTERM');
+            return Promise.all(orphanPids.map((childPid) => killProcessTree(childPid)));
+          }).catch(() => {});
         }
 
         if (entry.status === 'stopping' || entry.status === 'removed') return;
@@ -1028,31 +1052,35 @@ class YouTubeStreamService {
       try { await this.pipelineManager.stopCamera(entry.id); } catch { /* ignore */ }
     }
 
-    // Kill yt-dlp first (closing its stdout triggers ffmpeg stdin EOF)
+    // Kill yt-dlp first (closing its stdout triggers ffmpeg stdin EOF).
+    // Capture its child PIDs (internal ffmpeg downloader) BEFORE sending any
+    // signal — see findChildPids() comment for why this must happen while
+    // ytdlp is still fully alive, not derived after the fact.
     if (entry.ytdlpProcess) {
       const ytdlpPid = entry.ytdlpProcess.pid;
+      const orphanPids = await findChildPids(ytdlpPid);
       entry.ytdlpProcess.kill('SIGTERM');
       await new Promise((res) => {
         const t = setTimeout(() => { entry.ytdlpProcess && entry.ytdlpProcess.kill('SIGKILL'); res(); }, 3000);
         entry.ytdlpProcess.once('close', () => { clearTimeout(t); res(); });
       });
       entry.ytdlpProcess = null;
-      // Sweep yt-dlp's own subprocess tree (its internal ffmpeg downloader) —
-      // see killProcessTree() comment above for why the .kill() calls above
-      // never reach it.
-      await killProcessTree(ytdlpPid);
+      await Promise.all(orphanPids.map((childPid) => killProcessTree(childPid)));
     }
 
-    // Kill FFmpeg (the outer process reading pipe:0 and publishing RTSP)
+    // Kill FFmpeg (the outer process reading pipe:0 and publishing RTSP).
+    // Our own outer ffmpeg doesn't spawn further children in this pipeline,
+    // but capture-then-kill costs nothing and stays consistent/future-proof.
     if (entry.ffmpegProcess) {
       const ffmpegPid = entry.ffmpegProcess.pid;
+      const orphanPids = await findChildPids(ffmpegPid);
       entry.ffmpegProcess.kill('SIGTERM');
       await new Promise((res) => {
         const t = setTimeout(() => { entry.ffmpegProcess && entry.ffmpegProcess.kill('SIGKILL'); res(); }, 5000);
         entry.ffmpegProcess.once('close', () => { clearTimeout(t); res(); });
       });
       entry.ffmpegProcess = null;
-      await killProcessTree(ffmpegPid);
+      await Promise.all(orphanPids.map((childPid) => killProcessTree(childPid)));
     }
 
     entry.status = 'removed';

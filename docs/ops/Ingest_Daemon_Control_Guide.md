@@ -2,8 +2,8 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System  
 **Feature:** Admin Dashboard Ingest Daemon Start/Stop/Restart Control  
-**Version:** 1.0  
-**Date:** 2026-07-23
+**Version:** 1.1  
+**Date:** 2026-07-28
 
 ---
 
@@ -40,9 +40,11 @@ Stop and Restart both show a confirmation dialog warning that camera capture wil
 The ingest-daemon can enter a state where the process is alive and consuming CPU but its HTTP API never responds. Whether the daemon is "running" is determined by attempting to bind its port directly (`isPortFree()`) — never by whether `/health` answers — so Stop/Restart correctly detect and terminate a zombie daemon that a naive health-check-based approach would miss entirely.
 
 Termination sequence:
-1. `fuser -k <port>/tcp` + `pkill -f 'ingest_daemon.py'` (SIGTERM-equivalent)
+1. `fuser -k <port>/tcp` + `pkill -f 'ingest_daemon.py --addr :<port>'` (SIGTERM-equivalent — matched by
+   this instance's own `--addr :<port>` cmdline argument, not by process name alone, so killing one
+   instance in a multi-instance fleet, §8, never touches another instance's process)
 2. Poll port occupancy for up to 8 seconds
-3. If still occupied: `pkill -9 -f 'ingest_daemon.py'` (SIGKILL-equivalent), poll up to 3 more seconds
+3. If still occupied: `pkill -9 -f 'ingest_daemon.py --addr :<port>'` (SIGKILL-equivalent), poll up to 3 more seconds
 
 ---
 
@@ -59,6 +61,11 @@ npm run ingest:restart   # equivalent to clicking Restart
 # Preview config without side effects (start/restart only):
 npm run ingest:start -- --dry-run
 npm run ingest:restart -- --dry-run
+
+# Target a single instance in a multi-instance fleet (§8) — 0-based index:
+npm run ingest:start -- --instance=1
+npm run ingest:stop -- --instance=1
+npm run ingest:restart -- --instance=1
 ```
 
 ---
@@ -80,8 +87,36 @@ If cameras keep failing shortly after a manual Restart, check whether one of the
 
 ---
 
+## 8. Multi-Instance Fleet (§6.45)
+
+Since 2026-07-28, the sustained-GIL-contention issue in §7 was root-caused to GIL thrashing under a
+high thread count in a single `ingest_daemon.py` process (confirmed via live `strace` showing ~22,000
+`futex()` syscalls/sec across ~96 threads with zero actual I/O). The structural fix: cameras are
+distributed (by a deterministic hash of `cameraId`, re-computed on every restart — never persisted)
+across `INGEST_DAEMON_INSTANCES` independent OS processes instead of one.
+
+- **Env var**: `INGEST_DAEMON_INSTANCES` in `server/.env` (default `1` — fully backward compatible,
+  identical single-process behavior to before this feature). Each instance listens on
+  `INGEST_DAEMON_BASE_PORT + index * 10` (default base `7070`, so instance 0 = port 7070/internal 7071,
+  instance 1 = port 7080/internal 7081, instance 2 = port 7090/internal 7091, ...).
+- **Admin API**: `/admin/ingest/{start,stop,restart}` accept an optional body field `instance` (0-based)
+  to target one instance; omitted targets the whole fleet. See RFP/SRS/TC_Ingest_Daemon_Control.md for
+  the exact request/response shapes.
+- **CLI**: `--instance=<n>` flag on all three `npm run ingest:*` scripts (§5 above); omitted runs across
+  every configured instance.
+- **Dashboard UI**: the Start/Stop/Restart buttons do not yet expose a per-instance picker — each click
+  still targets the whole fleet, same as clicking with no `instance` via the API.
+- **Verifying the fleet is up**: `ps -ef | grep ingest_daemon.py` should show one process per instance,
+  each with a distinct `--addr :<port>` argument; `curl 127.0.0.1:<port>/health` for each configured
+  port should return `200`.
+- Full technical background, the strace evidence, and the six single-process mitigations that were
+  tried and failed before this structural fix: `docs/design/Design_RTSP_Capture_Backend.md` §6.45.
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-23 | 초기 작성 |
+| 1.1 | 2026-07-28 | §8 멀티 인스턴스 플릿(§6.45) 추가, §4/§5 인스턴스 스코프 반영 |

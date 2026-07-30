@@ -623,8 +623,10 @@ c.close()
 | `CAPTURE_BACKEND` | `ingest-daemon` | 캡처 백엔드: `ingest-daemon` / `gstreamer` / `pyav` / `ffmpeg` |
 | `WEBRTC_ENGINE` | `mediamtx` | WebRTC 엔진: `mediamtx` (권장) / `mediasoup` |
 | `INGEST_DAEMON_BIN` | `../ingest-daemon/ingest_daemon.py` | Python 데몬 스크립트 경로 |
-| `INGEST_DAEMON_ADDR` | `:7070` | 데몬 HTTP bind 주소 |
-| `INGEST_DAEMON_URL` | `http://127.0.0.1:7070` | Node.js → 데몬 URL |
+| `INGEST_DAEMON_ADDR` | `:7070` | 데몬 HTTP bind 주소 (인스턴스 0 기준 — §6.45 참고) |
+| `INGEST_DAEMON_URL` | `http://127.0.0.1:7070` | Node.js → 데몬 URL (인스턴스 0 기준) |
+| `INGEST_DAEMON_INSTANCES` | `1` | (§6.45) ingest-daemon 인스턴스 개수 — GIL thrashing 완화용 멀티 프로세스 플릿. 1이면 기존과 동일 동작 |
+| `INGEST_DAEMON_BASE_PORT` | `7070` | (§6.45) 인스턴스 0의 포트 — 인스턴스 N의 포트는 `BASE_PORT + N*10` (internalPort는 +1) |
 | `PYAV_PYTHON_BIN` | `python3` | Python 바이너리 경로 (ingest-daemon과 pyav 공용) |
 | `GSTREAMER_HW_ACCEL` | `auto` | GStreamer 하드웨어 가속: `auto` / `nvdec` / `vaapi` / `software` |
 | `PYAV_HW_ACCEL` | `none` | PyAV 인라인 사이드카 가속: `none` / `cuda` / `videotoolbox` |
@@ -684,3 +686,4 @@ curl http://localhost:3080/api/onvif-events?cameraId=<CAM_ID>&limit=1 | python3 
 | 1.2 | 2026-06-26 | ONVIF 이벤트 타임라인 운영 안내 섹션 추가 — 전체화면 하단 탭 Name 컬럼 설명·트러블슈팅 curl 예시 |
 | 1.3 | 2026-07-09 | "AI 프레임 해상도 튜닝(`AI_MAX_WIDTH`)" 섹션 신규 — Detections 탭 crop 화질이 흐릿한 근본 원인(AI JPEG가 YOLO 입력·crop 소스 겸용) 및 화질/부하 트레이드오프 안내 |
 | 1.4 | 2026-07-09 | 위 섹션 재작성 — ingest-daemon은 항상 원본 해상도 전송으로 변경, `AI_MAX_WIDTH`는 streaming→analysis 서버 전송용 Node.js 다운스케일 전용으로 재정의(crop 화질과 무관), 반영에 서버 재시작 필요로 정정 |
+| 1.5 | 2026-07-28 | 환경변수 표에 `INGEST_DAEMON_INSTANCES`/`INGEST_DAEMON_BASE_PORT` 추가 (§6.45 멀티 인스턴스 플릿) |

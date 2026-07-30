@@ -161,19 +161,22 @@ npm run ingest:restart
 
 > **동작 설명:**
 > - `ingest:start`: `/health` 체크 → 이미 실행 중이면 no-op → Python PyAV 데몬 백그라운드 시작 → 최대 10초 대기 → 카메라 자동 재등록
-> - `ingest:stop`: `/health` 체크 → `fuser -k 7070/tcp` + `pkill -f ingest_daemon.py` → 포트 해제 확인 (3초)
+> - `ingest:stop`: `/health` 체크 → `fuser -k 7070/tcp` + `pkill -f 'ingest_daemon.py --addr :7070'` → 포트 해제 확인 (3초)
 > - `ingest:restart`: `ingest:stop` → `ingest:start` 순서 실행
+> - 멀티 인스턴스 플릿(아래 `INGEST_DAEMON_INSTANCES`)에서는 세 명령 모두 `-- --instance=<n>`으로 특정 인스턴스만 타겟 가능(생략 시 전체 인스턴스 대상) — 상세: `docs/ops/Ingest_Daemon_Control_Guide.md` §8
 >
 > **환경 변수 (`server/.env`):**
 > | Variable | Default | Description |
 > |---|---|---|
-> | `INGEST_DAEMON_ADDR` | `:7070` | daemon 수신 주소 |
-> | `INGEST_DAEMON_URL` | `http://127.0.0.1:7070` | daemon REST URL |
+> | `INGEST_DAEMON_ADDR` | `:7070` | daemon 수신 주소 (인스턴스 0 기준) |
+> | `INGEST_DAEMON_URL` | `http://127.0.0.1:7070` | daemon REST URL (인스턴스 0 기준) |
 > | `INGEST_DAEMON_BIN` | `../ingest-daemon/ingest_daemon.py` | daemon 스크립트 경로 |
 > | `INGEST_DAEMON_LOG` | `/tmp/ingest-daemon.log` | daemon 로그 파일 경로 |
 > | `PYAV_PYTHON_BIN` | `python3` | Python 실행 경로 |
+> | `INGEST_DAEMON_INSTANCES` | `1` | GIL 스래싱 완화용 멀티 프로세스 플릿의 인스턴스 개수(`Design_RTSP_Capture_Backend.md` §6.45). `1`이면 기존과 완전히 동일하게 동작 |
+> | `INGEST_DAEMON_BASE_PORT` | `7070` | 인스턴스 0의 포트 — 인스턴스 N의 포트는 `BASE_PORT + N*10` |
 >
-> **로그 확인:** `tail -f /tmp/ingest-daemon.log`
+> **로그 확인:** `tail -f /tmp/ingest-daemon.log` (멀티 인스턴스는 인스턴스별 `ingest-daemon.<n>.log`)
 
 #### Web UI Start / Stop
 

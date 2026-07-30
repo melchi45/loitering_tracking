@@ -307,12 +307,44 @@ ingest-daemon crash
 
 **신규 — `Camera.webrtcVideoOnly` (세션 부하 완화, 2026-07-15):** 위 재진입 가드 수정 후에도 TID-A800은 stall이 완전히 사라지지 않았음 — ping(0% 손실)과 AI 디코딩 멀티스레드화(`thread_type=AUTO`)로도 해결 안 됨, 진짜 원인은 카메라 자체의 동시 RTSP 세션 처리 한계였음(실측: 물리 카메라 1대당 세션 총량을 8→6으로 줄이자 양쪽 채널 모두 안정화). `PUT /api/cameras/:id { webrtcVideoOnly: true }`로 카메라별 audio+App RTP RTP 세션을 생략하고 AI+video만 유지(카메라당 세션 4→2) — mediasoup WHEP 소비자 쪽엔 오디오/데이터채널이 없다는 것만 다를 뿐 영상 재생엔 영향 없음. RTSP 세션 부하가 큰(동시 채널 다수 등록·저사양 인코더) 카메라에 적용. 소스: `server/src/services/webrtc/mediasoupEngine.js` `addCameraStream()` opts.videoOnly. 상세: `docs/design/Design_RTSP_Capture_Backend.md` §6.7.
 
+**버그 수정 — 고아 `startServer.js`가 정상 ingest-daemon을 반복적으로 죽이던 결함 (2026-07-28, §6.41):** 같은 워킹 디렉토리에 구버전 코드를 메모리에 올린 채 실행 중이던 `startServer.js` 고아 인스턴스가 있으면, 그 인스턴스의 재시작 로직(`_killPortOrphan()`)이 포트 점유 프로세스의 헬스체크 없이 `pkill -f 'ingest_daemon.py'`로 무조건 죽여 실제 서비스 중인 정상 데몬까지 반복적으로 죽이는 flapping이 발생할 수 있었음 — 수정: `_respawnIngest()`가 죽이기 전에 `GET /health` 실응답을 먼저 확인, 이미 건강하면 이 인스턴스는 물러남. **단, 이미 떠 있던 구버전 고아 프로세스에는 이 코드 수정이 적용되지 않으므로 직접 종료해야 함.**
+
+**아키텍처 변경 — HTTP 컨트롤플레인 프로세스 분리 + 스레드 수 축소 (2026-07-28, §6.42):** 위 수정 후에도 단일 정상 인스턴스에서 ingest-daemon 자체가 ~2.3분 간격으로 주기적 응답 불능(§6.10/§6.29.5 계열의 재발, 실측 CPU 245%·NLWP 127)에 빠지는 현상이 남아있었음. 라이브 SIGUSR1 스택 덤프로 확인한 결과 accept 스레드는 `select()`에서 유휴 상태(데드락 아님) — 그리고 실제 라이브 카메라로 demux()/decode() 개별 호출이 GIL을 정상적으로 놓아주는지 합성 테스트로 검증했으나(처리량 87~99% 유지, 초 단위 정지 없음) 단일 GIL 홀더는 찾지 못함(단, 실제 스레드 127개 규모의 GIL convoy 효과까지는 재현 못 함 — 원인 미확정). **근본 메커니즘을 확정 못해도 구조적으로 면역이 되는 길**을 택함:
+- **`ingest_health_proxy.py`(신규)** — `/health`만 담당하는 완전히 별도 프로세스가 외부 포트를 리슨. `ingest_daemon.py`의 기존 API 서버는 `127.0.0.1:<외부 포트+1>`(내부 전용, `INGEST_INTERNAL_HTTP_PORT`로 override)로 이동. `/health`는 daemon이 1초마다 갱신하는 heartbeat 파일 신선도만으로 즉답(daemon의 GIL/스케줄링 상태와 무관), 5초 넘게 stale이면 503(기존 watchdog의 재시작 로직 그대로 작동). 나머지 경로는 내부 포트로 투명 프록시. daemon 프로세스가 사라지면 프록시도 ~2~3초 내 자동 종료. **Node 측 코드 변경 전혀 불필요** — 외부 포트·응답 형식 100% 하위 호환.
+- **스레드 수 축소** — `AI_DECODE_THREADS_TOTAL`(주석 처리돼 사실상 무제한 `os.cpu_count()=40`이던 것을 `20`으로 명시), `INGEST_STOP_WORKERS`(8→4). `server/.env`+3개 `.env*.example` 전부 동기화.
+- 진단·수정 상세: `docs/design/Design_RTSP_Capture_Backend.md` §6.42.
+
+**CAPTURE_FPS 보장 강화 — 카메라별 전용 슬롯 + latest-frame-wins 큐 + 스레드 우선순위 조정 (2026-07-28, §6.43):** §6.42 이후에도 daemon이 간헐적(37초 관측)으로 재차 wedge — 헬스체크 자체가 5초 넘게 stale해질 만큼 심각한 스레드 기아가 재발했고, 그 구간 동안 analysis 서버 전송이 완전히 멈췄음(§6.42가 재발 "빈도"는 줄였지만 근절은 못 함). 그런데 같은 구간에도 **WebRTC 영상 재생은 멈추지 않는** 현상을 조사한 결과, 두 경로의 근본적인 메커니즘 차이를 확인: 영상/오디오 RTP는 카메라 io 스레드 안에서 **동기적으로 로컬(127.0.0.1) UDP에 직접 mux()**되어(`_mux_passthrough()`) 응답 대기가 전혀 없는 반면, AI JPEG/App RTP는 **공유 스레드풀에 제출 후 `urlopen()`으로 Node 응답을 기다려야** 해서 daemon이 스레드 기아에 빠지면 이 "응답 대기형" 경로만 선택적으로 막힘. 이 진단을 바탕으로 CAPTURE_FPS 보장을 위해 3가지를 병행 적용:
+1. **카메라별 전용 슬롯 분리** — 기존 전체 카메라 공유 세마포어(`_SHARED_PUSH_SEMAPHORE`)를 폐지, 카메라마다 `_ai_own_slot`(전용 예약 1개) + 소량의 공유 overflow(`_AI_PUSH_OVERFLOW`)로 재구성. 하나의 카메라/App RTP 버스트가 다른 카메라의 fps를 빼앗지 못하도록 AI JPEG push(`_AI_PUSH_EXECUTOR`)와 App RTP push(`_APP_RTP_EXECUTOR`)도 완전히 별도 풀로 분리(이전엔 하나의 공유 풀·큐를 사용).
+2. **드롭 대신 latest-frame-wins 큐** — 세마포어가 가득 차면 그냥 드롭하던 기존 방식(`_push_jpeg`) 폐지. 이제 push가 밀리면 대기 중이던 이전 프레임을 최신 프레임으로 교체(coalesce)만 하고, 진행 중인 draining 루프(`_drain_ai_push`)가 항상 "가장 최근 프레임"으로 수렴 — Node 쪽 `pipelineManager.js`의 `ctx._pendingFrame` latest-frame-wins 패턴과 동일한 설계.
+3. **스레드 우선순위 조정** — App RTP·stopper(teardown) 풀 워커 스레드만 `os.setpriority(PRIO_PROCESS, get_native_id(), +8)`로 스케줄링 우선순위를 낮춤(루트 불필요 — nice를 올리는 건 항상 무권한 허용). AI push는 건드리지 않아 상대적으로 스케줄러 관심을 더 받음.
+
+세 가지 변경 모두 실제 `CameraSession` 메서드를 `__new__`로 인스턴스화해 구동하는 격리 검증 스크립트로 확인: (a) 자기 자신의 encode가 느려도 최신 프레임은 반드시 전달됨, (b) 공유 overflow가 고갈된 상태에서도 자기 전용 슬롯으로 정상 전달됨, (c) 한 카메라가 300ms 느려도 다른 카메라는 0ms 지연으로 독립 완료. 신규 env: `INGEST_AI_PUSH_WORKERS`(24)/`INGEST_AI_PUSH_OVERFLOW`(4)/`INGEST_APP_RTP_WORKERS`(4) — 기존 `INGEST_PUSH_WORKERS`는 폐지(대체됨). 상세: `docs/design/Design_RTSP_Capture_Backend.md` §6.43.
+
+**listen backlog 확대 + GIL switch interval 조정 — 재발 못 막음 (2026-07-28, §6.44):** §6.43 이후에도 daemon이 간헐적으로 wedge — `dmesg`에 `Possible SYN flooding on port 7070` 반복 확인, `ThreadingHTTPServer`의 listen backlog가 Python 기본값 5로 방치돼 있었음. `INGEST_LISTEN_BACKLOG`(128)로 확대했으나 **재발을 막지 못함** — SYN flood는 원인이 아니라 "이미 멈춘 daemon에 몰리는 연결 시도"의 증상이었던 것으로 판명. wedge 순간을 자동 감지해 즉시 `strace -f -tt -T`를 붙이는 스크립트로 실증: **4초간 futex() 49,533회(초당 ~22,000회, 스레드 96개 관여), 그 사이 실제 I/O syscall은 0회** — CPython GIL 전환 간격(5ms) 기준 다수 스레드가 동시에 GIL을 재요청하는 "GIL 스래싱" 라이브록 확인(§6.42가 "재현 못했다"고 남긴 스레드 127개 규모 GIL convoy effect를 실측). `sys.setswitchinterval()`을 5ms→50ms(`INGEST_GIL_SWITCH_INTERVAL`)로 늘려봤으나 재발 간격(~90초)에 뚜렷한 개선 없음 — 근본 원인이 스레드 수 자체임을 시사, §6.45로 이어짐.
+
+**멀티 프로세스 ingest-daemon 플릿 — 구조적 GIL 분리 (2026-07-28, §6.45):** §6.41~§6.44의 단일 프로세스 완화책 6가지 전부 wedge 재발을 못 막은 뒤, 카메라를 cameraId 해시 기반 **여러 독립 OS 프로세스**(각자 자기 GIL)로 분산 — `mediasoupEngine.js`가 이미 mediasoup Worker pool에 쓰는 `_workerIndexFor`와 동일 패턴을 `server/src/utils/cameraHash.js`로 추출해 공유. 신규 `server/src/services/ingestDaemonPool.js`가 "인스턴스 수·포트/URL·cameraId→인스턴스" 단일 소스(`INGEST_DAEMON_INSTANCES`, 기본 1; 인스턴스 i 외부 포트 = `INGEST_DAEMON_BASE_PORT + i*10`). 배정은 **재시작마다 재해싱, 저장 안 함**(mediasoup의 workerIndex 캐싱과 달리 인스턴스는 독립 HTTP 서비스라 "같은 슬롯 유지" 제약 없음). `startServer.js`(N개 자식 프로세스 spawn/감시, `_killPortOrphan()`의 `pkill` 패턴을 이 인스턴스의 `--addr :PORT`로 특정), `ingestDaemonControl.js`(`getConfig(instanceIndex)`, `*Daemon(instanceIndex)` — 인스턴스 1개면 기존과 완전 동일한 flat 응답, 하위 호환의 핵심), CLI(`--instance=<n>`)/Admin API(`body.instance`), `ingestDaemonWatchdog.js`(인스턴스별 독립 타이머, 실패한 인스턴스만 재시작), `ingestStatsAggregator.js`(전 인스턴스 fan-out+flatten) 전부 인스턴스 인식형으로 수정. **`INGEST_DAEMON_INSTANCES` 미설정 시 기존과 완전히 동일**(포트 7070 하나만 사용) — 이번 9카메라 배포는 인스턴스 3개(카메라당 ~3대) 적용.
+
+**버그 수정 — YouTube 채널 삭제 시 yt-dlp 내부 ffmpeg 다운로더가 고아 프로세스로 영구 잔존 (2026-07-28):** yt-dlp는 HLS 라이브 소스나 DASH 비디오+오디오 분리 스트림을 muxing할 때 자기 자신의 내부 `ffmpeg` 다운로더 서브프로세스를 띄우는데(Node에서 직접 핸들 없는 grandchild), 채널 하나당 ffmpeg 프로세스가 2개(우리 쪽 outer ffmpeg + yt-dlp 내부 ffmpeg) 보이는 것 자체는 정상 — 문제는 `youtubeStreamService.js`의 `_stopEntry()`가 yt-dlp 프로세스의 `close` 이벤트를 기다린 **뒤에야** `pgrep -P <ytdlpPid>`로 그 자식을 찾으려 했던 것. Linux는 부모가 종료되는 **즉시**(누군가 reap하기 전에) 고아 자식을 init으로 reparent하므로, `close` 이벤트가 뜰 때는 이미 그 자식의 ppid가 바뀐 뒤라 `pgrep -P`가 아무것도 찾지 못하고 내부 ffmpeg가 영구 잔존했음(실제 채널 삭제 테스트로 재현 확인). 수정: 부모에 시그널을 보내기 **전에** `findChildPids()`(신규)로 자식 PID를 먼저 캡처해두고, 그 PID들을 나중에 kill — 명시적 삭제 경로(`_stopEntry()`)와 자연 재시작 경로(`ffProc.on('close')`, 403 만료·네트워크 재접속 트리거) 양쪽 모두 적용. 회귀 테스트: `test/api/youtube_streams.test.js`의 TC-D-005b. 상세: `docs/design/Design_LTS2026_YouTube_RTSP_Ingest.md` §6, `docs/srs/SRS_YouTube_RTSP_Ingest.md` FR-YT-068.
+
 ### 환경변수
 
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `RTSP_READ_TIMEOUT` | `5` | PyAV 내부 watchdog 타임아웃(초). 불안정 네트워크에서는 10–15로 증가 |
 | `INGEST_WATCHDOG_ENABLED` | `true` | ingest-daemon `/health` 자동 감시(20초 간격, 2회 실패 시 자동 `ingest:restart`) 활성화 여부. **라이브 디버깅 목적으로만 일시적으로 `false`로** — 30분 지나면 `armDebugDisableSafetyNet()`이 값과 무관하게 강제 재활성화하므로 되돌리는 걸 잊어도 영구 방치되지는 않음(2026-07-27, §6.40) |
+| `AI_DECODE_THREADS_TOTAL` | `os.cpu_count()` | fleet-wide 네이티브 AI 디코드 스레드 총수 상한 — 카메라당 실제 thread_count = `min(AI_DECODE_THREADS, 이 값/활성 카메라수)`. 주석 처리 시 기본값이 그대로 코어 수라 카메라가 늘수록 비례 증가 — 명시적으로 낮춰 켤 것 권장 (2026-07-28, §6.42) |
+| `INGEST_STOP_WORKERS` | `8` | 카메라 teardown("stopper") `ThreadPoolExecutor` 크기, 스케줄링 우선순위 하향 적용 (2026-07-28, §6.42/§6.43) |
+| `INGEST_AI_PUSH_WORKERS` | `24` | AI JPEG push 전용 `ThreadPoolExecutor` 크기 — 카메라별 전용 슬롯(`_ai_own_slot`) 사용, App RTP와 완전 분리 (2026-07-28, §6.43) |
+| `INGEST_AI_PUSH_OVERFLOW` | `4` | AI push 공유 overflow 세마포어 — 카메라 자신의 전용 슬롯이 막혔을 때만 쓰는 안전판 (2026-07-28, §6.43) |
+| `INGEST_APP_RTP_WORKERS` | `4` | App RTP(ONVIF) push 전용 `ThreadPoolExecutor` 크기, 스케줄링 우선순위 하향 적용 (2026-07-28, §6.43) |
+| `INGEST_HEALTH_PROXY_ENABLED` | `true` | `ingest_health_proxy.py` 분리 실행 여부. `false`면 예전처럼 ingest_daemon.py가 직접 외부 포트를 리슨(§6.42) |
+| `INGEST_INTERNAL_HTTP_PORT` | 외부 포트+1 | 프록시 활성 시 실제 API 서버가 리슨하는 loopback 전용 내부 포트 (2026-07-28, §6.42) |
+| `INGEST_HEARTBEAT_FILE` | `$TMPDIR/ingest-daemon-heartbeat.json` | `_stats_sampler()`가 1초마다 갱신하는 heartbeat 파일 경로 — 프록시의 `/health` 판단 근거 (2026-07-28, §6.42) |
+| `INGEST_LISTEN_BACKLOG` | `128` | `ThreadingHTTPServer`(daemon+health-proxy 양쪽)의 TCP listen backlog. Python 기본값 5가 SYN flood 증상을 유발했으나, wedge 재발 자체는 못 막음 (2026-07-28, §6.44) |
+| `INGEST_GIL_SWITCH_INTERVAL` | `0.05` | `sys.setswitchinterval()` 초 단위(기본 5ms 대비 10배). GIL 스래싱 완화 시도, 단독으로는 개선 미미 (2026-07-28, §6.44) |
+| `INGEST_DAEMON_INSTANCES` | `1` | 카메라를 이 개수만큼 독립 ingest_daemon.py 프로세스(각자 GIL)로 분산 — cameraId 해시 기반(`services/ingestDaemonPool.js`). 미설정 시 기존과 완전 동일 (2026-07-28, §6.45) |
+| `INGEST_DAEMON_BASE_PORT` | `INGEST_DAEMON_ADDR`에서 유도 | instance 0 포트 오버라이드. instance i 외부 포트 = 이 값 + i*10 (2026-07-28, §6.45) |
 
 ### 수동 진단
 
@@ -646,6 +678,8 @@ WiseNet NVR이나 ONVIF NVR 장비는 채널 수(`MaxChannel > 1`)를 반환합�
 - `true` → WebRTC(WHEP) 수신, `false` → JPEG/Socket.IO (기본값: `false`)
 - `webrtcEnabled` 변경 시 스트림 자동 재시작
 - 관련 파일: `client/src/components/CameraList.tsx`, `client/src/components/CameraEditModal.tsx`, `server/src/api/youtubeStreams.js`
+
+**버그 수정 — Add 모달(YouTube 탭)에서 Repeat Playback/Channel Slot/WebRTC Streaming이 반영 안 되는 것처럼 보이던 문제 (2026-07-30):** 서버(`youtubeStreamService.js` `createStream()`/`_toPublic()`)는 세 값 모두 최초 생성 시점부터 DB에 정확히 저장하고 있었고, `POST /api/youtube-streams` 응답과 이후 `GET /api/youtube-streams/:id/status` 폴링 응답에도 항상 포함돼 있었음 — 버그는 순수 클라이언트 측. `CameraList.tsx`의 `startYtPoll()`이 스트림이 `live` 상태가 되는 순간 그 status 응답(`data`)을 그대로 쓰지 않고 `addCamera({...})`에 직접 필드를 나열해 넘기는데, 이 리터럴이 `repeatPlayback`과 `channelSlot`을 빠뜨리고 있었음(`webrtcEnabled`는 포함돼 있었음). `cameraStore.ts`의 `addCamera`는 전달받은 객체를 그대로 배열에 push할 뿐 기존 값과 병합하지 않으므로, 새로 추가된 카메라는 Zustand 스토어 안에서 두 필드가 `undefined`인 채로 남아 Channel Slot 그리드 배치와 Edit 모달 재오픈 시 체크박스 상태가 실제 저장값과 다르게 보였음 — 브라우저를 새로고침해 `GET /api/cameras`로 전체 목록을 다시 받아오면 정상 값이 나타났던 것도 이 때문(서버 데이터 자체는 항상 정확했음). Edit Camera 모달(`handleYtSave()`)은 애초에 `PATCH` 응답의 `repeatPlayback`/`webrtcEnabled`/`channelSlot`을 전부 `updateCamera()`에 넘기고 있어 이 버그가 없었음 — 사용자가 "Edit은 정상"이라고 보고한 이유. 수정: `startYtPoll()`의 `addCamera()` 호출에 `repeatPlayback: data.repeatPlayback`, `channelSlot: data.channelSlot`을 추가. RTSP 카메라 Add 흐름(`handleRtspAdd()`)은 서버가 반환한 `result.data` 전체 객체를 그대로 `addCamera()`에 넘기므로 애초에 이 종류의 필드 누락이 발생할 수 없는 구조 — **status/응답으로 받은 서버 객체를 로컬 스토어에 반영할 때는 필드를 개별 나열하지 말고 서버가 준 객체를 그대로(또는 spread로) 사용할 것**, 나열 방식은 신규 필드 추가 시마다 조용히 재발하는 클래스의 버그.
 
 **FFmpeg 파이프라인 (youtubeStreamService.js `_buildFFmpegArgsPipe`):**
 - `-c:v copy`: H.264 소스 복사 (libx264 재인코딩 제거 → CPU 대폭 절감)

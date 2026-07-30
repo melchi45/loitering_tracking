@@ -57,6 +57,19 @@ PARENT_POLL_S     = 2.0
 _heartbeat_file = None
 _internal_port  = None
 
+# TCP listen backlog (2026-07-28, §6.44 — see ingest_daemon.py's own
+# _LISTEN_BACKLOG comment for the full diagnosis). This process owns the
+# actual EXTERNAL port that every Node-side caller hits (watchdog health
+# poll, stats aggregator, camera add/remove/video-params), so it is at least
+# as exposed to the same tiny-default-backlog SYN-flood pattern as the real
+# daemon's own server — confirmed via `dmesg` showing "Possible SYN flooding
+# on port 7070" (the external port this proxy binds).
+_LISTEN_BACKLOG = int(os.environ.get("INGEST_LISTEN_BACKLOG", "128"))
+
+
+class _BacklogThreadingHTTPServer(ThreadingHTTPServer):
+    request_queue_size = _LISTEN_BACKLOG
+
 
 def _read_heartbeat():
     try:
@@ -177,9 +190,9 @@ def main():
 
     threading.Thread(target=_watch_parent, args=(args.parent_pid,), daemon=True).start()
 
-    server = ThreadingHTTPServer((args.external_host, args.external_port), Handler)
+    server = _BacklogThreadingHTTPServer((args.external_host, args.external_port), Handler)
     print(f"[ingest-health-proxy] listening on {args.external_host}:{args.external_port} "
-          f"→ forwarding to 127.0.0.1:{args.internal_port}", flush=True)
+          f"→ forwarding to 127.0.0.1:{args.internal_port} (listen backlog={_LISTEN_BACKLOG})", flush=True)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

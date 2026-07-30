@@ -4,10 +4,10 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-INGEST-CONTROL-001 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active — 결정 확정, 구현 완료 |
-| **Date** | 2026-07-23 |
-| **Related Design** | [Design_Ingest_Daemon_Monitoring.md](Design_Ingest_Daemon_Monitoring.md) (같은 Admin Dashboard 패널, 모니터링 전용) · [Design_Admin_Dashboard.md](Design_Admin_Dashboard.md) §4.6 · [Design_RTSP_Capture_Backend.md](Design_RTSP_Capture_Backend.md) §6.29.9(자동 복구 watchdog)/§6.35(재시작 스크립트 포트 확인 버그) |
+| **Date** | 2026-07-28 |
+| **Related Design** | [Design_Ingest_Daemon_Monitoring.md](Design_Ingest_Daemon_Monitoring.md) (같은 Admin Dashboard 패널, 모니터링 전용) · [Design_Admin_Dashboard.md](Design_Admin_Dashboard.md) §4.6 · [Design_RTSP_Capture_Backend.md](Design_RTSP_Capture_Backend.md) §6.29.9(자동 복구 watchdog)/§6.35(재시작 스크립트 포트 확인 버그)/§6.45(멀티 인스턴스 플릿 — 이 문서의 §7) |
 
 ---
 
@@ -119,6 +119,7 @@ CLI 스크립트(ingest:start/stop/restart)는 동일 ingestDaemonControl.js를 
 - `CAPTURE_BACKEND !== 'ingest-daemon'`이면 `501 { error: 'ingest-daemon backend not active' }` (Q1 확정 — SERVER_MODE 체크는 불필요)
 - 동기 응답(Q2 확정) — restart는 최대 ~11초 걸릴 수 있어 클라이언트 fetch에 타임아웃을 걸지 않는다
 - 성공/실패 모두 `AuditService.log({ event: 'ingest_daemon_start'|'stop'|'restart', actorId: req.user.sub, detail: {...} })`
+- (§7, 2026-07-28) 3개 라우트 모두 선택적 body 필드 `instance?: number`(0-based)를 받는다 — 지정 시 해당 인스턴스만 대상(응답 형태 위 표와 동일), 생략 시 전체 인스턴스 대상(N>1이면 `{ ok, instances: [...] }`로 래핑, N=1이면 위 표와 동일한 flat 응답 — 하위호환 보장)
 
 ---
 
@@ -127,6 +128,8 @@ CLI 스크립트(ingest:start/stop/restart)는 동일 ingestDaemonControl.js를 
 | 파일 | 변경 |
 |---|---|
 | `server/src/services/ingestDaemonControl.js` | 신규 — start/stop/restart 핵심 로직 (기존 3개 스크립트에서 추출) |
+| `server/src/services/ingestDaemonPool.js` | (§7, 2026-07-28) 신규 — 인스턴스 개수/포트/`cameraId`→인스턴스 해시 배정의 단일 소스 |
+| `server/src/utils/cameraHash.js` | (§7, 2026-07-28) 신규 — `mediasoupEngine.js` Worker pool과 공유하는 결정론적 해시 유틸 |
 | `server/src/scripts/startIngestDaemon.js`/`stopIngestDaemon.js`/`restartIngestDaemon.js` | 리팩터링 — `ingestDaemonControl.js` 호출하는 얇은 CLI 래퍼로 축소 |
 | `server/src/routes/admin.js` | `POST /ingest/start`, `/ingest/stop`, `/ingest/restart` 3개 라우트 추가 |
 | `client/src/components/IngestDaemonSection.tsx` | Start/Stop/Restart 버튼, 로딩/에러 상태, (Stop·Restart는 확인 모달 — 전 카메라 캡처 중단 영향) |
@@ -146,9 +149,31 @@ HTTP 요청을 완료까지 유지하고 최종 결과(카메라별 재등록 �
 
 ---
 
+## 7. 멀티 인스턴스 플릿 반영 (2026-07-28, §6.45)
+
+ingest-daemon의 GIL thrashing 재발(Design_RTSP_Capture_Backend.md §6.44/§6.45)에 대한 구조적 해법으로,
+카메라 캡처가 단일 프로세스에서 `INGEST_DAEMON_INSTANCES`개의 독립 프로세스 플릿으로 이동했다. 이 문서의
+§4 아키텍처 다이어그램은 여전히 단일 인스턴스(N=1) 기준으로 유효하다 — `ingestDaemonControl.js`의
+`startDaemon()`/`stopDaemon()`/`restartDaemon()`이 이제 `instanceIndex` 파라미터를 받아 `ingestDaemonPool.js`
+(신규, §5)에서 해당 인스턴스의 포트/주소를 조회하는 것으로 확장되었을 뿐, 인스턴스 하나에 대한 제어 흐름
+자체(§4 다이어그램)는 그대로다. N개 인스턴스에 대한 오케스트레이션(전체 대상 호출 시 `Promise.all`로 병렬
+처리, `{ok, instances:[...]}` 응답 래핑)은 `_runAllInstances()` 헬퍼가 담당하며, `getInstanceCount() === 1`
+(기본값)일 때는 항상 언래핑된 flat 응답으로 폴백해 이 문서의 §4.1 응답 계약을 그대로 보존한다 — 기존
+단일 인스턴스 배포는 이 변경으로 어떤 응답 형태 변화도 관찰하지 않는다.
+
+`killDaemon({daemonPort})`의 `pkill -f` 패턴도 이번에 `'ingest_daemon.py'`(이름만 매칭 — 여러 인스턴스를
+동시에 모두 죽임)에서 `` `ingest_daemon.py --addr :${daemonPort}` ``(이 인스턴스의 cmdline 인자까지 매칭)로
+수정되었다 — §4.1 응답 계약과는 무관하지만, 여러 인스턴스 환경에서 한 인스턴스를 종료했을 때 다른
+인스턴스가 함께 죽는 회귀를 막기 위한 필수 수정이다.
+
+전체 기술 배경(strace 근거, 실패한 6가지 단일 프로세스 완화책)은 Design_RTSP_Capture_Backend.md §6.45 참고.
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
+| 1.1 | 2026-07-28 | §7 추가 — 멀티 인스턴스 플릿(§6.45) 반영, `ingestDaemonPool.js`/`cameraHash.js` 신규 파일, `instance` 파라미터, `killDaemon()` pkill 패턴 수정 |
 | 1.0 | 2026-07-23 | §6 결정 확정(Q1: Streaming+Combined, Q2: 동기 응답) — Status를 Draft→Active로 전환, 구현 착수. `docs/mrd/`,`docs/rfp/`,`docs/prd/`,`docs/srs/`,`docs/tc/`,`docs/ops/` 문서 세트, TC 스위트, `ingestDaemonControl.js` 서비스 모듈, admin 라우트 3개, UI 버튼 구현 완료. |
 | 0.1 | 2026-07-23 | 초기 작성 — 요구사항, 현재 상태 조사(기존 CLI 스크립트 재사용 가능성, `stopIngestDaemon.js` 좀비 오탐 버그 발견), 요청 항목 매핑, 아키텍처 초안, 미결정 사항 정리. 구현 미착수. |

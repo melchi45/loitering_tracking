@@ -5,6 +5,7 @@ const fs   = require('fs');
 const { v4: uuidv4 } = require('uuid');
 const snapshotSvc = require('./snapshotService');
 const faceSearchConditions = require('./faceSearchConditions');
+const ingestDaemonPool = require('./ingestDaemonPool');
 
 // ── Lazy-load sharp (optional dependency, mirrors snapshotService.js) ─────────
 let sharp = null;
@@ -121,9 +122,11 @@ const SERVER_MODE = process.env.SERVER_MODE || 'combined';
 
 // ─── Ingest daemon helpers ────────────────────────────────────────────────────
 // Used when CAPTURE_BACKEND=ingest-daemon to register/remove cameras directly
-// with the AI-only Python daemon (no ffmpeg, no WebRTC RTP path).
-
-const _INGEST_DAEMON_URL = (process.env.INGEST_DAEMON_URL || 'http://127.0.0.1:7070').replace(/\/$/, '');
+// with the AI-only Python daemon (no ffmpeg, no WebRTC RTP path). Which daemon
+// instance a given camera talks to is resolved per-cameraId via
+// ingestDaemonPool.js (§6.45 — multi-process ingest-daemon fleet), not a
+// single fixed URL, so a heavy fleet's threads/GIL load spreads across
+// multiple OS processes instead of one.
 
 async function _ingestRegisterCamera(cameraId, rtspUrl, callbackUrl, appRtpCallbackUrl, appRtpRtspUrl, captureFps) {
   try {
@@ -134,7 +137,7 @@ async function _ingestRegisterCamera(cameraId, rtspUrl, callbackUrl, appRtpCallb
     if (appRtpRtspUrl) body.appRtpRtspUrl = appRtpRtspUrl;
     // Per-camera FPS target — ingest daemon uses time-based throttling when set.
     if (captureFps && captureFps > 0) body.captureFps = captureFps;
-    const resp = await fetch(`${_INGEST_DAEMON_URL}/cameras`, {
+    const resp = await fetch(`${ingestDaemonPool.urlForCamera(cameraId)}/cameras`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(body),
@@ -162,7 +165,7 @@ async function _ingestRegisterCamera(cameraId, rtspUrl, callbackUrl, appRtpCallb
 // trace in the log. One retry + logging on final failure closes that gap.
 async function _ingestRemoveCamera(cameraId, attempt = 1) {
   try {
-    const resp = await fetch(`${_INGEST_DAEMON_URL}/cameras/${encodeURIComponent(cameraId)}`, {
+    const resp = await fetch(`${ingestDaemonPool.urlForCamera(cameraId)}/cameras/${encodeURIComponent(cameraId)}`, {
       method: 'DELETE',
       signal: AbortSignal.timeout(5000),
     });
@@ -1746,11 +1749,17 @@ class PipelineManager {
    *  - mediamtx/direct: ctx._ingestRtspUrl is set → POST directly to ingest-daemon HTTP API
    *  - mediasoup:       ctx._ingestRtspUrl is null → re-register via engine.addCameraStream
    * Called by startServer.js auto-restart logic via POST /api/internal/ingest/reregister.
+   *
+   * @param {number} [instanceIndex] — when given (§6.45, multi-process ingest-daemon
+   *   fleet), only re-registers cameras that hash to THIS ingest-daemon instance —
+   *   the other instances' cameras are untouched, since only one instance actually
+   *   restarted. Omitted ⇒ every camera (today's exact single-instance behavior).
    */
-  async reregisterAllWithIngestDaemon() {
+  async reregisterAllWithIngestDaemon(instanceIndex) {
     const results = {};
     for (const [cameraId, ctx] of this._pipelines) {
       if (!ctx.running) continue;
+      if (instanceIndex !== undefined && ingestDaemonPool.instanceIndexForCamera(cameraId) !== instanceIndex) continue;
       try {
         if (ctx._ingestRtspUrl) {
           // mediamtx engine or direct AI-only path: re-register directly
