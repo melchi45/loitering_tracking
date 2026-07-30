@@ -4,12 +4,21 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UI-DD-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
-| **Date** | 2026-05-26 |
+| **Date** | 2026-07-30 |
 | **Parent SRS** | srs/SRS_Dashboard_Detection_Display.md |
 
 ---
+
+> **2026-07-30 — `VideoAnalyticsTab.tsx` removed.** Every reference to `VideoAnalyticsTab` in this
+> document (§1, §2, §3, §4.3, §7.1) describes a component that no longer exists in any
+> `SERVER_MODE` — the sidebar Analytics tab was deleted and its content (category on/off toggles,
+> now the full COCO 80-class catalog; Appearance Weights; Tracker/Kalman Settings; Fire/Smoke
+> Sensitivity) moved to Admin Dashboard → AI Models (`AiModelsSection`,
+> `client/src/pages/admin/AdminUsersPage.tsx`), clearly separated there from that page's existing
+> model Active/Deactivate controls. The sections below are kept for historical/background
+> reference only — see `Design_Admin_Dashboard.md` §4.2/§4.3 for the current implementation.
 
 ## Table of Contents
 1. [Architecture Overview](#1-architecture-overview)
@@ -452,3 +461,4 @@ The DashboardDetectionPanel is shown fullscreen in the Detections mobile tab, re
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Dashboard Detection Display |
+| 1.1 | 2026-07-30 | LTS Engineering Team | Top-of-document banner added — `VideoAnalyticsTab.tsx` removed, all Analytics-tab content moved to Admin Dashboard → AI Models |

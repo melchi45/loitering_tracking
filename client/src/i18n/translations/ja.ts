@@ -15,7 +15,6 @@ export const ja: Translations = {
   tabCameras: 'カメラ',
   tabAlerts: 'アラート',
   tabZones: 'ゾーン',
-  tabVideoAnalytics: '分析',
   tabDetections: '検知',
   tabFaceGallery: '顔認識',
   faceGallerySubtitle: '人物登録と認識',
@@ -40,8 +39,6 @@ export const ja: Translations = {
   galleryTypeBlocklist: 'ブロックリスト',
   galleryTypeMissing: '行方不明者',
   missingPersonAlert: '行方不明者を検知',
-  videoAnalyticsHint: '各AIモジュールをすべてのカメラでグローバルに有効/無効にします。',
-  videoAnalyticsFooter: '無効なモジュールは直ちに処理を停止します。変更は次のフレームから有効になります。',
 
   noCameras: 'カメラが追加されていません。',
   addCamera: 'カメラを追加',
@@ -309,12 +306,6 @@ export const ja: Translations = {
 
   waitingForAnalysisData: '分析データ受信待ち…',
 
-  vaDisableAllModules: '全モジュールを無効化',
-  vaEnableAllAvailable: '利用可能な全モジュールを有効化',
-  vaDisableGroup: 'グループ全体を無効化',
-  vaEnableGroup: 'グループ全体を有効化',
-  vaFireSensitivityHint: '値が低いほど感度が上がります（誤検知が増加）。デフォルト：0.35',
-  vaNmsHint: '値が低いほど重複ボックスの保持数が減ります。デフォルト：0.45',
 
   accessDeniedTitle: 'アクセス権限がありません',
   accessDeniedBefore: 'このダッシュボードは',

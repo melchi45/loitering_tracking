@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-UI-DD-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent PRD** | prd/PRD_Dashboard_Detection_Display.md |
@@ -37,7 +37,7 @@ This document covers:
 - Real-time bounding-box and label canvas overlay on live camera feeds
 - Detection list panel inside the Fullscreen Camera View
 - Aggregated detection list in the Dashboard sidebar Detection tab
-- Video Analytics tab with AI module toggles and Kalman tracker settings
+- ~~Video Analytics tab with AI module toggles and Kalman tracker settings~~ — removed 2026-07-30, moved to Admin Dashboard → AI Models (§6)
 
 Out of scope: cloth attribute (PAR) display (Phase-2), video recording/export, historical detection browsing.
 
@@ -66,8 +66,8 @@ Socket.IO 'detections' event (all cameras)
   └─ useAllDetections(cameraIds) hook
        └─ DashboardDetectionPanel (sidebar tab)
 
-REST API
-  ├─ GET  /api/analytics/config  → VideoAnalyticsTab toggles
+REST API (2026-07-30: consumer moved from VideoAnalyticsTab, removed, to Admin Dashboard → AI Models)
+  ├─ GET  /api/analytics/config  → Analytics Categories (On/Off) toggles
   ├─ PUT  /api/analytics/config  → save toggle states
   ├─ GET  /api/capabilities       → model availability gating
   ├─ GET  /api/tracker/config    → Kalman slider values
@@ -216,11 +216,15 @@ Each detection row in the aggregated list shall show a camera name badge (teal c
 
 ---
 
-## 6. Functional Requirements — Video Analytics Tab
+## 6. Functional Requirements — Video Analytics Tab (Removed 2026-07-30)
 
-### FR-UI-DD-040 — Tab Placement
+> This entire section (FR-UI-DD-040~04x) describes a sidebar tab that no longer exists in any
+> `SERVER_MODE`. Its content moved to Admin Dashboard → AI Models — see `SRS_Admin_Dashboard.md`
+> §4.2/§4.3. Kept below for historical reference only.
 
-The Video Analytics tab shall be the 5th tab (`analytics`) in the Dashboard sidebar.
+### FR-UI-DD-040 — Tab Placement (Historical)
+
+~~The Video Analytics tab shall be the 5th tab (`analytics`) in the Dashboard sidebar.~~
 
 ### FR-UI-DD-041 — AI Module Toggle Buttons
 
@@ -357,3 +361,4 @@ interface Detection {
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for Dashboard Detection Display |
+| 1.1 | 2026-07-30 | LTS Engineering Team | REST API diagram note updated — `/api/analytics/config` consumer moved from removed `VideoAnalyticsTab` to Admin Dashboard → AI Models |

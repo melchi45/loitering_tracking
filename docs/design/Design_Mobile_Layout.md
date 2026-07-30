@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UI-MOB-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-05-27 |
 | **Parent SRS** | srs/SRS_Mobile_Layout.md |
@@ -47,10 +47,10 @@ App.tsx
      │         ├─ [cameras]     MobileCamerasTab
      │         ├─ [alerts]      AlertPanel
      │         ├─ [zones]       ZoneGuidanceMessage
-     │         ├─ [detections]  CameraDropdown + DetectionPanel
-     │         └─ [analytics]   VideoAnalyticsTab
+     │         └─ [detections]  CameraDropdown + DetectionPanel
+     │         (analytics tab removed 2026-07-30 — moved to Admin Dashboard → AI Models)
      └─ BottomNavBar (52 px, position:fixed bottom-0)
-          └─ 5 tab buttons: 📷 Cameras | 🔔 Alerts | 🗺 Zones | 👁 Detections | 🤖 Analytics
+          └─ 4 tab buttons: 📷 Cameras | 🔔 Alerts | 🗺 Zones | 👁 Detections
 
 Shared Zustand stores (same instances for both modes):
   cameraStore, alertStore, crossCameraStore, discoveryStore, webrtcConfigStore
@@ -108,7 +108,7 @@ return (
           {mobileTab === 'alerts'     && <AlertPanel fullscreen />}
           {mobileTab === 'zones'      && <ZoneGuidanceMessage />}
           {mobileTab === 'detections' && <MobileDetectionsTab />}
-          {mobileTab === 'analytics'  && <VideoAnalyticsTab />}
+          {/* mobileTab === 'analytics' removed 2026-07-30 — moved to Admin Dashboard → AI Models */}
         </main>
         <BottomNavBar activeTab={mobileTab} onTabChange={setMobileTab} />
       </>
@@ -397,13 +397,17 @@ export function MobileCamerasTab() {
 )}
 ```
 
-### 7.4 Analytics Tab
+### 7.4 Analytics Tab (Removed 2026-07-30)
 
-```tsx
+~~```tsx
 {mobileTab === 'analytics' && (
   <VideoAnalyticsTab className="h-full overflow-y-auto" />
 )}
-```
+```~~
+
+This tab and `VideoAnalyticsTab.tsx` no longer exist in any mode. Its content (category on/off,
+appearance weights, tracker/Kalman settings, fire/smoke sensitivity) moved to Admin Dashboard →
+AI Models — see `Design_Admin_Dashboard.md` §4.2/§4.3.
 
 ### 7.5 Tab State Preservation
 
@@ -496,7 +500,7 @@ App.tsx
 │   ├─ [mobileTab='detections'] → MobileDetectionsTab
 │   │   ├─ CameraDropdown
 │   │   └─ DetectionPanel
-│   ├─ [mobileTab='analytics'] → VideoAnalyticsTab
+│   (mobileTab='analytics' removed 2026-07-30 — moved to Admin Dashboard → AI Models)
 │   └─ BottomNavBar
 │
 └─ [mobile=false]
@@ -553,3 +557,4 @@ App.tsx
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Mobile Layout |
+| 1.1 | 2026-07-30 | LTS Engineering Team | §7.4 Analytics Tab marked removed — `VideoAnalyticsTab` moved to Admin Dashboard → AI Models, bottom nav reduced to 4 tabs |

@@ -15,7 +15,6 @@ export const en = {
   tabCameras: 'Cameras',
   tabAlerts: 'Alerts',
   tabZones: 'Zones',
-  tabVideoAnalytics: 'Analytics',
   tabDetections: 'Detections',
   tabFaceGallery: 'Face ID',
 
@@ -44,8 +43,6 @@ export const en = {
   missingPersonAlert: 'MISSING PERSON DETECTED',
 
   // Video Analytics tab
-  videoAnalyticsHint: 'Enable or disable each AI module globally for all cameras.',
-  videoAnalyticsFooter: 'Disabled modules stop processing immediately. Changes take effect on the next video frame.',
 
   // Camera list
   noCameras: 'No cameras added yet.',
@@ -336,12 +333,6 @@ export const en = {
   waitingForAnalysisData: 'Waiting for analysis data…',
 
   // Video Analytics tab — module toggle tooltips / hints
-  vaDisableAllModules: 'Disable all modules',
-  vaEnableAllAvailable: 'Enable all available modules',
-  vaDisableGroup: 'Disable entire group',
-  vaEnableGroup: 'Enable entire group',
-  vaFireSensitivityHint: 'Lower = higher sensitivity (more false positives). Default: 0.35',
-  vaNmsHint: 'Lower keeps fewer overlapping boxes. Default: 0.45',
 
   // Access Denied page
   accessDeniedTitle: 'Access Denied',

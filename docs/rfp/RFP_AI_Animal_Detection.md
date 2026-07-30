@@ -7,7 +7,7 @@
 | **Parent System** | LTS-2026-001 Loitering Detection & Tracking System |
 | **Issue Date** | May 20, 2026 |
 | **Zone Target Key** | individual keys (`bird`, `cat`, `dog`, `horse`, `sheep`, `cow`, `elephant`, `bear`, `zebra`, `giraffe`) |
-| **Status** | **✅ Phase-1 Complete — COCO yolov8n 10-class detection active, per-class on/off in Video Analytics tab** |
+| **Status** | **✅ Phase-1 Complete — COCO yolov8n 10-class detection active, per-class on/off in Admin Dashboard → AI Models (moved 2026-07-30 from the removed Video Analytics tab)** |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -35,7 +35,7 @@ This RFP defines requirements for the **Animal Detection AI Module**, which dete
 ### 1.2 Scope
 
 - Detection of 10 COCO animal categories: bird, cat, dog, horse, sheep, cow, elephant, bear, zebra, giraffe
-- Per-class on/off toggle in the Video Analytics tab
+- Per-class on/off toggle in Admin Dashboard → AI Models (moved 2026-07-30 from the removed Video Analytics tab)
 - Integration as zone-level target classes: `"targetClasses": ["dog"]` (or any combination)
 - Loitering detection applies to animals — a stray dog dwelling in a zone triggers the same loitering alert logic as a person
 - Dashboard Detection Tab: animal detections appear in the merged list with species-specific color codes
@@ -75,7 +75,7 @@ Each animal class has an independent key. A zone can target a single species (`[
 ### 3.2 Per-Class Toggle
 
 Animal classes are individually controlled via:
-- **Video Analytics tab** (`VideoAnalyticsTab.tsx`): "Animals" group with 10 checkboxes
+- **Admin Dashboard → AI Models → Analytics Categories** (2026-07-30 — formerly the sidebar Video Analytics tab, `VideoAnalyticsTab.tsx`, now removed): "Animals" group with 10 toggles
 - **analyticsConfig.js** `DEFAULT_CONFIG`: each class defaults to `false`
 - **`/api/analytics/config`** PUT endpoint: persisted in `storage/analytics.json`
 
@@ -237,7 +237,7 @@ COCO ID → YOLO class index (0-based after mapping):
 | `server/src/services/analyticsConfig.js` | Per-class enable/disable, `isClassEnabled()` |
 | `server/src/services/detection.js` | YOLOv8n inference, 80-class NMS |
 | `server/src/services/tracking.js` | ByteTracker — animal tracks treated same as person |
-| `client/src/components/VideoAnalyticsTab.tsx` | zoneGroupAnimals checkbox group |
+| `client/src/pages/admin/AdminUsersPage.tsx` (`AiModelsSection`) | Animals toggle group (moved from removed `VideoAnalyticsTab.tsx`, 2026-07-30) |
 | `client/src/components/FullscreenCameraView.tsx` | `DetectionRow` color codes, Legend |
 | `client/src/components/DashboardDetectionPanel.tsx` | CATEGORIES Animal filter, `?` color legend |
 | `storage/analytics.json` | Persisted per-class enable state |

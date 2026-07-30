@@ -15,7 +15,6 @@ export const zhCN: Translations = {
   tabCameras: '摄像头',
   tabAlerts: '警报',
   tabZones: '区域',
-  tabVideoAnalytics: '分析',
   tabDetections: '检测',
   tabFaceGallery: '人脸识别',
   faceGallerySubtitle: '人员注册与识别',
@@ -40,8 +39,6 @@ export const zhCN: Translations = {
   galleryTypeBlocklist: '黑名单',
   galleryTypeMissing: '失踪人员',
   missingPersonAlert: '检测到失踪人员',
-  videoAnalyticsHint: '全局启用或禁用每个AI模块（对所有摄像头生效）。',
-  videoAnalyticsFooter: '禁用的模块将立即停止处理。更改将在下一帧生效。',
 
   noCameras: '尚未添加摄像头。',
   addCamera: '添加摄像头',
@@ -309,12 +306,6 @@ export const zhCN: Translations = {
 
   waitingForAnalysisData: '正在等待分析数据…',
 
-  vaDisableAllModules: '禁用所有模块',
-  vaEnableAllAvailable: '启用所有可用模块',
-  vaDisableGroup: '禁用整组',
-  vaEnableGroup: '启用整组',
-  vaFireSensitivityHint: '数值越低灵敏度越高（误报增加）。默认值：0.35',
-  vaNmsHint: '数值越低保留的重叠框越少。默认值：0.45',
 
   accessDeniedTitle: '无访问权限',
   accessDeniedBefore: '此控制台仅限',

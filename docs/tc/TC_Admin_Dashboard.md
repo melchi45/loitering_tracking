@@ -1,6 +1,6 @@
 ---
 **Document:** TC_Admin_Dashboard  
-**Version:** 1.3  
+**Version:** 1.4  
 **Status:** Draft  
 **Date:** 2026-07-10  
 **Parent SRS:** [SRS_Admin_Dashboard](../srs/SRS_Admin_Dashboard.md)  
@@ -136,17 +136,18 @@
 
 ---
 
-### TC-AD-009: AI Module Toggles Load
+### TC-AD-009: Analytics Category Toggles Load
 
 **Pre-condition:** Analysis server running with capabilities endpoint  
 **Steps:**
 1. Open AI Models section
-2. Scroll to "AI Analysis Modules"
+2. Scroll to "Analytics Categories (On/Off)"
 
 **Expected:**
-- Three groups shown: Core Detection / AI Attributes / Hazard Detection
+- Nine groups shown: Core Detection / AI Attributes / Hazard Detection / Accessories & Equipment / Indoor Objects / Animals / Outdoor Objects / Food & Drink / Home & Appliances (2026-07-30 — the last six groups merged from the former sidebar Analytics tab)
 - Human and Vehicle toggles are green (enabled by default)
 - Modules with missing model files show "Model Missing" badge
+- Glasses/Sunglasses (AI Attributes group) show a "Phase-2" badge and a disabled toggle, mirroring their prior behavior in the removed sidebar Analytics tab
 
 **Priority:** P1
 
@@ -172,13 +173,60 @@
 
 **Pre-condition:** `yolov8m_ppe.onnx` is missing (capStatus === 'missing')  
 **Steps:**
-1. Open AI Models section → AI Analysis Modules
+1. Open AI Models section → Analytics Categories (On/Off)
 2. Observe Mask and Hat module rows
 
 **Expected:**
 - "Model Missing" badge shown
 - Toggle is visually disabled (opacity-30)
 - Clicking toggle has no effect
+
+**Priority:** P2
+
+---
+
+### TC-AD-011b: Tracking & Sensitivity Tuning — Appearance Weights (2026-07-30 new)
+
+**Pre-condition:** Admin Dashboard → AI Models section  
+**Steps:**
+1. Scroll to "Tracking & Sensitivity Tuning" and expand "Appearance Weights"
+2. Drag the "Face" weight slider to a new value
+3. Wait 300ms+
+
+**Expected:**
+- Proportional bar chart above the sliders re-renders to reflect the new relative weights
+- `PUT /api/tracker/config { faceWeight: <value> }` is called (debounced 300ms)
+- "Reset Defaults" restores all five weights to `KALMAN_DEFAULTS`
+
+**Priority:** P2
+
+---
+
+### TC-AD-011c: Tracking & Sensitivity Tuning — Fire/Smoke Sensitivity (2026-07-30 new)
+
+**Pre-condition:** Fire/smoke model loaded (`GET /api/analysis/config/fire-smoke` returns `available: true`)  
+**Steps:**
+1. Expand "Fire / Smoke Sensitivity"
+2. Drag "Conf Threshold" slider
+
+**Expected:**
+- `PATCH /api/analysis/config/fire-smoke { confThreshold: <value> }` called after 300ms debounce
+- Panel does not render at all when `available: false` or the endpoint 404s
+
+**Priority:** P2
+
+---
+
+### TC-AD-011d: Tracking & Sensitivity Tuning — Tracker/Kalman Settings (2026-07-30 new)
+
+**Pre-condition:** Admin Dashboard → AI Models section  
+**Steps:**
+1. Expand "Tracker / Kalman Settings"
+2. Drag "Track Max Age" slider
+
+**Expected:**
+- `PUT /api/tracker/config { maxAge: <value> }` called after 300ms debounce
+- "Reset Defaults" calls `POST /api/tracker/config/reset` and repopulates all 8 sliders from the response
 
 **Priority:** P2
 
@@ -369,3 +417,4 @@ Admin Dashboard의 **Audit** 탭에서 결과를 확인할 수 있습니다.
 | 1.1 | 2026-06-24 | TC-AUDIT-001~007 추가 — Streaming/Analysis 모드 TC 구분, HTTPS 프로토콜 전파, MCP 카탈로그 업데이트, Auth/Dedup/WebRTC/capture-backend 수정 내용 반영 |
 | 1.2 | 2026-07-09 | TC-AD-004 YOLO26 시리즈 반영, TC-AD-012 신규 — 전체 모델 파일(face/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid) 테이블 표시 및 family별 독립 전환 테스트 |
 | 1.3 | 2026-07-10 | TC-AD-003 정정(System/Logs 반영), TC-AD-013~017 신규 — WebRTC/ICE 섹션 신설(모드별 표시 조건, 설정 모달과 상태 공유, streaming/analysis 모달 간소화, combined 모달 무변경, ICE 테스트) |
+| 1.4 | 2026-07-30 | TC-AD-009 "AI Analysis Modules"→"Analytics Categories (On/Off)"로 개편(9개 그룹, Glasses/Sunglasses Phase-2 배지 반영), TC-AD-011b~d 신규 — Tracking & Sensitivity Tuning(Appearance Weights/Fire-Smoke/Kalman), 옛 사이드바 `VideoAnalyticsTab.tsx` 삭제 반영 |

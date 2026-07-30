@@ -15,7 +15,6 @@ export const ar: Translations = {
   tabCameras: 'الكاميرات',
   tabAlerts: 'التنبيهات',
   tabZones: 'المناطق',
-  tabVideoAnalytics: 'تحليلات',
   tabDetections: 'كشف',
   tabFaceGallery: 'التعرف على الوجه',
   faceGallerySubtitle: 'تسجيل الأشخاص والتعرف عليهم',
@@ -40,8 +39,6 @@ export const ar: Translations = {
   galleryTypeBlocklist: 'القائمة السوداء',
   galleryTypeMissing: 'الأشخاص المفقودون',
   missingPersonAlert: 'تم الكشف عن شخص مفقود',
-  videoAnalyticsHint: 'تمكين أو تعطيل كل وحدة ذكاء اصطناعي عالميًا لجميع الكاميرات.',
-  videoAnalyticsFooter: 'تتوقف الوحدات المعطلة عن المعالجة فورًا. تسري التغييرات على الإطار التالي.',
 
   noCameras: 'لم تُضف أي كاميرات بعد.',
   addCamera: 'إضافة كاميرا',
@@ -309,12 +306,6 @@ export const ar: Translations = {
 
   waitingForAnalysisData: 'في انتظار بيانات التحليل…',
 
-  vaDisableAllModules: 'تعطيل جميع الوحدات',
-  vaEnableAllAvailable: 'تمكين جميع الوحدات المتاحة',
-  vaDisableGroup: 'تعطيل المجموعة بالكامل',
-  vaEnableGroup: 'تمكين المجموعة بالكامل',
-  vaFireSensitivityHint: 'كلما قلّت القيمة زادت الحساسية (زيادة الإنذارات الكاذبة). الافتراضي: 0.35',
-  vaNmsHint: 'كلما قلّت القيمة قلّ عدد المربعات المتداخلة المحتفَظ بها. الافتراضي: 0.45',
 
   accessDeniedTitle: 'الوصول مرفوض',
   accessDeniedBefore: 'لا يمكن الوصول إلى هذه اللوحة إلا من حساب',

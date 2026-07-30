@@ -112,7 +112,7 @@ loitering_tracking/
 │       │   └── useCamera.ts              # delegates to useWebRTC when webrtcEnabled
 │       └── components/
 │           ├── CameraView.tsx             # <video> WebRTC + canvas overlay
-│           └── VideoAnalyticsTab.tsx      # WebRTC enable/disable toggle
+│           └── (WebRTC enable/disable toggle now in pages/admin/AdminUsersPage.tsx WebRTCSection — see Design_Admin_Dashboard.md §4.3; VideoAnalyticsTab.tsx removed 2026-07-30)
 │
 ├── docs/
 │   ├── srs/SRS_WebRTC_Media_Gateway.md

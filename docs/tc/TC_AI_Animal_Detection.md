@@ -230,10 +230,10 @@ yolov8n.onnx model file
 - **Expected:** "Animals" category group present in category filter dropdown
 - **Acceptance:** "Animals" group visible; selecting it filters to animal detections only
 
-### TC-E-005 — VideoAnalyticsTab Animal Checkboxes
-- **Input:** Open VideoAnalyticsTab
-- **Expected:** "Animals" group with 10 checkboxes (one per species) visible
-- **Acceptance:** All 10 species checkboxes present and functional
+### TC-E-005 — Animals Toggle Group (moved 2026-07-30)
+- **Input:** Open Admin Dashboard → AI Models → Analytics Categories (formerly `VideoAnalyticsTab`, removed)
+- **Expected:** "Animals" group with 10 toggles (one per species) visible
+- **Acceptance:** All 10 species toggles present and functional
 
 ---
 

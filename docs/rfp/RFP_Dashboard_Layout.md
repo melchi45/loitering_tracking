@@ -1,8 +1,8 @@
 # RFP: Dashboard Full-Screen Layout and Configuration
 
 **Document No.**: LTS-2026-010  
-**Version**: 2.0  
-**Date**: 2026-05-19  
+**Version**: 2.1  
+**Date**: 2026-07-30  
 **Classification**: Technical Requirements Specification (RFP)  
 **Status**: Phase-2 multi-screen layout implementation reflected  
 **Related RFPs**: LTS-2026-001 (Loitering Tracking System), LTS-2026-003 (Detection Display)
@@ -661,7 +661,7 @@ Clicking the Settings icon (⚙) in the Top Bar renders `SettingsModal` as a Mod
 | LayoutPicker dropdown (SVG icons + 16 layout group selection) | ✅ Done | `App.tsx` |
 | Compact mode (16+ channels — minimize overlays) | ✅ Done | `CameraGrid.tsx` |
 | Camera Grid double-click Fullscreen entry | ✅ Done | |
-| Sidebar tab structure (Cameras/Alerts/Zones/Detections/Analytics) | ✅ Done | 5-tab layout |
+| Sidebar tab structure (Cameras/Alerts/Zones/Detections/Face Gallery) | ✅ Done | 5-tab layout; Analytics tab removed 2026-07-30, content moved to Admin Dashboard → AI Models |
 | Alerts tab badge (unacknowledged count) | ✅ Done | |
 | Fullscreen Overlay | ✅ Done | `FullscreenCameraView.tsx` |
 | Settings Modal (language, WebRTC) | ✅ Done | |
@@ -695,3 +695,4 @@ Clicking the Settings icon (⚙) in the Top Bar renders `SettingsModal` as a Mod
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for Dashboard Layout |
+| 2.1 | 2026-07-30 | LTS Engineering Team | Implementation status table updated — Analytics tab removed from sidebar, content moved to Admin Dashboard → AI Models |

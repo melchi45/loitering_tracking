@@ -15,7 +15,6 @@ export const de: Translations = {
   tabCameras: 'Kameras',
   tabAlerts: 'Alarme',
   tabZones: 'Zonen',
-  tabVideoAnalytics: 'Analytik',
   tabDetections: 'Erkennung',
   tabFaceGallery: 'Gesichtserken.',
   faceGallerySubtitle: 'Personen registrieren und erkennen',
@@ -40,8 +39,6 @@ export const de: Translations = {
   galleryTypeBlocklist: 'Sperrliste',
   galleryTypeMissing: 'Vermisste Personen',
   missingPersonAlert: 'VERMISSTE PERSON ERKANNT',
-  videoAnalyticsHint: 'Aktivieren oder deaktivieren Sie jedes KI-Modul global für alle Kameras.',
-  videoAnalyticsFooter: 'Deaktivierte Module stoppen die Verarbeitung sofort. Änderungen gelten ab dem nächsten Bild.',
 
   noCameras: 'Keine Kameras hinzugefügt.',
   addCamera: 'Kamera hinzufügen',
@@ -309,12 +306,6 @@ export const de: Translations = {
 
   waitingForAnalysisData: 'Warten auf Analysedaten…',
 
-  vaDisableAllModules: 'Alle Module deaktivieren',
-  vaEnableAllAvailable: 'Alle verfügbaren Module aktivieren',
-  vaDisableGroup: 'Gesamte Gruppe deaktivieren',
-  vaEnableGroup: 'Gesamte Gruppe aktivieren',
-  vaFireSensitivityHint: 'Niedrigerer Wert = höhere Empfindlichkeit (mehr Fehlalarme). Standard: 0,35',
-  vaNmsHint: 'Niedrigerer Wert behält weniger überlappende Boxen. Standard: 0,45',
 
   accessDeniedTitle: 'Zugriff verweigert',
   accessDeniedBefore: 'Dieses Dashboard ist nur über ein',

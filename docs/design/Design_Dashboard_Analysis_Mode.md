@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UI-DAM-01 |
-| **Version** | 1.9 |
+| **Version** | 2.0 |
 | **Status** | Active |
-| **Date** | 2026-06-10 |
+| **Date** | 2026-07-30 |
 | **Parent SRS** | [srs/SRS_Dashboard_Analysis_Mode.md](../srs/SRS_Dashboard_Analysis_Mode.md) |
 | **Parent PRD** | [prd/PRD_Dashboard_Analysis_Mode.md](../prd/PRD_Dashboard_Analysis_Mode.md) |
 
@@ -138,7 +138,9 @@ useEffect(() => {
 
 ### 2.4 TAB_ITEMS 조건부 구성
 
-`SERVER_MODE` 별 탭 정책 (PRD_Dashboard_Layout.md 4.4절):
+> **2026-07-30 갱신**: 이 섹션은 최초 설계 당시의 스냅샷이며, 이후 §10.2가 실제 최신 `TAB_ITEMS` 구성(analysis/combined/streaming 각각 별도 배열)으로 여러 차례 갱신되었다. `analytics` 탭 자체가 v2.0(§10.2)에서 완전히 제거되었으므로, 아래 코드 스니펫의 `analytics` 관련 줄은 더 이상 존재하지 않는다 — 배경 이해용으로만 유지.
+
+`SERVER_MODE` 별 탭 정책 (PRD_Dashboard_Layout.md 4.4절, 최초 설계 당시 기준):
 - `combined`: 전체 탭 표시
 - `streaming`: CAMERAS, ALERTS, ZONES, DETECTIONS, FACE ID — **ANALYTICS 숨김**
 - `analysis`: ALERTS, ZONES, DETECTIONS, ANALYTICS, FACE ID — **CAMERAS 숨김**
@@ -450,9 +452,11 @@ setFpsHistory(prev => {
 
 ---
 
-### 5.5 VideoAnalyticsTab — 🔥 Fire / Smoke Sensitivity 패널 (신규)
+### 5.5 VideoAnalyticsTab — 🔥 Fire / Smoke Sensitivity 패널 (2026-07-30부로 이관됨)
 
-`VideoAnalyticsTab.tsx` 우측 사이드바의 Analytics 탭에 화재/연기 감지 임계값을 런타임으로 조정하는 접이식 패널을 추가한다.
+> **2026-07-30 갱신**: `VideoAnalyticsTab.tsx`와 analysis 모드 사이드바의 Analytics 탭 자체가 완전히 제거되었다 (§10.2 v2.0 참고) — 이 섹션이 기술하는 UI/상태는 더 이상 존재하지 않는다. Fire/Smoke Sensitivity 패널(및 Analytics 카테고리 On/Off, Appearance Weights, Tracker/Kalman Settings)은 모두 Admin Dashboard → AI Models 탭(`AiModelsSection`, `client/src/pages/admin/AdminUsersPage.tsx`)의 "Tracking & Sensitivity Tuning" 섹션으로 이동했다. 아래 엔드포인트/`fireSmokeService.js` 변경 내역은 백엔드 계약이 그대로이므로 유효하지만, "VideoAnalyticsTab 상태 및 UI" 서브섹션은 새 위치의 동일한 state/handler로 대체되었다고 이해할 것 — 상세: `docs/design/Design_Admin_Dashboard.md` §4.2, `docs/design/Design_AI_Model_Catalog.md`.
+
+`VideoAnalyticsTab.tsx` 우측 사이드바의 Analytics 탭에 화재/연기 감지 임계값을 런타임으로 조정하는 접이식 패널을 추가한다. (아래는 2026-07-30 이전의 원본 설계 — 배경 이해용으로 유지)
 
 #### 새 엔드포인트
 
@@ -653,21 +657,23 @@ app.get(/^(?!\/api|\/auth|...).*/, (req, res) => res.sendFile(indexHtml));
 
 Analysis 모드에서 AI가 감지한 이벤트(화재, 연기, 배회)를 영구 저장하고, 대시보드 카드 클릭 시 날짜·시간 그룹별 이벤트 히스토리를 오버레이로 표시합니다. 크롭 이미지도 함께 저장·표시됩니다.
 
-### 10.2 사이드바 탭 — analysis 모드 (v1.8 변경)
+### 10.2 사이드바 탭 — analysis 모드 (v2.0 변경)
 
 **변경 이력**:
 ```
 v1.5: [ 🤖 Analytics ] [ 👁 Detections ] [ 🔔 Alerts ]
 v1.7: [ 🤖 Analytics ]                   ← Analytics 탭 1개만
 v1.8: [ 🤖 Analytics ] [ 👁 Detections ] ← Detections 탭 재도입 (실시간 감지)
+v2.0: [ 👁 Detections ]                  ← Analytics 탭 완전 제거, Admin AI Models로 통합
 ```
 
-`App.tsx`:
+**v2.0 (2026-07-30)**: Analytics 탭(`VideoAnalyticsTab.tsx`)이 완전히 삭제되었다 — 카테고리 On/Off 토글 전체 카탈로그(COCO 80종 포함), Appearance Weights, Tracker/Kalman Settings, Fire/Smoke Sensitivity가 모두 Admin Dashboard → AI Models(`AiModelsSection`)로 이관되어, model Active/Deactivate(어떤 ONNX가 각 family를 담당하는지)와 명확히 분리된 "Analytics Categories (On/Off)" 섹션·"Tracking & Sensitivity Tuning" 섹션으로 재구성되었다. analysis 모드 사이드바는 이제 Detections 탭 하나만 남는다. 상세: `docs/design/Design_Admin_Dashboard.md` §4.2 (v1.1), `docs/design/Design_AI_Model_Catalog.md`.
+
+`App.tsx` (v2.0):
 ```typescript
-const ANALYSIS_TABS: SidebarTab[] = ['analytics', 'detections'];
+const ANALYSIS_TABS: SidebarTab[] = ['detections'];
 const TAB_ITEMS = isAnalysis
   ? [
-      { id: 'analytics'  as SidebarTab, icon: '🤖', label: t.tabVideoAnalytics },
       { id: 'detections' as SidebarTab, icon: '👁',  label: t.tabDetections },
     ]
   : [...]; // combined/streaming 탭
@@ -883,4 +889,5 @@ if (db) {
 | 1.7 | 2026-06-10 | Section 10 전면 재작성: analysis 모드 탭 analytics 단일화, AnalysisDetectionPanel 날짜 그룹별 히스토리 브라우저로 재구현, AnalysisServerDashboard 내부 오버레이 방식, cropData 크롭 이미지 저장·표시 |
 | 1.8 | 2026-06-10 | Section 10.2 업데이트: analysis 모드에 Detections 탭 재도입 (`DashboardDetectionPanel` + global `io.emit()` 수신) |
 | 1.9 | 2026-06-10 | Section 10.2/10.4/10.4a 업데이트: 실시간 감지 피드를 Detections 탭에서 분리 — `AnalysisLivePanel` 신규 컴포넌트 도입, "감지 이벤트 (누적)" 카드 클릭 시 오버레이로 표시. Detections 탭은 `AnalysisEventsTab` (히스토리)으로 복귀 |
+| 2.0 | 2026-07-30 | Section 5.5/10.2 갱신 — Analytics 탭(`VideoAnalyticsTab.tsx`) 완전 제거, 내용 전부(카테고리 On/Off 전체 카탈로그·Appearance Weights·Tracker/Kalman·Fire/Smoke Sensitivity) Admin Dashboard → AI Models(`AiModelsSection`)로 이관 및 Active/Deactivate와 명확히 분리. analysis 모드 사이드바는 Detections 탭 1개만 남음 |
 

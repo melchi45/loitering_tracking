@@ -29,7 +29,8 @@
 ```
 ┌─────────────────────────────────────────────────────────────────┐
 │                         CLIENT (React)                           │
-│  VideoAnalyticsTab.tsx ── PUT /api/analytics/config             │
+│  AdminUsersPage.tsx (AiModelsSection) ── PUT /api/analytics/config │
+│      (moved 2026-07-30 from removed VideoAnalyticsTab.tsx)       │
 │      └─ Accessories group (5 checkboxes: backpack, umbrella,    │
 │                             handbag, tie, suitcase)             │
 │  FullscreenCameraView.tsx                                        │
@@ -89,7 +90,7 @@ loitering_tracking/
 ├── client/
 │   └── src/
 │       ├── components/
-│       │   ├── VideoAnalyticsTab.tsx   # Accessories group with 5 per-item checkboxes
+│       │   ├── (Accessories group now in pages/admin/AdminUsersPage.tsx — VideoAnalyticsTab.tsx removed 2026-07-30)
 │       │   ├── FullscreenCameraView.tsx # Amber detection rows + abandoned item alerts
 │       │   └── DashboardDetectionPanel.tsx # CATEGORIES filter includes accessories
 │       ├── types/
@@ -290,10 +291,10 @@ const ABANDON_TIMEOUTS = { high: 30, medium: 60, low: 120 };
 
 ## 4. Client-Side Design
 
-### 4.1 VideoAnalyticsTab — Accessories Group
+### 4.1 Accessories Group — Admin Dashboard → AI Models (moved 2026-07-30, formerly `VideoAnalyticsTab.tsx`)
 
 ```
-Accessories Group (i18n: zoneGroupAccessories)
+Accessories Group (English-only label, Admin Dashboard does not use i18n)
 ├─ [☐] Backpack      (i18n: accessoryBackpack)
 ├─ [☐] Umbrella      (i18n: accessoryUmbrella)
 ├─ [☐] Handbag       (i18n: accessoryHandbag)

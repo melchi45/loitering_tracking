@@ -34,7 +34,7 @@ The Animal Detection module extends the LTS-2026 Loitering Detection & Tracking 
 ### 2.1 Goals
 
 - Detect 10 COCO animal categories (bird, cat, dog, horse, sheep, cow, elephant, bear, zebra, giraffe) using the already-deployed `yolov8n.onnx` model.
-- Provide per-class on/off toggles in the Video Analytics tab and via `/api/analytics/config`.
+- Provide per-class on/off toggles in Admin Dashboard → AI Models (moved 2026-07-30 from the removed Video Analytics tab) and via `/api/analytics/config`.
 - Apply identical loitering dwell-time analysis to animal tracks (ByteTracker + BehaviorAnalyzer).
 - Emit `loitering:alert` Socket.IO events when an animal exceeds the zone dwell threshold.
 - Display animal detections in the Dashboard Detection Panel with species-specific color codes.
@@ -75,7 +75,7 @@ The Animal Detection module extends the LTS-2026 Loitering Detection & Tracking 
 ### 4.2 Per-Class Toggle
 
 Each animal class is individually controlled via:
-- `VideoAnalyticsTab.tsx` — "Animals" group with 10 checkboxes (i18n key: `zoneGroupAnimals`).
+- Admin Dashboard → AI Models → Analytics Categories — "Animals" group with 10 toggles (moved 2026-07-30 from the removed sidebar `VideoAnalyticsTab.tsx`, formerly i18n key `zoneGroupAnimals`).
 - `analyticsConfig.js` — each class defaults to `false` in `DEFAULT_CONFIG`.
 - `PUT /api/analytics/config` — persisted in `storage/analytics.json`.
 

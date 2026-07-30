@@ -29,7 +29,8 @@
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                          CLIENT (React)                           │
-│  VideoAnalyticsTab.tsx                                            │
+│  AdminUsersPage.tsx (AiModelsSection) — moved 2026-07-30 from     │
+│  removed VideoAnalyticsTab.tsx                                    │
 │      └─ Mask Detection toggle (PUT /api/analytics/config)        │
 │  FullscreenCameraView.tsx / CameraView.tsx                        │
 │      └─ Canvas overlay: MASK OK (green) / NO MASK (red) / MASK?  │
@@ -84,7 +85,7 @@ loitering_tracking/
 ├── client/
 │   └── src/
 │       ├── components/
-│       │   ├── VideoAnalyticsTab.tsx       # Mask toggle
+│       │   ├── (Mask toggle now in pages/admin/AdminUsersPage.tsx — VideoAnalyticsTab.tsx removed 2026-07-30)
 │       │   ├── FullscreenCameraView.tsx    # MASK OK / NO MASK / MASK? badges
 │       │   └── CameraView.tsx             # Canvas overlay mask badges
 │       ├── types/

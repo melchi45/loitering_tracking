@@ -19,7 +19,6 @@ import { DashboardDetectionPanel } from './components/DashboardDetectionPanel';
 import { SystemStatusBadges } from './components/SystemStatusBadges';
 import AnalysisEventsTab from './components/AnalysisEventsTab';
 import ZonesPanel from './components/ZonesPanel';
-import VideoAnalyticsTab from './components/VideoAnalyticsTab';
 import FaceGalleryTab from './components/FaceGalleryTab';
 import AnalysisServerDashboard from './components/AnalysisServerDashboard';
 import { SearchBar } from './components/SearchBar';
@@ -35,7 +34,7 @@ import PendingPage from './pages/PendingPage';
 import AdminUsersPage from './pages/admin/AdminUsersPage';
 import AccessDeniedPage from './pages/AccessDeniedPage';
 
-type SidebarTab = 'cameras' | 'alerts' | 'zones' | 'detections' | 'analytics' | 'faces';
+type SidebarTab = 'cameras' | 'alerts' | 'zones' | 'detections' | 'faces';
 
 // ── Layout picker dropdown ──────────────────────────────────────────────────
 function LayoutPicker({ current, onChange }: { current: LayoutId; onChange: (id: LayoutId) => void }) {
@@ -708,7 +707,7 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
         if (data.serverMode) {
           const normalizedMode = data.serverMode.trim().toLowerCase();
           setServerMode(normalizedMode);
-          if (normalizedMode === 'analysis') setSidebarTab('analytics');
+          if (normalizedMode === 'analysis') setSidebarTab('detections');
         }
         if (typeof data.maxChannelNum === 'number') setMaxChannelNum(data.maxChannelNum);
       })
@@ -922,11 +921,12 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
   }
 
   // ── Shared: tab nav items ───────────────────────────────────────────────────
-  // In combined mode the analytics tab lives at /analysis — no inline tab.
-  const ANALYSIS_TABS: SidebarTab[] = ['analytics', 'detections'];
+  // Analysis mode: Analytics category on/off + model Active/Deactivate config
+  // moved to Admin Dashboard → AI Models (2026-07-30) — this sidebar now only
+  // shows Detections history.
+  const ANALYSIS_TABS: SidebarTab[] = ['detections'];
   const TAB_ITEMS = isAnalysis
     ? [
-        { id: 'analytics'  as SidebarTab, icon: Bot, label: t.tabVideoAnalytics },
         { id: 'detections' as SidebarTab, icon: Eye,  label: t.tabDetections },
       ]
     : [
@@ -937,14 +937,12 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
         { id: 'faces'      as SidebarTab, icon: ScanFace,  label: t.tabFaceGallery },
       ].filter(Boolean) as { id: SidebarTab; icon: LucideIcon; label: string }[];
 
-  // If dashboard context changes, reset to a valid tab.
+  // If dashboard context changes, reset to a valid tab. (Analysis mode's only
+  // valid tab, 'detections', is also valid outside analysis mode, so no
+  // reset is needed in that direction.)
   useEffect(() => {
     if (isAnalysis && !ANALYSIS_TABS.includes(sidebarTab)) {
-      setSidebarTab('analytics');
-      return;
-    }
-    if (!isAnalysis && sidebarTab === 'analytics') {
-      setSidebarTab('cameras');
+      setSidebarTab('detections');
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAnalysis, sidebarTab]);
@@ -963,7 +961,6 @@ const [sidebarWidth, setSidebarWidth] = useState(288);
     const tab = overrideTab ?? sidebarTab;
     if (tab === 'cameras')    return <CameraList />;
     if (tab === 'alerts')     return <AlertPanel />;
-    if (tab === 'analytics')  return <VideoAnalyticsTab />;
     if (tab === 'detections') return isAnalysis ? <AnalysisEventsTab /> : <DashboardDetectionPanel />;
     if (tab === 'zones')      return <ZonesPanel onOpenCamera={setFullscreenCameraId} />;
     if (tab === 'faces')      return (

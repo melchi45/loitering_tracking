@@ -15,7 +15,6 @@ export const pt: Translations = {
   tabCameras: 'Câmeras',
   tabAlerts: 'Alertas',
   tabZones: 'Zonas',
-  tabVideoAnalytics: 'Análise',
   tabDetections: 'Detect',
   tabFaceGallery: 'Reconh. Facial',
   faceGallerySubtitle: 'Cadastrar e reconhecer pessoas',
@@ -40,8 +39,6 @@ export const pt: Translations = {
   galleryTypeBlocklist: 'Lista negra',
   galleryTypeMissing: 'Pessoas desaparecidas',
   missingPersonAlert: 'PESSOA DESAPARECIDA DETECTADA',
-  videoAnalyticsHint: 'Habilite ou desabilite cada módulo de IA globalmente para todas as câmeras.',
-  videoAnalyticsFooter: 'Módulos desabilitados param o processamento imediatamente. As alterações entram em vigor no próximo quadro.',
 
   noCameras: 'Nenhuma câmera adicionada.',
   addCamera: 'Adicionar Câmera',
@@ -309,12 +306,6 @@ export const pt: Translations = {
 
   waitingForAnalysisData: 'Aguardando dados de análise…',
 
-  vaDisableAllModules: 'Desativar todos os módulos',
-  vaEnableAllAvailable: 'Ativar todos os módulos disponíveis',
-  vaDisableGroup: 'Desativar grupo inteiro',
-  vaEnableGroup: 'Ativar grupo inteiro',
-  vaFireSensitivityHint: 'Valor menor = maior sensibilidade (mais falsos positivos). Padrão: 0,35',
-  vaNmsHint: 'Valor menor mantém menos caixas sobrepostas. Padrão: 0,45',
 
   accessDeniedTitle: 'Acesso negado',
   accessDeniedBefore: 'Este painel só é acessível a partir de uma conta',

@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-DAM-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
-| **Date** | 2026-06-08 |
+| **Date** | 2026-07-30 |
 | **Parent PRD** | [prd/PRD_Dashboard_Analysis_Mode.md](../prd/PRD_Dashboard_Analysis_Mode.md) |
 
 ---
@@ -154,11 +154,20 @@ isAnalysis = true
 데스크톱 사이드바 탭 바 및 모바일 하단 내비게이션 바 모두 적용된다.
 
 ### FR-DAM-031: analysis 모드 유지 탭
+
+> **2026-07-30 갱신**: 이 요구사항은 최초 설계 당시(analysis 모드가 여러 탭을 유지하던 초기 반복) 기준이다.
+> 이후 여러 차례 개정을 거쳐(Design_Dashboard_Analysis_Mode.md §10.2 v1.5~v2.0), 실제로는
+> `alerts`/`zones`/`faces` 탭이 사라지고 analysis 모드 사이드바에는 `detections` 단일 탭만 남았으며,
+> `analytics` 탭도 완전히 제거되어 그 내용이 Admin Dashboard → AI Models로 이관되었다. 원문은
+> 배경 이해용으로만 유지한다 — 상세: `SRS_Admin_Dashboard.md` §4.2/§4.3.
+
 `isAnalysis === true`인 경우 다음 탭은 변경 없이 유지되어야 한다:
 `alerts`, `zones`, `detections`, `analytics`, `faces`
 
 ### FR-DAM-032: combined 모드 탭 유지
 `isAnalysis === false`인 경우 기존 6개 탭(`cameras`, `alerts`, `zones`, `detections`, `analytics`, `faces`) 모두 표시되어야 한다.
+
+> **2026-07-30**: `analytics` 탭은 `combined` 모드를 포함해 전 모드에서 제거되었다.
 
 ---
 
@@ -241,3 +250,12 @@ i18n 파일 변경 후 `npm run build`가 TypeScript 타입 오류 없이 성공
 | FR-DAM-050 | TC-F-001 |
 | FR-DAM-051 | TC-F-002 |
 | FR-DAM-052 | TC-F-003 |
+
+---
+
+## Revision History
+
+| 버전 | 날짜 | 변경 내용 |
+|---|---|---|
+| 1.0 | 2026-06-08 | 초기 작성 |
+| 1.1 | 2026-07-30 | FR-DAM-031/032에 갱신 노트 추가 — `analytics` 탭이 이후 전 모드에서 완전히 제거되고 Admin Dashboard → AI Models로 이관되었음을 명시 (원문은 배경 이해용으로 유지). 이 문서에 최초로 Revision History 표 추가 |

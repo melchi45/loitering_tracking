@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-DAP-01 |
-| **Version** | 1.4 |
+| **Version** | 1.5 |
 | **Status** | Active |
 | **Date** | 2026-06-25 |
 | **Parent PRD** | [prd/PRD_Distributed_AI_Pipeline.md](../prd/PRD_Distributed_AI_Pipeline.md) |
@@ -111,9 +111,13 @@ SERVER_MODE=analysis  → 카메라 캡처 초기화 없음 →
 
 ### FR-DAP-006: 모드별 Dashboard 탭 정책
 
-- `combined`: Cameras, Analytics 탭 모두 표시
-- `streaming`: Cameras 탭 표시, Analytics 탭 숨김
-- `analysis`: Cameras 탭 숨김, Analytics 탭 표시, 메인 영역은 CameraGrid 대신 Analysis 모드 상태 패널 표시
+> **2026-07-30 갱신**: Analytics 탭은 전 모드에서 완전히 제거되었다(내용은 Admin Dashboard → AI Models로
+> 이관, `SRS_Admin_Dashboard.md` §4.2/§4.3 참고). 아래는 원문(최초 설계 당시) 기준 — 현재는 `analysis`
+> 모드 사이드바에 `Detections` 단일 탭만 남는다.
+
+- `combined`: Cameras, ~~Analytics~~ 탭 표시 (Analytics 탭 제거됨)
+- `streaming`: Cameras 탭 표시, Analytics 탭 숨김 (제거로 인해 항상 없음)
+- `analysis`: Cameras 탭 숨김, ~~Analytics 탭 표시~~ → Detections 탭만 표시, 메인 영역은 CameraGrid 대신 Analysis 모드 상태 패널 표시
 
 ### FR-DAP-005: streaming 모드 시작 검증
 
@@ -542,3 +546,4 @@ ANALYSIS_MAX_CONCURRENT=4
 | 1.2 | 2026-06-23 | FR-DAP-027 추가: analysis 서버 다중 채널 동시 추론 시 채널 격리 요구사항 (DetectionService 버퍼 per-call 할당) |
 | 1.3 | 2026-06-24 | FR-DAP-028 추가: TcRunnerService analysis-only 스위트 streaming 모드 스킵 요구사항 (Audit UI 필터링 포함) |
 | 1.4 | 2026-06-25 | FR-DAP-029, FR-DAP-043~044 추가: captureOnly TC 스위트 analysis 모드 스킵 요구사항, 레지스트리 이중 동기화, 플래그 문서화 |
+| 1.5 | 2026-07-30 | FR-DAP-006 갱신 — Analytics 탭이 전 모드에서 완전히 제거되고 Admin Dashboard → AI Models로 이관되었음을 반영 |

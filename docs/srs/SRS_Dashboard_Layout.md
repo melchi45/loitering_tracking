@@ -4,8 +4,8 @@
 | Field          | Value                                                      |
 |----------------|------------------------------------------------------------|
 | Document ID    | SRS-DLY-001                                                |
-| Version        | 1.0                                                        |
-| Date           | 2026-05-26                                                 |
+| Version        | 1.1                                                        |
+| Date           | 2026-07-30                                                 |
 | Parent RFP     | RFP_Dashboard_Layout.md                                    |
 | Parent PRD     | PRD_Dashboard_Layout.md                                    |
 | Status         | Approved                                                   |
@@ -56,9 +56,14 @@ A 4 px wide vertical divider between the main area and sidebar shall change colo
 
 ### FR-DLY-006 — Sidebar Tab Navigation
 The sidebar shall expose mode-dependent tabs based on `SERVER_MODE`:
-- `combined`: Cameras, Alerts, Zones, Detections, Analytics, Face Gallery
-- `streaming`: Cameras, Alerts, Zones, Detections, Face Gallery (Analytics hidden)
-- `analysis`: Analytics only
+- `combined`: Cameras, Alerts, Zones, Detections, Face Gallery
+- `streaming`: Cameras, Alerts, Zones, Detections, Face Gallery
+- `analysis`: Detections only
+
+> **2026-07-30**: The Analytics tab (`VideoAnalyticsTab.tsx`) has been removed from every mode — its
+> content (category on/off toggles, appearance weights, tracker/Kalman settings, fire/smoke
+> sensitivity) is now exclusively in Admin Dashboard → AI Models. See `SRS_Admin_Dashboard.md`
+> §4.2/§4.3.
 
 The active tab shall be visually distinguished by a blue bottom border and blue text color. The Alerts tab shall display an unread count badge (red circle) when unacknowledged alerts exist.
 
@@ -190,3 +195,4 @@ When a discovered camera device is selected in the Found tab, a `DiscoveredCamer
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for Dashboard Layout |
+| 1.1 | 2026-07-30 | LTS Engineering Team | FR-DLY-006 updated — Analytics tab removed from all modes, content moved to Admin Dashboard → AI Models |

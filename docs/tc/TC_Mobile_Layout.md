@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-UI-MOB-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-05-27 |
 | **Parent SRS** | srs/SRS_Mobile_Layout.md |
@@ -226,10 +226,10 @@
 - **Expected:** Camera selection dropdown + DetectionPanel shown fullscreen
 - **Acceptance:** Dropdown and panel both visible
 
-### TC-E-004 — Analytics Tab
-- **Input:** Tap Analytics tab
-- **Expected:** VideoAnalyticsTab shown fullscreen
-- **Acceptance:** Analytics tab fills content area
+### TC-E-004 — Analytics Tab (Removed 2026-07-30)
+- **Input:** ~~Tap Analytics tab~~
+- **Expected:** ~~VideoAnalyticsTab shown fullscreen~~ — this tab no longer exists; bottom nav has 4 tabs (Cameras/Alerts/Zones/Detections). Analytics content is now in Admin Dashboard → AI Models.
+- **Acceptance:** Analytics tab absent from bottom nav in every mode
 
 ---
 
@@ -292,3 +292,4 @@ Group A (breakpoint) → Group B (header) → Group C (bottom nav) → Group D (
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for Mobile Layout |
+| 1.1 | 2026-07-30 | LTS Engineering Team | TC-E-004 marked removed — Analytics tab moved to Admin Dashboard → AI Models |

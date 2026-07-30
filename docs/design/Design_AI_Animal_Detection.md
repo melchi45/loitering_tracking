@@ -29,8 +29,9 @@
 ```
 ┌───────────────────────────────────────────────────────────────────┐
 │                           CLIENT (React)                           │
-│  VideoAnalyticsTab.tsx                                             │
-│      └─ zoneGroupAnimals: 10 per-species checkboxes               │
+│  AdminUsersPage.tsx (AiModelsSection) — moved 2026-07-30           │
+│  from removed VideoAnalyticsTab.tsx                                │
+│      └─ Animals: 10 per-species toggles                           │
 │         PUT /api/analytics/config → { dog: true, cat: true, ... } │
 │  DashboardDetectionPanel.tsx                                       │
 │      └─ CATEGORIES filter: Animals group                          │
@@ -86,7 +87,7 @@ loitering_tracking/
 ├── client/
 │   └── src/
 │       ├── components/
-│       │   ├── VideoAnalyticsTab.tsx        # Animals group (10 checkboxes)
+│       │   ├── (Animals group now in pages/admin/AdminUsersPage.tsx — VideoAnalyticsTab.tsx removed 2026-07-30)
 │       │   ├── FullscreenCameraView.tsx     # Species color codes, loitering badge
 │       │   └── DashboardDetectionPanel.tsx  # CATEGORIES includes Animals filter
 │       ├── types/
@@ -234,10 +235,10 @@ for (const det of analyzed) {
 
 ## 4. Client-Side Design
 
-### 4.1 VideoAnalyticsTab — Animals Group
+### 4.1 Animals Group — Admin Dashboard → AI Models (moved 2026-07-30, formerly `VideoAnalyticsTab.tsx`)
 
 ```
-Animals  (i18n key: zoneGroupAnimals)
+Animals  (English-only label, Admin Dashboard does not use i18n)
 ├─ [☐] Bird       ├─ [☐] Cat
 ├─ [☐] Dog        ├─ [☐] Horse
 ├─ [☐] Sheep      ├─ [☐] Cow

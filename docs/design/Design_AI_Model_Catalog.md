@@ -1,6 +1,6 @@
 ---
 **Document:** Design_AI_Model_Catalog  
-**Version:** 2.5  
+**Version:** 2.6  
 **Status:** Draft  
 **Date:** 2026-07-14  
 **Parent SRS:** [SRS_AI_Model_Catalog](../srs/SRS_AI_Model_Catalog.md)  
@@ -479,7 +479,7 @@ Log line (both call sites), Korean per the project's operational logging convent
 
 ### 8.4 Why disable Cloth analysis rather than leave it stale
 
-`analyticsConfig`'s `cloth` flag (default `false`) is what actually gates whether `attributePipeline.js` attaches a `cloth` field to detections (`config.cloth !== false`). If the gate blocks the PAR model from loading but `cloth` stayed `true`, the pipeline would keep expecting cloth-attribute output that never arrives — silently degrading rather than failing visibly. Turning `cloth` off keeps the Admin Dashboard's AI Analysis Modules toggle honest: it reflects whether cloth attribute enrichment can actually run, not just whether an operator once flipped it on.
+`analyticsConfig`'s `cloth` flag (default `false`) is what actually gates whether `attributePipeline.js` attaches a `cloth` field to detections (`config.cloth !== false`). If the gate blocks the PAR model from loading but `cloth` stayed `true`, the pipeline would keep expecting cloth-attribute output that never arrives — silently degrading rather than failing visibly. Turning `cloth` off keeps the Admin Dashboard's Analytics Categories (On/Off) toggle honest (renamed from "AI Analysis Modules" 2026-07-30, see `Design_Admin_Dashboard.md` §4.2): it reflects whether cloth attribute enrichment can actually run, not just whether an operator once flipped it on.
 
 ### 8.5 Non-goals
 
@@ -594,3 +594,4 @@ On the next server restart, `_loadServices()` first loads `_detector` from the `
 | 2.3 | 2026-07-12 | PromptPAR Download 자동화 반영 — `openpar-pa100k`가 소스 전략 없음(shipped)에서 신규 `pyExport`(§4.2e, `exportPromptPAR.py`)로 전환: Event-AHU/OpenPAR repo clone + ViT-B/16 backbone + Google Drive PA100k 체크포인트(`gdown`) 자동 다운로드 후 CUDA GPU에서 export·검증. §3b 스키마에 `pyExport` 필드 추가, §9에 `PROMPTPAR_REPO_URL`/`_REPO_REF`/`_GDRIVE_FOLDER_ID`/`_CHECKPOINT_FILENAME`/`_CHECKPOINT_GDRIVE_FILE_ID`/`_VIT_BACKBONE_URL` 환경변수 추가 |
 | 2.4 | 2026-07-13 | Runtime Model Deactivate 신설(§5b, `POST /api/analysis/models/deactivate`) — YOLO 탐지기를 제외한 8개 확장 family(face-detection/face-recognition/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid/age-estimation) 각 서비스에 `unload()`/`unloadDetector()`/`unloadRecognizer()`/`unloadPar()`/`unloadHumanParsing()` 추가, Admin Dashboard AI Models에 Deactivate 버튼 추가. `colorClothService.js` `reloadPar()`의 기존 세션 미해제 누수도 함께 수정 |
 | 2.5 | 2026-07-14 | §11 신설 — Active Model Persistence: 신규 `activeModelConfig.js`가 `settings` 테이블(row id `activeModels`)에 family→modelId 맵을 저장, `DB_TYPE`(json/mongodb) 불문 동일 API. `/models/switch`·`/models/deactivate`의 family별 switch문을 `_applyModelSwitch()`/`_applyModelDeactivate()` 공용 함수로 리팩터링해 성공 시에만 영속화, 신규 `_restoreActiveModels()`가 `_loadServices()` 마지막 단계에서 재생. family 신규 추가 시 영속화 자체는 코드 변경 불필요(제네릭 설계) |
+| 2.6 | 2026-07-30 | 용어 갱신 — Admin Dashboard 토글 명칭이 "AI Analysis Modules"→"Analytics Categories (On/Off)"로 개편됨(`Design_Admin_Dashboard.md` §4.2), 이 문서의 §12 cloth 게이팅 설명 문구 동기화 |

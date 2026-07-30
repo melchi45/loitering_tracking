@@ -225,7 +225,7 @@ type AdminSection = 'users' | 'ai-models' | 'onvif' | 'audit' | 'system' | 'logs
 | 섹션 | 컴포넌트 | 주요 API |
 |------|---------|---------|
 | 👥 Users | `UsersSection` | GET/PATCH/DELETE `/admin/users` |
-| 🤖 AI Models | `AiModelsSection` | GET/POST `/api/analysis/models`, GET/PUT `/api/analytics/config`, GET `/api/capabilities` |
+| 🤖 AI Models | `AiModelsSection` | GET/POST `/api/analysis/models`, GET/PUT `/api/analytics/config`, GET `/api/capabilities`, GET/PUT `/api/tracker/config`(+`/reset`), GET/PATCH `/api/analysis/config/fire-smoke` |
 | 📡 ONVIF | `OnvifSection` | GET/DELETE `/api/onvif-event-types` |
 | 📋 Audit Log | `AuditSection` | GET `/admin/audit?limit=200` |
 | 📊 System | `SystemSection` | GET `/admin/system` |
@@ -281,13 +281,21 @@ type AdminSection = 'users' | 'ai-models' | 'onvif' | 'audit' | 'system' | 'logs
 - `PROPOSED_SERIES = new Set(['Human Parsing', 'Appearance Re-ID'])` — 이 두 개만 자주색 "Proposed" 배지 표시, 나머지(Face/PPE/Fire-Smoke/Cloth-PAR)는 이미 프로덕션 모델
 - `m.manualOnly && !m.exists` → Download 버튼 대신 `m.docRef` 링크의 "Manual export" 텍스트 렌더링 (cloth-PAR/OpenPAR — 공개 사전학습 ONNX 없음)
 
-**AI Analysis Modules (ADMIN_MODULE_GROUPS):**
+**Analytics Categories — On/Off (ADMIN_MODULE_GROUPS, 2026-07-30부로 9개 그룹으로 확장):**
 - Core: Human, Vehicle
-- AI Attributes: Face, Color, Cloth, Human Parsing(Proposed), Mask, Hat
+- AI Attributes: Face, Color, Cloth, Human Parsing(Proposed), Age/Gender(Proposed), Mask, Hat, Glasses/Sunglasses(Phase-2, `pending: true`)
 - Hazard: Fire, Smoke
+- Accessories & Equipment / Indoor Objects / Animals / Outdoor Objects / Food & Drink / Home & Appliances — 옛 사이드바 Analytics 탭(`VideoAnalyticsTab.tsx`, 2026-07-30 삭제)의 전체 COCO 80-class 카탈로그를 여기로 이관, 모델 불필요(YOLO 내장)
 - `GET /api/analytics/config` + `GET /api/capabilities` → 활성화 상태 및 가용성 로드
 - `PUT /api/analytics/config { [id]: boolean }` → 토글
-- 이 토글은 모델 카탈로그(위 두 섹션)와 별개 API — 모듈 자체의 on/off이지 모델 선택이 아님
+- 이 토글은 모델 카탈로그(위 두 섹션, Model Selection)와 명확히 분리된 별개 API — 카테고리 자체의 on/off이지 모델 선택이 아님(모델은 Active인데 카테고리는 Off일 수 있고 그 반대도 가능)
+
+**Tracking & Sensitivity Tuning (2026-07-30 신규 — 옛 Analytics 탭에서 이관):**
+- Appearance Weights (접이식) — 크로스카메라 Re-ID `iouWeight`/`faceWeight`/`colorWeight`/`clothWeight`/`accWeight` 슬라이더 + 비율 바, `GET/PUT /api/tracker/config`
+- Fire / Smoke Sensitivity (접이식) — Conf/NMS 임계값 슬라이더, `fireSmokeAvailable=false`면 비표시, `GET/PATCH /api/analysis/config/fire-smoke`
+- Tracker / Kalman Settings (접이식) — `maxAge` 등 8개 슬라이더, `GET/PUT /api/tracker/config` + `POST /api/tracker/config/reset`
+- 세 패널 모두 300ms debounce 자동 저장 + Reset Defaults 버튼
+- 상세: `docs/design/Design_Admin_Dashboard.md` §4.2/§4.3, `docs/srs/SRS_Admin_Dashboard.md` §4.3
 
 ### 공유 서브컴포넌트 (동일 파일 내)
 
@@ -379,15 +387,17 @@ Sign Out → auth.logout()
 
 ## SERVER_MODE 기반 탭 노출 정책 (중요)
 
-- 기준 위치: `client/src/App.tsx` (`serverMode`, `isStreaming`, `TAB_ITEMS`)
-- `combined`: Cameras/Analytics 탭 모두 표시
-- `streaming`: Analytics 탭 숨김
-- `analysis`: 메인 영역은 `AnalysisServerDashboard.tsx`, 우측/모바일 탭은 **2개 탭** 표시:
-  - `analytics` (VideoAnalyticsTab — 모듈 설정)
+> **2026-07-30**: `analytics` 탭(`VideoAnalyticsTab.tsx`)이 전 모드에서 완전히 제거되었다 — 카테고리
+> On/Off·Appearance Weights·Tracker/Kalman·Fire/Smoke Sensitivity가 모두 Admin Dashboard → AI Models
+> (`AiModelsSection`)로 이관되었다. 아래는 현재 동작 기준.
+
+- 기준 위치: `client/src/App.tsx` (`serverMode`, `isAnalysis`, `TAB_ITEMS`, `ANALYSIS_TABS`)
+- `combined`/`streaming`: Cameras/Alerts/Zones/Detections/Face Gallery 탭 표시 (Analytics 탭 없음)
+- `analysis`: 메인 영역은 `AnalysisServerDashboard.tsx`, 우측/모바일 탭은 **`detections` 단일 탭**만 표시:
   - `detections` (**AnalysisEventsTab** — 이벤트 히스토리 날짜 그룹)
   - 실시간 감지 피드는 대시보드 "감지 이벤트" 카드 클릭 → `AnalysisLivePanel` 오버레이로 표시
   - 이벤트 히스토리는 대시보드 "알림" 카드 클릭 → `AnalysisDetectionPanel` 오버레이로 표시
-- 모드 변경으로 현재 활성 탭이 유효하지 않으면 `analytics`로 자동 전환
+- 모드 변경으로 현재 활성 탭이 유효하지 않으면 `detections`로 자동 전환
 
 ```typescript
 // renderTabContent — analysis 분기

@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-MOB |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Draft |
 | **Date** | 2026-05-21 |
 | **Related RFP** | RFP_Mobile_Layout.md (LTS2026-MOB v1.0) |
@@ -55,7 +55,7 @@ The mobile layout adapts the LTS Dashboard for smartphones and tablets (screen w
 
 **Shift Supervisor (Mobile)** — reviews alerts and acknowledgement state from a mobile device during rounds. Uses the Alerts tab full-screen to triage notifications.
 
-**Remote Administrator** — checks analytics configuration and detection status from a phone. Uses the Analytics tab fullscreen to verify module states without accessing a workstation.
+**Remote Administrator** — checks analytics configuration and detection status from a phone. ~~Uses the Analytics tab fullscreen to verify module states~~ (2026-07-30: the Analytics tab was removed from mobile along with every other mode; this persona now uses Admin Dashboard → AI Models, which is not mobile-optimized as of this revision).
 
 ---
 
@@ -96,7 +96,7 @@ Fixed at the bottom of the screen (52px, `bg-gray-900 border-t border-gray-700`)
 | Alerts | 🔔 | AlertPanel fullscreen |
 | Zones | 🗺 | Zone guidance message + double-click hint |
 | Detections | 👁 | Camera selection dropdown + DetectionPanel |
-| Analytics | 🤖 | VideoAnalyticsTab fullscreen |
+| ~~Analytics~~ | ~~🤖~~ | ~~VideoAnalyticsTab fullscreen~~ (removed 2026-07-30 — moved to Admin Dashboard → AI Models) |
 
 - Icon: `text-xl` (20px)
 - Label: `text-[9px]`; active: `text-blue-400`; inactive: `text-gray-500`
@@ -221,7 +221,7 @@ All existing desktop components are reused without modification:
 | `CameraList` | Cameras tab bottom scrollable area |
 | `AlertPanel` | Alerts tab fullscreen |
 | `DetectionPanel` | Detections tab and Fullscreen overlay bottom panel |
-| `VideoAnalyticsTab` | Analytics tab fullscreen |
+| ~~`VideoAnalyticsTab`~~ | Removed 2026-07-30 — see Admin Dashboard → AI Models |
 | `FullscreenCameraView` | Overlay on double-tap, vertical split on mobile |
 | Settings Modal | Opened via header settings icon |
 
@@ -257,7 +257,7 @@ Swipe detection on the Cameras tab:
 
 1. When the viewport width is below 768px, the right sidebar is hidden and the bottom navigation bar is displayed; the layout switches back to desktop when the viewport reaches 768px or above.
 2. The mobile header hides the LayoutPicker and shows the compact form with logo, connection dot, camera count, and settings icon.
-3. Switching bottom navigation tabs renders the correct full-area content component for each tab (AlertPanel, DetectionPanel, VideoAnalyticsTab, zone guidance, or Cameras split view).
+3. Switching bottom navigation tabs renders the correct full-area content component for each tab (AlertPanel, DetectionPanel, zone guidance, or Cameras split view). (VideoAnalyticsTab removed 2026-07-30.)
 4. The Alerts tab notification badge on the bottom nav updates in real time to show the unacknowledged alert count.
 5. On the Cameras tab, the CameraGrid occupies approximately the top 60% and the CameraList occupies the bottom 40% of the content area.
 6. Swiping left on the Cameras tab advances `channelOffset` by the current layout's channel count; swiping right decreases it. A swipe of less than 40px horizontal travel is ignored.
@@ -298,3 +298,4 @@ Swipe detection on the Cameras tab:
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for Mobile Layout |
+| 1.1 | 2026-07-30 | LTS Engineering Team | Analytics tab removed from mobile bottom nav — moved to Admin Dashboard → AI Models |

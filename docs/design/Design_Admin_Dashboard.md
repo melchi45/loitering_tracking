@@ -1,6 +1,6 @@
 # Design: Admin Dashboard
 
-**Version:** 1.8
+**Version:** 1.9
 **Status:** Implemented
 **Related:** [Design_ONVIF_Timeline.md](Design_ONVIF_Timeline.md) · [SRS_User_Authentication.md](../srs/SRS_User_Authentication.md) · [Design_AI_Model_Catalog.md](Design_AI_Model_Catalog.md)
 
@@ -96,7 +96,9 @@ type AdminSection = 'users' | 'ai-models' | 'webrtc' | 'ingest' | 'onvif' | 'aud
 
 ### 4.2 AI Models 섹션 (`AiModelsSection`)
 
-**목적:** 전체 AI 모델 카탈로그(YOLO 탐지기 + 얼굴/PPE/화재연기/의상PAR/Human Parsing/Appearance Re-ID) 관리 및 AI 분석 모듈 활성화/비활성화
+**목적:** 전체 AI 모델 카탈로그(YOLO 탐지기 + 얼굴/PPE/화재연기/의상PAR/Human Parsing/Appearance Re-ID) 관리, AI 분석 카테고리 On/Off, 추적·감지 민감도 튜닝 — 세 concern을 명확히 분리된 세 섹션으로 한 곳에서 제공
+
+> **2026-07-30 통합**: 이전에는 analysis 모드 사이드바의 별도 "Analytics" 탭(`VideoAnalyticsTab.tsx`)이 카테고리 On/Off 전체 카탈로그(COCO 80종 포함) + Appearance Weights + Tracker/Kalman Settings + Fire/Smoke Sensitivity를 담당했고, 이 섹션은 그중 축소된 서브셋(Core/Attributes/Hazards)만 노출했다. `VideoAnalyticsTab.tsx`를 완전히 삭제하고 그 전체 내용을 이 섹션으로 이관하면서, "어떤 모델이 활성인가"(§1 Model Selection)와 "그 카테고리가 켜져 있는가"(§2 Analytics Categories)를 이전보다 명확하게 분리했다 — 모델을 Active 해두고도 카테고리는 Off일 수 있고(예: 미리 로드만 해두는 경우) 그 반대도 가능하다. 상세: `docs/design/Design_Dashboard_Analysis_Mode.md` §5.5/§10.2 (v2.0).
 
 **참조:** [Design_AI_Model_Catalog.md](Design_AI_Model_Catalog.md) · [SRS_AI_Model_Catalog](../srs/SRS_AI_Model_Catalog.md)
 
@@ -107,11 +109,16 @@ type AdminSection = 'users' | 'ai-models' | 'webrtc' | 'ingest' | 'onvif' | 'aud
 | `catalog` | `ModelCatalogEntry[]` | 전체 카탈로그 28개 항목 — YOLO 감지기 20개(`family` undefined) + 비감지기 8개(`family` 지정, exists/active/downloading/converting은 family별 독립) |
 | `switching` | string\|null | 전환 중인 modelId |
 | `dlLoading` | string\|null | 다운로드 트리거 중인 modelId |
-| `enabled` | `Record<string, boolean>` | AI 모듈 활성화 상태 |
-| `caps` | `Record<string, boolean>` | 모듈 사용 가능 여부 |
-| `capStatus` | `Record<string, string>` | 모듈 상세 상태 (`builtin`/`available`/`loaded`/`failed`/`missing`/`pending`) |
+| `enabled` | `Record<string, boolean>` | 분석 카테고리 활성화 상태 (전체 카탈로그, COCO 80종 포함) |
+| `caps` | `Record<string, boolean>` | 카테고리 사용 가능 여부 |
+| `capStatus` | `Record<string, string>` | 카테고리 상세 상태 (`builtin`/`available`/`loaded`/`failed`/`missing`/`pending`) |
+| `kalman` | `KalmanConfig` | ByteTrack/Kalman 모션 파라미터 + Appearance Re-ID 가중치 (13개 필드) |
+| `fireSmokeConfig` | `{ confThreshold, nmsThreshold }` | 화재/연기 감지 conf/NMS 임계값 |
+| `fireSmokeAvailable` | boolean | 화재/연기 모델 로드 여부 — false면 튜닝 서브섹션 비표시 |
 
-**UI 구성:**
+**UI 구성 — 3개 섹션으로 명확히 분리:**
+
+**① Model Selection (Active / Deactivate)** — 어떤 ONNX 모델이 각 family를 담당하는지
 
 1. **YOLO Detection Model** — 시리즈별(YOLO26→YOLO12→YOLO11→YOLOv8) 테이블
    - 컬럼: Model · mAP · CPU ms · T4 ms · Params · Size · Action
@@ -125,11 +132,21 @@ type AdminSection = 'users' | 'ai-models' | 'webrtc' | 'ingest' | 'onvif' | 'aud
    - `human-parsing`/`appearance-reid`만 "Proposed" 배지 표시(자주색) — 나머지(face/ppe/fire-smoke)는 이미 프로덕션에서 사용되는 필수/기본 모델이므로 배지 없음
    - family별로 독립적인 Active 상태 — 예: PPE 모델 전환이 YOLO 감지기나 얼굴 모델의 Active 상태에 영향을 주지 않음
 
-3. **AI Analysis Modules** — `ADMIN_MODULE_GROUPS` (Core / Attributes / Hazards)
+**② Analytics Categories (On/Off)** — 카테고리 자체가 실행되는지 (모델 선택과 별개 API)
+
+`ADMIN_MODULE_GROUPS` (2026-07-30부로 9개 그룹으로 확장):
    - Core Detection: Human, Vehicle
-   - AI Attributes: Face, Color, Cloth, Human Parsing(Proposed), Mask, Hat
+   - AI Attributes: Face, Color, Cloth, Human Parsing(Proposed), Age/Gender(Proposed), Mask, Hat, Glasses/Sunglasses(Phase-2, `pending`)
    - Hazard Detection: Fire, Smoke
-   - 각 항목: 이름 + 설명 + `requires: <model>` + 토글 스위치 — 이 토글은 모델 선택이 아니라 모듈 자체의 on/off이며, 위 카탈로그 테이블(다운로드/전환)과는 별개의 API(`/api/analytics/config`)
+   - Accessories & Equipment / Indoor Objects / Animals / Outdoor Objects / Food & Drink / Home & Appliances — 구 `VideoAnalyticsTab`의 전체 COCO 80-class 카탈로그, 모델 불필요(YOLO 내장)
+   - 각 항목: 이름 + (있다면) 설명/`requires: <model>` + 토글 스위치 — `/api/analytics/config`
+
+**③ Tracking & Sensitivity Tuning** — 숫자 파라미터, On/Off도 모델 선택도 아님
+
+   - **Appearance Weights** — 크로스카메라 Re-ID 시 IoU/Face/Color/Cloth/Accessories 가중치 슬라이더(합산 비율 바 포함), `/api/tracker/config`의 `iouWeight`/`faceWeight`/`colorWeight`/`clothWeight`/`accWeight`
+   - **Fire / Smoke Sensitivity** — Conf/NMS 임계값 슬라이더, `fireSmokeAvailable`이 false면 비표시, `/api/analysis/config/fire-smoke`
+   - **Tracker / Kalman Settings** — `maxAge`/`iouThreshold`/`fastSpeedThreshold` 등 8개 슬라이더, `/api/tracker/config` + `/api/tracker/config/reset`
+   - 슬라이더 변경 시 300ms debounce 후 자동 저장(Appearance/Kalman은 동일 `/api/tracker/config` PUT, Fire/Smoke는 별도 PATCH)
 
 **API:**
 
@@ -137,12 +154,16 @@ type AdminSection = 'users' | 'ai-models' | 'webrtc' | 'ingest' | 'onvif' | 'aud
 |--------|------|-------------|
 | GET | `/api/analysis/models` | 카탈로그 조회 (`{ activeFile, catalog[] }`) |
 | POST | `/api/analysis/models/switch` | 활성 모델 전환 (`{ modelId }`) |
+| POST | `/api/analysis/models/deactivate` | 활성 모델 언로드 (`{ modelId }`) |
 | POST | `/api/analysis/models/download` | 모델 다운로드 시작 (`{ modelId }`) |
-| GET | `/api/analytics/config` | 모듈 Enable/Disable 조회 |
-| PUT | `/api/analytics/config` | 모듈 Enable/Disable 변경 |
-| GET | `/api/capabilities` | 모듈 가용성 및 상태 조회 |
+| GET | `/api/analytics/config` | 카테고리 Enable/Disable 조회 |
+| PUT | `/api/analytics/config` | 카테고리 Enable/Disable 변경 |
+| GET | `/api/capabilities` | 카테고리 가용성 및 상태 조회 |
+| GET/PUT | `/api/tracker/config` | ByteTrack/Kalman + Appearance Weights 조회/변경 |
+| POST | `/api/tracker/config/reset` | 추적기 설정 기본값 초기화 |
+| GET/PATCH | `/api/analysis/config/fire-smoke` | 화재/연기 conf/NMS 임계값 조회/변경 |
 
-> **Note:** `/api/analysis/models` 응답 키는 `catalog` (not `models`). `exists` 필드로 다운로드 상태 확인.
+> **Note:** `/api/analysis/models` 응답 키는 `catalog` (not `models`). `exists` 필드로 다운로드 상태 확인. 이 섹션의 모든 API 호출은 전역 `fetch()`를 사용하며 Authorization 헤더를 붙이지 않는다(analysis API 자체가 서버 측 인증 게이트가 없음 — 클라이언트 라우팅상 admin 역할만 도달 가능한 것이 유일한 제약, `NFR-AD-003`).
 
 ### 4.3 WebRTC / ICE 섹션 (`WebRTCSection`)
 
@@ -292,7 +313,7 @@ client/src/pages/admin/
 └── AdminUsersPage.tsx     — Admin Dashboard 전체 (단일 파일)
     ├── export default AdminUsersPage  — 진입점 (App.tsx 참조)
     ├── UsersSection                   — 사용자 관리
-    ├── AiModelsSection                — YOLO 모델 카탈로그 + AI 모듈 토글
+    ├── AiModelsSection                — 모델 Active/Deactivate + Analytics 카테고리 On/Off + 추적/민감도 튜닝 (2026-07-30 통합)
     ├── WebRTCSection                  — STUN/TURN 서버 + ICE 연결 테스트
     ├── OnvifSection                   — ONVIF 타입 레지스트리
     ├── AuditSection                   — 감사 로그
@@ -310,6 +331,7 @@ client/src/pages/admin/
 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
+| 1.9 | 2026-07-30 | §4.2 전면 개정 — analysis 모드 사이드바의 Analytics 탭(`VideoAnalyticsTab.tsx`) 완전 삭제, 그 전체 내용(카테고리 On/Off 전체 카탈로그·Appearance Weights·Tracker/Kalman·Fire/Smoke Sensitivity)을 이 섹션으로 통합해 Model Selection/Analytics Categories/Tracking & Sensitivity Tuning 3개 하위 섹션으로 재구성, §9 파일 구조 갱신 |
 | 1.8 | 2026-07-23 | §4.6에 Start/Stop/Restart 컨트롤 추가 예정 명시(Proposed) — 상세 설계는 [Design_Ingest_Daemon_Control.md](Design_Ingest_Daemon_Control.md)로 분리, 구현 착수 전 사용자 결정 대기 |
 | 1.7 | 2026-07-21 | §4.6 Ingest Daemon 섹션 구현 완료로 갱신 — Proposed 표기 제거, 실측 검증 결과는 [Design_Ingest_Daemon_Monitoring.md](Design_Ingest_Daemon_Monitoring.md) §8 참고 |
 | 1.6 | 2026-07-21 | §3 nav 표에 `ingest`(Proposed) 행 추가, §4.6 Ingest Daemon 섹션 신규(미구현 — [Design_Ingest_Daemon_Monitoring.md](Design_Ingest_Daemon_Monitoring.md)로 상세 설계 분리, 구현 착수 전 사용자 확인 대기) |

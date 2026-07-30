@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-DAP-01 |
-| **Version** | 1.2 |
+| **Version** | 1.3 |
 | **Status** | Active |
 | **Date** | 2026-06-25 |
 | **Parent SRS** | [srs/SRS_Distributed_AI_Pipeline.md](../srs/SRS_Distributed_AI_Pipeline.md) |
@@ -585,13 +585,15 @@ describe('TC-DAP-008: WebRTC 스트림과 분석 결과 동시 표시', () => {
 
 ---
 
-## 12. TC-DAP-009: 모드별 Dashboard 탭 정책
+## 12. TC-DAP-009: 모드별 Dashboard 탭 정책 (2026-07-30 갱신)
+
+> Analytics 탭은 전 모드에서 제거되었다 — 아래 표는 갱신된 현재 동작 기준.
 
 | 단계 | 테스트 항목 | 입력 | 예상 결과 |
 |---|---|---|---|
-| TC-DAP-009-01 | combined 탭 정책 | `SERVER_MODE=combined` | Cameras/Analytics 탭 모두 표시 |
-| TC-DAP-009-02 | streaming 탭 정책 | `SERVER_MODE=streaming` | Cameras 탭 표시, Analytics 탭 미표시 |
-| TC-DAP-009-03 | analysis 탭 정책 | `SERVER_MODE=analysis` | Cameras 탭 미표시, 메인 영역에 Analysis 상태 패널 표시 |
+| TC-DAP-009-01 | combined 탭 정책 | `SERVER_MODE=combined` | Cameras 탭 표시 (Analytics 탭은 존재하지 않음) |
+| TC-DAP-009-02 | streaming 탭 정책 | `SERVER_MODE=streaming` | Cameras 탭 표시, Analytics 탭 미표시(항상) |
+| TC-DAP-009-03 | analysis 탭 정책 | `SERVER_MODE=analysis` | Cameras 탭 미표시, 메인 영역에 Analysis 상태 패널 표시, 사이드바는 Detections 단일 탭 |
 
 ## 13. TC-DAP-010: analysis 모드 discovery 비활성
 
@@ -730,3 +732,4 @@ SERVER_MODE=analysis node test/tc_runner_cli.js --url http://localhost:3080 --ou
 | 1.0 | 2026-06-08 | 초기 작성 |
 | 1.1 | 2026-06-24 | TC-DAP-013 추가: TcRunnerService analysis-only 스위트 streaming 모드 스킵 검증 (FR-DAP-028) |
 | 1.2 | 2026-06-25 | TC-DAP-014 추가: captureOnly 스위트 analysis 모드 스킵 검증 (FR-DAP-029) |
+| 1.3 | 2026-07-30 | TC-DAP-009 갱신 — Analytics 탭 전 모드 제거 반영 (FR-DAP-006) |

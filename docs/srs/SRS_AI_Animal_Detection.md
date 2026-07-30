@@ -252,12 +252,11 @@ Animal detections in the `detections` Socket.IO event payload must include enric
 - Enabling the Animals filter must display all 10 species in the merged detection list
 - Disabling the Animals filter must hide all animal detection rows without affecting other categories
 
-### FR-ANI-020 — VideoAnalytics Tab Group
+### FR-ANI-020 — Analytics Categories Group (moved 2026-07-30)
 
-- A "Animals" checkbox group must appear in `VideoAnalyticsTab.tsx` with 10 individual checkboxes
-- The group's i18n key must be `zoneGroupAnimals`
-- Each checkbox label must use the corresponding i18n key for the species name
-- Toggling a checkbox must call PUT `/api/analytics/config` with the updated species key
+- A "Animals" toggle group must appear in Admin Dashboard → AI Models → Analytics Categories (formerly `VideoAnalyticsTab.tsx`, removed) with 10 individual toggles
+- Each toggle label shows the species name (English only — the Admin Dashboard does not use i18n)
+- Toggling an item must call PUT `/api/analytics/config` with the updated species key
 
 ---
 

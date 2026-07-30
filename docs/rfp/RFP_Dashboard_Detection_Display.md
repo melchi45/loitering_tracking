@@ -1,10 +1,10 @@
 # RFP: Detection Visualization & Display Module
 
 **Document No.**: LTS-2026-003
-**Version**: 2.4
-**Date**: 2026-05-20
+**Version**: 2.6
+**Date**: 2026-07-30
 **Classification**: Technical Requirements Specification (RFP)
-**Status**: Updated to v2.4 — Video Analytics moved to Dashboard sidebar 4th tab (alongside Cameras/Alerts/Zones); Fullscreen view is now 2-column (left DetectionPanel + right video only); cloth attribute (PAR) display added
+**Status**: Updated to v2.6 — Video Analytics tab (§7, §10.3) removed entirely, content moved to Admin Dashboard → AI Models
 
 ---
 
@@ -12,14 +12,14 @@
 
 ### 1.1 Purpose
 
-This document defines the technical requirements for the **Detection Visualization & Display Module** of the Loitering Detection & Tracking System (LTS). It covers the canvas overlay that renders real-time object detections on live video streams, the detection list panel, the legend display, and the Video Analytics tab. The document has been updated from v1.0 to accurately reflect the Phase-1 implementation as of 2026-05-18.
+This document defines the technical requirements for the **Detection Visualization & Display Module** of the Loitering Detection & Tracking System (LTS). It covers the canvas overlay that renders real-time object detections on live video streams, the detection list panel, and the legend display. The document has been updated from v1.0 to accurately reflect the Phase-1 implementation as of 2026-05-18. (§7 "Video Analytics tab" content described in this document was removed 2026-07-30 — see the v2.6 note in §7.)
 
 ### 1.2 Scope
 
 - Camera view canvas overlay (bounding boxes, labels, attribute badges)
 - Fullscreen view detection panel (left side panel with two tabs)
 - Detection legend (color code reference)
-- Video Analytics tab (module enable/disable toggles)
+- ~~Video Analytics tab (module enable/disable toggles)~~ — removed 2026-07-30, see §7
 - Socket.IO real-time data reception and rendering
 
 ---
@@ -335,6 +335,8 @@ All unrecognized/fallback classes render as gray: `rgba(156,163,175,0.9)` / `tex
 > **Note (v2.3 → superseded by v2.4):** An intermediate layout placed Video Analytics in a 3-column right panel inside the Fullscreen view. This was reverted.
 >
 > **Note (v2.4 — Layout restructure):** Video Analytics moved out of the Fullscreen view entirely. The Fullscreen view is now a **2-column layout**: left DetectionPanel (256px) + right video feed (flex-1). `VideoAnalyticsTab` is now the **4th tab in the Dashboard sidebar** (`w-72 bg-gray-800 border-l border-gray-700`), alongside the Cameras / Alerts / Zones tabs (`SidebarTab = 'cameras' | 'alerts' | 'zones' | 'analytics'`). This reflects the semantic distinction: DetectionPanel is per-camera live data; VideoAnalyticsTab is global AI module configuration accessible from the main dashboard at all times.
+>
+> **Note (v2.6 — 2026-07-30, Analytics tab removed):** `VideoAnalyticsTab.tsx` and the sidebar Analytics tab described above have been removed entirely (from every `SERVER_MODE`, not just Fullscreen). Its content — category on/off toggles (now the full COCO 80-class catalog), Appearance Weights, Tracker/Kalman Settings, Fire/Smoke Sensitivity — moved to Admin Dashboard → AI Models (`AiModelsSection`), clearly separated from that page's existing model Active/Deactivate controls. See `Design_Admin_Dashboard.md` §4.2/§4.3 and `Design_Dashboard_Analysis_Mode.md` §10.2 (v2.0).
 
 #### 5.1.1 Legend Collapse/Expand Behaviour *(New in v2.2)*
 
@@ -873,6 +875,14 @@ Displayed inside the face detection row header, after the face ID and similarity
 
 ✅ Phase-1 Complete. Location updated in **v2.4**.
 
+> **2026-07-30 — Removed.** `VideoAnalyticsTab.tsx` and the sidebar Analytics tab this entire
+> section describes no longer exist in any `SERVER_MODE`. All of its content (module/category
+> toggles — now the full COCO 80-class catalog, not just the subset below — Appearance Weights,
+> Tracker/Kalman Settings, Fire/Smoke Sensitivity) moved to Admin Dashboard → AI Models
+> (`AiModelsSection`), clearly separated there from the page's existing model Active/Deactivate
+> controls. Sections 7.1–7.5 below are kept for historical/background reference only — see
+> `Design_Admin_Dashboard.md` §4.2/§4.3 for the current implementation.
+
 ### 7.1 Panel Location and Access
 
 The Video Analytics panel is the **4th tab (`analytics`) in the Dashboard right sidebar**, alongside the Cameras / Alerts / Zones tabs. It is not inside the Fullscreen view.
@@ -1186,7 +1196,10 @@ socket.on('face:reidentified', (event: CrossCameraReIdEvent) => {
 | 2-column layout: Left=DetectionPanel / Right=Video *(v2.4)* | ✅ Phase-1 Complete | No tab bar; no Analytics in fullscreen |
 | Video Analytics as Dashboard sidebar 4th tab *(v2.4)* | ✅ Phase-1 Complete | `SidebarTab = 'analytics'`; `App.tsx` sidebar; tab label `t.tabVideoAnalytics` |
 
-### 10.3 Video Analytics Tab (`VideoAnalyticsTab.tsx`)
+### 10.3 Video Analytics Tab (`VideoAnalyticsTab.tsx`) — Removed 2026-07-30
+
+> All rows below describe a component that no longer exists — moved to Admin Dashboard → AI Models.
+> Kept for historical reference only.
 
 | Feature | Status | Notes |
 |---------|--------|-------|
@@ -1362,3 +1375,4 @@ export function useAllDetections(enabledCameraIds: string[]): Map<string, Detect
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for Dashboard Detection Display |
+| 2.6 | 2026-07-30 | LTS Engineering Team | §7/§10.3 Video Analytics Tab marked removed — `VideoAnalyticsTab.tsx` and the sidebar Analytics tab deleted, content moved to Admin Dashboard → AI Models |

@@ -15,7 +15,6 @@ export const tr: Translations = {
   tabCameras: 'Kameralar',
   tabAlerts: 'Uyarılar',
   tabZones: 'Bölgeler',
-  tabVideoAnalytics: 'Analitik',
   tabDetections: 'Tespit',
   tabFaceGallery: 'Yüz Tanıma',
   faceGallerySubtitle: 'Kişileri kaydet ve tanı',
@@ -40,8 +39,6 @@ export const tr: Translations = {
   galleryTypeBlocklist: 'Engel Listesi',
   galleryTypeMissing: 'Kayıp Kişiler',
   missingPersonAlert: 'KAYIP KİŞİ TESPİT EDİLDİ',
-  videoAnalyticsHint: 'Her AI modülünü tüm kameralar için global olarak etkinleştirin veya devre dışı bırakın.',
-  videoAnalyticsFooter: 'Devre dışı bırakılan modüller işlemeyi hemen durdurur. Değişiklikler bir sonraki karede geçerli olur.',
 
   noCameras: 'Henüz kamera eklenmedi.',
   addCamera: 'Kamera Ekle',
@@ -309,12 +306,6 @@ export const tr: Translations = {
 
   waitingForAnalysisData: 'Analiz verisi bekleniyor…',
 
-  vaDisableAllModules: 'Tüm modülleri devre dışı bırak',
-  vaEnableAllAvailable: 'Kullanılabilir tüm modülleri etkinleştir',
-  vaDisableGroup: 'Tüm grubu devre dışı bırak',
-  vaEnableGroup: 'Tüm grubu etkinleştir',
-  vaFireSensitivityHint: 'Daha düşük değer = daha yüksek hassasiyet (daha fazla yanlış pozitif). Varsayılan: 0.35',
-  vaNmsHint: 'Daha düşük değer daha az örtüşen kutu tutar. Varsayılan: 0.45',
 
   accessDeniedTitle: 'Erişim Reddedildi',
   accessDeniedBefore: 'Bu pano yalnızca',

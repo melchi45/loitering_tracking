@@ -356,7 +356,7 @@ npm start
 
 `FIRE_SMOKE_CONF_THRESHOLD` / `FIRE_SMOKE_NMS_THRESHOLD` 환경변수 외에도, analysis 서버 실행 중 **재시작 없이** 대시보드 UI에서 임계값을 실시간으로 변경할 수 있습니다.
 
-**경로:** Dashboard 우측 Analytics 탭 → **🔥 Fire / Smoke Sensitivity** 패널 (접이식)
+**경로:** Admin Dashboard → **AI Models** 탭 → Tracking & Sensitivity Tuning → **🔥 Fire / Smoke Sensitivity** 패널 (접이식) — 2026-07-30부로 옛 사이드바 Analytics 탭에서 이관됨
 
 | 항목 | 값 범위 | 기본값 |
 |---|---|---|
@@ -942,7 +942,7 @@ FIRE_SMOKE_CONF_THRESHOLD=0.20   # 기본값 0.35 → 감도 상향
 
 **원인 3 — analyticsConfig `smoke` 키 비활성**
 
-`/api/analysis/metrics` 응답의 `modules.enabled` 배열에 `fire` 또는 `smoke`가 포함되어 있는지 확인합니다. 포함되지 않았다면 대시보드의 Analytics 탭에서 활성화하세요.
+`/api/analysis/metrics` 응답의 `modules.enabled` 배열에 `fire` 또는 `smoke`가 포함되어 있는지 확인합니다. 포함되지 않았다면 Admin Dashboard → AI Models → Analytics Categories (On/Off)에서 활성화하세요.
 
 ---
 
@@ -1114,3 +1114,4 @@ grep AI_MAX_WIDTH server/.env
 | 1.18 | 2026-07-14 | Active Model Persistence 반영 — §1.4에 Activate/Deactivate 선택이 서버 재시작 후에도 `settings` 테이블(row id `activeModels`)을 통해 유지됨을 안내, 저장된 모델 파일 삭제/카탈로그 제거 시 안전 폴백 동작 및 범위(pipelineManager 로컬 카메라 경로는 미포함) 명시 — [Design_AI_Model_Catalog.md §11](../design/Design_AI_Model_Catalog.md#11-active-model-persistence-server-restart-survival) 참조 |
 | 1.19 | 2026-07-15 | 섹션 9.13/9.14/9.15 추가 — Analysis Server Dashboard 3종 버그 수정: (1) Currently Analyzing/Loaded AI Models 데이터 소스 불일치 및 Age/Gender 모델 누락 수정, (2) `/frame` 핸들러의 behaviorEngine 결과가 다운스트림(소켓 emit·detectionTracks·스냅샷)에 반영되지 않던 문제 수정, (3) `faceSearchSync.js`에 갤러리 타입별 매칭 집계(`matches`) 전달 추가 — analysis 서버 `GET /api/analysis/metrics`가 `faceMatches` 필드로 Missing/VIP/Blocklist/General 카운트 반환 |
 | 1.20 | 2026-07-15 | 섹션 9.16/9.17 추가 — (1) analysis 서버 `SNAPSHOT_MAX_DIMENSION`이 streaming 서버 `AI_MAX_WIDTH`(기본 640→960 상향)에 의해 실질적으로 상한되는 문제 문서화 및 기본값 조정, 상세는 `docs/design/Design_RTSP_Capture_Backend.md` §9.2, (2) `pipelineManager.js` `_processRemoteResult()`의 streaming 모드 전용 `ctx._trackMeta` 누적 코드가 `estimatedAge`/`estimatedGender`를 누락시켜 Fullscreen DETECTION timeline Person Detail에 Age/Gender가 표시되지 않던 결함 수정 |
+| 1.21 | 2026-07-30 | §5.6 및 9장 경로 정정 — Dashboard 우측 Analytics 탭(`VideoAnalyticsTab.tsx`, 삭제됨)이 Admin Dashboard → AI Models로 이관됨에 따라 Fire/Smoke Sensitivity 패널·카테고리 활성화 경로 안내 갱신 |

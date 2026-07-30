@@ -15,7 +15,6 @@ export const id: Translations = {
   tabCameras: 'Kamera',
   tabAlerts: 'Peringatan',
   tabZones: 'Zona',
-  tabVideoAnalytics: 'Analitik',
   tabDetections: 'Deteksi',
   tabFaceGallery: 'Pengenal Wajah',
   faceGallerySubtitle: 'Daftarkan dan kenali orang',
@@ -40,8 +39,6 @@ export const id: Translations = {
   galleryTypeBlocklist: 'Daftar Blokir',
   galleryTypeMissing: 'Orang Hilang',
   missingPersonAlert: 'ORANG HILANG TERDETEKSI',
-  videoAnalyticsHint: 'Aktifkan atau nonaktifkan setiap modul AI secara global untuk semua kamera.',
-  videoAnalyticsFooter: 'Modul yang dinonaktifkan segera berhenti memproses. Perubahan berlaku pada frame berikutnya.',
 
   noCameras: 'Belum ada kamera yang ditambahkan.',
   addCamera: 'Tambah Kamera',
@@ -309,12 +306,6 @@ export const id: Translations = {
 
   waitingForAnalysisData: 'Menunggu data analisis…',
 
-  vaDisableAllModules: 'Nonaktifkan semua modul',
-  vaEnableAllAvailable: 'Aktifkan semua modul yang tersedia',
-  vaDisableGroup: 'Nonaktifkan seluruh grup',
-  vaEnableGroup: 'Aktifkan seluruh grup',
-  vaFireSensitivityHint: 'Nilai lebih rendah = sensitivitas lebih tinggi (lebih banyak false positive). Default: 0.35',
-  vaNmsHint: 'Nilai lebih rendah menyimpan lebih sedikit kotak yang tumpang tindih. Default: 0.45',
 
   accessDeniedTitle: 'Akses Ditolak',
   accessDeniedBefore: 'Dasbor ini hanya dapat diakses dari akun',

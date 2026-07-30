@@ -1,7 +1,7 @@
 # RFP — Mobile Layout (LTS2026-MOB)
 
-**Document version:** 1.0  
-**Date:** 2026-05-20  
+**Document version:** 1.1  
+**Date:** 2026-07-30  
 **Status:** ✅ Implemented
 
 ---
@@ -62,7 +62,7 @@ When switching tabs, the corresponding content occupies the entire area.
 | 🔔 Alerts | AlertPanel fullscreen | `AlertPanel` |
 | 🗺 Zones | Zone guidance message + double-click camera selection hint | Existing Zone guidance JSX |
 | 👁 Detections | Camera selection dropdown + DetectionPanel | `DetectionPanel` |
-| 🤖 Analytics | VideoAnalyticsTab fullscreen | `VideoAnalyticsTab` |
+| ~~🤖 Analytics~~ | ~~VideoAnalyticsTab fullscreen~~ (탭 및 컴포넌트 2026-07-30 제거, Admin Dashboard → AI Models로 이관 — `Design_Dashboard_Layout.md` §3.1) | ~~`VideoAnalyticsTab`~~ |
 
 ### 2.4 Bottom Navigation Bar
 
@@ -217,7 +217,7 @@ useEffect(() => {
 | `CameraList` | `CameraList.tsx` | Scrollable list in bottom area of Cameras tab |
 | `AlertPanel` | `AlertPanel.tsx` | Alerts tab fullscreen |
 | `DetectionPanel` | `FullscreenCameraView.tsx` (export) | Detections tab fullscreen |
-| `VideoAnalyticsTab` | `VideoAnalyticsTab.tsx` | Analytics tab fullscreen |
+| ~~`VideoAnalyticsTab`~~ | ~~`VideoAnalyticsTab.tsx`~~ | Removed 2026-07-30 — moved to Admin Dashboard → AI Models |
 | `FullscreenCameraView` | `FullscreenCameraView.tsx` | Overlay on double tap |
 | `LayoutPicker` | `App.tsx` (inline) | ❌ Hidden on mobile (simplified) |
 | Settings Modal | `App.tsx` (inline) | Same modal on settings icon click |
@@ -275,7 +275,7 @@ State is preserved when switching layouts.
 | Alerts tab (mobile) | ✅ | AlertPanel fullscreen reuse |
 | Zones tab (mobile) | ✅ | Existing guidance JSX reuse |
 | Detections tab (mobile) | ✅ | Dropdown + DetectionPanel reuse |
-| Analytics tab (mobile) | ✅ | VideoAnalyticsTab reuse |
+| Analytics tab (mobile) | ❌ Removed 2026-07-30 | Moved to Admin Dashboard → AI Models |
 | Fullscreen Overlay (mobile) | ✅ | `flex-col` vertical split (60/40) |
 | Desktop layout | ✅ | Existing behavior preserved (≥ 768px) |
 
@@ -286,3 +286,4 @@ State is preserved when switching layouts.
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — RFP for Mobile Layout |
+| 1.1 | 2026-07-30 | LTS Engineering Team | Analytics tab (`VideoAnalyticsTab`) removed from mobile bottom nav — moved to Admin Dashboard → AI Models |

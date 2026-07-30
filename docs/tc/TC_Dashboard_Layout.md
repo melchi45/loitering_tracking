@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | TC-DLY-001 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
-| **Date** | 2026-05-27 |
+| **Date** | 2026-07-30 |
 | **Parent SRS** | srs/SRS_Dashboard_Layout.md |
 | **Test Scripts** | test/e2e/dashboard_e2e.test.js (Phase-3 placeholder) |
 
@@ -120,11 +120,11 @@
 
 ### TC-B-003 — Sidebar Tabs (Mode-Dependent)
 - **Input:** Desktop sidebar (`SERVER_MODE`별 확인)
-- **Expected:**
-  - combined: Cameras, Alerts, Zones, Detections, Analytics, Face Gallery
-  - streaming: Cameras, Alerts, Zones, Detections, Face Gallery (Analytics hidden)
-  - analysis: Analytics only
-- **Acceptance:** 각 모드별 탭 노출 정책 일치; unacknowledged alert badge visible when count > 0
+- **Expected:** (2026-07-30 — Analytics 탭 전 모드에서 제거됨)
+  - combined: Cameras, Alerts, Zones, Detections, Face Gallery
+  - streaming: Cameras, Alerts, Zones, Detections, Face Gallery
+  - analysis: Detections only
+- **Acceptance:** 각 모드별 탭 노출 정책 일치; unacknowledged alert badge visible when count > 0; Analytics 탭이 어느 모드에서도 렌더링되지 않음
 
 ---
 
@@ -174,7 +174,7 @@
 
   > Note: SRS_Dashboard_Layout specifies 6 tabs but SRS_Mobile_Layout specifies 5; defer to Mobile_Layout SRS for tab count.
 
-- **Acceptance:** Bottom bar present and fixed at bottom; 탭 개수는 mode-dependent 정책(analysis에서 Analytics 단일 탭, streaming에서 Analytics 제거)을 따른다
+- **Acceptance:** Bottom bar present and fixed at bottom; 탭 개수는 mode-dependent 정책을 따른다 (2026-07-30 — Analytics 탭은 전 모드에서 제거됨, analysis 모드는 Detections 단일 탭)
 
 ### TC-E-003 — Mobile Cameras Tab Split
 - **Input:** Mobile viewport; Cameras tab active
@@ -298,3 +298,4 @@ Group A (shell) → Group B (sidebar) → Group C (grid) → Group D (fullscreen
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for Dashboard Layout |
+| 1.1 | 2026-07-30 | LTS Engineering Team | TC-B-003/TC-E-002 updated — Analytics tab removed from all modes (content moved to Admin Dashboard → AI Models) |

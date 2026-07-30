@@ -1,8 +1,8 @@
 ---
 **Document:** SRS_Admin_Dashboard  
-**Version:** 1.3  
+**Version:** 1.4  
 **Status:** Draft  
-**Date:** 2026-07-10  
+**Date:** 2026-07-30  
 **Child Design:** [Design_Admin_Dashboard](../design/Design_Admin_Dashboard.md)  
 **Child TC:** [TC_Admin_Dashboard](../tc/TC_Admin_Dashboard.md)  
 **Related SRS:** [SRS_AI_Model_Catalog](SRS_AI_Model_Catalog.md) · [SRS_User_Authentication](SRS_User_Authentication.md)  
@@ -18,7 +18,7 @@ This SRS specifies software requirements for the LTS-2026 Admin Dashboard (`Admi
 
 Admin Dashboard provides management sections accessible via left sidebar navigation:
 - Users — account management
-- AI Models — full AI model catalog (YOLO detector + face/PPE/fire-smoke/cloth-PAR/human-parsing/appearance-reid) and AI module control
+- AI Models — full AI model catalog (YOLO detector + face/PPE/fire-smoke/cloth-PAR/human-parsing/appearance-reid), Analytics category on/off (full COCO 80-class catalog, merged 2026-07-30 from the former analysis-mode sidebar Analytics tab), and tracking/sensitivity tuning — three concerns kept in clearly separate sub-sections
 - WebRTC / ICE — STUN/TURN server configuration and ICE connectivity test (relocated from the per-dashboard Settings modal)
 - ONVIF — event type registry
 - Audit Log — activity history
@@ -67,16 +67,34 @@ Admin Dashboard provides management sections accessible via left sidebar navigat
 | FR-AD-025 | Only the `Human Parsing` and `Appearance Re-ID` family tables shall display a "Proposed" badge; Face Detection, Face Recognition, PPE Detection, Fire & Smoke Detection, and Cloth Attribute (PAR) shall not, since they are production models already required or optionally enabled by the pipeline. |
 | FR-AD-026 | Each family's active/downloading/converting state shall be independent of every other family's — activating a model in one family shall not change the displayed active model of any other family. |
 
-### 4.2 AI Analysis Module Toggles
+### 4.2 Analytics Categories (On/Off)
+
+> **2026-07-30**: This sub-section absorbs the full category catalog formerly exclusive to the
+> analysis-mode sidebar's "Analytics" tab (`VideoAnalyticsTab.tsx`, now deleted) — see
+> FR-AD-030 for the expanded group list. It remains a **distinct concern from Model Selection
+> (§4.1/4.1b)**: this toggle controls whether a category runs at all, not which ONNX model
+> backs it — a model may be Active while its category is Off (pre-loaded but idle), and vice versa.
 
 | ID | Requirement |
 |---|---|
-| FR-AD-030 | The AI Models section shall show module enable/disable toggles for: Human, Vehicle, Face, Color, Cloth, Mask, Hat, Fire, Smoke. |
+| FR-AD-030 | The AI Models section shall show category enable/disable toggles grouped as: Core Detection (Human, Vehicle); AI Attributes (Face, Color, Cloth, Human Parsing, Age Estimation, Gender Classification, Mask, Hat, Glasses, Sunglasses); Hazard Detection (Fire, Smoke); Accessories & Equipment; Indoor Objects; Animals; Outdoor Objects; Food & Drink; Home & Appliances — the last six groups being the full COCO 80-class catalog requiring no additional model file. |
 | FR-AD-031 | Toggle state shall be loaded from `GET /api/analytics/config` and capability availability from `GET /api/capabilities`. |
-| FR-AD-032 | Toggling a module shall call `PUT /api/analytics/config { [moduleId]: boolean }`. |
-| FR-AD-033 | Modules with `capStatus === 'failed'` or `'missing'` shall show a status badge and have the toggle disabled. |
-| FR-AD-034 | Modules with `capStatus === 'pending'` shall show "Phase-2" badge and have the toggle disabled. |
-| FR-AD-035 | Each module row shall show: label, description, required model file (if applicable), toggle switch. |
+| FR-AD-032 | Toggling a category shall call `PUT /api/analytics/config { [categoryId]: boolean }`. |
+| FR-AD-033 | Categories with `capStatus === 'failed'` or `'missing'` shall show a status badge and have the toggle disabled. |
+| FR-AD-034 | Categories with `capStatus === 'pending'`, or with no server-provided `capStatus` and a client-side `pending` flag (e.g. Glasses, Sunglasses), shall show a "Phase-2" badge and have the toggle disabled. |
+| FR-AD-035 | Each category row shall show: label, description (if applicable), required model file (if applicable), toggle switch. |
+
+### 4.3 Tracking & Sensitivity Tuning
+
+> **2026-07-30 new**: also merged from the former sidebar Analytics tab. These are numeric
+> parameters — neither a model selection nor an on/off toggle — kept in their own sub-section.
+
+| ID | Requirement |
+|---|---|
+| FR-AD-036 | The AI Models section shall provide a collapsible "Appearance Weights" panel with five sliders (IoU, Face, Color, Cloth, Accessories weights, `iouWeight`/`faceWeight`/`colorWeight`/`clothWeight`/`accWeight`) plus a proportional bar-chart visualization, backed by `GET/PUT /api/tracker/config`. |
+| FR-AD-037 | The AI Models section shall provide a collapsible "Fire / Smoke Sensitivity" panel with Conf Threshold and NMS IoU Threshold sliders, backed by `GET/PATCH /api/analysis/config/fire-smoke`; the panel shall not render when the fire/smoke model is unavailable (`available === false` or the endpoint 404s). |
+| FR-AD-038 | The AI Models section shall provide a collapsible "Tracker / Kalman Settings" panel with eight sliders (`maxAge`, `iouThreshold`, `fastSpeedThreshold`, `fastQScale`, `slowSpeedThreshold`, `slowQScale`, `occlusionQScale`, `measurementNoise`), backed by `GET/PUT /api/tracker/config` and `POST /api/tracker/config/reset`. |
+| FR-AD-039 | All three tuning panels shall auto-save slider changes after a 300ms debounce, and shall provide a "Reset Defaults" button. |
 
 ## 5. Functional Requirements — Users Section
 
@@ -131,3 +149,4 @@ Admin Dashboard provides management sections accessible via left sidebar navigat
 | 1.1 | 2026-06-17 | FR-AD-005 추가 — streaming 모드에서 AI Models 탭 숨김 (`GET /health` serverMode 판별) |
 | 1.2 | 2026-07-09 | §4.1b 신규 — 전체 모델 파일(face/ppe/fire-smoke/cloth-par/human-parsing/appearance-reid) 테이블 요구사항(FR-AD-022~026) 추가, FR-AD-010/015 YOLO26 반영 |
 | 1.3 | 2026-07-10 | FR-AD-004/005 정정(System/Logs 탭 반영, WebRTC/ICE 숨김 조건 추가), §8 신규 — WebRTC/ICE 섹션 요구사항(FR-AD-070~075), §2 Scope에 WebRTC/ICE·System·Server Logs 반영 |
+| 1.4 | 2026-07-30 | §4.2 "AI Analysis Module Toggles" → "Analytics Categories (On/Off)"로 개편(FR-AD-030 카테고리 목록을 옛 사이드바 Analytics 탭 전체 COCO 80종으로 확장, FR-AD-034 client-side pending 플래그 반영), §4.3 신규 — Tracking & Sensitivity Tuning(FR-AD-036~039, Appearance Weights/Fire-Smoke Sensitivity/Kalman), `VideoAnalyticsTab.tsx` 삭제 반영 |

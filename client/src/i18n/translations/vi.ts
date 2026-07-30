@@ -15,7 +15,6 @@ export const vi: Translations = {
   tabCameras: 'Camera',
   tabAlerts: 'Cảnh báo',
   tabZones: 'Vùng',
-  tabVideoAnalytics: 'Phân tích',
   tabDetections: 'Phát hiện',
   tabFaceGallery: 'Nhan dien khuon mat',
   faceGallerySubtitle: 'Dang ky va nhan dien nguoi',
@@ -40,8 +39,6 @@ export const vi: Translations = {
   galleryTypeBlocklist: 'Danh sach den',
   galleryTypeMissing: 'Nguoi mat tich',
   missingPersonAlert: 'PHAT HIEN NGUOI MAT TICH',
-  videoAnalyticsHint: 'Bật hoặc tắt từng mô-đun AI cho tất cả camera trên toàn cục.',
-  videoAnalyticsFooter: 'Các mô-đun bị tắt sẽ dừng xử lý ngay lập tức. Thay đổi có hiệu lực từ khung hình tiếp theo.',
 
   noCameras: 'Chưa có camera nào được thêm.',
   addCamera: 'Thêm Camera',
@@ -309,12 +306,6 @@ export const vi: Translations = {
 
   waitingForAnalysisData: 'Đang chờ dữ liệu phân tích…',
 
-  vaDisableAllModules: 'Tắt tất cả mô-đun',
-  vaEnableAllAvailable: 'Bật tất cả mô-đun khả dụng',
-  vaDisableGroup: 'Tắt toàn bộ nhóm',
-  vaEnableGroup: 'Bật toàn bộ nhóm',
-  vaFireSensitivityHint: 'Giá trị thấp hơn = độ nhạy cao hơn (tăng dương tính giả). Mặc định: 0.35',
-  vaNmsHint: 'Giá trị thấp hơn giữ lại ít hộp chồng lấn hơn. Mặc định: 0.45',
 
   accessDeniedTitle: 'Truy cập bị từ chối',
   accessDeniedBefore: 'Trang tổng quan này chỉ có thể truy cập từ tài khoản',

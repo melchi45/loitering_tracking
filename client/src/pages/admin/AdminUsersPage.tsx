@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   Users, Bot, Wifi, Radio, ClipboardList, BarChart3, Monitor,
   RotateCcw, Check, X, Download, FlaskConical, AlertTriangle, Loader2, Plug,
+  Flame, Settings,
   type LucideIcon,
 } from 'lucide-react';
 import { useAuthStore } from '../../stores/authStore';
@@ -96,7 +97,7 @@ interface ModelCatalogEntry {
   license?: string;
 }
 
-interface AdminModuleItem  { id: string; label: string; desc: string; model?: string; }
+interface AdminModuleItem  { id: string; label: string; desc?: string; model?: string; pending?: boolean; }
 interface AdminModuleGroup { groupKey: string; label: string; items: AdminModuleItem[]; }
 
 const ADMIN_MODULE_GROUPS: AdminModuleGroup[] = [
@@ -120,6 +121,8 @@ const ADMIN_MODULE_GROUPS: AdminModuleGroup[] = [
       { id: 'genderClassification', label: 'Gender Classification (Proposed)', desc: 'Classify person gender — InsightFace GenderAge or ViT Gender Classifier, pick one below', model: 'genderage.onnx / vit_gender_classifier.onnx' },
       { id: 'mask',  label: 'Mask Detection',   desc: 'PPE mask compliance',    model: 'yolov8m_ppe.onnx' },
       { id: 'hat',   label: 'Helmet Detection', desc: 'PPE safety helmet',      model: 'yolov8m_ppe.onnx' },
+      { id: 'glasses',    label: 'Glasses',    desc: 'Worn accessory classifier — Phase-2', pending: true },
+      { id: 'sunglasses', label: 'Sunglasses', desc: 'Worn accessory classifier — Phase-2', pending: true },
     ],
   },
   {
@@ -130,6 +133,185 @@ const ADMIN_MODULE_GROUPS: AdminModuleGroup[] = [
       { id: 'smoke', label: 'Smoke Detection', desc: 'Early smoke',     model: 'yolov8s_fire_smoke.onnx' },
     ],
   },
+  // ── Below: merged from the analysis-mode sidebar's former "Analytics" tab
+  // (VideoAnalyticsTab.tsx, removed 2026-07-30) — plain COCO yolov8n classes,
+  // no extra model required, so no `model` field on any of these items.
+  {
+    groupKey: 'accessories',
+    label: 'Accessories & Equipment',
+    items: [
+      { id: 'backpack',      label: 'Backpack' },
+      { id: 'handbag',       label: 'Handbag' },
+      { id: 'suitcase',      label: 'Suitcase' },
+      { id: 'umbrella',      label: 'Umbrella' },
+      { id: 'tie',           label: 'Tie' },
+      { id: 'sportsball',    label: 'Sports Ball' },
+      { id: 'frisbee',       label: 'Frisbee' },
+      { id: 'skis',          label: 'Skis' },
+      { id: 'snowboard',     label: 'Snowboard' },
+      { id: 'baseballbat',   label: 'Baseball Bat' },
+      { id: 'baseballglove', label: 'Baseball Glove' },
+      { id: 'skateboard',    label: 'Skateboard' },
+      { id: 'surfboard',     label: 'Surfboard' },
+      { id: 'tennisracket',  label: 'Tennis Racket' },
+      { id: 'kite',          label: 'Kite' },
+      { id: 'remote',        label: 'Remote' },
+      { id: 'scissors',      label: 'Scissors' },
+      { id: 'fork',          label: 'Fork' },
+      { id: 'knife',         label: 'Knife' },
+      { id: 'spoon',         label: 'Spoon' },
+    ],
+  },
+  {
+    groupKey: 'indoor',
+    label: 'Indoor Objects',
+    items: [
+      { id: 'chair',       label: 'Chair' },
+      { id: 'couch',       label: 'Couch/Sofa' },
+      { id: 'diningtable', label: 'Desk/Table' },
+      { id: 'laptop',      label: 'Laptop' },
+      { id: 'tv',          label: 'TV/Monitor' },
+      { id: 'keyboard',    label: 'Keyboard' },
+      { id: 'mouse',       label: 'Mouse' },
+      { id: 'cellphone',   label: 'Phone' },
+      { id: 'clock',       label: 'Clock' },
+      { id: 'cup',         label: 'Cup' },
+      { id: 'bottle',      label: 'Bottle' },
+      { id: 'book',        label: 'Book' },
+    ],
+  },
+  {
+    groupKey: 'animals',
+    label: 'Animals',
+    items: [
+      { id: 'bird',     label: 'Bird' },
+      { id: 'cat',      label: 'Cat' },
+      { id: 'dog',      label: 'Dog' },
+      { id: 'horse',    label: 'Horse' },
+      { id: 'sheep',    label: 'Sheep' },
+      { id: 'cow',      label: 'Cow' },
+      { id: 'elephant', label: 'Elephant' },
+      { id: 'bear',     label: 'Bear' },
+      { id: 'zebra',    label: 'Zebra' },
+      { id: 'giraffe',  label: 'Giraffe' },
+    ],
+  },
+  {
+    groupKey: 'outdoor',
+    label: 'Outdoor Objects',
+    items: [
+      { id: 'bench',        label: 'Bench' },
+      { id: 'trafficlight', label: 'Traffic Light' },
+      { id: 'firehydrant',  label: 'Fire Hydrant' },
+      { id: 'stopsign',     label: 'Stop Sign' },
+      { id: 'parkingmeter', label: 'Parking Meter' },
+      { id: 'airplane',     label: 'Airplane' },
+      { id: 'boat',         label: 'Boat' },
+      { id: 'train',        label: 'Train' },
+    ],
+  },
+  {
+    groupKey: 'food',
+    label: 'Food & Drink',
+    items: [
+      { id: 'bowl',      label: 'Bowl' },
+      { id: 'wineglass', label: 'Wine Glass' },
+      { id: 'banana',    label: 'Banana' },
+      { id: 'apple',     label: 'Apple' },
+      { id: 'sandwich',  label: 'Sandwich' },
+      { id: 'orange',    label: 'Orange' },
+      { id: 'broccoli',  label: 'Broccoli' },
+      { id: 'carrot',    label: 'Carrot' },
+      { id: 'hotdog',    label: 'Hot Dog' },
+      { id: 'pizza',     label: 'Pizza' },
+      { id: 'donut',     label: 'Donut' },
+      { id: 'cake',      label: 'Cake' },
+    ],
+  },
+  {
+    groupKey: 'appliances',
+    label: 'Home & Appliances',
+    items: [
+      { id: 'bed',          label: 'Bed' },
+      { id: 'toilet',       label: 'Toilet' },
+      { id: 'sink',         label: 'Sink' },
+      { id: 'microwave',    label: 'Microwave' },
+      { id: 'oven',         label: 'Oven' },
+      { id: 'toaster',      label: 'Toaster' },
+      { id: 'refrigerator', label: 'Refrigerator' },
+      { id: 'pottedplant',  label: 'Potted Plant' },
+      { id: 'teddybear',    label: 'Teddy Bear' },
+      { id: 'hairdrier',    label: 'Hair Drier' },
+      { id: 'toothbrush',   label: 'Toothbrush' },
+    ],
+  },
+];
+
+// ── Tuning constants (merged from the former sidebar Analytics tab) ─────────
+
+interface FireSmokeConfig { confThreshold: number; nmsThreshold: number; }
+const FIRE_SMOKE_DEFAULTS: FireSmokeConfig = { confThreshold: 0.35, nmsThreshold: 0.45 };
+
+interface KalmanConfig {
+  maxAge:             number;
+  iouThreshold:       number;
+  fastSpeedThreshold: number;
+  fastQScale:         number;
+  slowSpeedThreshold: number;
+  slowQScale:         number;
+  occlusionQScale:    number;
+  measurementNoise:   number;
+  iouWeight:          number;
+  faceWeight:         number;
+  colorWeight:        number;
+  clothWeight:        number;
+  accWeight:          number;
+}
+
+const KALMAN_DEFAULTS: KalmanConfig = {
+  maxAge:             90,
+  iouThreshold:       0.25,
+  fastSpeedThreshold: 30,
+  fastQScale:         4.0,
+  slowSpeedThreshold: 5,
+  slowQScale:         0.5,
+  occlusionQScale:    3.0,
+  measurementNoise:   10,
+  iouWeight:          0.60,
+  faceWeight:         0.20,
+  colorWeight:        0.12,
+  clothWeight:        0.05,
+  accWeight:          0.03,
+};
+
+const KALMAN_SLIDERS: Array<{
+  key: keyof KalmanConfig;
+  label: string;
+  hint: string;
+  min: number; max: number; step: number; unit: string;
+}> = [
+  { key: 'maxAge',             label: 'Track Max Age',         hint: 'Frames before lost track is deleted (90=9s @ 10fps)',          min: 10,  max: 300, step: 10,   unit: ' fr'   },
+  { key: 'iouThreshold',       label: 'IoU Match Threshold',   hint: 'Min combined score for re-association (lower = more stable IDs)', min: 0.1, max: 0.6, step: 0.05, unit: '' },
+  { key: 'fastSpeedThreshold', label: 'Fast Speed Threshold',  hint: 'Speed above = fast motion',                                    min: 5,   max: 100, step: 1,    unit: ' px/f' },
+  { key: 'fastQScale',         label: 'Fast Q Scale',          hint: 'Q × when fast (trust measurement)',                            min: 1.0, max: 10,  step: 0.5,  unit: '×'     },
+  { key: 'slowSpeedThreshold', label: 'Slow Speed Threshold',  hint: 'Speed below = stationary',                                     min: 1,   max: 20,  step: 1,    unit: ' px/f' },
+  { key: 'slowQScale',         label: 'Slow Q Scale',          hint: 'Q × when still (tighten)',                                     min: 0.1, max: 1.0, step: 0.05, unit: '×'     },
+  { key: 'occlusionQScale',    label: 'Occlusion Q Scale',     hint: 'Q × during occlusion',                                         min: 1.0, max: 10,  step: 0.5,  unit: '×'     },
+  { key: 'measurementNoise',   label: 'Measurement Noise (R)', hint: 'R↑ = trust prediction more, measurements less',               min: 1,   max: 50,  step: 1,    unit: ''      },
+];
+
+const APPEARANCE_SLIDERS: Array<{
+  key: keyof KalmanConfig;
+  label: string;
+  hint: string;
+  color: string;
+  min: number; max: number; step: number;
+}> = [
+  { key: 'iouWeight',   label: 'IoU (λ_iou)',        hint: 'Spatial overlap — always active, baseline cue',             color: 'accent-blue-400',   min: 0.0, max: 1.0, step: 0.05 },
+  { key: 'faceWeight',  label: 'Face (λ_face)',      hint: 'ArcFace cosine sim — active when face model is enabled',   color: 'accent-green-400',  min: 0.0, max: 1.0, step: 0.05 },
+  { key: 'colorWeight', label: 'Color (λ_color)',    hint: 'Upper/lower body RGB distance — fast, no model needed',    color: 'accent-yellow-400', min: 0.0, max: 1.0, step: 0.05 },
+  { key: 'clothWeight', label: 'Cloth (λ_cloth)',    hint: 'PAR cloth-type match — active when openpar.onnx is loaded',color: 'accent-orange-400', min: 0.0, max: 1.0, step: 0.05 },
+  { key: 'accWeight',   label: 'Accessories (λ_acc)', hint: 'Hat/Mask presence — active when PPE model is enabled',    color: 'accent-purple-400', min: 0.0, max: 1.0, step: 0.05 },
 ];
 
 // Non-detector model families rendered below the YOLO Detection Model table.
@@ -1050,6 +1232,19 @@ function AiModelsSection() {
 
   const [loadError, setLoadError] = useState(false);
 
+  // Tracking & Sensitivity Tuning — merged from the former sidebar Analytics tab
+  const [kalman,          setKalman]          = useState<KalmanConfig>({ ...KALMAN_DEFAULTS });
+  const [kalmanOpen,      setKalmanOpen]      = useState(false);
+  const [kalmanSaving,    setKalmanSaving]    = useState(false);
+  const [appearOpen,      setAppearOpen]      = useState(false);
+  const kalmanDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const [fireSmokeConfig,    setFireSmokeConfig]    = useState<FireSmokeConfig>({ ...FIRE_SMOKE_DEFAULTS });
+  const [fireSmokeOpen,      setFireSmokeOpen]      = useState(false);
+  const [fireSmokeSaving,    setFireSmokeSaving]    = useState(false);
+  const [fireSmokeAvailable, setFireSmokeAvailable] = useState(false);
+  const fireSmokeDebounce = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   const fetchCatalog = useCallback(async () => {
     try {
       const r = await fetch('/api/analysis/models');
@@ -1071,15 +1266,86 @@ function AiModelsSection() {
     Promise.all([
       fetch('/api/analytics/config').then(r => r.json()),
       fetch('/api/capabilities').then(r => r.json()),
+      fetch('/api/tracker/config').then(r => r.json()),
+      fetch('/api/analysis/config/fire-smoke').then(r => r.ok ? r.json() : null).catch(() => null),
     ])
-      .then(([cfg, cap]) => {
+      .then(([cfg, cap, kfg, fsCfg]) => {
         if (cfg.success) setEnabled(cfg.data);
         if (cap.ai)      setCaps(cap.ai);
         if (cap.status)  setCapStatus(cap.status);
+        if (kfg.success) setKalman(prev => ({ ...prev, ...kfg.data }));
+        if (fsCfg) {
+          setFireSmokeAvailable(fsCfg.available !== false);
+          setFireSmokeConfig({
+            confThreshold: fsCfg.confThreshold ?? FIRE_SMOKE_DEFAULTS.confThreshold,
+            nmsThreshold:  fsCfg.nmsThreshold  ?? FIRE_SMOKE_DEFAULTS.nmsThreshold,
+          });
+        }
       })
       .catch(() => setLoadError(true));
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [fetchCatalog]);
+
+  const handleKalmanChange = (key: keyof KalmanConfig, value: number) => {
+    const next = { ...kalman, [key]: value };
+    setKalman(next);
+    if (kalmanDebounce.current) clearTimeout(kalmanDebounce.current);
+    kalmanDebounce.current = setTimeout(async () => {
+      setKalmanSaving(true);
+      try {
+        await fetch('/api/tracker/config', {
+          method:  'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ [key]: value }),
+        });
+      } finally {
+        setKalmanSaving(false);
+      }
+    }, 300);
+  };
+
+  const resetKalman = async () => {
+    setKalmanSaving(true);
+    try {
+      const res = await fetch('/api/tracker/config/reset', { method: 'POST' });
+      const { data } = await res.json();
+      setKalman(data);
+    } finally {
+      setKalmanSaving(false);
+    }
+  };
+
+  const handleFireSmokeChange = (key: keyof FireSmokeConfig, value: number) => {
+    const next = { ...fireSmokeConfig, [key]: value };
+    setFireSmokeConfig(next);
+    if (fireSmokeDebounce.current) clearTimeout(fireSmokeDebounce.current);
+    fireSmokeDebounce.current = setTimeout(async () => {
+      setFireSmokeSaving(true);
+      try {
+        await fetch('/api/analysis/config/fire-smoke', {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ [key]: value }),
+        });
+      } finally {
+        setFireSmokeSaving(false);
+      }
+    }, 300);
+  };
+
+  const resetFireSmoke = async () => {
+    setFireSmokeSaving(true);
+    try {
+      await fetch('/api/analysis/config/fire-smoke', {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify(FIRE_SMOKE_DEFAULTS),
+      });
+      setFireSmokeConfig({ ...FIRE_SMOKE_DEFAULTS });
+    } finally {
+      setFireSmokeSaving(false);
+    }
+  };
 
   const startPolling = () => {
     if (pollRef.current) return;
@@ -1159,6 +1425,15 @@ function AiModelsSection() {
 
       {loadError && <ErrorBar msg="Failed to load AI configuration. Is the analysis server running?" />}
       {dlError   && <ErrorBar msg={dlError} />}
+
+      {/* ── Model Selection (Active/Deactivate) — which ONNX model backs each
+           family. Kept structurally separate from "Analytics Categories" below:
+           a model can be Active here while its category is toggled Off there
+           (e.g. pre-load a model without running it yet), and vice versa. ── */}
+      <SectionHeader
+        title="Model Selection (Active / Deactivate)"
+        subtitle="Choose which ONNX model backs each detection/attribute family — independent of whether that category is enabled below"
+      />
 
       {/* ── YOLO Detection Model Catalog ── */}
       <div>
@@ -1422,13 +1697,17 @@ function AiModelsSection() {
         );
       })}
 
-      {/* ── AI Module Enable / Disable ── */}
-      <div>
-        <h3 className="text-sm font-semibold text-white mb-3 flex items-center gap-2">
-          <span className="text-green-400">◈</span>
-          AI Analysis Modules
-        </h3>
-
+      {/* ── Analytics Categories (On/Off) — separate from Model Selection above:
+           this controls whether a category is analyzed at all, not which ONNX
+           model backs it. Merged 2026-07-30 from the analysis-mode sidebar's
+           former "Analytics" tab (VideoAnalyticsTab.tsx, now removed) so every
+           category — including plain COCO classes that need no extra model —
+           is configurable from one place. ── */}
+      <div className="border-t border-gray-800 pt-8">
+        <SectionHeader
+          title="Analytics Categories (On/Off)"
+          subtitle="Enable or disable whole detection categories globally for all cameras — independent of which model backs each family above"
+        />
         <div className="space-y-4">
           {ADMIN_MODULE_GROUPS.map(group => (
             <div key={group.groupKey} className="border border-gray-800 rounded-lg overflow-hidden">
@@ -1438,7 +1717,7 @@ function AiModelsSection() {
               <div className="divide-y divide-gray-800/60">
                 {group.items.map(item => {
                   const available = caps[item.id] !== false;
-                  const st        = capStatus[item.id] ?? '';
+                  const st        = capStatus[item.id] ?? (item.pending ? 'pending' : '');
                   const isOn      = enabled[item.id] === true;
                   const isSaving  = modSaving === item.id;
                   const isFailed  = st === 'failed' || st === 'missing';
@@ -1488,9 +1767,202 @@ function AiModelsSection() {
         </div>
 
         <p className="mt-3 text-[10px] text-gray-600">
-          Full module list (COCO 80-class accessories, animals, indoor objects) is available in the
-          Analytics panel (left sidebar → 🤖 Analytics tab).
+          Disabled categories stop processing immediately. Changes take effect on the next video frame.
         </p>
+      </div>
+
+      {/* ── Tracking & Sensitivity Tuning — numeric parameters, neither a model
+           selection nor an on/off toggle. Merged 2026-07-30 from the same
+           former sidebar Analytics tab. ── */}
+      <div className="border-t border-gray-800 pt-8">
+        <SectionHeader
+          title="Tracking & Sensitivity Tuning"
+          subtitle="Cross-camera Re-ID weighting, ByteTrack/Kalman motion parameters, and fire/smoke detection sensitivity"
+        />
+
+        <div className="space-y-4">
+          {/* Appearance Weights */}
+          <div className="border border-gray-800 rounded-lg overflow-hidden">
+            <button
+              onClick={() => setAppearOpen(prev => !prev)}
+              className="flex items-center justify-between w-full px-4 py-2 bg-gray-900 border-b border-gray-800 hover:bg-gray-900/70"
+            >
+              <span className="text-xs font-bold text-gray-300">◈ Appearance Weights (Cross-Camera Re-ID)</span>
+              <span className="text-xs text-gray-500">{appearOpen ? '▲' : '▼'}</span>
+            </button>
+            {appearOpen && (
+              <div className="p-4 space-y-3">
+                <div className="space-y-1.5 pb-3 border-b border-gray-800">
+                  {APPEARANCE_SLIDERS.map(s => {
+                    const total = APPEARANCE_SLIDERS.reduce((sum, x) => sum + (kalman[x.key] as number), 0);
+                    const pct   = total > 0 ? Math.round(((kalman[s.key] as number) / total) * 100) : 0;
+                    const barColors: Record<string, string> = {
+                      'accent-blue-400':   'bg-blue-500',
+                      'accent-green-400':  'bg-green-500',
+                      'accent-yellow-400': 'bg-yellow-500',
+                      'accent-orange-400': 'bg-orange-500',
+                      'accent-purple-400': 'bg-purple-500',
+                    };
+                    return (
+                      <div key={s.key} className="flex items-center gap-2">
+                        <span className="text-[10px] text-gray-500 w-24 shrink-0">{s.label.split(' ')[0]}</span>
+                        <div className="flex-1 h-1.5 bg-gray-800 rounded-full overflow-hidden">
+                          <div
+                            className={`h-full rounded-full transition-all ${barColors[s.color] ?? 'bg-gray-500'}`}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <span className="text-[10px] text-gray-400 font-mono w-8 text-right">{pct}%</span>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {APPEARANCE_SLIDERS.map(s => (
+                  <div key={s.key}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <label className="text-xs text-gray-400">{s.label}</label>
+                      <span className="text-xs text-white font-semibold font-mono">
+                        {(kalman[s.key] as number).toFixed(2)}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={s.min} max={s.max} step={s.step}
+                      value={kalman[s.key] as number}
+                      onChange={(e) => handleKalmanChange(s.key, Number(e.target.value))}
+                      className={`w-full h-1 ${s.color}`}
+                    />
+                    <p className="text-[10px] text-gray-600 mt-0.5">{s.hint}</p>
+                  </div>
+                ))}
+
+                <div className="flex items-center gap-2 pt-1 border-t border-gray-800">
+                  <button
+                    onClick={resetKalman}
+                    disabled={kalmanSaving}
+                    className="px-3 py-1 rounded bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-[10px] text-gray-400"
+                  >
+                    Reset Defaults
+                  </button>
+                  {kalmanSaving && <span className="text-[10px] text-purple-400 animate-pulse">saving…</span>}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Fire / Smoke Sensitivity */}
+          {fireSmokeAvailable && (
+            <div className="border border-gray-800 rounded-lg overflow-hidden">
+              <button
+                onClick={() => setFireSmokeOpen(prev => !prev)}
+                className="flex items-center justify-between w-full px-4 py-2 bg-gray-900 border-b border-gray-800 hover:bg-gray-900/70"
+              >
+                <span className="text-xs font-bold text-gray-300 inline-flex items-center gap-1.5">
+                  <Flame className="w-3.5 h-3.5" /> Fire / Smoke Sensitivity
+                </span>
+                <span className="text-xs text-gray-500">{fireSmokeOpen ? '▲' : '▼'}</span>
+              </button>
+              {fireSmokeOpen && (
+                <div className="p-4 space-y-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <label className="text-xs text-gray-400">Conf Threshold</label>
+                      <span className="text-xs text-white font-semibold font-mono">
+                        {fireSmokeConfig.confThreshold.toFixed(2)}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0.05} max={0.95} step={0.05}
+                      value={fireSmokeConfig.confThreshold}
+                      onChange={(e) => handleFireSmokeChange('confThreshold', Number(e.target.value))}
+                      className="w-full accent-orange-500 h-1"
+                    />
+                    <p className="text-[10px] text-gray-600 mt-0.5">Lower = higher sensitivity (more false positives). Default: 0.35</p>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <label className="text-xs text-gray-400">NMS IoU Threshold</label>
+                      <span className="text-xs text-white font-semibold font-mono">
+                        {fireSmokeConfig.nmsThreshold.toFixed(2)}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={0.10} max={0.90} step={0.05}
+                      value={fireSmokeConfig.nmsThreshold}
+                      onChange={(e) => handleFireSmokeChange('nmsThreshold', Number(e.target.value))}
+                      className="w-full accent-orange-500 h-1"
+                    />
+                    <p className="text-[10px] text-gray-600 mt-0.5">Lower keeps fewer overlapping boxes. Default: 0.45</p>
+                  </div>
+
+                  <div className="flex items-center gap-2 pt-1 border-t border-gray-800">
+                    <button
+                      onClick={resetFireSmoke}
+                      disabled={fireSmokeSaving}
+                      className="px-3 py-1 rounded bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-[10px] text-gray-400"
+                    >
+                      Reset Defaults
+                    </button>
+                    {fireSmokeSaving && <span className="text-[10px] text-orange-400 animate-pulse">saving…</span>}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Kalman / Tracker Settings */}
+          <div className="border border-gray-800 rounded-lg overflow-hidden">
+            <button
+              onClick={() => setKalmanOpen(prev => !prev)}
+              className="flex items-center justify-between w-full px-4 py-2 bg-gray-900 border-b border-gray-800 hover:bg-gray-900/70"
+            >
+              <span className="text-xs font-bold text-gray-300 inline-flex items-center gap-1.5">
+                <Settings className="w-3.5 h-3.5" /> Tracker / Kalman Settings
+              </span>
+              <span className="text-xs text-gray-500">{kalmanOpen ? '▲' : '▼'}</span>
+            </button>
+            {kalmanOpen && (
+              <div className="p-4 space-y-3">
+                {KALMAN_SLIDERS.map(s => (
+                  <div key={s.key}>
+                    <div className="flex items-center justify-between mb-0.5">
+                      <label className="text-xs text-gray-400">{s.label}</label>
+                      <span className="text-xs text-white font-semibold font-mono">
+                        {typeof kalman[s.key] === 'number'
+                          ? s.step < 1 ? (kalman[s.key] as number).toFixed(2) : kalman[s.key]
+                          : kalman[s.key]
+                        }{s.unit}
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min={s.min} max={s.max} step={s.step}
+                      value={kalman[s.key] as number}
+                      onChange={(e) => handleKalmanChange(s.key, Number(e.target.value))}
+                      className="w-full accent-purple-500 h-1"
+                    />
+                    <p className="text-[10px] text-gray-600 mt-0.5">{s.hint}</p>
+                  </div>
+                ))}
+
+                <div className="flex items-center gap-2 pt-1 border-t border-gray-800">
+                  <button
+                    onClick={resetKalman}
+                    disabled={kalmanSaving}
+                    className="px-3 py-1 rounded bg-gray-800 hover:bg-gray-700 disabled:opacity-40 text-[10px] text-gray-400"
+                  >
+                    Reset Defaults
+                  </button>
+                  {kalmanSaving && <span className="text-[10px] text-purple-400 animate-pulse">saving…</span>}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );

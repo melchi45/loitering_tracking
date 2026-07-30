@@ -549,7 +549,7 @@ Face quality score should consider:
 
 #### ✅ Phase-1 Complete — Two-Stage Pipeline (SCRFD + ArcFace)
 
-Both models are installed and active. The face recognition toggle in the VideoAnalytics tab enables the full pipeline.
+Both models are installed and active. The face recognition toggle in Admin Dashboard → AI Models (2026-07-30 — formerly the VideoAnalytics tab) enables the full pipeline.
 
 **Installed models:**
 
@@ -566,7 +566,7 @@ Both models are installed and active. The face recognition toggle in the VideoAn
 | `server/src/services/attributePipeline.js` | Calls `getEmbedding()` in parallel for all detected faces; returns embeddings in `detectedFaces` |
 | `server/src/services/pipelineManager.js` | `_assignFaceIds()` — **server-wide shared** cosine-similarity gallery (threshold 0.35, 30s expiry); cross-camera Re-ID with `face:reidentified` event; Global Person Registry (`_personTrajectory`) with canonical alias (P1, P2…); `getCrossCameraReIdStats()` and `getPersonTrajectories()` REST handlers |
 | `server/src/index.js` | `/api/capabilities` — `face: has('scrfd_2.5g.onnx') && has('arcface_w600k_r50.onnx')`; `/api/faces/cross-camera-stats`; `/api/faces/trajectories` |
-| `client/src/components/VideoAnalyticsTab.tsx` | Face item label updated to "Face Recognition"; model field shows both models |
+| `client/src/pages/admin/AdminUsersPage.tsx` (`AiModelsSection`) | Face item label "Face Recognition"; model field shows both models (moved 2026-07-30 from removed `VideoAnalyticsTab.tsx`) |
 | `client/src/components/FullscreenCameraView.tsx` | DetectionRow shows `[faceId]` / `[alias]` and cosine similarity score for face detections |
 | `client/src/components/CameraView.tsx` | Canvas bbox label shows `face [F3]  87%` (alias when available) instead of `face #90001  87%` |
 | `client/src/types/index.ts` | `Detection` interface — added `faceId?: string`, `alias?: string`, `matchScore?: number`, `crossCamera?: { prevCameraId: string }` |

@@ -15,7 +15,6 @@ export const ru: Translations = {
   tabCameras: 'Камеры',
   tabAlerts: 'Оповещения',
   tabZones: 'Зоны',
-  tabVideoAnalytics: 'Аналитика',
   tabDetections: 'Детекция',
   tabFaceGallery: 'Распозн. лиц',
   faceGallerySubtitle: 'Регистрация и распознавание людей',
@@ -40,8 +39,6 @@ export const ru: Translations = {
   galleryTypeBlocklist: 'Чёрный список',
   galleryTypeMissing: 'Пропавшие без вести',
   missingPersonAlert: 'ОБНАРУЖЕН ПРОПАВШИЙ ЧЕЛОВЕК',
-  videoAnalyticsHint: 'Включите или отключите каждый модуль ИИ глобально для всех камер.',
-  videoAnalyticsFooter: 'Отключённые модули сразу прекращают обработку. Изменения вступают в силу на следующем кадре.',
 
   noCameras: 'Камеры не добавлены.',
   addCamera: 'Добавить камеру',
@@ -309,12 +306,6 @@ export const ru: Translations = {
 
   waitingForAnalysisData: 'Ожидание данных анализа…',
 
-  vaDisableAllModules: 'Отключить все модули',
-  vaEnableAllAvailable: 'Включить все доступные модули',
-  vaDisableGroup: 'Отключить всю группу',
-  vaEnableGroup: 'Включить всю группу',
-  vaFireSensitivityHint: 'Меньшее значение = выше чувствительность (больше ложных срабатываний). По умолчанию: 0.35',
-  vaNmsHint: 'Меньшее значение сохраняет меньше перекрывающихся рамок. По умолчанию: 0.45',
 
   accessDeniedTitle: 'Доступ запрещён',
   accessDeniedBefore: 'Эта панель доступна только с учётной записи',

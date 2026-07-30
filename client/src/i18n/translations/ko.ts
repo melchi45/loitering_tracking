@@ -15,7 +15,6 @@ export const ko: Translations = {
   tabCameras: '카메라',
   tabAlerts: '알림',
   tabZones: '구역',
-  tabVideoAnalytics: '분석',
   tabDetections: '감지목록',
   tabFaceGallery: '얼굴 인식',
   faceGallerySubtitle: '인물 등록 및 인식',
@@ -40,8 +39,6 @@ export const ko: Translations = {
   galleryTypeBlocklist: '블랙리스트',
   galleryTypeMissing: '실종자',
   missingPersonAlert: '실종자 감지됨',
-  videoAnalyticsHint: '각 AI 모듈을 전체 카메라에 대해 전역으로 활성화/비활성화합니다.',
-  videoAnalyticsFooter: '비활성화된 모듈은 즉시 처리를 중지합니다. 변경 사항은 다음 비디오 프레임부터 적용됩니다.',
 
   noCameras: '추가된 카메라가 없습니다.',
   addCamera: '카메라 추가',
@@ -321,12 +318,6 @@ export const ko: Translations = {
   waitingForAnalysisData: '분석 데이터 수신 대기 중…',
 
   // Video Analytics tab — module toggle tooltips / hints
-  vaDisableAllModules: '모든 모듈 비활성화',
-  vaEnableAllAvailable: '사용 가능한 모든 모듈 활성화',
-  vaDisableGroup: '그룹 전체 비활성화',
-  vaEnableGroup: '그룹 전체 활성화',
-  vaFireSensitivityHint: '낮을수록 감도 ↑ (false positive 증가). 기본값: 0.35',
-  vaNmsHint: '낮을수록 겹치는 박스 더 적게 유지. 기본값: 0.45',
 
   // Access Denied page
   accessDeniedTitle: '접근 권한 없음',

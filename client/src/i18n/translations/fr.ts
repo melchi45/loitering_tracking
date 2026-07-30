@@ -15,7 +15,6 @@ export const fr: Translations = {
   tabCameras: 'Caméras',
   tabAlerts: 'Alertes',
   tabZones: 'Zones',
-  tabVideoAnalytics: 'Analytique',
   tabDetections: 'Détect',
   tabFaceGallery: 'Reconn. Faciale',
   faceGallerySubtitle: 'Inscrire et reconnaître des personnes',
@@ -40,8 +39,6 @@ export const fr: Translations = {
   galleryTypeBlocklist: 'Liste noire',
   galleryTypeMissing: 'Personnes disparues',
   missingPersonAlert: 'PERSONNE DISPARUE DÉTECTÉE',
-  videoAnalyticsHint: 'Activez ou désactivez chaque module IA globalement pour toutes les caméras.',
-  videoAnalyticsFooter: 'Les modules désactivés arrêtent immédiatement le traitement. Les modifications prennent effet à la prochaine image.',
 
   noCameras: 'Aucune caméra ajoutée.',
   addCamera: 'Ajouter une Caméra',
@@ -309,12 +306,6 @@ export const fr: Translations = {
 
   waitingForAnalysisData: 'En attente des données d\'analyse…',
 
-  vaDisableAllModules: 'Désactiver tous les modules',
-  vaEnableAllAvailable: 'Activer tous les modules disponibles',
-  vaDisableGroup: 'Désactiver le groupe entier',
-  vaEnableGroup: 'Activer le groupe entier',
-  vaFireSensitivityHint: 'Plus la valeur est basse, plus la sensibilité est élevée (plus de faux positifs). Par défaut : 0,35',
-  vaNmsHint: 'Plus la valeur est basse, moins de boîtes chevauchantes sont conservées. Par défaut : 0,45',
 
   accessDeniedTitle: 'Accès refusé',
   accessDeniedBefore: 'Ce tableau de bord est accessible uniquement depuis un compte',

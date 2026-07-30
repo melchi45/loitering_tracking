@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-DAM-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
-| **Date** | 2026-06-08 |
+| **Date** | 2026-07-30 |
 | **Parent SRS** | [srs/SRS_Dashboard_Analysis_Mode.md](../srs/SRS_Dashboard_Analysis_Mode.md) |
 | **Parent Design** | [design/Design_Dashboard_Analysis_Mode.md](../design/Design_Dashboard_Analysis_Mode.md) |
 
@@ -246,25 +246,33 @@
 
 ---
 
-### TC-D-002: analysis 모드 나머지 탭 정상 동작
+### TC-D-002: analysis 모드 나머지 탭 정상 동작 (2026-07-30 갱신)
 **SRS:** FR-DAM-031
+
+> 원문(alerts/zones/detections/analytics/faces 5개 탭 유지)은 최초 설계 당시 기준이며, 이후 여러
+> 차례 개정을 거쳐 analysis 모드 사이드바는 현재 `detections` 단일 탭만 유지한다(`analytics` 탭은
+> Admin Dashboard → AI Models로 완전히 이관, `alerts`/`zones`/`faces`도 이후 개정에서 제거됨). 아래는
+> 현재 동작으로 갱신.
 
 | 항목 | 내용 |
 |---|---|
-| **목적** | analysis 모드에서 알림·구역·감지·분석·얼굴 탭이 모두 클릭 가능하고 해당 컴포넌트가 렌더링되는지 확인 |
+| **목적** | analysis 모드에서 유일하게 남은 Detections 탭이 클릭 가능하고 `AnalysisEventsTab`이 렌더링되는지 확인 |
 | **전제 조건** | `SERVER_MODE=analysis` |
-| **기대 결과** | 각 탭 클릭 시 AlertPanel / ZonesPanel / DashboardDetectionPanel / VideoAnalyticsTab / FaceGalleryTab 렌더링 |
+| **기대 결과** | Detections 탭 클릭 시 `AnalysisEventsTab` 렌더링; 사이드바에 다른 탭(Alerts/Zones/Analytics/Face Gallery)은 존재하지 않음 |
 
 ---
 
-### TC-D-003: combined 모드 6개 탭 모두 표시
+### TC-D-003: combined 모드 탭 표시 (2026-07-30 갱신)
 **SRS:** FR-DAM-032
+
+> 원문(카메라 포함 6개 탭 — Analytics 포함)은 최초 설계 당시 기준. `analytics` 탭은 이후 combined
+> 모드를 포함한 전 모드에서 제거되었다.
 
 | 항목 | 내용 |
 |---|---|
-| **목적** | combined 모드에서 카메라 탭이 포함된 6개 탭이 모두 표시되는지 확인 |
+| **목적** | combined 모드에서 카메라 탭이 포함된 탭들이 표시되는지 확인 |
 | **전제 조건** | `SERVER_MODE=combined` |
-| **기대 결과** | 탭 바에 📷🔔🗺👁🤖🪪 6개 탭 모두 존재 |
+| **기대 결과** | 탭 바에 📷🔔🗺👁🪪 5개 탭 존재 (🤖 Analytics 탭은 없음) |
 
 ---
 
@@ -352,3 +360,12 @@ TC-F-003 (빌드 확인) → TC-A-001 → TC-A-002 → TC-A-003 → TC-A-004
 ### 경미한 결함 (Minor)
 - 배지 스타일 색상 미세 차이
 - 모바일 레이아웃 소폭 정렬 차이
+
+---
+
+## Revision History
+
+| 버전 | 날짜 | 변경 내용 |
+|---|---|---|
+| 1.0 | 2026-06-08 | 초기 작성 |
+| 1.1 | 2026-07-30 | TC-D-002/TC-D-003 갱신 — `analytics` 탭이 전 모드에서 제거되고 Admin Dashboard → AI Models로 이관되었음을 반영, 이 문서에 최초로 Revision History 표 추가 |

@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UI-DL-01 |
-| **Version** | 1.2 |
+| **Version** | 1.3 |
 | **Status** | Active |
-| **Date** | 2026-05-26 |
+| **Date** | 2026-07-30 |
 | **Parent SRS** | srs/SRS_Dashboard_Layout.md |
 
 ---
@@ -61,7 +61,7 @@ loitering_tracking/
 │       │   ├── AlertPanel.tsx               # Alerts sidebar tab
 │       │   ├── ZonesPanel.tsx               # Zones sidebar tab (hint only)
 │       │   ├── DashboardDetectionPanel.tsx  # Detections sidebar tab
-│       │   ├── VideoAnalyticsTab.tsx        # Analytics sidebar tab
+│       │   ├── (VideoAnalyticsTab.tsx removed 2026-07-30 — merged into Admin AI Models)
 │       │   ├── AnalysisServerDashboard.tsx  # Analysis mode traffic/result dashboard
 │       │   ├── FaceGalleryTab.tsx           # Face ID sidebar tab
 │       │   ├── FullscreenCameraView.tsx     # Fullscreen overlay
@@ -117,8 +117,8 @@ App.tsx
 │       │   ├─ alerts   → AlertPanel
 │       │   ├─ zones    → ZonesPanel
 │       │   ├─ detections → DashboardDetectionPanel
-│       │   ├─ analytics → VideoAnalyticsTab (hidden in streaming mode)
 │       │   └─ faces    → FaceGalleryTab
+│       │   (analytics tab removed 2026-07-30 — see §3.1)
 │       └─ [Collapsed] Icon strip (44px) + Hover flyout panel
 │
 ├─ [Mobile Content Area]
@@ -136,14 +136,16 @@ App.tsx
 
 ### 3.1 Mode-Dependent Navigation Policy
 
-| SERVER_MODE | Cameras Tab | Analytics Tab | Main Area |
+> **2026-07-30 갱신**: Analytics 탭(`VideoAnalyticsTab.tsx`)이 모든 모드에서 완전히 제거되었다 — 모듈 설정(카테고리 On/Off), Appearance Weights, Tracker/Kalman Settings, Fire/Smoke Sensitivity가 전부 Admin Dashboard → AI Models로 이관되었다. 아래 표는 갱신 전 정책을 반영한 것으로, "Analytics Tab" 열은 더 이상 유효하지 않다 — 상세: `docs/design/Design_Dashboard_Analysis_Mode.md` §10.2 (v2.0), `docs/design/Design_Admin_Dashboard.md` §4.2 (v1.9).
+
+| SERVER_MODE | Cameras Tab | Analytics Tab (제거됨) | Main Area |
 |---|---|---|---|
-| `combined` | 표시 | 표시 | CameraGrid |
-| `streaming` | 표시 | 숨김 | CameraGrid |
-| `analysis` | 숨김 | Analytics + Detections | AnalysisServerDashboard |
+| `combined` | 표시 | ~~표시~~ | CameraGrid |
+| `streaming` | 표시 | ~~숨김~~ | CameraGrid |
+| `analysis` | 숨김 | ~~Analytics + Detections~~ → Detections만 | AnalysisServerDashboard |
 
 - `analysis` 모드에서 카메라 레이아웃은 렌더링하지 않으며 메인 영역에 AnalysisServerDashboard를 표시합니다.
-- `analysis` 모드의 우측/모바일 탭은 `Analytics`(모듈 설정)와 `Detections`(실시간 감지) 두 개 탭을 제공합니다.
+- `analysis` 모드의 우측/모바일 탭은 (2026-07-30부로) `Detections`(실시간 감지 이력) 단일 탭만 제공합니다. 이전에 여기 있던 모듈 설정은 Admin Dashboard → AI Models에서 관리합니다.
 - `analysis` 모드에서 우측 상단 `Statistics` 버튼은 `AnalysisStatsModal`을 열어 `/api/analysis/metrics` 기반 지표만 표시합니다.
 - `analysis` 모드에서 `SettingsModal`은 언어 선택만 제공하고 WebRTC/ICE 설정 섹션은 숨깁니다.
 
@@ -316,7 +318,7 @@ export function useSocket(url: string) {
 ```typescript
 // types/index.ts (layout-relevant types)
 
-export type SidebarTab = 'cameras' | 'alerts' | 'zones' | 'detections' | 'analytics' | 'faces';
+export type SidebarTab = 'cameras' | 'alerts' | 'zones' | 'detections' | 'faces'; // 'analytics' removed 2026-07-30
 
 export type LayoutId =
   | '1' | '2' | '4' | '5' | '8' | '9' | '12' | '16' | '24' | '32' | '64'
@@ -495,3 +497,4 @@ ESC keydown || close button click
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Technical design for Dashboard Layout |
 | 1.1 | 2026-06-10 | Youngho Kim | 사이드바 Collapse/Expand 기능 추가 — ✕ 버튼으로 아이콘 스트립 축소, 클릭 시 복원, hover flyout 패널 |
 | 1.2 | 2026-06-10 | Youngho Kim | analysis 모드에 Detections 탭 추가 — `DashboardDetectionPanel` 전역 `detections` 이벤트 수신 |
+| 1.3 | 2026-07-30 | Youngho Kim | Analytics 탭(`VideoAnalyticsTab.tsx`) 전 모드에서 완전 제거 — 내용 전부 Admin Dashboard → AI Models로 이관. §3.1 Mode-Dependent Navigation Policy, 파일 트리, 컴포넌트 트리, `SidebarTab` 타입 정의 갱신 |

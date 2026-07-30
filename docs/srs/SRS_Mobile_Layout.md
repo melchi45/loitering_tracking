@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-UI-MOB-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-05-26 |
 | **Parent PRD** | prd/PRD_Mobile_Layout.md |
@@ -132,7 +132,7 @@ The bottom navigation bar shall be fixed at the bottom of the viewport (`positio
 | Alerts | 🔔 | AlertPanel fullscreen |
 | Zones | 🗺 | Zone guidance message + double-click hint |
 | Detections | 👁 | Camera selection dropdown + DetectionPanel |
-| Analytics | 🤖 | VideoAnalyticsTab fullscreen |
+| ~~Analytics~~ | ~~🤖~~ | ~~VideoAnalyticsTab fullscreen~~ (removed 2026-07-30) |
 
 ### FR-UI-MOB-021 — Tab Label Style
 
@@ -211,9 +211,11 @@ The Zones tab shall render a zone guidance message with double-click hint (same 
 
 The Detections tab shall contain a camera selection dropdown and `DetectionPanel` in fullscreen mode (category filter bar, scrollable detection list, Cross-Camera Re-ID feed, collapsible legend).
 
-### FR-UI-MOB-043 — Analytics Tab
+### FR-UI-MOB-043 — Analytics Tab (Removed 2026-07-30)
 
-The Analytics tab shall render `VideoAnalyticsTab` fullscreen.
+~~The Analytics tab shall render `VideoAnalyticsTab` fullscreen.~~ The Analytics tab and
+`VideoAnalyticsTab.tsx` have been removed from every mode, including mobile. Its content now lives
+in Admin Dashboard → AI Models — see `SRS_Admin_Dashboard.md` §4.2/§4.3.
 
 ### FR-UI-MOB-044 — Tab State Persistence
 
@@ -310,7 +312,7 @@ useEffect(() => {
 | `CameraList` | Cameras tab bottom 40% |
 | `AlertPanel` | Alerts tab fullscreen |
 | `DetectionPanel` | Detections tab and Fullscreen overlay bottom panel |
-| `VideoAnalyticsTab` | Analytics tab fullscreen |
+| ~~`VideoAnalyticsTab`~~ | Removed 2026-07-30 — see Admin Dashboard → AI Models |
 | `FullscreenCameraView` | Overlay on double-tap, vertical split on mobile |
 | Settings Modal | Opened via header settings icon |
 
@@ -335,3 +337,4 @@ useEffect(() => {
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for Mobile Layout |
+| 1.1 | 2026-07-30 | LTS Engineering Team | FR-UI-MOB-043 marked removed — Analytics tab moved to Admin Dashboard → AI Models |

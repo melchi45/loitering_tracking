@@ -29,7 +29,8 @@
 ```
 ┌──────────────────────────────────────────────────────────────────┐
 │                          CLIENT (React)                           │
-│  VideoAnalyticsTab.tsx                                            │
+│  AdminUsersPage.tsx (AiModelsSection) — moved 2026-07-30 from     │
+│  removed VideoAnalyticsTab.tsx                                    │
 │      └─ Hat Detection toggle (PUT /api/analytics/config)         │
 │  FullscreenCameraView.tsx / CameraView.tsx                        │
 │      └─ Canvas overlay badge: HELMET (blue) / NO HELMET (red)    │
@@ -81,7 +82,7 @@ loitering_tracking/
 ├── client/
 │   └── src/
 │       ├── components/
-│       │   ├── VideoAnalyticsTab.tsx       # Hat toggle
+│       │   ├── (Hat toggle now in pages/admin/AdminUsersPage.tsx — VideoAnalyticsTab.tsx removed 2026-07-30)
 │       │   ├── FullscreenCameraView.tsx    # HELMET / NO HELMET / HAT? badges
 │       │   └── CameraView.tsx             # Canvas overlay hat badges
 │       ├── types/

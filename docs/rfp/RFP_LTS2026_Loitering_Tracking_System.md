@@ -312,7 +312,7 @@ Based on the limitations of pure position-based tracking, the following improvem
 
 #### 2.4a.3 Adaptive Kalman Filter Specification *(P1 — Implemented)*
 
-> **Status**: ✅ Fully implemented — `_inv4()` NaN guard; KalmanFilter wired into `Track.predict()` / `Track.update()`; all Q/R parameters are **runtime-configurable** via `/api/tracker/config` and the Video Analytics tab UI.
+> **Status**: ✅ Fully implemented — `_inv4()` NaN guard; KalmanFilter wired into `Track.predict()` / `Track.update()`; all Q/R parameters are **runtime-configurable** via `/api/tracker/config` and the Admin Dashboard → AI Models UI (moved 2026-07-30 from the removed Video Analytics tab).
 
 **Runtime-Configurable Parameters** (`GET / PUT /api/tracker/config`):
 
@@ -338,7 +338,7 @@ if (appearanceConf < 0.5): covariance *= 2  // weak appearance match
 
 #### 2.4a.4 Multi-Cue Association Specification *(✅ Done — P2, v2.5)*
 
-> **Status**: ✅ Implemented — `server/src/services/tracking.js` + `pipelineManager.js` + `VideoAnalyticsTab.tsx` Appearance Weights panel.
+> **Status**: ✅ Implemented — `server/src/services/tracking.js` + `pipelineManager.js` + Appearance Weights panel (moved 2026-07-30 to Admin Dashboard → AI Models → Tracking & Sensitivity Tuning, formerly `VideoAnalyticsTab.tsx`).
 
 ##### 5-Cue Weighted Score
 

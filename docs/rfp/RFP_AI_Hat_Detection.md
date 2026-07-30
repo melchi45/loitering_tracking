@@ -41,7 +41,7 @@ Phase-1 delivers end-to-end hardhat/no-hardhat detection using the shared `yolov
 | Attribute pipeline (hat block) | `server/src/services/attributePipeline.js` | Done |
 | Analytics config (`hat` key) | `server/src/services/analyticsConfig.js` | Done |
 | Capabilities endpoint (`hat: true`) | `server/src/index.js` | Done |
-| UI toggle (Video Analytics tab) | `client/src/components/VideoAnalyticsTab.tsx` | Done |
+| UI toggle (Admin Dashboard → AI Models) | `client/src/pages/admin/AdminUsersPage.tsx` (moved 2026-07-30 from removed `VideoAnalyticsTab.tsx`) | Done |
 | Detection badge (HELMET / NO HELMET) | `client/src/components/FullscreenCameraView.tsx` | Done |
 | Canvas overlay badge | `client/src/components/CameraView.tsx` | Done |
 | TypeScript types (`HatAttribute`) | `client/src/types/index.ts` | Done |
@@ -527,7 +527,7 @@ PPE model class mapping for hat module:
   2: no_hardhat → hat.isHelmet = false, safetyCompliant = false
   (no match)   → hat.isHelmet = null,  safetyCompliant = null,  className = 'uncertain'
 
-Activation: analytics config `hat: true` (toggled via VideoAnalyticsTab UI or PUT /api/analytics/config)
+Activation: analytics config `hat: true` (toggled via Admin Dashboard → AI Models UI or PUT /api/analytics/config)
 Output fields: detection.hat.className / detection.hat.isHelmet / detection.hat.confidence / detection.hat.safetyCompliant
 
 'uncertain' is always emitted (not undefined) when the PPE model is running — this allows the

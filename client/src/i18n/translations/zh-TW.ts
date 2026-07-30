@@ -15,7 +15,6 @@ export const zhTW: Translations = {
   tabCameras: '攝影機',
   tabAlerts: '警報',
   tabZones: '區域',
-  tabVideoAnalytics: '分析',
   tabDetections: '偵測',
   tabFaceGallery: '人臉識別',
   faceGallerySubtitle: '人員註冊與識別',
@@ -40,8 +39,6 @@ export const zhTW: Translations = {
   galleryTypeBlocklist: '黑名單',
   galleryTypeMissing: '失蹤人員',
   missingPersonAlert: '偵測到失蹤人員',
-  videoAnalyticsHint: '全局啟用或停用每個AI模組（對所有攝影機生效）。',
-  videoAnalyticsFooter: '停用的模組將立即停止處理。變更將於下一幀生效。',
 
   noCameras: '尚未新增攝影機。',
   addCamera: '新增攝影機',
@@ -309,12 +306,6 @@ export const zhTW: Translations = {
 
   waitingForAnalysisData: '正在等待分析資料…',
 
-  vaDisableAllModules: '停用所有模組',
-  vaEnableAllAvailable: '啟用所有可用模組',
-  vaDisableGroup: '停用整組',
-  vaEnableGroup: '啟用整組',
-  vaFireSensitivityHint: '數值越低靈敏度越高（誤報增加）。預設值：0.35',
-  vaNmsHint: '數值越低保留的重疊框越少。預設值：0.45',
 
   accessDeniedTitle: '無存取權限',
   accessDeniedBefore: '此儀表板僅限',

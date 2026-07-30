@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | TC-LTS-UI-DD-01 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Active |
 | **Date** | 2026-05-27 |
 | **Parent SRS** | srs/SRS_Dashboard_Detection_Display.md |
@@ -198,7 +198,12 @@
 
 ---
 
-## 6. Test Group D — Video Analytics Tab
+## 6. Test Group D — Video Analytics Tab (Removed 2026-07-30)
+
+> `VideoAnalyticsTab.tsx` and the sidebar Analytics tab have been removed from every `SERVER_MODE`.
+> TC-D-001~007 below describe a UI surface that no longer exists — kept for historical reference
+> only. Equivalent coverage now belongs under Admin Dashboard → AI Models
+> (see `TC_Admin_Dashboard.md` TC-AD-009, TC-AD-011~011d).
 
 ### TC-D-001 — Analytics Tab Position
 - **Input:** Sidebar with all tabs visible
@@ -291,3 +296,4 @@ Group A (canvas) → Group B (fullscreen panel) → Group C (sidebar) → Group 
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — Test cases for Dashboard Detection Display |
+| 1.1 | 2026-07-30 | LTS Engineering Team | Test Group D marked removed — Video Analytics Tab moved to Admin Dashboard → AI Models, see TC_Admin_Dashboard.md |

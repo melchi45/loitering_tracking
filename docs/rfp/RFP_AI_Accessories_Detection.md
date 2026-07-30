@@ -527,7 +527,7 @@ The existing `yolov8n.onnx` (COCO 80-class) already detects the following access
 | `server/src/services/analyticsConfig.js` | Replaced single `accessories` key with individual `backpack`, `handbag`, `suitcase`, `umbrella`, `tie`, `glasses`, `sunglasses` keys in DEFAULT_CONFIG and MODULE_CLASSES |
 | `server/src/services/behaviorEngine.js` | Added individual TARGET_CLASS_MAP entries for each accessory; kept `accessories` alias for backward zone compatibility |
 | `server/src/index.js` | `/api/capabilities` now returns per-item capability flags |
-| `client/src/components/VideoAnalyticsTab.tsx` | New "Accessories" group with individual toggle per item; `glasses`/`sunglasses` shown as pending |
+| `client/src/pages/admin/AdminUsersPage.tsx` (`AiModelsSection`) | "Accessories" group with individual toggle per item; `glasses`/`sunglasses` shown as pending (moved 2026-07-30 from removed `VideoAnalyticsTab.tsx`) |
 | `client/src/components/FullscreenCameraView.tsx` | Accessory detections colored amber in detection panel and legend |
 | `server/storage/analytics.json` | Migrated from `accessories: false` to individual keys |
 

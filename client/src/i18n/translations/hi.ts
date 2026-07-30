@@ -15,7 +15,6 @@ export const hi: Translations = {
   tabCameras: 'कैमरे',
   tabAlerts: 'अलर्ट',
   tabZones: 'ज़ोन',
-  tabVideoAnalytics: 'विश्लेषण',
   tabDetections: 'डिटेक्शन',
   tabFaceGallery: 'चेहरा पहचान',
   faceGallerySubtitle: 'व्यक्तियों को नामांकित और पहचानें',
@@ -40,8 +39,6 @@ export const hi: Translations = {
   galleryTypeBlocklist: 'ब्लैकलिस्ट',
   galleryTypeMissing: 'लापता व्यक्ति',
   missingPersonAlert: 'लापता व्यक्ति का पता चला',
-  videoAnalyticsHint: 'सभी कैमरों के लिए प्रत्येक AI मॉड्यूल को विश्व स्तर पर सक्षम या अक्षम करें।',
-  videoAnalyticsFooter: 'अक्षम मॉड्यूल तुरंत प्रसंस्करण रोक देते हैं। परिवर्तन अगले फ्रेम से लागू होते हैं।',
 
   noCameras: 'कोई कैमरा नहीं जोड़ा गया।',
   addCamera: 'कैमरा जोड़ें',
@@ -309,12 +306,6 @@ export const hi: Translations = {
 
   waitingForAnalysisData: 'विश्लेषण डेटा की प्रतीक्षा…',
 
-  vaDisableAllModules: 'सभी मॉड्यूल अक्षम करें',
-  vaEnableAllAvailable: 'सभी उपलब्ध मॉड्यूल सक्षम करें',
-  vaDisableGroup: 'पूरा समूह अक्षम करें',
-  vaEnableGroup: 'पूरा समूह सक्षम करें',
-  vaFireSensitivityHint: 'कम मान = अधिक संवेदनशीलता (अधिक झूठी सकारात्मकताएं)। डिफ़ॉल्ट: 0.35',
-  vaNmsHint: 'कम मान कम ओवरलैपिंग बॉक्स बनाए रखता है। डिफ़ॉल्ट: 0.45',
 
   accessDeniedTitle: 'पहुंच अस्वीकृत',
   accessDeniedBefore: 'यह डैशबोर्ड केवल',

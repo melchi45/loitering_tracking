@@ -142,7 +142,7 @@
 | ZoneEditor | `client/src/components/ZoneEditorOverlay.tsx` | Drag-and-drop polygon canvas editor |
 | AlertPanel | `client/src/components/AlertsPanel.tsx` | Real-time alert log with acknowledge controls |
 | FaceGalleryTab | `client/src/components/FaceGalleryTab.tsx` | Gallery CRUD, enrollment, live match log |
-| VideoAnalyticsTab | `client/src/components/VideoAnalyticsTab.tsx` | Tracker config sliders; appearance weights |
+| AiModelsSection (Admin Dashboard → AI Models) | `client/src/pages/admin/AdminUsersPage.tsx` | Tracker config sliders; appearance weights (moved 2026-07-30 from removed `VideoAnalyticsTab.tsx`) |
 | FullscreenCameraView | `client/src/components/FullscreenCameraView.tsx` | Expanded single-camera view with detection panel |
 
 ---
@@ -448,8 +448,8 @@ App.tsx
 ├── Sidebar
 │   ├── CameraList (useCameraStore)
 │   ├── AlertsPanel (useAlertStore)
-│   ├── FaceGalleryTab (FR-FAC-050..057)
-│   └── VideoAnalyticsTab (tracker config)
+│   └── FaceGalleryTab (FR-FAC-050..057)
+│   (VideoAnalyticsTab removed 2026-07-30 — tracker config moved to Admin Dashboard → AI Models)
 │
 └── Main content
     ├── CameraGrid (multi-camera live view)

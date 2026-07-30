@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-003 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Draft |
 | **Date** | 2026-05-21 |
 | **Related RFP** | RFP_Dashboard_Detection_Display.md (LTS-2026-003 v2.4) |
@@ -38,7 +38,7 @@ The Detection Visualization & Display Module overlays real-time AI detections on
 - Display a structured per-object detection list (sorted: loitering first, then by dwell time) in the Fullscreen view's left 256px panel.
 - Show AI attribute badges (mask, helmet, color, face ID, cross-camera Re-ID) both on canvas and in the detection list.
 - Provide a collapsible 8-section detection legend pinned at the bottom of the detection panel.
-- Expose a Video Analytics tab in the Dashboard sidebar for per-module AI toggle switches and Kalman tracker configuration.
+- Expose per-module AI toggle switches and Kalman tracker configuration (2026-07-30: moved from the former Dashboard sidebar Video Analytics tab, now removed, to Admin Dashboard → AI Models).
 
 ### 2.2 Non-Goals
 
@@ -54,7 +54,7 @@ The Detection Visualization & Display Module overlays real-time AI detections on
 
 **Safety Compliance Officer** — reviews mask and helmet compliance badges in real time. Uses the detection list panel to verify `MASK OK` / `NO MASK` / `HELMET` / `NO HELMET` states and dwell durations.
 
-**System Administrator** — configures which AI modules are active and tunes Kalman tracker parameters via the Video Analytics tab, without restarting cameras.
+**System Administrator** — configures which AI modules are active and tunes Kalman tracker parameters via Admin Dashboard → AI Models (2026-07-30 — formerly the Video Analytics tab), without restarting cameras.
 
 ---
 
@@ -222,7 +222,7 @@ Key fields on `Detection` objects:
 5. AMF metrics (risk score, revisit count, velocity, circular score) appear only for zone-matched objects.
 6. The `↔ CROSS-CAM` badge appears on face rows whose `faceId` is present in `useCrossCameraStore` events involving the current camera.
 7. The legend is collapsed by default and expands to show all 8 sections with a scrollable `max-h-64` container.
-8. The Video Analytics tab correctly gates toggle availability based on `GET /api/capabilities`; missing models render as `opacity-35` with "Not installed".
+8. Admin Dashboard → AI Models correctly gates toggle availability based on `GET /api/capabilities`; missing models render with a disabled state and "Model Missing"/"Not Installed" badge. (Formerly the Video Analytics tab, removed 2026-07-30.)
 9. Kalman slider changes are debounced 300ms and persisted; the Reset button restores all default values.
 10. The Dashboard Detection tab checkbox filter correctly shows/hides per-camera rows, and the "All Cameras" label updates to "N / M cameras" on partial selection.
 
@@ -236,7 +236,7 @@ Key fields on `Detection` objects:
 |-----------|-------------|--------|-----------|--------|
 | M1 | Canvas overlay (all Phase-1 classes, badges, dwell time) | TBD | Phase-1 done | ✅ Complete |
 | M2 | Detection list panel (2-column fullscreen, legend, cross-cam) | TBD | Phase-1 done | ✅ Complete |
-| M3 | Video Analytics tab + Kalman settings | TBD | Phase-1 done | ✅ Complete |
+| M3 | Video Analytics tab + Kalman settings (moved 2026-07-30 to Admin Dashboard → AI Models) | TBD | Phase-1 done | ✅ Complete |
 | M4 | Dashboard aggregated detection tab (all-camera merged view) | TBD | Phase-1 done | ✅ Complete |
 | M5 | Phase-2: cloth attribute (PAR) canvas + panel display | TBD | - | ⏳ Pending |
 
@@ -257,3 +257,4 @@ Key fields on `Detection` objects:
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for Dashboard Detection Display |
+| 1.1 | 2026-07-30 | LTS Engineering Team | Video Analytics tab references updated — moved to Admin Dashboard → AI Models |

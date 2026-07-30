@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-010 |
-| **Version** | 1.0 |
+| **Version** | 1.1 |
 | **Status** | Draft |
-| **Date** | 2026-05-21 |
+| **Date** | 2026-07-30 |
 | **Related RFP** | RFP_Dashboard_Layout.md (LTS-2026-010 v2.0) |
 
 ---
@@ -42,7 +42,7 @@ The LTS Dashboard provides security operators with a full-screen, real-time mult
 
 ### 2.2 Non-Goals
 
-- This document does not cover the internal content of Sidebar tabs (Cameras, Alerts, Zones, Detections, Analytics) — those are specified in their respective RFPs.
+- This document does not cover the internal content of Sidebar tabs (Cameras, Alerts, Zones, Detections, Face Gallery) — those are specified in their respective RFPs. (The former Analytics tab was removed 2026-07-30; its content now lives in Admin Dashboard → AI Models, out of scope for this PRD.)
 - Mobile/tablet responsive layout is out of scope for this PRD (covered by PRD_Mobile_Layout.md).
 - Camera drag-and-drop reordering is not required in this release.
 
@@ -99,9 +99,13 @@ Each button shows a 20×20 SVG `LayoutIcon` + label. Active layout uses `bg-blue
 Fixed `w-72` right panel with mode-dependent tabs. The Alerts tab shows a red badge with unacknowledged alert count (shows `9+` when ≥ 10). Active tab: `text-blue-400 border-b-2 border-blue-400`.
 
 **Mode policy (`SERVER_MODE`):**
-- `combined`: CAMERAS, ALERTS, ZONES, DETECTIONS, ANALYTICS, 🪪 FACE ID
-- `streaming`: CAMERAS, ALERTS, ZONES, DETECTIONS, 🪪 FACE ID (ANALYTICS hidden)
-- `analysis`: ALERTS, ZONES, DETECTIONS, ANALYTICS, 🪪 FACE ID (CAMERAS hidden)
+- `combined`: CAMERAS, ALERTS, ZONES, DETECTIONS, 🪪 FACE ID
+- `streaming`: CAMERAS, ALERTS, ZONES, DETECTIONS, 🪪 FACE ID
+- `analysis`: DETECTIONS only
+
+> **2026-07-30**: The `analytics`/ANALYTICS tab (`VideoAnalyticsTab`) has been removed from all modes.
+> Its AI enable/disable content now lives in Admin Dashboard → AI Models — see
+> `SRS_Admin_Dashboard.md` §4.2/§4.3.
 
 | Tab ID | Label | Component | Notes |
 |---|---|---|---|
@@ -109,7 +113,6 @@ Fixed `w-72` right panel with mode-dependent tabs. The Alerts tab shows a red ba
 | `alerts` | ALERTS | `AlertPanel` | Red badge when alerts > 0 |
 | `zones` | ZONES | ZoneHint / `ZoneEditor` | — |
 | `detections` | DETECTIONS | `DetectionPanel` | Selected camera only |
-| `analytics` | ANALYTICS | `VideoAnalyticsTab` | AI enable/disable |
 | `faces` | 🪪 FACE ID | `FaceGalleryTab` | Gallery CRUD + real-time match log |
 
 The **Face ID tab** (`faces`) allows operators to:
@@ -275,3 +278,4 @@ An `absolute`-positioned overlay above the Camera Grid, shown when a device from
 | Version | Date | Author | Description |
 |---|---|---|---|
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — PRD for Dashboard Layout |
+| 1.1 | 2026-07-30 | LTS Engineering Team | §2.2/§4.4 updated — Analytics tab removed from all modes, content moved to Admin Dashboard → AI Models |
