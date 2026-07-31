@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UMP-TS-001 |
-| **Version** | 1.2 |
-| **Status** | Active (Layer 1-11 구현 완료, `custom/ump-player.ts`(신규 `custom/UmpPlayer.ts`) 포함 전 레이어 포팅 완료) |
-| **Date** | 2026-07-30 |
+| **Version** | 1.3 |
+| **Status** | Active (Layer 1-11 구현 완료, `custom/ump-player.ts`(신규 `custom/UmpPlayer.ts`) 포함 전 레이어 포팅 완료; 2026-07-31 실카메라 라이브 재생 검증 및 포팅 회귀 수정 완료) |
+| **Date** | 2026-07-31 |
 | **Related Design** | [Design_UMP_Player_RTSP_over_WebSocket.md](Design_UMP_Player_RTSP_over_WebSocket.md) — 스코프 경계: 그 문서는 서버 통합/프로토콜(LTS 서버가 `<ump-player>`를 어떻게 소비하는지), 이 문서는 `submodules/ump-player` 라이브러리 **내부** 아키텍처(레거시 JS를 TS/ESM으로 재작성하는 방법)를 다룸 |
 | **Parent PRD** | [PRD_UMP_Player_TypeScript_Migration.md](../prd/PRD_UMP_Player_TypeScript_Migration.md) |
 | **Parent SRS** | [SRS_UMP_Player_TypeScript_Migration.md](../srs/SRS_UMP_Player_TypeScript_Migration.md) |
@@ -54,7 +54,7 @@ submodules/ump-player/src/player/
   index.ts              # public entry — ESM export + customElements.define 등록 (`./custom` re-export 경유)
 ```
 
-전체 141개 소스 파일(`.test.ts` 제외), 89개 테스트 파일, 539 테스트 (`npx vitest run` 기준, 2026-07-30).
+전체 141개 소스 파일(`.test.ts` 제외), 89개 테스트 파일, 539 테스트 (`npx vitest run` 기준, 2026-07-31).
 
 ---
 
@@ -86,7 +86,7 @@ Vite library mode, 듀얼 아웃풋:
 - `dist/player/ump-player.esm.js` (ESM) — app-react 등 모던 소비자용
 - `dist/player/ump-player.global.js` (IIFE) — 레거시 `<script>` 소비자용 하위호환. `customElements.define('ump-player', UmpPlayer)` 사이드이펙트가 `index.ts` → `custom/index.ts` → `custom/UmpPlayer.ts` 임포트 체인을 통해 이 두 번들 모두에 포함된다.
 
-워커 엔트리 6개(`worker/**/*.ts`)는 `build.lib.entry`에 수동 등록하지 않는다 — Vite가 `new Worker(new URL(...))` 호출부를 자동 탐지해 별도 번들로 분리한다(`custom/UmpPlayer.ts`는 현재 스코프에서 워커를 직접 생성하지 않으며, 그 호출부는 `interface/StreamPlayer.ts`의 `MediaRouter`/`RtpClient` 경로에 있다).
+워커 엔트리 6개(`worker/**/*.ts`)는 `build.lib.entry`에 수동 등록하지 않는다 — Vite가 `new Worker(new URL('...', import.meta.url))` 호출부를 자동 탐지해 별도 번들로 분리한다. 실제 호출부 6곳(모두 생성자 기본 파라미터로 팩토리 주입, 테스트에서 교체 가능): `video/player/video/VideoTagPlayer.ts`(audiotranscoderWorker), `video/player/canvas/CanvasTagPlayer.ts`(decoderWorker), `mediaSession/videoSession/MjpegSession.ts`(mjpegDepacketizeWorker), `backup/FileMaker.ts`(zipWorker), `backup/BackupProvider.ts`(backupWorker), `network/http/SunapiRestClient.ts`(sunapiRequestTask). §6에서 이 6곳 전부의 런타임 URL 해석 문제와 수정 내역을 다룬다.
 
 `vite.config.ts`의 `worker: { format: 'iife' }`는 명시적으로 고정되어 있다 — 벤더 번들(ffmpeg.js 등)이 classic-script `importScripts()` 로딩에 의존하기 때문(ESM 워커 포맷에서는 vendor의 top-level `this` 해석이 깨짐).
 
@@ -110,7 +110,33 @@ WebSocket/Canvas/Worker/CustomElement 등 부수효과가 있는 클래스는 ol
 
 ---
 
-## 6. `custom/UmpPlayer.ts` — Layer 11 상세
+## 6. Worker 런타임 아키텍처 — 경로 해석과 Emscripten 부트스트랩
+
+Layer 10에서 6개 워커 엔트리(`worker/**/*.ts`)의 소스 포팅과 유닛 테스트는 완료되어 있었으나, **번들이 실제로 브라우저·실카메라 환경에서 로드되는지는 검증되지 않은 상태**였다. 2026-07-31에 `wss://<host>/StreamingServer`로 실제 카메라(H.265/G.711)에 연결해 라이브 재생을 검증하는 과정에서, 포팅 과정에 도입된 2가지 회귀(regression)를 발견·수정했다. 레거시 자체의 버그가 아니라 **TS/ESM 재작성 중 새로 생긴 문제**라는 점에서 §7.1의 "레거시 버그 보존" 목록과는 성격이 다르다.
+
+### 6.1 IIFE 빌드의 `import.meta.url` 폴리필 한계 — 데모 페이지는 ESM을 로드해야 함
+
+`new Worker(new URL('./worker.ts', import.meta.url))` 패턴은 Vite의 빌드타임 워커 청크 분리(§4)에는 항상 정상 동작하지만, **IIFE(`ump-player.global.js`) 런타임에서 `import.meta.url`을 흉내내는 폴리필은 `document.currentScript`에 의존**한다. `document.currentScript`는 `<script>` 태그가 파싱되는 동안의 동기 실행 구간에서만 유효하고, 이 플레이어의 워커들은 전부 실제 RTP 데이터가 도착한 뒤 지연 생성되므로(스크립트 로드가 끝난 지 한참 뒤) 그 시점엔 이미 `null`이다. Vite는 이때 `document.baseURI`(현재 **페이지** URL)로 폴백하는데, 이는 스크립트 자신의 실제 위치와 다를 수 있어 워커 청크 경로가 한 디렉토리 얕게(`/assets/foo.js`, 정상은 `/player/assets/foo.js`) 계산되고, 그 경로가 서버의 SPA 폴백에 걸려 HTML을 돌려받으면 `Uncaught SyntaxError: Unexpected token '<'`로 나타난다.
+
+**ESM(`ump-player.esm.js`)은 이 문제가 원천적으로 없다** — ESM의 `import.meta.url`은 폴리필이 아니라 모듈별로 정적 바인딩되는 언어 차원의 값이라, 워커가 스크립트 로드 이후 언제 생성되든 항상 정확하다. 따라서:
+
+- `dist/index.html`(실제 재생 데모)은 `<script type="module" src="./player/ump-player.esm.js">`를 사용한다 — `<script src="...global.js">` 금지.
+- `dist/test.html`(순수 계약 테스트 러너, `window.UmpPlayerLib` 전역 참조)은 실제 Worker를 한 번도 생성하지 않으므로 IIFE(`ump-player.global.js`)를 그대로 사용해도 안전하다.
+- `vite.config.ts`에 `base: './'`를 추가했다 — 기본값 `base: '/'`는 워커/청크 URL을 origin-절대경로(`/assets/...`)로 굳혀버려, `dist/player/`가 사이트 루트가 아닌 임의의 서브패스(`/rtsp-ws/`, `/ump-react/` 등)에 배포될 때 항상 깨진다. `'./'`는 실행 중인 스크립트 자신의 위치 기준 상대경로를 강제해 배포 경로에 무관하게 동작하게 한다.
+
+### 6.2 `Module.wasmBinary` 경쟁 조건 — wasm 선-fetch 후 `importScripts()`
+
+`AssemblyDecoder.ts`/`AssemblyTranscoder.ts`(§3 Layer 10)는 벤더 Emscripten 글루(`vendor/ffmpeg.js`, `vendor/ffmpegAAC.transcoder.js`)를 `importScripts()`로 로드한다. 이 글루의 `createWasm()`은 자기 자신의 최상위 동기 실행 구간에서 `Module["wasmBinary"]`를 확인해, 있으면 그대로 쓰고 없으면 **자기 안에 하드코딩된 파일명**(`"ffmpeg.wasm"`/`"ffmpegAAC.wasm"`)을 워커 자신의 위치(`self.location.href`) 기준으로 직접 `fetch()`한다.
+
+포팅 시 `importScriptsFn(...)`을 먼저 호출하고 `fetchFn(...).then(buffer => Module.wasmBinary = buffer)`를 그 뒤에 거는 순서였는데, `fetch().then()`은 본질적으로 비동기라 글루의 동기 `createWasm()`이 항상 먼저 실행되어 `Module.wasmBinary`를 못 보고 자체 fetch로 넘어간다. 이 프로젝트의 빌드는 vendor wasm/js를 별도 파일이 아니라 워커 청크 안에 base64 `data:` URL로 인라인하므로(§4), 저 하드코딩된 상대경로 파일은 애초에 디스크에 존재하지 않는다 → 정적 서버가 SPA 폴백 HTML(또는 순수 텍스트 404)을 돌려주고, 그걸 wasm으로 인스턴스화하려다 `WebAssembly.instantiate(): expected magic word 00 61 73 6d, found ...`로 실패한다.
+
+**수정**: 두 클래스 모두 순서를 뒤집었다 — wasm을 먼저 `fetch()`해 `Module.wasmBinary`를 채운 뒤에야 `importScriptsFn(...)`을 호출한다. 이러면 글루의 `createWasm()`이 실행되는 시점에 `Module.wasmBinary`가 이미 채워져 있어 자체 fetch를 아예 시도하지 않는다. 관련 유닛 테스트(`AssemblyDecoder.test.ts`/`AssemblyTranscoder.test.ts`)도 "fetch가 영원히 안 끝나도 constructor는 동기적으로 초기화된다"를 가정하던 픽스처에서 "fetch가 resolve된 뒤 초기화된다"로 갱신했다.
+
+같은 조사 과정에서, `decoderWorker.ts`/`audiotranscoderWorker.ts`가 레거시의 `var Module = typeof Module !== "undefined" ? Module : {};` 사전 선언(워커 엔트리 최상단, 글루 로드 전에 `Module` 전역을 미리 만들어두는 관용구)을 포팅 과정에서 누락했던 것도 함께 발견해 추가했다 — `EmscriptenModule.d.ts`는 `Module`의 **타입**만 선언할 뿐 런타임 값을 만들어주지 않으므로, 저 런타임 대입문이 없으면 `Module.onRuntimeInitialized = ...`에서 `ReferenceError: Module is not defined`가 발생한다.
+
+---
+
+## 7. `custom/UmpPlayer.ts` — Layer 11 상세
 
 레거시 `Custom/ump-player.js`(7312줄, 단일 `UmpPlayer extends HTMLElement` 클래스)의 라인 단위 포팅. 다음 원칙을 따른다:
 
@@ -118,7 +144,7 @@ WebSocket/Canvas/Worker/CustomElement 등 부수효과가 있는 클래스는 ol
 - **CSS 텍스트 블록**(통계/네트워크상태/컨텍스트메뉴/제스처 오버레이 패널을 빌드하는 `[appendStyle](...)` 인라인 문자열, 약 700줄)은 `custom/panelStyles.ts`로 추출 — 로직 변경 없이 파일 길이만 축소.
 - **클래스 자체는 분할하지 않음** — 단일 커스텀 엘리먼트·단일 legacy prototype이며, `this` 바인딩에 의존하는 버그 재현 정확성을 위해 컴포지션으로 쪼개는 리팩터링을 의도적으로 배제했다.
 
-### 6.1 확인된 레거시 버그 (포팅 시 그대로 보존, 수정하지 않음)
+### 7.1 확인된 레거시 버그 (포팅 시 그대로 보존, 수정하지 않음)
 
 아래는 대표적인 항목이며, 전체 목록과 정확한 근거(라인 번호·재현 방법)는 `custom/UmpPlayer.ts` 각 메서드/접근자의 인라인 주석에 있다.
 
@@ -138,9 +164,29 @@ WebSocket/Canvas/Worker/CustomElement 등 부수효과가 있는 클래스는 ol
 | `connectedCallback`의 `info.media.element !== null && info.media.element !== null` (동일 절 중복, `!== undefined` 의도) | ump-player.js:1117 | `id` 속성 누락 시에도 `_updateRendering()`이 여전히 실행됨(console.warn만 발생) |
 | `attributeChangedCallback`의 `'android'` 케이스 — attribute 값은 항상 string이라 `typeof newValue !== 'boolean'`이 항상 참 | ump-player.js:940-956 | 마크업으로 `android` 속성을 설정하면 항상 throw (connectedCallback은 별도 경로로 우회) |
 
+### 7.2 DOM 구조 — `#ump-wrapper-<id>` 통합 (2026-07-31)
+
+레거시부터 이어받은 구조에서는 `channel_div`(§7.1 통계 채널 라벨)/`statistics`/`video-container`/`contextmenu` 4개 오버레이 패널이 `<ump-player>`의 직속 자식으로 나란히 붙고, `#ump-wrapper-<id>`는 비디오(`canvas`/`video`) 엘리먼트 하나만 감싸는 별개의 형제 노드였다. 이 4개 패널 + 비디오 엘리먼트를 **모두 하나의 `#ump-wrapper-<id>` 하위**로 재구성했다:
+
+```
+<ump-player>
+  └─ div#ump-wrapper-<id>
+       ├─ div.channel_div
+       ├─ div.statistics
+       ├─ div.video-container
+       ├─ canvas | video            (this.video)
+       └─ div#contextmenu.menu      (우클릭 시 지연 생성)
+```
+
+`channel_div`/`statistics`는 `statisticsDiv()`에서, `video-container`/비디오 엘리먼트는 `updateRendering()`에서, `contextmenu`는 최초 우클릭 시 `contextmenuDiv()`에서 — 서로 독립적인 3개 경로가 정해진 순서 없이 호출될 수 있으므로(예: `statistics` 속성은 `connectedCallback` 한참 뒤에도 setter로 켜질 수 있음), `ensureUmpWrapper()` 헬퍼가 `#ump-wrapper-<id>`를 최초 1회만 지연 생성해 `this`에 붙이고, 이미 있으면 그대로 재사용하도록 했다. 세 메서드 모두 `this.appendChild(...)` 대신 `this.ensureUmpWrapper().appendChild(...)`를 호출한다.
+
+부수 수정: `statistics`를 끌 때 기존 `this.removeChild(this.statisticsElement)`는 `statisticsElement`가 더 이상 `this`의 직속 자식이 아니게 되어 `NotFoundError`를 던지게 되므로, 부모에 무관하게 안전한 `this.statisticsElement.remove()`로 변경했다.
+
+CSS 영향 없음 확인: `.channel_div`/`.statistics`/`.video-container`/`.menu`는 전부 `position: absolute`이지만, `#ump-wrapper-<id>`의 인라인 스타일은 `position`을 지정하지 않아(`static` 유지) 새로운 positioning 컨텍스트를 만들지 않는다 — 즉 이 4개 패널의 절대좌표 기준(containing block)은 이 DOM 재구성 전후로 동일하다.
+
 ---
 
-## 7. 문서 세트 현황
+## 8. 문서 세트 현황
 
 원 계획(Phase 0)의 6개 SDD 문서(MRD/PRD/SRS/Design/Ops/TC)가 모두 작성 완료되었다. Layer 12의 `Control/ptz/*`는 팀 확인 전까지 착수하지 않으므로, 착수 시점에 관련 내용을 추가한다.
 
@@ -153,3 +199,4 @@ WebSocket/Canvas/Worker/CustomElement 등 부수효과가 있는 클래스는 ol
 | 1.0 | 2026-07-30 | 초기 작성 — Layer 1-11 전체 포팅 완료 반영 (Layer 11: `custom/UmpPlayer.ts`, 141 source files, 89 test files, 539 tests) |
 | 1.1 | 2026-07-30 | MRD/PRD/SRS/Ops 문서 신규 작성 완료 반영 — Related PRD/SRS/Ops 헤더 추가, §7 갱신 |
 | 1.2 | 2026-07-30 | Layer 12 상태 오기 수정 — `angularInterface/*`는 이미 포팅·테스트 완료(+19 tests) 상태였는데 "미착수"로 잘못 기재되어 있던 것을 수정. 미착수인 것은 `Control/ptz/*`뿐 |
+| 1.3 | 2026-07-31 | 실카메라(H.265/G.711) 라이브 재생 검증 중 발견한 포팅 회귀 2건 수정 반영 — §6(신설) IIFE `import.meta.url` 폴리필 한계로 데모를 ESM 빌드로 전환 + `base:'./'` 추가, `Module.wasmBinary` 경쟁 조건(fetch-then-importScripts 순서 반전) 및 누락된 `Module` 전역 사전 선언 수정. §7.2(신설) `channel_div`/`statistics`/`video-container`/`contextmenu`를 `#ump-wrapper-<id>` 하위로 통합한 DOM 재구성 반영. 기존 §6 → §7, §7 → §8로 번호 이동 |
