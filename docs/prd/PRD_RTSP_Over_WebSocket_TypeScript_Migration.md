@@ -1,14 +1,14 @@
 # PRODUCT REQUIREMENTS DOCUMENT (PRD)
-# UMP Player 레거시 JS → TypeScript/ESM 마이그레이션
+# RTSP-over-WebSocket 레거시 JS → TypeScript/ESM 마이그레이션
 
 | | |
 |---|---|
 | **Document ID** | PRD-LTS-UMP-TS-01 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Active (구현 완료 — Layer 1-11) |
 | **Date** | 2026-07-30 |
-| **Related MRD** | [MRD_UMP_Player_TypeScript_Migration.md](../mrd/MRD_UMP_Player_TypeScript_Migration.md) |
-| **Related Design** | [Design_UMP_Player_TypeScript_Migration.md](../design/Design_UMP_Player_TypeScript_Migration.md) |
+| **Related MRD** | [MRD_RTSP_Over_WebSocket_TypeScript_Migration.md](../mrd/MRD_RTSP_Over_WebSocket_TypeScript_Migration.md) |
+| **Related Design** | [Design_RTSP_Over_WebSocket_TypeScript_Migration.md](../design/Design_RTSP_Over_WebSocket_TypeScript_Migration.md) |
 
 ---
 
@@ -70,7 +70,7 @@
 
 ## 5. 기능 명세 — 12-레이어 로드맵
 
-전체 로드맵과 각 레이어의 완료 상태는 [Design_UMP_Player_TypeScript_Migration.md §3](../design/Design_UMP_Player_TypeScript_Migration.md#3-12-레이어-로드맵--최종-상태)를 참조한다. 요약:
+전체 로드맵과 각 레이어의 완료 상태는 [Design_RTSP_Over_WebSocket_TypeScript_Migration.md §3](../design/Design_RTSP_Over_WebSocket_TypeScript_Migration.md#3-12-레이어-로드맵--최종-상태)를 참조한다. 요약:
 
 | 레이어 범위 | 상태 |
 |---|---|
@@ -83,7 +83,7 @@
 
 ## 6. 테스트 계약
 
-레이어별 자동화된 테스트 케이스는 [TC_UMP_Player_TypeScript_Migration.md](../tc/TC_UMP_Player_TypeScript_Migration.md)(TC-UMPTS-001~013)에 전부 기록되어 있다. 요구되는 최소 기준:
+레이어별 자동화된 테스트 케이스는 [TC_RTSP_Over_WebSocket_TypeScript_Migration.md](../tc/TC_RTSP_Over_WebSocket_TypeScript_Migration.md)(TC-UMPTS-001~013)에 전부 기록되어 있다. 요구되는 최소 기준:
 
 - 순수 로직 파일: old-vs-new parity 테스트 필수.
 - DOM/Worker/WebSocket 등 부수효과가 있는 클래스: 문서화된 공개 계약(속성/attribute/이벤트명·payload/메서드 시그니처) 대비 Contract 테스트 필수.
@@ -93,7 +93,7 @@
 
 ## 7. Edge Case / 발견된 기존 이슈
 
-마이그레이션 과정에서 확인된, **이번 스코프에서 수정하지 않는** 기존 결함(전체 목록은 `custom/UmpPlayer.ts` 등 각 포트 파일의 인라인 주석 및 [Design_UMP_Player_TypeScript_Migration.md §6.1](../design/Design_UMP_Player_TypeScript_Migration.md#61-확인된-레거시-버그-포팅-시-그대로-보존-수정하지-않음)):
+마이그레이션 과정에서 확인된, **이번 스코프에서 수정하지 않는** 기존 결함(전체 목록은 `custom/UmpPlayer.ts` 등 각 포트 파일의 인라인 주석 및 [Design_RTSP_Over_WebSocket_TypeScript_Migration.md §6.1](../design/Design_RTSP_Over_WebSocket_TypeScript_Migration.md#61-확인된-레거시-버그-포팅-시-그대로-보존-수정하지-않음)):
 
 - `app/camera.html`이 현재 트리에 없는 파일(`Util/sunapi.js`, `Video/Renderer/*`, `Workers/workerManager.js`)을 참조 — 이미 깨져 있었음, 이번 마이그레이션과 무관.
 - `Worker/sunapi/sunapiRequestTask.js`가 워커 컨텍스트에서 정의되지 않은 `fastJsonStringfy`(메인 스레드 전역)를 호출 — 사실상 REST 클라이언트 디스패치 로직 전체가 비활성 상태.
@@ -125,3 +125,4 @@
 |---|---|---|
 | 1.0 | 2026-07-30 | 초기 작성 — Layer 1-11 구현 완료 시점에 소급 작성 |
 | 1.1 | 2026-07-30 | Layer 12 상태 오기 수정 — `angularInterface/*`는 이미 포팅·테스트 완료(+19 tests) 상태였는데 "미착수"로 잘못 기재되어 있던 것을 수정. 미착수인 것은 `Control/ptz/*`뿐 |
+| 1.2 | 2026-08-04 | 이 마이그레이션의 결과물이 `@melchi45/rtsp-over-websocket@1.0.1`로 npm 배포되고 LTS-2026에 채택되면서 `submodules/ump-player` 서브모듈 자체가 제거됨 — Design_RTSP_Over_WebSocket_TypeScript_Migration.md §9(Superseded/Shipped) 참고 |

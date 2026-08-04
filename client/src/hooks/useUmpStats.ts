@@ -6,7 +6,7 @@ import { useCallback, useRef, useState } from 'react';
 // see rtpSession.js's statisticsTimer, 1000ms interval); `type: 'fps'` fires
 // ~1/sec for the decode/render side. Both are re-dispatched verbatim as
 // `this[dispatch]("statistics", {statistics})` on the <ump-player> host
-// element, which UmpPlayerView.tsx listens for and forwards here via
+// element, which RTSPOverWebSocketView.tsx listens for and forwards here via
 // onStatistics(). `type: 'timestamp'` exists in the vendor payload too but
 // is never dispatched as a public event (only used to update the player's
 // own internal statistics overlay), so it never reaches this hook.
@@ -109,7 +109,7 @@ const EMPTY_STATS: UmpStatsSnapshot = {
  * UmpStatsPanel.tsx can render a "stats for nerds" panel the same way
  * CameraView.tsx already does for WebRTC (see WebRtcStatsPanel.tsx /
  * useWebRTC.ts's RxSample). Lives in the CameraView layer (not
- * UmpPlayerView) so the resulting badge/toggle/panel can sit in the same
+ * RTSPOverWebSocketView) so the resulting badge/toggle/panel can sit in the same
  * top-right corner flex column as the WebRTC/Zone rows instead of a second,
  * overlapping absolutely-positioned block.
  */

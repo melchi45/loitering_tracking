@@ -99,7 +99,7 @@ export default defineConfig({
       },
       // UMP Player RTSP-over-WebSocket bridge (2026-07-23) — see
       // server/src/services/umpStreamingServer.js /
-      // docs/design/Design_UMP_Player_RTSP_over_WebSocket.md §4.2.
+      // docs/design/Design_RTSP_Over_WebSocket.md §4.2.
       '/StreamingServer': {
         target: backendTarget,
         ws: true,

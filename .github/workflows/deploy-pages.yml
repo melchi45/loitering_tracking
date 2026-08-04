@@ -41,6 +41,17 @@ jobs:
           cache: 'npm'
           cache-dependency-path: client/package-lock.json
 
+      # client/ depends on @melchi45/rtsp-over-websocket, published to GitHub
+      # Packages — npm install always requires auth there, even for a public
+      # repo under the same account (unlike the default npmjs.com registry).
+      # Requires a repo secret NPM_GH_PACKAGES_TOKEN (a GitHub PAT with
+      # read:packages on melchi45/rtsp-over-websocket) — see client/.npmrc.example.
+      - name: Configure npm registry for @melchi45 (GitHub Packages)
+        working-directory: client
+        run: |
+          echo "@melchi45:registry=https://npm.pkg.github.com" >> .npmrc
+          echo "//npm.pkg.github.com/:_authToken=${{ secrets.NPM_GH_PACKAGES_TOKEN }}" >> .npmrc
+
       - name: Install dependencies
         working-directory: client
         run: npm ci

@@ -5,6 +5,8 @@ metadata:
   type: project
 ---
 
+**STALE (2026-08-04):** `submodules/ump-player` was removed from this repo — its `src/player/` TS rewrite shipped as the standalone npm package `@melchi45/rtsp-over-websocket`, which LTS-2026 now consumes directly (see `docs/design/Design_RTSP_Over_WebSocket.md` §8.21 and `docs/design/Design_RTSP_Over_WebSocket_TypeScript_Migration.md` §9, Superseded/Shipped). Everything below describes the situation as of 2026-07-27, while the submodule still existed — kept for historical reference only; none of the `submodules/ump-player/...` paths below still exist in this repo.
+
 `submodules/ump-player` (a separate git submodule, npm-published as `@melchi45/ump-player`) is undergoing an incremental TypeScript/ESM rewrite of its legacy `app/media/ump/` JS library (87 files) + `app/media/angularInterface/` (2 files) into `submodules/ump-player/src/player/`. This is internal to the ump-player library itself — separate from, and not to be confused with, `[[project_ingest_daemon_http_unresponsive_pattern]]`-style LTS-2026 server work or the `camera-stream-setup` skill's UMP Player RTSP-over-WebSocket feature (that skill covers the npm-consumed `<ump-player>` element; this migration is about the library's own source tree).
 
 **SDD docs**: `submodules/ump-player/docs/{mrd,prd,srs,design,ops,tc}/*_TypeScript_Migration.md`. Full architecture/roadmap in the Design doc.

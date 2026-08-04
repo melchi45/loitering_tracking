@@ -1,16 +1,16 @@
 # SOFTWARE REQUIREMENTS SPECIFICATION (SRS)
-# UMP Player 레거시 JS → TypeScript/ESM 마이그레이션
+# RTSP-over-WebSocket 레거시 JS → TypeScript/ESM 마이그레이션
 
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-UMP-TS-01 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Active (구현 완료 — Layer 1-11) |
 | **Date** | 2026-07-30 |
-| **Parent PRD** | [prd/PRD_UMP_Player_TypeScript_Migration.md](../prd/PRD_UMP_Player_TypeScript_Migration.md) |
-| **Parent MRD** | [mrd/MRD_UMP_Player_TypeScript_Migration.md](../mrd/MRD_UMP_Player_TypeScript_Migration.md) |
-| **Child Design** | [design/Design_UMP_Player_TypeScript_Migration.md](../design/Design_UMP_Player_TypeScript_Migration.md) |
-| **Child TC** | [tc/TC_UMP_Player_TypeScript_Migration.md](../tc/TC_UMP_Player_TypeScript_Migration.md) |
+| **Parent PRD** | [prd/PRD_RTSP_Over_WebSocket_TypeScript_Migration.md](../prd/PRD_RTSP_Over_WebSocket_TypeScript_Migration.md) |
+| **Parent MRD** | [mrd/MRD_RTSP_Over_WebSocket_TypeScript_Migration.md](../mrd/MRD_RTSP_Over_WebSocket_TypeScript_Migration.md) |
+| **Child Design** | [design/Design_RTSP_Over_WebSocket_TypeScript_Migration.md](../design/Design_RTSP_Over_WebSocket_TypeScript_Migration.md) |
+| **Child TC** | [tc/TC_RTSP_Over_WebSocket_TypeScript_Migration.md](../tc/TC_RTSP_Over_WebSocket_TypeScript_Migration.md) |
 
 ---
 
@@ -30,7 +30,7 @@
 
 ### 1.1 목적
 
-본 SRS는 `submodules/ump-player/app/media/ump`(레거시)를 `submodules/ump-player/src/player`(TypeScript/ESM)로 병행 재작성하는 마이그레이션의 검증 가능한 기능 요구사항을 정의한다. 각 요구사항은 `FR-UMPTS-NNN` ID로 식별되며 `TC_UMP_Player_TypeScript_Migration.md`의 `TC-UMPTS-NNN` 테스트 케이스와 1:1 추적 가능하다.
+본 SRS는 `submodules/ump-player/app/media/ump`(레거시)를 `submodules/ump-player/src/player`(TypeScript/ESM)로 병행 재작성하는 마이그레이션의 검증 가능한 기능 요구사항을 정의한다. 각 요구사항은 `FR-UMPTS-NNN` ID로 식별되며 `TC_RTSP_Over_WebSocket_TypeScript_Migration.md`의 `TC-UMPTS-NNN` 테스트 케이스와 1:1 추적 가능하다.
 
 ### 1.2 범위
 
@@ -39,7 +39,7 @@
 - old-vs-new parity 검증 방법론(Node `vm` 기반) 및 Contract 검증 방법론(jsdom 등)의 요구사항.
 - 빌드 산출물(ESM/IIFE 듀얼 아웃풋) 요구사항.
 
-범위 밖: 레거시 `app/media` 서브모듈 자체의 수정, `app/*.html` 데모 페이지 cutover, LTS-2026 서버(`server/`)·클라이언트(`client/`)의 UMP 통합 방식 변경(이는 [SRS_UMP_Player_RTSP_over_WebSocket.md](SRS_UMP_Player_RTSP_over_WebSocket.md)의 범위).
+범위 밖: 레거시 `app/media` 서브모듈 자체의 수정, `app/*.html` 데모 페이지 cutover, LTS-2026 서버(`server/`)·클라이언트(`client/`)의 RTSP-over-WebSocket 통합 방식 변경(이는 [SRS_RTSP_Over_WebSocket.md](SRS_RTSP_Over_WebSocket.md)의 범위).
 
 ### 1.3 용어
 
@@ -53,7 +53,7 @@
 
 ## 2. 시스템 개요
 
-`src/player/`는 12개 레이어로 구성되며, 하위 레이어(Exception/Util)부터 상위 레이어(커스텀 엘리먼트)까지 의존성 순서대로 포팅된다. 전체 구조는 [Design_UMP_Player_TypeScript_Migration.md §2](../design/Design_UMP_Player_TypeScript_Migration.md#2-디렉토리-구조-실제-구현-상태)를 참조.
+`src/player/`는 12개 레이어로 구성되며, 하위 레이어(Exception/Util)부터 상위 레이어(커스텀 엘리먼트)까지 의존성 순서대로 포팅된다. 전체 구조는 [Design_RTSP_Over_WebSocket_TypeScript_Migration.md §2](../design/Design_RTSP_Over_WebSocket_TypeScript_Migration.md#2-디렉토리-구조-실제-구현-상태)를 참조.
 
 ---
 
@@ -127,7 +127,7 @@
 
 ### FR-UMPTS-012: 확인된 레거시 버그의 동일 재현
 
-레거시에서 확인된 결함(전체 목록: [Design_UMP_Player_TypeScript_Migration.md §6.1](../design/Design_UMP_Player_TypeScript_Migration.md#61-확인된-레거시-버그-포팅-시-그대로-보존-수정하지-않음))은 신규 구현에서 **동일한 조건에서 동일하게 재현**되어야 하며, 사용자 승인 없이 임의로 수정되어서는 안 된다. 각 버그는 포팅된 소스 파일의 인라인 주석에 근거 라인(레거시 파일:라인번호)과 함께 문서화되어야 한다.
+레거시에서 확인된 결함(전체 목록: [Design_RTSP_Over_WebSocket_TypeScript_Migration.md §6.1](../design/Design_RTSP_Over_WebSocket_TypeScript_Migration.md#61-확인된-레거시-버그-포팅-시-그대로-보존-수정하지-않음))은 신규 구현에서 **동일한 조건에서 동일하게 재현**되어야 하며, 사용자 승인 없이 임의로 수정되어서는 안 된다. 각 버그는 포팅된 소스 파일의 인라인 주석에 근거 라인(레거시 파일:라인번호)과 함께 문서화되어야 한다.
 
 **Rationale:** 이 마이그레이션은 리팩터링이 아니라 이식이다. 버그를 "고치면" 프로덕션에서 이미 그 버그에 맞춰 동작하는 다른 코드(예: `app-react`, LTS 서버 통합 코드)와의 동작 불일치가 발생할 수 있다.
 
@@ -185,3 +185,4 @@ Emscripten `Module` 전역은 `vendor/EmscriptenModule.d.ts` 단일 위치에서
 |---|---|---|
 | 1.0 | 2026-07-30 | 초기 작성 — Layer 1-11 구현 완료 시점에 소급 작성, FR-UMPTS-001~013 정의 |
 | 1.1 | 2026-07-30 | §7 Layer 12 상태 오기 수정 — `angularInterface/*`는 이미 포팅·테스트 완료(+19 tests) 상태였는데 "미확인"으로 잘못 기재되어 있던 것을 수정. 미착수인 것은 `Control/ptz/*`뿐 |
+| 1.2 | 2026-08-04 | 이 마이그레이션의 결과물이 `@melchi45/rtsp-over-websocket@1.0.1`로 npm 배포되고 LTS-2026에 채택되면서 `submodules/ump-player` 서브모듈 자체가 제거됨 — Design_RTSP_Over_WebSocket_TypeScript_Migration.md §9(Superseded/Shipped) 참고 |

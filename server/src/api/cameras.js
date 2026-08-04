@@ -27,7 +27,7 @@ const WEBRTC_ENGINE    = (process.env.WEBRTC_ENGINE   || 'mediamtx').toLowerCase
 
 // streamingMode ('jpeg'|'webrtc'|'ump') is a UI-facing convenience on top of the
 // existing webrtcEnabled boolean + new umpEnabled boolean (2026-07-22,
-// Design_UMP_Player_RTSP_over_WebSocket.md §7.2). Kept as a derivation rather than
+// Design_RTSP_Over_WebSocket.md §7.2). Kept as a derivation rather than
 // a stored field so pipelineManager.js's existing webrtcEnabled-based logic (pipeline
 // restart detection, addCameraStream() calls) stays completely untouched — umpEnabled
 // is a brand new flag that only the UMP fan-out code path reads.
@@ -526,7 +526,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null, io = null) {
         thermalSensorHeight: thermalSensorHeight ? parseInt(thermalSensorHeight, 10) : null,
         status:        'offline',
         // streamingMode ('jpeg'|'webrtc'|'ump') is a UI convenience, not stored directly —
-        // see streamingModeToFlags() above (Design_UMP_Player_RTSP_over_WebSocket.md §7.2).
+        // see streamingModeToFlags() above (Design_RTSP_Over_WebSocket.md §7.2).
         ...streamingModeToFlags(streamingMode),
       });
 
@@ -578,7 +578,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null, io = null) {
    * no auth gate) rather than following that precedent. Same reasoning as the
    * admin:subscribe-ingest-stats Socket.IO gate (utils/logger.js) — anything
    * that hands back stored RTSP credentials must be authenticated.
-   * See docs/design/Design_UMP_Player_RTSP_over_WebSocket.md §4.2/§8.
+   * See docs/design/Design_RTSP_Over_WebSocket.md §4.2/§8.
    */
   router.get('/:id/ump-credentials', verifyAccessToken, (req, res) => {
     try {
@@ -593,10 +593,10 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null, io = null) {
   /**
    * POST /api/cameras/:id/ump-meta
    * Body: { xml: string } — one <ump-player> 'meta' CustomEvent's detail.xml
-   * (see client/src/components/UmpPlayerView.tsx's onMeta relay).
+   * (see client/src/components/RTSPOverWebSocketView.tsx's onMeta relay).
    *
    * UMP-mode cameras bypass ingest-daemon's Application RTP fan-out entirely
-   * (Design_UMP_Player_RTSP_over_WebSocket.md §8.13), so for a UMP-only camera
+   * (Design_RTSP_Over_WebSocket.md §8.13), so for a UMP-only camera
    * the RTSP session's own metadata track — parsed browser-side by
    * metaSession.js/metaDataParser.js into ump-player.js's public 'meta' event —
    * is otherwise the only place its ONVIF MetadataStream XML ever surfaces.
@@ -709,7 +709,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null, io = null) {
       // cameras too, so umpStreamingServer.js's MediaMTX-direct-path preference can
       // actually find it (Design_RTSP_Capture_Backend.md §6.38); toggling umpEnabled
       // must now (de)register that path, not just flip the on-demand WS bridge's own
-      // fan-out (Design_UMP_Player_RTSP_over_WebSocket.md §4.2).
+      // fan-out (Design_RTSP_Over_WebSocket.md §4.2).
       const needsRestart =
         (rtspUrl       !== undefined && normalizedRtsp.value            !== camera.rtspUrl) ||
         (streamingFlags.webrtcEnabled !== undefined && !!streamingFlags.webrtcEnabled !== !!camera.webrtcEnabled) ||

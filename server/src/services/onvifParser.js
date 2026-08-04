@@ -234,7 +234,7 @@ function parseSingleNotification(blockXml) {
  * blocks together. Each is parsed independently so no data is lost.
  *
  * Split out from parseOnvifPayload() (2026-07-27) so callers that already
- * have plain XML text — e.g. UmpPlayerView.tsx's browser-side relay of
+ * have plain XML text — e.g. RTSPOverWebSocketView.tsx's browser-side relay of
  * <ump-player>'s 'meta' CustomEvent, which decodes the RTP payload itself
  * client-side via metaSession.js/metaDataParser.js — don't need to
  * re-encode it to base64 just to satisfy this function's original

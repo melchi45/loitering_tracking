@@ -1,28 +1,28 @@
 # Operations Guide
-# UMP Player TypeScript/ESM 마이그레이션 — 빌드/테스트 운영 가이드
+# RTSP-over-WebSocket TypeScript/ESM 마이그레이션 — 빌드/테스트 운영 가이드
 
 | | |
 |---|---|
 | **Document Reference** | OPS-LTS2026-UMP-TS-001 |
 | **Document Type** | Operations Guide |
 | **Parent System** | LTS-2026-001 Loitering Detection & Tracking System (submodule: ump-player) |
-| **Issue Date** | 2026-07-30 |
-| **Status** | **Active** |
-| **Related PRD** | [prd/PRD_UMP_Player_TypeScript_Migration.md](../prd/PRD_UMP_Player_TypeScript_Migration.md) |
-| **Related SRS** | [srs/SRS_UMP_Player_TypeScript_Migration.md](../srs/SRS_UMP_Player_TypeScript_Migration.md) |
-| **Related Design** | [design/Design_UMP_Player_TypeScript_Migration.md](../design/Design_UMP_Player_TypeScript_Migration.md) |
+| **Issue Date** | 2026-08-04 |
+| **Status** | **Superseded** (2026-08-04) — `submodules/ump-player`는 LTS-2026 저장소에서 제거되었습니다(Design_RTSP_Over_WebSocket_TypeScript_Migration.md §9). 이 문서의 빌드/테스트 절차는 이제 이 저장소가 아니라 별도 저장소 `melchi45/rtsp-over-websocket`에서 수행됩니다 — 아래 §1~§5는 서브모듈이 존재하던 당시의 절차를 **역사적 기록**으로 보존한 것이며, `cd submodules/ump-player`로 시작하는 명령은 더 이상 이 저장소에서 실행할 수 없습니다. |
+| **Related PRD** | [prd/PRD_RTSP_Over_WebSocket_TypeScript_Migration.md](../prd/PRD_RTSP_Over_WebSocket_TypeScript_Migration.md) |
+| **Related SRS** | [srs/SRS_RTSP_Over_WebSocket_TypeScript_Migration.md](../srs/SRS_RTSP_Over_WebSocket_TypeScript_Migration.md) |
+| **Related Design** | [design/Design_RTSP_Over_WebSocket_TypeScript_Migration.md](../design/Design_RTSP_Over_WebSocket_TypeScript_Migration.md) |
 
 ---
 
 ## 개요
 
-`submodules/ump-player/src/player/`는 레거시 `app/media/ump`(별도 git 서브모듈, 수정 금지)와 병행하는 TypeScript/ESM 구현이다. 이 문서는 로컬 개발, 빌드, 테스트 실행 방법을 다룬다. 아키텍처 자체는 [Design_UMP_Player_TypeScript_Migration.md](../design/Design_UMP_Player_TypeScript_Migration.md)를 참고한다.
+`submodules/ump-player/src/player/`는 레거시 `app/media/ump`(별도 git 서브모듈, 수정 금지)와 병행하는 TypeScript/ESM 구현이다. 이 문서는 로컬 개발, 빌드, 테스트 실행 방법을 다룬다. 아키텍처 자체는 [Design_RTSP_Over_WebSocket_TypeScript_Migration.md](../design/Design_RTSP_Over_WebSocket_TypeScript_Migration.md)를 참고한다.
 
 ---
 
 ## 1. 사전 준비
 
-`submodules/ump-player`는 private 저장소이며 중첩 서브모듈(`app/media`, `app/external-lib`)을 가진다. 최초 체크아웃 절차는 [UMP_Player_Streaming_Setup.md §1](UMP_Player_Streaming_Setup.md#1-서브모듈-설정-최초-1회)의 SSH override 절차를 그대로 따른다 — TypeScript 마이그레이션 작업 시에도 레거시 소스(`app/media/ump/*.js`)를 parity 테스트가 `vm`으로 로드하므로 서브모듈 체크아웃이 반드시 되어 있어야 한다.
+`submodules/ump-player`는 private 저장소이며 중첩 서브모듈(`app/media`, `app/external-lib`)을 가진다. 최초 체크아웃 절차는 [RTSP_Over_WebSocket_Streaming_Setup.md §1](RTSP_Over_WebSocket_Streaming_Setup.md#1-서브모듈-설정-최초-1회)의 SSH override 절차를 그대로 따른다 — TypeScript 마이그레이션 작업 시에도 레거시 소스(`app/media/ump/*.js`)를 parity 테스트가 `vm`으로 로드하므로 서브모듈 체크아웃이 반드시 되어 있어야 한다.
 
 의존성 설치:
 
@@ -88,7 +88,7 @@ npx vitest run mediaSession/RtpSession.test.ts
 3. 확인된 버그는 고치지 말고 인라인 주석(근거: 레거시 파일:라인번호)과 함께 그대로 포팅.
 4. 순수 로직이면 `loadLegacyModule`/`loadLegacyModuleExports`/`loadLegacyModuleSlice`(`test-support/loadLegacyModule.ts`)로 parity 테스트 작성. DOM/Worker 등 부수효과가 있으면 fake/jsdom 기반 Contract 테스트 작성.
 5. `tsc -b --force && vite build && npx vitest run`으로 전체 검증.
-6. `docs/design/Design_UMP_Player_TypeScript_Migration.md`(레이어 상태 표), `docs/tc/TC_UMP_Player_TypeScript_Migration.md`(신규 TC-UMPTS-NNN)를 갱신.
+6. `docs/design/Design_RTSP_Over_WebSocket_TypeScript_Migration.md`(레이어 상태 표), `docs/tc/TC_RTSP_Over_WebSocket_TypeScript_Migration.md`(신규 TC-UMPTS-NNN)를 갱신.
 
 ---
 
@@ -108,3 +108,4 @@ npx vitest run mediaSession/RtpSession.test.ts
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-30 | 초기 작성 — Layer 1-11 구현 완료 시점에 소급 작성 |
+| 1.1 | 2026-08-04 | `submodules/ump-player` 제거에 따라 Superseded로 상태 변경 — 이 문서가 다루는 빌드/테스트 워크플로는 이제 별도 저장소 `melchi45/rtsp-over-websocket`에서 수행됨. Design_RTSP_Over_WebSocket_TypeScript_Migration.md §9 참고 |

@@ -1,17 +1,17 @@
 # DESIGN DOCUMENT
-# UMP Player 레거시 JS → TypeScript/ESM 마이그레이션
+# RTSP-over-WebSocket 레거시 JS → TypeScript/ESM 마이그레이션
 
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-UMP-TS-001 |
-| **Version** | 1.3 |
-| **Status** | Active (Layer 1-11 구현 완료, `custom/ump-player.ts`(신규 `custom/UmpPlayer.ts`) 포함 전 레이어 포팅 완료; 2026-07-31 실카메라 라이브 재생 검증 및 포팅 회귀 수정 완료) |
-| **Date** | 2026-07-31 |
-| **Related Design** | [Design_UMP_Player_RTSP_over_WebSocket.md](Design_UMP_Player_RTSP_over_WebSocket.md) — 스코프 경계: 그 문서는 서버 통합/프로토콜(LTS 서버가 `<ump-player>`를 어떻게 소비하는지), 이 문서는 `submodules/ump-player` 라이브러리 **내부** 아키텍처(레거시 JS를 TS/ESM으로 재작성하는 방법)를 다룸 |
-| **Parent PRD** | [PRD_UMP_Player_TypeScript_Migration.md](../prd/PRD_UMP_Player_TypeScript_Migration.md) |
-| **Parent SRS** | [SRS_UMP_Player_TypeScript_Migration.md](../srs/SRS_UMP_Player_TypeScript_Migration.md) |
-| **Related TC** | [TC_UMP_Player_TypeScript_Migration.md](../tc/TC_UMP_Player_TypeScript_Migration.md) |
-| **Related Ops** | [UMP_Player_TypeScript_Migration_Ops.md](../ops/UMP_Player_TypeScript_Migration_Ops.md) |
+| **Version** | 1.4 |
+| **Status** | **Superseded/Shipped** (2026-08-04) — 이 문서가 다루는 재작성 결과물이 `@melchi45/rtsp-over-websocket@1.0.1`(npm, GitHub Packages)로 정식 배포되고 LTS-2026이 그걸 채택하면서, 이 문서가 다루던 `submodules/ump-player` 서브모듈 자체가 제거됨(§9). 이하 §1~§8은 그 서브모듈 안에서 이 마이그레이션이 어떻게 진행됐는지의 **역사적 기록**으로 보존 — 이전 상태: Active (Layer 1-11 구현 완료, `custom/ump-player.ts`(신규 `custom/UmpPlayer.ts`) 포함 전 레이어 포팅 완료; 2026-07-31 실카메라 라이브 재생 검증 및 포팅 회귀 수정 완료) |
+| **Date** | 2026-08-04 |
+| **Related Design** | [Design_RTSP_Over_WebSocket.md](Design_RTSP_Over_WebSocket.md) — 스코프 경계: 그 문서는 서버 통합/프로토콜(LTS 서버가 `<ump-player>`를 어떻게 소비하는지), 이 문서는 `submodules/ump-player` 라이브러리 **내부** 아키텍처(레거시 JS를 TS/ESM으로 재작성하는 방법)를 다룸 |
+| **Parent PRD** | [PRD_RTSP_Over_WebSocket_TypeScript_Migration.md](../prd/PRD_RTSP_Over_WebSocket_TypeScript_Migration.md) |
+| **Parent SRS** | [SRS_RTSP_Over_WebSocket_TypeScript_Migration.md](../srs/SRS_RTSP_Over_WebSocket_TypeScript_Migration.md) |
+| **Related TC** | [TC_RTSP_Over_WebSocket_TypeScript_Migration.md](../tc/TC_RTSP_Over_WebSocket_TypeScript_Migration.md) |
+| **Related Ops** | [RTSP_Over_WebSocket_TypeScript_Migration_Ops.md](../ops/RTSP_Over_WebSocket_TypeScript_Migration_Ops.md) |
 | **Related Submodule** | [submodules/ump-player](../../submodules/ump-player) (`github.com/melchi45/ump-player`, 자체 `app/media`(`github.com/melchi45/ump`) 서브모듈 포함) |
 
 ---
@@ -192,6 +192,16 @@ CSS 영향 없음 확인: `.channel_div`/`.statistics`/`.video-container`/`.menu
 
 ---
 
+## 9. npm 패키지 배포 및 채택 — 서브모듈 종료 (2026-08-04)
+
+이 문서가 §1~§8에서 다룬 `submodules/ump-player`의 `src/player/` TypeScript 재작성이 `@melchi45/rtsp-over-websocket@1.0.1`로 GitHub Packages에 정식 배포되었고, LTS-2026이 이 npm 패키지를 직접 의존성으로 채택하면서 `submodules/ump-player` 서브모듈 자체를 저장소에서 제거했다(`.gitmodules`, `git rm`).
+
+- LTS-2026 쪽 채택 상세는 [Design_RTSP_Over_WebSocket.md](Design_RTSP_Over_WebSocket.md) §8.21 참고 — 패키지의 `observedAttributes`/이벤트명/`channel` 오프셋 규칙이 레거시 `<ump-player>`와 1:1 호환됨을 확인한 뒤 `client/src/components/RTSPOverWebSocketView.tsx`만 교체, 서버 쪽(`umpStreamingServer.js`)은 무변경.
+- 이 문서(§1~§8)와 병렬 SDD 세트(MRD/PRD/SRS/Ops/TC, 위 헤더 링크)는 **서브모듈 내부 개발 과정의 역사적 기록**으로 그대로 보존한다 — 레이어별 포팅 순서, 발견된 버그, 회귀 수정 이력 등은 npm 패키지 자체의 향후 유지보수(별도 저장소 `melchi45/rtsp-over-websocket`)에서도 참고 가치가 있음.
+- 이 문서 세트에 대한 신규 작업(레이어 추가, 버그 수정 등)은 이제 LTS-2026 저장소가 아니라 `melchi45/rtsp-over-websocket` 저장소에서 이루어진다 — 이 문서는 더 이상 능동적으로 갱신되지 않는다.
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
@@ -200,3 +210,4 @@ CSS 영향 없음 확인: `.channel_div`/`.statistics`/`.video-container`/`.menu
 | 1.1 | 2026-07-30 | MRD/PRD/SRS/Ops 문서 신규 작성 완료 반영 — Related PRD/SRS/Ops 헤더 추가, §7 갱신 |
 | 1.2 | 2026-07-30 | Layer 12 상태 오기 수정 — `angularInterface/*`는 이미 포팅·테스트 완료(+19 tests) 상태였는데 "미착수"로 잘못 기재되어 있던 것을 수정. 미착수인 것은 `Control/ptz/*`뿐 |
 | 1.3 | 2026-07-31 | 실카메라(H.265/G.711) 라이브 재생 검증 중 발견한 포팅 회귀 2건 수정 반영 — §6(신설) IIFE `import.meta.url` 폴리필 한계로 데모를 ESM 빌드로 전환 + `base:'./'` 추가, `Module.wasmBinary` 경쟁 조건(fetch-then-importScripts 순서 반전) 및 누락된 `Module` 전역 사전 선언 수정. §7.2(신설) `channel_div`/`statistics`/`video-container`/`contextmenu`를 `#ump-wrapper-<id>` 하위로 통합한 DOM 재구성 반영. 기존 §6 → §7, §7 → §8로 번호 이동 |
+| 1.4 | 2026-08-04 | §9 신규 추가 — 이 마이그레이션의 결과물이 `@melchi45/rtsp-over-websocket@1.0.1`로 npm 배포·LTS-2026에 채택되면서 `submodules/ump-player` 서브모듈 자체가 제거됨. 문서 상태를 Superseded/Shipped로 변경(§1~§8은 역사적 기록으로 보존), 채택 상세는 Design_RTSP_Over_WebSocket.md §8.21로 링크 |

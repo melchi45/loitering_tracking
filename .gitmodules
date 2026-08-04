@@ -2,7 +2,3 @@
 	path = submodules/WiseNetChromeIPInstaller
 	url = git@github.com:melchi45/WiseNetChromeIPInstaller.git
 	branch = nodejs-udp-discovery
-[submodule "submodules/ump-player"]
-	path = submodules/ump-player
-	url = git@github.com:melchi45/ump-player.git
-	branch = feature/lts-server-integration

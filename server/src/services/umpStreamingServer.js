@@ -3,7 +3,7 @@
 /**
  * UMP Player RTSP-over-WebSocket bridge (`/StreamingServer`) — 2026-07-23.
  *
- * See docs/design/Design_UMP_Player_RTSP_over_WebSocket.md §4.2 for the full
+ * See docs/design/Design_RTSP_Over_WebSocket.md §4.2 for the full
  * design. Summary: `<ump-player>` opens a plain WebSocket (not Socket.IO) to
  * `ws(s)://<host>/StreamingServer<path>` and tunnels standard RTSP-over-TCP
  * interleaved framing (RFC 7826 §10.12) through it — the same framing a real

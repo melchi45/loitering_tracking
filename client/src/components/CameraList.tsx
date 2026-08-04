@@ -942,7 +942,7 @@ export default function CameraList() {
                     />
                   </div>
 
-                  {/* Streaming mode — JPEG(Default) / WebRTC / UMP (Design_UMP_Player_RTSP_over_WebSocket.md §7) */}
+                  {/* Streaming mode — JPEG(Default) / WebRTC / UMP (Design_RTSP_Over_WebSocket.md §7) */}
                   <StreamingModeSelector
                     value={form.streamingMode}
                     onChange={(mode) => setForm((p) => ({ ...p, streamingMode: mode }))}

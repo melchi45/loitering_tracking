@@ -280,44 +280,12 @@ async function main() {
   // UMP Player RTSP-over-WebSocket bridge (2026-07-23) — same ingest-daemon
   // dependency as the monitoring aggregator above (needs its rtsp-publish
   // API); also skipped in analysis mode, which has no cameras at all. See
-  // docs/design/Design_UMP_Player_RTSP_over_WebSocket.md §4.2.
+  // docs/design/Design_RTSP_Over_WebSocket.md §4.2.
   if (SERVER_MODE !== 'analysis' &&
       (process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase() === 'ingest-daemon') {
     const { attachUmpStreamingServer } = require('./services/umpStreamingServer');
     attachUmpStreamingServer(httpServer, db);
   }
-
-  // TEMP DIAGNOSTIC (2026-07-24) — serves the ump-player submodule's own example
-  // harness (ump-player-example.html) at this server's own origin, so it can hit
-  // /StreamingServer over the same already-trusted TLS cert instead of needing a
-  // separate self-signed-cert exception on another port. Remove once the UMP
-  // SPS/PPS crash investigation is done: https://dev.hanwhavision.com:3443/ump-player/ump-player-example.html
-  app.use('/ump-player', express.static(path.join(__dirname, '..', '..', 'submodules', 'ump-player', 'app')));
-
-  // TEMP DIAGNOSTIC (2026-07-24) — serves the ump-player submodule's React port
-  // (app-react) build output at this server's own origin, so it can hit
-  // /StreamingServer over the same already-trusted TLS cert instead of needing a
-  // separate self-signed-cert exception on another port. Must serve `dist/`
-  // (built via `npm run build` in app-react), not the raw project — the dev
-  // index.html references /src/main.tsx and other paths only a Vite dev
-  // server can resolve, and vite.config.ts's `base: '/ump-react/'` only takes
-  // effect in the built output. Remove once the UMP React port is done:
-  // https://dev.hanwhavision.com:3443/ump-react/
-  app.use('/ump-react', express.static(path.join(__dirname, '..', '..', 'submodules', 'ump-player', 'app-react', 'dist')));
-
-  // TEMP DIAGNOSTIC (2026-07-24) — serves the ump-player submodule's src/player/
-  // TypeScript-migration build output (dist/index.html + dist/player/
-  // ump-player.global.js, NOT app-react/'s copy-pasted-comment sibling above)
-  // at this server's own origin, so its demo form's hostname/port default
-  // (dist/index.html: `form.port.value = window.location.port || ...`) lands
-  // on this same HTTPS_PORT and /StreamingServer stays same-origin — no
-  // separate self-signed-cert exception or WS cross-port failure. Access via
-  // https://<SERVER_IP>:<HTTPS_PORT>/rtsp-ws/ (e.g. https://192.168.214.3:3443/rtsp-ws/),
-  // NOT a separately-hosted static server on another port — serving this dist/
-  // elsewhere (e.g. `npx serve -p 4001`) reintroduces exactly the cross-origin
-  // WS failure this route exists to avoid, since the page's own origin then
-  // no longer matches the backend's. Remove once the UMP TS migration is done.
-  app.use('/rtsp-ws', express.static(path.join(__dirname, '..', '..', 'submodules', 'ump-player', 'dist')));
 
   // ── Auth / Admin Routes ───────────────────────────────────────────────────
   app.use('/auth',  authRouter);

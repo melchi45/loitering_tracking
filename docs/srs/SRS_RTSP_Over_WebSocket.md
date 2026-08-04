@@ -1,16 +1,16 @@
 # SOFTWARE REQUIREMENTS SPECIFICATION (SRS)
-# UMP Player 기반 RTSP-over-WebSocket 스트리밍 경로
+# RTSP-over-WebSocket 스트리밍 경로
 
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-UMP-WS-01 |
-| **Version** | 1.1 |
+| **Version** | 1.2 |
 | **Status** | Active |
 | **Date** | 2026-07-22 |
-| **Parent PRD** | [prd/PRD_UMP_Player_RTSP_over_WebSocket.md](../prd/PRD_UMP_Player_RTSP_over_WebSocket.md) |
-| **Parent RFP** | [rfp/RFP_UMP_Player_RTSP_over_WebSocket.md](../rfp/RFP_UMP_Player_RTSP_over_WebSocket.md) |
-| **Child Design** | [design/Design_UMP_Player_RTSP_over_WebSocket.md](../design/Design_UMP_Player_RTSP_over_WebSocket.md) |
-| **Child TC** | [tc/TC_UMP_Player_RTSP_over_WebSocket.md](../tc/TC_UMP_Player_RTSP_over_WebSocket.md) |
+| **Parent PRD** | [prd/PRD_RTSP_Over_WebSocket.md](../prd/PRD_RTSP_Over_WebSocket.md) |
+| **Parent RFP** | [rfp/RFP_RTSP_Over_WebSocket.md](../rfp/RFP_RTSP_Over_WebSocket.md) |
+| **Child Design** | [design/Design_RTSP_Over_WebSocket.md](../design/Design_RTSP_Over_WebSocket.md) |
+| **Child TC** | [tc/TC_RTSP_Over_WebSocket.md](../tc/TC_RTSP_Over_WebSocket.md) |
 
 ---
 
@@ -33,7 +33,7 @@
 
 ### 1.1 목적
 
-본 SRS는 LTS-2026의 세 번째 카메라 재생 경로인 UMP Player 기반 RTSP-over-WebSocket 기능의 검증 가능한 기능 요구사항을 정의한다. 각 요구사항은 `FR-UMP-NNN` ID로 식별되며 `TC_UMP_Player_RTSP_over_WebSocket.md`의 테스트 케이스와 추적 가능하다.
+본 SRS는 LTS-2026의 세 번째 카메라 재생 경로인 RTSP-over-WebSocket 기능의 검증 가능한 기능 요구사항을 정의한다. 각 요구사항은 `FR-UMP-NNN` ID로 식별되며 `TC_RTSP_Over_WebSocket.md`의 테스트 케이스와 추적 가능하다.
 
 ### 1.2 범위
 
@@ -42,15 +42,15 @@
 - ingest-daemon의 6번째 fan-out(PyAV → 로컬 MediaMTX publish)의 on-demand 시작/종료
 - 신규 `/StreamingServer` WebSocket 엔드포인트 — RTSP Digest 인증 + WS↔TCP 바이트 릴레이
 - `channelSlot` 재사용에 의한 채널 라우팅
-- 카메라 Add/Edit UI의 JPEG/WebRTC/UMP 3-way 선택
+- 카메라 Add/Edit UI의 JPEG/WebRTC/RTSP-over-WebSocket 3-way 선택
 
-범위 밖: `/StreamingServer` 프로토콜 자체의 재정의(표준 RTSP-over-TCP-interleaved 프레이밍 그대로 릴레이), YouTube/RTMP/HLS 소스에 대한 UMP 지원, 신규 인증 체계(JWT 등) 도입.
+범위 밖: `/StreamingServer` 프로토콜 자체의 재정의(표준 RTSP-over-TCP-interleaved 프레이밍 그대로 릴레이), YouTube/RTMP/HLS 소스에 대한 RTSP-over-WebSocket 지원, 신규 인증 체계(JWT 등) 도입.
 
 ### 1.3 용어
 
 | 용어 | 정의 |
 |---|---|
-| UMP Player | Hanwha(Wisenet) `<ump-player>` 웹 컴포넌트, `submodules/ump-player` |
+| RTSP-over-WebSocket | Hanwha(Wisenet) `<ump-player>` 웹 컴포넌트, `submodules/ump-player` |
 | `/StreamingServer` | Hanwha SUNAPI가 정의하는 RTSP-over-WebSocket 엔드포인트 경로 규약 |
 | RTSP Proxy | 이 기능이 신설하는 로컬 MediaMTX publish 대상(채널별 `rtsp://127.0.0.1:8554/<channelSlot>`) |
 | WS 브릿지 | `/StreamingServer` WebSocket 연결을 수락하고 인증 후 내부 RTSP Proxy로 바이트 릴레이하는 신규 LTS Node 서버 컴포넌트 |
@@ -124,7 +124,7 @@ CameraEditModal.tsx (streamingMode 3-way 선택)
 
 `umpEnabled` 필드 추가는 `pipelineManager.js`의 파이프라인 재시작 판단, `addCameraStream()` 호출 등 기존 `webrtcEnabled` 관련 코드 경로의 동작을 변경해서는 안 된다(SHALL NOT).
 
-### FR-UMP-005 — YouTube 카메라의 UMP 제외
+### FR-UMP-005 — YouTube 카메라의 RTSP-over-WebSocket 제외
 
 YouTube 카메라(가상 카메라)는 `streamingMode` 선택지에서 `'ump'`를 지원하지 않아야 한다(SHALL NOT) — YouTube 소스는 원본 카메라 개념이 없어 SUNAPI/RTSP Digest 인증 재사용이 성립하지 않는다.
 
@@ -190,7 +190,7 @@ WS 브릿지는 특정 채널에 대한 활성 WS 연결 수가 0이 되는 시�
 
 ### FR-UMP-030 — `channelSlot` 재사용
 
-UMP 재생의 채널 식별은 기존 `channelSlot`(1..`MAX_CHANNEL_NUM`) 값을 그대로 재사용해야 한다(SHALL). 신규 채널 매핑 테이블을 도입해서는 안 된다(SHALL NOT).
+RTSP-over-WebSocket 재생의 채널 식별은 기존 `channelSlot`(1..`MAX_CHANNEL_NUM`) 값을 그대로 재사용해야 한다(SHALL). 신규 채널 매핑 테이블을 도입해서는 안 된다(SHALL NOT).
 
 ### FR-UMP-031 — `channelSlotService` 재사용
 
@@ -202,11 +202,11 @@ WS 브릿지의 `channelSlot → cameraId` 조회는 기존 `channelSlotService.
 
 ### FR-UMP-040 — 3-way 재생 모드 선택
 
-카메라 Add 모달(RTSP 탭)과 Edit 모달(`CameraEditModal.tsx`)은 기존 WebRTC On/Off 토글을 JPEG(Default)/WebRTC/UMP 3버튼 세그먼트 컨트롤로 교체해야 한다(SHALL).
+카메라 Add 모달(RTSP 탭)과 Edit 모달(`CameraEditModal.tsx`)은 기존 WebRTC On/Off 토글을 JPEG(Default)/WebRTC/RTSP-over-WebSocket 3버튼 세그먼트 컨트롤로 교체해야 한다(SHALL).
 
-### FR-UMP-041 — YouTube 폼의 UMP 제외
+### FR-UMP-041 — YouTube 폼의 RTSP-over-WebSocket 제외
 
-YouTube Add/Edit 폼은 동일한 3-way 컨트롤 대신, UMP 옵션이 제외된 JPEG/WebRTC 2-way 컨트롤을 유지해야 한다(SHALL).
+YouTube Add/Edit 폼은 동일한 3-way 컨트롤 대신, RTSP-over-WebSocket 옵션이 제외된 JPEG/WebRTC 2-way 컨트롤을 유지해야 한다(SHALL).
 
 ### FR-UMP-042 — `<ump-player>` 렌더링
 
@@ -214,7 +214,7 @@ YouTube Add/Edit 폼은 동일한 3-way 컨트롤 대신, UMP 옵션이 제외�
 
 ### FR-UMP-043 — Detection Bounding Box 오버레이 (2026-07-30 추가)
 
-`streamingMode === 'ump'`인 카메라도 JPEG/WebRTC 모드와 동일하게 `<ump-player>` 위에 detection bounding box/라벨 오버레이를 표시해야 한다(SHALL) — `CameraView.tsx`는 UMP 분기에도 다른 재생 모드와 동일한 `<canvas>` 엘리먼트를 렌더링하고, 동일한 `drawOverlay()`/`frameWidth`/`frameHeight` 스케일링 로직을 재사용한다. capture image가 analysis 파이프라인에 정상 입력되고 있다면(재생 모드와 무관하게 항상 동일 경로), 오버레이도 항상 함께 표시되어야 한다. 상세: `Design_UMP_Player_RTSP_over_WebSocket.md` §8.20.
+`streamingMode === 'ump'`인 카메라도 JPEG/WebRTC 모드와 동일하게 `<ump-player>` 위에 detection bounding box/라벨 오버레이를 표시해야 한다(SHALL) — `CameraView.tsx`는 RTSP-over-WebSocket 분기에도 다른 재생 모드와 동일한 `<canvas>` 엘리먼트를 렌더링하고, 동일한 `drawOverlay()`/`frameWidth`/`frameHeight` 스케일링 로직을 재사용한다. capture image가 analysis 파이프라인에 정상 입력되고 있다면(재생 모드와 무관하게 항상 동일 경로), 오버레이도 항상 함께 표시되어야 한다. 상세: `Design_RTSP_Over_WebSocket.md` §8.20.
 
 ---
 
@@ -226,7 +226,7 @@ YouTube Add/Edit 폼은 동일한 3-way 컨트롤 대신, UMP 옵션이 제외�
 | NFR-UMP-02 | ingest-daemon의 fan-out(§4)은 뷰어가 없는 유휴 상태에서 리소스를 점유해서는 안 된다(on-demand) |
 | NFR-UMP-03 | 이 기능은 `SERVER_MODE`가 `combined` 또는 `streaming`일 때만 적용되며, `analysis` 모드(카메라 없음)는 영향을 받지 않는다 |
 | NFR-UMP-04 | 카메라 자격증명(username/password)은 로그에 출력되어서는 안 된다(SHALL NOT) — 기존 RTSP URL 자격증명 로깅 금지 규칙과 동일 |
-| NFR-UMP-05 | 임의 개수의 UMP 브라우저 세션이 동일 카메라를 동시 시청해도 해당 카메라의 ingest-daemon RTSP 세션 수는 항상 1이어야 한다 |
+| NFR-UMP-05 | 임의 개수의 RTSP-over-WebSocket 브라우저 세션이 동일 카메라를 동시 시청해도 해당 카메라의 ingest-daemon RTSP 세션 수는 항상 1이어야 한다 |
 
 ---
 
@@ -255,7 +255,7 @@ GET /api/cameras, GET /api/cameras/:id, POST/PUT 응답
 
 ```
 POST /cameras/:id/video-fanout   (ingest-daemon API, 기존)
-  UMP WS 브릿지가 채널의 첫 연결/마지막 연결 종료 시 호출해 fan-out 시작/종료
+  RTSP-over-WebSocket WS 브릿지가 채널의 첫 연결/마지막 연결 종료 시 호출해 fan-out 시작/종료
 ```
 
 ---
@@ -263,8 +263,8 @@ POST /cameras/:id/video-fanout   (ingest-daemon API, 기존)
 ## 10. 제약 사항 및 가정
 
 - `/StreamingServer` 프로토콜은 Hanwha SUNAPI가 이미 정의한 규격이며, 이 기능은 이를 로컬에서 재현할 뿐 새로 설계하지 않는다(Design 문서 §2).
-- 카메라에 RTSP 자격증명(username/password)이 없는 경우 UMP 재생은 인증에 실패한다(§FR-UMP-023) — 별도 익명 접근 경로를 제공하지 않는다.
-- 서브모듈 `submodules/ump-player`의 중첩 서브모듈(`app/media`, `app/external-lib`) 관리는 이 저장소 범위 밖이며, 운영 절차는 `docs/ops/UMP_Player_Streaming_Setup.md`를 따른다.
+- 카메라에 RTSP 자격증명(username/password)이 없는 경우 RTSP-over-WebSocket 재생은 인증에 실패한다(§FR-UMP-023) — 별도 익명 접근 경로를 제공하지 않는다.
+- 서브모듈 `submodules/ump-player`의 중첩 서브모듈(`app/media`, `app/external-lib`) 관리는 이 저장소 범위 밖이며, 운영 절차는 `docs/ops/RTSP_Over_WebSocket_Streaming_Setup.md`를 따른다.
 
 ---
 
@@ -273,4 +273,5 @@ POST /cameras/:id/video-fanout   (ingest-daemon API, 기존)
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-22 | 초기 작성 |
-| 1.1 | 2026-07-30 | FR-UMP-043 추가 — UMP 모드 detection bounding box 오버레이 요구사항 (버그 수정 반영) |
+| 1.1 | 2026-07-30 | FR-UMP-043 추가 — RTSP-over-WebSocket 모드 detection bounding box 오버레이 요구사항 (버그 수정 반영) |
+| 1.2 | 2026-08-04 | 클라이언트 라이브러리를 `submodules/ump-player` 서브모듈에서 `@melchi45/rtsp-over-websocket` npm 패키지로 전환 — Design_RTSP_Over_WebSocket.md §8.21 참고. 기능 요구사항 자체는 변경 없음(패키지가 기존 속성/이벤트 계약과 호환) |

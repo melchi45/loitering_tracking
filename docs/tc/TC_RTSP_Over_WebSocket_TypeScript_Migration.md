@@ -1,13 +1,13 @@
-# TC — UMP Player 레거시 JS → TypeScript/ESM 마이그레이션
+# TC — RTSP-over-WebSocket 레거시 JS → TypeScript/ESM 마이그레이션
 
 **Product:** LTS-2026 Loitering Detection & Tracking System (submodule: ump-player)
 **Feature:** `submodules/ump-player/app/media/ump` → `submodules/ump-player/src/player` TypeScript/ESM 재작성
-**Version:** 1.1
-**Date:** 2026-07-30
-**SRS Reference:** [SRS_UMP_Player_TypeScript_Migration.md](../srs/SRS_UMP_Player_TypeScript_Migration.md)
-**Design Reference:** [Design_UMP_Player_TypeScript_Migration.md](../design/Design_UMP_Player_TypeScript_Migration.md)
+**Version:** 1.2
+**Date:** 2026-08-04
+**SRS Reference:** [SRS_RTSP_Over_WebSocket_TypeScript_Migration.md](../srs/SRS_RTSP_Over_WebSocket_TypeScript_Migration.md)
+**Design Reference:** [Design_RTSP_Over_WebSocket_TypeScript_Migration.md](../design/Design_RTSP_Over_WebSocket_TypeScript_Migration.md)
 
-> **TC-ID 넘버링 노트**: 기존 `TC_UMP_Player_RTSP_over_WebSocket.md`는 `TC-UMP-NNN` 프리픽스를 사용 중이므로(서버 통합/프로토콜 테스트), 이 문서는 겹치지 않도록 `TC-UMPTS-NNN` 프리픽스를 사용한다(라이브러리 내부 TypeScript 마이그레이션 테스트).
+> **TC-ID 넘버링 노트**: 기존 `TC_RTSP_Over_WebSocket.md`는 `TC-UMP-NNN` 프리픽스를 사용 중이므로(서버 통합/프로토콜 테스트), 이 문서는 겹치지 않도록 `TC-UMPTS-NNN` 프리픽스를 사용한다(라이브러리 내부 TypeScript 마이그레이션 테스트).
 >
 > **실행 방법**: `cd submodules/ump-player/src/player && npx vitest run` — 89개 테스트 파일, 539개 테스트 전부 자동화됨(수동 검증 항목 없음). 이 문서의 "자동화" 표기는 전부 "완료(구현됨)"이다 — 레거시 서버 스위트(`test:tc`, TC-XXX)와 달리 이 마이그레이션은 브라우저 카메라 연동이 필요 없는 라이브러리 레벨 코드이므로 100% 자동화 가능하다.
 
@@ -169,3 +169,4 @@
 |---|---|---|
 | 1.0 | 2026-07-30 | 초기 작성 — Layer 1-11 전체 TC-ID 기록 (TC-UMPTS-001~013), 전부 자동화 완료 상태로 표기 |
 | 1.1 | 2026-07-30 | SRS 신규 작성 완료 반영 — 각 TC 항목에 `**SRS:** FR-UMPTS-NNN` 추적 라인 추가, 헤더에 SRS Reference 추가 |
+| 1.2 | 2026-08-04 | 이 마이그레이션의 결과물이 `@melchi45/rtsp-over-websocket@1.0.1`로 npm 배포되고 LTS-2026에 채택되면서 `submodules/ump-player` 서브모듈 자체가 제거됨 — Design_RTSP_Over_WebSocket_TypeScript_Migration.md §9(Superseded/Shipped) 참고 |

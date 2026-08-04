@@ -122,7 +122,7 @@ export default function CameraEditModal({ camera, onClose }: Props) {
 
   // ── RTSP form state ────────────────────────────────────────────────────────
   // streamingMode ('jpeg'|'webrtc'|'ump') replaces the old binary webrtcEnabled toggle —
-  // see Design_UMP_Player_RTSP_over_WebSocket.md §7. Falls back to deriving from
+  // see Design_RTSP_Over_WebSocket.md §7. Falls back to deriving from
   // webrtcEnabled for cameras fetched before the server started returning streamingMode.
   const [rtspForm, setRtspForm] = useState({
     name:          camera.name,
@@ -562,7 +562,7 @@ export default function CameraEditModal({ camera, onClose }: Props) {
                 )}
               </div>
 
-              {/* Streaming mode — JPEG(Default) / WebRTC / UMP (Design_UMP_Player_RTSP_over_WebSocket.md §7) */}
+              {/* Streaming mode — JPEG(Default) / WebRTC / UMP (Design_RTSP_Over_WebSocket.md §7) */}
               <StreamingModeSelector
                 value={rtspForm.streamingMode}
                 onChange={(mode) => setRtspForm((p) => ({ ...p, streamingMode: mode }))}

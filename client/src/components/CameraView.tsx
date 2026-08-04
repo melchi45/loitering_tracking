@@ -9,7 +9,7 @@ import ZoneEditor from './ZoneEditor';
 import ThermalOverlay from './ThermalOverlay';
 import WebRtcStatsPanel from './WebRtcStatsPanel';
 import UmpStatsPanel from './UmpStatsPanel';
-import UmpPlayerView from './UmpPlayerView';
+import RTSPOverWebSocketView from './RTSPOverWebSocketView';
 import type { Detection, Zone } from '../types';
 
 interface Props {
@@ -322,7 +322,7 @@ export default function CameraView({ cameraId, cameraName }: Props) {
   const cameras        = useCameraStore((s) => s.cameras);
   const camera         = cameras.find((c) => c.id === cameraId);
   // streamingMode ('jpeg'|'webrtc'|'ump') selects one of three delivery paths —
-  // see Design_UMP_Player_RTSP_over_WebSocket.md §7. Falls back to deriving
+  // see Design_RTSP_Over_WebSocket.md §7. Falls back to deriving
   // from webrtcEnabled for cameras fetched before the server returned it.
   const streamingMode = camera?.streamingMode ?? (camera?.webrtcEnabled ? 'webrtc' : 'jpeg');
   // STUN/TURN settings come from useWebRTC hook via webrtcConfigStore.
@@ -334,7 +334,7 @@ export default function CameraView({ cameraId, cameraName }: Props) {
   // WebRTC path (active only when webrtcEnabled + global WebRTC enabled)
   const { videoRef, state: webrtcState, hasAudio, retry: retryWebRTC, iceStats, rxHistory, rxCodec } = useWebRTC(cameraId, useWebRTCMode);
   // UMP path stats (active only when streamingMode === 'ump') — fed by
-  // UmpPlayerView's 'statistics' listener via onStatistics, same shape of
+  // RTSPOverWebSocketView's 'statistics' listener via onStatistics, same shape of
   // wiring as useWebRTC's iceStats/rxHistory above. See useUmpStats.ts.
   const { stats: umpStats, history: umpHistory, onStatistics: onUmpStatistics } = useUmpStats();
 
@@ -398,7 +398,7 @@ export default function CameraView({ cameraId, cameraName }: Props) {
       {useUmpMode && camera ? (
         /* ── UMP path: RTSP-over-WebSocket via <ump-player> ── */
         <>
-          <UmpPlayerView camera={camera} onStatistics={onUmpStatistics} />
+          <RTSPOverWebSocketView camera={camera} onStatistics={onUmpStatistics} />
           {/* Detection bbox overlay — same canvas + drawOverlay() as the JPEG/
               WebRTC paths (2026-07-30 fix: this canvas was previously missing
               from the UMP branch entirely, so canvasRef.current stayed null
@@ -417,7 +417,7 @@ export default function CameraView({ cameraId, cameraName }: Props) {
               corner layout as the WebRTC badge/ICE/Zone rows below, so the
               two streaming modes read as the same UI. Toggle gates on
               umpStats !== null (first 'statistics' tick received) rather
-              than a connection-state enum — UmpPlayerView doesn't expose
+              than a connection-state enum — RTSPOverWebSocketView doesn't expose
               one, and "has produced at least one stat sample" is an
               equivalent proxy for "connected enough to show". */}
           <div className="absolute top-2 right-2 flex flex-col items-end gap-1 z-10">

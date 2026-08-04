@@ -1,5 +1,5 @@
 # REQUEST FOR PROPOSAL (RFP)
-# UMP Player 기반 RTSP-over-WebSocket 스트리밍 경로
+# RTSP-over-WebSocket 스트리밍 경로
 
 | | |
 |---|---|
@@ -7,8 +7,8 @@
 | **Parent System** | LTS-2026-001 Loitering Detection & Tracking System |
 | **Issue Date** | 2026-07-22 |
 | **Status** | **Active — 구현 진행 중** |
-| **Related MRD** | [MRD_UMP_Player_RTSP_over_WebSocket.md](../mrd/MRD_UMP_Player_RTSP_over_WebSocket.md) |
-| **Related Design** | [Design_UMP_Player_RTSP_over_WebSocket.md](../design/Design_UMP_Player_RTSP_over_WebSocket.md) |
+| **Related MRD** | [MRD_RTSP_Over_WebSocket.md](../mrd/MRD_RTSP_Over_WebSocket.md) |
+| **Related Design** | [Design_RTSP_Over_WebSocket.md](../design/Design_RTSP_Over_WebSocket.md) |
 | **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) |
 
 ---
@@ -28,9 +28,9 @@
 
 ## 1. 배경
 
-LTS-2026의 카메라 재생 경로는 JPEG Capture 스트리밍(`pipelineManager.js` → Socket.IO `frame`)과 WebRTC(mediasoup SFU 또는 MediaMTX WHEP) 두 가지입니다. 이번 RFP는 Hanwha `<ump-player>` 웹 컴포넌트(신규 서브모듈 `submodules/ump-player`)를 이용한 **세 번째 경로 — UMP Player 기반 RTSP-over-WebSocket**을 정의합니다.
+LTS-2026의 카메라 재생 경로는 JPEG Capture 스트리밍(`pipelineManager.js` → Socket.IO `frame`)과 WebRTC(mediasoup SFU 또는 MediaMTX WHEP) 두 가지입니다. 이번 RFP는 Hanwha `<ump-player>` 웹 컴포넌트(신규 서브모듈 `submodules/ump-player`)를 이용한 **세 번째 경로 — RTSP-over-WebSocket**을 정의합니다.
 
-UMP Player의 실제 와이어 프로토콜을 분석한 결과(Design 문서 §2), `/StreamingServer`는 Hanwha 카메라 펌웨어가 자체 제공하는 SUNAPI 기능이며, 표준 RFC 7826 RTSP-over-TCP-interleaved 프레이밍을 WebSocket 바이너리 메시지에 그대로 실은 것에 불과합니다(§2.4). 즉 서버 측에서 RTSP를 해석할 필요 없이, WS 연결과 내부 RTSP TCP 연결 사이를 순수 바이트로 릴레이하면 됩니다.
+RTSP-over-WebSocket의 실제 와이어 프로토콜을 분석한 결과(Design 문서 §2), `/StreamingServer`는 Hanwha 카메라 펌웨어가 자체 제공하는 SUNAPI 기능이며, 표준 RFC 7826 RTSP-over-TCP-interleaved 프레이밍을 WebSocket 바이너리 메시지에 그대로 실은 것에 불과합니다(§2.4). 즉 서버 측에서 RTSP를 해석할 필요 없이, WS 연결과 내부 RTSP TCP 연결 사이를 순수 바이트로 릴레이하면 됩니다.
 
 이 저장소의 최우선 아키텍처 원칙("ingest-daemon이 카메라별 단일 RTSP 세션만 유지")과 충돌하지 않도록, 카메라에는 신규 세션을 추가하지 않고 ingest-daemon이 이미 열어둔 세션의 6번째 fan-out으로 로컬 MediaMTX에 채널별 재발행(publish)하는 구조로 확정되었습니다(Design 문서 §3, §4.1 — YouTube 카메라가 이미 사용 중인 로컬 publish 패턴과 동일).
 
@@ -40,7 +40,7 @@ UMP Player의 실제 와이어 프로토콜을 분석한 결과(Design 문서 §
 
 1. 카메라 스키마에 `umpEnabled`(boolean) 필드 추가 — 기존 `webrtcEnabled`는 변경 없이 유지.
 2. API 계층(`server/src/api/cameras.js`)에 UI 편의 필드 `streamingMode: 'jpeg'|'webrtc'|'ump'` 추가 — 저장 시 `{webrtcEnabled, umpEnabled}`로 파생, 조회 시 역산. **(구현 완료 — `streamingModeToFlags()`/`deriveStreamingMode()`)**
-3. 카메라 Add/Edit UI의 기존 "WebRTC On/Off" 토글을 "JPEG(Default) / WebRTC / UMP" 3-way 세그먼트 컨트롤로 교체 (RTSP·YouTube 폼 공통, YouTube는 UMP 옵션 제외).
+3. 카메라 Add/Edit UI의 기존 "WebRTC On/Off" 토글을 "JPEG(Default) / WebRTC / RTSP-over-WebSocket" 3-way 세그먼트 컨트롤로 교체 (RTSP·YouTube 폼 공통, YouTube는 RTSP-over-WebSocket 옵션 제외).
 4. ingest-daemon(PyAV)에 6번째 fan-out 추가 — 채널별로 `rtsp://127.0.0.1:8554/<channelSlot>/media.smp`에 로컬 MediaMTX publish. 기존 `POST /cameras/:id/video-fanout` API를 on-demand 시작/종료에 재사용.
 5. LTS Node 서버에 신규 `/StreamingServer` WebSocket 엔드포인트 추가 — RTSP Digest(MD5) 인증 후 WS↔TCP 순수 바이트 릴레이.
 6. 클라이언트 재생 컴포넌트(`CameraGrid.tsx`/`CameraView.tsx`)에 `streamingMode==='ump'`일 때 `<ump-player>` 렌더링 통합.
@@ -54,7 +54,7 @@ UMP Player의 실제 와이어 프로토콜을 분석한 결과(Design 문서 §
 
 ### 3.1 카메라 세션 — 신규 세션 금지
 
-UMP 재생 경로 추가는 카메라에 대한 ingest-daemon의 RTSP 세션 수를 늘리지 않는다. 몇 개의 브라우저가 동시에 같은 카메라를 UMP로 시청하더라도 카메라 쪽 세션은 항상 1개다(Design 문서 §3).
+RTSP-over-WebSocket 재생 경로 추가는 카메라에 대한 ingest-daemon의 RTSP 세션 수를 늘리지 않는다. 몇 개의 브라우저가 동시에 같은 카메라를 RTSP-over-WebSocket로 시청하더라도 카메라 쪽 세션은 항상 1개다(Design 문서 §3).
 
 ### 3.2 로컬 RTSP Proxy — MediaMTX 재사용
 
@@ -80,11 +80,11 @@ ingest-daemon의 6번째 fan-out(§3.2)은 WS 브릿지의 해당 채널 첫 연
 
 ### 3.6 카메라 호환성 게이팅 없음
 
-`supportSunapi`와 무관하게 모든 RTSP 카메라에 UMP 옵션이 노출된다 — 로컬 프록시가 재서빙하므로 원본 카메라의 SUNAPI 지원 여부는 게이팅 조건이 아니다. YouTube 카메라는 UMP 대상에서 제외한다(Design 문서 §5 항목 4).
+`supportSunapi`와 무관하게 모든 RTSP 카메라에 RTSP-over-WebSocket 옵션이 노출된다 — 로컬 프록시가 재서빙하므로 원본 카메라의 SUNAPI 지원 여부는 게이팅 조건이 아니다. YouTube 카메라는 RTSP-over-WebSocket 대상에서 제외한다(Design 문서 §5 항목 4).
 
 ### 3.7 카메라 Add/Edit UI — 3-way 재생 모드 선택
 
-기존 WebRTC On/Off 토글을 JPEG(Default) / WebRTC / UMP 3버튼 세그먼트 컨트롤로 교체한다. RTSP 폼과 YouTube 폼 양쪽에 동일 적용하되 YouTube 폼에는 UMP 옵션을 표시하지 않는다(Design 문서 §7.2).
+기존 WebRTC On/Off 토글을 JPEG(Default) / WebRTC / RTSP-over-WebSocket 3버튼 세그먼트 컨트롤로 교체한다. RTSP 폼과 YouTube 폼 양쪽에 동일 적용하되 YouTube 폼에는 RTSP-over-WebSocket 옵션을 표시하지 않는다(Design 문서 §7.2).
 
 ---
 
@@ -135,8 +135,8 @@ Hanwha SUNAPI 프로토콜과 동일 — <ump-player proxy="SERVER_IP" hostname=
 
 ## 6. UI 배치
 
-- Add Camera 모달(RTSP 탭) — 기존 WebRTC 토글 위치를 JPEG(Default)/WebRTC/UMP 3버튼 세그먼트 컨트롤로 교체
-- Add Camera 모달(YouTube 탭) — 동일 컨트롤이되 UMP 옵션 미표시(JPEG/WebRTC 2-way 유지)
+- Add Camera 모달(RTSP 탭) — 기존 WebRTC 토글 위치를 JPEG(Default)/WebRTC/RTSP-over-WebSocket 3버튼 세그먼트 컨트롤로 교체
+- Add Camera 모달(YouTube 탭) — 동일 컨트롤이되 RTSP-over-WebSocket 옵션 미표시(JPEG/WebRTC 2-way 유지)
 - Edit Camera 모달(`CameraEditModal.tsx`) — 동일 3-way 컨트롤, 카메라의 현재 `streamingMode`로 사전 선택
 - 카메라 그리드(`CameraGrid.tsx`) / 단일 뷰(`CameraView.tsx`) — `streamingMode==='ump'`일 때 `<ump-player>` 렌더링(미구현)
 
@@ -158,12 +158,12 @@ Design 문서 §8의 구현 순서를 따른다:
 
 ## 8. 인수 기준
 
-- 카메라 Add/Edit 화면에서 JPEG/WebRTC/UMP 3-way 선택이 가능하고, 저장/조회 시 `webrtcEnabled`/`umpEnabled` 파생·역산이 정확히 동작한다 (완료 — API 레벨).
-- UMP로 임의 개수의 브라우저가 동시 시청해도 대상 카메라의 ingest-daemon RTSP 세션 수가 1개로 유지된다.
-- UMP 뷰어가 모두 종료되면 해당 채널의 ingest-daemon fan-out 및 MediaMTX publish가 자동 정리된다.
+- 카메라 Add/Edit 화면에서 JPEG/WebRTC/RTSP-over-WebSocket 3-way 선택이 가능하고, 저장/조회 시 `webrtcEnabled`/`umpEnabled` 파생·역산이 정확히 동작한다 (완료 — API 레벨).
+- RTSP-over-WebSocket로 임의 개수의 브라우저가 동시 시청해도 대상 카메라의 ingest-daemon RTSP 세션 수가 1개로 유지된다.
+- RTSP-over-WebSocket 뷰어가 모두 종료되면 해당 채널의 ingest-daemon fan-out 및 MediaMTX publish가 자동 정리된다.
 - `/StreamingServer`에 카메라 자격증명으로 접속 시 RTSP Digest 인증이 성공하고, 실패 시(잘못된 자격증명) 인증 단계에서 거부되어 내부 MediaMTX로 연결이 진행되지 않는다.
 - `<ump-player>`가 `streamingMode==='ump'`인 카메라에서 정상적으로 영상을 재생한다.
-- YouTube 카메라의 Add/Edit 화면에는 UMP 옵션이 노출되지 않는다.
+- YouTube 카메라의 Add/Edit 화면에는 RTSP-over-WebSocket 옵션이 노출되지 않는다.
 
 ---
 
@@ -172,3 +172,4 @@ Design 문서 §8의 구현 순서를 따른다:
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-22 | 초기 작성 |
+| 1.1 | 2026-08-04 | 클라이언트 라이브러리를 `submodules/ump-player` 서브모듈에서 `@melchi45/rtsp-over-websocket` npm 패키지로 전환 — Design_RTSP_Over_WebSocket.md §8.21 참고 |

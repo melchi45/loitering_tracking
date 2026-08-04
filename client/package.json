@@ -5,10 +5,10 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
-    "preview": "vite preview",
-    "postinstall": "node scripts/copyUmpPlayerAssets.js"
+    "preview": "vite preview"
   },
   "dependencies": {
+    "@melchi45/rtsp-over-websocket": "1.0.1",
     "clsx": "^2.1.0",
     "lucide-react": "^0.363.0",
     "mediasoup-client": "^3.7.6",

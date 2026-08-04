@@ -1560,31 +1560,31 @@ WHEP 세션을 90초간 관찰한 결과, 특정 카메라(특히 2048×1536 이
 
 ### 6.37 §6.29.5의 미해결 GIL 경합 가설을 실측으로 확정 — PyAV RTSP `mux()`는 블로킹 쓰기 동안 GIL을 놓지 않는다 (2026-07-24)
 
-§6.29.5는 "CPython GIL 경합이 유력한 메커니즘으로 의심되나... py-spy로 확인하려면 root 권한이 필요해 차단됨"이라며 미확정으로 남겼던 사안이다. UMP(`/StreamingServer`) 채널6 재생 처리량을 조사하던 중(전체 경위는 `Design_UMP_Player_RTSP_over_WebSocket.md` §8.12 참고) 같은 벽(`ptrace_scope=1`, `perf_event_paranoid=3` 모두 sudo 없이 차단)에 다시 부딪혔으나, **py-spy 없이도 확정 가능한 격리 실험**으로 우회했다:
+§6.29.5는 "CPython GIL 경합이 유력한 메커니즘으로 의심되나... py-spy로 확인하려면 root 권한이 필요해 차단됨"이라며 미확정으로 남겼던 사안이다. RTSP-over-WebSocket(`/StreamingServer`) 채널6 재생 처리량을 조사하던 중(전체 경위는 `Design_RTSP_Over_WebSocket.md` §8.12 참고) 같은 벽(`ptrace_scope=1`, `perf_event_paranoid=3` 모두 sudo 없이 차단)에 다시 부딪혔으나, **py-spy 없이도 확정 가능한 격리 실험**으로 우회했다:
 
 같은 프로세스에서 (1) 아무 것도 안 읽는 소켓을 만들고, (2) pure-Python 카운터를 계속 증가시키기만 하는 스레드를 하나 띄운 뒤, (3) 다른 스레드에서 그 소켓으로 `av.open(..., format="rtsp").mux(큰_packet)`을 호출해 블로킹시켰다. 결과: 카운터 스레드가 `mux()` 호출이 끝날 때까지 **완전히 정지**했다(`time.sleep(3)` 한 줄만 있는 메인 스레드조차 3초를 못 끝냄). CPython의 GIL은 프로세스 전체에 하나뿐이므로, **PyAV의 RTSP `mux()`가 블로킹 네트워크 쓰기 동안 GIL을 놓지 않는 한, 그 호출을 어느 OS 스레드에서 실행하든 같은 프로세스의 다른 모든 파이썬 스레드가 함께 멈춘다** — §6.29.5가 의심했던 것과 정확히 같은 메커니즘이 카메라 fan-out(mux 쓰기) 경로에도 있었음을 실측으로 확정.
 
-실제 영향(채널6, UMP rtsp-publish fan-out): 이 fan-out 엔트리 하나가 붙어있는 동안 **그 카메라 자신의 원본 RTSP 읽기 루프**(`video_packets_total`, 어떤 fan-out과도 무관하게 매 패킷 증가하는 카운터)가 카메라 실측 30fps 대비 6fps 안팎까지 떨어졌다 — 엔트리를 떼면 즉시 회복. 별도 스레드로 옮겨도(순수 threading, GIL은 공유) 효과가 없었던 이유가 이걸로 설명된다.
+실제 영향(채널6, RTSP-over-WebSocket rtsp-publish fan-out): 이 fan-out 엔트리 하나가 붙어있는 동안 **그 카메라 자신의 원본 RTSP 읽기 루프**(`video_packets_total`, 어떤 fan-out과도 무관하게 매 패킷 증가하는 카운터)가 카메라 실측 30fps 대비 6fps 안팎까지 떨어졌다 — 엔트리를 떼면 즉시 회복. 별도 스레드로 옮겨도(순수 threading, GIL은 공유) 효과가 없었던 이유가 이걸로 설명된다.
 
-**해결**: `rtsp_publish_worker.py`라는 완전히 별도의 OS 프로세스(자체 GIL)를 신설해 실제 `av.open()`/`add_stream()`/`mux()`를 전담시키고, ingest-daemon은 stdin 파이프로 raw 패킷 바이트만 전달한다. **이 패턴은 채널6/UMP에 국한되지 않는 일반적인 교훈이다** — ingest-daemon이 앞으로 카메라 데이터를 네트워크로 쓰는(mux하는) 새 fan-out을 추가할 때마다, 그 쓰기가 io 스레드나 다른 어떤 파이썬 스레드와도 GIL을 공유하지 않도록 프로세스 경계로 격리해야 한다는 것 — 스레드 분리만으로는 원천적으로 불충분하다. §6.29.5/§6.29.9의 "ingest-daemon이 반복적으로 응답 불능에 빠진다"는 미해결 문제도 (다중 카메라의 mux 쓰기 경합이 HTTP 서버 스레드까지 밀어내는) 같은 근본 메커니즘일 가능성이 높다 — 후속 조사 시 이 항목부터 검증 권장.
+**해결**: `rtsp_publish_worker.py`라는 완전히 별도의 OS 프로세스(자체 GIL)를 신설해 실제 `av.open()`/`add_stream()`/`mux()`를 전담시키고, ingest-daemon은 stdin 파이프로 raw 패킷 바이트만 전달한다. **이 패턴은 채널6/RTSP-over-WebSocket에 국한되지 않는 일반적인 교훈이다** — ingest-daemon이 앞으로 카메라 데이터를 네트워크로 쓰는(mux하는) 새 fan-out을 추가할 때마다, 그 쓰기가 io 스레드나 다른 어떤 파이썬 스레드와도 GIL을 공유하지 않도록 프로세스 경계로 격리해야 한다는 것 — 스레드 분리만으로는 원천적으로 불충분하다. §6.29.5/§6.29.9의 "ingest-daemon이 반복적으로 응답 불능에 빠진다"는 미해결 문제도 (다중 카메라의 mux 쓰기 경합이 HTTP 서버 스레드까지 밀어내는) 같은 근본 메커니즘일 가능성이 높다 — 후속 조사 시 이 항목부터 검증 권장.
 
-전체 조사 경위(실험 스크립트 포함), `rtsp_publish_worker.py`의 정확한 wire 프로토콜, 그리고 이후 발견한 §6.38(다음 항목)의 상위 아키텍처 변경은 `Design_UMP_Player_RTSP_over_WebSocket.md` §8.12/§8.13에 기록.
+전체 조사 경위(실험 스크립트 포함), `rtsp_publish_worker.py`의 정확한 wire 프로토콜, 그리고 이후 발견한 §6.38(다음 항목)의 상위 아키텍처 변경은 `Design_RTSP_Over_WebSocket.md` §8.12/§8.13에 기록.
 
 ### 6.38 아키텍처 변경 — fleet 부하가 근본 원인일 때는 GIL 회피가 아니라 ingest-daemon 자체를 우회 (2026-07-24)
 
 §6.37로 개별 fan-out의 GIL 블로킹은 없앴지만, 카메라 10대의 RTSP 읽기+AI 디코드를 여전히 **하나의 파이썬 프로세스(하나의 GIL)**가 처리하는 이상 fleet 전체 부하가 개별 카메라의 실효 프레임레이트를 깎아먹는 현상은 남았다(실측: 채널6 raw 읽기 속도가 카메라 실제 전송량의 40~63%, AI 디코드를 꺼도 63%까지만 회복 — 나머지는 다른 9개 카메라의 io/AI 스레드와의 경합). §6.29.5/§6.31.2~6.31.3에서 반복 관찰된 "ingest-daemon이 부하 상황에서 응답성을 잃는다"는 패턴과 같은 계열의 제약이다.
 
-`WEBRTC_ENGINE=mediamtx` 배포에서는 `mediamtxManager.addCameraPath()`가 `webrtcEnabled` 카메라마다 **MediaMTX 자신의(Go, non-GIL) RTSP 클라이언트로 카메라를 직접 pull**해 상시 서빙 중이라는 점에 착안 — 이 경로는 ingest-daemon의 파이썬 프로세스를 전혀 거치지 않으므로 fleet 부하와 무관하게 항상 안정적이다(실측: WebRTC 뷰어가 이 경로로 `framesPerSecond: 30`, 손실 0.01% 미만 확인). UMP(`umpStreamingServer.js`)가 ingest-daemon에 재발행을 요청하기 전에 이 기존 경로가 이미 준비돼 있는지 먼저 확인하고, 있으면 그대로 재사용하도록 변경 — ingest-daemon 완전 우회. 상세는 `Design_UMP_Player_RTSP_over_WebSocket.md` §8.13.
+`WEBRTC_ENGINE=mediamtx` 배포에서는 `mediamtxManager.addCameraPath()`가 `webrtcEnabled` 카메라마다 **MediaMTX 자신의(Go, non-GIL) RTSP 클라이언트로 카메라를 직접 pull**해 상시 서빙 중이라는 점에 착안 — 이 경로는 ingest-daemon의 파이썬 프로세스를 전혀 거치지 않으므로 fleet 부하와 무관하게 항상 안정적이다(실측: WebRTC 뷰어가 이 경로로 `framesPerSecond: 30`, 손실 0.01% 미만 확인). RTSP-over-WebSocket(`umpStreamingServer.js`)가 ingest-daemon에 재발행을 요청하기 전에 이 기존 경로가 이미 준비돼 있는지 먼저 확인하고, 있으면 그대로 재사용하도록 변경 — ingest-daemon 완전 우회. 상세는 `Design_RTSP_Over_WebSocket.md` §8.13.
 
 **일반화 가능한 원칙**: ingest-daemon의 GIL 경합이 근본 원인으로 의심되는 다른 증상(§6.29.5의 반복적 응답 불능 등)에서도, "그 데이터를 이미 GIL과 무관한 다른 컴포넌트(MediaMTX 등)가 갖고 있는가"를 먼저 확인하는 것이 스레드/프로세스 최적화보다 우선순위가 높은 해결책일 수 있다.
 
-### 6.39 §6.38 우회 경로가 UMP 전용 카메라에는 적용되지 않던 결함 (2026-07-24)
+### 6.39 §6.38 우회 경로가 RTSP-over-WebSocket 전용 카메라에는 적용되지 않던 결함 (2026-07-24)
 
-**증상**: §6.38의 MediaMTX 직접 우회를 배포한 당일, `webrtcEnabled`도 함께 켜진 카메라에서는 30fps가 확인됐지만, **UMP만 켜고 WebRTC는 꺼둔 카메라**(channelSlot 6)에서 다시 ~13.5fps로 저하됨을 실측(ffmpeg로 MediaMTX loopback에 직접 붙어 15초 측정, 187 frames/13.84s).
+**증상**: §6.38의 MediaMTX 직접 우회를 배포한 당일, `webrtcEnabled`도 함께 켜진 카메라에서는 30fps가 확인됐지만, **RTSP-over-WebSocket만 켜고 WebRTC는 꺼둔 카메라**(channelSlot 6)에서 다시 ~13.5fps로 저하됨을 실측(ffmpeg로 MediaMTX loopback에 직접 붙어 15초 측정, 187 frames/13.84s).
 
-**원인**: `pipelineManager.js`의 `needsMediaMTX` 조건이 `camera.webrtcEnabled`만 보고 있었다 — `camera.umpEnabled`는 전혀 고려되지 않았다. 즉 §6.38의 우회가 전제하는 "MediaMTX가 이미 이 카메라를 pull하고 있다"는 조건 자체가, WebRTC를 안 쓰는 순수 UMP 카메라에서는 **애초에 성립하지 않았다** — `mediamtxManager.addCameraPath(camera.id, ...)`가 한 번도 호출되지 않으므로 `umpStreamingServer.js`의 `waitForPathReady(camera.id, ...)`가 항상 실패하고, 매번 ingest-daemon의 (느린) 재발행 폴백으로 떨어지고 있었다.
+**원인**: `pipelineManager.js`의 `needsMediaMTX` 조건이 `camera.webrtcEnabled`만 보고 있었다 — `camera.umpEnabled`는 전혀 고려되지 않았다. 즉 §6.38의 우회가 전제하는 "MediaMTX가 이미 이 카메라를 pull하고 있다"는 조건 자체가, WebRTC를 안 쓰는 순수 RTSP-over-WebSocket 카메라에서는 **애초에 성립하지 않았다** — `mediamtxManager.addCameraPath(camera.id, ...)`가 한 번도 호출되지 않으므로 `umpStreamingServer.js`의 `waitForPathReady(camera.id, ...)`가 항상 실패하고, 매번 ingest-daemon의 (느린) 재발행 폴백으로 떨어지고 있었다.
 
-**수정**: `needsMediaMTX`를 `(requestedWebRTC || requestedUmp) && WEBRTC_ENGINE === 'mediamtx'`로 확장 — UMP 전용 카메라도 `camera.id` 경로가 등록되도록 함. 브라우저에 WHEP를 노출할지 여부(`useWebRTC`)는 `requestedWebRTC`만으로 별도 게이트되어 있어(§4.3 아키텍처상 이미 분리됨) 이 변경이 WebRTC 노출 범위에는 영향 없음을 코드 확인. `server/src/api/cameras.js`의 `needsRestart`도 `umpEnabled` 변경 시 재시작하도록 함께 수정 — 이제 `umpEnabled` 토글이 MediaMTX 등록 여부에 실질적으로 영향을 주므로 "재시작 불필요"였던 기존 예외가 더는 성립하지 않음.
+**수정**: `needsMediaMTX`를 `(requestedWebRTC || requestedUmp) && WEBRTC_ENGINE === 'mediamtx'`로 확장 — RTSP-over-WebSocket 전용 카메라도 `camera.id` 경로가 등록되도록 함. 브라우저에 WHEP를 노출할지 여부(`useWebRTC`)는 `requestedWebRTC`만으로 별도 게이트되어 있어(§4.3 아키텍처상 이미 분리됨) 이 변경이 WebRTC 노출 범위에는 영향 없음을 코드 확인. `server/src/api/cameras.js`의 `needsRestart`도 `umpEnabled` 변경 시 재시작하도록 함께 수정 — 이제 `umpEnabled` 토글이 MediaMTX 등록 여부에 실질적으로 영향을 주므로 "재시작 불필요"였던 기존 예외가 더는 성립하지 않음.
 
 재시작 후 재측정: 카메라 자신의 `camera.id` 경로로 정상 전환(`6/media.smp` ingest-daemon 폴백 경로는 더 이상 사용되지 않음), 424 frames/15.00s ≈ 28~31fps로 복구 확인.
 
@@ -1806,8 +1806,8 @@ WHEP 세션을 90초간 관찰한 결과, 특정 카메라(특히 2048×1536 이
 | 1.67 | 2026-07-28 | §6.42 신규 — §6.41 조치 후에도 남아있던 ingest-daemon 자체의 주기적(~2.3분) 응답 불능을 라이브 SIGUSR1 스택 덤프 + 실증 GIL 테스트(demux/decode는 GIL을 정상적으로 놓아줌을 확인)로 진단. `ingest_health_proxy.py` 신규(HTTP 컨트롤플레인을 별도 프로세스로 분리, heartbeat 파일 기반 /health 즉답 + 나머지 경로 투명 프록시), `AI_DECODE_THREADS_TOTAL`/`INGEST_PUSH_WORKERS`/`INGEST_STOP_WORKERS`로 스레드 수 자체도 축소 |
 | 1.66 | 2026-07-28 | §6.41 신규 — 고아 `startServer.js`(관리 대상 index.js는 죽고 슈퍼바이저만 잔존)가 재시작 시도마다 헬스체크 없이 `pkill -f 'ingest_daemon.py'`로 정상 데몬을 죽여 fleet 전체 fps가 간헐적으로 0이 되던 결함 수정. `_respawnIngest()`에 `_isIngestHealthy()` 게이트 추가 — 포트의 데몬이 이미 healthy면 죽이지 않고 물러남 |
 | 1.65 | 2026-07-27 | §6.40 신규 — Streaming Dashboard 8개 카메라가 RETRY/Offline(WebRTC 영상 자체는 정상 재생 중)이던 원인 확정: ingest-daemon HTTP 스레드 wedged(§6.29.5 계열) + 이미 있던 자동 복구 `ingestDaemonWatchdog.js`(§6.29.9)가 `server/.env`의 `INGEST_WATCHDOG_ENABLED=false`(과거 디버깅 세션 후 원복 누락)로 비활성화돼 있어 자동 복구가 무력화된 상태로 최소 수일 방치. `.env` 원복 + `ingest:restart`로 즉시 복구, `armDebugDisableSafetyNet()` 신규 추가로 디버깅용 비활성화가 30분 후 자동 강제 재활성화되도록 안전장치 도입 |
-| 1.64 | 2026-07-24 | §6.39 신규 — §6.38의 MediaMTX 직접 우회가 `webrtcEnabled` 카메라에만 적용되고 UMP 전용(`umpEnabled`, `webrtcEnabled=false`) 카메라에는 적용되지 않던 결함 수정. `needsMediaMTX`에 `umpEnabled` 반영, `cameras.js`의 `needsRestart`도 `umpEnabled` 변경 시 재시작하도록 동기화. 재측정 ~13.5fps → 28~31fps 복구 확인 |
-| 1.63 | 2026-07-24 | §6.38 신규(아키텍처) — fleet 부하로 인한 개별 카메라 프레임레이트 저하가 §6.37 이후에도 잔존(GIL 경합은 fan-out 하나만의 문제가 아니었음). `WEBRTC_ENGINE=mediamtx`가 이미 만들어둔 MediaMTX 직접(non-GIL) 경로를 UMP가 우선 재사용하도록 변경 — ingest-daemon 완전 우회. "GIL 회피보다 우회가 우선일 수 있다"는 일반 원칙으로 정리 |
+| 1.64 | 2026-07-24 | §6.39 신규 — §6.38의 MediaMTX 직접 우회가 `webrtcEnabled` 카메라에만 적용되고 RTSP-over-WebSocket 전용(`umpEnabled`, `webrtcEnabled=false`) 카메라에는 적용되지 않던 결함 수정. `needsMediaMTX`에 `umpEnabled` 반영, `cameras.js`의 `needsRestart`도 `umpEnabled` 변경 시 재시작하도록 동기화. 재측정 ~13.5fps → 28~31fps 복구 확인 |
+| 1.63 | 2026-07-24 | §6.38 신규(아키텍처) — fleet 부하로 인한 개별 카메라 프레임레이트 저하가 §6.37 이후에도 잔존(GIL 경합은 fan-out 하나만의 문제가 아니었음). `WEBRTC_ENGINE=mediamtx`가 이미 만들어둔 MediaMTX 직접(non-GIL) 경로를 RTSP-over-WebSocket가 우선 재사용하도록 변경 — ingest-daemon 완전 우회. "GIL 회피보다 우회가 우선일 수 있다"는 일반 원칙으로 정리 |
 | 1.62 | 2026-07-24 | §6.37 신규 — §6.29.5에서 미확정으로 남겼던 CPython GIL 경합 가설을 실측으로 확정: PyAV RTSP `mux()`가 블로킹 네트워크 쓰기 동안 GIL을 놓지 않아, 스레드 분리만으로는 카메라 자신의 읽기 루프를 못 지킴(py-spy 없이 spin-counter 스레드로 격리 실험). `rtsp_publish_worker.py` 별도 프로세스로 근본 해결 — 향후 유사 fan-out 추가 시 일반 원칙으로 기록 |
 | 1.61 | 2026-07-23 | §6.36 신규 — §6.35과 동일한 `fuser`/`lsof` ptrace_scope 결함이 `startServer.js`의 크래시 자동재시작 경로(`_killPortOrphan()`)에도 남아있어 무한 재시작 크래시 루프를 실측(`attempt #14`)로 확인, `restartIngestDaemon.js`와 동일하게 `pkill -f`/`isPortFree()` 폴링/`pkill -9 -f` 에스컬레이션으로 교체 |
 | 1.60 | 2026-07-23 | §6.35 신규 — `restartIngestDaemon.js`의 포트-해제 확인이 `_getPortPid()`(`lsof`)에 의존해, `kernel.yama.ptrace_scope=1` 호스트에서 다른 세션이 기동한 좀비 daemon을 `lsof`가 못 찾아 "포트 해제됨"으로 즉시 오판 → SIGKILL 에스컬레이션이 건너뛰어져 새 daemon이 `EADDRINUSE`로 무한 재시작 크래시하던 결함 수정. `isPortFree()`(실제 bind 시도, ptrace 무관·크로스플랫폼)로 판단 기준 교체, SIGKILL 단계에 `pkill -9 -f` 폴백 추가. 재발한 좀비 daemon 대상 실측 검증(SIGKILL 정상 에스컬레이션, 카메라 9대 전부 재등록·`streaming` 복구 확인) — `ingestDaemonWatchdog.js`(§6.29.9)의 자동 복구 경로도 동일하게 정상화됨. daemon 자체가 왜 반복 좀비화되는지(§6.29.5/§6.34)는 여전히 미해결 |
