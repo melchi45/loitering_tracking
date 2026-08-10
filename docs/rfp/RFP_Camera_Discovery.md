@@ -1,6 +1,6 @@
 # RFP — Camera Discovery & Network Search Subsystem
 **Document ID**: LTS-2026-002  
-**Version**: 1.7  
+**Version**: 1.8  
 **Date**: 2026-07-03  
 **Project**: Loitering Detection & Tracking System (LTS-2026)  
 **Status**: Draft
@@ -110,14 +110,16 @@ Each camera response contains the following binary-encoded fields. Fields marked
 - **Deduplication**: MAC address based, persists across scan cycles
 - **Real-time push**: Socket.IO `discovery:result` event per new/updated device
 
-**Submodule structure** (branch: `nodejs-udp-discovery`):
+**Submodule structure** (branch: `master` — 2026-08-10부터; 이전에는 `nodejs-udp-discovery` 브랜치였으며 master에 머지됨):
 
 ```
 submodules/WiseNetChromeIPInstaller/
+├── sunapi/                 # Shared SUNAPI wire format (protocol.js / request.js / response.js —
+│                           #  Chrome 확장과 nodejs/가 공유, 2026-08-10 nodejs/에서 이동)
 └── nodejs/
-    ├── udpDiscovery.js     # Core discovery module (dgram port)
-    ├── utils.js            # ntohs/ntohl/bytes2int helpers
-    └── index.js            # Example usage / CLI
+    ├── udpDiscovery.js     # Core discovery module (dgram port, ../sunapi/* require)
+    ├── index.js            # Example usage / CLI
+    └── examples/           # Node.js example server (ws)
 ```
 
 **Usage example:**
@@ -564,3 +566,4 @@ Continued Annex A cross-checking (RFP-CH-020~022) surfaced a further struct-layo
 | 1.5 | 2026-07-03 | LTS Engineering Team | §10.6 신규 추가 — RFP-CH-020~022, 고객이 Annex A 구조체와 대조해 발견한 `supported_protocol`/`no_password` 오프셋 버그, 그리고 확장 필드 블록 존재 여부가 패킷 길이가 아니라 응답의 `nMode`(Table 1/2 enum)로 결정되어야 한다는 요구사항 추가 |
 | 1.6 | 2026-07-03 | LTS Engineering Team | §10.7 신규 추가 — RFP-CH-023~027: `reserved2`/`reserved3` 구조체 반영(334바이트), 요청 옵코드 `nMode=6` 기본 전환, 인라인 폴백 제거 및 npm 설치 경로 요구사항으로 대체(RFP-CH-018~019 상위 대체), RTSP URL이 `nTcpPort`/`nPort`를 쓰지 않아야 함, Digest 인증 감지가 콤바인드 헤더를 인식해야 함 |
 | 1.7 | 2026-07-03 | LTS Engineering Team | RFP-CH-025 정정 — 서브모듈 경로+npm 설치를 병행 지원한다는 서술을 npm 패키지 단일 의존으로 정정(사용자 명시 지시); RFP-CH-028 신규 추가 — require 시점이 아닌 최초 실제 사용 시점까지 npm 패키지 해석을 지연해야 함(`SERVER_MODE=analysis` 기동 실패 회귀 수정) |
+| 1.8 | 2026-08-10 | LTS Engineering Team | §2.1.4 서브모듈 구조 갱신 — 참조 브랜치를 `nodejs-udp-discovery`(master에 머지됨)에서 `master`로 전환, SUNAPI 와이어 포맷 모듈(`protocol.js`/`request.js`/`response.js`)이 Chrome 확장과 공유되는 `sunapi/`로 이동한 새 레이아웃 반영(`nodejs/utils.js` 제거, `nodejs/examples/` 추가) |
