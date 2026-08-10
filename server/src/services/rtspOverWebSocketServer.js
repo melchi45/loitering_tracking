@@ -4,7 +4,7 @@
  * UMP Player RTSP-over-WebSocket bridge (`/StreamingServer`) — 2026-07-23.
  *
  * See docs/design/Design_RTSP_Over_WebSocket.md §4.2 for the full
- * design. Summary: `<ump-player>` opens a plain WebSocket (not Socket.IO) to
+ * design. Summary: `<rtsp-over-websocket>` opens a plain WebSocket (not Socket.IO) to
  * `ws(s)://<host>/StreamingServer<path>` and tunnels standard RTSP-over-TCP
  * interleaved framing (RFC 7826 §10.12) through it — the same framing a real
  * Wisenet camera's own `/StreamingServer` endpoint speaks. That means this
@@ -19,7 +19,7 @@
  * above _connectBackend()): the video track's RTP channel (H.264 or H.265,
  * whichever the DESCRIBE response's SDP declares) is held back (non-keyframe
  * slices dropped) until the first keyframe passes, since MediaMTX doesn't
- * wait for one before serving a newly-connected reader and <ump-player>
+ * wait for one before serving a newly-connected reader and <rtsp-over-websocket>
  * would otherwise spend the rest of the current GOP throwing "SPS payload
  * is not available" (mediaRouter.js:spsParse) on undecodable mid-GOP slices.
  *
@@ -49,7 +49,7 @@ const mediamtxManager = require('./mediamtxManager');
 
 const MEDIAMTX_RTSP_PORT = parseInt(process.env.MEDIAMTX_RTSP_PORT, 10) || 8554;
 const INGEST_DAEMON_URL = (process.env.INGEST_DAEMON_URL || 'http://127.0.0.1:7070').replace(/\/$/, '');
-const REALM = 'lts-ump';
+const REALM = 'lts-rtsp-over-websocket';
 const MAX_AUTH_ATTEMPTS = 3;
 const BACKEND_CONNECT_TIMEOUT_MS = 5000;
 
@@ -73,7 +73,7 @@ async function _startFanout(cameraId, channelSlot) {
     });
     if (!resp.ok) throw new Error(`ingest-daemon responded ${resp.status}`);
   } catch (err) {
-    console.warn(`[UmpStreamingServer][${cameraId.slice(0, 8)}] rtsp-publish start failed: ${err.message}`);
+    console.warn(`[RTSPOverWebSocketServer][${cameraId.slice(0, 8)}] rtsp-publish start failed: ${err.message}`);
   }
 }
 
@@ -85,7 +85,7 @@ async function _stopFanout(cameraId) {
     });
     if (!resp.ok) throw new Error(`ingest-daemon responded ${resp.status}`);
   } catch (err) {
-    console.warn(`[UmpStreamingServer][${cameraId.slice(0, 8)}] rtsp-publish stop failed: ${err.message}`);
+    console.warn(`[RTSPOverWebSocketServer][${cameraId.slice(0, 8)}] rtsp-publish stop failed: ${err.message}`);
   }
 }
 
@@ -119,7 +119,7 @@ function parseHeader(text, name) {
 }
 
 /** channelSlot is the first numeric path segment of the RTSP URL. The client
- * uses <ump-player device="nvr">, whose generateRTSPURL() builds
+ * uses <rtsp-over-websocket device="nvr">, whose generateRTSPURL() builds
  * "LiveChannel/<channel>/media.smp" (or "PlaybackChannel/"/"BackupChannel/"
  * for other modes) — a non-numeric prefix precedes the channel number, so
  * this searches for the first numeric segment anywhere in the path rather
@@ -144,7 +144,7 @@ function parseDigestAuthorization(text) {
 
 /** Rewrites an outgoing (client -> backend) RTSP request line's URI to target
  * MediaMTX instead of the camera's own hostname, leaving every other line
- * untouched. <ump-player device="nvr"> builds a base URI once from the
+ * untouched. <rtsp-over-websocket device="nvr"> builds a base URI once from the
  * `channel`/`profile_number`/etc. attributes (e.g. "rtsp://<hostname>/
  * LiveChannel/<channel>/media.smp/profile=<n>") — that base has no relation
  * to the path ingest-daemon actually published on MediaMTX
@@ -199,7 +199,7 @@ function buildRtspResponse(statusCode, statusText, cseq, extraHeaders = '') {
 
 /** Simple-mode RTSP Digest (no qop) — rtspClient.js's DigestGenerator falls back
  * to this exact scheme whenever the server's challenge omits qop/algorithm/opaque
- * (see submodules/ump-player/app/media/ump/Util/digestGenerator.js Digest()),
+ * (see submodules/rtsp-over-websocket/app/media/ump/Util/digestGenerator.js Digest()),
  * which is deliberate here: it avoids needing server-side nc/cnonce session state
  * for what is, in effect, an internal loopback-adjacent relay. */
 function verifyDigest(auth, method, camera, nonce) {
@@ -217,7 +217,7 @@ function verifyDigest(auth, method, camera, nonce) {
 // (_connectBackend below); MediaMTX does not wait for the next keyframe
 // before serving a new reader — it forwards whatever the live GOP is doing
 // "now". Since this bridge used to be a pure byte relay with no RTP
-// awareness, <ump-player> would receive non-keyframe slices with no
+// awareness, <rtsp-over-websocket> would receive non-keyframe slices with no
 // SPS/PPS (or VPS/SPS/PPS for H.265) cached yet and throw repeated "SPS
 // payload is not available" (mediaRouter.js:spsParse, errorCode 772) until
 // the encoder's next GOP boundary arrived. The functions below parse just
@@ -463,7 +463,7 @@ function handleConnection(ws, db) {
           gatingEnabled = true;
           gateOpen = false;
           gateDeadline = Date.now() + KEYFRAME_GATE_TIMEOUT_MS;
-          console.log(`[UmpStreamingServer][${camera?.id?.slice(0, 8)}] ${videoCodec} video RTP interleaved channel=${videoRtpChannel} — gating relay until first IDR (timeout ${KEYFRAME_GATE_TIMEOUT_MS}ms)`);
+          console.log(`[RTSPOverWebSocketServer][${camera?.id?.slice(0, 8)}] ${videoCodec} video RTP interleaved channel=${videoRtpChannel} — gating relay until first IDR (timeout ${KEYFRAME_GATE_TIMEOUT_MS}ms)`);
         }
       }
     }
@@ -498,7 +498,7 @@ function handleConnection(ws, db) {
     const rewrittenText = rewriteRequestUri(original, clientBaseUri, backendTargetUri);
     recordOutgoingRequest(rewrittenText);
     if (rewrittenText !== original) {
-      console.log(`[UmpStreamingServer][${camera?.id?.slice(0, 8)}] rewrote request line "${original.split('\r\n')[0]}" -> "${rewrittenText.split('\r\n')[0]}"`);
+      console.log(`[RTSPOverWebSocketServer][${camera?.id?.slice(0, 8)}] rewrote request line "${original.split('\r\n')[0]}" -> "${rewrittenText.split('\r\n')[0]}"`);
     }
     const rewritten = Buffer.from(rewrittenText, 'utf8');
     if (backendSocket && !backendSocket.destroyed) backendSocket.write(rewritten);
@@ -512,10 +512,10 @@ function handleConnection(ws, db) {
     }
 
     const text = Buffer.isBuffer(data) ? data.toString('utf8') : String(data);
-    console.log(`[UmpStreamingServer] message (${data.length}B): ${text.slice(0, 300).replace(/\r\n/g, ' | ')}`);
+    console.log(`[RTSPOverWebSocketServer] message (${data.length}B): ${text.slice(0, 300).replace(/\r\n/g, ' | ')}`);
     const reqLine = parseRtspRequestLine(text);
     if (!reqLine) {
-      console.warn(`[UmpStreamingServer] close 1002: first line did not parse as an RTSP request — "${text.split('\r\n')[0]}"`);
+      console.warn(`[RTSPOverWebSocketServer] close 1002: first line did not parse as an RTSP request — "${text.split('\r\n')[0]}"`);
       ws.close(1002, 'invalid RTSP request');
       return;
     }
@@ -524,26 +524,26 @@ function handleConnection(ws, db) {
     if (channelSlot === null) {
       channelSlot = extractChannelSlot(reqLine.uri);
       if (channelSlot === null) {
-        console.warn(`[UmpStreamingServer] close 1008: no numeric channel segment found in URI "${reqLine.uri}"`);
+        console.warn(`[RTSPOverWebSocketServer] close 1008: no numeric channel segment found in URI "${reqLine.uri}"`);
         ws.close(1008, 'no channel in request URI');
         return;
       }
       camera = db.all('cameras').find((c) => c.channelSlot === channelSlot);
       if (!camera) {
-        console.warn(`[UmpStreamingServer] close 1008: no camera has channelSlot=${channelSlot} (parsed from URI "${reqLine.uri}")`);
+        console.warn(`[RTSPOverWebSocketServer] close 1008: no camera has channelSlot=${channelSlot} (parsed from URI "${reqLine.uri}")`);
         ws.send(Buffer.from(buildRtspResponse(404, 'Not Found', cseq)));
         ws.close(1008, 'unknown channel');
         return;
       }
       clientBaseUri = reqLine.uri;
       backendTargetUri = `rtsp://127.0.0.1:${MEDIAMTX_RTSP_PORT}/${channelSlot}/media.smp`;
-      console.log(`[UmpStreamingServer][${camera.id.slice(0, 8)}] matched channelSlot=${channelSlot} -> ${backendTargetUri} (client base "${clientBaseUri}")`);
+      console.log(`[RTSPOverWebSocketServer][${camera.id.slice(0, 8)}] matched channelSlot=${channelSlot} -> ${backendTargetUri} (client base "${clientBaseUri}")`);
     }
 
     const auth = parseDigestAuthorization(text);
     if (!auth || !nonce || !verifyDigest(auth, reqLine.method, camera, nonce)) {
       if (auth) {
-        console.warn(`[UmpStreamingServer][${camera.id.slice(0, 8)}] digest verification failed (attempt ${attempts + 1}/${MAX_AUTH_ATTEMPTS}) — ` +
+        console.warn(`[RTSPOverWebSocketServer][${camera.id.slice(0, 8)}] digest verification failed (attempt ${attempts + 1}/${MAX_AUTH_ATTEMPTS}) — ` +
           `received username="${auth.username}" nonce="${auth.nonce}" uri="${auth.uri}" response="${auth.response}", ` +
           `expected nonce="${nonce}", expected camera.username="${camera.username || ''}" ` +
           `(camera has password: ${camera.password ? 'yes' : 'NO — empty/unset'})`);
@@ -551,7 +551,7 @@ function handleConnection(ws, db) {
       challenge(cseq);
       return;
     }
-    console.log(`[UmpStreamingServer][${camera.id.slice(0, 8)}] digest auth OK — switching to relay`);
+    console.log(`[RTSPOverWebSocketServer][${camera.id.slice(0, 8)}] digest auth OK — switching to relay`);
 
     // Authenticated — switch to pure byte relay against local MediaMTX.
     state = 'relaying';
@@ -574,7 +574,7 @@ function handleConnection(ws, db) {
       const directPathReady = await mediamtxManager.waitForPathReady(camera.id, 400, 100);
       if (directPathReady) {
         backendTargetUri = `rtsp://127.0.0.1:${MEDIAMTX_RTSP_PORT}/${camera.id}`;
-        console.log(`[UmpStreamingServer][${camera.id.slice(0, 8)}] reusing existing MediaMTX-direct path -> ${backendTargetUri} (bypassing ingest-daemon fan-out)`);
+        console.log(`[RTSPOverWebSocketServer][${camera.id.slice(0, 8)}] reusing existing MediaMTX-direct path -> ${backendTargetUri} (bypassing ingest-daemon fan-out)`);
         return;
       }
       usedIngestFanout = true;
@@ -595,7 +595,7 @@ function handleConnection(ws, db) {
         const mediaMtxPathName = `${channelSlot}/media.smp`;
         pathReady = await mediamtxManager.waitForPathReady(mediaMtxPathName, 8000, 250);
         if (!pathReady) {
-          console.warn(`[UmpStreamingServer][${camera.id.slice(0, 8)}] MediaMTX path "${mediaMtxPathName}" not ready after 8s`);
+          console.warn(`[RTSPOverWebSocketServer][${camera.id.slice(0, 8)}] MediaMTX path "${mediaMtxPathName}" not ready after 8s`);
         }
       }
       if (closed) return;
@@ -639,7 +639,7 @@ function handleConnection(ws, db) {
               if (gatingEnabled && !gateOpen && channel === videoRtpChannel) {
                 if (Date.now() > gateDeadline) {
                   gateOpen = true;
-                  console.warn(`[UmpStreamingServer][${camera?.id?.slice(0, 8)}] no IDR within ${KEYFRAME_GATE_TIMEOUT_MS}ms — releasing gate anyway`);
+                  console.warn(`[RTSPOverWebSocketServer][${camera?.id?.slice(0, 8)}] no IDR within ${KEYFRAME_GATE_TIMEOUT_MS}ms — releasing gate anyway`);
                 } else {
                   const { forward, opensGate } = classifyVideoRtpPacket(videoCodec, frame.slice(4));
                   if (opensGate) gateOpen = true;
@@ -658,7 +658,7 @@ function handleConnection(ws, db) {
                 // in a way this bridge doesn't understand. Fail open: stop
                 // trying to parse framing for the rest of this connection
                 // rather than stalling or growing the buffer unbounded.
-                console.warn(`[UmpStreamingServer][${camera?.id?.slice(0, 8)}] backend stream did not resolve to a complete RTSP response after ${backendBuf.length}B — disabling keyframe gating and relaying raw`);
+                console.warn(`[RTSPOverWebSocketServer][${camera?.id?.slice(0, 8)}] backend stream did not resolve to a complete RTSP response after ${backendBuf.length}B — disabling keyframe gating and relaying raw`);
                 if (ws.readyState === ws.OPEN) ws.send(backendBuf);
                 backendBuf = Buffer.alloc(0);
                 gatingEnabled = false;
@@ -692,7 +692,7 @@ function handleConnection(ws, db) {
  * Socket.IO already ignores upgrade requests whose path doesn't match its own
  * `/socket.io/` default, so no conflict.
  */
-function attachUmpStreamingServer(httpServer, db) {
+function attachRTSPOverWebSocketServer(httpServer, db) {
   const wss = new WebSocketServer({ noServer: true });
   httpServer.on('upgrade', (req, socket, head) => {
     if (!req.url || !req.url.startsWith('/StreamingServer')) return;
@@ -701,13 +701,13 @@ function attachUmpStreamingServer(httpServer, db) {
     });
   });
   wss.on('connection', (ws) => handleConnection(ws, db));
-  console.log('[UmpStreamingServer] /StreamingServer WS bridge attached');
+  console.log('[RTSPOverWebSocketServer] /StreamingServer WS bridge attached');
   return wss;
 }
 
 module.exports = {
-  attachUmpStreamingServer,
-  // Exported for unit testing only (./umpStreamingServer.test.js) — pure
+  attachRTSPOverWebSocketServer,
+  // Exported for unit testing only (./rtspOverWebSocketServer.test.js) — pure
   // functions, no connection/socket state, safe to call directly.
   extractRtspResponseText,
   parseSdpVideoTrack,

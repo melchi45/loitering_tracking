@@ -31,10 +31,10 @@ export interface Camera {
   ip?: string;
   mac?: string;
   webrtcEnabled?: boolean;
-  /** UMP Player RTSP-over-WebSocket delivery enabled — independent of webrtcEnabled, see Design_RTSP_Over_WebSocket.md §7.2 */
-  umpEnabled?: boolean;
-  /** UI convenience derived from webrtcEnabled/umpEnabled by the server (GET) and accepted on save (POST/PUT) — preferred over setting the two booleans directly */
-  streamingMode?: 'jpeg' | 'webrtc' | 'ump';
+  /** RTSP-over-WebSocket delivery enabled — independent of webrtcEnabled, see Design_RTSP_Over_WebSocket.md §7.2 */
+  rtspOverWebSocketEnabled?: boolean;
+  /** UI convenience derived from webrtcEnabled/rtspOverWebSocketEnabled by the server (GET) and accepted on save (POST/PUT) — preferred over setting the two booleans directly */
+  streamingMode?: 'jpeg' | 'webrtc' | 'rtsp-over-websocket';
   status: 'live' | 'streaming' | 'connecting' | 'reconnecting' | 'offline' | 'error' | 'idle' | 'paused';
   /** 'youtube' for virtual YouTube stream channels; absent for physical IP cameras */
   type?: 'youtube' | string;

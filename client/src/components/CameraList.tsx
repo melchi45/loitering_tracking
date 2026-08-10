@@ -14,7 +14,7 @@ interface AddCameraForm {
   rtspUrl: string;
   username: string;
   password: string;
-  streamingMode: 'jpeg' | 'webrtc' | 'ump';
+  streamingMode: 'jpeg' | 'webrtc' | 'rtsp-over-websocket';
 }
 
 interface AddYouTubeForm {
@@ -942,7 +942,7 @@ export default function CameraList() {
                     />
                   </div>
 
-                  {/* Streaming mode — JPEG(Default) / WebRTC / UMP (Design_RTSP_Over_WebSocket.md §7) */}
+                  {/* Streaming mode — JPEG(Default) / WebRTC / RTSP-over-WebSocket (Design_RTSP_Over_WebSocket.md §7) */}
                   <StreamingModeSelector
                     value={form.streamingMode}
                     onChange={(mode) => setForm((p) => ({ ...p, streamingMode: mode }))}

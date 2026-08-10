@@ -880,7 +880,7 @@ if (subscribedRef.current.size > 0 && !subscribedRef.current.has(ev.cameraId)) r
 | 포트 | 프로토콜 | 컴포넌트 | 용도 |
 |---|---|---|---|
 | 3080 | HTTP | Node.js | REST API (HTTP) |
-| 3443 | HTTPS | Node.js | REST API + Socket.IO + WHEP 프록시 + WSS `/StreamingServer`(RTSP-over-WebSocket, `umpStreamingServer.js`) |
+| 3443 | HTTPS | Node.js | REST API + Socket.IO + WHEP 프록시 + WSS `/StreamingServer`(RTSP-over-WebSocket, `rtspOverWebSocketServer.js`) |
 | 3100 | HTTP | mcp-server | MCP HTTP+SSE 모드 |
 | 8554 | RTSP | MediaMTX | RTSP 재발행 (로컬 루프백) |
 | 8889 | HTTP | MediaMTX | WebRTC WHEP 시그널링 (로컬 루프백) |

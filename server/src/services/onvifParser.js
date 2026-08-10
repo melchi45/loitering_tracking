@@ -235,7 +235,7 @@ function parseSingleNotification(blockXml) {
  *
  * Split out from parseOnvifPayload() (2026-07-27) so callers that already
  * have plain XML text — e.g. RTSPOverWebSocketView.tsx's browser-side relay of
- * <ump-player>'s 'meta' CustomEvent, which decodes the RTP payload itself
+ * <rtsp-over-websocket>'s 'meta' CustomEvent, which decodes the RTP payload itself
  * client-side via metaSession.js/metaDataParser.js — don't need to
  * re-encode it to base64 just to satisfy this function's original
  * ingest-daemon-shaped signature.
@@ -370,13 +370,13 @@ function parseLogstringPayload(base64Payload) {
 
 // ── Shared storage/broadcast for parsed ONVIF events ──────────────────────────
 // Extracted from server/src/routes/internalApi.js (2026-07-27) so a second
-// ingestion path — the browser-side relay of <ump-player>'s 'meta' event
-// (server/src/api/cameras.js's POST /:id/ump-meta, for UMP-mode cameras that
-// bypass ingest-daemon's Application RTP fan-out entirely) — converges on the
+// ingestion path — the browser-side relay of <rtsp-over-websocket>'s 'meta' event
+// (server/src/api/cameras.js's POST /:id/rtsp-over-websocket-meta, for RTSP-over-WebSocket-mode
+// cameras that bypass ingest-daemon's Application RTP fan-out entirely) — converges on the
 // exact same onvif_events storage, snapshot capture, type registry, and
 // Socket.IO broadcast as the ingest-daemon path, instead of duplicating this
 // logic. Sharing the same _lastStates map also means a camera reachable via
-// both paths at once (webrtcEnabled + umpEnabled both true) still dedupes
+// both paths at once (webrtcEnabled + rtspOverWebSocketEnabled both true) still dedupes
 // correctly across them.
 
 // Per-camera+topic+sourceToken+ruleName last known state — prevents storing

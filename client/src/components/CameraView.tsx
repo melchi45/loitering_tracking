@@ -2,13 +2,13 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Volume2, VolumeX } from 'lucide-react';
 import { useCamera } from '../hooks/useCamera';
 import { useWebRTC } from '../hooks/useWebRTC';
-import { useUmpStats } from '../hooks/useUmpStats';
+import { useRTSPOverWebSocketStats } from '../hooks/useRTSPOverWebSocketStats';
 import { useCameraStore } from '../stores/cameraStore';
 import { useI18n } from '../i18n';
 import ZoneEditor from './ZoneEditor';
 import ThermalOverlay from './ThermalOverlay';
 import WebRtcStatsPanel from './WebRtcStatsPanel';
-import UmpStatsPanel from './UmpStatsPanel';
+import RTSPOverWebSocketStatsPanel from './RTSPOverWebSocketStatsPanel';
 import RTSPOverWebSocketView from './RTSPOverWebSocketView';
 import type { Detection, Zone } from '../types';
 
@@ -321,29 +321,29 @@ function drawOverlay(
 export default function CameraView({ cameraId, cameraName }: Props) {
   const cameras        = useCameraStore((s) => s.cameras);
   const camera         = cameras.find((c) => c.id === cameraId);
-  // streamingMode ('jpeg'|'webrtc'|'ump') selects one of three delivery paths —
+  // streamingMode ('jpeg'|'webrtc'|'rtsp-over-websocket') selects one of three delivery paths —
   // see Design_RTSP_Over_WebSocket.md §7. Falls back to deriving
   // from webrtcEnabled for cameras fetched before the server returned it.
   const streamingMode = camera?.streamingMode ?? (camera?.webrtcEnabled ? 'webrtc' : 'jpeg');
   // STUN/TURN settings come from useWebRTC hook via webrtcConfigStore.
   const useWebRTCMode  = streamingMode === 'webrtc';
-  const useUmpMode      = streamingMode === 'ump';
+  const useRTSPOverWebSocketMode = streamingMode === 'rtsp-over-websocket';
 
   // JPEG path (always active for AI detections; frame only used when not WebRTC)
   const { frame, detections, frameWidth, frameHeight } = useCamera(cameraId);
   // WebRTC path (active only when webrtcEnabled + global WebRTC enabled)
   const { videoRef, state: webrtcState, hasAudio, retry: retryWebRTC, iceStats, rxHistory, rxCodec } = useWebRTC(cameraId, useWebRTCMode);
-  // UMP path stats (active only when streamingMode === 'ump') — fed by
+  // RTSP-over-WebSocket path stats (active only when streamingMode === 'rtsp-over-websocket') — fed by
   // RTSPOverWebSocketView's 'statistics' listener via onStatistics, same shape of
-  // wiring as useWebRTC's iceStats/rxHistory above. See useUmpStats.ts.
-  const { stats: umpStats, history: umpHistory, onStatistics: onUmpStatistics } = useUmpStats();
+  // wiring as useWebRTC's iceStats/rxHistory above. See useRTSPOverWebSocketStats.ts.
+  const { stats: rtspOverWebSocketStats, history: rtspOverWebSocketHistory, onStatistics: onRTSPOverWebSocketStatistics } = useRTSPOverWebSocketStats();
 
   const imgRef    = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   const [isMuted,      setIsMuted]      = useState(true);
   const [showIcePanel, setShowIcePanel] = useState(false);
-  const [showUmpPanel, setShowUmpPanel] = useState(false);
+  const [showRTSPOverWebSocketPanel, setShowRTSPOverWebSocketPanel] = useState(false);
 
   // Sync muted state when WebRTC reconnects (stream re-attached).
   // Note: user-initiated unmute must be set synchronously in the click handler (not here)
@@ -395,42 +395,42 @@ export default function CameraView({ cameraId, cameraName }: Props) {
 
   return (
     <div className="relative w-full h-full bg-gray-900 overflow-hidden rounded-lg">
-      {useUmpMode && camera ? (
-        /* ── UMP path: RTSP-over-WebSocket via <ump-player> ── */
+      {useRTSPOverWebSocketMode && camera ? (
+        /* ── RTSP-over-WebSocket path: via <rtsp-over-websocket> ── */
         <>
-          <RTSPOverWebSocketView camera={camera} onStatistics={onUmpStatistics} />
+          <RTSPOverWebSocketView camera={camera} onStatistics={onRTSPOverWebSocketStatistics} />
           {/* Detection bbox overlay — same canvas + drawOverlay() as the JPEG/
               WebRTC paths (2026-07-30 fix: this canvas was previously missing
-              from the UMP branch entirely, so canvasRef.current stayed null
+              from the RTSP-over-WebSocket branch entirely, so canvasRef.current stayed null
               and drawOverlay() silently no-op'd on every detections update
-              even though frame/detections data was flowing normally — UMP
+              even though frame/detections data was flowing normally — RTSP-over-WebSocket
               mode doesn't change how capture images reach the AI pipeline,
               only how the browser plays the video back). Sizing is CSS-driven
               (canvas.clientWidth/clientHeight) and scaled against frameWidth/
-              frameHeight from useCamera(), not tied to <ump-player>'s own
-              native resolution, so no UMP-specific scaling data is needed. */}
+              frameHeight from useCamera(), not tied to <rtsp-over-websocket>'s own
+              native resolution, so no RTSP-over-WebSocket-specific scaling data is needed. */}
           <canvas
             ref={canvasRef}
             className="absolute top-0 left-0 w-full h-full pointer-events-none"
           />
-          {/* UMP badge + stats toggle + Zone button — same stacked top-right
+          {/* RTSP-over-WebSocket badge + stats toggle + Zone button — same stacked top-right
               corner layout as the WebRTC badge/ICE/Zone rows below, so the
               two streaming modes read as the same UI. Toggle gates on
-              umpStats !== null (first 'statistics' tick received) rather
+              rtspOverWebSocketStats !== null (first 'statistics' tick received) rather
               than a connection-state enum — RTSPOverWebSocketView doesn't expose
               one, and "has produced at least one stat sample" is an
               equivalent proxy for "connected enough to show". */}
           <div className="absolute top-2 right-2 flex flex-col items-end gap-1 z-10">
             <div className="flex items-center gap-1">
               <div className="bg-purple-900/70 rounded px-1.5 py-0.5 text-[9px] font-bold text-purple-300">
-                UMP
+                RTSP-over-WS
               </div>
-              {umpStats && (
+              {rtspOverWebSocketStats && (
                 <button
-                  onClick={() => setShowUmpPanel((v) => !v)}
-                  title="UMP statistics"
+                  onClick={() => setShowRTSPOverWebSocketPanel((v) => !v)}
+                  title="RTSP-over-WebSocket statistics"
                   className={`rounded px-1.5 py-0.5 text-[9px] font-bold transition-colors ${
-                    showUmpPanel
+                    showRTSPOverWebSocketPanel
                       ? 'bg-cyan-600/80 text-white'
                       : 'bg-gray-700/70 text-gray-400 hover:text-cyan-300'
                   }`}
@@ -449,11 +449,11 @@ export default function CameraView({ cameraId, cameraName }: Props) {
               </button>
             )}
           </div>
-          {/* UMP stats panel — same position/sizing/scroll behavior as the
+          {/* RTSP-over-WebSocket stats panel — same position/sizing/scroll behavior as the
               WebRTC ICE panel below (see its comment for rationale). */}
-          {showUmpPanel && umpStats && (
+          {showRTSPOverWebSocketPanel && rtspOverWebSocketStats && (
             <div className="absolute top-9 right-2 max-h-[calc(100%-3rem)] overflow-y-auto bg-black/85 rounded-lg p-1.5 text-[9px] font-mono text-gray-200 z-20 w-[220px] border border-gray-700/60">
-              <UmpStatsPanel stats={umpStats} history={umpHistory} />
+              <RTSPOverWebSocketStatsPanel stats={rtspOverWebSocketStats} history={rtspOverWebSocketHistory} />
             </div>
           )}
         </>
@@ -625,8 +625,8 @@ export default function CameraView({ cameraId, cameraName }: Props) {
       </div>
 
       {/* Zone edit button (top-right) — shown for the JPEG path only; WebRTC
-          and UMP cameras render this button inside their own badge container above */}
-      {!editZones && !useWebRTCMode && !useUmpMode && (
+          and RTSP-over-WebSocket cameras render this button inside their own badge container above */}
+      {!editZones && !useWebRTCMode && !useRTSPOverWebSocketMode && (
         <button
           onClick={() => setEditZones(true)}
           className="absolute top-2 right-2 bg-black/60 hover:bg-black/80 rounded px-2 py-1 text-[10px] text-gray-300 hover:text-white transition-colors z-10"

@@ -1290,7 +1290,7 @@ class CameraSession:
         payload. RTP/RTSP-based consumers of this fan-out (UMP Player over
         add_rtsp_publish()/add_video_fanout()) don't speak SDP the same way and
         instead seed their decoder purely from in-band NAL units (confirmed via
-        submodules/ump-player's h264Session.js/h265Session.js — no SDP sprop
+        submodules/rtsp-over-websocket's h264Session.js/h265Session.js — no SDP sprop
         fallback) — so a destination that joins after the camera's own single
         parameter-set transmission (i.e. any dynamically-added fan-out entry,
         which by definition joins well after the initial connect) would never
@@ -1477,9 +1477,9 @@ class CameraSession:
             # for its OWN next keyframe before receiving anything: an H.265
             # RTSP source packetizes VPS/SPS/PPS as separate NAL units bundled
             # into the same libav packet as the following IDR slice, so
-            # starting mid-GOP means MediaMTX (and thus <ump-player>, which
+            # starting mid-GOP means MediaMTX (and thus <rtsp-over-websocket>, which
             # seeds its H265SPSParser purely from in-band VPS/SPS/PPS NALs —
-            # confirmed via submodules/ump-player MediaSession/VideoSession/
+            # confirmed via submodules/rtsp-over-websocket MediaSession/VideoSession/
             # h265Session.js, no SDP sprop-vps/sprop-sps/sprop-pps fallback)
             # would relay bare slice NALs with no parameter sets at all,
             # crashing the player on the very first frame with "Cannot read

@@ -8,10 +8,10 @@ import type { Camera } from '../types';
 type Props = {
   camera: Camera;
   // Forwards the raw payload of <rtsp-over-websocket>'s 'statistics'
-  // CustomEvent up to CameraView.tsx, which owns the UMP stats badge/toggle/
+  // CustomEvent up to CameraView.tsx, which owns the RTSP-over-WebSocket stats badge/toggle/
   // panel (same pattern as useWebRTC's iceStats/rxHistory) so it can sit in
   // the same top-right corner flex column as the WebRTC/Zone rows instead of
-  // a second, overlapping absolutely-positioned block. See useUmpStats.ts.
+  // a second, overlapping absolutely-positioned block. See useRTSPOverWebSocketStats.ts.
   onStatistics?: (raw: unknown) => void;
 };
 
@@ -35,10 +35,10 @@ interface RTSPOverWebSocketElement extends HTMLElement {
  * custom element — RTSP-over-WebSocket, the 3rd streaming mode alongside
  * JPEG/WebRTC. See docs/design/Design_RTSP_Over_WebSocket.md.
  *
- * 2026-08-04: switched from the git submodule (`submodules/ump-player`,
+ * 2026-08-04: switched from the git submodule (`submodules/rtsp-over-websocket`,
  * ~70 sequentially-loaded legacy `<script>` tags registering the old
- * `<ump-player>` element) to this npm package — the same author's TypeScript
- * rewrite of the same component (`submodules/ump-player`'s `src/player/`),
+ * `<rtsp-over-websocket>` element) to this npm package — the same author's TypeScript
+ * rewrite of the same component (`submodules/rtsp-over-websocket`'s `src/player/`),
  * now published standalone. Verified against the package's source
  * (github.com/melchi45/rtsp-over-websocket) before switching: same
  * `observedAttributes` set (hostname/proxy/port/secure/device/channel/
@@ -47,7 +47,7 @@ interface RTSPOverWebSocketElement extends HTMLElement {
  * unchanged), same `device === 'nvr'` branch, same event names (`error`/
  * `statechange`/`waiting`/`statistics`/`meta`), and a public `play()` method
  * — so the attribute/event wiring below carries over unchanged from the old
- * `<ump-player>` version; only the loading mechanism (npm import vs. a
+ * `<rtsp-over-websocket>` version; only the loading mechanism (npm import vs. a
  * sequential global-script loader) and the `PLAYING` state constant (now a
  * proper named export instead of a `window.UmpPlayState` global) changed.
  * The package's own React wrapper (`@melchi45/rtsp-over-websocket`'s
@@ -55,7 +55,7 @@ interface RTSPOverWebSocketElement extends HTMLElement {
  * playback through `SunapiManager.init()`, which has the browser log into
  * the device's own SUNAPI REST API directly. This project's architecture
  * never lets the browser talk to a camera directly: credentials come from
- * our own JWT-gated `/api/cameras/:id/ump-credentials`, and `hostname`/
+ * our own JWT-gated `/api/cameras/:id/rtsp-over-websocket-credentials`, and `hostname`/
  * `proxy` always point back at this same origin (Proxy mode, see the design
  * doc) — the raw custom element used below is the only way to keep that
  * intact.
@@ -80,7 +80,7 @@ export default function RTSPOverWebSocketView({ camera, onStatistics }: Props) {
   // vendor's own reference example just logs them and keeps the player
   // running, which is what lets it recover a few frames later. Unmounting on
   // the first one permanently killed the session before it ever got the
-  // chance to recover (carried over from the old <ump-player> integration,
+  // chance to recover (carried over from the old <rtsp-over-websocket> integration,
   // 2026-07-24 — see git history for the original incident).
   const [playerNotice, setPlayerNotice] = useState('');
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
@@ -147,16 +147,16 @@ export default function RTSPOverWebSocketView({ camera, onStatistics }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/cameras/${camera.id}/ump-credentials`, {
+    fetch(`/api/cameras/${camera.id}/rtsp-over-websocket-credentials`, {
       headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
     })
       .then((r) => r.json())
       .then((d) => {
         if (cancelled) return;
         if (d.success) setCreds(d.data);
-        else setError(d.error || 'Failed to load UMP credentials');
+        else setError(d.error || 'Failed to load RTSP-over-WebSocket credentials');
       })
-      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load UMP credentials'); });
+      .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load RTSP-over-WebSocket credentials'); });
     return () => { cancelled = true; };
   }, [camera.id, accessToken]);
 
@@ -227,9 +227,9 @@ export default function RTSPOverWebSocketView({ camera, onStatistics }: Props) {
     // 'meta' carries the RTSP session's own metadata track (ONVIF
     // MetadataStream XML — motion/analytics events, the same class of data
     // server/src/services/onvifParser.js already parses from ingest-daemon's
-    // Application RTP fan-out for JPEG/WebRTC-mode cameras). UMP mode bypasses
-    // ingest-daemon entirely (Design_RTSP_Over_WebSocket.md §8.13),
-    // so for a UMP-only camera (webrtcEnabled=false) this browser-side event
+    // Application RTP fan-out for JPEG/WebRTC-mode cameras). RTSP-over-WebSocket
+    // mode bypasses ingest-daemon entirely (Design_RTSP_Over_WebSocket.md §8.13),
+    // so for an RTSP-over-WebSocket-only camera (webrtcEnabled=false) this browser-side event
     // is otherwise the only place that XML ever surfaces — relay it to the
     // server so it lands in the same onvif_events timeline/Socket.IO stream
     // as every other camera.
@@ -240,7 +240,7 @@ export default function RTSPOverWebSocketView({ camera, onStatistics }: Props) {
       const now = Date.now();
       if (now - lastMetaRelayRef.current < 500) return;
       lastMetaRelayRef.current = now;
-      fetch(`/api/cameras/${camera.id}/ump-meta`, {
+      fetch(`/api/cameras/${camera.id}/rtsp-over-websocket-meta`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -258,7 +258,7 @@ export default function RTSPOverWebSocketView({ camera, onStatistics }: Props) {
     try {
       el.play();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start UMP playback');
+      setError(err instanceof Error ? err.message : 'Failed to start RTSP-over-WebSocket playback');
     }
     return () => {
       el.removeEventListener('error', onError);
@@ -292,7 +292,7 @@ export default function RTSPOverWebSocketView({ camera, onStatistics }: Props) {
   if (camera.channelSlot == null) {
     return (
       <div className="flex items-center justify-center w-full h-full text-xs text-red-400 text-center px-4">
-        UMP playback requires a Channel Slot
+        RTSP-over-WebSocket playback requires a Channel Slot
       </div>
     );
   }
@@ -303,11 +303,11 @@ export default function RTSPOverWebSocketView({ camera, onStatistics }: Props) {
     <div ref={containerRef} className="relative w-full h-full">
       {error ? (
         <div className="flex items-center justify-center w-full h-full text-xs text-red-400 text-center px-4">
-          UMP playback error: {error}
+          RTSP-over-WebSocket playback error: {error}
         </div>
       ) : !scriptReady || !creds || !size ? (
         <div className="flex items-center justify-center w-full h-full text-xs text-gray-500">
-          Loading UMP player…
+          Loading RTSP-over-WebSocket player…
         </div>
       ) : (
         <>
@@ -342,9 +342,9 @@ export default function RTSPOverWebSocketView({ camera, onStatistics }: Props) {
             // Element treats `channel` as 1-based and subtracts 1 internally to
             // build the outgoing RTSP path — confirmed against this package's
             // own source (RTSPOverWebSocket.ts generateRTSPURL()).
-            // umpStreamingServer.js matches that resulting channel number
+            // rtspOverWebSocketServer.js matches that resulting channel number
             // directly against camera.channelSlot (exact equality, server/src/
-            // services/umpStreamingServer.js), so passing channelSlot unmodified
+            // services/rtspOverWebSocketServer.js), so passing channelSlot unmodified
             // here would silently connect to channelSlot-1's camera instead.
             channel={String(camera.channelSlot + 1)}
             profile_number="1"
@@ -356,7 +356,7 @@ export default function RTSPOverWebSocketView({ camera, onStatistics }: Props) {
           />
           {/* Audio mute/unmute button — same position/icons/gating pattern as
               CameraView.tsx's WebRTC button (webrtcState === 'connected' &&
-              hasAudio); isPlaying is the UMP equivalent of "connected", and
+              hasAudio); isPlaying is the RTSP-over-WebSocket equivalent of "connected", and
               hasAudio here is learned reactively (see its state comment)
               rather than known upfront. */}
           {isPlaying && hasAudio && (

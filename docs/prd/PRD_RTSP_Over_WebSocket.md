@@ -3,8 +3,8 @@
 
 | | |
 |---|---|
-| **Document ID** | PRD-LTS-UMP-WS-01 |
-| **Version** | 1.1 |
+| **Document ID** | PRD-LTS-RTSPWS-01 |
+| **Version** | 1.2 |
 | **Status** | Active |
 | **Date** | 2026-07-22 |
 | **Related RFP** | [RFP_RTSP_Over_WebSocket.md](../rfp/RFP_RTSP_Over_WebSocket.md) |
@@ -27,7 +27,7 @@
 
 ## 1. 제품 비전
 
-카메라 재생 경로에 RTSP-over-WebSocket(Hanwha `<ump-player>` 웹 컴포넌트) 기반 RTSP-over-WebSocket을 추가해, JPEG(기본)/WebRTC와 나란히 세 번째 선택지로 제공한다. 핵심은 **카메라 세션을 추가하지 않는 것**이다 — ingest-daemon의 기존 단일 RTSP 세션 뒤에 로컬 RTSP Proxy(MediaMTX 재사용)와 단일 WS 브릿지를 추가해, 몇 명이 RTSP-over-WebSocket로 보든 카메라는 영향받지 않는다.
+카메라 재생 경로에 RTSP-over-WebSocket(Hanwha `<rtsp-over-websocket>` 웹 컴포넌트) 기반 RTSP-over-WebSocket을 추가해, JPEG(기본)/WebRTC와 나란히 세 번째 선택지로 제공한다. 핵심은 **카메라 세션을 추가하지 않는 것**이다 — ingest-daemon의 기존 단일 RTSP 세션 뒤에 로컬 RTSP Proxy(MediaMTX 재사용)와 단일 WS 브릿지를 추가해, 몇 명이 RTSP-over-WebSocket로 보든 카메라는 영향받지 않는다.
 
 ---
 
@@ -35,7 +35,7 @@
 
 ### 2.1 목표
 
-- Hanwha `<ump-player>`가 기대하는 `/StreamingServer` WebSocket 프로토콜을 LTS Node 서버에서 재현한다.
+- Hanwha `<rtsp-over-websocket>`가 기대하는 `/StreamingServer` WebSocket 프로토콜을 LTS Node 서버에서 재현한다.
 - ingest-daemon 우선 원칙(카메라별 단일 RTSP 세션)을 위반하지 않는다.
 - 카메라별 저장된 RTSP 자격증명을 그대로 재사용해 별도 인증 체계 없이 RTSP-over-WebSocket 재생을 인증한다.
 - 뷰어가 실제로 RTSP-over-WebSocket로 볼 때만 리소스를 소비하는 on-demand 모델을 구현한다.
@@ -46,7 +46,7 @@
 - `/StreamingServer` 프로토콜 자체의 재정의 — 표준 RTSP-over-TCP-interleaved 프레이밍을 WS로 감싼 기존 규격을 그대로 릴레이한다(Design 문서 §2.4).
 - 신규 인증 체계(JWT 등) 도입 — 카메라별 저장 자격증명 재사용으로 확정됨(Design 문서 §5 항목 2).
 - YouTube/RTMP/HLS 소스에 대한 RTSP-over-WebSocket 지원.
-- `submodules/ump-player`의 `.gitmodules`(HTTPS URL) 자체 수정 — 별도 리포 관리 사항.
+- `melchi45/rtsp-over-websocket`의 `.gitmodules`(HTTPS URL) 자체 수정 — 별도 리포 관리 사항.
 
 ---
 
@@ -73,9 +73,9 @@
 
 ### 4.2 인증 — RTSP Digest, 신규 인증 체계 없음
 
-`app/media/ump/Network/RTSPoverWebsocket/rtspClient.js`의 `DigestGenerator`가 클라이언트 쪽에서 이미 표준 RTSP Digest challenge-response를 구현하고 있으므로, 서버(WS 브릿지)가 그 반대편(401 challenge 발급 → HA1=MD5(user:realm:pass) 검증)을 구현하면 `<ump-player username="..." password="...">`에 카메라 자격증명을 그대로 넣는 것만으로 동작한다(Design 문서 §4.2-3).
+`app/media/Network/RTSPoverWebsocket/rtspClient.js`의 `DigestGenerator`가 클라이언트 쪽에서 이미 표준 RTSP Digest challenge-response를 구현하고 있으므로, 서버(WS 브릿지)가 그 반대편(401 challenge 발급 → HA1=MD5(user:realm:pass) 검증)을 구현하면 `<rtsp-over-websocket username="..." password="...">`에 카메라 자격증명을 그대로 넣는 것만으로 동작한다(Design 문서 §4.2-3).
 
-**대안 검토**: 별도 JWT 발급 체계도 검토되었으나, `<ump-player>`가 표준 HTML 속성(`username`/`password`)만 받는 컴포넌트라 JWT를 그 자리에 넣는 것은 부자연스럽고, RTSP Digest는 카메라 자체가 이미 쓰는 인증 방식이라 운영자 학습 비용이 없다는 이유로 카메라별 저장 자격증명 재사용이 확정되었다.
+**대안 검토**: 별도 JWT 발급 체계도 검토되었으나, `<rtsp-over-websocket>`가 표준 HTML 속성(`username`/`password`)만 받는 컴포넌트라 JWT를 그 자리에 넣는 것은 부자연스럽고, RTSP Digest는 카메라 자체가 이미 쓰는 인증 방식이라 운영자 학습 비용이 없다는 이유로 카메라별 저장 자격증명 재사용이 확정되었다.
 
 ### 4.3 On-demand Fan-out — 기존 API 재사용
 
@@ -85,8 +85,8 @@ ingest-daemon의 6번째 fan-out(PyAV MediaMTX publish)은 기존 `POST /cameras
 
 `camera.webrtcEnabled`가 `pipelineManager.js`의 파이프라인 재시작 판단·`addCameraStream()` 호출 등 여러 곳에서 이미 깊게 쓰이고 있어(과거 "CameraEditModal이 항상 webrtcEnabled를 보내 변경 감지가 오작동" 버그 이력 포함), 이 필드의 내부 동작을 건드리는 것은 리스크가 크다고 판단했다. 따라서:
 
-- `streamingMode`는 **API 계층에서만** 존재하는 UI 소스-오브-트루스로 두고, 저장 시 서버가 `{webrtcEnabled, umpEnabled}`로 파생한다.
-- `umpEnabled`는 완전히 신규 필드라 기존 `webrtcEnabled` 코드 경로에 영향을 주지 않는다.
+- `streamingMode`는 **API 계층에서만** 존재하는 UI 소스-오브-트루스로 두고, 저장 시 서버가 `{webrtcEnabled, rtspOverWebSocketEnabled}`로 파생한다.
+- `rtspOverWebSocketEnabled`는 완전히 신규 필드라 기존 `webrtcEnabled` 코드 경로에 영향을 주지 않는다.
 - 응답(GET) 시 저장된 두 boolean으로부터 `streamingMode`를 역산한다 — 별도 마이그레이션 스크립트가 불필요하다.
 
 **구현 상태**: 이 파생/역산 로직(`streamingModeToFlags()`/`deriveStreamingMode()`)은 `server/src/api/cameras.js`에 구현 완료됨(Design 문서 §7.2).
@@ -118,13 +118,13 @@ RFC 7826 §10.12 TCP interleaved 프레이밍을 그대로 WebSocket 바이너�
 ### 카메라 저장 (구현 완료)
 
 ```
-POST/PUT body { streamingMode: 'jpeg' | 'webrtc' | 'ump' }
+POST/PUT body { streamingMode: 'jpeg' | 'webrtc' | 'rtsp-over-websocket' }
   → 저장: streamingMode==='webrtc' → { webrtcEnabled: true }
           streamingMode==='jpeg'   → { webrtcEnabled: false }
-          streamingMode==='ump'    → { webrtcEnabled: false, umpEnabled: true }
+          streamingMode==='rtsp-over-websocket'    → { webrtcEnabled: false, rtspOverWebSocketEnabled: true }
 
 GET 응답 { ...camera, streamingMode: deriveStreamingMode(camera) }
-  deriveStreamingMode(): camera.umpEnabled ? 'ump' : camera.webrtcEnabled ? 'webrtc' : 'jpeg'
+  deriveStreamingMode(): camera.rtspOverWebSocketEnabled ? 'rtsp-over-websocket' : camera.webrtcEnabled ? 'webrtc' : 'jpeg'
 ```
 
 ### `/StreamingServer` WS 엔드포인트 (미구현 — Design 문서 §4.2 계약)
@@ -146,7 +146,7 @@ GET 응답 { ...camera, streamingMode: deriveStreamingMode(camera) }
 | RTSP-over-WebSocket로 시청 중인 브라우저가 0개가 됨 | ingest-daemon 6번째 fan-out 및 MediaMTX publish가 해제된다(on-demand 해제) |
 | WS 연결의 첫 요청 라인 URL에 존재하지 않는 channelSlot이 포함됨 | WS 연결을 즉시 종료한다 |
 | 카메라에 저장된 username/password가 없음 | RTSP Digest 인증이 실패해 WS 연결이 거부된다(별도 익명 접근 허용 없음) |
-| YouTube 카메라의 streamingMode를 'ump'로 전송 | 서버가 거부하거나(백엔드 검증 필요) UI 자체가 옵션을 노출하지 않아 발생하지 않음 — 클라이언트 재생 컴포넌트 통합 단계에서 백엔드 방어 로직 필요 여부 확정 |
+| YouTube 카메라의 streamingMode를 'rtsp-over-websocket'로 전송 | 서버가 거부하거나(백엔드 검증 필요) UI 자체가 옵션을 노출하지 않아 발생하지 않음 — 클라이언트 재생 컴포넌트 통합 단계에서 백엔드 방어 로직 필요 여부 확정 |
 | `supportSunapi=false`인 ONVIF 전용 카메라에서 RTSP-over-WebSocket 선택 | 정상 노출·동작 대상 — 로컬 프록시가 재서빙하므로 원본 카메라의 SUNAPI 지원 여부는 게이팅 조건이 아님 |
 
 ---
@@ -162,4 +162,5 @@ RFP 문서 §7과 동일 — 스키마/API(완료) → 클라이언트 UI(진행
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-22 | 초기 작성 |
-| 1.1 | 2026-08-04 | 클라이언트 라이브러리를 `submodules/ump-player` 서브모듈에서 `@melchi45/rtsp-over-websocket` npm 패키지로 전환 — Design_RTSP_Over_WebSocket.md §8.21 참고 |
+| 1.1 | 2026-08-04 | 클라이언트 라이브러리를 `melchi45/rtsp-over-websocket` 서브모듈에서 `@melchi45/rtsp-over-websocket` npm 패키지로 전환 — Design_RTSP_Over_WebSocket.md §8.21 참고 |
+| 1.2 | 2026-08-10 | 문서 ID `PRD-LTS-UMP-WS-01` → `PRD-LTS-RTSPWS-01`로 통일(연관 SRS/TC의 `FR-UMP-*`/`TC-UMP-*` 추적 ID가 `FR-RTSPWS-*`/`TC-RTSPWS-*`로 리네임된 것과 일관성 맞춤); 잔존 레거시 명칭 일괄 정리 — `Ump*` 식별자·`submodules/rtsp-over-websocket` 경로를 `@melchi45/rtsp-over-websocket` npm 패키지의 현행 명칭(`RTSPOverWebSocket*`, 별도 저장소 `melchi45/rtsp-over-websocket`)으로 전면 교체 |

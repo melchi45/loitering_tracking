@@ -3,7 +3,7 @@
 
 | | |
 |---|---|
-| **Document Reference** | OPS-LTS2026-UMP-001 |
+| **Document Reference** | OPS-LTS2026-RTSPWS-001 |
 | **Document Type** | Operations Guide |
 | **Parent System** | LTS-2026-001 Loitering Detection & Tracking System |
 | **Issue Date** | 2026-08-04 |
@@ -22,7 +22,7 @@ RTSP-over-WebSocket은 JPEG Capture / WebRTC에 이은 3번째 카메라 재생 
 
 ## 1. npm 패키지 인증 설정 (최초 1회, 개발자별) — 2026-08-04 갱신
 
-**서브모듈은 더 이상 필요 없습니다.** `<rtsp-over-websocket>` 웹 컴포넌트는 `@melchi45/rtsp-over-websocket`(GitHub Packages, `npm.pkg.github.com`)로 정식 배포되어 `client/package.json`의 필수 `dependencies`에 등록돼 있습니다(레거시 `submodules/ump-player` 서브모듈과 그 안의 `optionalDependencies`였던 `@melchi45/ump-player`는 2026-08-04 제거됨 — 상세: [Design_RTSP_Over_WebSocket.md](../design/Design_RTSP_Over_WebSocket.md) §8.21).
+**서브모듈은 더 이상 필요 없습니다.** `<rtsp-over-websocket>` 웹 컴포넌트는 `@melchi45/rtsp-over-websocket`(GitHub Packages, `npm.pkg.github.com`)로 정식 배포되어 `client/package.json`의 필수 `dependencies`에 등록돼 있습니다(레거시 `melchi45/rtsp-over-websocket` 서브모듈과 그 안의 `optionalDependencies`였던 `@melchi45/rtsp-over-websocket`는 2026-08-04 제거됨 — 상세: [Design_RTSP_Over_WebSocket.md](../design/Design_RTSP_Over_WebSocket.md) §8.21).
 
 GitHub Packages는 **public 저장소라도 `npm install`에 항상 인증이 필요**합니다(기본 npmjs.com 레지스트리와의 차이점). `read:packages` 권한의 GitHub Personal Access Token(PAT)이 필요합니다. 토큰은 절대 커밋하거나 채팅/로그에 붙여넣지 마십시오.
 
@@ -61,7 +61,7 @@ npm install    # @melchi45/rtsp-over-websocket 포함 정상 설치, 별도 자�
 | 변수 | 기본값 | 용도 |
 |---|---|---|
 | `MEDIAMTX_RTSP_PORT` | `8554` | ingest-daemon의 6번째 fan-out이 publish하는 로컬 MediaMTX RTSP 포트, `/StreamingServer` WS 브릿지가 연결하는 backend 포트와 동일 |
-| `INGEST_DAEMON_URL` | `http://127.0.0.1:7070` | `umpStreamingServer.js`가 on-demand `POST`/`DELETE /cameras/:id/rtsp-publish` 호출 시 사용 |
+| `INGEST_DAEMON_URL` | `http://127.0.0.1:7070` | `rtspOverWebSocketServer.js`가 on-demand `POST`/`DELETE /cameras/:id/rtsp-publish` 호출 시 사용 |
 | `CAPTURE_BACKEND` | `ingest-daemon` | `ingest-daemon`이 아니면 `/StreamingServer` WS 브릿지 자체가 기동되지 않음 (`index.js` 가드) |
 
 `/StreamingServer` WS 브릿지는 `SERVER_MODE`가 `analysis`가 아니고 `CAPTURE_BACKEND=ingest-daemon`일 때만 `server/src/index.js`에서 기동됩니다 — 기존 HTTPS/HTTP 포트(3080/3443)를 그대로 공유하며 별도 포트가 필요 없습니다.
@@ -84,12 +84,12 @@ RTSP-over-WebSocket 재생이 동작하려면 해당 카메라에 **RTSP usernam
 |---|---|---|
 | `npm install`이 `client/`에서 401/404로 실패 | `client/.npmrc`가 없거나 `@melchi45:registry`/토큰이 잘못됨 — GitHub Packages는 public repo라도 인증 없이는 `@melchi45/rtsp-over-websocket`을 못 받음 | `client/.npmrc.example`을 `client/.npmrc`로 복사 후 `read:packages` 권한 PAT 채워넣기(§1). CI는 `NPM_GH_PACKAGES_TOKEN` 리포지토리 시크릿 등록 여부 확인 |
 | 카메라 타일에 "Loading RTSP-over-WebSocket player…"가 계속 표시됨 | `customElements.whenDefined('rtsp-over-websocket')`가 resolve되지 않음 — 보통 위 npm install 실패로 패키지 자체가 `node_modules`에 없거나, 번들 로드 중 JS 에러 | 브라우저 개발자도구 Console에서 `@melchi45/rtsp-over-websocket` 관련 에러 확인, `node_modules/@melchi45/rtsp-over-websocket` 존재 여부 확인 후 필요 시 `npm install` 재실행 |
-| "RTSP-over-WebSocket playback error: ..." 표시 | `GET /api/cameras/:id/ump-credentials` 실패(401 등) | 로그인 세션(accessToken) 확인 — 이 엔드포인트만 JWT 필수 |
+| "RTSP-over-WebSocket playback error: ..." 표시 | `GET /api/cameras/:id/rtsp-over-websocket-credentials` 실패(401 등) | 로그인 세션(accessToken) 확인 — 이 엔드포인트만 JWT 필수 |
 | 재생이 시작되지 않고 조용히 멈춤 | `/StreamingServer` WS 연결이 안 열림 | `CAPTURE_BACKEND=ingest-daemon` 확인, 브라우저 개발자도구 Network 탭에서 WS 연결 상태 확인 |
 | WS는 연결되나 401 반복 | 카메라에 저장된 username/password 불일치 또는 공란 | 카메라 Edit 화면에서 RTSP 자격증명 재입력 |
 | 인증은 성공하나 영상이 안 나옴 | ingest-daemon의 rtsp-publish fan-out이 MediaMTX에 아직 준비되지 않음(레이스) 또는 MediaMTX 미기동 | `curl http://127.0.0.1:7070/cameras/stats`에서 해당 카메라 `rtspPublishChannel` 값 확인, MediaMTX 프로세스 상태 확인 |
 | 개발 모드(`npm run dev`)에서 WS 연결 실패 | Vite dev 서버 프록시에 `/StreamingServer` 규칙 누락 | `client/vite.config.ts`의 `server.proxy['/StreamingServer']`(`ws: true`) 확인 |
-| 인증 성공 후 OPTIONS→DESCRIBE→SETUP까지 갔다가 계속 재시도(무한 루프), MediaMTX 로그에 `invalid SETUP path` | 구버전 `rewriteRequestUri()`가 SETUP 요청 URI의 트랙 접미사(예: `/trackID=0`)까지 통째로 지우고 DESCRIBE와 같은 URI로 덮어써 MediaMTX가 거부. 클라이언트가 SETUP URI를 DESCRIBE 응답의 `Content-Base`(MediaMTX 자신의 베이스, 이미 올바른 값)로 만드는 경우까지 감안해야 함(2026-07-23 실 카메라 라이브 테스트로 확인, 두 차례 수정) | 이미 수정됨(§8.8, v2.0) — `umpStreamingServer.js`의 `rewriteRequestUri()`가 "이미 MediaMTX 타깃으로 시작하면 그대로 통과 → 클라이언트 베이스 접두사면 그 부분만 치환 → 둘 다 아니면 통째 치환" 3단 분기인지 확인. 재발 시 `[UmpStreamingServer] rewrote request line "..." -> "..."` 로그로 SETUP 라인이 실제로 어떻게 바뀌는지 확인 |
+| 인증 성공 후 OPTIONS→DESCRIBE→SETUP까지 갔다가 계속 재시도(무한 루프), MediaMTX 로그에 `invalid SETUP path` | 구버전 `rewriteRequestUri()`가 SETUP 요청 URI의 트랙 접미사(예: `/trackID=0`)까지 통째로 지우고 DESCRIBE와 같은 URI로 덮어써 MediaMTX가 거부. 클라이언트가 SETUP URI를 DESCRIBE 응답의 `Content-Base`(MediaMTX 자신의 베이스, 이미 올바른 값)로 만드는 경우까지 감안해야 함(2026-07-23 실 카메라 라이브 테스트로 확인, 두 차례 수정) | 이미 수정됨(§8.8, v2.0) — `rtspOverWebSocketServer.js`의 `rewriteRequestUri()`가 "이미 MediaMTX 타깃으로 시작하면 그대로 통과 → 클라이언트 베이스 접두사면 그 부분만 치환 → 둘 다 아니면 통째 치환" 3단 분기인지 확인. 재발 시 `[RTSPOverWebSocketServer] rewrote request line "..." -> "..."` 로그로 SETUP 라인이 실제로 어떻게 바뀌는지 확인 |
 | RTSP 핸드셰이크(OPTIONS~PLAY)는 전부 성공하고 WS로 데이터도 들어오는데 첫 프레임에서 `RTSP-over-WebSocket playback error: Cannot read properties of null (reading 'byteLength')` | on-demand fan-out이 카메라 스트림의 GOP 중간에 합류해 VPS/SPS/PPS 없는 P-슬라이스부터 전달됨 — `<rtsp-over-websocket>`의 H265 파서는 SDP의 sprop-vps/sprop-sps/sprop-pps를 쓰지 않고 오직 인밴드 RTP NAL(VPS/SPS/PPS)로만 디코더 상태를 시딩하므로, 그게 없는 첫 프레임에서 그대로 크래시(2026-07-23 실 카메라 라이브 테스트로 확인) | 이미 수정됨(§8.9, v2.1) — `ingest_daemon.py`의 `add_rtsp_publish()`/`add_video_fanout()` 동적 추가 경로에 `needsKeyframe` 게이트가 있는지 확인(다음 키프레임까지 해당 fan-out 엔트리에는 패킷을 보내지 않아야 함). 재발 시 `ingest-daemon.log`에서 `RTSP publish added` 직후 첫 전달 패킷이 키프레임인지 확인 |
 
 ---
@@ -99,10 +99,11 @@ RTSP-over-WebSocket 재생이 동작하려면 해당 카메라에 **RTSP usernam
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-07-23 | 초기 작성 |
-| 1.1 | 2026-07-23 | "Loading RTSP-over-WebSocket player…" 무한 대기 버그 1차 수정 반영 — `crypto-js.js` 정적 자산 추가, 스크립트 로드 순서(`crypto-js.js` → `ffmpegAAC.js` → `ump-player.min.js`) 명시, 트러블슈팅 표 갱신 |
-| 1.2 | 2026-07-23 | jsdom 재현으로 진짜 원인 확인 — `ump-player.min.js`의 `new Logger()` 폴백이 `window.log4javascript` 부재 시 throw. `log4javascript.js` 정적 자산 추가, 최종 로드 순서를 `log4javascript.js` → `crypto-js.js` → `ffmpegAAC.js` → `ump-player.min.js`로 정정 |
+| 1.1 | 2026-07-23 | "Loading RTSP-over-WebSocket player…" 무한 대기 버그 1차 수정 반영 — `crypto-js.js` 정적 자산 추가, 스크립트 로드 순서(`crypto-js.js` → `ffmpegAAC.js` → `rtsp-over-websocket.min.js`) 명시, 트러블슈팅 표 갱신 |
+| 1.2 | 2026-07-23 | jsdom 재현으로 진짜 원인 확인 — `rtsp-over-websocket.min.js`의 `new Logger()` 폴백이 `window.log4javascript` 부재 시 throw. `log4javascript.js` 정적 자산 추가, 최종 로드 순서를 `log4javascript.js` → `crypto-js.js` → `ffmpegAAC.js` → `rtsp-over-websocket.min.js`로 정정 |
 | 1.3 | 2026-07-23 | npm 패키지 `dist/html`·`dist/docs` 확인 결과 반영 — `device="nvr"`(camera 아님)가 올바른 모드, `width`/`height` 속성 필수(없으면 렌더링 자체 불가) |
 | 1.4 | 2026-07-23 | SETUP 요청 URI 트랙 접미사가 지워져 MediaMTX가 "invalid SETUP path"로 거부하며 무한 재시도하던 버그(§5 트러블슈팅 표에 항목 추가) — Design 문서 §8.8 참조 |
 | 1.5 | 2026-07-23 | 위 버그의 진짜 원인(클라이언트가 MediaMTX의 Content-Base로 SETUP URI를 만드는 경우)과 최종 3단 분기 수정 반영 — Design 문서 §8.8/v2.0 참조 |
 | 1.6 | 2026-07-23 | RTSP 핸드셰이크 성공 후 첫 프레임에서 "Cannot read properties of null (reading 'byteLength')"로 크래시하던 버그(§5 트러블슈팅 표에 항목 추가) — on-demand fan-out의 GOP 중간 합류가 원인, `needsKeyframe` 게이트로 수정. Design 문서 §8.9/v2.1 참조 |
-| 2.0 | 2026-08-04 | §1/§2 전면 재작성 — `submodules/ump-player` 서브모듈 설정 절차와 `optionalDependencies` `@melchi45/ump-player` 설치·정적 자산 복사 안내를 제거하고, 필수 dependency `@melchi45/rtsp-over-websocket` 설치 + `client/.npmrc.example` 기반 인증 설정으로 교체. CI `NPM_GH_PACKAGES_TOKEN` 시크릿 안내 추가. `<ump-player>` 태그명 참조를 `<rtsp-over-websocket>`으로 갱신, §5 트러블슈팅 표의 스크립트 로드 순서 항목을 npm install 인증 실패 항목으로 교체. Design 문서 §8.21 참조 |
+| 2.0 | 2026-08-04 | §1/§2 전면 재작성 — `melchi45/rtsp-over-websocket` 서브모듈 설정 절차와 `optionalDependencies` `@melchi45/rtsp-over-websocket` 설치·정적 자산 복사 안내를 제거하고, 필수 dependency `@melchi45/rtsp-over-websocket` 설치 + `client/.npmrc.example` 기반 인증 설정으로 교체. CI `NPM_GH_PACKAGES_TOKEN` 시크릿 안내 추가. `<rtsp-over-websocket>` 태그명 참조를 `<rtsp-over-websocket>`으로 갱신, §5 트러블슈팅 표의 스크립트 로드 순서 항목을 npm install 인증 실패 항목으로 교체. Design 문서 §8.21 참조 |
+| 2.1 | 2026-08-10 | 문서 ID `OPS-LTS2026-UMP-001` → `OPS-LTS2026-RTSPWS-001`로 통일(연관 SRS/TC 추적 ID 리네임과 일관성 맞춤); 잔존 레거시 명칭 일괄 정리 — `Ump*` 식별자·`submodules/rtsp-over-websocket` 경로를 `@melchi45/rtsp-over-websocket` npm 패키지의 현행 명칭(`RTSPOverWebSocket*`, 별도 저장소 `melchi45/rtsp-over-websocket`)으로 전면 교체 |

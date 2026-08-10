@@ -277,14 +277,14 @@ async function main() {
     startIngestStatsAggregator({ io, db, pipelineManager, getWebRTCEngine });
   }
 
-  // UMP Player RTSP-over-WebSocket bridge (2026-07-23) — same ingest-daemon
+  // RTSP-over-WebSocket bridge (2026-07-23) — same ingest-daemon
   // dependency as the monitoring aggregator above (needs its rtsp-publish
   // API); also skipped in analysis mode, which has no cameras at all. See
   // docs/design/Design_RTSP_Over_WebSocket.md §4.2.
   if (SERVER_MODE !== 'analysis' &&
       (process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase() === 'ingest-daemon') {
-    const { attachUmpStreamingServer } = require('./services/umpStreamingServer');
-    attachUmpStreamingServer(httpServer, db);
+    const { attachRTSPOverWebSocketServer } = require('./services/rtspOverWebSocketServer');
+    attachRTSPOverWebSocketServer(httpServer, db);
   }
 
   // ── Auth / Admin Routes ───────────────────────────────────────────────────

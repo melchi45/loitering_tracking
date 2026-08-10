@@ -1,12 +1,12 @@
 'use strict';
 /**
- * TC-UMPMETA-001 ~ TC-UMPMETA-009 — UMP 'meta' Event → ONVIF Relay
+ * TC-UMPMETA-001 ~ TC-UMPMETA-009 — RTSP-over-WebSocket 'meta' Event → ONVIF Relay
  *
  * Covers the second ONVIF ingestion path added 2026-07-27
- * (Design_UMP_Player_RTSP_over_WebSocket.md §8.19): UMP-mode cameras bypass
- * ingest-daemon's Application RTP fan-out entirely, so <ump-player>'s own
+ * (Design_RTSP_Over_WebSocket.md §8.19): RTSP-over-WebSocket-mode cameras bypass
+ * ingest-daemon's Application RTP fan-out entirely, so <rtsp-over-websocket>'s own
  * 'meta' CustomEvent (already-decoded XML, not base64 RTP payload) is
- * relayed browser-side to POST /api/cameras/:id/ump-meta and parsed via
+ * relayed browser-side to POST /api/cameras/:id/rtsp-over-websocket-meta and parsed via
  * onvifParser.js's parseOnvifXml()/ingestOnvifEvents() — the same functions
  * server/src/routes/internalApi.js's /apprtp/:cameraId handler uses, so both
  * paths share one dedup map and converge on identical onvif_events storage.
@@ -23,13 +23,13 @@
  * TC-UMPMETA-004  ingestOnvifEvents: dedup — same topic+source+state → single insert
  * TC-UMPMETA-005  ingestOnvifEvents: radiometry → onvif:temperature, no dedup
  * TC-UMPMETA-006  clearDedupStateForCamera: only clears the given camera's keys
- * TC-UMPMETA-007  POST /:id/ump-meta route handler: unknown camera → 404
- * TC-UMPMETA-008  POST /:id/ump-meta route handler: missing xml → 400
- * TC-UMPMETA-009  POST /:id/ump-meta route handler: valid xml → 204 + DB insert + broadcast
+ * TC-UMPMETA-007  POST /:id/rtsp-over-websocket-meta route handler: unknown camera → 404
+ * TC-UMPMETA-008  POST /:id/rtsp-over-websocket-meta route handler: missing xml → 400
+ * TC-UMPMETA-009  POST /:id/rtsp-over-websocket-meta route handler: valid xml → 204 + DB insert + broadcast
  *
- * Run: node test/api/onvif_ump_meta_relay.test.js
+ * Run: node test/api/onvif_rtsp_over_websocket_meta_relay.test.js
  *
- * Related design: docs/design/Design_UMP_Player_RTSP_over_WebSocket.md §8.19
+ * Related design: docs/design/Design_RTSP_Over_WebSocket.md §8.19
  */
 
 const path = require('path');
@@ -161,9 +161,9 @@ function makeRes() {
 }
 
 (async function main() {
-  console.log('╔══════════════════════════════════════════════════════════╗');
-  console.log('║  TC_UMP_Meta_Relay — UMP "meta" event ONVIF relay tests  ║');
-  console.log('╚══════════════════════════════════════════════════════════╝\n');
+  console.log('╔══════════════════════════════════════════════════════════════════╗');
+  console.log('║  TC_UMP_Meta_Relay — RTSP-over-WebSocket "meta" event ONVIF relay tests  ║');
+  console.log('╚══════════════════════════════════════════════════════════════════╝\n');
 
   console.log('── Group: onvifParser.parseOnvifXml (direct XML, not base64) ──\n');
 
@@ -250,13 +250,13 @@ function makeRes() {
     });
   }
 
-  console.log('\n── Group: POST /api/cameras/:id/ump-meta (real route handler) ──\n');
+  console.log('\n── Group: POST /api/cameras/:id/rtsp-over-websocket-meta (real route handler) ──\n');
 
   if (camerasRouter) {
     const db = makeMockDb({ cameras: [{ id: 'cam-1' }] });
     const io = makeMockIo();
     const router = camerasRouter(db, /* pipelineManager */ {}, /* youtubeSvc */ null, io);
-    const handler = findRouteHandler(router, 'post', '/:id/ump-meta');
+    const handler = findRouteHandler(router, 'post', '/:id/rtsp-over-websocket-meta');
 
     await test('TC-UMPMETA-007', 'unknown camera → 404', async () => {
       assert(handler, 'route handler must be registered');

@@ -1,16 +1,10 @@
 node_modules/
 .env
 .env_*
-# npm.pkg.github.com auth token for @melchi45/ump-player (2026-07-23,
-# docs/ops/UMP_Player_Streaming_Setup.md §2) — per-developer secret, never commit.
+# npm.pkg.github.com auth token for @melchi45/rtsp-over-websocket (2026-07-23,
+# docs/ops/RTSP_Over_WebSocket_Streaming_Setup.md §2) — per-developer secret, never commit.
 client/.npmrc
 
-# ump-player runtime assets — postinstall-generated symlinks into
-# submodules/ump-player (client/scripts/copyUmpPlayerAssets.js, 2026-07-24).
-# Never commit: symlink targets are relative to this checkout's layout and
-# assume the submodule is initialized.
-client/public/media/
-client/public/ump-player/
 server/storage/
 client/dist/
 *.db

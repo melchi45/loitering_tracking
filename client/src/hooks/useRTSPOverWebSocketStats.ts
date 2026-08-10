@@ -1,11 +1,11 @@
 import { useCallback, useRef, useState } from 'react';
 
 // Mirrors the vendor player's public 'statistics' CustomEvent payload shapes
-// — see submodules/ump-player/src/ump/custom/ump-player.js onUmpStatistics().
+// — see submodules/rtsp-over-websocket/src/ump/custom/rtsp-over-websocket.js onRTSPOverWebSocketStatistics().
 // `type: 'rtp'` fires ~1/sec per media track (video and audio separately,
 // see rtpSession.js's statisticsTimer, 1000ms interval); `type: 'fps'` fires
 // ~1/sec for the decode/render side. Both are re-dispatched verbatim as
-// `this[dispatch]("statistics", {statistics})` on the <ump-player> host
+// `this[dispatch]("statistics", {statistics})` on the <rtsp-over-websocket> host
 // element, which RTSPOverWebSocketView.tsx listens for and forwards here via
 // onStatistics(). `type: 'timestamp'` exists in the vendor payload too but
 // is never dispatched as a public event (only used to update the player's
@@ -17,11 +17,11 @@ import { useCallback, useRef, useState } from 'react';
 // number), and videoTagPlayer.js feeds that straight into
 // decodedFramesMean/decodedBytesMean/dropFramesMean; `latency` is always
 // `latency.toFixed(4)` (always a string). Treating these as `number` at the
-// type level let a raw `.toFixed()` call in UmpStatsPanel.tsx crash with
+// type level let a raw `.toFixed()` call in RTSPOverWebSocketStatsPanel.tsx crash with
 // "toFixed is not a function" the first time a mean field ticked past its
 // zero-count default — see toNum() below, which normalizes at this
 // boundary instead of trusting the vendor's inconsistent typing.
-interface UmpRtpStatistics {
+interface RTSPOverWebSocketRtpStatistics {
   type: 'rtp';
   media?: 'video' | 'audio';
   codec?: string;
@@ -29,7 +29,7 @@ interface UmpRtpStatistics {
   receviedPacket?: unknown; // vendor's own (misspelled) field name
 }
 
-interface UmpFpsStatistics {
+interface RTSPOverWebSocketFpsStatistics {
   type: 'fps';
   fps?: unknown;
   decodedPerSec?: unknown;
@@ -41,7 +41,7 @@ interface UmpFpsStatistics {
   // sent as-is, only smoothed into decodedBytesMean below via
   // `videoMean.record(videoBytesDecodedPerSec)`. Graphing this field
   // directly produces a strictly-increasing line, not a rate — see
-  // decodedBytesTotal in UmpStatsSnapshot.
+  // decodedBytesTotal in RTSPOverWebSocketStatsSnapshot.
   decodedBytesDecodedPerSec?: unknown;
   decodedBytesMean?: unknown; // true average bytes/sec (Mean() over the real per-tick delta) — the actual rate
   dropFramesCount?: unknown;
@@ -53,9 +53,9 @@ interface UmpFpsStatistics {
   chunksize?: unknown;
 }
 
-type UmpStatisticsPayload = UmpRtpStatistics | UmpFpsStatistics | { type: string };
+type RTSPOverWebSocketStatisticsPayload = RTSPOverWebSocketRtpStatistics | RTSPOverWebSocketFpsStatistics | { type: string };
 
-export interface UmpStatsSnapshot {
+export interface RTSPOverWebSocketStatsSnapshot {
   videoCodec:          string;
   audioCodec:          string;
   videoFps:            number;
@@ -77,7 +77,7 @@ export interface UmpStatsSnapshot {
 
 // One point per 'fps' tick (~1/sec) — see onStatistics() below for why
 // history is sampled off that tick specifically rather than every event.
-export interface UmpSample {
+export interface RTSPOverWebSocketSample {
   t:               number; // Date.now() at sample time
   decodedFps:      number;
   bitrateBpsMean:  number; // decodedBpsMean at this tick — the graphable rate (decodedBytesTotal is cumulative, not sampled)
@@ -85,7 +85,7 @@ export interface UmpSample {
   latencySec:      number;
 }
 
-const UMP_HISTORY_MAX = 120; // ~2min at ~1 sample/sec — matches RX_HISTORY_MAX in useWebRTC.ts
+const RTSP_OVER_WEBSOCKET_HISTORY_MAX = 120; // ~2min at ~1 sample/sec — matches RX_HISTORY_MAX in useWebRTC.ts
 
 // `v` may legitimately be a number, a numeric string (see the module doc
 // comment above), or missing/NaN-producing — falls back to the previous
@@ -96,7 +96,7 @@ function toNum(v: unknown, fallback: number): number {
   return Number.isFinite(n) ? n : fallback;
 }
 
-const EMPTY_STATS: UmpStatsSnapshot = {
+const EMPTY_STATS: RTSPOverWebSocketStatsSnapshot = {
   videoCodec: '', audioCodec: '', videoFps: 0, videoFrames: 0, audioFps: 0, audioFrames: 0,
   decodedFps: 0, decodedFpsMean: 0, decodedBytesTotal: 0, decodedBpsMean: 0,
   dropFramesCount: 0, dropFramesMean: 0, width: 0, height: 0, latencySec: 0,
@@ -104,28 +104,28 @@ const EMPTY_STATS: UmpStatsSnapshot = {
 };
 
 /**
- * Accumulates <ump-player>'s 'statistics' CustomEvent stream into a
+ * Accumulates <rtsp-over-websocket>'s 'statistics' CustomEvent stream into a
  * WebRtcStatsPanel-shaped snapshot + bounded sample history, so
- * UmpStatsPanel.tsx can render a "stats for nerds" panel the same way
+ * RTSPOverWebSocketStatsPanel.tsx can render a "stats for nerds" panel the same way
  * CameraView.tsx already does for WebRTC (see WebRtcStatsPanel.tsx /
  * useWebRTC.ts's RxSample). Lives in the CameraView layer (not
  * RTSPOverWebSocketView) so the resulting badge/toggle/panel can sit in the same
  * top-right corner flex column as the WebRTC/Zone rows instead of a second,
  * overlapping absolutely-positioned block.
  */
-export function useUmpStats() {
-  const [stats, setStats] = useState<UmpStatsSnapshot | null>(null);
-  const [history, setHistory] = useState<UmpSample[]>([]);
-  const latestRef = useRef<UmpStatsSnapshot>(EMPTY_STATS);
+export function useRTSPOverWebSocketStats() {
+  const [stats, setStats] = useState<RTSPOverWebSocketStatsSnapshot | null>(null);
+  const [history, setHistory] = useState<RTSPOverWebSocketSample[]>([]);
+  const latestRef = useRef<RTSPOverWebSocketStatsSnapshot>(EMPTY_STATS);
 
   const onStatistics = useCallback((raw: unknown) => {
-    const s = raw as UmpStatisticsPayload | undefined;
+    const s = raw as RTSPOverWebSocketStatisticsPayload | undefined;
     if (!s || (s.type !== 'rtp' && s.type !== 'fps')) return;
 
-    const next: UmpStatsSnapshot = { ...latestRef.current };
+    const next: RTSPOverWebSocketStatsSnapshot = { ...latestRef.current };
 
     if (s.type === 'rtp') {
-      const rtp = s as UmpRtpStatistics;
+      const rtp = s as RTSPOverWebSocketRtpStatistics;
       if (rtp.media === 'video') {
         if (typeof rtp.codec === 'string') next.videoCodec = rtp.codec;
         next.videoFps = toNum(rtp.fps, next.videoFps);
@@ -136,7 +136,7 @@ export function useUmpStats() {
         next.audioFrames = toNum(rtp.receviedPacket, next.audioFrames);
       }
     } else {
-      const fps = s as UmpFpsStatistics;
+      const fps = s as RTSPOverWebSocketFpsStatistics;
       next.decodedFps = toNum(fps.decodedPerSec ?? fps.fps, next.decodedFps);
       next.decodedFpsMean = toNum(fps.decodedFramesMean, next.decodedFpsMean);
       next.decodedBytesTotal = toNum(fps.decodedBytesDecodedPerSec, next.decodedBytesTotal);
@@ -163,7 +163,7 @@ export function useUmpStats() {
         bitrateBpsMean: next.decodedBpsMean,
         dropFramesMean: next.dropFramesMean,
         latencySec:     next.latencySec,
-      }].slice(-UMP_HISTORY_MAX));
+      }].slice(-RTSP_OVER_WEBSOCKET_HISTORY_MAX));
     }
   }, []);
 

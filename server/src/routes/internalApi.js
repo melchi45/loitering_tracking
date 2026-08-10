@@ -161,8 +161,8 @@ router.post(
               });
             }
           }
-          // Shared with cameras.js's POST /:id/ump-meta (UMP-mode cameras'
-          // browser-side ONVIF metadata relay) — see onvifParser.js.
+          // Shared with cameras.js's POST /:id/rtsp-over-websocket-meta (RTSP-over-WebSocket-mode
+          // cameras' browser-side ONVIF metadata relay) — see onvifParser.js.
           ingestOnvifEvents(cameraId, parsedList, {
             db: _db,
             io: _io,

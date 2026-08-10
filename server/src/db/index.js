@@ -27,6 +27,29 @@ const { backfillChannelSlots } = require('../services/channelSlotService');
 
 let _db = null;
 
+// One-time field-rename migration (2026-08-10): the RTSP-over-WebSocket streaming
+// mode's boolean flag was renamed from `umpEnabled` to `rtspOverWebSocketEnabled`
+// (see server/src/api/cameras.js's streamingModeToFlags()/deriveStreamingMode()).
+// Only migrates cameras that still have the legacy field but not yet the new one —
+// idempotent, safe to run on every startup. The stale `umpEnabled` key is left in
+// place rather than unset — BaseDatabase.update() only supports $set-style merges,
+// and MongoDatabase's upsert() (mongoDbService.js's findOneAndUpdate $set) silently
+// drops `undefined` values instead of unsetting the field, so there's no reliable
+// cross-backend way to actually remove it here. It's harmless dead data: no code
+// reads `umpEnabled` after this migration runs.
+function _migrateRtspOverWebSocketField(db) {
+  const cameras = db.all('cameras');
+  let migrated = 0;
+  for (const cam of cameras) {
+    if (cam.umpEnabled === undefined || cam.rtspOverWebSocketEnabled !== undefined) continue;
+    db.update('cameras', cam.id, { rtspOverWebSocketEnabled: !!cam.umpEnabled });
+    migrated++;
+  }
+  if (migrated > 0) {
+    console.log(`[DB] Migrated umpEnabled -> rtspOverWebSocketEnabled for ${migrated} camera(s)`);
+  }
+}
+
 // ── Factory ───────────────────────────────────────────────────────────────────
 
 function _createBackend(type) {
@@ -64,6 +87,7 @@ async function initDB() {
   // camera-management API request can be accepted (NFR-CH-03). Idempotent.
   // See docs/design/Design_Channel_Slot.md §4.4.
   backfillChannelSlots(_db);
+  _migrateRtspOverWebSocketField(_db);
 
   return _db;
 }

@@ -1,25 +1,25 @@
-export type StreamingMode = 'jpeg' | 'webrtc' | 'ump';
+export type StreamingMode = 'jpeg' | 'webrtc' | 'rtsp-over-websocket';
 
 const MODE_LABELS: Record<StreamingMode, string> = {
   jpeg: 'JPEG',
   webrtc: 'WebRTC',
-  ump: 'UMP',
+  'rtsp-over-websocket': 'RTSP-over-WebSocket',
 };
 
 const MODE_DESCRIPTIONS: Record<StreamingMode, string> = {
   jpeg: 'Video via JPEG / Socket.IO (default)',
   webrtc: 'Video via WebRTC (H.264 + Audio) — requires SERVER_IP in .env',
-  ump: 'Video via UMP Player RTSP-over-WebSocket',
+  'rtsp-over-websocket': 'Video via RTSP-over-WebSocket',
 };
 
-const MODES: StreamingMode[] = ['jpeg', 'webrtc', 'ump'];
+const MODES: StreamingMode[] = ['jpeg', 'webrtc', 'rtsp-over-websocket'];
 
 interface StreamingModeSelectorProps {
   value: StreamingMode;
   onChange: (mode: StreamingMode) => void;
 }
 
-/** JPEG/WebRTC/UMP picker — dot indicators, selected mode renders as an enlarged filled circle. */
+/** JPEG/WebRTC/RTSP-over-WebSocket picker — dot indicators, selected mode renders as an enlarged filled circle. */
 export function StreamingModeSelector({ value, onChange }: StreamingModeSelectorProps) {
   return (
     <div className="py-2 border-t border-gray-700 mt-1">

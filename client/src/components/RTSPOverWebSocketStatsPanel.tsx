@@ -1,4 +1,4 @@
-import type { UmpStatsSnapshot, UmpSample } from '../hooks/useUmpStats';
+import type { RTSPOverWebSocketStatsSnapshot, RTSPOverWebSocketSample } from '../hooks/useRTSPOverWebSocketStats';
 import Sparkline from './Sparkline';
 import HeatStrip from './HeatStrip';
 
@@ -31,18 +31,18 @@ function fmtBytes(bytes: number): string {
 }
 
 interface Props {
-  stats:   UmpStatsSnapshot | null;
-  history: UmpSample[];
+  stats:   RTSPOverWebSocketStatsSnapshot | null;
+  history: RTSPOverWebSocketSample[];
 }
 
 /**
- * UMP counterpart to WebRtcStatsPanel.tsx — same YouTube "stats for nerds"
- * label:value grid + sparkline layout, sourced from <ump-player>'s
- * 'statistics' CustomEvent (see useUmpStats.ts) instead of RTCPeerConnection
+ * RTSP-over-WebSocket counterpart to WebRtcStatsPanel.tsx — same YouTube "stats for nerds"
+ * label:value grid + sparkline layout, sourced from <rtsp-over-websocket>'s
+ * 'statistics' CustomEvent (see useRTSPOverWebSocketStats.ts) instead of RTCPeerConnection
  * getStats(). Toggled from the same top-right corner button CameraView.tsx
  * already uses for WebRTC's ICE panel.
  */
-export default function UmpStatsPanel({ stats, history }: Props) {
+export default function RTSPOverWebSocketStatsPanel({ stats, history }: Props) {
   const decodedFpsHistory  = history.map(s => s.decodedFps);
   const bitrateHistory     = history.map(s => s.bitrateBpsMean);
   const dropHistory        = history.map(s => s.dropFramesMean);

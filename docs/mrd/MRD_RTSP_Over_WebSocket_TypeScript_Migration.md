@@ -3,23 +3,23 @@
 
 | | |
 |---|---|
-| **Document Reference** | MRD-LTS2026-UMP-TS-01 |
-| **Product** | LTS-2026 Loitering Detection & Tracking System (submodule: ump-player) |
-| **Feature** | `submodules/ump-player/app/media/ump` 레거시 바닐라 JS → `submodules/ump-player/src/player` TypeScript/ESM 병행 재작성 |
-| **Version** | 1.2 |
+| **Document Reference** | MRD-LTS2026-RTSPWS-TS-01 |
+| **Product** | LTS-2026 Loitering Detection & Tracking System (submodule: rtsp-over-websocket) |
+| **Feature** | `melchi45/rtsp-over-websocket/app/media` 레거시 바닐라 JS → `melchi45/rtsp-over-websocket/src/player` TypeScript/ESM 병행 재작성 |
+| **Version** | 1.3 |
 | **Date** | 2026-07-30 |
 | **Status** | Active (구현 완료 — Layer 1-11) |
 | **Related Design** | [Design_RTSP_Over_WebSocket_TypeScript_Migration.md](../design/Design_RTSP_Over_WebSocket_TypeScript_Migration.md) |
 | **Related PRD** | [PRD_RTSP_Over_WebSocket_TypeScript_Migration.md](../prd/PRD_RTSP_Over_WebSocket_TypeScript_Migration.md) |
-| **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) (submodule: [github.com/melchi45/ump-player](https://github.com/melchi45/ump-player)) |
+| **Repository** | [github.com/melchi45/loitering_tracking](https://github.com/melchi45/loitering_tracking) (submodule: [github.com/melchi45/rtsp-over-websocket](https://github.com/melchi45/rtsp-over-websocket)) |
 
 ---
 
 ## 1. Executive Summary
 
-LTS-2026은 카메라 재생 경로 중 하나로 Hanwha(Wisenet) `<ump-player>` 웹 컴포넌트를 사용한다([Design_RTSP_Over_WebSocket.md](../design/Design_RTSP_Over_WebSocket.md) 참고). 이 컴포넌트가 속한 라이브러리(`submodules/ump-player/app/media/ump`)는 87개 파일·약 4.1만 줄 규모의 2010년대식 바닐라 JavaScript로, `import`/`export`가 전혀 없고 `window.X = ...` 전역 할당과 `<script src>` 순차 로딩에 전적으로 의존한다. 테스트 러너가 설치되어 있지 않아(`"test": "grunt test"`는 실제로는 jshint 정적분석일 뿐) 회귀 방지 수단이 없고, 타입 시스템이 없어 리팩터링·신규 기능 추가 시 런타임 오류를 사전에 잡을 수 없다.
+LTS-2026은 카메라 재생 경로 중 하나로 Hanwha(Wisenet) `<rtsp-over-websocket>` 웹 컴포넌트를 사용한다([Design_RTSP_Over_WebSocket.md](../design/Design_RTSP_Over_WebSocket.md) 참고). 이 컴포넌트가 속한 라이브러리(`melchi45/rtsp-over-websocket/app/media`)는 87개 파일·약 4.1만 줄 규모의 2010년대식 바닐라 JavaScript로, `import`/`export`가 전혀 없고 `window.X = ...` 전역 할당과 `<script src>` 순차 로딩에 전적으로 의존한다. 테스트 러너가 설치되어 있지 않아(`"test": "grunt test"`는 실제로는 jshint 정적분석일 뿐) 회귀 방지 수단이 없고, 타입 시스템이 없어 리팩터링·신규 기능 추가 시 런타임 오류를 사전에 잡을 수 없다.
 
-이 문서는 이 라이브러리를 TypeScript/ESM으로 병행 재작성(`submodules/ump-player/src/player/`)하는 시장/엔지니어링 필요성을 정리한다. LTS-2026 프로젝트 전체가 React/TypeScript 스택으로 이동하는 시점에서, 이 서드파티 유래 라이브러리만 타입 안전성·테스트 가능성이 없는 상태로 남아 있는 것이 기술 부채로 확인되었다.
+이 문서는 이 라이브러리를 TypeScript/ESM으로 병행 재작성(`melchi45/rtsp-over-websocket/src/player/`)하는 시장/엔지니어링 필요성을 정리한다. LTS-2026 프로젝트 전체가 React/TypeScript 스택으로 이동하는 시점에서, 이 서드파티 유래 라이브러리만 타입 안전성·테스트 가능성이 없는 상태로 남아 있는 것이 기술 부채로 확인되었다.
 
 ---
 
@@ -61,4 +61,5 @@ LTS-2026은 카메라 재생 경로 중 하나로 Hanwha(Wisenet) `<ump-player>`
 |---|---|---|
 | 1.0 | 2026-07-30 | 초기 작성 — Layer 1-11 구현 완료 시점에 소급 작성 |
 | 1.1 | 2026-07-30 | 달성 현황 Layer 12 상태 오기 수정 — `angularInterface/*`는 이미 포팅 완료(+19 tests) 상태였는데 "로드맵만"으로 잘못 기재되어 있던 것을 수정. 미착수인 것은 `Control/ptz/*`뿐 |
-| 1.2 | 2026-08-04 | 이 마이그레이션의 결과물이 `@melchi45/rtsp-over-websocket@1.0.1`로 npm 배포되고 LTS-2026에 채택되면서 `submodules/ump-player` 서브모듈 자체가 제거됨 — Design_RTSP_Over_WebSocket_TypeScript_Migration.md §9(Superseded/Shipped) 참고 |
+| 1.2 | 2026-08-04 | 이 마이그레이션의 결과물이 `@melchi45/rtsp-over-websocket@1.0.1`로 npm 배포되고 LTS-2026에 채택되면서 `melchi45/rtsp-over-websocket` 서브모듈 자체가 제거됨 — Design_RTSP_Over_WebSocket_TypeScript_Migration.md §9(Superseded/Shipped) 참고 |
+| 1.3 | 2026-08-10 | 문서 ID `MRD-LTS2026-UMP-TS-01` → `MRD-LTS2026-RTSPWS-TS-01`로 통일(연관 SRS/TC 추적 ID 리네임과 일관성 맞춤); 잔존 레거시 명칭 일괄 정리 — `Ump*` 식별자·`submodules/rtsp-over-websocket` 경로를 `@melchi45/rtsp-over-websocket` npm 패키지의 현행 명칭(`RTSPOverWebSocket*`, 별도 저장소 `melchi45/rtsp-over-websocket`)으로 전면 교체 |

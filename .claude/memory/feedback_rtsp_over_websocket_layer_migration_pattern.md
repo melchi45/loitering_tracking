@@ -1,11 +1,11 @@
 ---
-name: feedback-ump-player-layer-migration-pattern
-description: Pattern for porting an ump-player legacy layer to TypeScript when its dependencies can't be verified in-repo — contract tests instead of vm-parity, no new type-only npm deps, extract framework glue into pure DI functions
+name: feedback-rtsp-over-websocket-layer-migration-pattern
+description: Pattern for porting an rtsp-over-websocket legacy layer to TypeScript when its dependencies can't be verified in-repo — contract tests instead of vm-parity, no new type-only npm deps, extract framework glue into pure DI functions
 metadata:
   type: feedback
 ---
 
-While porting `app/media/angularInterface/{streamInterface,streamCanvas}.js` to `submodules/ump-player/src/player/angularInterface/` (see [[project_ump_player_ts_migration_status]]), this approach was used and worked well — worth reusing for any future layer where the legacy code's dependencies aren't available inside this repo to run for comparison:
+While porting `app/media/angularInterface/{streamInterface,streamCanvas}.js` to `melchi45/rtsp-over-websocket/src/player/angularInterface/` (see [[project_rtsp_over_websocket_ts_migration_status]]), this approach was used and worked well — worth reusing for any future layer where the legacy code's dependencies aren't available inside this repo to run for comparison:
 
 1. **Don't add `@types/*` or runtime packages just for typing an external dependency.** jQuery and AngularJS 1.x (`$`, `$rootScope`, `$interval`, directive/IDirective types) were needed, but instead of adding `jquery`/`@types/jquery`/`@types/angular` as new devDependencies, minimal structural types (`JQueryLike`, `RootScopeLike`, `IntervalServiceLike`, etc.) were hand-declared in a local `types.ts`, containing only the members actually called at the call sites being ported. This kept the migration dependency-free and matches the project's own precedent (Phase 1 also avoided pulling in unnecessary deps).
 2. **When the legacy file registers itself as a side-effecting global (AngularJS `.factory()`/`.directive()`, `angular.module(...)`), extract the factory/directive body into a plain, explicitly-dependency-injected function** (e.g. `createKindStreamInterface(deps)`) that returns the same public object/definition. Keep the actual global registration (`angular.module(...).factory(...)`) in one small separate file (`register.ts` here) that does the untyped boundary casting — this is the file's designated "vendor/host boundary," consistent with this project's existing carve-out for `any`-adjacent code at vendor boundaries (NFR: "any 사용 0건, vendor 경계 제외").
@@ -16,4 +16,4 @@ While porting `app/media/angularInterface/{streamInterface,streamCanvas}.js` to 
 
 **Why**: These choices came from directly hitting each problem while porting Layer 12 — they're not theoretical. Reusing them will save re-deriving the same decisions when porting the remaining layers 3-11 (network/mediaSession/listen/talk/video/interface/backup/control/worker/custom), especially any of them with similarly unverifiable external dependencies.
 
-**How to apply**: When asked to port another `app/media/ump/**` layer to `src/player/`, check first whether its dependencies exist elsewhere in this same repo (they mostly should, since most of the roadmap is internal-to-ump-player code) — if so, the normal Phase-1-style `node:vm` parity approach still applies. Only fall back to the contract-test approach above when a dependency is confirmed absent from the repo (as was uniquely the case for angularInterface's AngularJS host-app services).
+**How to apply**: When asked to port another `app/media/**` layer to `src/player/`, check first whether its dependencies exist elsewhere in this same repo (they mostly should, since most of the roadmap is internal-to-rtsp-over-websocket code) — if so, the normal Phase-1-style `node:vm` parity approach still applies. Only fall back to the contract-test approach above when a dependency is confirmed absent from the repo (as was uniquely the case for angularInterface's AngularJS host-app services).

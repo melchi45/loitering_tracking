@@ -25,21 +25,21 @@ const SERVER_MODE      = process.env.SERVER_MODE      || 'combined';
 const CAPTURE_BACKEND  = (process.env.CAPTURE_BACKEND || 'ffmpeg').toLowerCase();
 const WEBRTC_ENGINE    = (process.env.WEBRTC_ENGINE   || 'mediamtx').toLowerCase();
 
-// streamingMode ('jpeg'|'webrtc'|'ump') is a UI-facing convenience on top of the
-// existing webrtcEnabled boolean + new umpEnabled boolean (2026-07-22,
+// streamingMode ('jpeg'|'webrtc'|'rtsp-over-websocket') is a UI-facing convenience on top of the
+// existing webrtcEnabled boolean + new rtspOverWebSocketEnabled boolean (2026-07-22,
 // Design_RTSP_Over_WebSocket.md §7.2). Kept as a derivation rather than
 // a stored field so pipelineManager.js's existing webrtcEnabled-based logic (pipeline
-// restart detection, addCameraStream() calls) stays completely untouched — umpEnabled
-// is a brand new flag that only the UMP fan-out code path reads.
+// restart detection, addCameraStream() calls) stays completely untouched — rtspOverWebSocketEnabled
+// is a brand new flag that only the RTSP-over-WebSocket fan-out code path reads.
 function streamingModeToFlags(streamingMode) {
-  if (streamingMode === 'ump')    return { webrtcEnabled: false, umpEnabled: true };
-  if (streamingMode === 'webrtc') return { webrtcEnabled: true,  umpEnabled: false };
-  return { webrtcEnabled: false, umpEnabled: false }; // 'jpeg' (default)
+  if (streamingMode === 'rtsp-over-websocket') return { webrtcEnabled: false, rtspOverWebSocketEnabled: true };
+  if (streamingMode === 'webrtc')              return { webrtcEnabled: true,  rtspOverWebSocketEnabled: false };
+  return { webrtcEnabled: false, rtspOverWebSocketEnabled: false }; // 'jpeg' (default)
 }
 
 function deriveStreamingMode(camera) {
-  if (camera.umpEnabled)    return 'ump';
-  if (camera.webrtcEnabled) return 'webrtc';
+  if (camera.rtspOverWebSocketEnabled) return 'rtsp-over-websocket';
+  if (camera.webrtcEnabled)            return 'webrtc';
   return 'jpeg';
 }
 
@@ -193,7 +193,7 @@ function resolveProbeChannelsDecision({ onvifMax, onvifProfiles, sunapiMax, suna
  * @param {import('better-sqlite3').Database} db
  * @param {import('../services/pipelineManager')} pipelineManager
  * @param {import('../services/youtubeStreamService')|null} [youtubeSvc]
- * @param {import('socket.io').Server|null} [io] used by POST /:id/ump-meta to
+ * @param {import('socket.io').Server|null} [io] used by POST /:id/rtsp-over-websocket-meta to
  *   broadcast onvif:event/onvif:type-registered/onvif:temperature the same
  *   way internalApi.js's apprtp route does — see onvifParser.js's ingestOnvifEvents()
  * @returns {Router}
@@ -218,7 +218,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null, io = null) {
         const bitrate = cam.type === 'youtube' && cam.bitrate
           ? Math.round(cam.bitrate / 1000)
           : cam.bitrate;
-        const webrtcOverride = FORCE_NO_WEBRTC ? { webrtcEnabled: false, umpEnabled: false } : {};
+        const webrtcOverride = FORCE_NO_WEBRTC ? { webrtcEnabled: false, rtspOverWebSocketEnabled: false } : {};
         return {
           ...cam,
           bitrate,
@@ -525,7 +525,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null, io = null) {
         thermalSensorWidth:  thermalSensorWidth  ? parseInt(thermalSensorWidth, 10)  : null,
         thermalSensorHeight: thermalSensorHeight ? parseInt(thermalSensorHeight, 10) : null,
         status:        'offline',
-        // streamingMode ('jpeg'|'webrtc'|'ump') is a UI convenience, not stored directly —
+        // streamingMode ('jpeg'|'webrtc'|'rtsp-over-websocket') is a UI convenience, not stored directly —
         // see streamingModeToFlags() above (Design_RTSP_Over_WebSocket.md §7.2).
         ...streamingModeToFlags(streamingMode),
       });
@@ -551,7 +551,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null, io = null) {
       if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
 
       const pipelineStatus = pipelineManager.getCameraStatus(camera.id);
-      const webrtcOverride = FORCE_NO_WEBRTC ? { webrtcEnabled: false, umpEnabled: false } : {};
+      const webrtcOverride = FORCE_NO_WEBRTC ? { webrtcEnabled: false, rtspOverWebSocketEnabled: false } : {};
       res.json({
         success: true,
         data: {
@@ -568,10 +568,10 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null, io = null) {
   });
 
   /**
-   * GET /api/cameras/:id/ump-credentials
+   * GET /api/cameras/:id/rtsp-over-websocket-credentials
    * Returns this camera's raw RTSP username/password so the browser's
-   * <ump-player> can complete the RTSP Digest challenge issued by
-   * /StreamingServer (server/src/services/umpStreamingServer.js verifyDigest()
+   * <rtsp-over-websocket> can complete the RTSP Digest challenge issued by
+   * /StreamingServer (server/src/services/rtspOverWebSocketServer.js verifyDigest()
    * checks against these exact same stored values). Every other camera
    * endpoint deliberately strips password — this is the one exception, so it
    * requires a valid JWT (unlike the rest of this router, which currently has
@@ -580,7 +580,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null, io = null) {
    * that hands back stored RTSP credentials must be authenticated.
    * See docs/design/Design_RTSP_Over_WebSocket.md §4.2/§8.
    */
-  router.get('/:id/ump-credentials', verifyAccessToken, (req, res) => {
+  router.get('/:id/rtsp-over-websocket-credentials', verifyAccessToken, (req, res) => {
     try {
       const camera = db.findOne('cameras', { id: req.params.id });
       if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
@@ -591,14 +591,14 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null, io = null) {
   });
 
   /**
-   * POST /api/cameras/:id/ump-meta
-   * Body: { xml: string } — one <ump-player> 'meta' CustomEvent's detail.xml
+   * POST /api/cameras/:id/rtsp-over-websocket-meta
+   * Body: { xml: string } — one <rtsp-over-websocket> 'meta' CustomEvent's detail.xml
    * (see client/src/components/RTSPOverWebSocketView.tsx's onMeta relay).
    *
-   * UMP-mode cameras bypass ingest-daemon's Application RTP fan-out entirely
-   * (Design_RTSP_Over_WebSocket.md §8.13), so for a UMP-only camera
+   * RTSP-over-WebSocket-mode cameras bypass ingest-daemon's Application RTP fan-out entirely
+   * (Design_RTSP_Over_WebSocket.md §8.13), so for an RTSP-over-WebSocket-only camera
    * the RTSP session's own metadata track — parsed browser-side by
-   * metaSession.js/metaDataParser.js into ump-player.js's public 'meta' event —
+   * metaSession.js/metaDataParser.js into rtsp-over-websocket.js's public 'meta' event —
    * is otherwise the only place its ONVIF MetadataStream XML ever surfaces.
    * This relays that XML here so it lands in the exact same onvif_events
    * storage/dedup/Socket.IO stream as the ingest-daemon path
@@ -606,14 +606,14 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null, io = null) {
    * onvifParser.js's shared ingestOnvifEvents()/parseOnvifXml(), split out
    * 2026-07-27 specifically to support this second ingestion path).
    *
-   * Requires a valid JWT (like ump-credentials above) — unauthenticated
+   * Requires a valid JWT (like rtsp-over-websocket-credentials above) — unauthenticated
    * clients must not be able to inject arbitrary events into a camera's
    * ONVIF timeline. Malformed/non-ONVIF XML is not an error: parseOnvifXml()
    * returns null and this is a silent no-op, since a busy metadata track
    * (e.g. non-MetadataStream housekeeping packets) is expected traffic, not
    * a client bug.
    */
-  router.post('/:id/ump-meta', verifyAccessToken, (req, res) => {
+  router.post('/:id/rtsp-over-websocket-meta', verifyAccessToken, (req, res) => {
     try {
       const camera = db.findOne('cameras', { id: req.params.id });
       if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
@@ -669,7 +669,7 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null, io = null) {
         }
       }
 
-      // streamingMode ('jpeg'|'webrtc'|'ump') is the preferred UI field (CameraEditModal) and,
+      // streamingMode ('jpeg'|'webrtc'|'rtsp-over-websocket') is the preferred UI field (CameraEditModal) and,
       // when present, takes priority over the legacy raw webrtcEnabled (still accepted for
       // other callers — MCP tools, scripts). See streamingModeToFlags() above.
       const streamingFlags = streamingMode !== undefined
@@ -704,16 +704,16 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null, io = null) {
       // Only restart pipeline when a value that actually affects the stream changed.
       // Checking presence (webrtcEnabled !== undefined) was wrong — CameraEditModal
       // always sends webrtcEnabled, causing a ByteTracker reset on every save.
-      // umpEnabled now also triggers a restart (2026-07-24) — pipelineManager.js's
-      // needsMediaMTX started registering a camera.id-keyed MediaMTX path for UMP-only
-      // cameras too, so umpStreamingServer.js's MediaMTX-direct-path preference can
-      // actually find it (Design_RTSP_Capture_Backend.md §6.38); toggling umpEnabled
+      // rtspOverWebSocketEnabled now also triggers a restart (2026-07-24) — pipelineManager.js's
+      // needsMediaMTX started registering a camera.id-keyed MediaMTX path for RTSP-over-WebSocket-only
+      // cameras too, so rtspOverWebSocketServer.js's MediaMTX-direct-path preference can
+      // actually find it (Design_RTSP_Capture_Backend.md §6.38); toggling rtspOverWebSocketEnabled
       // must now (de)register that path, not just flip the on-demand WS bridge's own
       // fan-out (Design_RTSP_Over_WebSocket.md §4.2).
       const needsRestart =
         (rtspUrl       !== undefined && normalizedRtsp.value            !== camera.rtspUrl) ||
         (streamingFlags.webrtcEnabled !== undefined && !!streamingFlags.webrtcEnabled !== !!camera.webrtcEnabled) ||
-        (streamingFlags.umpEnabled    !== undefined && !!streamingFlags.umpEnabled    !== !!camera.umpEnabled) ||
+        (streamingFlags.rtspOverWebSocketEnabled !== undefined && !!streamingFlags.rtspOverWebSocketEnabled !== !!camera.rtspOverWebSocketEnabled) ||
         (username      !== undefined && (username || null)             !== camera.username) ||
         (password      !== undefined && (password || null)             !== camera.password) ||
         (webrtcVideoOnly !== undefined && !!webrtcVideoOnly            !== !!camera.webrtcVideoOnly);

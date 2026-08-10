@@ -7,7 +7,7 @@ const {
   classifyH264RtpPacket,
   classifyH265RtpPacket,
   classifyVideoRtpPacket,
-} = require('./umpStreamingServer');
+} = require('./rtspOverWebSocketServer');
 
 function rtpPacket(payloadBytes, { cc = 0, extension = false } = {}) {
   const header = Buffer.alloc(12 + cc * 4);
@@ -41,7 +41,7 @@ function h265FuPacket(fragType, { start = true, end = false } = {}) {
   return Buffer.concat([h265NalHeader(49), Buffer.from([fuHeaderByte, 0xaa, 0xbb])]);
 }
 
-describe('umpStreamingServer.rtpPayload', () => {
+describe('rtspOverWebSocketServer.rtpPayload', () => {
   test('returns the payload after the fixed 12-byte header', () => {
     const packet = rtpPacket([0x67, 0xaa, 0xbb]);
     expect(rtpPayload(packet)).toEqual(Buffer.from([0x67, 0xaa, 0xbb]));
@@ -57,7 +57,7 @@ describe('umpStreamingServer.rtpPayload', () => {
   });
 });
 
-describe('umpStreamingServer.classifyH264RtpPacket', () => {
+describe('rtspOverWebSocketServer.classifyH264RtpPacket', () => {
   test('drops a single-NAL non-IDR slice (type 1) and does not open the gate', () => {
     const packet = rtpPacket([0x41, 0xaa, 0xbb]); // ref_idc=2, type=1
     expect(classifyH264RtpPacket(packet)).toEqual({ forward: false, opensGate: false });
@@ -111,7 +111,7 @@ describe('umpStreamingServer.classifyH264RtpPacket', () => {
   });
 });
 
-describe('umpStreamingServer.extractRtspResponseText', () => {
+describe('rtspOverWebSocketServer.extractRtspResponseText', () => {
   test('returns null when the header terminator has not arrived yet', () => {
     const partial = Buffer.from('RTSP/1.0 200 OK\r\nCSeq: 2\r\n');
     expect(extractRtspResponseText(partial)).toBeNull();
@@ -143,7 +143,7 @@ describe('umpStreamingServer.extractRtspResponseText', () => {
   });
 });
 
-describe('umpStreamingServer.parseSdpVideoTrack', () => {
+describe('rtspOverWebSocketServer.parseSdpVideoTrack', () => {
   test('extracts the video control and confirms H264 from rtpmap', () => {
     const sdp = [
       'v=0',
@@ -179,7 +179,7 @@ describe('umpStreamingServer.parseSdpVideoTrack', () => {
   });
 });
 
-describe('umpStreamingServer.classifyH265RtpPacket', () => {
+describe('rtspOverWebSocketServer.classifyH265RtpPacket', () => {
   test('drops a single-NAL non-IRAP slice (type 1, TRAIL_R) and does not open the gate', () => {
     const packet = rtpPacket(h265Packet(1, [0xaa, 0xbb]));
     expect(classifyH265RtpPacket(packet)).toEqual({ forward: false, opensGate: false });
@@ -238,7 +238,7 @@ describe('umpStreamingServer.classifyH265RtpPacket', () => {
   });
 });
 
-describe('umpStreamingServer.classifyVideoRtpPacket', () => {
+describe('rtspOverWebSocketServer.classifyVideoRtpPacket', () => {
   test('dispatches to the H264 classifier for codec H264', () => {
     const packet = rtpPacket([0x65, 0xaa, 0xbb]); // H.264 IDR
     expect(classifyVideoRtpPacket('H264', packet)).toEqual({ forward: true, opensGate: true });
