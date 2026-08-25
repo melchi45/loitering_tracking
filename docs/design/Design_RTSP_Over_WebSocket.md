@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-RTSPWS-001 |
-| **Version** | 3.9 |
+| **Version** | 3.10 |
 | **Status** | Active (구현 완료, 라이브 검증 완료 — channelSlot=6 실 카메라 30fps 확인; 클라이언트 라이브러리는 2026-08-04 npm 패키지로 전환, §8.21) / §9는 Proposed — 미결정 사항 있음 |
 | **Date** | 2026-08-13 |
 | **Related Design** | [Design_RTSP_Capture_Backend.md](Design_RTSP_Capture_Backend.md) · [Design_Server_Architecture.md](Design_Server_Architecture.md) · [Design_RTSP_Over_WebSocket_TypeScript_Migration.md](Design_RTSP_Over_WebSocket_TypeScript_Migration.md) |
@@ -465,6 +465,28 @@ python3[<pid>]: segfault ... in libavformat.so.58.76.100
 
 ---
 
+### 8.23 버그 수정 — 채널 진입/풀스크린 전환 시 영상 안 보임 + 재연결 없는 그리드↔풀스크린 전환 (2026-08-25)
+
+**증상**: RTSP-over-WebSocket 카메라를 더블클릭해 풀스크린(`FullscreenCameraView`)으로 전환하면 영상이 안 보임. F11(브라우저 네이티브 풀스크린)으로 전환하면 재생되고 있었음이 드러나고, Esc로 그리드로 복귀하면 이번엔 그리드 타일 쪽 영상도 안 보임.
+
+**근본 원인**: `CameraGrid.tsx`의 `CameraCell`은 카메라가 풀스크린으로 열려도 그리드 타일의 `CameraView`를 언마운트하지 않고, `FullscreenCameraView.tsx`도 자신만의 별도 `CameraView` 인스턴스를 렌더링함 — 즉 같은 카메라에 대해 그리드용·풀스크린용 두 개의 독립적인 `<rtsp-over-websocket>` 세션(=WebSocket 연결)이 동시에 열림. 서버 쪽 `rtspOverWebSocketServer.js`의 `_viewerCounts` ref-count가 동시 뷰어 자체는 정식 지원하지만(WebRTC/JPEG의 Socket.IO 구독 refcount와 동일 패턴, README 참고), RTSP-over-WebSocket 세션 두 개가 겹치는 상황에서 실제로는 한쪽(또는 양쪽)의 영상이 그려지지 않는 렌더링 문제가 있었음 — 그리드 타일의 세션을 완전히 언마운트해 이중 세션 자체를 없애자 문제가 재현되지 않음(실사용 환경에서 확인).
+
+**1차 수정(진단용)**: `CameraView`에 `suspended` prop을 추가해 카메라가 풀스크린으로 열려 있는 동안 그리드 타일의 `<rtsp-over-websocket>` 마운트 자체를 건너뛰도록 함 — 버그 자체는 해결됐으나, 그리드↔풀스크린 전환마다 매번 완전히 새로운 세션(자격증명 재요청 → WS 재연결 → RTSP 핸드셰이크 → 키프레임 대기)을 맺어야 해서 전환할 때마다 눈에 띄는 지연이 발생.
+
+**Portal(DOM 재부모)로 세션을 유지하는 방식은 통하지 않음 — 벤더 소스로 확인**: `@melchi45/rtsp-over-websocket`의 커스텀 엘리먼트는 `disconnectedCallback()`에서 무조건 `this.stop()`을 호출해 WebSocket/MediaSource/RTP 상태를 정리하도록 명시적으로 구현되어 있음(과거 연결 leak 버그를 막기 위해 일부러 추가된 것 — 소스 주석에 기록). React Portal이든 순수 `appendChild`로 부모를 바꾸든, DOM 노드가 실제로 이동하는 모든 방식은 브라우저가 `disconnectedCallback → connectedCallback`을 순차 발생시켜 결국 매번 재연결되므로, DOM 재부모 전략 자체를 포기.
+
+**최종 수정 — CSS `position:fixed` 기반 시각적 오버레이 (DOM 재부모 없음)**: 그리드 타일의 `CameraView` 인스턴스가 **한 번도 자신의 원래 부모(그리드 타일 DOM)를 벗어나지 않은 채로**, 그 카메라가 풀스크린으로 열려 있는 동안만 `position: fixed`로 좌표를 풀스크린 모달의 영상 영역에 맞춰 그 위에 떠 있는 것처럼 보이게 함 — 같은 DOM 노드, 같은 WebSocket 연결이 전환 내내 유지됨.
+
+- `client/src/stores/rtspFullscreenBridgeStore.ts`(신규) — cameraId별 `targetRects`(풀스크린 모달의 영상 영역 rect)와 `gridInstances`(해당 카메라의 그리드 인스턴스 마운트 여부)를 관리하는 Zustand store. 두 컴포넌트 트리(그리드/풀스크린)가 서로의 존재를 모른 채 cameraId로만 연결됨.
+- `CameraView.tsx` — RTSP-over-WebSocket 모드일 때 마운트 시 `registerGridInstance`/언마운트 시 `unregisterGridInstance`. `targetRects[cameraId]`가 존재하면(=이 카메라가 풀스크린으로 열려 있고 그리드 인스턴스가 borrow되는 중) 루트 엘리먼트를 `position:fixed`(해당 rect, `zIndex:60`으로 모달의 `z-50` 위)로 전환하고, 그리드 타일의 원래 자리엔 "Playing in fullscreen" placeholder를 별도로 렌더링.
+- `FullscreenCameraView.tsx` — RTSP-over-WebSocket 카메라는 자신만의 `CameraView`를 직접 렌더링하는 대신, `videoTargetRef` div를 렌더링해 `ResizeObserver`+`window resize`로 그 rect를 store에 계속 갱신(그리드가 이 rect로 스스로를 fixed-position). `gridInstances[cameraId]`가 없으면(예: 검색·얼굴매칭·구역 패널 등 그리드가 현재 안 보이는 경로로 열린 경우) 폴백으로 로컬 `<CameraView>`를 그대로 렌더링 — 이 경우는 기존과 동일하게 재연결됨.
+
+**한계**: 풀스크린이 열려 있는 도중 배경 그리드가 다른 채널 그룹 페이지로 이동해 그리드 인스턴스가 언마운트되는 극단적 케이스는 별도 처리하지 않음(드문 시나리오로 판단, 발생 시 풀스크린을 닫았다 다시 열면 복구됨).
+
+관련 파일: `client/src/components/CameraGrid.tsx`, `client/src/components/CameraView.tsx`, `client/src/components/FullscreenCameraView.tsx`, `client/src/stores/rtspFullscreenBridgeStore.ts`(신규).
+
+---
+
 ## 9. SUNAPI 로그인 연동 (Proposed, 2026-08-13)
 
 ### 9.1 배경 및 목표
@@ -545,3 +567,4 @@ python3[<pid>]: segfault ... in libavformat.so.58.76.100
 | 3.7 | 2026-08-10 | 문서 ID `DESIGN-LTS-UMP-WS-001` → `DESIGN-LTS-RTSPWS-001`로 통일 — 연관 SRS/TC의 `FR-UMP-*`/`TC-UMP-*` 추적 ID가 `FR-RTSPWS-*`/`TC-RTSPWS-*`로 리네임된 것과 맞춤; 잔존 레거시 명칭 일괄 정리 — `Ump*` 식별자·`submodules/rtsp-over-websocket` 경로를 `@melchi45/rtsp-over-websocket` npm 패키지의 현행 명칭(`RTSPOverWebSocket*`, 별도 저장소 `melchi45/rtsp-over-websocket`)으로 전면 교체 |
 | 3.8 | 2026-08-13 | §9 추가(Proposed) — §8.21에서 "미채택"으로 명시했던 `SunapiManager`/`SunapiClient` 연동을 RTSP-over-WebSocket 모드에 한해 재검토. 사용자 확인: SUNAPI 로그인 용도(재생 시 별도 비밀번호 입력 없이 인증)로 한정, 신뢰 경계는 브라우저→카메라 직접 통신을 예외적으로 허용(§3 Proxy 원칙의 국소적 예외). 패키지 소스 분석으로 `serverType:'camera'` 시 브라우저 컨텍스트에서 `hostname`/`port`가 `window.location`으로 강제됨을 확인했으나 이번 결정상 `cameraIp`/`httpPort`(기존 스키마 필드) 직결로 우회. 네트워크 도달성/Mixed Content/CORS 제약과 미결정 사항 4건 정리 — 구현 착수 전 확인 필요 |
 | 3.9 | 2026-08-25 | §8.22 추가(버그 수정) — 풀스크린 전환 시 "Invalid or expired token" 재생 실패. SUNAPI/카메라 인증과 무관하게 이 서버 자체 JWT access token이 만료(기본 15분)됐는데도 백그라운드 자동 갱신·401 재시도 로직이 없어 발생하던 문제로 확인(§9의 SUNAPI 연동과는 무관 — 확정·구현돼도 이 버그는 해결되지 않음). `authStore.ts`에 만료 60초 전 자동 `refresh()` 타이머 추가, `RTSPOverWebSocketView.tsx`의 credentials fetch에 401 수신 시 토큰 갱신 후 1회 재시도하는 안전망 추가 |
+| 3.10 | 2026-08-25 | §8.23 추가(버그 수정) — 채널/풀스크린 전환 시 영상 안 보임(그리드+풀스크린 동시 이중 세션이 원인, 실사용 환경에서 재현·수정 확인) + 그리드↔풀스크린 전환 시 재연결 없이 세션을 유지하는 후속 개선. 벤더 커스텀 엘리먼트의 `disconnectedCallback()`이 무조건 `stop()`을 호출함을 소스로 확인해 Portal(DOM 재부모) 전략은 폐기, `position:fixed` 기반 시각적 오버레이(DOM 노드는 그리드 타일에 고정, 좌표만 풀스크린 영역으로 전환)로 최종 구현. 신규 `rtspFullscreenBridgeStore.ts` |

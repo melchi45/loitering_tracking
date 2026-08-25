@@ -4,6 +4,7 @@ import { useCamera } from '../hooks/useCamera';
 import { useWebRTC } from '../hooks/useWebRTC';
 import { useRTSPOverWebSocketStats } from '../hooks/useRTSPOverWebSocketStats';
 import { useCameraStore } from '../stores/cameraStore';
+import { useRtspFullscreenBridgeStore } from '../stores/rtspFullscreenBridgeStore';
 import { useI18n } from '../i18n';
 import ZoneEditor from './ZoneEditor';
 import ThermalOverlay from './ThermalOverlay';
@@ -329,6 +330,27 @@ export default function CameraView({ cameraId, cameraName }: Props) {
   const useWebRTCMode  = streamingMode === 'webrtc';
   const useRTSPOverWebSocketMode = streamingMode === 'rtsp-over-websocket';
 
+  // Registers this instance in rtspFullscreenBridgeStore so FullscreenCameraView
+  // knows a grid instance exists to visually "borrow" (see that store's
+  // header comment for why we float this same DOM node in place rather
+  // than reparenting it — reparenting would trigger the custom element's
+  // disconnectedCallback()/stop() just as much as an unmount would). When
+  // this camera is shown fullscreen, `fullscreenRect` switches this
+  // component's root from normal in-flow layout to `position: fixed`
+  // covering that rect — same player instance, same connection, the whole
+  // time, instead of a second independent (re-authenticating, re-handshaking)
+  // instance in the modal.
+  const registerGridInstance   = useRtspFullscreenBridgeStore((s) => s.registerGridInstance);
+  const unregisterGridInstance = useRtspFullscreenBridgeStore((s) => s.unregisterGridInstance);
+  useEffect(() => {
+    if (!useRTSPOverWebSocketMode) return;
+    registerGridInstance(cameraId);
+    return () => unregisterGridInstance(cameraId);
+  }, [useRTSPOverWebSocketMode, cameraId, registerGridInstance, unregisterGridInstance]);
+  const fullscreenRect = useRtspFullscreenBridgeStore((s) =>
+    useRTSPOverWebSocketMode ? s.targetRects[cameraId] : undefined
+  );
+
   // JPEG path (always active for AI detections; frame only used when not WebRTC)
   const { frame, detections, frameWidth, frameHeight } = useCamera(cameraId);
   // WebRTC path (active only when webrtcEnabled + global WebRTC enabled)
@@ -393,8 +415,32 @@ export default function CameraView({ cameraId, cameraName }: Props) {
     status === 'error'                          ? t.statusErr   :
     status === 'offline'                        ? t.statusOff   : t.statusIdle;
 
+  // While this camera is shown in FullscreenCameraView (rtsp-over-websocket
+  // mode only — fullscreenRect is always undefined otherwise), switch the
+  // root from normal grid-tile layout to `position: fixed` covering the
+  // fullscreen modal's video slot rect. z-[60] clears FullscreenCameraView's
+  // own z-50 backdrop. The grid tile's own box is left to render the
+  // "Playing in fullscreen" placeholder below instead, since this root no
+  // longer occupies it (fixed positioning takes it out of normal flow).
+  const floatStyle: React.CSSProperties | undefined = fullscreenRect
+    ? {
+        position: 'fixed',
+        top: fullscreenRect.top,
+        left: fullscreenRect.left,
+        width: fullscreenRect.width,
+        height: fullscreenRect.height,
+        zIndex: 60,
+      }
+    : undefined;
+
   return (
-    <div className="relative w-full h-full bg-gray-900 overflow-hidden rounded-lg">
+    <>
+      {fullscreenRect && (
+        <div className="absolute inset-0 flex items-center justify-center bg-gray-900 rounded-lg text-[10px] text-gray-600 text-center px-2">
+          Playing in fullscreen
+        </div>
+      )}
+      <div className="relative w-full h-full bg-gray-900 overflow-hidden rounded-lg" style={floatStyle}>
       {useRTSPOverWebSocketMode && camera ? (
         /* ── RTSP-over-WebSocket path: via <rtsp-over-websocket> ── */
         <>
@@ -649,6 +695,7 @@ export default function CameraView({ cameraId, cameraName }: Props) {
           </span>
         </div>
       )}
-    </div>
+      </div>
+    </>
   );
 }

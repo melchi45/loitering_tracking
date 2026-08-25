@@ -4,6 +4,7 @@ import { useCamera } from '../hooks/useCamera';
 import { useCrossCameraStore } from '../stores/crossCameraStore';
 import { useClothingReIdStore } from '../stores/clothingReIdStore';
 import { useCameraStore } from '../stores/cameraStore';
+import { useRtspFullscreenBridgeStore } from '../stores/rtspFullscreenBridgeStore';
 import { usePersonTrajectoryStore } from '../stores/personTrajectoryStore';
 import { useDataChannelStore } from '../stores/dataChannelStore';
 import type { AppRtpMessage } from '../stores/dataChannelStore';
@@ -878,6 +879,44 @@ export default function FullscreenCameraView({ cameraId, cameraName, onClose, in
     return isNaN(saved) ? 200 : Math.max(PANEL_MIN_H, Math.min(PANEL_MAX_H, saved));
   });
 
+  // rtsp-over-websocket bridge (see rtspFullscreenBridgeStore.ts): if a grid
+  // tile for this camera is currently mounted, its live <rtsp-over-websocket>
+  // player floats over videoTargetRef below (position: fixed, same DOM node,
+  // no reconnect) instead of this component mounting a second, independent
+  // (re-authenticating) player instance. Falls back to a local <CameraView>
+  // when no grid instance exists (e.g. opened via search/face-match/zones
+  // while this camera's channel-group page isn't the one currently visible
+  // in the grid) — a real reconnect in that case, same as before this bridge.
+  const cameras = useCameraStore((s) => s.cameras);
+  const camera = cameras.find((c) => c.id === cameraId);
+  const isRtspOverWebSocket = camera?.streamingMode === 'rtsp-over-websocket';
+  const hasGridInstance = useRtspFullscreenBridgeStore((s) => isRtspOverWebSocket && !!s.gridInstances[cameraId]);
+  const setTargetRect = useRtspFullscreenBridgeStore((s) => s.setTargetRect);
+  const videoTargetRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isRtspOverWebSocket) return;
+    const el = videoTargetRef.current;
+    if (!el) return;
+    const update = () => {
+      const r = el.getBoundingClientRect();
+      setTargetRect(cameraId, { top: r.top, left: r.left, width: r.width, height: r.height });
+    };
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    window.addEventListener('resize', update);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener('resize', update);
+      setTargetRect(cameraId, undefined);
+    };
+    // isMobile/panelHeight change the video column's layout (stacking
+    // direction, available height) — re-measure on top of whatever
+    // ResizeObserver already catches, since the fixed-inset-0 modal's
+    // column position (not just size) can shift with them.
+  }, [isRtspOverWebSocket, cameraId, isMobile, panelHeight, setTargetRect]);
+
   // Close on Escape key
   useEffect(() => {
     const handler = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose(); };
@@ -958,7 +997,17 @@ export default function FullscreenCameraView({ cameraId, cameraName, onClose, in
 
         {/* Video */}
         <div className="flex-1 min-h-0 overflow-hidden p-2">
-          <CameraView cameraId={cameraId} cameraName={cameraName} />
+          {isRtspOverWebSocket ? (
+            // Target rect for the grid tile's floated player (see the bridge
+            // effect above) — rendered even when hasGridInstance is false so
+            // the ResizeObserver has something to measure; the fallback
+            // local <CameraView> below fills this same box in that case.
+            <div ref={videoTargetRef} className="relative w-full h-full">
+              {!hasGridInstance && <CameraView cameraId={cameraId} cameraName={cameraName} />}
+            </div>
+          ) : (
+            <CameraView cameraId={cameraId} cameraName={cameraName} />
+          )}
         </div>
 
         {/* ── Splitbar ──────────────────────────────────────────────── */}
