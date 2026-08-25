@@ -38,11 +38,11 @@
     "test:report": "node test/generate_report.js --skip e2e"
   },
   "devDependencies": {
-    "concurrently": "^9.2.1",
-    "typescript": "^6.0.3"
+    "concurrently": "^10.0.4",
+    "typescript": "^7.0.2"
   },
   "dependencies": {
-    "@qdrant/js-client-rest": "^1.18.0",
+    "@qdrant/js-client-rest": "^1.19.0",
     "ultralytics": "^1.1.1"
   }
 }
