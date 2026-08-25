@@ -67,6 +67,7 @@ interface RTSPOverWebSocketElement extends HTMLElement {
  */
 export default function RTSPOverWebSocketView({ camera, onStatistics }: Props) {
   const accessToken = useAuthStore((s) => s.accessToken);
+  const refreshAccessToken = useAuthStore((s) => s.refresh);
   const [scriptReady, setScriptReady] = useState(false);
   const [creds, setCreds] = useState<{ username: string; password: string } | null>(null);
   const [error, setError] = useState('');
@@ -147,18 +148,34 @@ export default function RTSPOverWebSocketView({ camera, onStatistics }: Props) {
 
   useEffect(() => {
     let cancelled = false;
-    fetch(`/api/cameras/${camera.id}/rtsp-over-websocket-credentials`, {
-      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
-    })
-      .then((r) => r.json())
-      .then((d) => {
+
+    // authStore proactively refreshes the access token shortly before it
+    // expires (see authStore.ts's scheduleTokenRefresh), but a session that
+    // was asleep/backgrounded past that point (e.g. a laptop lid closed
+    // through the refresh window) can still hand this fetch a stale token —
+    // retry once with a freshly refreshed one instead of surfacing "Invalid
+    // or expired token" for what's really just a timer that got skipped.
+    const fetchCredentials = async (token: string | null, alreadyRetried: boolean): Promise<unknown> => {
+      const res = await fetch(`/api/cameras/${camera.id}/rtsp-over-websocket-credentials`, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (res.status === 401 && !alreadyRetried) {
+        const refreshed = await refreshAccessToken();
+        if (refreshed) return fetchCredentials(useAuthStore.getState().accessToken, true);
+      }
+      return res.json();
+    };
+
+    fetchCredentials(accessToken, false)
+      .then((raw) => {
         if (cancelled) return;
-        if (d.success) setCreds(d.data);
+        const d = raw as { success?: boolean; data?: { username: string; password: string }; error?: string };
+        if (d.success && d.data) setCreds(d.data);
         else setError(d.error || 'Failed to load RTSP-over-WebSocket credentials');
       })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load RTSP-over-WebSocket credentials'); });
     return () => { cancelled = true; };
-  }, [camera.id, accessToken]);
+  }, [camera.id, accessToken, refreshAccessToken]);
 
   // Explicit play() + surface the element's own 'error' CustomEvent (dispatched
   // by e.g. auth/connection failures, but also by expected transient startup

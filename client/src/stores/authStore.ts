@@ -53,6 +53,40 @@ interface AuthState {
 
 const BASE = '';  // same origin — proxy or direct HTTPS
 
+// Access tokens expire per server/.env JWT_ACCESS_EXPIRES (default 15m,
+// server/src/services/TokenService.js) and were otherwise only ever refreshed
+// once, on initial app load (App.tsx's auth.refresh() on mount). A session
+// left open past that TTL then had every authenticated request — e.g.
+// RTSPOverWebSocketView's credentials fetch on fullscreen transition — fail
+// with 401 "Invalid or expired token" until a full page reload. Proactively
+// refresh shortly before expiry instead, decoding `exp` straight out of the
+// JWT payload rather than hardcoding the TTL (it's server-configurable).
+const REFRESH_BUFFER_MS = 60_000;
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+
+function decodeJwtExpMs(token: string): number | null {
+  try {
+    const payload = token.split('.')[1];
+    const json = JSON.parse(atob(payload.replace(/-/g, '+').replace(/_/g, '/')));
+    return typeof json.exp === 'number' ? json.exp * 1000 : null;
+  } catch {
+    return null;
+  }
+}
+
+function scheduleTokenRefresh(token: string, doRefresh: () => Promise<boolean>) {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  const expMs = decodeJwtExpMs(token);
+  if (expMs == null) return;
+  const delay = Math.max(expMs - Date.now() - REFRESH_BUFFER_MS, 5_000);
+  refreshTimer = setTimeout(() => { doRefresh(); }, delay);
+}
+
+function clearTokenRefresh() {
+  if (refreshTimer) clearTimeout(refreshTimer);
+  refreshTimer = null;
+}
+
 async function apiFetch(path: string, opts: RequestInit = {}) {
   const res = await fetch(`${BASE}${path}`, {
     credentials: 'include',
@@ -88,6 +122,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         set({ user: data.user, accessToken: null, page: 'pending', loading: false });
       } else {
         set({ user: data.user, accessToken: data.accessToken, page: 'dashboard', loading: false });
+        scheduleTokenRefresh(data.accessToken, get().refresh);
       }
     } catch (err: unknown) {
       set({ loading: false, error: (err as Error).message });
@@ -104,6 +139,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       const page: AppPage =
         data.user.status === 'pending' ? 'pending' : 'dashboard';
       set({ user: data.user, accessToken: data.accessToken, page, loading: false });
+      if (page === 'dashboard') scheduleTokenRefresh(data.accessToken, get().refresh);
     } catch (err: unknown) {
       const msg = (err as Error).message;
       // If pending, redirect to pending page
@@ -116,6 +152,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   logout: async () => {
+    clearTokenRefresh();
     try {
       await apiFetch('/auth/logout', { method: 'POST' });
     } catch {}
@@ -126,6 +163,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     try {
       const data = await apiFetch('/auth/refresh', { method: 'POST' });
       set({ accessToken: data.accessToken });
+      scheduleTokenRefresh(data.accessToken, get().refresh);
       // Also re-fetch /auth/me to get latest user data
       const userData = await apiFetch('/auth/me', {
         headers: { Authorization: `Bearer ${data.accessToken}` },
@@ -134,6 +172,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       set({ user: userData, page });
       return true;
     } catch {
+      clearTokenRefresh();
       set({ user: null, accessToken: null, page: 'signin' });
       return false;
     }

@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-RTSPWS-001 |
-| **Version** | 3.7 |
-| **Status** | Active (구현 완료, 라이브 검증 완료 — channelSlot=6 실 카메라 30fps 확인; 클라이언트 라이브러리는 2026-08-04 npm 패키지로 전환, §8.21) |
-| **Date** | 2026-08-04 |
+| **Version** | 3.9 |
+| **Status** | Active (구현 완료, 라이브 검증 완료 — channelSlot=6 실 카메라 30fps 확인; 클라이언트 라이브러리는 2026-08-04 npm 패키지로 전환, §8.21) / §9는 Proposed — 미결정 사항 있음 |
+| **Date** | 2026-08-13 |
 | **Related Design** | [Design_RTSP_Capture_Backend.md](Design_RTSP_Capture_Backend.md) · [Design_Server_Architecture.md](Design_Server_Architecture.md) · [Design_RTSP_Over_WebSocket_TypeScript_Migration.md](Design_RTSP_Over_WebSocket_TypeScript_Migration.md) |
 | **Related Package** | [@melchi45/rtsp-over-websocket](https://github.com/melchi45/rtsp-over-websocket) (npm, GitHub Packages) — `melchi45/rtsp-over-websocket` 서브모듈은 2026-08-04 제거됨, §8.21 |
 
@@ -449,6 +449,65 @@ python3[<pid>]: segfault ... in libavformat.so.58.76.100
 
 ---
 
+### 8.22 버그 수정 — access token 만료로 인한 풀스크린 전환 시 "Invalid or expired token" 재생 실패 (2026-08-25)
+
+**증상**: Streaming Server 모드에서 RTSP-over-WebSocket 채널을 더블클릭해 풀스크린으로 전환하면 `RTSP-over-WebSocket playback error: Invalid or expired token`이 표시되며 재생이 실패. `GET /api/cameras/:id/rtsp-over-websocket-credentials`가 401을 반환하고 있었음.
+
+**근본 원인**: SUNAPI/카메라 인증과 무관한, 이 서버 자체의 JWT access token 만료 문제. `client/src/stores/authStore.ts`는 access token(`server/.env` `JWT_ACCESS_EXPIRES`, 기본 15분)을 메모리에만 보관하고, 앱 최초 로드 시 `App.tsx`의 `auth.refresh()` 호출 1회 외에는 백그라운드 자동 갱신도, 401 응답에 대한 재시도 로직도 전혀 없었음. 대시보드를 TTL 이상 열어둔 채(그 사이 다른 인증 요청 없이) 방치하면 `accessToken`이 만료되고, 그 상태로 채널을 풀스크린 전환하면 `RTSPOverWebSocketView.tsx`가 (재)마운트되며 credentials fetch가 만료된 토큰으로 실행되어 `server/src/middleware/auth.js`의 `verifyAccessToken`이 401 `{ error: 'Invalid or expired token' }`을 반환 — 클라이언트는 이 문자열을 그대로 표시할 뿐 갱신을 시도하지 않았음.
+
+**검토했으나 채택하지 않은 대안**: §9에서 검토 중인 SUNAPI `SunapiManager` 연동은 이 문제와 무관함 — SUNAPI 로그인은 카메라 자체 인증이고, 401이 발생한 `/rtsp-over-websocket-credentials`는 이 서버의 JWT 게이트이므로 서로 다른 인증 경계. §9가 확정·구현되더라도 이 버그는 해결되지 않음.
+
+**수정**:
+- `client/src/stores/authStore.ts` — access token의 JWT `exp` 클레임을 디코딩해 만료 60초 전(`REFRESH_BUFFER_MS`)에 `refresh()`를 자동 실행하는 타이머(`scheduleTokenRefresh`/`clearTokenRefresh`) 추가. `login`/`register`(dashboard 진입)/`refresh` 성공 시 재스케줄, `logout`/`refresh` 실패 시 해제.
+- `client/src/components/RTSPOverWebSocketView.tsx` — credentials fetch가 401을 받으면(위 타이머가 놓친 엣지 케이스 대비 안전망) `authStore.refresh()`로 토큰을 한 번 갱신한 뒤 새 토큰으로 재시도. 재시도도 실패하면 기존과 동일하게 에러 표시.
+
+관련 파일: `client/src/stores/authStore.ts`, `client/src/components/RTSPOverWebSocketView.tsx`.
+
+---
+
+## 9. SUNAPI 로그인 연동 (Proposed, 2026-08-13)
+
+### 9.1 배경 및 목표
+
+§8.21에서 "미채택"으로 명시한 결정 — 패키지의 `SunapiManager`/`SunapiClient`를 쓰지 않고 raw custom element만 쓰는 것 — 을 카메라 Add/Edit 화면에서 Streaming Mode로 **RTSP-over-WebSocket을 선택한 경우에 한해** 예외적으로 뒤집는 제안입니다.
+
+목표(사용자 확인, 2026-08-13): Add/Edit 폼에 이미 존재하는 `username`/`password` 필드(§7.2, `CameraEditModal.tsx`)로 `SunapiManager.init()`을 통해 SUNAPI 로그인을 수행해, RTSP-over-WebSocket 재생 시점에 별도 비밀번호 입력 없이 자동으로 인증되도록 한다.
+
+### 9.2 아키텍처 결정 — 신뢰 경계 예외 (사용자 확인, 2026-08-13)
+
+이 프로젝트의 원칙(§3)은 "브라우저는 카메라와 절대 직접 통신하지 않는다"입니다. `SunapiManager`/`SunapiClient`는 패키지 소스 확인 결과 `serverType: 'camera'`(기본값)일 때 브라우저 컨텍스트에서는 `hostname`/`port`를 **항상 `window.location`으로 강제**해 이 원칙과 자연히 맞물릴 수 있는 구조지만(`SunapiClient.ts` 생성자, `this.restClientConfig.serverType !== 'grunt'`이고 페이지가 http/https로 서빙 중이면 무조건 현재 origin 사용), 그러려면 `rtspOverWebSocketServer.js`에 없는 SUNAPI REST HTTP 프록시 라우트를 새로 만들어야 합니다.
+
+**사용자 확인**: 이번 건은 그 프록시를 만들지 않고, **브라우저→카메라 직접 통신을 예외적으로 허용**하기로 결정했습니다. 즉 `SunapiClient` 생성 시 `hostname`/`cameraIp`를 `window.location`이 아니라 **카메라의 실제 IP**(`camera.ip`, `httpPort` — 이미 스키마에 존재, `server/src/api/cameras.js`의 SUNAPI 채널 프로브가 서버 쪽에서 동일 필드를 사용 중)로 명시적으로 넘깁니다.
+
+이 결정은 §3/§8.21의 "Proxy 전용" 원칙에 대한 **국소적 예외**입니다 — JPEG/WebRTC 스트리밍 모드나 RTSP-over-WebSocket의 미디어 스트림 자체(여전히 `/StreamingServer` WS 브릿지 경유)는 전혀 영향받지 않고, 오직 RTSP-over-WebSocket 모드의 SUNAPI 로그인 호출에만 적용됩니다. §3에 이 예외를 명시적으로 문서화해야 합니다(9.5 참고).
+
+### 9.3 알려진 제약 (구현 전 반드시 확인 필요)
+
+브라우저→카메라 직접 통신을 선택했기 때문에, 아래 세 가지는 코드로 해결할 수 없는 **환경/네트워크 제약**이며 사전에 확인이 필요합니다:
+
+1. **네트워크 도달성** — 사용자의 브라우저가 카메라와 같은 네트워크(또는 라우팅 가능한 네트워크)에 있어야 합니다. `dev.hanwhavision.com:3443`에 외부에서 접속하는 사용자는 카메라(`192.168.214.x` 등 사설 대역)에 도달하지 못할 수 있습니다 — 이 경우 SUNAPI 로그인은 실패하지만(9.4의 페일-오픈 정책에 따라) RTSP-over-WebSocket 재생 자체는 기존과 동일하게 서버 프록시로 계속 동작해야 합니다.
+2. **Mixed Content** — 이 페이지는 HTTPS(3443)로 서빙됩니다. 카메라의 SUNAPI가 HTTP(보통 80번 포트)만 지원하면 브라우저가 Mixed Content로 요청 자체를 차단합니다. 카메라가 HTTPS SUNAPI(보통 443 또는 별도 포트)를 지원하고 `protocol: 'https'`로 붙어야 실사용이 가능 — 카메라 펌웨어/포트 설정에 의존하는 부분이라 UI에서 사전 안내 문구가 필요합니다.
+3. **CORS** — SunapiClient는 XHR로 카메라에 직접 요청합니다. 카메라의 SUNAPI 웹서버가 `dev.hanwhavision.com` 오리진에 대한 CORS(`Access-Control-Allow-Origin` 등) 응답 헤더를 내려주지 않으면 브라우저가 응답을 차단합니다 — Hanwha 카메라 펌웨어의 CORS 지원 여부/설정 방법 확인이 선행돼야 합니다(`SunapiClientDeviceInfo.cors` 플래그가 있는 것으로 보아 패키지 자체는 이 시나리오를 이미 인지하고 있으나, 카메라 쪽 헤더가 실제로 내려오는지는 실기 카메라로 검증 필요).
+
+### 9.4 미결정 사항 (구현 전 확인 필요)
+
+| # | 질문 | 제안 기본값 |
+|---|---|---|
+| 1 | SUNAPI 로그인은 **언제** 실행되는가 — Add/Edit 폼에서 저장 시 "연결 테스트"로 1회, 아니면 `RTSPOverWebSocketView.tsx`가 재생을 시작할 때마다 자동으로? | 재생 시작 시 자동 실행(폼 저장 시점에는 카메라가 아직 꺼져있거나 네트워크 미도달일 수 있어 "연결 테스트"만으로는 항상 유효하지 않음) — 단, Add/Edit 폼에 있는 것 자체는 검토 대상 |
+| 2 | SUNAPI 로그인 **실패 시** 동작 — 재생을 막을지, 경고만 띄우고 기존처럼 서버 프록시 경로로 재생을 계속할지? | 페일-오픈(경고만 표시, 재생은 계속 시도) — 9.3의 네트워크 도달성 제약상 로그인 실패가 흔할 수 있고, 실제 미디어 스트림은 여전히 서버 프록시를 쓰므로 SUNAPI 로그인 실패가 재생 자체를 막을 이유가 없음 |
+| 3 | 카메라의 실제 IP를 프론트엔드에 어떻게 전달할까 — 기존 `GET /api/cameras/:id` 응답에 `ip`/`httpPort`가 이미 포함돼 있는지, `password`처럼 별도 JWT 게이트가 필요한지? | `password`는 이미 `/rtsp-over-websocket-credentials` 전용 엔드포인트로 분리돼 있음(일반 `GET /api/cameras`는 비밀번호 제외) — `ip`/`httpPort`도 민감 정보로 볼지 결정 필요. 카메라 IP는 이미 일반 카메라 목록 응답에 포함되는 것으로 보이나 재확인 필요 |
+| 4 | `protocol`(http/https)과 SUNAPI 포트를 카메라별로 별도 설정할 UI 필드가 필요한가, 아니면 기존 `httpPort`/`streamingMode` 만으로 추론할까? | 카메라 스키마에 SUNAPI 전용 프로토콜/포트 필드가 없다면 Add/Edit 폼에 신규 필드 추가가 필요 — 9.3-2의 Mixed Content 제약 때문에 관리자가 명시적으로 선택하게 하는 편이 안전 |
+
+### 9.5 확정되면 필요한 변경 사항 (구현 착수 시)
+
+- `RTSPOverWebSocketView.tsx` — `scriptReady && creds` 이후, `el.play()` 이전(또는 병행)에 `SunapiManager.init({ serverType: 'camera', cameraIp: camera.ip, port: <9.4-4>, protocol: <9.4-4>, username: creds.username, password: creds.password })` 호출 추가. 실패 시 9.4-2 정책에 따라 `playerNotice`류 배너로만 노출.
+- `server/src/api/cameras.js` (또는 신규 필드) — 9.4-3에 따라 프론트엔드가 `camera.ip`/`httpPort`(및 필요 시 SUNAPI protocol/port)를 안전하게 받을 수 있는지 확인/보강.
+- §3(아키텍처 원칙) — "브라우저는 카메라와 절대 직접 통신하지 않는다" 문구에 "RTSP-over-WebSocket 모드의 SUNAPI 로그인은 예외" 각주 추가.
+- `.claude/skills/camera-stream-setup/SKILL.md` — SDLC 동기화 규칙에 따라 이 예외를 반영.
+- 실기 카메라로 9.3의 세 가지 제약(네트워크 도달성/Mixed Content/CORS) 사전 검증 — 하나라도 막히면 기능 자체가 무의미해지므로 코드 작성 전 스파이크 테스트 권장.
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
@@ -484,3 +543,5 @@ python3[<pid>]: segfault ... in libavformat.so.58.76.100
 | 3.5 | 2026-07-30 | §8.20 버그 수정 추가 — RTSP-over-WebSocket 재생 시 bounding box 오버레이가 전혀 표시되지 않던 결함. `CameraView.tsx`의 RTSP-over-WebSocket 분기에 `<canvas>` 엘리먼트 자체가 누락돼 있었음(WebRTC/JPEG 분기는 있었음) — `drawOverlay()`는 정상 호출되고 있었으나 canvasRef.current가 null이라 매번 no-op. RTSP-over-WebSocket 분기에 canvas 추가로 해결, 기존 JPEG/WebRTC와 동일한 frameWidth/frameHeight 스케일링 재사용 |
 | 3.6 | 2026-08-04 | §8.21 추가(아키텍처) — `melchi45/rtsp-over-websocket` 서브모듈 제거, 같은 저자의 TS 재작성 결과물인 `@melchi45/rtsp-over-websocket@1.0.1`(npm, GitHub Packages)로 전환. 패키지 소스 확인 결과 속성/이벤트/채널 오프셋이 기존 `<rtsp-over-websocket>`와 1:1 호환돼 서버 쪽(`rtspOverWebSocketServer.js`) 무변경, `RTSPOverWebSocketView.tsx`만 로더 방식 교체. CI에 `.npmrc` 인증 스텝 추가(신규 리포지토리 시크릿 `NPM_GH_PACKAGES_TOKEN` 필요) |
 | 3.7 | 2026-08-10 | 문서 ID `DESIGN-LTS-UMP-WS-001` → `DESIGN-LTS-RTSPWS-001`로 통일 — 연관 SRS/TC의 `FR-UMP-*`/`TC-UMP-*` 추적 ID가 `FR-RTSPWS-*`/`TC-RTSPWS-*`로 리네임된 것과 맞춤; 잔존 레거시 명칭 일괄 정리 — `Ump*` 식별자·`submodules/rtsp-over-websocket` 경로를 `@melchi45/rtsp-over-websocket` npm 패키지의 현행 명칭(`RTSPOverWebSocket*`, 별도 저장소 `melchi45/rtsp-over-websocket`)으로 전면 교체 |
+| 3.8 | 2026-08-13 | §9 추가(Proposed) — §8.21에서 "미채택"으로 명시했던 `SunapiManager`/`SunapiClient` 연동을 RTSP-over-WebSocket 모드에 한해 재검토. 사용자 확인: SUNAPI 로그인 용도(재생 시 별도 비밀번호 입력 없이 인증)로 한정, 신뢰 경계는 브라우저→카메라 직접 통신을 예외적으로 허용(§3 Proxy 원칙의 국소적 예외). 패키지 소스 분석으로 `serverType:'camera'` 시 브라우저 컨텍스트에서 `hostname`/`port`가 `window.location`으로 강제됨을 확인했으나 이번 결정상 `cameraIp`/`httpPort`(기존 스키마 필드) 직결로 우회. 네트워크 도달성/Mixed Content/CORS 제약과 미결정 사항 4건 정리 — 구현 착수 전 확인 필요 |
+| 3.9 | 2026-08-25 | §8.22 추가(버그 수정) — 풀스크린 전환 시 "Invalid or expired token" 재생 실패. SUNAPI/카메라 인증과 무관하게 이 서버 자체 JWT access token이 만료(기본 15분)됐는데도 백그라운드 자동 갱신·401 재시도 로직이 없어 발생하던 문제로 확인(§9의 SUNAPI 연동과는 무관 — 확정·구현돼도 이 버그는 해결되지 않음). `authStore.ts`에 만료 60초 전 자동 `refresh()` 타이머 추가, `RTSPOverWebSocketView.tsx`의 credentials fetch에 401 수신 시 토큰 갱신 후 1회 재시도하는 안전망 추가 |
