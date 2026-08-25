@@ -777,16 +777,24 @@ async function runSunapiUrlPatternTests() {
 //    consistently observed), which per Annex A's `DATAPACKET_IPv4_T` has no
 //    room for the extended block regardless of length. TC-H-031 verifies the
 //    nMode gate specifically (a long-enough-but-base-mode packet must still
-//    yield undefined extended fields) — direct require of the submodule's
-//    parser + mapUDPDevice() to verify both the length- and mode-based gates
-//    end-to-end.
+//    yield undefined extended fields) — direct require of the
+//    `@melchi45/wisenet-udp-discovery` npm package's parser (2026-08-25:
+//    no longer a git submodule, see docs/design/Design_Camera_Discovery.md
+//    §3.1i) + mapUDPDevice() to verify both the length- and mode-based
+//    gates end-to-end.
 
 async function runUdpExtendedFieldTests() {
   console.log('\n── UDP discovery extended-field parsing (FR-CAM-081, FR-CAM-084) ──\n');
 
+  // Path into server/node_modules explicitly rather than a bare
+  // '@melchi45/wisenet-udp-discovery/udpDiscovery' specifier — this file is
+  // invoked with cwd=repo root (test/run_all.js), so Node's module
+  // resolution (based on this file's own directory, test/api/, not cwd)
+  // would never see server/node_modules, which is a sibling directory, not
+  // an ancestor.
   let UDPDiscovery, mapUDPDevice;
   try {
-    ({ UDPDiscovery } = require('../../submodules/WiseNetChromeIPInstaller/nodejs/udpDiscovery'));
+    ({ UDPDiscovery } = require('../../server/node_modules/@melchi45/wisenet-udp-discovery/udpDiscovery'));
     ({ mapUDPDevice } = require('../../server/src/services/discoveryService'));
   } catch (err) {
     console.log(`      (could not require udpDiscovery.js/discoveryService.js from this working directory — skipping: ${err.message})`);
@@ -959,13 +967,16 @@ async function runUdpExtendedFieldTests() {
 //    implementation: first an ONVIF-XML-only stub (despite listening on the
 //    WiseNet-specific port 7701/7711 — couldn't discover a SUNAPI/WiseNet
 //    device at all), later a full inline duplicate of the WiseNet binary
-//    protocol kept in sync with the git submodule by hand. It is now a thin
-//    re-export of the `wisenet-chrome-ip-installer` npm dependency (same
-//    repo/branch as the git submodule below, fetched by `npm install`) — no
-//    independent parsing implementation lives in server/ anymore. These
+//    protocol kept in sync with a git submodule by hand. It is now a thin
+//    re-export of the `@melchi45/wisenet-udp-discovery` npm dependency
+//    (GitHub Packages — 2026-08-25: the git submodule this package used to
+//    be sourced from was removed entirely, docs/design/Design_Camera_Discovery.md
+//    §3.1i) — no independent parsing implementation lives in server/ anymore. These
 //    tests verify the npm-package-backed parser behaves correctly and
-//    matches the submodule-loaded copy byte-for-byte (both should be the
-//    same source, loaded from two different install paths).
+//    matches a directly-required copy of the same npm package byte-for-byte
+//    (guards the lazy _resolveImpl()/re-export wiring in
+//    server/src/utils/udpDiscovery.js against silently returning something
+//    other than the real package).
 
 async function runFallbackParserTests() {
   console.log('\n── server-side UDPDiscovery (npm package) WiseNet binary parser (FR-CAM-082) ──\n');
@@ -989,40 +1000,40 @@ async function runFallbackParserTests() {
     assertEq(parsed.chDeviceName, 'PNM-C32083', 'chDeviceName');
     assertEq(parsed.nPort, 443, 'nPort (HTTPS/web port) — catches ntohs() big/little-endian flag inversion');
     assertEq(parsed.nTcpPort, 10030, 'nTcpPort — catches the same endianness class of bug');
-    assertEq(parsed.modelType, undefined, 'modelType still undefined for a short packet (same bounds-check fix as the submodule)');
+    assertEq(parsed.modelType, undefined, 'modelType still undefined for a short packet (same bounds-check fix as the underlying npm package)');
   });
 
-  await test('TC-H-029', 'npm-package-backed UDPDiscovery + mapUDPDevice() end-to-end matches the submodule-loaded copy for the same bytes', async () => {
-    let UDPDiscoverySubmodule;
+  await test('TC-H-029', 'npm-package-backed UDPDiscovery + mapUDPDevice() end-to-end matches a directly-required copy of the npm package for the same bytes', async () => {
+    let UDPDiscoveryDirect;
     try {
-      ({ UDPDiscovery: UDPDiscoverySubmodule } = require('../../submodules/WiseNetChromeIPInstaller/nodejs/udpDiscovery'));
+      ({ UDPDiscovery: UDPDiscoveryDirect } = require('../../server/node_modules/@melchi45/wisenet-udp-discovery/udpDiscovery'));
     } catch (err) {
-      console.log(`      (submodule not available — skipping parity check: ${err.message})`);
+      console.log(`      (@melchi45/wisenet-udp-discovery not available — skipping parity check: ${err.message})`);
       return;
     }
     const buf = Buffer.from(real262Hex, 'hex');
     const npmParsed        = new UDPDiscovery()._parseResponse(buf, { address: '192.168.214.37' });
-    const submoduleParsed  = new UDPDiscoverySubmodule()._parseResponse(buf, { address: '192.168.214.37' });
+    const directParsed  = new UDPDiscoveryDirect()._parseResponse(buf, { address: '192.168.214.37' });
     const fields = ['chMac', 'chIP', 'chSubnetMask', 'chGateway', 'nPort', 'nStatus', 'chDeviceName',
                      'nHttpPort', 'nDevicePort', 'nTcpPort', 'nUdpPort', 'nUploadPort', 'nMulticastPort',
                      'nNetworkMode', 'DDNSURL', 'modelType', 'httpType', 'supportedProtocol', 'noPassword',
                      'url', 'rtspUrl'];
     for (const f of fields) {
-      assertEq(JSON.stringify(npmParsed[f]), JSON.stringify(submoduleParsed[f]), `field "${f}" must match between the npm-package-backed and submodule-loaded parsers`);
+      assertEq(JSON.stringify(npmParsed[f]), JSON.stringify(directParsed[f]), `field "${f}" must match between the lazy-loaded (server/src/utils/udpDiscovery.js) and directly-required npm package parsers`);
     }
     const npmMapped       = mapUDPDevice(npmParsed);
-    const submoduleMapped = mapUDPDevice(submoduleParsed);
-    assertEq(npmMapped.Model, submoduleMapped.Model, 'mapUDPDevice() Model matches');
-    assertEq(npmMapped.Port, submoduleMapped.Port, 'mapUDPDevice() Port matches');
-    assertEq(npmMapped.DeviceType, submoduleMapped.DeviceType, 'mapUDPDevice() DeviceType matches (both undefined for this short packet)');
+    const directMapped = mapUDPDevice(directParsed);
+    assertEq(npmMapped.Model, directMapped.Model, 'mapUDPDevice() Model matches');
+    assertEq(npmMapped.Port, directMapped.Port, 'mapUDPDevice() Port matches');
+    assertEq(npmMapped.DeviceType, directMapped.DeviceType, 'mapUDPDevice() DeviceType matches (both undefined for this short packet)');
   });
 
-  await test('TC-H-032', 'npm-package-backed UDPDiscovery matches the submodule-loaded copy for a genuine nMode=12 (DEF_RES_SCAN_EXT) response, including supportedProtocol (FR-CAM-084)', async () => {
-    let UDPDiscoverySubmodule;
+  await test('TC-H-032', 'npm-package-backed UDPDiscovery matches a directly-required copy of the npm package for a genuine nMode=12 (DEF_RES_SCAN_EXT) response, including supportedProtocol (FR-CAM-084)', async () => {
+    let UDPDiscoveryDirect;
     try {
-      ({ UDPDiscovery: UDPDiscoverySubmodule } = require('../../submodules/WiseNetChromeIPInstaller/nodejs/udpDiscovery'));
+      ({ UDPDiscovery: UDPDiscoveryDirect } = require('../../server/node_modules/@melchi45/wisenet-udp-discovery/udpDiscovery'));
     } catch (err) {
-      console.log(`      (submodule not available — skipping parity check: ${err.message})`);
+      console.log(`      (@melchi45/wisenet-udp-discovery not available — skipping parity check: ${err.message})`);
       return;
     }
     const prefix = Buffer.from(real262Hex.slice(0, 261 * 2), 'hex');
@@ -1043,18 +1054,18 @@ async function runFallbackParserTests() {
     const buf = Buffer.concat([prefix, extended]);
 
     const npmParsed       = new UDPDiscovery()._parseResponse(buf, { address: '10.0.0.99' });
-    const submoduleParsed = new UDPDiscoverySubmodule()._parseResponse(buf, { address: '10.0.0.99' });
+    const directParsed = new UDPDiscoveryDirect()._parseResponse(buf, { address: '10.0.0.99' });
     assertEq(npmParsed.modelType, 3, 'npm-package-backed parser resolves modelType for a genuine nMode=12 response');
     assertEq(npmParsed.supportedProtocol, 5, 'npm-package-backed parser resolves supportedProtocol correctly');
     const fields = ['modelType', 'chDeviceNameNew', 'version', 'httpType', 'nHttpsPort', 'supportedProtocol', 'noPassword'];
     for (const f of fields) {
-      assertEq(JSON.stringify(npmParsed[f]), JSON.stringify(submoduleParsed[f]), `field "${f}" must match between the npm-package-backed and submodule-loaded parsers for an nMode=12 response`);
+      assertEq(JSON.stringify(npmParsed[f]), JSON.stringify(directParsed[f]), `field "${f}" must match between the lazy-loaded (server/src/utils/udpDiscovery.js) and directly-required npm package parsers for an nMode=12 response`);
     }
     const npmMapped       = mapUDPDevice(npmParsed);
-    const submoduleMapped = mapUDPDevice(submoduleParsed);
+    const directMapped = mapUDPDevice(directParsed);
     assertEq(npmMapped.DeviceType, 'Recorder', 'mapUDPDevice() DeviceType resolves for the npm-package-backed parser');
-    assertEq(npmMapped.DeviceType, submoduleMapped.DeviceType, 'mapUDPDevice() DeviceType matches between implementations');
-    assertEq(npmMapped.SupportedProtocol, submoduleMapped.SupportedProtocol, 'mapUDPDevice() SupportedProtocol matches between implementations');
+    assertEq(npmMapped.DeviceType, directMapped.DeviceType, 'mapUDPDevice() DeviceType matches between implementations');
+    assertEq(npmMapped.SupportedProtocol, directMapped.SupportedProtocol, 'mapUDPDevice() SupportedProtocol matches between implementations');
   });
 
   await test('TC-H-034', 'UDPDiscovery._parseResponse() also bails out (returns null) for non-scan nMode values (FR-CAM-084)', async () => {

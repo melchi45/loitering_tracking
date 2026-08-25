@@ -31,8 +31,9 @@ function hasConfiguredSunapiCredentials() {
  * Extract a single <attribute name="..." value="..."/> value from a SUNAPI
  * `attributes.cgi/attributes` XML response, scoped to a specific
  * <group name="..."><category name="..."> block (mirrors the vendor IP
- * Installer's own XMLParser.parseAttributeSection('Group/Category/Attr')
- * — see submodules/WiseNetChromeIPInstaller/media/ump/Network/http/xmlParser.js).
+ * Installer's own XMLParser.parseAttributeSection('Group/Category/Attr') —
+ * cross-checked against the vendor Chrome extension's source when this was
+ * written; no longer vendored locally, see docs/design/Design_Camera_Discovery.md §3.1i).
  */
 function extractGroupCategoryAttr(xml, groupName, categoryName, attrName) {
   const groupRe = new RegExp(`<group\\s+name="${groupName}"[^>]*>([\\s\\S]*?)<\\/group>`, 'i');
@@ -53,7 +54,8 @@ function extractGroupCategoryAttr(xml, groupName, categoryName, attrName) {
  * type="..." value="..."/></category></group></attributes> blocks. MaxChannel
  * lives at group="System" / category="Limit" / attribute="MaxChannel"
  * (confirmed against the vendor IP Installer's own query path, System/Limit/MaxChannel
- * — see submodules/WiseNetChromeIPInstaller/media/ump/Network/http/attributes.js).
+ * — cross-checked when this was written; no longer vendored locally, see
+ * docs/design/Design_Camera_Discovery.md §3.1i).
  * SECONDARY source only — see hasConfiguredSunapiCredentials() above and
  * mapUDPDevice()'s binary-response parsing, which is the primary source and
  * needs no HTTP round-trip. This function remains useful as a fallback (the
@@ -322,11 +324,11 @@ const DEVICE_TYPE_LABELS = {
 function mapUDPDevice(raw) {
   const clean = (v) => String(v || '').replace(/\xff/g, '').replace(/[^\x20-\x7E]/g, '').trim();
 
-  // Both submodules/WiseNetChromeIPInstaller/nodejs/udpDiscovery.js and its
-  // self-contained fallback (server/src/utils/udpDiscovery.js's
-  // UDPDiscoveryFallback, 2026-07-02 — now a real WiseNet binary parser, not
-  // an ONVIF-XML stub) emit the same chIP/chMac/... shape; MACAddress/
-  // IPAddress/ip/mac are accepted too for forward/test-fixture compatibility.
+  // @melchi45/wisenet-udp-discovery's udpDiscovery.js (server/src/utils/
+  // udpDiscovery.js's re-export — no independent fallback implementation
+  // exists anymore, see docs/design/Design_Camera_Discovery.md §3.1f/§3.1i)
+  // emits chIP/chMac/... shaped objects; MACAddress/IPAddress/ip/mac are
+  // accepted too for forward/test-fixture compatibility.
   const mac = clean(raw.chMac || raw.MACAddress || raw.mac);
   const ip  = clean(raw.chIP  || raw.IPAddress  || raw.ip);
   if (!ip) return null;
@@ -667,7 +669,7 @@ class DiscoveryService {
    * Log only when a device is genuinely new or a tracked field actually
    * changed (2026-07-21, §discovery-log-noise) — every UDP/ONVIF scan cycle
    * re-announces every camera on the subnet unchanged, and the raw
-   * per-packet log this used to rely on (submodules/WiseNetChromeIPInstaller
+   * per-packet log this used to rely on (@melchi45/wisenet-udp-discovery's
    * response.js's UdpResponse.parse()) produced 10+ lines/sec of pure noise
    * with just a handful of cameras. `prev` is undefined for a brand-new
    * device (never seen this deviceKey before); `deviceSignature()` scopes

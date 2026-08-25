@@ -74,7 +74,7 @@
     "ws": "^8.18.3"
   },
   "optionalDependencies": {
-    "wisenet-chrome-ip-installer": "github:melchi45/WiseNetChromeIPInstaller#master"
+    "@melchi45/wisenet-udp-discovery": "^1.0.1"
   },
   "devDependencies": {
     "jest": "^29.7.0",

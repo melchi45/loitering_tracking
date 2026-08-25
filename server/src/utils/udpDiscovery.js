@@ -2,12 +2,16 @@
 
 // WiseNet/Hanwha SUNAPI UDP camera discovery ("IP Scan for SUNAPI" —
 // SUNAPI IP Installer spec §3.4). The actual implementation lives in the
-// `wisenet-chrome-ip-installer` npm dependency (server/package.json) —
-// the Node.js port of the WiseNetChromeIPInstaller Chrome extension's UDP
-// broadcast discovery. This file has no independent socket-opening/parsing
-// implementation of its own, and does not read from the git submodule path
-// directly — `wisenet-chrome-ip-installer` (an ordinary `npm install`) is
-// the sole install path this file resolves against.
+// `@melchi45/wisenet-udp-discovery` npm dependency (server/package.json,
+// GitHub Packages — see server/.npmrc.example) — the Node.js port of the
+// WiseNetChromeIPInstaller Chrome extension's UDP broadcast discovery. This
+// file has no independent socket-opening/parsing implementation of its own,
+// and does not read from any git submodule path — the npm package (an
+// ordinary `npm install`) is the sole install path this file resolves
+// against. The package's own `main` entry is a CLI demo that runs discovery
+// as a side effect on require(), so this imports the `udpDiscovery`
+// submodule path directly rather than the package root (see the package's
+// README "Installing this package in another project").
 //
 // Resolution is deferred to first actual use (a call to getUDPDiscovery(),
 // or access to one of the properties defined below) rather than done at
@@ -15,11 +19,11 @@
 // this module unconditionally, and `index.js` requires `discoveryService.js`
 // unconditionally, in every SERVER_MODE — including `analysis`, which has
 // no cameras and never calls getUDPDiscovery() at all. An eager
-// `require('wisenet-chrome-ip-installer/...')` at the top of this file
+// `require('@melchi45/wisenet-udp-discovery/...')` at the top of this file
 // crashes server startup in that mode whenever the package isn't installed,
 // even though nothing there ever needed camera discovery in the first
 // place (regression found live 2026-07-03, analysis-mode server).
-const PACKAGE = 'wisenet-chrome-ip-installer/nodejs/udpDiscovery';
+const PACKAGE = '@melchi45/wisenet-udp-discovery/udpDiscovery';
 
 let _impl = null;
 
@@ -31,13 +35,14 @@ function _resolveImpl() {
   } catch (err) {
     throw new Error(
       `WiseNet UDP discovery implementation not found (${PACKAGE}). Run ` +
-      '`npm install` in server/ (wisenet-chrome-ip-installer optionalDependency).\n' +
+      '`npm install` in server/ (@melchi45/wisenet-udp-discovery optionalDependency ' +
+      '— GitHub Packages, requires server/.npmrc; see server/.npmrc.example).\n' +
       `  - ${err.message}`
     );
   }
 }
 
-/** @returns {typeof import('wisenet-chrome-ip-installer/nodejs/udpDiscovery').UDPDiscovery} */
+/** @returns {typeof import('@melchi45/wisenet-udp-discovery/udpDiscovery').UDPDiscovery} */
 function getUDPDiscovery() {
   return _resolveImpl().UDPDiscovery;
 }

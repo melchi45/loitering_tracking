@@ -1,0 +1,7 @@
+# Copy this file to .npmrc (gitignored, never commit real tokens) and fill in
+# a GitHub Personal Access Token with `read:packages` scope on the
+# melchi45/wisenet-camera-discovery repo — @melchi45/wisenet-udp-discovery is
+# published to GitHub Packages, which always requires authentication for
+# `npm install`, even for public repos (unlike the default npmjs.com registry).
+@melchi45:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=YOUR_GITHUB_PAT_WITH_READ_PACKAGES_SCOPE

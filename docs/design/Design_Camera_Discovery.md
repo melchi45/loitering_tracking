@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAM-01 |
-| **Version** | 1.18 |
+| **Version** | 1.20 |
 | **Status** | Active |
 | **Date** | 2026-07-03 |
 | **Parent SRS** | srs/SRS_Camera_Discovery.md |
@@ -401,6 +401,29 @@ No other logic changed; `SunapiMaxChannel`'s parallel expression was updated ide
 
 **Verification and remaining gap**: TC-H-040 (`test/api/nvr_channel_discovery.test.js`) confirms the *mechanism* — a real 262-byte captured packet (`nMode=11`, base mode) yields `MaxChannel`/`nMaxChannel: undefined` and `mapUDPDevice().MaxChannel: 1`; the identical bytes with only the `nMode` byte overwritten to `12` yield `MaxChannel`/`nMaxChannel` equal to the decoded `nMulticastPort` (10050 in the fixture) and `mapUDPDevice().MaxChannel: 10050`. No device sending a genuine `nMode=12` response has been captured on this network, so whether a real device's `nMulticastPort`-as-`MaxChannel` value is actually a sane channel count (as opposed to, say, a real multicast port number that happens to be `> 1`) remains unconfirmed — the credential-gated SUNAPI CGI fallback (`querySunapiMaxChannel()`, §3.1) stays in place as a secondary/cross-check source, not superseded by this.
 
+### 3.1i 서브모듈 제거 — `@melchi45/wisenet-udp-discovery` npm 패키지로 전환 (2026-08-25)
+
+§3.1f~§1.18에 걸쳐 기록된 `git submodule` `submodules/WiseNetChromeIPInstaller`(및 그 저장소의 `github:` 참조로 설치되던 `wisenet-chrome-ip-installer` npm `optionalDependencies`)를, RTSP-over-WebSocket에 이미 적용된 것과 동일한 패턴(`docs/design/Design_RTSP_Over_WebSocket.md` §8.21)으로 정식 GitHub Packages npm 패키지 `@melchi45/wisenet-udp-discovery`(저장소 `melchi45/wisenet-camera-discovery`)로 전환하고, git submodule 자체를 완전히 제거했습니다.
+
+**계기**: submodule 체크아웃 안에 있는 Chrome 확장/재생 관련 파일 일부를 로컬에서 삭제했으나 그 변경을 submodule 원본 저장소에 push하고 싶지 않다는 요청 — 조사 결과 그 파일들은 애초에 `server/`가 런타임에 참조하는 경로가 아니었음(아래 "재확인" 참고)이 드러나면서, submodule 자체를 완전히 없애는 쪽으로 결정.
+
+**재확인된 사실**: `server/`는 git submodule의 파일시스템 경로를 직접 `require()`한 적이 한 번도 없습니다(§3.1f/1.16에서 이미 명시적으로 정정된 사실) — 오직 `server/package.json`의 `optionalDependencies` npm 의존성(`wisenet-chrome-ip-installer`, submodule 저장소의 `files: ["nodejs", "sunapi"]`로 제한된 서브트리만 설치)만을 통해 접근했습니다. 즉 submodule 체크아웃에 있던 Chrome 확장/재생 코드(`external-lib/`, `media/` 등)는 애초에 `node_modules`에 설치조차 되지 않았고, submodule은 오직 (1) 이 문서·`camera-stream-setup` 스킬의 코드 주석·레퍼런스 링크, (2) README.md §10 안내용으로만 쓰이고 있었습니다.
+
+**호환성 검증**: 전환 전 `melchi45/wisenet-camera-discovery`의 `src/nodejs/udpDiscovery.ts`·`src/sunapi/{protocol,request,response}.ts`를 직접 받아 기존 `wisenet-chrome-ip-installer`의 대응 `.js` 파일과 diff — TypeScript 타입 주석이 추가된 것 외 로직·필드명·이벤트명·상수명이 1바이트도 다르지 않은 동일 소스임을 확인(`UDPDiscovery` 생성자 옵션 `sendPort`/`receivePort`/`broadcastAddr`/`timeout`, 이벤트 7종 `listening`/`sent`/`device`/`scanExtConfirmed`/`parseError`/`done`/`error`, export `UDPDiscovery, SEND_PORT, RECEIVE_PORT, BROADCAST_ADDR, RESPONSE_MODE_SCAN_EXT, NMODE, NON_SCAN_RESPONSE_MODES` 전부 일치) — `server/src/utils/udpDiscovery.js`/`discoveryService.js`가 의존하는 표면과 완전히 일치.
+
+**주의 — `main` 서브패스 함정**: 새 패키지의 `package.json` `main`(`index.js`)은 CLI 데모이며 require 시 discovery를 부작용으로 즉시 실행합니다. 반드시 서브패스로 import해야 합니다: `require('@melchi45/wisenet-udp-discovery/udpDiscovery')` — 패키지 루트를 그대로 require하면 안 됩니다. (RTSP-over-WebSocket 패키지의 "React wrapper는 SunapiManager로 브라우저→카메라 직접 통신을 전제해 미채택" 함정과 같은 종류의 "패키지가 함께 제공하는 기본 진입점을 그대로 쓰면 안 되는" 케이스.)
+
+**변경 내용**:
+- `server/package.json` — `optionalDependencies`를 `"wisenet-chrome-ip-installer": "github:melchi45/WiseNetChromeIPInstaller#master"` → `"@melchi45/wisenet-udp-discovery": "^1.0.0"`로 교체
+- `server/src/utils/udpDiscovery.js` — `PACKAGE` 상수를 `'@melchi45/wisenet-udp-discovery/udpDiscovery'`로 변경, 에러 메시지도 새 패키지명/설치 경로로 갱신
+- `server/.npmrc.example` 신설 — `client/.npmrc.example`과 동일한 `@melchi45:registry=https://npm.pkg.github.com` 패턴, `.gitignore`에 `server/.npmrc` 추가
+- `.github/workflows/test.yml` — 3개 잡(Phase 1 `test`, Phase 2 `mcp-extended`, Phase 3 `e2e`) 전부에 `server/.npmrc` 작성 스텝 추가(Phase 3는 기존 `client/.npmrc` 스텝에 병합). **기존 `NPM_GH_PACKAGES_TOKEN` 리포지토리 시크릿이 fine-grained PAT라면 `melchi45/wisenet-camera-discovery` 저장소에 대한 `read:packages` 권한이 추가로 필요할 수 있음** — 저장소 관리자 확인 필요
+- `.gitmodules` 삭제, `git submodule deinit` + `git rm submodules/WiseNetChromeIPInstaller` — submodule 완전 제거. `README.md` §10 "Submodules" 섹션도 제거
+- `docs/ops/Camera_Discovery_Guide.md`, `.claude/skills/camera-stream-setup/SKILL.md`(+ `.github/skills/` 동일본) — 설치 안내를 새 패키지 기준으로 갱신
+- **설치 검증 완료 (2026-08-25 후속)**: 사용자가 `server/.npmrc`에 유효한 GitHub PAT(`${NPM_TOKEN}` 환경변수 참조 방식)을 설정한 뒤 `npm install` 실행 — 첫 시도는 `up to date`로 조용히 실패(패키지가 실제로 설치되지 않음, `optionalDependencies`라 에러 없음). 원인 조사 결과 **`@melchi45/wisenet-udp-discovery`는 아직 정식 `1.0.0`을 배포하지 않고 `1.0.0-beta.371069f` 베타 태그만 배포된 상태**였고, `package.json`의 최초 버전 범위 `^1.0.0`은 세미버 규칙상 프리릴리스를 매칭하지 않아 npm이 해당 optionalDependency를 조용히 건너뛰고 있었음(레지스트리 직접 질의로 확인, GitHub Packages 인증 자체는 정상 200 응답). `"@melchi45/wisenet-udp-discovery": "1.0.0-beta.371069f"`(정확한 버전 고정)로 수정 후 재실행해 `added 1 package` 확인, `node_modules/@melchi45/wisenet-udp-discovery/{index.js,udpDiscovery.js,sunapi/}` 실존 확인, `test/api/nvr_channel_discovery.test.js`의 TC-H-026~034 9건 전부 실제 npm 패키지 대상으로 재통과(이전엔 패키지 미설치로 스킵되던 항목들 포함) — 회귀 없음 최종 확인. **후속 조치**: `melchi45/wisenet-camera-discovery`가 정식 `1.0.0` 안정 버전을 배포하면 `^1.0.0`으로 되돌릴 것(현재는 베타 정확 버전 고정이라 저자가 새 베타를 재배포해도 자동 추종하지 않음, 의도적 선택)
+
+관련 파일: `server/package.json`, `server/package-lock.json`(재생성 필요), `server/src/utils/udpDiscovery.js`, `server/.npmrc.example`(신규), `.gitignore`, `.gitmodules`(삭제), `.github/workflows/test.yml`, `README.md`, `docs/ops/Camera_Discovery_Guide.md`, `.claude/skills/camera-stream-setup/SKILL.md`, `.github/skills/camera-stream-setup/SKILL.md`.
+
 ### 3.2 ONVIFDiscovery (`server/src/services/onvifDiscovery.js`)
 
 **State machine:**
@@ -737,8 +760,8 @@ const HTTP_TIMEOUT   = 4000; // ms — per SOAP call
 | 기본 응답 | 261 bytes |
 | 확장 응답 | ≥ 261 bytes (신형 펌웨어 포함) |
 
-**레퍼런스:** `submodules/WiseNetChromeIPInstaller/scripts/socket.js` (Chrome 확장 원본 소스)  
-**Node.js 포트:** `submodules/WiseNetChromeIPInstaller/nodejs/udpDiscovery.js`
+**레퍼런스:** `melchi45/wisenet-camera-discovery`(GitHub) `src/chrome-extension/`(Chrome 확장 원본 소스, 과거 `WiseNetChromeIPInstaller` 저장소)  
+**Node.js 포트:** `@melchi45/wisenet-udp-discovery` npm 패키지(GitHub Packages, `udpDiscovery` 서브패스) — §3.1i 참고
 
 #### 응답 패킷 바이너리 레이아웃
 
@@ -805,20 +828,19 @@ url           = {http|https}://{chIP}:{nHttpPort|nHttpsPort}
 | DDNSURL 디코딩 | `Uint16Array` → UTF-16 | `latin1` | ASCII URL에서 동일 동작 |
 | `chDeviceNameNew` 정리 | regex 제어문자 제거 | 첫 null-byte에서 절단 | 결과 동일 |
 
-#### 서브모듈 vs 인라인 폴백
+#### 구현 경로 (2026-08-25 갱신 — §3.1i)
 
-`server/src/utils/udpDiscovery.js`는 두 구현 중 가용한 것을 자동 선택합니다:
+> 이 하위섹션은 §3.1f(2026-07-03, 인라인 폴백 제거)·§3.1i(2026-08-25, 서브모듈→npm 패키지 전환) 이후에도 갱신되지 않고 남아있던 낡은 서술이었습니다. 현재 아키텍처는 다음 한 가지 경로뿐입니다 — 서브모듈도, 인라인 폴백도 없습니다.
 
-| 구현 | 파일 | Discovery 패킷 | 대상 카메라 |
+| 구현 | 패키지/파일 | Discovery 패킷 | 대상 카메라 |
 |------|------|------|------|
-| **서브모듈 (우선)** | `submodules/WiseNetChromeIPInstaller/nodejs/udpDiscovery.js` | WiseNet 바이너리 magic packet | Hanwha/WiseNet 전용 |
-| **인라인 폴백** | `server/src/utils/udpDiscovery.js` (`UDPDiscoveryFallback`) | ONVIF XML Probe | 범용 ONVIF — WiseNet 카메라 탐색 불가 |
+| **npm 패키지 (유일 경로)** | `@melchi45/wisenet-udp-discovery`(GitHub Packages, `optionalDependencies`) — `server/src/utils/udpDiscovery.js`가 지연 로딩으로 재노출 | WiseNet 바이너리 magic packet | Hanwha/WiseNet 전용 |
 
-> **서브모듈 초기화 필수:** WiseNet/Hanwha 카메라를 탐색하려면 반드시 실행:
+> **설치 필수:** WiseNet/Hanwha 카메라를 탐색하려면 `server/.npmrc.example`을 `server/.npmrc`로 복사해 `read:packages` 권한의 GitHub PAT을 채운 뒤 실행:
 > ```bash
-> git submodule update --init submodules/WiseNetChromeIPInstaller
+> cd server && npm install
 > ```
-> 서브모듈이 없으면 폴백 사용 시 WiseNet 카메라가 응답해도 탐색되지 않습니다.
+> 패키지가 설치돼 있지 않으면(`.npmrc` 미설정 등) `getUDPDiscovery()` 호출 시점에 명확한 에러로 실패합니다 — 조용히 결과 0개로 끝나지 않습니다(§3.1i "지연 로딩" 참고). 폴백 구현은 존재하지 않으므로 이 설치가 WiseNet UDP discovery의 유일한 활성화 조건입니다.
 
 ---
 
@@ -875,3 +897,5 @@ url           = {http|https}://{chIP}:{nHttpPort|nHttpsPort}
 | 1.16 | 2026-07-03 | LTS Engineering Team | §3.1f 두 군데 정정: (1) `server/src/utils/udpDiscovery.js`가 서브모듈 파일시스템 경로와 npm 패키지 중 하나를 우선순위로 시도한다고 서술했던 부분을, 사용자 명시 지시대로 **npm 패키지(`wisenet-chrome-ip-installer`) 단일 경로만 사용**(서브모듈 경로 직접 참조 없음)하도록 정정 — git 서브모듈은 그 npm 패키지의 소스일 뿐, `server/`의 별도 런타임 설치 경로가 아님. (2) "지연 로딩" 신규 단락 추가 — `require('wisenet-chrome-ip-installer/...')`를 파일 최상단에서 즉시 실행하도록 만들었던 첫 교체 버전이 `SERVER_MODE=analysis`(카메라·discovery 자체가 없는 모드) 서버를 패키지 미설치 시 기동 실패시키는 회귀를 실측으로 유발 — `getUDPDiscovery()`/재노출 프로퍼티 접근 시점까지 `require()`를 지연시키는 `_resolveImpl()` 패턴으로 수정, `require('./udpDiscovery')` 자체는 항상 안전하게 통과하도록 복원 |
 | 1.17 | 2026-08-10 | LTS Engineering Team | §3.1(SUNAPI MaxChannel) 참조 정리 — 교차 확인 근거로 인용하던 `submodules/WiseNetChromeIPInstaller` 내부 벤더 클라이언트 소스 파일 경로를 삭제(해당 서브모듈의 `media/` 디렉토리가 체크아웃에서 제거됨). 검증 사실 자체(벤더 IP Installer가 동일 `System/Limit/MaxChannel` 경로를 질의)는 유지; §7 자산 예시 목록의 레거시 파일명 언급도 제거 |
 | 1.18 | 2026-08-10 | LTS Engineering Team | §7 npm 의존성 갱신 — `wisenet-chrome-ip-installer` 참조를 `#nodejs-udp-discovery`(master에 머지됨)에서 `#master`로 전환, SUNAPI 와이어 포맷 모듈의 `sunapi/` 이동과 루트 `files: ["nodejs", "sunapi"]`(~88KB) 반영. 서버 소비 서브패스(`nodejs/udpDiscovery`)는 변경 없음 — parity 테스트·라이브 탐색 재검증 완료 |
+| 1.19 | 2026-08-25 | LTS Engineering Team | §3.1i 신규 추가 — git submodule `submodules/WiseNetChromeIPInstaller` 완전 제거, `wisenet-chrome-ip-installer`(github: 참조) → `@melchi45/wisenet-udp-discovery`(GitHub Packages) 전환. 신규 저장소 소스를 기존 코드와 diff해 로직·필드명·이벤트명 100% 동일함을 확인(RTSP-over-WebSocket §8.21과 동일 마이그레이션 패턴), `main` 서브패스 함정 확인·반영. §7.3 "서브모듈 vs 인라인 폴백" 표(이미 §3.1f 이후로 갱신되지 않아 낡아 있던 서술)를 실제 단일 npm-패키지 경로로 정정. `npm install` 자체는 GitHub PAT 미보유로 이 세션에서 미검증 — `server/package-lock.json` 재생성 필요 |
+| 1.20 | 2026-08-25 | LTS Engineering Team | §3.1i 후속 — 사용자 PAT로 실제 `npm install` 검증 완료. 진짜 원인 발견: `@melchi45/wisenet-udp-discovery`는 정식 `1.0.0` 미배포(베타 `1.0.0-beta.371069f`만 존재), `package.json`의 `^1.0.0` 범위가 프리릴리스를 매칭하지 않아 optionalDependency가 조용히 스킵되고 있었음 — 정확한 베타 버전으로 고정해 해결. `node_modules` 설치 확인 + TC-H-026~034 9건 실제 재통과 확인, 회귀 없음. 정식 1.0.0 배포 시 `^1.0.0`으로 복귀 필요 |

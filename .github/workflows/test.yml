@@ -51,6 +51,18 @@ jobs:
       - name: Install root dependencies
         run: npm ci --prefer-offline || npm install
 
+      # server/ depends on @melchi45/wisenet-udp-discovery, published to
+      # GitHub Packages — npm install always requires auth there, even for a
+      # public repo under the same account (unlike the default npmjs.com
+      # registry). Requires a repo secret NPM_GH_PACKAGES_TOKEN (a GitHub PAT
+      # with read:packages on melchi45/wisenet-camera-discovery) — see
+      # server/.npmrc.example.
+      - name: Configure npm registry for @melchi45 (GitHub Packages)
+        working-directory: server
+        run: |
+          echo "@melchi45:registry=https://npm.pkg.github.com" >> .npmrc
+          echo "//npm.pkg.github.com/:_authToken=${{ secrets.NPM_GH_PACKAGES_TOKEN }}" >> .npmrc
+
       - name: Install server dependencies
         run: npm ci --prefer-offline || npm install
         working-directory: server
@@ -251,6 +263,14 @@ jobs:
         with:
           node-version: '20'
 
+      # server/ depends on @melchi45/wisenet-udp-discovery, published to
+      # GitHub Packages — see server/.npmrc.example.
+      - name: Configure npm registry for @melchi45 (GitHub Packages)
+        working-directory: server
+        run: |
+          echo "@melchi45:registry=https://npm.pkg.github.com" >> .npmrc
+          echo "//npm.pkg.github.com/:_authToken=${{ secrets.NPM_GH_PACKAGES_TOKEN }}" >> .npmrc
+
       - name: Install dependencies
         run: |
           npm ci --prefer-offline || npm install
@@ -313,15 +333,20 @@ jobs:
         with:
           node-version: '20'
 
-      # client/ depends on @melchi45/rtsp-over-websocket, published to GitHub
-      # Packages — npm install always requires auth there, even for a public
-      # repo under the same account (unlike the default npmjs.com registry).
+      # client/ depends on @melchi45/rtsp-over-websocket and server/ depends
+      # on @melchi45/wisenet-udp-discovery, both published to GitHub Packages
+      # — npm install always requires auth there, even for a public repo
+      # under the same account (unlike the default npmjs.com registry).
       # Requires a repo secret NPM_GH_PACKAGES_TOKEN (a GitHub PAT with
-      # read:packages on melchi45/rtsp-over-websocket) — see client/.npmrc.example.
+      # read:packages on both melchi45/rtsp-over-websocket and
+      # melchi45/wisenet-camera-discovery) — see client/.npmrc.example and
+      # server/.npmrc.example.
       - name: Configure npm registry for @melchi45 (GitHub Packages)
         run: |
           echo "@melchi45:registry=https://npm.pkg.github.com" >> client/.npmrc
           echo "//npm.pkg.github.com/:_authToken=${{ secrets.NPM_GH_PACKAGES_TOKEN }}" >> client/.npmrc
+          echo "@melchi45:registry=https://npm.pkg.github.com" >> server/.npmrc
+          echo "//npm.pkg.github.com/:_authToken=${{ secrets.NPM_GH_PACKAGES_TOKEN }}" >> server/.npmrc
 
       - name: Install dependencies
         run: |

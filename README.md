@@ -20,7 +20,7 @@
 7. [Per-Channel AI Module Selection](#7-per-channel-ai-module-selection) — [GPU Provider Setup](docs/ops/GPU_Provider_Setup.md)
 8. [Loitering Detection Logic](#8-loitering-detection-logic)
 9. [React Web UI](#9-react-web-ui)
-10. [Submodules](#10-submodules)
+10. [External npm Dependencies (GitHub Packages)](#10-external-npm-dependencies-github-packages)
 11. [Technical Requirements](#11-technical-requirements)
 12. [Functional Requirements](#12-functional-requirements)
 13. [Non-Functional Requirements](#13-non-functional-requirements)
@@ -1706,24 +1706,16 @@ A module-level `subscriptionCounts` map ensures `camera:subscribe` is emitted on
 
 ---
 
-## 10. Submodules
+## 10. External npm Dependencies (GitHub Packages)
 
-### 10.1 WiseNetChromeIPInstaller (Node.js UDP branch)
+This project has no git submodules (the last one, `WiseNetChromeIPInstaller`, was removed 2026-08-25 — see `docs/design/Design_Camera_Discovery.md` §3.1i). Instead, `server/` and `client/` each depend on an `@melchi45`-scoped npm package published to **GitHub Packages**, which always requires authentication for `npm install`, even for public repos (unlike the default npmjs.com registry):
 
-```bash
-# Initialize after cloning loitering_tracking
-git submodule update --init --recursive
-```
+| Consumer | Package | Repository | Purpose |
+|---|---|---|---|
+| `server/` | `@melchi45/wisenet-udp-discovery` | [github.com/melchi45/wisenet-camera-discovery](https://github.com/melchi45/wisenet-camera-discovery) | WiseNet/Hanwha UDP camera discovery (`server/src/utils/udpDiscovery.js`) |
+| `client/` | `@melchi45/rtsp-over-websocket` | [github.com/melchi45/rtsp-over-websocket](https://github.com/melchi45/rtsp-over-websocket) | RTSP-over-WebSocket playback (`client/src/components/RTSPOverWebSocketView.tsx`) |
 
-| Path | Repository | Branch |
-|---|---|---|
-| `submodules/WiseNetChromeIPInstaller` | [github.com/melchi45/WiseNetChromeIPInstaller](https://github.com/melchi45/WiseNetChromeIPInstaller) | `nodejs-udp-discovery` |
-
-The `nodejs-udp-discovery` branch adds:
-- `nodejs/udpDiscovery.js` — Node.js `dgram` port of Chrome `sockets.udp` discovery
-- `nodejs/utils.js` — `ntohs`/`ntohl`/`bytes2int` helpers
-- `nodejs/package.json` — Node.js module config
-- `nodejs/README.md` — Usage instructions
+Setup (once per machine): copy `server/.npmrc.example` → `server/.npmrc` and `client/.npmrc.example` → `client/.npmrc`, filling in a GitHub Personal Access Token with `read:packages` scope in each. See §15.2 below.
 
 ---
 
@@ -2022,9 +2014,14 @@ Identical steps to the Windows script, using `PYTHON_EXEC_LINUX` / `PYTHON_EXEC`
 ### 15.2 Installation
 
 ```bash
-# Clone with submodules
-git clone --recurse-submodules https://github.com/melchi45/loitering_tracking.git
+git clone https://github.com/melchi45/loitering_tracking.git
 cd loitering_tracking
+
+# GitHub Packages auth (2026-08-25: no git submodules anymore — both
+# server/ and client/ depend on @melchi45-scoped npm packages published to
+# GitHub Packages, which always requires auth even for public repos):
+cp server/.npmrc.example server/.npmrc   # then fill in a read:packages PAT
+cp client/.npmrc.example client/.npmrc   # then fill in a read:packages PAT
 
 # Install backend dependencies
 cd server && npm install
@@ -2511,8 +2508,6 @@ loitering_tracking/
 │   ├── fixtures/
 │   └── reports/
 ├── storage/                         # Root-level shared storage artifacts
-├── submodules/
-│   └── WiseNetChromeIPInstaller/
 ├── .claude/                         # Local agent settings
 ├── .vscode/                         # Workspace editor settings
 └── .github/

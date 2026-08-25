@@ -1,6 +1,6 @@
 ---
 name: camera-stream-setup
-description: "LTS-2026 카메라 스트림 설정 및 관리. Use when: RTSP 카메라 추가/연결, ONVIF 카메라 자동 탐색, YouTube/RTMP 스트림 RTSP 변환 ingestion, WebRTC 미디어 게이트웨이 설정, MediaMTX 프록시/WHEP 설정, ICE/STUN/TURN 연결 문제 해결, 카메라 스트림 끊김 디버깅, 새 카메라 소스 지원 추가, CAPTURE_BACKEND 전환(ingest-daemon/gstreamer/ffmpeg), WEBRTC_ENGINE 선택(mediamtx/mediasoup), ingest-daemon 설정 및 재시작(ingest:restart), GStreamer 하드웨어 가속 설정(nvdec/vaapi), B-프레임 H264 카메라 처리, camera:capabilities 소켓 이벤트, Dashboard Channel Slot(channelSlot 전역 채널 매핑, MAX_CHANNEL_NUM, NVR 채널 전환), RTSP-over-WebSocket 3번째 재생 경로(streamingMode 3-way 토글, /StreamingServer WS 브릿지, RTSP Digest 인증, @melchi45/rtsp-over-websocket npm 패키지). Covers: captureFactory.js, ingestDaemonCapture.js, ingest_daemon.py, rtspCapture.js, gstreamerCapture.js, pyavCapture.js, discoveryService.js, onvifDiscovery.js, youtubeStreamService.js, mediamtx.yml, streamHandler.js, channelSlotService.js, RTSPOverWebSocketView.tsx."
+description: "LTS-2026 카메라 스트림 설정 및 관리. Use when: RTSP 카메라 추가/연결, ONVIF 카메라 자동 탐색, WiseNet/Hanwha UDP discovery(@melchi45/wisenet-udp-discovery npm 패키지, GitHub Packages), YouTube/RTMP 스트림 RTSP 변환 ingestion, WebRTC 미디어 게이트웨이 설정, MediaMTX 프록시/WHEP 설정, ICE/STUN/TURN 연결 문제 해결, 카메라 스트림 끊김 디버깅, 새 카메라 소스 지원 추가, CAPTURE_BACKEND 전환(ingest-daemon/gstreamer/ffmpeg), WEBRTC_ENGINE 선택(mediamtx/mediasoup), ingest-daemon 설정 및 재시작(ingest:restart), GStreamer 하드웨어 가속 설정(nvdec/vaapi), B-프레임 H264 카메라 처리, camera:capabilities 소켓 이벤트, Dashboard Channel Slot(channelSlot 전역 채널 매핑, MAX_CHANNEL_NUM, NVR 채널 전환), RTSP-over-WebSocket 3번째 재생 경로(streamingMode 3-way 토글, /StreamingServer WS 브릿지, RTSP Digest 인증, @melchi45/rtsp-over-websocket npm 패키지). Covers: captureFactory.js, ingestDaemonCapture.js, ingest_daemon.py, rtspCapture.js, gstreamerCapture.js, pyavCapture.js, discoveryService.js, onvifDiscovery.js, youtubeStreamService.js, mediamtx.yml, streamHandler.js, channelSlotService.js, RTSPOverWebSocketView.tsx."
 argument-hint: "카메라 소스 유형 (RTSP / ONVIF / YouTube / WebRTC) 또는 백엔드 (ingest-daemon / gstreamer / ffmpeg)"
 ---
 
@@ -396,7 +396,7 @@ python3 -c "import av, PIL; print(av.__version__)"
 **포트:** 송신 `7701` (broadcast → 카메라), 수신 `7711` (카메라 → 서버)  
 **패킷:** 334바이트 고정 바이너리 요청(`nMode=6`) → 카메라가 바이너리 응답 반환(base 261 bytes + extended 73 bytes)
 
-응답 패킷 바이너리 레이아웃 — **필드 정의의 단일 소스는 `submodules/WiseNetChromeIPInstaller/nodejs/protocol.js`의 `FIELDS` 배열**이며, 아래 표는 그 값을 그대로 옮긴 것 (2026-07-03 갱신 — `reserved2`/`reserved3`, `nSupportedProtocol` 반영):
+응답 패킷 바이너리 레이아웃 — **필드 정의의 단일 소스는 `@melchi45/wisenet-udp-discovery`(GitHub Packages)의 `sunapi/protocol.js`의 `FIELDS` 배열**(2026-08-25까지는 git submodule `submodules/WiseNetChromeIPInstaller/nodejs/protocol.js`였음 — §"구현 아키텍처" 참고)이며, 아래 표는 그 값을 그대로 옮긴 것 (2026-07-03 갱신 — `reserved2`/`reserved3`, `nSupportedProtocol` 반영):
 
 | 오프셋 | 크기 | 필드 | 설명 |
 |--------|------|------|------|
@@ -430,20 +430,22 @@ python3 -c "import av, PIL; print(av.__version__)"
 
 > **RTSP 포트는 이 응답 어디에도 없습니다.** `nPort`(HTTP/HTTPS 웹 포트)와 `nTcpPort`(VNP 전용)를 RTSP 포트로 오인해 쓰던 버그가 2026-07-03에 발견·수정됐습니다 — 아래 "RTSP URL 생성" 참고.
 
-**구현 아키텍처 (2026-07-03 개편, 2026-07-03 재정정 — npm 패키지 단일 경로, 인라인 폴백 없음):**
+**구현 아키텍처 (2026-08-25 갱신 — git submodule 완전 제거, npm 패키지 단일 경로 유지):**
 
-`submodules/WiseNetChromeIPInstaller/nodejs/`(git 서브모듈)가 프로토콜 구현의 원본이지만, `server/src/utils/udpDiscovery.js`는 **그 파일시스템 경로를 직접 읽지 않습니다** — 오직 `wisenet-chrome-ip-installer` npm `optionalDependencies`(`server/package.json`, 서브모듈과 동일 저장소/브랜치를 `npm install`로 획득)만을 통해 접근합니다:
+`server/`는 `@melchi45/wisenet-udp-discovery`(GitHub Packages, `server/package.json`의 `optionalDependencies` — `server/.npmrc.example`을 `.npmrc`로 복사해 `read:packages` PAT 설정 필요) npm 패키지 하나만을 통해 프로토콜 구현에 접근합니다. **2026-08-25 이전엔 이 패키지의 소스가 git submodule `submodules/WiseNetChromeIPInstaller`였으나(`wisenet-chrome-ip-installer`라는 이름의 `github:` 참조 의존성으로 설치), submodule 자체가 완전히 제거되고 저자의 정식 npm 재배포(`melchi45/wisenet-camera-discovery` 저장소)로 전환됐습니다** — 전환 전 소스를 직접 diff해 로직·필드명·이벤트명이 100% 동일함을 확인(`docs/design/Design_Camera_Discovery.md` §3.1i). `server/`가 서브모듈의 파일시스템 경로를 직접 읽은 적은 (submodule이 있던 시절에도) 없었습니다 — 항상 npm 의존성 경유로만 접근했습니다:
 
 ```bash
-cd server && npm install   # wisenet-chrome-ip-installer optionalDependency
+cd server && npm install   # @melchi45/wisenet-udp-discovery optionalDependency
 ```
+
+> **주의 — `main` 서브패스 함정**: 이 패키지의 `package.json` `main`(`index.js`)은 CLI 데모이며 require 시 discovery를 부작용으로 즉시 실행합니다. `server/src/utils/udpDiscovery.js`는 반드시 서브패스로 import합니다: `require('@melchi45/wisenet-udp-discovery/udpDiscovery')` — 패키지 루트가 아닙니다.
 
 `server/src/utils/udpDiscovery.js`는 npm 패키지를 재노출하는 60줄짜리 얇은 파일입니다 — **더 이상 자체 소켓/파싱 구현(`UDPDiscoveryFallback`)도, 서브모듈 경로 직접 탐지 로직도 갖지 않습니다.** 과거엔 이 파일이 서브모듈 미초기화 시를 대비해 WiseNet 바이너리 프로토콜을 통째로 중복 구현하고 있었지만(§"UDP Discovery 인라인 폴백" 이력 참고), 그 중복 유지 비용(엔디언 버그 등 실제 drift 사례 있었음)보다 npm 패키지 경로 하나로 단순화하는 게 더 안전하다고 판단해 제거했습니다.
 
-- **지연 로딩(2026-07-03 재정정)**: `require('wisenet-chrome-ip-installer/...')`는 `getUDPDiscovery()` 실제 호출(또는 export 프로퍼티 접근) 시점까지 지연됩니다 — `discoveryService.js`가 `SERVER_MODE`와 무관하게 이 파일을 무조건 require하는데, 파일 최상단에서 즉시 require하면 `SERVER_MODE=analysis`(카메라 자체가 없어 discovery를 아예 안 쓰는 모드)에서도 패키지 미설치 시 서버가 기동 실패하는 회귀가 실측으로 발생했습니다(2026-07-03). `require('./udpDiscovery')` 자체는 패키지가 없어도 절대 실패하지 않고, 실제로 discovery를 쓰려고 할 때만(`getUDPDiscovery()` 호출) 명확한 에러로 실패합니다.
-- 패키지가 없으면(`npm install`을 안 돌렸거나 실패) `getUDPDiscovery()` 호출 시점에 `require()`가 실패합니다 — 더 이상 "조용히 폴백"하지 않고 명시적으로 에러가 납니다.
+- **지연 로딩(2026-07-03 도입, 2026-08-25 패키지명만 갱신)**: `require('@melchi45/wisenet-udp-discovery/...')`는 `getUDPDiscovery()` 실제 호출(또는 export 프로퍼티 접근) 시점까지 지연됩니다 — `discoveryService.js`가 `SERVER_MODE`와 무관하게 이 파일을 무조건 require하는데, 파일 최상단에서 즉시 require하면 `SERVER_MODE=analysis`(카메라 자체가 없어 discovery를 아예 안 쓰는 모드)에서도 패키지 미설치 시 서버가 기동 실패하는 회귀가 실측으로 발생했습니다(2026-07-03). `require('./udpDiscovery')` 자체는 패키지가 없어도 절대 실패하지 않고, 실제로 discovery를 쓰려고 할 때만(`getUDPDiscovery()` 호출) 명확한 에러로 실패합니다.
+- 패키지가 없으면(`npm install`을 안 돌렸거나, `.npmrc` 인증 누락으로 `optionalDependencies` 설치가 조용히 스킵됐거나, 설치가 실패) `getUDPDiscovery()` 호출 시점에 `require()`가 실패합니다 — 더 이상 "조용히 폴백"하지 않고 명시적으로 에러가 납니다.
 
-**Request/Response/protocol.js 클래스:** `submodules/WiseNetChromeIPInstaller/nodejs/` 하위 3개 파일이 프로토콜 구현을 담당합니다.
+**Request/Response/protocol.js 클래스:** `@melchi45/wisenet-udp-discovery`의 `sunapi/` 하위 3개 파일이 프로토콜 구현을 담당합니다.
 
 - **`protocol.js`** — 포트 상수(`SEND_PORT`/`RECEIVE_PORT`/`BROADCAST_ADDR`), 위 334바이트 `FIELDS` 테이블, `NMODE`(요청+응답 12개 값 전체), `NON_SCAN_RESPONSE_MODES`, 그리고 응답 필드별 열거형 상수(`NVERSION` 비트마스크, `NETWORK_MODE`, `DEVICE_TYPE`, `HTTP_MODE`, `SUPPORTED_PROTOCOL` 비트마스크, `PASSWORD_STATUS`) — request.js/response.js/udpDiscovery.js 세 파일이 전부 여기서 import (과거엔 `NMODE`가 세 파일에 각각 다른 부분집합으로 중복 정의돼 있었음)
 - **`request.js`(`UdpRequest`)** — §3.2 SendData Format. 기본값 `nMode = DEF_REQ_SCAN_EXT (6)`, MAC+random 기반으로 매번 새로 생성되는 `chPacketID`, 나머지는 스펙상 "Unused"(0). 생성자 인자로 임의 필드 오버라이드 가능(`new UdpRequest({ nMode: 1 })`로 과거 옵코드 재현 가능)
