@@ -59,6 +59,16 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
+    // @melchi45/rtsp-over-websocket's zipWorker/audiotranscoderWorker chunks (<4KB, Vite's
+    // default assetsInlineLimit) get base64-inlined as `data:text/javascript,...` Worker
+    // URLs instead of emitted as real files. Those worker scripts then resolve a sibling
+    // asset via a relative `new URL('../foo.js', self.location.href)` — but `self.location`
+    // for a Worker built from a `data:` URL IS that data: URL, and data: URLs have an
+    // opaque path (WHATWG URL spec), so relative resolution against them throws
+    // "Failed to construct 'URL': Invalid URL", killing every RTSP-over-WebSocket channel
+    // at worker startup. Disabling inlining forces every such asset to a real /assets/
+    // file with a resolvable http(s) base. See RTSPOverWebSocketView.tsx.
+    assetsInlineLimit: 0,
   },
   server: {
     host: '0.0.0.0',   // Accessible from the entire LAN (default 127.0.0.1 is local-only)

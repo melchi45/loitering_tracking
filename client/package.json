@@ -3,12 +3,15 @@
   "version": "1.0.0",
   "private": true,
   "scripts": {
+    "postinstall": "node scripts/copyRtspOverWebSocketAssets.js",
+    "predev": "node scripts/copyRtspOverWebSocketAssets.js",
     "dev": "vite",
+    "prebuild": "node scripts/copyRtspOverWebSocketAssets.js",
     "build": "tsc && vite build",
     "preview": "vite preview"
   },
   "dependencies": {
-    "@melchi45/rtsp-over-websocket": "1.0.1",
+    "@melchi45/rtsp-over-websocket": "1.0.15",
     "clsx": "^2.1.0",
     "lucide-react": "^0.363.0",
     "mediasoup-client": "^3.7.6",
