@@ -8,6 +8,7 @@ const { validateChannelSlot, nextFreeChannelSlot } = require('../services/channe
 const { querySunapiMaxChannel, querySunapiRtspPort, getDiscoveryService } = require('../services/discoveryService');
 const { enrichDeviceAutoScheme } = require('../services/onvifDiscovery');
 const { channelRtspUrl, defaultSunapiRtspUrl } = require('../utils/channelRtsp');
+const { getOrCreateRtspOverWebSocketSecret } = require('../utils/rtspOverWebSocketAuth');
 const { verifyAccessToken } = require('../middleware/auth');
 const { parseOnvifXml, ingestOnvifEvents } = require('../services/onvifParser');
 
@@ -569,22 +570,32 @@ function camerasRouter(db, pipelineManager, youtubeSvc = null, io = null) {
 
   /**
    * GET /api/cameras/:id/rtsp-over-websocket-credentials
-   * Returns this camera's raw RTSP username/password so the browser's
-   * <rtsp-over-websocket> can complete the RTSP Digest challenge issued by
-   * /StreamingServer (server/src/services/rtspOverWebSocketServer.js verifyDigest()
-   * checks against these exact same stored values). Every other camera
-   * endpoint deliberately strips password — this is the one exception, so it
-   * requires a valid JWT (unlike the rest of this router, which currently has
-   * no auth gate) rather than following that precedent. Same reasoning as the
-   * admin:subscribe-ingest-stats Socket.IO gate (utils/logger.js) — anything
-   * that hands back stored RTSP credentials must be authenticated.
-   * See docs/design/Design_RTSP_Over_WebSocket.md §4.2/§8.
+   * Returns the username + a per-camera RTSP-over-WebSocket secret so the
+   * browser's <rtsp-over-websocket> can complete the RTSP Digest challenge
+   * issued by /StreamingServer (server/src/services/rtspOverWebSocketServer.js
+   * verifyDigest() checks against this exact same secret). This is
+   * deliberately NOT the camera's real RTSP/SUNAPI password (2026-08-25,
+   * §8.24) — the browser authenticates to *this server*, not the camera
+   * itself, so it never needs to know the real device credential (which
+   * would otherwise sit fully readable in the <rtsp-over-websocket> element's
+   * `password` attribute — the vendor package's own `set password()` even
+   * warns about this: "This attribute is not safety"). This server's own
+   * separate backend connection to the camera/MediaMTX still uses the real
+   * stored camera.username/camera.password, entirely server-side.
+   * Every other camera endpoint deliberately strips password — this
+   * endpoint requires a valid JWT (unlike the rest of this router, which
+   * currently has no auth gate) rather than following that precedent, since
+   * it hands back a credential (even though a scoped one, not the device's
+   * real password). Same reasoning as the admin:subscribe-ingest-stats
+   * Socket.IO gate (utils/logger.js).
+   * See docs/design/Design_RTSP_Over_WebSocket.md §4.2/§8/§8.24.
    */
   router.get('/:id/rtsp-over-websocket-credentials', verifyAccessToken, (req, res) => {
     try {
       const camera = db.findOne('cameras', { id: req.params.id });
       if (!camera) return res.status(404).json({ success: false, error: 'Camera not found' });
-      res.json({ success: true, data: { username: camera.username || '', password: camera.password || '' } });
+      const secret = getOrCreateRtspOverWebSocketSecret(db, camera);
+      res.json({ success: true, data: { username: camera.username || '', password: secret } });
     } catch (err) {
       res.status(500).json({ success: false, error: err.message });
     }

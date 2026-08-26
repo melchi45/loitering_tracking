@@ -46,6 +46,7 @@ const crypto = require('crypto');
 const net = require('net');
 const { WebSocketServer } = require('ws');
 const mediamtxManager = require('./mediamtxManager');
+const { getOrCreateRtspOverWebSocketSecret } = require('../utils/rtspOverWebSocketAuth');
 
 const MEDIAMTX_RTSP_PORT = parseInt(process.env.MEDIAMTX_RTSP_PORT, 10) || 8554;
 const INGEST_DAEMON_URL = (process.env.INGEST_DAEMON_URL || 'http://127.0.0.1:7070').replace(/\/$/, '');
@@ -201,12 +202,21 @@ function buildRtspResponse(statusCode, statusText, cseq, extraHeaders = '') {
  * to this exact scheme whenever the server's challenge omits qop/algorithm/opaque
  * (see submodules/rtsp-over-websocket/app/media/ump/Util/digestGenerator.js Digest()),
  * which is deliberate here: it avoids needing server-side nc/cnonce session state
- * for what is, in effect, an internal loopback-adjacent relay. */
-function verifyDigest(auth, method, camera, nonce) {
+ * for what is, in effect, an internal loopback-adjacent relay.
+ *
+ * Verified against `getOrCreateRtspOverWebSocketSecret(db, camera)` — a
+ * per-camera secret distinct from the real camera.password (2026-08-25,
+ * §8.24) — NOT the actual device credential. The browser authenticates to
+ * *this server*, not the camera, so there's no reason it needs to know the
+ * real password at all: this server's own separate backend connection to
+ * the camera/MediaMTX still uses camera.username/camera.password, entirely
+ * server-side. */
+function verifyDigest(auth, method, camera, nonce, db) {
   if (!auth || !auth.username || !auth.nonce || !auth.uri || !auth.response) return false;
   if (auth.nonce !== nonce) return false;
   if (auth.username !== (camera.username || '')) return false;
-  const ha1 = md5(`${camera.username || ''}:${REALM}:${camera.password || ''}`);
+  const secret = getOrCreateRtspOverWebSocketSecret(db, camera);
+  const ha1 = md5(`${camera.username || ''}:${REALM}:${secret}`);
   const ha2 = md5(`${method}:${auth.uri}`);
   const expected = md5(`${ha1}:${auth.nonce}:${ha2}`);
   return expected === auth.response;
@@ -541,12 +551,12 @@ function handleConnection(ws, db) {
     }
 
     const auth = parseDigestAuthorization(text);
-    if (!auth || !nonce || !verifyDigest(auth, reqLine.method, camera, nonce)) {
+    if (!auth || !nonce || !verifyDigest(auth, reqLine.method, camera, nonce, db)) {
       if (auth) {
         console.warn(`[RTSPOverWebSocketServer][${camera.id.slice(0, 8)}] digest verification failed (attempt ${attempts + 1}/${MAX_AUTH_ATTEMPTS}) — ` +
           `received username="${auth.username}" nonce="${auth.nonce}" uri="${auth.uri}" response="${auth.response}", ` +
           `expected nonce="${nonce}", expected camera.username="${camera.username || ''}" ` +
-          `(camera has password: ${camera.password ? 'yes' : 'NO — empty/unset'})`);
+          `(rtspOverWebSocketSecret set: ${camera.rtspOverWebSocketSecret ? 'yes' : 'NO — will be lazily generated'})`);
       }
       challenge(cseq);
       return;
