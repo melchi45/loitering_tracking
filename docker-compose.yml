@@ -20,6 +20,21 @@ services:
       start_period: 10s
     restart: unless-stopped
 
+  bgutil-pot-provider:
+    # opt-in — server/.env의 YTDLP_POT_PROVIDER_ENABLED=true 없이는 서버가 호출하지
+    # 않음 (qdrant와 동일한 opt-in 패턴). docs/design/Design_YouTube_RTSP_Ingest.md §12.6
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    container_name: lts-bgutil-pot-provider
+    ports:
+      - "4416:4416"
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/localhost/4416 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
   mediamtx:
     image: bluenviron/mediamtx:latest
     container_name: lts-mediamtx

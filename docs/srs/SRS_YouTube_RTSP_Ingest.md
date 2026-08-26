@@ -4,9 +4,9 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-YT-01 |
-| **Version** | 1.2 |
+| **Version** | 1.3 |
 | **Status** | Active |
-| **Date** | 2026-07-28 |
+| **Date** | 2026-08-26 |
 | **Parent PRD** | prd/PRD_YouTube_RTSP_Ingest.md |
 | **Parent RFP** | rfp/RFP_YouTube_RTSP_Ingest.md |
 
@@ -247,6 +247,14 @@ Server start
 - `YTDLP_BIN` must be detected by trying known paths (`~/.local/bin/yt-dlp`, `/usr/local/bin/yt-dlp`, `/usr/bin/yt-dlp`) before falling back to `yt-dlp` on PATH.
 - `FFMPEG_BIN` defaults to `ffmpeg` unless overridden by `FFMPEG_BIN` env var.
 - If FFmpeg is not found (`ENOENT`), the stream must fail with `FFMPEG_NOT_FOUND`.
+
+### FR-YT-016 — PO Token Provider Integration (opt-in, Implemented 2026-08-26)
+
+- When `YTDLP_POT_PROVIDER_ENABLED === 'true'`, the service must probe `${YTDLP_POT_PROVIDER_URL}/ping` (default `http://127.0.0.1:4416`) with a short timeout before each `_startStream()` call.
+- If the probe succeeds **and** a JS runtime (`NODE_BIN_FOR_YTDLP`) is available, the yt-dlp argument array must additionally include `--extractor-args youtube:player_client=mweb` and `--extractor-args youtubepot-bgutilhttp:base_url=${YTDLP_POT_PROVIDER_URL}`.
+- If the flag is `false` (default), the probe fails, or no JS runtime is detected, the service must fall back to the existing argument set unchanged — this path must never hard-fail a stream start.
+- The PO Token provider itself (`brainicism/bgutil-ytdlp-pot-provider`, port 4416) is deployed as an independent opt-in Docker Compose service and is not managed or health-checked beyond the `/ping` probe above.
+- The yt-dlp plugin (`bgutil-ytdlp-pot-provider` PyPI package) must be installed on the same host that runs the `yt-dlp` binary for the `youtubepot-bgutilhttp` extractor-args key to be recognized; installation is automated in `setup-env.linux.sh` / `setup-env.windows.ps1`.
 
 ---
 
@@ -525,6 +533,7 @@ interface StreamPublicRecord {
 | C-07 | YouTube Terms of Service compliance is the operator's responsibility; a warning banner must be shown on first use |
 | C-08 | `YouTubeStreamService` is instantiated with a `db` reference and `pipelineManager` at server startup |
 | C-09 | The `--no-check-certificate` flag is gated by `YTDLP_NO_CHECK_CERT` env var for corporate network compatibility |
+| C-10 | PO Token provider integration (FR-YT-016) is opt-in and requires an operator-managed `bgutil-pot-provider` Docker Compose service; it is not a hard dependency of YouTube ingest |
 
 ---
 
@@ -535,3 +544,4 @@ interface StreamPublicRecord {
 | 1.0 | 2026-05-28 | LTS Engineering Team | Initial release — SRS for YouTube RTSP Ingest |
 | 1.1 | 2026-06-26 | LTS Engineering Team | §2.1-A YouTube 이중 경로 Mermaid 다이어그램 추가 (코드 라인 참조 포함) |
 | 1.2 | 2026-07-28 | LTS Engineering Team | FR-YT-068 추가 — 프로세스 트리 정리(고아 프로세스 금지) 요구사항, 헤더 Version 필드를 실제 최신 테이블 행과 일치하도록 정정 |
+| 1.3 | 2026-08-26 | LTS Engineering Team | FR-YT-016 추가(Proposed) — YouTube PO Token 정책 대응 opt-in PO Token provider 연동 요구사항, C-10 추가 |

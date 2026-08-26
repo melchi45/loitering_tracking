@@ -15,6 +15,7 @@
  */
 
 const { spawn, execFile }  = require('child_process');
+const http = require('http');
 const { v4: uuidv4 } = require('uuid');
 const { validateChannelSlot, nextFreeChannelSlot } = require('./channelSlotService');
 
@@ -92,6 +93,12 @@ const YTDLP_FORCE_IPV4 = process.env.YTDLP_FORCE_IPV4 === 'true';
 const YTDLP_REMOTE_COMPONENTS = process.env.YTDLP_REMOTE_COMPONENTS !== undefined
   ? process.env.YTDLP_REMOTE_COMPONENTS
   : 'ejs:github';
+// opt-in — bgutil-ytdlp-pot-provider 사이드카(Docker, 기본 포트 4416)가 떠 있을 때만
+// PO Token 경로(--extractor-args youtube:player_client=mweb)를 사용한다. 없으면(false
+// 이거나 /ping 프로브 실패) 기존 동작으로 안전하게 폴백 — 하드 의존성 아님.
+// 상세 배경: docs/design/Design_YouTube_RTSP_Ingest.md §12.6
+const YTDLP_POT_PROVIDER_ENABLED = process.env.YTDLP_POT_PROVIDER_ENABLED === 'true';
+const YTDLP_POT_PROVIDER_URL = process.env.YTDLP_POT_PROVIDER_URL || 'http://127.0.0.1:4416';
 
 // yt-dlp binary path — detected in order: env var > known paths > PATH
 const { execFileSync } = require('child_process');
@@ -171,6 +178,7 @@ if (!_isAnalysis) {
   console.log(`[YouTubeStream] yt-dlp binary: ${YTDLP_BIN}`);
   console.log(`[YouTubeStream] SSL check: ${YTDLP_NO_CHECK_CERT ? 'disabled (--no-check-certificate)' : 'enabled'}`);
   console.log(`[YouTubeStream] IPv4-only: ${YTDLP_FORCE_IPV4 ? 'enabled (--force-ipv4)' : 'disabled'}`);
+  console.log(`[YouTubeStream] PO Token provider: ${YTDLP_POT_PROVIDER_ENABLED ? `enabled (${YTDLP_POT_PROVIDER_URL})` : 'disabled'}`);
 }
 
 // ── URL-expiry refresh: if FFmpeg stderr contains HTTP 403 re-resolve ─────────
@@ -644,6 +652,36 @@ class YouTubeStreamService {
   // ── Private helpers ─────────────────────────────────────────────────────────
 
   /**
+   * Ping the bgutil-ytdlp-pot-provider sidecar. Never throws — resolves false
+   * on any error/timeout so callers can safely fall back.
+   * @returns {Promise<boolean>}
+   */
+  _potProviderReachable() {
+    return new Promise((resolve) => {
+      let settled = false;
+      const req = http.get(`${YTDLP_POT_PROVIDER_URL}/ping`, { timeout: 1000 }, (res) => {
+        res.resume();
+        if (!settled) { settled = true; resolve((res.statusCode ?? 0) < 500); }
+      });
+      req.on('timeout', () => { req.destroy(); });
+      req.on('error', () => { if (!settled) { settled = true; resolve(false); } });
+    });
+  }
+
+  /**
+   * Decide whether to force the PO-Token-aware yt-dlp client (mweb) for this
+   * stream start. Only true when the opt-in flag is set AND a JS runtime is
+   * available AND the sidecar actually responds — otherwise existing behavior
+   * is unchanged (forcing mweb alone, without a working PO Token provider,
+   * is worse than the default client mix).
+   * @returns {Promise<boolean>}
+   */
+  async _shouldUseMwebPotClient() {
+    if (!YTDLP_POT_PROVIDER_ENABLED || !NODE_BIN_FOR_YTDLP) return false;
+    return this._potProviderReachable();
+  }
+
+  /**
    * Build the FFmpeg argument array for pipe mode (reading from stdin).
    * yt-dlp pipes MPEGTS to ffmpeg's stdin; no HTTPS required from ffmpeg.
    * @param {StreamEntry} entry
@@ -694,6 +732,7 @@ class YouTubeStreamService {
    * @returns {Promise<void>}
    */
   async _startStream(entry) {
+    const useMwebPotClient = await this._shouldUseMwebPotClient();
     return new Promise((resolve, reject) => {
       entry.liveResolve = resolve;
       entry.liveReject  = reject;
@@ -759,9 +798,14 @@ class YouTubeStreamService {
       if (NODE_BIN_FOR_YTDLP && YTDLP_REMOTE_COMPONENTS) ytArgs.push('--remote-components', YTDLP_REMOTE_COMPONENTS);
       if (YTDLP_NO_CHECK_CERT) ytArgs.push('--no-check-certificate');
       if (YTDLP_FORCE_IPV4) ytArgs.push('--force-ipv4');
+      if (useMwebPotClient) {
+        ytArgs.push('--extractor-args', 'youtube:player_client=mweb');
+        ytArgs.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${YTDLP_POT_PROVIDER_URL}`);
+      }
       ytArgs.push(entry.youtubeUrl);
 
       console.log(`[YouTubeStream] Spawning yt-dlp | ffmpeg pipe for ${entry.id}`);
+      console.log(`[YouTubeStream] ${entry.id}: player_client=${useMwebPotClient ? 'mweb (PO Token provider detected)' : 'default'}`);
 
       const ytProc = spawn(YTDLP_BIN, ytArgs, {
         shell: false,

@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-YT-01 |
-| **Version** | 1.5 |
+| **Version** | 1.6 |
 | **Status** | Active |
 | **Date** | 2026-07-28 |
 | **Parent SRS** | srs/SRS_YouTube_RTSP_Ingest.md |
@@ -665,6 +665,8 @@ OS              Node.js             YouTubeStreamService    yt-dlp/FFmpeg
 | `YOUTUBE_START_TIMEOUT` | `30000` | Stream start timeout in ms |
 | `MEDIAMTX_HOST` | `127.0.0.1` | MediaMTX RTSP host |
 | `MEDIAMTX_PORT` | `8554` | MediaMTX RTSP port |
+| `YTDLP_POT_PROVIDER_ENABLED` | `false` | opt-in — PO Token 경로(§12.6) 활성화 |
+| `YTDLP_POT_PROVIDER_URL` | `http://127.0.0.1:4416` | bgutil-ytdlp-pot-provider 사이드카 base URL |
 
 ---
 
@@ -744,6 +746,34 @@ const CONSECUTIVE_403_WINDOW_MS = 15000;  // 15초 슬라이딩 윈도우
 
 **검증 상태:** 코드 반영 후 서버 재시작·3개 채널 정상 기동까지 확인. 이 실패 모드는 자연 발생까지 시간이 걸리는 문제(직전 관측: 재시작 후 약 20분 뒤 발생)라, `forcing full restart` 로그 메시지가 실제로 트리거되는 것까지는 아직 실시간으로 재확인하지 못함 — 사용자 관찰 결과를 기다리는 중.
 
+### 12.6 YouTube PO Token(Proof-of-Origin) 정책 대응 — opt-in 사전 예방 (2026-08-26)
+
+**배경:** YouTube가 봇 트래픽 차단을 위해 PO Token(재생 URL 서명에 필요한 추가 증명 토큰) 요구 범위를 확대했다. §12.5의 "연속 403 감지 후 강제 재시작"과 기존 `--js-runtimes node:<NODE_BIN_FOR_YTDLP> --remote-components ejs:github`(nsig/서명 챌린지 해결용)는 모두 **PO Token이 없을 때 발생하는 증상에 대한 사후 대응**이며, PO Token 자체를 발급하는 사전 예방 장치는 없었다. 참고로 확인한 [melchi45/rtsp-over-websocket](https://github.com/melchi45/rtsp-over-websocket)(동일하게 YouTube→yt-dlp→ffmpeg→RTSP 파이프라인을 자체 구현한 별도 프로젝트)의 README/`src/server/services/transcodeSession.ts`에는, JS 런타임과 PO Token provider가 **둘 다** 감지될 때만 `--extractor-args youtube:player_client=mweb`을 강제하는 조건부 로직이 이미 추가되어 있었다. JS 챌린지 해결 자체는 그 프로젝트가 Deno를 쓸 뿐 우리가 이미 쓰는 Node 런타임으로도 동일하게 충족되므로, 신규 의존성은 PO Token provider 하나로 한정된다.
+
+**아키텍처 (opt-in):**
+
+```
+┌────────────────────────────┐   HTTP :4416   ┌────────────────────────────────┐
+│ youtubeStreamService.js     │───────────────▶│ bgutil-pot-provider (Docker)    │
+│  _startStream()              │  GET /ping     │ brainicism/bgutil-ytdlp-pot-    │
+│   potProviderReachable()?    │◀───────────────│ provider:latest                 │
+│   && NODE_BIN_FOR_YTDLP?     │                └────────────────────────────────┘
+│   && YTDLP_POT_PROVIDER_     │
+│      ENABLED === 'true'      │  yes → ytArgs에 추가:
+│                               │   --extractor-args youtube:player_client=mweb
+│                               │   --extractor-args youtubepot-bgutilhttp:base_url=<URL>
+│                               │  no  → 기존 동작 그대로 (폴백, 하드 실패 없음)
+└──────────────────────────────┘
+```
+
+- **사이드카 배포:** `docker-compose.yml`에 `bgutil-pot-provider` 서비스 추가 (qdrant와 동일한 opt-in 패턴 — compose에는 항상 포함되지만 `YTDLP_POT_PROVIDER_ENABLED=true` 없이는 서버가 호출하지 않음). 공식 이미지 사용, 별도 빌드 불필요.
+- **yt-dlp 플러그인:** `bgutil-ytdlp-pot-provider` PyPI 패키지를 설치하면 yt-dlp가 자동으로 `bgutil:http-*` provider를 인식한다(엔트리포인트 자동 등록, 별도 등록 코드 불필요). `setup-env.linux.sh` / `setup-env.windows.ps1`의 yt-dlp 설치 단계에 `pip install bgutil-ytdlp-pot-provider` 추가.
+- **활성화 정책:** 기본값 비활성(opt-in) — `YTDLP_POT_PROVIDER_ENABLED=false`. 이 프로젝트의 다른 opt-in AI/외부 의존성 기능(QDRANT_ENABLED, ageEstimation 등)과 동일한 컨벤션. 관리자가 사이드카를 띄우고 플래그를 켜기 전까지는 기존 동작(§12.4/§12.5의 사후 대응)이 그대로 유지된다.
+- **감지 실패 시 폴백:** `YTDLP_POT_PROVIDER_ENABLED=true`이어도 `potProviderReachable()`가 실패(사이드카 다운/미기동)하면 `--extractor-args` 없이 기존 기본 클라이언트로 그대로 진행 — 하드 실패 없음(mweb 단독 강제는 오히려 기본값보다 나쁘다는 원 프로젝트의 판단을 그대로 따름).
+- **신규 env 변수:** `YTDLP_POT_PROVIDER_ENABLED`, `YTDLP_POT_PROVIDER_URL` (§11 참고).
+
+**Status:** Implemented (2026-08-26) — `server/src/services/youtubeStreamService.js`(`_potProviderReachable()`/`_shouldUseMwebPotClient()`), `docker-compose.yml`(`bgutil-pot-provider` 서비스), `server/.env.example`, `setup-env.linux.sh`/`setup-env.windows.ps1` 5개 파일 모두 반영 완료. 검증: `node -c youtubeStreamService.js` 통과, `docker compose config` 통과, `bash -n setup-env.linux.sh` 통과. **미검증:** 실제 `bgutil-pot-provider` 컨테이너를 띄운 상태에서의 실 스트림 PO Token 발급/재생 성공 여부(라이브 YouTube 채널 대상 E2E 미실시) — opt-in 기본값 `false`라 배포 리스크는 낮음.
+
 ---
 
 ## Document History
@@ -756,4 +786,5 @@ const CONSECUTIVE_403_WINDOW_MS = 15000;  // 15초 슬라이딩 윈도우
 | 1.3 | 2026-07-14 | LTS Engineering Team | §12.4 신규 — HLS keep-alive 재접속 실패로 인한 I-frame 이후 노이즈 근본 원인 확정 및 수정(`-reconnect_on_network_error 1 -http_persistent 0` 추가), 실 운영 로그로 확인 |
 | 1.4 | 2026-07-14 | LTS Engineering Team | §12.5 신규 — §12.4 적용 후에도 노이즈 재발 보고를 계기로 재조사, 재생 URL 만료 시 무한 403 루프에 빠지는 더 심각한 실제 근본 원인 확정. 기존에 작성만 되고 연결되지 않았던 `HTTP_403_RE`/`URL_EXPIRED_RE` 죽은 코드를 실제 연속-403 감지+강제 재시작 로직(`_checkForExpiredUrl()`)으로 연결 |
 | 1.5 | 2026-07-28 | LTS Engineering Team | §10.2에 프로세스 트리 reparenting 레이스 수정 노트 추가 — yt-dlp의 내부 ffmpeg 다운로더가 채널 삭제 시 고아 프로세스로 영구 잔존하던 버그, `findChildPids()`를 부모 시그널 전송 전에 호출하도록 수정 |
+| 1.6 | 2026-08-26 | LTS Engineering Team | §12.6 신규(Proposed) — YouTube PO Token 정책 변경 대응. `bgutil-ytdlp-pot-provider` 사이드카(Docker, opt-in) + 조건부 `--extractor-args youtube:player_client=mweb` 아키텍처 추가, §11에 `YTDLP_POT_PROVIDER_ENABLED`/`YTDLP_POT_PROVIDER_URL` 추가 |
 | 1.3 | 2026-06-26 | LTS Engineering Team | §5.1 YouTube 이중 경로 파이프라인 다이어그램 추가 (ASCII + Mermaid, 코드 라인 참조 포함) |

@@ -700,6 +700,14 @@ WiseNet NVR이나 ONVIF NVR 장비는 채널 수(`MaxChannel > 1`)를 반환합�
 - HLS AAC `AAC with no global headers` 오류 → `-c:a aac`로 자동 변환
 - `STREAM_TIMEOUT` → yt-dlp 또는 MediaMTX 문제, 로그 확인: `grep YouTubeStream /tmp/lts-server-dev.log`
 
+**YouTube PO Token(Proof-of-Origin) 대응 — opt-in (2026-08-26, Implemented):** YouTube가 봇 차단 강화를 위해 PO Token 요구 범위를 확대하면서, PO Token 없이는 "Sign in to confirm you're not a bot" / 연속 403 / `ffmpeg exited 183` 오류가 발생할 수 있음(§12.5의 연속-403 강제재시작, `--js-runtimes node:...`는 모두 이 증상에 대한 **사후 대응**일 뿐 PO Token 자체를 발급하지 않음). 동일한 YouTube→yt-dlp→ffmpeg→RTSP 파이프라인을 구현한 별도 프로젝트([melchi45/rtsp-over-websocket](https://github.com/melchi45/rtsp-over-websocket))의 README/`transcodeSession.ts`에서 이미 대응 로직(PO Token provider + JS 런타임이 둘 다 있을 때만 `--extractor-args youtube:player_client=mweb` 강제)을 확인하고 이식했다.
+
+- **사이드카:** `docker-compose.yml`에 `bgutil-pot-provider` 서비스(공식 이미지 `brainicism/bgutil-ytdlp-pot-provider:latest`, 포트 4416) — qdrant와 동일한 opt-in 패턴, `docker compose up -d bgutil-pot-provider`로 개별 기동 가능.
+- **yt-dlp 플러그인:** `pip install bgutil-ytdlp-pot-provider` — yt-dlp가 자동 인식(엔트리포인트 등록), `setup-env.linux.sh`/`setup-env.windows.ps1`의 yt-dlp 설치 단계 직후 자동 설치됨.
+- **활성화:** `YTDLP_POT_PROVIDER_ENABLED=true` (기본 `false`, opt-in) + `YTDLP_POT_PROVIDER_URL`(기본 `http://127.0.0.1:4416`). `_startStream()`이 매 스트림 시작 시 `/ping`을 프로브해서, 사이드카가 살아있고 JS 런타임(`NODE_BIN_FOR_YTDLP`)이 있을 때만 `--extractor-args youtube:player_client=mweb` + `--extractor-args youtubepot-bgutilhttp:base_url=<URL>`를 추가. 플래그가 꺼져 있거나 프로브 실패 시 하드 실패 없이 기존 동작 그대로 폴백.
+- **Deno 불필요:** 원 프로젝트는 JS 챌린지 해결에 Deno를 쓰지만, 우리는 이미 Node(`--js-runtimes node:...`)로 동일 역할을 하고 있어 신규 런타임 의존성 추가 없음.
+- **문서:** `docs/design/Design_YouTube_RTSP_Ingest.md` §12.6, `docs/srs/SRS_YouTube_RTSP_Ingest.md` FR-YT-016.
+
 ### 카메라 Pause/Resume — 수집 연결 일시정지/재개 (2026-07-21 추가)
 
 카메라 레코드(자격증명·`channelSlot`·구역 등)는 그대로 둔 채, 수집 연결(RTSP/YouTube)만 끊고 나중에 재개하는 기능. Streaming Dashboard 사이드바 "Added" 탭의 각 카메라 행에 Pause/Resume 버튼으로 노출됨.
@@ -905,6 +913,10 @@ MEDIAMTX_BIN=/home/youngho/.local/bin/mediamtx
 
 YOUTUBE_MAX_STREAMS=10   # 동시 YouTube 스트림 상한
 YOUTUBE_MAX_RESTARTS=5   # 자동 재시작 횟수 한계
+
+# PO Token 대응 (opt-in, 기본 비활성) — docker compose up -d bgutil-pot-provider 필요
+YTDLP_POT_PROVIDER_ENABLED=false
+YTDLP_POT_PROVIDER_URL=http://127.0.0.1:4416
 ```
 
 경로 확인 명령:
