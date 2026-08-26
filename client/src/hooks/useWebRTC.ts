@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { useSocket } from './useSocket';
+import { useAuthStore } from '../stores/authStore';
 import { useWebRTCConfigStore } from '../stores/webrtcConfigStore';
 import { useDataChannelStore } from '../stores/dataChannelStore';
 import { registerPeerConnection } from '../clientLogger';
@@ -1093,9 +1094,16 @@ export function useWebRTC(cameraId: string, enabled: boolean) {
         // Keep only typ=host candidates; strip srflx and relay to avoid NAT hairpin.
         const hostOnlySdp = _filterHostCandidates(pc.localDescription?.sdp ?? offer.sdp ?? '');
 
+        // JWT-gated since 2026-08-25 (server/src/index.js, see
+        // docs/design/Design_RTSP_Over_WebSocket.md §8.24) — this endpoint
+        // used to accept any WHEP negotiation with no auth at all.
+        const accessToken = useAuthStore.getState().accessToken;
         const resp = await fetch(`/api/webrtc/whep/${cameraId}`, {
           method:  'POST',
-          headers: { 'Content-Type': 'application/sdp' },
+          headers: {
+            'Content-Type': 'application/sdp',
+            ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+          },
           body:    hostOnlySdp,
         });
 

@@ -422,6 +422,7 @@ loitering_tracking/
 ## Socket.IO 이벤트
 
 > 소스: `server/src/services/pipelineManager.js` (송신 대부분), `server/src/socket/streamHandler.js` (구독·발견 이벤트 수신), `client/src/App.tsx`/`hooks/`.
+> **연결 레벨 인증 (2026-08-25)**: `server/src/index.js`의 `io.use()`가 모든 연결(최초 접속·자동 재연결 포함)에 JWT(`socket.handshake.auth.token`)를 요구 — `AUTH_ENABLED=false`가 아닌 한 미인증 연결은 거부됨(핸드셰이크 단계 게이트, 이벤트별 게이트 아님). 클라이언트는 `client/src/hooks/useSocket.ts`가 authStore의 accessToken을 자동으로 실어 보냄. `admin:subscribe-*` 계열은 이 연결 레벨 게이트에 더해 이벤트 핸들러 자체에서 admin role도 별도 검증(기존 동작 유지).
 
 | 이벤트 | 방향 | 설명 |
 |--------|------|------|
@@ -584,6 +585,7 @@ npm run test:report
 - RTSP URL의 자격증명은 로그 출력 금지
 - SQL 인젝션 방지: MongoDB 쿼리 파라미터 항상 검증
 - 얼굴 데이터는 `AuditService.js`로 모든 접근 기록
+- 영상 스트림 3경로(JPEG/Socket.IO, WebRTC/WHEP, RTSP-over-WebSocket) 모두 인증 필수(2026-08-25) — Socket.IO는 `io.use()` 연결 레벨 JWT 게이트, WHEP는 `verifyAccessToken`, RTSP-over-WebSocket은 RTSP Digest(서버 발급 카메라별 시크릿, 실제 카메라 비밀번호 아님) + credentials 엔드포인트 JWT 게이트. 신규 실시간/스트리밍 엔드포인트 추가 시 반드시 이 셋 중 하나 이상의 인증 패턴을 적용할 것 — 자세한 경위는 `docs/design/Design_RTSP_Over_WebSocket.md` §8.24/§8.25
 
 ---
 

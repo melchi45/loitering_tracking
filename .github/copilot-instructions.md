@@ -176,6 +176,8 @@ loitering_tracking/
 
 ## Socket.IO 이벤트
 
+> **연결 레벨 인증 (2026-08-25)**: 모든 연결(최초·재연결 포함)에 JWT 필수(`io.use()`, `server/src/index.js`) — 클라이언트는 `useSocket.ts`가 자동으로 토큰을 실어 보냄.
+
 | 이벤트 | 방향 | 설명 |
 |--------|------|------|
 | `frame` | Server → Client | 카메라 룸 대상 프레임 전송 |

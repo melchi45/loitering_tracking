@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-RTSPWS-001 |
-| **Version** | 3.10 |
+| **Version** | 3.13 |
 | **Status** | Active (구현 완료, 라이브 검증 완료 — channelSlot=6 실 카메라 30fps 확인; 클라이언트 라이브러리는 2026-08-04 npm 패키지로 전환, §8.21) / §9는 Proposed — 미결정 사항 있음 |
 | **Date** | 2026-08-13 |
 | **Related Design** | [Design_RTSP_Capture_Backend.md](Design_RTSP_Capture_Backend.md) · [Design_Server_Architecture.md](Design_Server_Architecture.md) · [Design_RTSP_Over_WebSocket_TypeScript_Migration.md](Design_RTSP_Over_WebSocket_TypeScript_Migration.md) |
@@ -487,6 +487,63 @@ python3[<pid>]: segfault ... in libavformat.so.58.76.100
 
 ---
 
+### 8.24 보안 개선 — `<rtsp-over-websocket>` `password` 속성에 실제 카메라 비밀번호가 그대로 노출되던 문제 (2026-08-25)
+
+**증상 지적**: `RTSPOverWebSocketView.tsx`가 `<rtsp-over-websocket username={...} password={...}>`로 렌더링하면서, 브라우저 DOM(Inspect Element)에 카메라의 **실제 RTSP 비밀번호**가 평문으로 그대로 보임.
+
+**SunapiManager로 우회 가능한지 검토**: 벤더 패키지(`@melchi45/rtsp-over-websocket`) 소스를 직접 확인. `password` setter 자체가 `console.warn("This attribute is not safety...")`로 이미 경고하고 있었음. `RtspClient`의 `formDigestAuthHeader()`를 보면, `sunapiClient`가 연결돼 있으면 카메라의 SUNAPI REST API(`/stw-cgi/security.cgi?msubmenu=digestauth&action=view`)에 요청해 Digest 응답값을 카메라가 대신 계산해주므로 브라우저가 원문 비밀번호를 몰라도 되는 경로가 실제로 존재함을 확인. 다만 이 경로는 브라우저가 카메라 SUNAPI REST API에 **직접** 접근해야 해서, §9에서 이미 검토된 "브라우저→카메라 직접 통신" 예외와 동일한 네트워크 도달성/Mixed Content/CORS 제약이 그대로 적용됨 — 이번 건의 해결책으로는 채택하지 않음(§9는 별도로 Proposed 상태 유지).
+
+**채택한 해결책 — 서버가 발급하는 카메라별 전용 시크릿으로 실제 비밀번호 대체**: 브라우저가 실제로 인증하는 대상은 카메라가 아니라 **이 서버**(`rtspOverWebSocketServer.js`의 `/StreamingServer` WS 브릿지)라는 점에 착안 — `verifyDigest()`가 대조하는 기준값을 `camera.password`(실제 장치 비밀번호)에서 **카메라별로 서버가 자체 발급하는 무작위 시크릿**으로 교체. 브라우저는 이 시크릿만 알면 되고, 실제 카메라 비밀번호는 전혀 필요 없음 — 이 서버가 MediaMTX/ingest-daemon 등 백엔드로 맺는 실제 RTSP 연결은 여전히 서버 내부에서만 실제 자격증명을 사용(변경 없음). 네트워크·CORS 제약이 전혀 없고 클라이언트 코드 변경도 불필요(credentials 엔드포인트가 반환하는 `password` 필드 값만 바뀜, `RTSPOverWebSocketView.tsx`는 그대로).
+
+- `server/src/utils/rtspOverWebSocketAuth.js`(신규) — `getOrCreateRtspOverWebSocketSecret(db, camera)`: `camera.rtspOverWebSocketSecret` 필드가 없으면 `crypto.randomBytes(24)`로 생성해 DB에 영속화(기존 카메라도 마이그레이션 없이 최초 접근 시 자동 생성), 있으면 재사용.
+- `server/src/api/cameras.js`의 `GET /:id/rtsp-over-websocket-credentials` — 응답의 `password` 필드를 `camera.password` 대신 이 시크릿으로 교체.
+- `server/src/services/rtspOverWebSocketServer.js`의 `verifyDigest()` — HA1 계산 시 `camera.password` 대신 동일 시크릿 사용(`db`를 추가 인자로 받아 조회).
+
+**검증**: `getOrCreateRtspOverWebSocketSecret()` 단위 동작 확인(최초 생성·영속화·재사용, `camera.password` 불변 확인). `test/api/onvif_rtsp_over_websocket_meta_relay.test.js`(같은 `cameras.js` 라우터를 로드하는 기존 테스트) 9건 전부 재통과 확인. 실 카메라로 브라우저 DOM에 더 이상 실제 비밀번호가 노출되지 않는지, 재생 자체가 정상 동작하는지는 실사용 환경에서 별도 확인 필요.
+
+관련 파일: `server/src/utils/rtspOverWebSocketAuth.js`(신규), `server/src/api/cameras.js`, `server/src/services/rtspOverWebSocketServer.js`.
+
+---
+
+### 8.25 보안 개선 — Socket.IO(JPEG) 및 WebRTC WHEP 경로에 인증이 전혀 없던 문제 (2026-08-25)
+
+**발견 경위**: §8.24 작업 중 사용자 질문("MJPEG, WebRTC, rtsp-over-websocket 에서 영상 연결 시도에 인증 절차가 있나요?")을 계기로 3개 스트리밍 경로 전체를 감사. RTSP-over-WebSocket만 인증(RTSP Digest + JWT 게이트 credentials 엔드포인트)이 있었고, **JPEG(Socket.IO)와 WebRTC(WHEP)는 인증이 전혀 없었음**이 드러남 — `:3080`(또는 3443)에 네트워크로 도달 가능한 누구나 로그인 없이 임의 카메라의 실시간 영상을 볼 수 있는 상태였음.
+
+**증상(수정 전)**:
+- `server/src/index.js`의 Socket.IO 서버 생성부에 `io.use()` 인증 미들웨어 자체가 없었음. 클라이언트(`useSocket.ts`)도 `auth` 옵션 없이 연결.
+- `server/src/socket/streamHandler.js`의 `camera:subscribe`는 받은 `cameraId`를 검증 없이 그대로 `socket.join()` — 아무 `cameraId`나 넣으면 즉시 `frame`/`detections` 수신 시작.
+- `POST /api/webrtc/whep/:cameraId`(`server/src/index.js`, MediaMTX·mediasoup 엔진 공용 경로)에도 미들웨어가 전혀 없었음. MediaMTX 자체(`mediamtx.yml`)도 `authInternalUsers: user: any, pass: ""`로 완전 개방이라, 보호는 전적으로 이 Node 프록시에 의존하는 구조였는데 그 프록시에 인증이 없었음.
+- `GET /api/cameras`(카메라 목록)도 무인증이라, 위 두 경로에 쓸 `cameraId`를 알아내는 것 자체에도 로그인이 필요 없었음.
+
+**수정**:
+- `server/src/index.js` — `const io = new SocketIOServer(...)` 직후 `io.use((socket, next) => {...})` 추가. `AUTH_ENABLED=false`가 아닌 한 `socket.handshake.auth.token`을 `verifyToken()`(`middleware/auth.js`, 기존 `verifySocketAdmin`이 쓰던 것과 동일 함수)으로 검증, 실패 시 연결 자체를 거부. 모든 (재)연결 시도마다 실행되므로 socket.io-client의 자동 재연결에도 동일하게 적용됨.
+- `server/src/index.js`의 `POST /api/webrtc/whep/:cameraId` — `verifyAccessToken` 미들웨어 추가(REST API 다른 곳과 동일한 JWT 게이트).
+- `client/src/hooks/useSocket.ts` — `io()`의 `auth` 옵션을 함수 형태(`auth: (cb) => cb({ token: useAuthStore.getState().accessToken })`)로 지정 — 매 연결 시도마다 authStore의 **최신** 토큰을 읽으므로, 로그인 전에 생성된 소켓(토큰 null → 서버가 거부)도 로그인 완료 후 다음 자동 재연결(최대 5초 백오프) 시점에 별도 조치 없이 정상 토큰으로 재시도됨.
+- `client/src/hooks/useWebRTC.ts` — WHEP `fetch()` 호출에 `Authorization: Bearer <accessToken>` 헤더 추가.
+- `test/api/thermal_radiometry_overlay.test.js` — Socket.IO 연결에 인증이 필요해지면서 무인증 연결이 깨지는 것을 수정: 테스트 전용 계정을 자체 가입 시도해 토큰을 받아 연결, 이미 관리자 계정이 있어 가입이 대기 상태로 처리되는 경우(토큰 없음)는 실패 대신 Group B 전체를 SKIP 처리(기존 "카메라 없음"/"서버 미실행" 스킵과 동일 패턴). `test/api/missing_persons.test.js`의 동일 헬퍼(`waitForSocketEvent`)는 실제로 어디서도 호출되지 않는 죽은 코드라 영향 없음(수정하지 않음).
+
+**미해결/후속 검토 필요**: `camera:subscribe`는 이제 "로그인한 사용자인지"만 확인하며, 카메라별 접근 권한(예: 특정 사용자가 특정 카메라만 볼 수 있게 제한) 같은 세분화된 인가는 이 프로젝트에 애초에 존재하지 않는 개념이라 이번 수정 범위에도 포함하지 않음 — 로그인 사용자는 여전히 모든 카메라를 볼 수 있음(기존 REST API 전반과 동일한 신뢰 모델).
+
+관련 파일: `server/src/index.js`, `client/src/hooks/useSocket.ts`, `client/src/hooks/useWebRTC.ts`, `test/api/thermal_radiometry_overlay.test.js`.
+
+---
+
+### 8.26 의존성 업데이트 — `@melchi45/rtsp-over-websocket` 1.0.15 → 1.1.3 (2026-08-26)
+
+GitHub Packages의 `latest` 태그(`1.1.3`, `beta` 태그는 `1.1.2-beta.4`로 더 낮아 미채택)로 업데이트. 전환 전 신규 버전의 `dist/player/rtsp-over-websocket.esm.js`를 직접 확인해 이 프로젝트가 의존하는 표면이 전부 동일함을 검증:
+
+- `observedAttributes`에 `hostname`/`proxy`/`port`/`secure`/`device`/`channel`/`profile_number`/`username`/`password`/`width`/`height` 전부 유지
+- 이벤트 5종(`error`/`statechange`/`waiting`/`statistics`/`meta`) 페이로드 shape 동일
+- `disconnectedCallback()`의 `stop()` 무조건 호출(§8.23의 `position:fixed` 오버레이 설계가 전제하는 동작), `password` setter의 `setAttribute` 강제 호출(§8.24), `device==='nvr'` 분기 전부 그대로
+
+**신규 발견**: `ffmpegAAC.decoder.js`(AAC 디코더, 신규 파일)가 `dist/player/`에 추가됨 — 기존 Worker 파일들(`ffmpeg.js` 등, Worker의 `self.location` 기준 상대 URL이라 `copyRtspOverWebSocketAssets.js`로 수동 복사 필요)과 달리 메인 모듈 컨텍스트에서 `new URL("./ffmpegAAC.decoder.js", import.meta.url)`로 로드되는 방식이라 Vite가 빌드 시 자동으로 감지·번들링함(`vite build` 결과물에 `dist/assets/ffmpegAAC.decoder-*.js` 청크로 정상 포함 확인) — `copyRtspOverWebSocketAssets.js` 수정 불필요.
+
+**검증**: `tsc --noEmit`, `vite build` 통과(신규 청크 정상 생성 확인). 실 카메라 재생 동작은 별도 확인 필요.
+
+관련 파일: `client/package.json`, `client/package-lock.json`.
+
+---
+
 ## 9. SUNAPI 로그인 연동 (Proposed, 2026-08-13)
 
 ### 9.1 배경 및 목표
@@ -568,3 +625,6 @@ python3[<pid>]: segfault ... in libavformat.so.58.76.100
 | 3.8 | 2026-08-13 | §9 추가(Proposed) — §8.21에서 "미채택"으로 명시했던 `SunapiManager`/`SunapiClient` 연동을 RTSP-over-WebSocket 모드에 한해 재검토. 사용자 확인: SUNAPI 로그인 용도(재생 시 별도 비밀번호 입력 없이 인증)로 한정, 신뢰 경계는 브라우저→카메라 직접 통신을 예외적으로 허용(§3 Proxy 원칙의 국소적 예외). 패키지 소스 분석으로 `serverType:'camera'` 시 브라우저 컨텍스트에서 `hostname`/`port`가 `window.location`으로 강제됨을 확인했으나 이번 결정상 `cameraIp`/`httpPort`(기존 스키마 필드) 직결로 우회. 네트워크 도달성/Mixed Content/CORS 제약과 미결정 사항 4건 정리 — 구현 착수 전 확인 필요 |
 | 3.9 | 2026-08-25 | §8.22 추가(버그 수정) — 풀스크린 전환 시 "Invalid or expired token" 재생 실패. SUNAPI/카메라 인증과 무관하게 이 서버 자체 JWT access token이 만료(기본 15분)됐는데도 백그라운드 자동 갱신·401 재시도 로직이 없어 발생하던 문제로 확인(§9의 SUNAPI 연동과는 무관 — 확정·구현돼도 이 버그는 해결되지 않음). `authStore.ts`에 만료 60초 전 자동 `refresh()` 타이머 추가, `RTSPOverWebSocketView.tsx`의 credentials fetch에 401 수신 시 토큰 갱신 후 1회 재시도하는 안전망 추가 |
 | 3.10 | 2026-08-25 | §8.23 추가(버그 수정) — 채널/풀스크린 전환 시 영상 안 보임(그리드+풀스크린 동시 이중 세션이 원인, 실사용 환경에서 재현·수정 확인) + 그리드↔풀스크린 전환 시 재연결 없이 세션을 유지하는 후속 개선. 벤더 커스텀 엘리먼트의 `disconnectedCallback()`이 무조건 `stop()`을 호출함을 소스로 확인해 Portal(DOM 재부모) 전략은 폐기, `position:fixed` 기반 시각적 오버레이(DOM 노드는 그리드 타일에 고정, 좌표만 풀스크린 영역으로 전환)로 최종 구현. 신규 `rtspFullscreenBridgeStore.ts` |
+| 3.11 | 2026-08-25 | §8.24 추가(보안 개선) — `<rtsp-over-websocket>` `password` 속성에 실제 카메라 비밀번호가 DOM에 그대로 노출되던 문제. SunapiManager 우회는 §9와 동일한 브라우저→카메라 직접통신 제약(네트워크/CORS/Mixed Content)에 걸림을 소스 분석으로 확인해 미채택. 대신 브라우저가 실제로 인증하는 대상이 카메라가 아니라 이 서버임에 착안해, `verifyDigest()`의 대조 기준을 `camera.password`에서 서버가 카메라별로 발급하는 무작위 시크릿(`rtspOverWebSocketAuth.js` 신규)으로 교체 — 네트워크 제약 없이 실제 비밀번호를 브라우저에 전혀 노출하지 않음, 클라이언트 코드 변경 불필요 |
+| 3.12 | 2026-08-25 | §8.25 추가(보안 개선) — §8.24 작업 중 3개 스트리밍 경로 전체 감사 결과 JPEG(Socket.IO)·WebRTC(WHEP)에 인증이 전혀 없었음을 발견(RTSP-over-WebSocket만 보호되고 있었음) — `camera:subscribe`에 아무 cameraId나 넣으면 로그인 없이 즉시 영상 수신 가능했던 상태. Socket.IO에 `io.use()` JWT 인증 미들웨어 신설, WHEP 엔드포인트에 `verifyAccessToken` 추가, 클라이언트(`useSocket.ts`/`useWebRTC.ts`) 양쪽에 토큰 전달 로직 추가. 무인증 연결에 의존하던 `thermal_radiometry_overlay.test.js` Group B도 자체 계정 가입 후 연결하도록 수정(실패 시 기존 스킵 패턴과 동일하게 SKIP) |
+| 3.13 | 2026-08-26 | §8.26 추가 — `@melchi45/rtsp-over-websocket` 1.0.15 → 1.1.3 업데이트. 전환 전 observedAttributes·이벤트 5종·`disconnectedCallback`/`password` setter/`nvr` 분기가 전부 동일함을 소스로 검증. 신규 `ffmpegAAC.decoder.js`(AAC 디코더)는 기존 Worker 자산과 달리 `new URL(..., import.meta.url)` 방식이라 Vite가 자동 번들링 — `copyRtspOverWebSocketAssets.js` 수정 불필요, `vite build` 결과물에 신규 청크 정상 포함 확인 |

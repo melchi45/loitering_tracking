@@ -50,6 +50,7 @@ const { buildRouter: buildSearchRouter }    = require('./api/search');
 const { buildRouter: buildStatsRouter }     = require('./api/stats');
 const authRouter         = require('./routes/auth');
 const adminRouter        = require('./routes/admin');
+const { verifyAccessToken, verifyToken } = require('./middleware/auth');
 const buildClientLogsRouter = require('./routes/clientLogs');
 const { passport: configuredPassport, setup: setupPassport } = require('./config/passport');
 const YouTubeStreamService   = require('./services/youtubeStreamService');
@@ -234,6 +235,28 @@ async function main() {
       methods: ['GET', 'POST'],
     },
     maxHttpBufferSize: 10 * 1024 * 1024, // 10 MB (for base64 frames)
+  });
+
+  // Auth gate (2026-08-25) — every camera:subscribe/frame/detections event on
+  // this namespace used to be reachable by anyone who could open a WebSocket
+  // to this port at all, with no login required (docs/design/Design_RTSP_Over_WebSocket.md
+  // §8.24 found this while auditing the RTSP-over-WebSocket path specifically —
+  // JPEG/WebRTC turned out to have zero auth of their own). Runs on every
+  // (re)connection attempt, including socket.io-client's automatic retries —
+  // client/src/hooks/useSocket.ts supplies the *current* accessToken via the
+  // function form of the `auth` option, so a socket that connects before
+  // login (token null, rejected here) picks up a real token on its next
+  // reconnect attempt (<=5s backoff) without any extra reconnect-nudging.
+  io.use((socket, next) => {
+    if (process.env.AUTH_ENABLED === 'false') return next();
+    const token = socket.handshake.auth?.token;
+    if (!token) return next(new Error('unauthorized'));
+    try {
+      socket.data.user = verifyToken(token);
+      next();
+    } catch {
+      next(new Error('unauthorized'));
+    }
   });
 
   // Expose io to route handlers via app.set
@@ -479,8 +502,14 @@ async function main() {
   // ── WebRTC WHEP proxy ─────────────────────────────────────────────────────
   // Browser POSTs SDP offer → Node.js delegates to the active WebRTC engine →
   // returns SDP answer.  The active engine is selected by WEBRTC_ENGINE in .env.
+  // JWT-gated (2026-08-25, docs/design/Design_RTSP_Over_WebSocket.md §8.24) —
+  // this endpoint used to accept any WHEP negotiation (full live video/audio)
+  // with zero auth, found while auditing the RTSP-over-WebSocket credentials
+  // path specifically. MediaMTX itself (mediamtx.yml) has no auth of its own
+  // either, so this Node proxy was the only place this could be enforced.
   app.post('/api/webrtc/whep/:cameraId',
     express.text({ type: 'application/sdp', limit: '64kb' }),
+    verifyAccessToken,
     async (req, res) => {
       const { cameraId } = req.params;
       const sdpOffer = typeof req.body === 'string' ? req.body : '';

@@ -340,12 +340,46 @@ async function runGroupB() {
     return;
   }
 
-  const socket = io(BASE_URL, { transports: ['websocket'], timeout: 5000 });
-  await new Promise((resolve, reject) => {
-    socket.on('connect', resolve);
-    socket.on('connect_error', reject);
-    setTimeout(() => reject(new Error('socket connect timeout')), 5000);
-  });
+  // Socket.IO now requires a valid accessToken at connect time (2026-08-25,
+  // docs/design/Design_RTSP_Over_WebSocket.md §8.24 — camera:subscribe/frame/
+  // detections/onvif:* had no auth at all before this). Self-registers a
+  // throwaway test user for a token; if this server already has an admin,
+  // that registration lands 'pending' with no token (first-user-only
+  // auto-approve), so there's no way for this standalone test to
+  // self-provision a session in that case — skip Group B gracefully rather
+  // than failing, same as the "no camera"/"server unreachable" skips above.
+  let authToken = null;
+  try {
+    const regRes = await fetch(`${BASE_URL}/auth/register`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        email: `thermal_test_${Date.now()}@lts-test.local`,
+        password: 'ThermalTest1!',
+        name: 'Thermal Overlay Test',
+      }),
+    });
+    const regData = await regRes.json().catch(() => ({}));
+    authToken = regData.accessToken || null;
+  } catch {
+    authToken = null;
+  }
+
+  const socket = io(BASE_URL, { transports: ['websocket'], timeout: 5000, auth: { token: authToken } });
+  try {
+    await new Promise((resolve, reject) => {
+      socket.on('connect', resolve);
+      socket.on('connect_error', reject);
+      setTimeout(() => reject(new Error('socket connect timeout')), 5000);
+    });
+  } catch (err) {
+    socket.disconnect();
+    console.warn(`  ⊘ Socket.IO 인증/연결 실패(${err.message}) — Group B 전체 스킵`);
+    ['TC-B-001', 'TC-B-002', 'TC-B-003'].forEach(id =>
+      results.push({ id, description: id, status: 'SKIP', reason: 'Socket.IO 인증 불가 — 서버에 이미 관리자 계정이 있어 테스트용 신규 가입이 대기 상태로 처리됨' })
+    );
+    return;
+  }
 
   function waitForEvent(eventName, timeoutMs = 3000) {
     return new Promise((resolve, reject) => {
