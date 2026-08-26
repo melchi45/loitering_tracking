@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-CAM-01 |
-| **Version** | 1.20 |
+| **Version** | 1.21 |
 | **Status** | Active |
 | **Date** | 2026-07-03 |
 | **Parent SRS** | srs/SRS_Camera_Discovery.md |
@@ -423,6 +423,8 @@ No other logic changed; `SunapiMaxChannel`'s parallel expression was updated ide
 - **설치 검증 완료 (2026-08-25 후속)**: 사용자가 `server/.npmrc`에 유효한 GitHub PAT(`${NPM_TOKEN}` 환경변수 참조 방식)을 설정한 뒤 `npm install` 실행 — 첫 시도는 `up to date`로 조용히 실패(패키지가 실제로 설치되지 않음, `optionalDependencies`라 에러 없음). 원인 조사 결과 **`@melchi45/wisenet-udp-discovery`는 아직 정식 `1.0.0`을 배포하지 않고 `1.0.0-beta.371069f` 베타 태그만 배포된 상태**였고, `package.json`의 최초 버전 범위 `^1.0.0`은 세미버 규칙상 프리릴리스를 매칭하지 않아 npm이 해당 optionalDependency를 조용히 건너뛰고 있었음(레지스트리 직접 질의로 확인, GitHub Packages 인증 자체는 정상 200 응답). `"@melchi45/wisenet-udp-discovery": "1.0.0-beta.371069f"`(정확한 버전 고정)로 수정 후 재실행해 `added 1 package` 확인, `node_modules/@melchi45/wisenet-udp-discovery/{index.js,udpDiscovery.js,sunapi/}` 실존 확인, `test/api/nvr_channel_discovery.test.js`의 TC-H-026~034 9건 전부 실제 npm 패키지 대상으로 재통과(이전엔 패키지 미설치로 스킵되던 항목들 포함) — 회귀 없음 최종 확인. **후속 조치**: `melchi45/wisenet-camera-discovery`가 정식 `1.0.0` 안정 버전을 배포하면 `^1.0.0`으로 되돌릴 것(현재는 베타 정확 버전 고정이라 저자가 새 베타를 재배포해도 자동 추종하지 않음, 의도적 선택)
 
 관련 파일: `server/package.json`, `server/package-lock.json`(재생성 필요), `server/src/utils/udpDiscovery.js`, `server/.npmrc.example`(신규), `.gitignore`, `.gitmodules`(삭제), `.github/workflows/test.yml`, `README.md`, `docs/ops/Camera_Discovery_Guide.md`, `.claude/skills/camera-stream-setup/SKILL.md`, `.github/skills/camera-stream-setup/SKILL.md`.
+
+- **정식 안정 버전 배포 후 복귀 (2026-08-26)**: `melchi45/wisenet-camera-discovery`가 정식 `1.0.1`, `1.0.2`(`latest` 태그)를 배포해 위 "후속 조치"를 실행 — `"@melchi45/wisenet-udp-discovery": "^1.0.2"`(캐럿 범위로 복귀, 더 이상 베타 정확 버전 고정 불필요)로 변경. 전환 전 `v1.0.2` 태그의 `udpDiscovery.ts`/`sunapi/*`를 받아 기존 소스와 diff — TS 소스 대 컴파일된 JS라 포맷팅 차이만 있을 뿐 로직·필드명·이벤트명 전부 동일함을 확인. `npm install` 재실행해 정상 설치 확인(`node_modules/@melchi45/wisenet-udp-discovery/udpDiscovery.js` 로드·`UDPDiscovery` 생성자 동작 확인), `test/api/nvr_channel_discovery.test.js`의 TC-H-026~034 9건 재통과.
 
 ### 3.2 ONVIFDiscovery (`server/src/services/onvifDiscovery.js`)
 
@@ -899,3 +901,4 @@ url           = {http|https}://{chIP}:{nHttpPort|nHttpsPort}
 | 1.18 | 2026-08-10 | LTS Engineering Team | §7 npm 의존성 갱신 — `wisenet-chrome-ip-installer` 참조를 `#nodejs-udp-discovery`(master에 머지됨)에서 `#master`로 전환, SUNAPI 와이어 포맷 모듈의 `sunapi/` 이동과 루트 `files: ["nodejs", "sunapi"]`(~88KB) 반영. 서버 소비 서브패스(`nodejs/udpDiscovery`)는 변경 없음 — parity 테스트·라이브 탐색 재검증 완료 |
 | 1.19 | 2026-08-25 | LTS Engineering Team | §3.1i 신규 추가 — git submodule `submodules/WiseNetChromeIPInstaller` 완전 제거, `wisenet-chrome-ip-installer`(github: 참조) → `@melchi45/wisenet-udp-discovery`(GitHub Packages) 전환. 신규 저장소 소스를 기존 코드와 diff해 로직·필드명·이벤트명 100% 동일함을 확인(RTSP-over-WebSocket §8.21과 동일 마이그레이션 패턴), `main` 서브패스 함정 확인·반영. §7.3 "서브모듈 vs 인라인 폴백" 표(이미 §3.1f 이후로 갱신되지 않아 낡아 있던 서술)를 실제 단일 npm-패키지 경로로 정정. `npm install` 자체는 GitHub PAT 미보유로 이 세션에서 미검증 — `server/package-lock.json` 재생성 필요 |
 | 1.20 | 2026-08-25 | LTS Engineering Team | §3.1i 후속 — 사용자 PAT로 실제 `npm install` 검증 완료. 진짜 원인 발견: `@melchi45/wisenet-udp-discovery`는 정식 `1.0.0` 미배포(베타 `1.0.0-beta.371069f`만 존재), `package.json`의 `^1.0.0` 범위가 프리릴리스를 매칭하지 않아 optionalDependency가 조용히 스킵되고 있었음 — 정확한 베타 버전으로 고정해 해결. `node_modules` 설치 확인 + TC-H-026~034 9건 실제 재통과 확인, 회귀 없음. 정식 1.0.0 배포 시 `^1.0.0`으로 복귀 필요 |
+| 1.21 | 2026-08-26 | LTS Engineering Team | §3.1i 후속 — `melchi45/wisenet-camera-discovery`가 정식 `1.0.1`/`1.0.2`(`latest`) 배포, `^1.0.2`로 캐럿 범위 복귀(베타 정확 버전 고정 해제). `v1.0.2` 태그 소스 diff로 API 표면 동일 확인, `npm install` 재검증, TC-H-026~034 9건 재통과 |
