@@ -9,6 +9,7 @@ import { useAuthStore } from '../../stores/authStore';
 import { useOnvifEventStore, type OnvifEventType } from '../../stores/onvifEventStore';
 import { useSocket } from '../../hooks/useSocket';
 import AdminLogPanel from '../../components/AdminLogPanel';
+import LogRotationPanel from '../../components/LogRotationPanel';
 import IngestDaemonSection from '../../components/IngestDaemonSection';
 import { useWebRTCConfigStore, type WebRTCConfig, type TurnServer } from '../../stores/webrtcConfigStore';
 
@@ -2370,6 +2371,9 @@ function SystemSection({ apiFetch }: { apiFetch: (path: string, opts?: RequestIn
           <div className="text-xs text-gray-600">Loading…</div>
         )}
       </div>
+
+      {/* ── Log Storage & Rotation ───────────────────────────────────────────── */}
+      <LogRotationPanel apiFetch={apiFetch} />
     </div>
   );
 }

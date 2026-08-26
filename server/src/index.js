@@ -157,6 +157,16 @@ async function main() {
   const db = await _initDBWithRetry();
   console.log('[Server] Database initialised (mode:', require('./db').getStorageMode(), ')');
 
+  // Restore Admin Dashboard → System log storage path / rotation settings.
+  // Applies to this process's own logger.js instance (tailLogFile/admin display)
+  // and, under startServer.js (production), relays to the supervisor process
+  // that actually owns the log file handle — see logConfigService.js header.
+  try {
+    require('./services/logConfigService').restoreOnBoot();
+  } catch (err) {
+    console.warn('[Server] Failed to restore log rotation config:', err.message);
+  }
+
   // Date-based retention for onvif_snapshots/detectionSnapshots (MongoDB only —
   // see snapshotArchiveService.js). No-op under DB_TYPE=json.
   require('./services/snapshotArchiveService').start();

@@ -24,6 +24,21 @@
  *   LOG_FILTER_PATTERNS=<csv>   comma-separated regex strings; matching lines are
  *                               suppressed regardless of level.
  *                               Example: \[hls @.*\] Skip,EXT-X-DATERANGE.*PREDICT
+ *   LOG_MAX_FILE_SIZE_MB=50     size (MB) at which the active log file is split
+ *   LOG_MAX_FILES=10            max rotated/backdated log files kept before the
+ *                               oldest (by mtime) is deleted
+ *
+ * These three (dir/maxFileSizeMB/maxFiles) are also runtime-adjustable via
+ * setLogConfig() — Admin Dashboard → System persists them to the `settings`
+ * table (services/logConfigService.js) and restores them on every boot. The
+ * env vars above only seed the very first run.
+ *
+ * IMPORTANT: the actual file handle lives in whichever process calls
+ * openLogFile() — in production that is the startServer.js SUPERVISOR
+ * process, not the Express server process (index.js) where the Admin API
+ * runs. setLogConfig() changes made from the Admin API only take effect on
+ * the file itself once relayed to the supervisor via IPC — see
+ * scripts/startServer.js's child.on('message', ...) handler.
  */
 
 const fs   = require('fs');
@@ -44,8 +59,24 @@ let _runtimeMinLevel = MIN_LEVEL;
 // ─── Configuration ────────────────────────────────────────────────────────────
 
 const LOG_TO_FILE  = (process.env.LOG_TO_FILE ?? 'true').toLowerCase() !== 'false';
-const LOG_DIR      = process.env.LOG_DIR || '/var/log/lts';
 const FALLBACK_DIR = path.resolve(__dirname, '..', '..', 'logs');
+
+const DEFAULT_MAX_FILE_SIZE_MB = 50;
+const DEFAULT_MAX_FILES        = 10;
+
+// Mutable at runtime via setLogConfig() — env vars only seed the first run.
+// `dir` mirrors the old LOG_DIR constant; `maxFileSizeMB`/`maxFiles` drive
+// size-based rotation (see _rotate()/_enforceMaxFiles() below).
+let _cfg = {
+  dir:           process.env.LOG_DIR || '/var/log/lts',
+  maxFileSizeMB: parseInt(process.env.LOG_MAX_FILE_SIZE_MB, 10) || DEFAULT_MAX_FILE_SIZE_MB,
+  maxFiles:      parseInt(process.env.LOG_MAX_FILES, 10) || DEFAULT_MAX_FILES,
+};
+
+/** Returns a copy of the current runtime log config (dir/maxFileSizeMB/maxFiles). */
+function getLogConfig() {
+  return { ..._cfg };
+}
 
 // ─── Filter patterns ──────────────────────────────────────────────────────────
 
@@ -119,40 +150,192 @@ function formatTs() {
 
 // ─── Log-file management ─────────────────────────────────────────────────────
 
-let _logStream = null;
-let _logDate   = '';
+let _logStream  = null;
+let _logDate    = '';
+let _logDir     = '';   // directory actually in use (may be FALLBACK_DIR)
+let _logPath    = '';   // full path of the currently open file
+let _fallback   = false; // true when _logDir === FALLBACK_DIR (configured dir failed)
+let _currentSizeBytes = 0;
+
+// Archived (rotated) files use this suffix so they never collide with the
+// live per-day filename `lts-YYYY-MM-DD.log` that openLogFile()/_dateStr()
+// produce — e.g. `lts-2026-08-26_143205123-1.log`.
+const ARCHIVE_RE = /^lts-\d{4}-\d{2}-\d{2}(_\d{9}-\d+)?\.log$/;
 
 function _dateStr() {
   const n = new Date();
   return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,'0')}-${String(n.getDate()).padStart(2,'0')}`;
 }
 
+// Monotonic counter appended to every archive name — a burst of rotations
+// (e.g. a synchronous flood of ERROR lines) can hit _rotate() more than once
+// within the same millisecond; time-of-day alone would let the second rename
+// silently clobber the first archive file.
+let _archiveSeq = 0;
+
+function _archiveSuffix() {
+  const n  = new Date();
+  const hh = String(n.getHours()).padStart(2, '0');
+  const mm = String(n.getMinutes()).padStart(2, '0');
+  const ss = String(n.getSeconds()).padStart(2, '0');
+  const ms = String(n.getMilliseconds()).padStart(3, '0');
+  _archiveSeq += 1;
+  return `${hh}${mm}${ss}${ms}-${_archiveSeq}`;
+}
+
 function _tryOpen(dir, dateStr) {
   fs.mkdirSync(dir, { recursive: true });
   const logPath = path.join(dir, `lts-${dateStr}.log`);
-  const stream  = fs.createWriteStream(logPath, { flags: 'a', encoding: 'utf8' });
+  // fs.createWriteStream(path) opens the underlying fd lazily/asynchronously —
+  // under size-based rotation, a tight burst of writes can trigger a second
+  // _rotate() before that async open completes, so fs.renameSync() would race
+  // against a file that doesn't exist on disk yet (ENOENT). fs.openSync()
+  // creates it synchronously first; handing the fd to createWriteStream makes
+  // stream creation itself synchronous from the filesystem's point of view.
+  const fd = fs.openSync(logPath, 'a');
+  const existingSize = fs.fstatSync(fd).size;
+  const stream = fs.createWriteStream(null, { fd, encoding: 'utf8' });
   stream.on('error', (err) => {
     process.stderr.write(`[Logger] Log write error: ${err.message}\n`);
     _logStream = null;
   });
-  return { stream, logPath };
+  return { stream, logPath, existingSize };
 }
 
-/** Opens (or re-opens on midnight rotation) the daily log file. */
+/** Opens (or re-opens on midnight/size rotation) the daily log file. */
 function openLogFile() {
   if (!LOG_TO_FILE) return;
   const dateStr = _dateStr();
-  for (const dir of [LOG_DIR, FALLBACK_DIR]) {
+  const dirs = [_cfg.dir, FALLBACK_DIR];
+  for (const dir of dirs) {
     try {
-      const { stream, logPath } = _tryOpen(dir, dateStr);
+      const { stream, logPath, existingSize } = _tryOpen(dir, dateStr);
       _logStream = stream;
       _logDate   = dateStr;
+      _logDir    = dir;
+      _logPath   = logPath;
+      _fallback  = dir === FALLBACK_DIR && dir !== _cfg.dir;
+      _currentSizeBytes = existingSize;
       process.stderr.write(`[Logger] Writing to ${logPath} (level=${_levelStr})\n`);
       return;
     } catch (err) {
-      process.stderr.write(`[Logger] Cannot open ${dir}: ${err.message}${dir === LOG_DIR ? ' — trying fallback' : ''}\n`);
+      process.stderr.write(`[Logger] Cannot open ${dir}: ${err.message}${dir === _cfg.dir ? ' — trying fallback' : ''}\n`);
     }
   }
+}
+
+/** Deletes the oldest archived log files in _logDir beyond _cfg.maxFiles (the active file is never counted/deleted). */
+function _enforceMaxFiles() {
+  if (!_logDir) return;
+  try {
+    const entries = fs.readdirSync(_logDir)
+      .filter(name => ARCHIVE_RE.test(name) && path.join(_logDir, name) !== _logPath)
+      .map(name => {
+        const p = path.join(_logDir, name);
+        try { return { name, p, mtime: fs.statSync(p).mtimeMs }; } catch (_) { return null; }
+      })
+      .filter(Boolean)
+      .sort((a, b) => a.mtime - b.mtime); // oldest first
+
+    const excess = entries.length - _cfg.maxFiles;
+    for (let i = 0; i < excess; i++) {
+      try { fs.unlinkSync(entries[i].p); } catch (err) {
+        process.stderr.write(`[Logger] Failed to delete ${entries[i].p}: ${err.message}\n`);
+      }
+    }
+  } catch (err) {
+    process.stderr.write(`[Logger] Failed to enforce max log files in ${_logDir}: ${err.message}\n`);
+  }
+}
+
+/** Renames the current file to an archive name and opens a fresh active file. Used by both size- and manual-triggered rotation. */
+function _rotate() {
+  if (!_logStream || !_logPath) return;
+  const oldPath = _logPath;
+  const archivePath = oldPath.replace(/\.log$/, `_${_archiveSuffix()}.log`);
+  _logStream.end();
+  _logStream = null;
+  try {
+    fs.renameSync(oldPath, archivePath);
+  } catch (err) {
+    process.stderr.write(`[Logger] Failed to archive ${oldPath}: ${err.message}\n`);
+  }
+  openLogFile();
+  _enforceMaxFiles();
+}
+
+/** Manually triggers a rotation right now, regardless of current file size. No-op if file logging is disabled or not yet open. */
+function forceRotate() {
+  if (!LOG_TO_FILE || !_logStream) return false;
+  _rotate();
+  return true;
+}
+
+/**
+ * Updates the runtime log config (dir/maxFileSizeMB/maxFiles). Any subset of
+ * keys may be provided; omitted keys keep their current value. If `dir`
+ * changes, the active file is closed and a fresh one opened at the new
+ * location (existing content is left in place, not moved).
+ */
+function setLogConfig(partial = {}) {
+  const next = { ..._cfg };
+  if (partial.dir !== undefined && partial.dir !== null && String(partial.dir).trim()) {
+    next.dir = String(partial.dir).trim();
+  }
+  if (partial.maxFileSizeMB !== undefined && Number.isFinite(Number(partial.maxFileSizeMB))) {
+    next.maxFileSizeMB = Math.max(1, Math.round(Number(partial.maxFileSizeMB)));
+  }
+  if (partial.maxFiles !== undefined && Number.isFinite(Number(partial.maxFiles))) {
+    next.maxFiles = Math.max(1, Math.round(Number(partial.maxFiles)));
+  }
+
+  const dirChanged = next.dir !== _cfg.dir;
+  _cfg = next;
+
+  if (dirChanged && LOG_TO_FILE) {
+    if (_logStream) { _logStream.end(); _logStream = null; }
+    openLogFile();
+  }
+  _enforceMaxFiles();
+  return getLogConfig();
+}
+
+/**
+ * Returns current log storage stats: effective directory, fallback status,
+ * the active file, and the archived files sorted newest-first — used by
+ * GET /admin/system/logs.
+ */
+function getLogStats() {
+  const files = [];
+  let totalBytes = 0;
+  if (_logDir) {
+    try {
+      for (const name of fs.readdirSync(_logDir)) {
+        if (!ARCHIVE_RE.test(name)) continue;
+        const p = path.join(_logDir, name);
+        if (p === _logPath) continue;
+        try {
+          const st = fs.statSync(p);
+          files.push({ name, sizeBytes: st.size, mtime: st.mtimeMs });
+          totalBytes += st.size;
+        } catch (_) { /* skip unreadable file */ }
+      }
+    } catch (_) { /* dir unreadable */ }
+  }
+  files.sort((a, b) => b.mtime - a.mtime);
+
+  return {
+    config: getLogConfig(),
+    effectiveDir: _logDir || _cfg.dir,
+    fallbackActive: _fallback,
+    ipcAvailable: !!process.send,
+    currentFile: _logPath
+      ? { name: path.basename(_logPath), sizeBytes: _currentSizeBytes }
+      : null,
+    files,
+    totalFiles: files.length,
+    totalBytes: totalBytes + _currentSizeBytes,
+  };
 }
 
 function _writeToFile(line) {
@@ -163,8 +346,16 @@ function _writeToFile(line) {
     _logStream = null;
     _logDate   = '';
     openLogFile();
+    _enforceMaxFiles();
   }
-  if (_logStream) _logStream.write(line + '\n');
+  if (_logStream) {
+    const bytes = Buffer.byteLength(line, 'utf8') + 1; // +1 for the trailing \n
+    _logStream.write(line + '\n');
+    _currentSizeBytes += bytes;
+    if (_currentSizeBytes >= _cfg.maxFileSizeMB * 1024 * 1024) {
+      _rotate();
+    }
+  }
 }
 
 // ─── Socket.IO real-time relay ────────────────────────────────────────────────
@@ -257,7 +448,7 @@ function installSocketRelay(io) {
  * @returns {{ ts: string, level: string, msg: string, t: number }[]}
  */
 function tailLogFile({ prefix = null, limit = 200 } = {}) {
-  const dirs = [LOG_DIR, FALLBACK_DIR];
+  const dirs = [_cfg.dir, FALLBACK_DIR];
   const date = _dateStr();
   for (const dir of dirs) {
     const p = path.join(dir, `lts-${date}.log`);
@@ -347,4 +538,8 @@ module.exports = {
   getLogLevel,
   getRecentLogs,
   tailLogFile,
+  getLogConfig,
+  setLogConfig,
+  getLogStats,
+  forceRotate,
 };

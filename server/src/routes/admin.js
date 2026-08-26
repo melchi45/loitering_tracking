@@ -13,7 +13,10 @@ const { verifyAccessToken } = require('../middleware/auth');
 const { requireRole }       = require('../middleware/role');
 const { getSystemMetrics }  = require('../services/systemMetrics');
 const { getDbStats, getDbDetailedStats } = require('../db');
-const { getRecentLogs, setLogLevel, getLogLevel, tailLogFile } = require('../utils/logger');
+const { getRecentLogs, setLogLevel, getLogLevel, tailLogFile, getLogStats, setLogConfig } = require('../utils/logger');
+const logConfigService = require('../services/logConfigService');
+const fs = require('fs');
+const path = require('path');
 
 // All admin routes require authentication + admin role
 router.use(verifyAccessToken);
@@ -198,6 +201,91 @@ router.patch('/logs/level', (req, res) => {
   });
 
   res.json({ ok: true, level: getLogLevel() });
+});
+
+// ── Log Storage & Rotation (Admin Dashboard → System) ─────────────────────────
+// docs/design/Design_Log_Rotation.md — the actual log file handle is owned by
+// the startServer.js SUPERVISOR process in production (npm run start/streaming/
+// analysis), not this Express process. GET reads/PUT writes this process's own
+// utils/logger.js state (used for display + tailLogFile()) and the persisted
+// `settings` row; PUT/rotate additionally relay to the supervisor via
+// process.send() (IPC) so the change actually reaches the file writer. Under
+// `npm run dev*` there is no supervisor/IPC — changes persist but never rotate
+// anything live, which is why every response includes `ipcAvailable`.
+
+// Tests that `dir` can actually be created and written to before persisting it,
+// so a bad path fails the PUT with a clear 400 instead of silently falling back
+// to logger.js's own FALLBACK_DIR later.
+function _assertDirWritable(dir) {
+  fs.mkdirSync(dir, { recursive: true });
+  const probe = path.join(dir, `.lts-write-test-${process.pid}`);
+  fs.writeFileSync(probe, '');
+  fs.unlinkSync(probe);
+}
+
+// ── GET /admin/system/logs ────────────────────────────────────────────────────
+router.get('/system/logs', (_req, res) => {
+  res.json(getLogStats());
+});
+
+// ── PUT /admin/system/logs ────────────────────────────────────────────────────
+// Body: { dir?: string, maxFileSizeMB?: number, maxFiles?: number }
+router.put('/system/logs', (req, res) => {
+  const { dir, maxFileSizeMB, maxFiles } = req.body ?? {};
+  const patch = {};
+
+  if (dir !== undefined) {
+    if (typeof dir !== 'string' || !dir.trim())
+      return res.status(400).json({ error: 'dir must be a non-empty string' });
+    const resolved = path.resolve(dir.trim());
+    try {
+      _assertDirWritable(resolved);
+    } catch (err) {
+      return res.status(400).json({ error: `dir is not writable: ${err.message}` });
+    }
+    patch.dir = resolved;
+  }
+
+  if (maxFileSizeMB !== undefined) {
+    const n = Number(maxFileSizeMB);
+    if (!Number.isFinite(n) || n < 1 || n > 10240)
+      return res.status(400).json({ error: 'maxFileSizeMB must be a number between 1 and 10240' });
+    patch.maxFileSizeMB = Math.round(n);
+  }
+
+  if (maxFiles !== undefined) {
+    const n = Number(maxFiles);
+    if (!Number.isFinite(n) || n < 1 || n > 1000)
+      return res.status(400).json({ error: 'maxFiles must be a number between 1 and 1000' });
+    patch.maxFiles = Math.round(n);
+  }
+
+  if (Object.keys(patch).length === 0)
+    return res.status(400).json({ error: 'Body must include at least one of: dir, maxFileSizeMB, maxFiles' });
+
+  try {
+    const saved = logConfigService.setLogConfig(patch);
+    setLogConfig(patch); // apply to this process's own logger.js instance (display + tailLogFile)
+    if (process.send) process.send({ type: 'lts:logConfig', payload: saved }); // relay to supervisor (production)
+
+    AuditService.log({ event: 'log_config_changed', actorId: req.user.sub, detail: patch });
+
+    res.json(getLogStats());
+  } catch (err) {
+    console.error('[admin/system/logs PUT]', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// ── POST /admin/system/logs/rotate ────────────────────────────────────────────
+// Manually triggers a split right now, regardless of current file size.
+router.post('/system/logs/rotate', (req, res) => {
+  if (!process.send) {
+    return res.status(501).json({ error: 'Rotation requires running via startServer.js (npm run start|streaming|analysis) — not available under npm run dev*' });
+  }
+  process.send({ type: 'lts:logRotate' });
+  AuditService.log({ event: 'log_rotate_requested', actorId: req.user.sub });
+  res.json({ ok: true });
 });
 
 // ── ingest-daemon control (Design_Ingest_Daemon_Control.md) ──────────────────

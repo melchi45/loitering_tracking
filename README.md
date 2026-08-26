@@ -1828,6 +1828,7 @@ Setup (once per machine): copy `server/.npmrc.example` → `server/.npmrc` and `
 | 7 | Loitering Logic | `behaviorEngine.js` 슬라이딩 윈도우 변위 · pacing score · 5-factor 위험 점수 · 크로스 ID 전이 · 구역 트리거 | — | ✅ Done | May 19, 2026 |
 | 8 | Attribute Pipeline | SCRFD 얼굴 감지 · ArcFace Re-ID · PPE(안전모/마스크) · 색상/의상 분석(OpenPAR) · 화재/연기(YOLOv8s) | — | ✅ Done | May 19, 2026 |
 | 9 | Integration | E2E 파이프라인 · combined/streaming/analysis 모드 · WebRTC(mediamtx/mediasoup) · YouTube 수집 · MCP 서버 | — | ✅ Done | May 28, 2026 |
+| 9-A | YouTube PO Token 대응 | YouTube의 PO Token(Proof-of-Origin) 요구 확대에 대응하는 opt-in 사전 예방 로직 구현 완료 — `bgutil-ytdlp-pot-provider` 사이드카(Docker, 포트 4416) + JS 런타임(Node) 둘 다 감지될 때만 `--extractor-args youtube:player_client=mweb` 적용, 실패 시 기존 동작(§12.4/§12.5 사후 대응)으로 안전 폴백. `youtubeStreamService.js`/`docker-compose.yml`/`.env.example`/setup-env 스크립트 전부 반영, 기본 비활성(opt-in) — [Design_YouTube_RTSP_Ingest.md §12.6](docs/design/Design_YouTube_RTSP_Ingest.md), FR-YT-016 | 실제 사이드카를 띄운 라이브 YouTube 채널 대상 E2E 검증 미실시(코드 레벨 검증만 완료) | 🟡 In Progress | Aug 26, 2026 |
 | 10 | UAT & QA | HOTA/MOTA 벤치마크 · 회귀 테스트(KF/IoU/NaN) · 보안 감사 · `test/` Jest 스위트 | — | ✅ Done | May 28, 2026 |
 | 11 | User Auth | JWT RS256 · bcrypt · RBAC(admin/operator/viewer) · refresh token 로테이션 · admin 승인 · AuditService · **Google OAuth 2.0**(passport-google-oauth20) · **Microsoft OAuth**(MSAL, @azure/msal-node) | 이메일 인증 · 2FA(TOTP) | ✅ Done | May 28, 2026 |
 | 11-B | Missing Person | `missingPersonService.js` · ArcFace 임베딩 비교 · 실종자 등록/탐지/통계 · MCP 도구 5종 | UI 뷰 보강 | ✅ Done | Jun 2026 |
@@ -1844,7 +1845,7 @@ Setup (once per machine): copy `server/.npmrc.example` → `server/.npmrc` and `
 | 18 | Map Layout | — | 도면/위성맵 카메라 배치 전체 미착수 | 🔲 Planned | Oct 20, 2026 |
 | 19 | Privacy & Audit | **AuditService.js** 불변 감사 로그(최대 10,000건) · RBAC 접근 이력 · `/admin/audit` UI | 얼굴 블러/익명화 미착수 · GDPR 삭제 API 미착수 | ⚠️ Partial | Nov 3, 2026 |
 | 20 | AI Model Mgmt | **전체 AI 모델 카탈로그**(YOLO 감지기 20종 YOLOv8/11/12/26 n/s/m/l/x + 얼굴 감지·인식(SCRFD/ArcFace)·PPE·화재연기·의상PAR·Human Parsing·Appearance Re-ID 8종, 총 28종) · family별 독립 다운로드/전환(direct ONNX·HuggingFace PT 변환·수동export) · **런타임 모델 전환**(family별 독립 hot-swap) · **Admin UI** AiModelsSection(family별 테이블) — 2026-07-30부로 옛 사이드바 Analytics 탭을 통합해 **Model Selection**(Active/Deactivate) · **Analytics Categories**(카테고리 On/Off, 전체 COCO 80종 포함) · **Tracking & Sensitivity Tuning**(Appearance Weights/Kalman/Fire-Smoke) 3개 섹션으로 명확히 분리 | 커스텀 모델 업로드 미착수 · 카메라별 모델 배정 UI 미착수 · A/B 테스트 미착수 · SSE 실시간 진행률 미구현(2초 폴링으로 대체) · Admin Dashboard 모바일 미최적화 | ⚠️ Partial | Jul 30, 2026 |
-| 21 | Deployment | **Docker Compose** 단일 명령 배포 · **프로덕션 로그**(레벨 필터 · `/var/log/lts`) · `npm run start/stop` 프로세스 관리 · `/admin/system` CPU/메모리/GPU/디스크 메트릭 | Prometheus `/metrics` 미착수 · OpenAPI 문서 미착수 · K8s/Helm 미착수(→ ES-8) | ⚠️ Partial | Dec 1, 2026 |
+| 21 | Deployment | **Docker Compose** 단일 명령 배포 · **프로덕션 로그**(레벨 필터 · `/var/log/lts` · Admin Dashboard 저장 경로/크기 기반 로테이션·개수 기반 자동 삭제 설정, 2026-08-26) · `npm run start/stop` 프로세스 관리 · `/admin/system` CPU/메모리/GPU/디스크 메트릭 | Prometheus `/metrics` 미착수 · OpenAPI 문서 미착수 · K8s/Helm 미착수(→ ES-8) | ⚠️ Partial | Dec 1, 2026 |
 
 ### 14.2 Enterprise Scale 마일스톤 — 대규모 분산 / 이중화 (TODO)
 

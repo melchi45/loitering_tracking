@@ -12,7 +12,8 @@ try {
   // Continue with process env when dotenv is unavailable.
 }
 
-const { openLogFile, patchConsole, makeLineRelay } = require('../utils/logger');
+const logger = require('../utils/logger');
+const { openLogFile, patchConsole, makeLineRelay } = logger;
 openLogFile();
 patchConsole();
 
@@ -478,11 +479,24 @@ async function main() {
   }
 
   const child = spawn(nodeExec, [serverEntry], {
-    stdio: ['inherit', 'pipe', 'pipe'],
+    // 4th 'ipc' slot lets index.js (Admin API, Log Storage & Rotation panel)
+    // push logConfig changes to THIS process via process.send()/child.on('message')
+    // — this process is the one that actually owns the log file handle
+    // (openLogFile()/patchConsole() above), see utils/logger.js header comment
+    // and docs/design/Design_Log_Rotation.md.
+    stdio: ['inherit', 'pipe', 'pipe', 'ipc'],
     env: childEnv,
   });
   child.stdout.on('data', makeLineRelay('', process.stdout));
   child.stderr.on('data', makeLineRelay('', process.stderr));
+  child.on('message', (msg) => {
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.type === 'lts:logConfig' && msg.payload) {
+      logger.setLogConfig(msg.payload);
+    } else if (msg.type === 'lts:logRotate') {
+      logger.forceRotate();
+    }
+  });
 
   child.on('error', (err) => {
     console.error(`[Start] Failed to launch server with "${nodeExec}": ${err.message}`);

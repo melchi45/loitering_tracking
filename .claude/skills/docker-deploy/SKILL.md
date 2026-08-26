@@ -10,13 +10,14 @@ argument-hint: "배포 환경 또는 작업 (예: production, staging, restart, 
 
 ```
 docker-compose.yml
-├── qdrant         — 벡터 DB, opt-in (포트 6333, 6334) — QDRANT_ENABLED=true 없이는 서버가 연결 안 함, 무해
+├── qdrant             — 벡터 DB, opt-in (포트 6333, 6334) — QDRANT_ENABLED=true 없이는 서버가 연결 안 함, 무해
+├── bgutil-pot-provider — YouTube PO Token provider, opt-in (포트 4416) — YTDLP_POT_PROVIDER_ENABLED=true 없이는 서버가 호출 안 함, 무해 (Implemented, 2026-08-26)
 ├── mediamtx       — RTSP/WebRTC/HLS 미디어 프록시 (포트 8554, 8889, 9997)
 ├── server         — Node.js 백엔드 API + AI 파이프라인 (포트 3080)
 └── client         — React 정적 파일 (Nginx, 포트 3000)
 ```
 
-`docker compose up -d`는 `qdrant`도 함께 기동합니다(기본 포함, opt-in). `qdrant`만 개별로 올리려면 `docker compose up -d qdrant`. 상세: [`docs/ops/Distributed_AI_Pipeline_Setup.md` §7.5](../../../docs/ops/Distributed_AI_Pipeline_Setup.md#75-qdrant-벡터-db-opt-in--ai-05-phase-3--crosscamera-phase-2).
+`docker compose up -d`는 `qdrant`/`bgutil-pot-provider`도 함께 기동합니다(기본 포함, opt-in). 개별로 올리려면 `docker compose up -d qdrant` / `docker compose up -d bgutil-pot-provider`. 상세: [`docs/ops/Distributed_AI_Pipeline_Setup.md` §7.5](../../../docs/ops/Distributed_AI_Pipeline_Setup.md#75-qdrant-벡터-db-opt-in--ai-05-phase-3--crosscamera-phase-2), [`docs/design/Design_YouTube_RTSP_Ingest.md` §12.6](../../../docs/design/Design_YouTube_RTSP_Ingest.md).
 
 ## 기본 운영 명령
 
@@ -91,14 +92,18 @@ grep '\[WARNING\]' /var/log/lts/lts-$(date +%Y-%m-%d).log
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `LOG_TO_FILE` | `true` | `false`로 설정 시 파일 저장 비활성화 |
-| `LOG_DIR` | `/var/log/lts` | 로그 디렉토리. 권한 없을 시 `server/logs/`로 자동 폴백 |
+| `LOG_DIR` | `/var/log/lts` | 로그 디렉토리. 권한 없을 시 `server/logs/`로 자동 폴백. **최초 부팅 시에만** 참조(이후는 Admin Dashboard 설정이 우선) |
 | `LOG_LEVEL` | `INFO` | 최소 레벨: `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`/`NONE` |
 | `LOG_FILTER_PATTERNS` | `` | 쉼표 구분 정규식 — 매칭 줄 강제 억제 |
+| `LOG_MAX_FILE_SIZE_MB` | `50` | 활성 로그 파일이 이 크기(MB)를 넘으면 분할(split). **최초 부팅 시에만** 참조 |
+| `LOG_MAX_FILES` | `10` | 보관할 분할 로그 파일 최대 개수 — 초과 시 가장 오래된 파일 자동 삭제. **최초 부팅 시에만** 참조 |
 
 > `LOG_LEVEL=INFO`(기본) 설정 시 ffmpeg `[hls @ 0x...] Skip` 노이즈가 자동 필터링됩니다.
 > `LOG_LEVEL=DEBUG`로 변경하면 yt-dlp/ffmpeg 전체 verbose 출력을 볼 수 있습니다.
 
-상세 내용 → [`docs/ops/Logging_Guide.md`](../../../docs/ops/Logging_Guide.md)
+**로그 저장 경로/크기 기반 로테이션 설정**은 Admin Dashboard → System → *Log Storage & Rotation* 패널에서 재시작 없이 변경할 수 있습니다(`GET/PUT /admin/system/logs`, `POST /admin/system/logs/rotate`) — `settings` 테이블에 영속화되며 combined/streaming/analysis 전 모드 공통 동작. `npm run dev*`(개발 모드)에서는 저장만 되고 실제 파일에는 반영되지 않습니다(로거 자체가 프로덕션 전용).
+
+상세 내용 → [`docs/ops/Logging_Guide.md`](../../../docs/ops/Logging_Guide.md), [`docs/design/Design_Log_Rotation.md`](../../../docs/design/Design_Log_Rotation.md)
 
 ## 환경변수 파일 규칙
 
@@ -243,6 +248,7 @@ curl -I http://localhost:3000
 | mediamtx API | 9997 | MediaMTX 관리 API |
 | MongoDB | 27017 | 데이터베이스 |
 | Qdrant | 6333, 6334 | 벡터 DB (opt-in, `QDRANT_ENABLED=true`) |
+| bgutil-pot-provider | 4416 | YouTube PO Token provider (opt-in, `YTDLP_POT_PROVIDER_ENABLED=true`, Implemented) |
 
 ## 프로세스 관리 및 종료
 
@@ -329,6 +335,7 @@ chmod -R 755 server/models server/storage
 | `server/.env` (`SERVER_MODE` 변경) | `docs/design/Design_Server_Architecture.md` 모드별 기능 매트릭스 |
 | 새 서비스 컨테이너 추가 | `docs/design/Design_LTS2026_Loitering_Tracking_System.md` 배포 아키텍처 다이어그램 + Ops 가이드 신규 추가 |
 | `docker-compose.yml` (`qdrant` 서비스), `QDRANT_ENABLED`/`QDRANT_URL` | `docs/ops/Distributed_AI_Pipeline_Setup.md` §5.1/§7.5, `docs/design/Design_AI_AppearanceReID.md` §12.3 |
+| `docker-compose.yml` (`bgutil-pot-provider` 서비스), `YTDLP_POT_PROVIDER_ENABLED`/`YTDLP_POT_PROVIDER_URL` | `docs/design/Design_YouTube_RTSP_Ingest.md` §12.6, `docs/srs/SRS_YouTube_RTSP_Ingest.md` FR-YT-016 |
 
 **공통 규칙**
 - **포트 변경** → Design 아키텍처 포트 표 + SRS 시스템 제약 + Ops 가이드 업데이트
