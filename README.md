@@ -131,7 +131,7 @@ kill $(lsof -ti tcp:3002)
 fuser -k 3002/tcp
 ```
 
-> **HTTP/SSE Health Check:** `GET http://localhost:3002/health` → `{ "status": "ok" }`  
+> **HTTP/SSE Health Check:** `GET http://localhost:3002/health` → `{ "status": "ok" }`
 > **Environment Variables:**
 > | Variable | Default | Description |
 > |---|---|---|
@@ -328,7 +328,7 @@ Phase 3 — ICE Candidate report
   PASS — ICE connection verified, video data flow normal
 ```
 
-**Screenshot on failure:** `/tmp/lts-ice-test-fail.png`  
+**Screenshot on failure:** `/tmp/lts-ice-test-fail.png`
 **Screenshot on success:** `/tmp/lts-ice-test-ok.png`
 
 #### Method 1 — Web UI ICE Panel (recommended)
@@ -1311,8 +1311,8 @@ Label format: `person #3  94%` (className + objectId + confidence)
 
 ### 7.5 Installed AI Model File Status
 
-> Verification environment: **onnxruntime-node 1.26.0** (Node.js, 2026-05-18)  
-> Python onnxruntime 1.14.1 does not support `yolov8n.onnx` (ONNX IR v9) — works only with Node.js runtime  
+> Verification environment: **onnxruntime-node 1.26.0** (Node.js, 2026-05-18)
+> Python onnxruntime 1.14.1 does not support `yolov8n.onnx` (ONNX IR v9) — works only with Node.js runtime
 > Full catalog source of truth: `MODEL_CATALOG` / `EXTENDED_CATALOG` in [`analysisApi.js`](server/src/routes/analysisApi.js), managed via Admin Dashboard → **AI Models** tab (`GET/POST /api/analysis/models*`, see [§6. AI Models & Inference Pipeline](#6-ai-models--inference-pipeline) and `docs/design/Design_AI_Model_Catalog.md`).
 
 #### 7.5.1 Core pipeline models (always active)
@@ -1416,7 +1416,7 @@ Each `InferenceSession` created by the ONNX Runtime spawns **intra-op worker thr
 | `protectiveEquipService.js` | `yolov8m_ppe.onnx` | 1 |
 | `colorClothService.js` | `openpar.onnx` | 1 |
 
-Total threads in dev mode = 5 sessions × 1 thread = **5 threads**.  
+Total threads in dev mode = 5 sessions × 1 thread = **5 threads**.
 Total threads in prod mode (32-core server) = 5 sessions × 8 threads = **40 threads**.
 
 #### CUDA Enablement
@@ -1653,7 +1653,7 @@ The Zone Editor opens as a full-viewport overlay when the **+ Zone** button is c
 
 Double-clicking any camera cell in the grid opens a fullscreen overlay with a dedicated left-side detection panel.
 
-**Trigger:** Double-click on any camera cell in the multi-camera grid  
+**Trigger:** Double-click on any camera cell in the multi-camera grid
 **Exit:** Click the × button, press `Escape`, or click the dimmed background
 
 **Layout:**
@@ -1699,7 +1699,7 @@ Objects are sorted: loitering first, then by descending dwell time.
 
 **Socket.IO subscription reference counting:**
 
-The fullscreen view renders an additional `useCamera(cameraId)` hook for the same camera.  
+The fullscreen view renders an additional `useCamera(cameraId)` hook for the same camera.
 A module-level `subscriptionCounts` map ensures `camera:subscribe` is emitted only on the **first** subscriber and `camera:unsubscribe` only when the **last** subscriber unmounts — preventing the grid cell from losing its stream when the fullscreen modal closes.
 
 ![Fullscreen Camera View — loitering detection with cloth analysis, zone overlay, and real-time detection panel](docs/screenshots/camera_detection.png)
@@ -1815,7 +1815,7 @@ Setup (once per machine): copy `server/.npmrc.example` → `server/.npmrc` and `
 
 ## 14. Project Milestones & Deliverables
 
-> **범례**: ✅ Done — 완전 구현 · ⚠️ Partial — 핵심 기능 구현, 일부 미완 · 🔲 Planned — 미착수
+> **범례**: ✅ Done — 핵심 기능 구현 완료(잔여 항목은 향후 개선 과제일 뿐 기능 자체는 동작) · 🟡 In Progress — 핵심 로직은 구현됐으나 설명된 범위(Phase) 자체가 아직 부분적으로만 배선/완료됨 · ⚠️ Partial — 일부 하위 기능이 통째로 미착수 · 🔲 Planned — 미착수
 
 | Phase | Milestone | 구현 내역 | 미구현 / 잔여 | Status | Date |
 |:---:|---|---|---|:---:|:---:|
@@ -1828,12 +1828,12 @@ Setup (once per machine): copy `server/.npmrc.example` → `server/.npmrc` and `
 | 7 | Loitering Logic | `behaviorEngine.js` 슬라이딩 윈도우 변위 · pacing score · 5-factor 위험 점수 · 크로스 ID 전이 · 구역 트리거 | — | ✅ Done | May 19, 2026 |
 | 8 | Attribute Pipeline | SCRFD 얼굴 감지 · ArcFace Re-ID · PPE(안전모/마스크) · 색상/의상 분석(OpenPAR) · 화재/연기(YOLOv8s) | — | ✅ Done | May 19, 2026 |
 | 9 | Integration | E2E 파이프라인 · combined/streaming/analysis 모드 · WebRTC(mediamtx/mediasoup) · YouTube 수집 · MCP 서버 | — | ✅ Done | May 28, 2026 |
-| 9-A | YouTube PO Token 대응 | YouTube의 PO Token(Proof-of-Origin) 요구 확대에 대응하는 opt-in 사전 예방 로직 구현 완료 — `bgutil-ytdlp-pot-provider` 사이드카(Docker, 포트 4416) + JS 런타임(Node) 둘 다 감지될 때만 `--extractor-args youtube:player_client=mweb` 적용, 실패 시 기존 동작(§12.4/§12.5 사후 대응)으로 안전 폴백. `youtubeStreamService.js`/`docker-compose.yml`/`.env.example`/setup-env 스크립트 전부 반영, 기본 비활성(opt-in) — [Design_YouTube_RTSP_Ingest.md §12.6](docs/design/Design_YouTube_RTSP_Ingest.md), FR-YT-016 | 실제 사이드카를 띄운 라이브 YouTube 채널 대상 E2E 검증 미실시(코드 레벨 검증만 완료) | 🟡 In Progress | Aug 26, 2026 |
+| 9-A | YouTube PO Token 대응 | YouTube의 PO Token(Proof-of-Origin) 요구 확대에 대응하는 opt-in 사전 예방 로직 구현 완료 — `bgutil-ytdlp-pot-provider` 사이드카(Docker, 포트 4416) + JS 런타임(Node) 둘 다 감지될 때만 `--extractor-args youtube:player_client=mweb` 적용, 실패 시 기존 동작(§12.4/§12.5 사후 대응)으로 안전 폴백. `youtubeStreamService.js`/`docker-compose.yml`/`.env.example`/setup-env 스크립트 전부 반영, 설치 스크립트(`npm run install-pot-plugin`) 분리, 2026-08-27 실 운영 환경에서 원격 사이드카 호스트로 실제 활성화됨(§15.1.3) — [Design_YouTube_RTSP_Ingest.md §12.6](docs/design/Design_YouTube_RTSP_Ingest.md), FR-YT-016 | 실제 사이드카를 띄운 라이브 YouTube 채널 대상 E2E 검증(PO Token 발급→재생 성공 여부)은 미실시 — Phase 11(User Auth)의 이메일 인증·2FA처럼 향후 검증 과제로 유지 | ✅ Done | Aug 26, 2026 |
 | 10 | UAT & QA | HOTA/MOTA 벤치마크 · 회귀 테스트(KF/IoU/NaN) · 보안 감사 · `test/` Jest 스위트 | — | ✅ Done | May 28, 2026 |
 | 11 | User Auth | JWT RS256 · bcrypt · RBAC(admin/operator/viewer) · refresh token 로테이션 · admin 승인 · AuditService · **Google OAuth 2.0**(passport-google-oauth20) · **Microsoft OAuth**(MSAL, @azure/msal-node) | 이메일 인증 · 2FA(TOTP) | ✅ Done | May 28, 2026 |
 | 11-B | Missing Person | `missingPersonService.js` · ArcFace 임베딩 비교 · 실종자 등록/탐지/통계 · MCP 도구 5종 | UI 뷰 보강 | ✅ Done | Jun 2026 |
 | 12 | Video Recording | DVR/NVR 녹화 스케줄러 · 이전/이후 이벤트 클립 · 영상 재생 UI · 보존 정책 | 전체 미착수 | 🔲 Planned | Jul 28, 2026 |
-| 12-A | Human Parsing 색상 분류 | SCHP/SegFormer 모델 카탈로그, 트랙 단위 캐시, K-Means 마스크 색상 추출 (Phase-3) 코드 구현 완료 — `colorClothService.js#_runHumanParsing`, `kmeansColor.js`(단위 테스트 완료); 기존 고정 ROI에 K-Means 대표색만 적용하는 모델 불필요 개선(Phase-1.5)은 미착수 — [Design_AI_Color_Analysis.md §10](docs/design/Design_AI_Color_Analysis.md#10-phase-3-proposed-architecture--human-parsing-model-catalog), [§11](docs/design/Design_AI_Color_Analysis.md#11-phase-15-proposed--k-means-dominant-color-on-the-existing-fixed-roi-no-model) | 모델 파일 미배포(자동 다운로드 비활성)·`humanParsing` 토글 기본 OFF·마스크 분류 동작 테스트 없음 | 🟡 In Progress | TBD |
+| 12-A | Human Parsing 색상 분류 | SCHP/SegFormer 모델 카탈로그, 트랙 단위 캐시, K-Means 마스크 색상 추출(Phase-3) — `analyticsConfig.js`의 `humanParsing` 토글 → `attributePipeline.js` → `colorClothService.js#analyze()/_runHumanParsing()`까지 로컬 루프·`/frame` 원격 진입점 양쪽 모두 완전 배선 확인(2026-08-27 코드 재검증) — [Design_AI_Color_Analysis.md §10](docs/design/Design_AI_Color_Analysis.md#10-phase-3-proposed-architecture--human-parsing-model-catalog)(Status: Implemented, opt-in), [SRS_AI_Color_Analysis.md FR-CLR-022~027](docs/srs/SRS_AI_Color_Analysis.md) 전체 ✅ Done | 모델 파일(`schp_lip.onnx`/`segformer_clothes.onnx`)은 PPE·화재연기 등 다른 opt-in AI 모듈과 동일하게 관리자가 Admin Dashboard에서 별도 다운로드해야 함(다운로드 자동화 자체는 정상 동작, 단지 기본 미다운로드) · 토글 기본 OFF · 마스크 분류 동작 테스트 없음 · 고정 ROI+K-Means 대체안(Phase-1.5, [§11](docs/design/Design_AI_Color_Analysis.md#11-phase-15-proposed--k-means-dominant-color-on-the-existing-fixed-roi-no-model))은 별개 제안으로 미착수 | ✅ Done | Jul 9, 2026 |
 | 12-B | Appearance/Body Re-ID 고도화 | OSNet 임베딩(`appearanceReidService.js`) + Qdrant `appearance_embeddings` 컬렉션(`qdrantService.js`) 코드 구현 완료, 실시간 매칭에 80/20 가중치 반영(`pipelineManager.js#_weightedAppearSim`), 색상 사전필터 검색(`GET /api/search?types=appearance`) — [Design_AI_AppearanceReID.md §12](docs/design/Design_AI_AppearanceReID.md#12-phase-2-개선-제안--실제-re-id-임베딩-모델-도입) | 장시간 재등장 시 Qdrant 조회(kNN)는 미배선(upsert만 동작, 실시간 매칭은 여전히 5분 TTL 인메모리 갤러리만 조회) · OSNet 전처리 실제 모델 출력 대비 미검증 · 모델 파일/Qdrant 모두 기본 비활성(opt-in) · 테스트 없음 | 🟡 In Progress | TBD |
 | 12-C | Age Estimation 정확도 개선 | InsightFace GenderAge/ViT Age Classifier 듀얼 모델 카탈로그·추론·4곳 화면 표시·DB 영속화 구현 완료; 2026-07-14 실사용 관측(나이가 대부분 ~35/`20-29`로 수렴)으로 HuggingFace `preprocessor_config.json`·`deepinsight/insightface` 소스 대조를 통해 확인된 전처리 버그 3건(**Phase 1**, ViT 정규화 상수·InsightFace 채널 순서(RGB↔BGR)·표준편차) 수정 완료, 회귀 테스트(TC-AGE-017) 통과 — [Design_AI_Age_Estimation.md §13](docs/design/Design_AI_Age_Estimation.md#13-정확도-문제--근본-원인-분석-및-개선-계획-2026-07-14-실사용-관측) | **Phase 2**(`genderage.onnx` 그래프 내장 정규화 여부 실측 진단, TC-AGE-018) · **Phase 3**(5점 랜드마크 얼굴 정렬 TC-AGE-019, body-crop 신뢰도 표시 TC-AGE-020, 공용 전처리 유틸 추출) · **Phase 4**(참조 이미지 정확도 검증 세트) 전체 미착수 | 🟡 In Progress | TBD |
 | 12-D | Gender Classification 정확도 개선 | InsightFace GenderAge(Age Estimation과 공유 파일)/ViT Gender Classifier 듀얼 모델, 양쪽 진입점(로컬 루프·`/frame` 핸들러) 최초 구현부터 완비; Age Estimation과 동일한 전처리 버그 3건이 독립 코드 사본(`genderClassificationService.js`)에도 존재함을 확인·수정(**Phase 1** 완료, TC-GEN-017 통과) — 실사용 관측: 실제 성비 50:50에 가까운데도 대부분 여성으로 분류 — [Design_AI_Gender_Classification.md §13](docs/design/Design_AI_Gender_Classification.md#13-정확도-문제--근본-원인-분석-및-개선-계획-2026-07-14-실사용-관측) | Age Estimation과 동일한 **Phase 2~4**(그래프 진단 TC-GEN-018, 랜드마크 정렬 TC-GEN-019) 전체 미착수, 추가로 **성별 신뢰도(confidence) 임계값 미도입**(TC-GEN-020) | 🟡 In Progress | TBD |
@@ -1843,13 +1843,13 @@ Setup (once per machine): copy `server/.npmrc.example` → `server/.npmrc` and `
 | 16 | Advanced AI | — | 낙상 · 싸움 · 역주행 감지 전체 미착수 | 🔲 Planned | Sep 22, 2026 |
 | 17 | Auto Reports | — | PDF · Excel · 이메일 예약 발송 전체 미착수 | 🔲 Planned | Oct 6, 2026 |
 | 18 | Map Layout | — | 도면/위성맵 카메라 배치 전체 미착수 | 🔲 Planned | Oct 20, 2026 |
-| 19 | Privacy & Audit | **AuditService.js** 불변 감사 로그(최대 10,000건) · RBAC 접근 이력 · `/admin/audit` UI | 얼굴 블러/익명화 미착수 · GDPR 삭제 API 미착수 | ⚠️ Partial | Nov 3, 2026 |
+| 19 | Privacy & Audit | **AuditService.js** 불변 감사 로그(최대 10,000건) · RBAC 접근 이력 · `/admin/audit` UI · **얼굴 갤러리 GDPR 삭제권**(`DELETE /api/galleries/:id/faces/:faceId`, 감사 로그 기록 포함) · 감지 스냅샷 삭제(`DELETE /api/snapshots/:id`) | 얼굴 블러/익명화 미착수 · **실종자 등록부는 삭제 API 자체가 없음**(`missingPersons.js`는 POST/GET/PUT만 존재, 상태 변경만 가능 — 완전 삭제 불가) · "내 데이터 전체 삭제" 같은 통합 GDPR 삭제 API는 미착수(리소스별 개별 삭제만 가능) | ⚠️ Partial | Nov 3, 2026 |
 | 20 | AI Model Mgmt | **전체 AI 모델 카탈로그**(YOLO 감지기 20종 YOLOv8/11/12/26 n/s/m/l/x + 얼굴 감지·인식(SCRFD/ArcFace)·PPE·화재연기·의상PAR·Human Parsing·Appearance Re-ID 8종, 총 28종) · family별 독립 다운로드/전환(direct ONNX·HuggingFace PT 변환·수동export) · **런타임 모델 전환**(family별 독립 hot-swap) · **Admin UI** AiModelsSection(family별 테이블) — 2026-07-30부로 옛 사이드바 Analytics 탭을 통합해 **Model Selection**(Active/Deactivate) · **Analytics Categories**(카테고리 On/Off, 전체 COCO 80종 포함) · **Tracking & Sensitivity Tuning**(Appearance Weights/Kalman/Fire-Smoke) 3개 섹션으로 명확히 분리 | 커스텀 모델 업로드 미착수 · 카메라별 모델 배정 UI 미착수 · A/B 테스트 미착수 · SSE 실시간 진행률 미구현(2초 폴링으로 대체) · Admin Dashboard 모바일 미최적화 | ⚠️ Partial | Jul 30, 2026 |
 | 21 | Deployment | **Docker Compose** 단일 명령 배포 · **프로덕션 로그**(레벨 필터 · `/var/log/lts` · Admin Dashboard 저장 경로/크기 기반 로테이션·개수 기반 자동 삭제 설정, 2026-08-26) · `npm run start/stop` 프로세스 관리 · `/admin/system` CPU/메모리/GPU/디스크 메트릭 | Prometheus `/metrics` 미착수 · OpenAPI 문서 미착수 · K8s/Helm 미착수(→ ES-8) | ⚠️ Partial | Dec 1, 2026 |
 
 ### 14.2 Enterprise Scale 마일스톤 — 대규모 분산 / 이중화 (TODO)
 
-> 섹션 2.10 현재 구현 상태 분석을 기반으로 도출한 엔터프라이즈 수준 확장 과제입니다.  
+> 섹션 2.10 현재 구현 상태 분석을 기반으로 도출한 엔터프라이즈 수준 확장 과제입니다.
 > 우선순위는 좌측 순서(ES-1 → ES-8)이며, ES-1~ES-3 은 다중 노드 배포의 **필수 전제 조건**입니다.
 
 | ID | Milestone | 상세 내용 | 현재 한계 | 상태 | 목표 |
@@ -1862,6 +1862,30 @@ Setup (once per machine): copy `server/.npmrc.example` → `server/.npmrc` and `
 | **ES-6** | **카메라 자동 배정 / 이전** | 스트리밍 서버 부하 기반 카메라 자동 배정 알고리즘; 카메라 무중단 이전(drain → 재등록); 서버 과부하 시 자동 재분배; 카메라 발견(ONVIF) 시 최소 부하 서버 자동 선택; 배정 상태 중앙 DB 관리 | 카메라 → 서버 매핑 `.env` 수동 설정, 서버 간 이전 불가 | 🔲 Planned | Q2 2027 |
 | **ES-7** | **프로덕션 가시성 (Observability)** | `/metrics` Prometheus 엔드포인트; 카메라별 처리 FPS · 큐 깊이 · 지연시간 메트릭; OpenTelemetry 분산 추적(Jaeger / Zipkin); ELK / Loki 중앙 로그 집계; Grafana 대시보드(카메라/서버/AI 메트릭); SLA 알림(분석 서버 응답 지연 > 2s) | `/admin/system` CPU/메모리 제공, Prometheus / 분산 추적 없음 | 🔲 Planned | Q2 2027 |
 | **ES-8** | **Kubernetes / Helm 배포** | Helm Chart(streaming / analysis / mcp-server 분리); HPA(Horizontal Pod Autoscaler — 카메라 수 기반 스케일); GPU NodeSelector(`ONNX_CUDA=1` analysis pod); PersistentVolume(모델 파일 공유); K8s ConfigMap / Secret(.env 대체); mediamtx StatefulSet(ICE UDP NodePort); Readiness / Liveness probe 연동 | Docker Compose 단일 호스트, K8s 미지원 | 🔲 Planned | Q3 2027 |
+
+### 14.3 미구현 / 진행 중 기능 한눈에 보기 (2026-08-27 기준)
+
+> §14/§14.2 표의 "미구현·잔여" 열을 상태별로 재정리한 요약입니다. 전체 코드베이스와 대조해 실제로 구현이 끝났는데 상태만 뒤처진 항목이 없는지 확인했고(예: 얼굴 갤러리 GDPR 삭제 API·PTZ·Heatmap·Prometheus `/metrics`·Redis 어댑터 존재 여부를 코드에서 직접 grep으로 재검증), 아래는 그 결과 실제로 남아 있는 것만 정리한 목록입니다. **Done 판단 기준**: 설명된 기능이 코드 레벨로 끝까지 배선되어 동작하면 Done(opt-in 토글 기본 OFF나 모델 파일 수동 다운로드 자체는 이 프로젝트의 다른 Done 기능들(PPE 등)도 동일하게 요구하므로 미완성 근거가 아님) — 반대로 핵심 경로 일부가 아예 연결 안 됐거나(예: 12-B의 Qdrant kNN 조회 미배선), 설명된 Phase 자체가 통째로 코드에 없으면(12-C/D의 Phase 2~4) In Progress로 남긴다. 9-A(YouTube PO Token)와 12-A(Human Parsing)는 이 기준으로 재검토한 결과 ✅ Done으로 정정했다.
+
+**🔲 전체 미착수 (코드 없음)**
+
+- **Phase 12 — Video Recording**: DVR/NVR 녹화 스케줄러 · 클립 재생 UI · 보존 정책 전체 미착수
+- **Phase 13 — PTZ Control**: ONVIF PTZ API(pan/tilt/zoom) 자체가 코드에 없음
+- **Phase 15 — Heatmap & Path**: `behaviorEngine.js:136`에 `TODO(heatmap)` 주석만 존재, 실제 집계/렌더링 없음
+- **Phase 16 — Advanced AI**: 낙상 · 싸움 · 역주행 감지 전체 미착수
+- **Phase 17 — Auto Reports**: PDF/Excel/이메일 예약 리포트 전체 미착수
+- **Phase 18 — Map Layout**: 도면/위성맵 기반 카메라 배치 전체 미착수
+- **ES-1 AI 분석 서버 풀** / **ES-2 Socket.IO 멀티 노드 어댑터** / **ES-3 분산 세션 스토어** / **ES-5 중앙 Admin Dashboard** / **ES-6 카메라 자동 배정·이전** / **ES-7 프로덕션 가시성(Prometheus/OTel)** / **ES-8 Kubernetes/Helm** — 전부 단일 노드/단일 서버 전제, 코드 없음
+
+**🟡⚠️ 핵심 구현됨 — 잔여 작업 있음**
+
+- **Phase 12-B — Appearance/Body Re-ID**: 코드 완료, Qdrant kNN 재조회는 미배선(upsert만 동작 — `pipelineManager.js`에 `qdrant.search()` 호출 없음, `upsertAppearance()`만 있음)
+- **Phase 12-C/12-D — Age/Gender 정확도 개선**: Phase 1(전처리 버그 수정) 완료, Phase 2~4(그래프 진단·랜드마크 정렬·검증 세트) 전체 미착수
+- **Phase 14 — Notification Hub**: Webhook·Email 완료, SMS/Slack/Teams 미착수(코드 확인 — 관련 문자열 전무)
+- **Phase 19 — Privacy & Audit**: 얼굴 갤러리 GDPR 삭제(`DELETE /api/galleries/:id/faces/:faceId`)는 구현됨(2026-08-27 확인) — 다만 **실종자 등록부(`missingPersons.js`)는 삭제 API 자체가 없어**(POST/GET/PUT만 존재) 완전 삭제가 불가능하고, 얼굴 블러/익명화·통합 "전체 삭제" API도 미착수
+- **Phase 20 — AI Model Mgmt**: 카탈로그·hot-swap·Admin UI 완료, 커스텀 모델 업로드·카메라별 모델 배정·A/B 테스트·SSE 실시간 진행률(현재 2초 폴링)·Admin 모바일 최적화 미착수
+- **Phase 21 — Deployment**: Docker Compose·프로덕션 로그 완료, Prometheus `/metrics`(현재 `/api/analysis/metrics`는 자체 대시보드용이지 Prometheus 포맷 아님)·OpenAPI 문서·K8s/Helm 미착수
+- **ES-4 — MongoDB 고가용성 튜닝**: Replica Set URI는 지원되나 `readPreference`/풀 크기 튜닝 미적용
 
 ---
 
@@ -1893,7 +1917,7 @@ See: docs/ops/ONNX_Runtime_Provider_Diagnostics.md
 
 ### 15.1.1 Automated Setup (Recommended)
 
-The setup scripts **auto-detect** Node.js, Python 3, and FFmpeg.  
+The setup scripts **auto-detect** Node.js, Python 3, and FFmpeg.
 If any tool is missing, they attempt to install it automatically (via `winget` on Windows, `apt`/`dnf`/`brew` on Linux/macOS) and then generate `server/.env` with the correct OS-specific binary paths.
 
 #### Windows (PowerShell)
@@ -2076,7 +2100,7 @@ wget https://github.com/ultralytics/assets/releases/download/v0.0.0/yolov8n.onnx
 
 ### 15.4 Configuration
 
-> **Tip:** Use the automated setup scripts described in [15.1.1](#1511-automated-setup-recommended) to generate `server/.env` with correct paths detected automatically.  
+> **Tip:** Use the automated setup scripts described in [15.1.1](#1511-automated-setup-recommended) to generate `server/.env` with correct paths detected automatically.
 > Manual copy is still available as a fallback:
 
 ```bash
@@ -2251,7 +2275,7 @@ curl -k https://localhost:3443/health
 # → {"status":"ok"}
 ```
 
-> **Browser trust (optional):** Add `server/certs/server.crt` to your OS/browser trust store to eliminate the "Not secure" warning.  
+> **Browser trust (optional):** Add `server/certs/server.crt` to your OS/browser trust store to eliminate the "Not secure" warning.
 > On Ubuntu: `sudo cp server/certs/server.crt /usr/local/share/ca-certificates/ && sudo update-ca-certificates`
 
 ### 16.3 Option B — mkcert (Locally Trusted Dev Cert, Recommended)
