@@ -15,6 +15,11 @@ const path = require('path');
 const SRC_DIR = path.resolve(__dirname, '../node_modules/@melchi45/rtsp-over-websocket/dist/player');
 const DEST_DIR = path.resolve(__dirname, '../public');
 
+// public/ isn't committed to git (no tracked files inside it), so it may not exist yet on a fresh clone.
+if (!fs.existsSync(DEST_DIR)) {
+  fs.mkdirSync(DEST_DIR, { recursive: true });
+}
+
 // decoderWorker -> ffmpeg.{js,wasm}; audiotranscoderWorker -> ffmpegAAC.transcoder.{js,wasm};
 // zipWorker -> minizip-asm.js (confirmed via grep against each worker's own `new URL(...)` call).
 const REQUIRED_FILES = [
