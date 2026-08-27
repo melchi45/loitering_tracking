@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Admin-Configurable Log Storage Path, Size-Based Rotation, Count-Based Retention
-**Version:** 1.2
+**Version:** 1.3
 **Date:** 2026-08-27
 
 ---
@@ -19,7 +19,7 @@ Applies to production log writing (`npm run start|streaming|analysis`, all `SERV
 |---|---|
 | FR-LR-001 | The system SHALL persist log directory, max file size (MB), and max retained file count in the `settings` table under a **per-server-instance** row id `` `logConfig:${SERVER_ID or os.hostname()}` `` (v1.1 — see FR-LR-013), surviving restarts. |
 | FR-LR-002 | On first boot with no persisted `logConfig` row, the system SHALL seed it from `server/.env` (`LOG_DIR`, `LOG_MAX_FILE_SIZE_MB`, `LOG_MAX_FILES`), defaulting to 50 / 10 for the latter two when absent, and to the platform-appropriate directory per FR-LR-016 for `dir`. |
-| FR-LR-003 | `GET /admin/system/logs` SHALL return the current config, effective directory, fallback status, IPC availability, the active file (name + size), and the list of archived files (name, size, mtime) sorted newest-first, plus total count/bytes. |
+| FR-LR-003 | `GET /admin/system/logs` SHALL return the current config, effective directory, fallback status, IPC availability, the active file (name + size), and the list of archived files (name, size, mtime) sorted newest-first, plus total count/bytes. The active-file and archived-file data SHALL reflect the real contents of the effective directory regardless of whether the responding process itself holds the live write handle (v1.3, FR-LR-017). |
 | FR-LR-004 | `PUT /admin/system/logs` SHALL accept a partial body (`dir?`, `maxFileSizeMB?`, `maxFiles?`), validate each provided field, persist the merged config, and apply it to the live log writer when running under `startServer.js`. |
 | FR-LR-005 | `dir` validation SHALL attempt to create the directory (recursive) and perform a write+delete probe; on failure the endpoint SHALL return HTTP 400 with a descriptive error and MUST NOT persist the change. |
 | FR-LR-006 | `maxFileSizeMB` SHALL be validated as a number in [1, 10240]; `maxFiles` SHALL be validated as a number in [1, 1000]. Out-of-range or non-numeric values SHALL return HTTP 400. |
@@ -33,6 +33,7 @@ Applies to production log writing (`npm run start|streaming|analysis`, all `SERV
 | FR-LR-014 | (v1.1) On first read of the per-instance row (FR-LR-013) when it does not yet exist, if a legacy row with id `logConfig` exists (from a pre-v1.1 deployment), the system SHALL seed the new per-instance row from it instead of from `server/.env`, so upgrading does not silently discard an operator's prior configuration. The legacy row MUST NOT be deleted by this migration. |
 | FR-LR-015 | (v1.1) `GET /admin/system/logs` SHALL include a `serverId` field (the value resolved per FR-LR-013) in its response, so the Admin UI can indicate which server instance's configuration is being displayed. |
 | FR-LR-016 | (v1.2) The default log directory used to seed `dir` (FR-LR-002) SHALL be resolved as: `LOG_DIR_WINDOWS` if set and `process.platform === 'win32'`; else `LOG_DIR_LINUX` if set and not Windows; else the general `LOG_DIR` if set; else `C:\ProgramData\lts\logs` on Windows or `/var/log/lts` otherwise. This mirrors the OS-specific-wins-over-general precedence already used by `YTDLP_BIN_WINDOWS`/`_LINUX` etc. elsewhere in this project. |
+| FR-LR-017 | (v1.3) `getLogStats()` (backing FR-LR-003) SHALL determine the active-file and archived-files data by scanning the effective directory directly, and MUST NOT depend on whether the responding process has itself called `openLogFile()` — the file list and active-file size MUST be accurate even on a process (e.g. the Admin API child) that has never itself opened a log file handle. |
 
 ---
 
@@ -68,6 +69,7 @@ Applies to production log writing (`npm run start|streaming|analysis`, all `SERV
 | FR-LR-010–011 | Existing `/admin/*` security baseline (`CLAUDE.md` 보안 규칙) |
 | FR-LR-013–015, NFR-LR-005 | Post-ship gap found 2026-08-27: shared-`DB_TYPE=mongodb` deployments would let one server's log-path change overwrite another's — same bug class as the 2026-07-15 `faceSearchConditions` shared-MongoDB incident (`Design_Face_Search_Condition_Sync.md`) |
 | FR-LR-016 | Post-ship gap found 2026-08-27: `LOG_DIR` default was Linux-only (`/var/log/lts`), unlike every other path-like env var in this project which has `_WINDOWS`/`_LINUX` variants |
+| FR-LR-017 | Real production bug reported 2026-08-27 (both streaming and analysis instances) — Admin Dashboard showed no active file/archived files despite real log content; reproduced in an isolated sandbox and root-caused to child-process-local `_logDir`/`_logPath` state |
 
 ---
 
@@ -78,3 +80,4 @@ Applies to production log writing (`npm run start|streaming|analysis`, all `SERV
 | 1.0 | 2026-08-26 | 초기 작성 |
 | 1.1 | 2026-08-27 | FR-LR-001 수정 + FR-LR-013~015, NFR-LR-005 추가 — 서버 인스턴스별 설정 분리(SERVER_ID/hostname), 레거시 row 마이그레이션, `serverId` 응답 필드 |
 | 1.2 | 2026-08-27 | FR-LR-002 수정 + FR-LR-016 추가 — `LOG_DIR` 기본값에 Windows 대응(`LOG_DIR_WINDOWS`/`LOG_DIR_LINUX`, Windows 기본값 `C:\ProgramData\lts\logs`) |
+| 1.3 | 2026-08-27 | FR-LR-003 수정 + FR-LR-017 추가 — Admin Dashboard가 실제 로그 내용에도 불구하고 빈 상태로 보이던 실사용 버그 수정, `getLogStats()`가 프로세스 로컬 상태 대신 실제 디렉토리를 스캔하도록 변경 |

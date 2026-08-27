@@ -205,6 +205,19 @@
 
 ---
 
+### TC-LR-017: GET reflects real files even when this process never opened one (v1.3)
+
+**SRS:** FR-LR-003, FR-LR-017
+**Precondition:** Fresh server boot where the persisted/effective `dir` happens to equal whatever this process's own `logger.js` module already computed at load time (so `dirChanged` never fires on this process) — reproduced via a from-scratch DB with no prior `logConfig*` row
+**Steps:**
+1. Start the server fresh (no admin interaction yet)
+2. Let it log normally for a few seconds (real content accumulates in the active file on disk)
+3. `GET /admin/system/logs` on the Admin API
+
+**Expected:** `currentFile` reports the real active file's actual name and current on-disk size (not `null`) — matches `docs/design/Design_Log_Rotation.md` §3C. Follow with `POST .../rotate`, then `GET` again: `files` includes the newly-archived file with its real size, even though this exact process never itself called `openLogFile()`.
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
@@ -212,3 +225,4 @@
 | 1.0 | 2026-08-26 | 초기 작성 |
 | 1.1 | 2026-08-27 | TC-LR-013/014 추가 — 서버 인스턴스별 설정 분리 및 레거시 row 마이그레이션 검증 |
 | 1.2 | 2026-08-27 | TC-LR-015/016 추가 — 기본 로그 경로 Windows 대응 및 OS별 오버라이드 우선순위 검증 |
+| 1.3 | 2026-08-27 | TC-LR-017 추가 — 실사용 버그(Active File/Archived Files 빈 상태) 회귀 방지 검증 |

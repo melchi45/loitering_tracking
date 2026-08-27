@@ -324,14 +324,27 @@ function setLogConfig(partial = {}) {
  * GET /admin/system/logs.
  */
 function getLogStats() {
+  // Scan the *effective* directory even when this process never opened a
+  // file handle there itself. The Admin API child process only calls
+  // openLogFile() opportunistically — when a dir change happens to occur
+  // during its own process lifetime (see setLogConfig()) — so _logDir/_logPath
+  // can legitimately stay empty on the child for its entire lifetime even
+  // while the supervisor process is actively writing real files at _cfg.dir.
+  // Falling back to _cfg.dir (already what `effectiveDir` reported) keeps the
+  // Admin Dashboard accurate regardless of which process actually owns the
+  // live write handle. See Design_Log_Rotation.md §3C.
+  const scanDir    = _logDir || _cfg.dir;
+  const activeName = `lts-${_dateStr()}.log`;
+  const activePath = _logPath || (scanDir ? path.join(scanDir, activeName) : '');
+
   const files = [];
   let totalBytes = 0;
-  if (_logDir) {
+  if (scanDir) {
     try {
-      for (const name of fs.readdirSync(_logDir)) {
+      for (const name of fs.readdirSync(scanDir)) {
         if (!ARCHIVE_RE.test(name)) continue;
-        const p = path.join(_logDir, name);
-        if (p === _logPath) continue;
+        const p = path.join(scanDir, name);
+        if (p === activePath) continue;
         try {
           const st = fs.statSync(p);
           files.push({ name, sizeBytes: st.size, mtime: st.mtimeMs });
@@ -342,18 +355,31 @@ function getLogStats() {
   }
   files.sort((a, b) => b.mtime - a.mtime);
 
+  let currentFile = null;
+  if (_logPath) {
+    // This process owns the open stream — _currentSizeBytes is tracked
+    // incrementally, cheaper than a stat() on every GET.
+    currentFile = { name: path.basename(_logPath), sizeBytes: _currentSizeBytes };
+  } else if (scanDir) {
+    // Never opened here — read the real on-disk size directly so the
+    // dashboard reflects what the actual writer (e.g. the supervisor) has
+    // produced, instead of always reporting "no active file".
+    try {
+      const st = fs.statSync(activePath);
+      currentFile = { name: path.basename(activePath), sizeBytes: st.size };
+    } catch (_) { /* not written yet today, or dir unreadable — leave null */ }
+  }
+
   return {
     config: getLogConfig(),
-    effectiveDir: _logDir || _cfg.dir,
+    effectiveDir: scanDir,
     fallbackActive: _fallback,
     ipcAvailable: !!process.send,
     serverId: getServerId(),
-    currentFile: _logPath
-      ? { name: path.basename(_logPath), sizeBytes: _currentSizeBytes }
-      : null,
+    currentFile,
     files,
     totalFiles: files.length,
-    totalBytes: totalBytes + _currentSizeBytes,
+    totalBytes: totalBytes + (currentFile ? currentFile.sizeBytes : 0),
   };
 }
 

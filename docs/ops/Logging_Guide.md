@@ -1,6 +1,6 @@
 # LTS-2026 Logging Guide
 
-**Version:** 2.2
+**Version:** 2.3
 **대상 서버:** `npm run start` / `npm run streaming` / `npm run analysis` (프로덕션 모드)
 
 ---
@@ -130,6 +130,7 @@ LOG_FILTER_PATTERNS=EXT-X-DATERANGE.*AD,\[segment @.*\] Opening
 - **서버 인스턴스별로 분리 저장됩니다(2026-08-27, v1.1)** — row id가 고정된 `logConfig`가 아니라 `logConfig:<SERVER_ID 또는 hostname>`입니다. 로그 저장 경로는 "이 프로세스가 쓰는 로컬 디스크 경로"라서 서버마다 달라야 하는 값인데, 처음에는 `activeModelConfig.js`(어떤 AI 모델을 쓸지 — 서버끼리 같은 게 맞는 값)와 동일한 "고정 row id 공유" 패턴을 그대로 가져다 써서, `DB_TYPE=mongodb`로 여러 서버가 같은 DB를 공유하면 서버끼리 서로의 로그 경로를 덮어쓰는 문제가 있었습니다(수정 완료). 기본값은 `os.hostname()`이며, 같은 머신에 여러 인스턴스를 띄우는 경우에만 `SERVER_ID` env var로 명시적으로 구분하면 됩니다. 기존에 고정 `logConfig` row로 설정해둔 경우 다음 부팅 시 자동으로 서버별 row로 마이그레이션됩니다(기존 row는 삭제되지 않고 남아 있습니다). 상세: `Design_Log_Rotation.md` §3A.
 - 분할 시 활성 파일이 `lts-YYYY-MM-DD_HHmmssSSS-N.log`(시:분:초.밀리초 + 순번)로 이름이 바뀌고, 원래 날짜 파일명으로 새 활성 파일이 열립니다. 자정 날짜 롤오버가 일어난 뒤에도 동일하게 보관 개수 정책이 적용됩니다(날짜 롤오버와 크기 롤오버 어느 쪽이든 오래된 파일 삭제 대상은 동일).
 - "지금 분할(Rotate Now)" 버튼으로 크기와 무관하게 즉시 분할을 트리거할 수 있습니다 — 운영/테스트 용도.
+- **(2026-08-27, v2.3 수정)** Admin Dashboard의 Active File/Archived Files가 실제 로그 내용이 있는데도 빈 상태로 보이는 버그가 있었습니다 — Admin API가 자기 프로세스 안에서 파일을 직접 연 적이 없으면(디렉토리를 변경한 적이 이 프로세스 생애주기 동안 한 번도 없으면) 목록이 영원히 비어 보였습니다. 실제 디렉토리를 항상 스캔하도록 수정 완료 — 상세: `Design_Log_Rotation.md` §3C.
 - **기존 cron 기반 삭제 예시(아래)는 이제 선택 사항입니다.** 개수 기반 자동 삭제가 내장되었으므로, 특정 보존 "기간"(예: "무조건 90일 뒤엔 삭제") 정책이 별도로 필요한 경우에만 cron을 보조로 유지하세요.
 
 ### 아키텍처: 왜 부모/자식 프로세스 간 IPC가 필요한가
@@ -252,3 +253,4 @@ startServer.js  (부모/슈퍼바이저 — 실제 파일 writer)
 | 2.0 | 2026-08-26 | Admin Dashboard → System에서 로그 저장 경로·최대 파일 크기·최대 보관 개수 설정 기능 추가 (크기 기반 로테이션/split + 개수 기반 자동 삭제). `settings` 테이블 영속화 + startServer.js↔index.js IPC 아키텍처 도입, combined/streaming/analysis 전 모드 공통 동작. 상세: [`Design_Log_Rotation.md`](../design/Design_Log_Rotation.md) |
 | 2.1 | 2026-08-27 | 설정 저장 키를 고정 `logConfig`에서 서버 인스턴스별(`logConfig:<SERVER_ID 또는 hostname>`)로 분리 — 공유 MongoDB 배포에서 서버 간 로그 경로 상호 덮어쓰기 방지. `SERVER_ID` env var 추가 |
 | 2.2 | 2026-08-27 | 기본 로그 경로에 Windows 대응 추가 — `LOG_DIR_WINDOWS`/`LOG_DIR_LINUX` env var, Windows 기본값 `C:\ProgramData\lts\logs` |
+| 2.3 | 2026-08-27 | Admin Dashboard가 실제 로그 내용에도 불구하고 빈 상태로 보이던 실사용 버그 수정 — `getLogStats()`가 실제 디렉토리를 항상 스캔하도록 변경 |

@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Admin-Configurable Log Storage Path, Size-Based Rotation (Split), Count-Based Retention
-**Version:** 1.2
+**Version:** 1.3
 **Date:** 2026-08-27
 
 ---
@@ -127,6 +127,18 @@ function _resolveDefaultLogDir() {
 
 ---
 
+## 3C. Admin Dashboard Showing "No Active File" Despite Real Log Content (v1.3, 2026-08-27)
+
+**Symptom (reported by user, both `streaming` and `analysis` instances):** editing the directory and clicking Save, or clicking "Rotate Now", had visibly no effect — "Active File" stayed `—` and "Archived Files" stayed `0`, even though the real supervisor process was actively writing a real, growing log file at the configured path.
+
+**Root cause, reproduced in an isolated sandbox (real `startServer.js` + `index.js`, real IPC, `DB_TYPE=json` to avoid touching production Mongo):** `getLogStats()`'s file listing and "current file" detection were keyed off `_logDir`/`_logPath` — module-scope variables that are populated **only when THIS process has itself called `openLogFile()`**. For the Admin API (child/`index.js`) process, that only happens opportunistically inside `setLogConfig()`, when `dirChanged` (the new `dir` differs from this process's own already-in-memory `_cfg.dir`) happens to be true *during this process's lifetime*. Since the child's own `_cfg.dir` is seeded independently at module-load time via the same `_resolveDefaultLogDir()`/persisted-config restore path the supervisor uses, there is a real window — confirmed via direct reproduction — where the persisted/effective directory is correct and the supervisor is genuinely writing there, yet `dirChanged` never evaluates true on the child during its lifetime, so `_logDir`/`_logPath` stay empty on the child **forever**, and every `GET /admin/system/logs` from that child reports an empty file list regardless of reality. `POST .../rotate` only relays IPC to the supervisor and never touches the child's own state at all, so its real effect (the supervisor genuinely rotating) was similarly invisible on the dashboard.
+
+**Fix:** `getLogStats()` now scans the *effective* directory (`_logDir || _cfg.dir` — the same fallback `effectiveDir` already used) regardless of whether this process itself holds an open handle there, and for the active file, falls back to a direct `fs.statSync()` on the expected `lts-<today>.log` path when `_logPath` is empty. This makes the Admin Dashboard reflect the real filesystem state independent of which process (child or supervisor) actually owns the live write handle — a purely additive, read-only change (no new file handles opened, no behavior change to what's actually written).
+
+**Verification:** reproduced the exact broken state (fresh boot, `dirChanged` never true on the child) and confirmed the fix resolves it — `currentFile` now correctly reports the supervisor's real active file size on the very first `GET` after boot, `POST .../rotate` results are correctly visible afterward, and the existing Save-with-different-directory path (already working before this fix) shows no regression.
+
+---
+
 ## 4. `utils/logger.js` — Rotation Engine
 
 ### 4.1 State
@@ -222,3 +234,4 @@ Ad-hoc verification performed during implementation (isolated `node -e` scripts 
 | 1.0 | 2026-08-26 | 초기 작성 |
 | 1.1 | 2026-08-27 | §3A 신규 — `settings` row id를 고정 `logConfig`에서 `logConfig:${SERVER_ID or hostname()}`로 변경(서버 인스턴스별 분리), 레거시 글로벌 row 자동 마이그레이션, `getLogStats()`에 `serverId` 필드 추가. 공유 MongoDB 배포에서 서버 간 로그 설정 상호 덮어쓰기 버그 수정(Windows 기본 경로 미고려는 별도 이슈로 분리, 이번 변경 범위 아님) |
 | 1.2 | 2026-08-27 | §3B 신규 — `LOG_DIR` 기본값에 Windows 대응 추가: `LOG_DIR_WINDOWS`/`LOG_DIR_LINUX` env var, Windows 기본값 `C:\ProgramData\lts\logs`, `_resolveDefaultLogDir()`로 `logger.js`/`logConfigService.js` 로직 일원화 |
+| 1.3 | 2026-08-27 | §3C 신규 — 사용자 실사용 보고("Active File/Archived Files가 표시되던 게 안 보임") 기반 실제 버그 발견·수정. `getLogStats()`가 `_logDir`/`_logPath`(이 프로세스가 직접 연 적 있을 때만 채워짐) 대신 `_cfg.dir` 기준으로 항상 실제 디렉토리를 스캔하도록 변경 — Admin API child 프로세스가 자기 생애주기 동안 한 번도 `openLogFile()`을 호출하지 않으면 GET이 영원히 빈 목록을 반환하던 버그. 격리된 샌드박스에서 실제 코드로 재현 후 수정 검증 완료 |
