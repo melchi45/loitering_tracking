@@ -2012,6 +2012,43 @@ Identical steps to the Windows script, using `PYTHON_EXEC_LINUX` / `PYTHON_EXEC`
 
 ---
 
+### 15.1.3 YouTube PO Token Provider (opt-in)
+
+YouTube's expanded bot-detection (PO Token requirement) can make `yt-dlp` fail with `Sign in to confirm you're not a bot` / repeated `403` / `ffmpeg exited 183` — see [`docs/design/Design_YouTube_RTSP_Ingest.md` §12.6](docs/design/Design_YouTube_RTSP_Ingest.md). This installs the yt-dlp plugin side of the opt-in fix (the `bgutil-pot-provider` Docker sidecar itself is started separately, see below).
+
+```bash
+npm run install-pot-plugin
+```
+
+**What it does:** detects `yt-dlp`/Python, `pip install`s the `bgutil-ytdlp-pot-provider` PyPI package, then verifies the install via pip metadata (this package ships no importable top-level module — only yt-dlp plugin files — so a plain `import` check always misreports failure). Safe to re-run; never touches `server/.env` or the Docker sidecar.
+
+**Example output:**
+
+```
+── yt-dlp PO Token 플러그인 설치 (bgutil-ytdlp-pot-provider) ──
+
+✅ yt-dlp PO Token 플러그인 설치 완료 (pip: bgutil-ytdlp-pot-provider)
+
+  다음 단계 (opt-in 기능 활성화 시):
+    1) docker compose up -d bgutil-pot-provider   (사이드카 기동, 포트 4416)
+    2) server/.env: YTDLP_POT_PROVIDER_ENABLED=true
+```
+
+If `yt-dlp` or Python isn't found, it prints a `[SKIP]`/`❌` line instead and exits non-zero — the calling `setup-env.linux.sh` / `setup-env.windows.ps1` treat this as non-fatal (`|| true` / `try`/`catch`) since the feature is opt-in and defaults to disabled.
+
+**Enabling the feature** (after the plugin is installed) in `server/.env`:
+
+```dotenv
+YTDLP_POT_PROVIDER_ENABLED=true
+# Sidecar can run on the same host (docker compose up -d bgutil-pot-provider)
+# or on a separate LAN host running the same container — point the URL there:
+YTDLP_POT_PROVIDER_URL=http://192.168.214.3:4416
+```
+
+The server probes `${YTDLP_POT_PROVIDER_URL}/ping` before each YouTube stream start; if unreachable it falls back to the pre-existing behavior without failing the stream.
+
+---
+
 ### 15.2 Installation
 
 ```bash

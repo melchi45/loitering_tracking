@@ -705,6 +705,7 @@ WiseNet NVR이나 ONVIF NVR 장비는 채널 수(`MaxChannel > 1`)를 반환합�
 - **사이드카:** `docker-compose.yml`에 `bgutil-pot-provider` 서비스(공식 이미지 `brainicism/bgutil-ytdlp-pot-provider:latest`, 포트 4416) — qdrant와 동일한 opt-in 패턴, `docker compose up -d bgutil-pot-provider`로 개별 기동 가능.
 - **yt-dlp 플러그인:** `pip install bgutil-ytdlp-pot-provider` — yt-dlp가 자동 인식(엔트리포인트 등록). 설치 로직은 `server/src/scripts/installYtdlpPotPlugin.js`(`npm run install-pot-plugin`) 하나로 일원화되어 있고, `setup-env.linux.sh`/`setup-env.windows.ps1`의 yt-dlp 설치 단계 직후 이 스크립트를 그대로 호출함 — 최초 환경설정을 이미 마친 뒤 이 기능만 나중에 켜려면 `npm run install-pot-plugin` 단독 실행으로 충분. 주의: 이 패키지는 top-level import 가능한 모듈이 없으므로(`yt_dlp_plugins/extractor/getpot_bgutil*.py`만 설치) 설치 여부는 `importlib.metadata.version(...)`로 검증해야 함 — `import bgutil_ytdlp_pot_provider` 방식은 항상 실패로 오판한다(실행 테스트로 발견·수정, 2026-08-26).
 - **활성화:** `YTDLP_POT_PROVIDER_ENABLED=true` (기본 `false`, opt-in) + `YTDLP_POT_PROVIDER_URL`(기본 `http://127.0.0.1:4416`). `_startStream()`이 매 스트림 시작 시 `/ping`을 프로브해서, 사이드카가 살아있고 JS 런타임(`NODE_BIN_FOR_YTDLP`)이 있을 때만 `--extractor-args youtube:player_client=mweb` + `--extractor-args youtubepot-bgutilhttp:base_url=<URL>`를 추가. 플래그가 꺼져 있거나 프로브 실패 시 하드 실패 없이 기존 동작 그대로 폴백.
+- **원격 사이드카 호스트(2026-08-27, 실 운영 사례):** `YTDLP_POT_PROVIDER_URL`은 로컬호스트뿐 아니라 별도 LAN 머신도 가리킬 수 있다 — 예: `http://192.168.214.3:4416`(그 머신에서 `docker compose up -d bgutil-pot-provider` 별도 기동). 서버 호스트에서 해당 포트로 도달 가능해야 하는 것 외 나머지 동작은 로컬 배포와 동일.
 - **Deno 불필요:** 원 프로젝트는 JS 챌린지 해결에 Deno를 쓰지만, 우리는 이미 Node(`--js-runtimes node:...`)로 동일 역할을 하고 있어 신규 런타임 의존성 추가 없음.
 - **문서:** `docs/design/Design_YouTube_RTSP_Ingest.md` §12.6, `docs/srs/SRS_YouTube_RTSP_Ingest.md` FR-YT-016.
 
@@ -915,8 +916,11 @@ YOUTUBE_MAX_STREAMS=10   # 동시 YouTube 스트림 상한
 YOUTUBE_MAX_RESTARTS=5   # 자동 재시작 횟수 한계
 
 # PO Token 대응 (opt-in, 기본 비활성) — docker compose up -d bgutil-pot-provider 필요
+# 플러그인 설치: npm run install-pot-plugin (server/ 또는 루트 workspace)
 YTDLP_POT_PROVIDER_ENABLED=false
 YTDLP_POT_PROVIDER_URL=http://127.0.0.1:4416
+# 원격 LAN 호스트에서 사이드카를 별도 기동한 경우 예시:
+# YTDLP_POT_PROVIDER_URL=http://192.168.214.3:4416
 ```
 
 경로 확인 명령:

@@ -522,7 +522,11 @@ npm run setup-env:linux         # 초기 환경 설정 스크립트 (setup-env:w
 npm run check-capture-backend:linux  # CAPTURE_BACKEND 사전 점검 (check-capture-backend:windows)
 npm run install-pot-plugin      # yt-dlp PO Token 플러그인 설치 (bgutil-ytdlp-pot-provider,
                                  # setup-env:linux/windows의 [4b] 단계와 동일 로직 — 단독 재실행용,
-                                 # opt-in 기능이므로 실패해도 무해. Design_YouTube_RTSP_Ingest.md §12.6)
+                                 # opt-in 기능이므로 실패해도 무해. 출력 예시·활성화 절차: README.md §15.1.3,
+                                 # 설계: Design_YouTube_RTSP_Ingest.md §12.6)
+# YTDLP_POT_PROVIDER_URL은 localhost뿐 아니라 원격 LAN 호스트도 가리킬 수 있음
+# (예: http://192.168.214.3:4416 — 그 호스트에서 bgutil-pot-provider 컨테이너를 별도로
+# 기동한 경우, 서버 호스트에서 4416 포트로 도달 가능해야 함). Design §12.6 참고.
 
 # ── MongoDB 원격 서버 초기 설정 ──────────────────────────────────────────────
 cd server && npm run install_db

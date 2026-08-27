@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | DESIGN-LTS-YT-01 |
-| **Version** | 1.7 |
+| **Version** | 1.8 |
 | **Status** | Active |
 | **Date** | 2026-07-28 |
 | **Parent SRS** | srs/SRS_YouTube_RTSP_Ingest.md |
@@ -774,6 +774,8 @@ const CONSECUTIVE_403_WINDOW_MS = 15000;  // 15초 슬라이딩 윈도우
 
 **Status:** Implemented (2026-08-26) — `server/src/services/youtubeStreamService.js`(`_potProviderReachable()`/`_shouldUseMwebPotClient()`), `docker-compose.yml`(`bgutil-pot-provider` 서비스), `server/.env.example`, `setup-env.linux.sh`/`setup-env.windows.ps1` 5개 파일 모두 반영 완료. 검증: `node -c youtubeStreamService.js` 통과, `docker compose config` 통과, `bash -n setup-env.linux.sh` 통과. **미검증:** 실제 `bgutil-pot-provider` 컨테이너를 띄운 상태에서의 실 스트림 PO Token 발급/재생 성공 여부(라이브 YouTube 채널 대상 E2E 미실시) — opt-in 기본값 `false`라 배포 리스크는 낮음.
 
+**운영 배포 예시 — 원격 사이드카 호스트 (2026-08-27):** `YTDLP_POT_PROVIDER_URL`은 `http://127.0.0.1:4416`(같은 호스트에서 `docker compose up -d bgutil-pot-provider`)뿐 아니라, 별도 LAN 머신에서 동일 컨테이너를 띄우고 그 호스트를 가리키도록 설정할 수도 있다 — 예: `YTDLP_POT_PROVIDER_URL=http://192.168.214.3:4416`(`SERVER_IP`/`TURN_URL` 등 이 프로젝트의 다른 LAN 예시와 동일한 사설 IP 대역). 이 경우 사이드카를 띄운 호스트에서 4416 포트가 서버 호스트로부터 도달 가능해야 하며(`docker-compose.yml`의 `ports: ["4416:4416"]`가 이미 외부 바인딩을 열어둠, 방화벽만 확인), 그 외 동작은 로컬 배포와 동일 — `_potProviderReachable()`이 URL만 바뀐 채 동일하게 `/ping` 프로브를 수행한다. 활성화 절차·`npm run install-pot-plugin` 출력 예시는 `README.md` §15.1.3 참고.
+
 **후속 수정 (같은 날, 플러그인 설치 스크립트 분리):** 설치 로직을 `setup-env.linux.sh`/`setup-env.windows.ps1`에 각각 인라인으로 중복 구현했던 것을 `server/src/scripts/installYtdlpPotPlugin.js` 단일 스크립트로 추출하고 `npm run install-pot-plugin`(루트/서버 양쪽) 등록 — 최초 전체 환경설정을 이미 마친 사용자가 이 기능만 나중에 켤 때 `setup-env` 전체를 재실행하지 않아도 되도록 함. 이 과정에서 최초 구현의 검증 로직 버그를 실행 테스트로 발견·수정했다: `python3 -c "import bgutil_ytdlp_pot_provider"`로 설치 여부를 확인했으나, 이 패키지는 top-level import 가능한 모듈을 전혀 제공하지 않고 `yt_dlp_plugins/extractor/getpot_bgutil*.py`만 yt-dlp 플러그인 네임스페이스에 설치한다 — 즉 pip install 자체는 매번 성공(`Requirement already satisfied`)하는데도 검증 단계가 항상 실패로 오판했다. `importlib.metadata.version('bgutil-ytdlp-pot-provider')`로 pip 메타데이터를 직접 확인하는 방식으로 수정.
 
 ---
@@ -790,4 +792,5 @@ const CONSECUTIVE_403_WINDOW_MS = 15000;  // 15초 슬라이딩 윈도우
 | 1.5 | 2026-07-28 | LTS Engineering Team | §10.2에 프로세스 트리 reparenting 레이스 수정 노트 추가 — yt-dlp의 내부 ffmpeg 다운로더가 채널 삭제 시 고아 프로세스로 영구 잔존하던 버그, `findChildPids()`를 부모 시그널 전송 전에 호출하도록 수정 |
 | 1.6 | 2026-08-26 | LTS Engineering Team | §12.6 신규(Proposed) — YouTube PO Token 정책 변경 대응. `bgutil-ytdlp-pot-provider` 사이드카(Docker, opt-in) + 조건부 `--extractor-args youtube:player_client=mweb` 아키텍처 추가, §11에 `YTDLP_POT_PROVIDER_ENABLED`/`YTDLP_POT_PROVIDER_URL` 추가 |
 | 1.7 | 2026-08-26 | LTS Engineering Team | §12.6 Status를 Implemented로 갱신 + 후속 수정 기록 추가 — 플러그인 설치 로직을 `installYtdlpPotPlugin.js`/`npm run install-pot-plugin`으로 일원화(setup-env 스크립트 2곳 중복 제거), 실행 테스트로 발견한 잘못된 설치 검증 방식(top-level import 시도) 버그 수정(`importlib.metadata.version()` 방식으로 교체) |
+| 1.8 | 2026-08-27 | LTS Engineering Team | §12.6에 원격 사이드카 호스트 배포 예시 추가(`YTDLP_POT_PROVIDER_URL`이 로컬호스트 외 LAN 호스트도 가리킬 수 있음, `http://192.168.214.3:4416` 예시) — 실 운영 환경에서 opt-in 플래그가 활성화된 것을 계기로 기록, `README.md` §15.1.3 신규 추가와 상호 참조 |
 | 1.3 | 2026-06-26 | LTS Engineering Team | §5.1 YouTube 이중 경로 파이프라인 다이어그램 추가 (ASCII + Mermaid, 코드 라인 참조 포함) |
