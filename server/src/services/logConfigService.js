@@ -5,12 +5,22 @@
  * rotation settings (directory, max file size, max retained files) so they
  * survive a server restart.
  *
- * Storage: `settings` table (row id = 'logConfig'), same DB_TYPE-selected
- * backend (json/mongodb) as activeModelConfig.js / trackerConfig.js.
+ * Storage: `settings` table, row id = `logConfig:<serverId>` (see §3A of
+ * Design_Log_Rotation.md), same DB_TYPE-selected backend (json/mongodb) as
+ * activeModelConfig.js / trackerConfig.js.
  *
- * The row is DB-mode-agnostic and shared across combined/streaming/analysis —
- * whichever process boots first seeds it from server/.env (LOG_DIR /
- * LOG_MAX_FILE_SIZE_MB / LOG_MAX_FILES); every later boot restores from here.
+ * Unlike activeModelConfig.js's row (which SHOULD be the same value across
+ * every server sharing a DB — which AI model to run), `dir` names a path on
+ * THIS process's own local filesystem. Keying the row by server instance
+ * (SERVER_ID env var, defaulting to os.hostname()) means multiple physical
+ * servers intentionally sharing one DB_TYPE=mongodb database each keep their
+ * own independent config instead of overwriting each other's — see
+ * serverId.js and Design_Log_Rotation.md §3A for the incident this fixes.
+ *
+ * Whichever process boots first (per its own serverId) seeds its row from
+ * server/.env (LOG_DIR / LOG_MAX_FILE_SIZE_MB / LOG_MAX_FILES), unless a
+ * pre-fix global row (id `logConfig`) already exists, in which case that is
+ * adopted instead (one-time, read-only migration — see _getOrInit()).
  *
  * NOTE: writing this row does NOT by itself change what gets written to disk.
  * The actual log file handle is owned by utils/logger.js, and in production
@@ -22,8 +32,15 @@
 
 const { getDB } = require('../db');
 const logger = require('../utils/logger');
+const { getServerId } = require('../utils/serverId');
 
-const SETTING_ID = 'logConfig';
+// Pre-v1.1 row id — every server used to share this one row. Kept only as a
+// one-time migration source; new writes always go to the per-instance id.
+const LEGACY_SETTING_ID = 'logConfig';
+
+function _settingId() {
+  return `logConfig:${getServerId()}`;
+}
 
 let _cached = null; // lazy-initialised on first access
 
@@ -35,20 +52,30 @@ function _seedFromEnv() {
   };
 }
 
+function _stripRowMeta(row) {
+  const { id, createdAt, updatedAt, ...cfg } = row;
+  return cfg;
+}
+
 function _getOrInit() {
   if (_cached !== null) return _cached;
 
-  const db  = getDB();
-  const row = db.findOne('settings', { id: SETTING_ID });
+  const db = getDB();
+  const id = _settingId();
+  const row = db.findOne('settings', { id });
 
   if (row) {
-    const { id, createdAt, updatedAt, ...cfg } = row;
-    _cached = cfg;
+    _cached = _stripRowMeta(row);
     return _cached;
   }
 
-  _cached = _seedFromEnv();
-  db.insert('settings', { id: SETTING_ID, ..._cached });
+  // No row yet for this instance — adopt the pre-fix global row if one
+  // exists (a deployment that ran the feature before per-instance scoping
+  // shipped), rather than silently reverting to env defaults and discarding
+  // an operator's prior configuration. The legacy row is left untouched.
+  const legacy = db.findOne('settings', { id: LEGACY_SETTING_ID });
+  _cached = legacy ? _stripRowMeta(legacy) : _seedFromEnv();
+  db.insert('settings', { id, ..._cached });
   return _cached;
 }
 
@@ -63,11 +90,12 @@ function setLogConfig(partial) {
   _cached = { ..._cached, ...partial };
 
   const db = getDB();
-  const existing = db.findOne('settings', { id: SETTING_ID });
+  const id = _settingId();
+  const existing = db.findOne('settings', { id });
   if (existing) {
-    db.update('settings', SETTING_ID, { ...partial });
+    db.update('settings', id, { ...partial });
   } else {
-    db.insert('settings', { id: SETTING_ID, ..._cached });
+    db.insert('settings', { id, ..._cached });
   }
   return getLogConfig();
 }

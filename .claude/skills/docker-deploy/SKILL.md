@@ -97,11 +97,12 @@ grep '\[WARNING\]' /var/log/lts/lts-$(date +%Y-%m-%d).log
 | `LOG_FILTER_PATTERNS` | `` | 쉼표 구분 정규식 — 매칭 줄 강제 억제 |
 | `LOG_MAX_FILE_SIZE_MB` | `50` | 활성 로그 파일이 이 크기(MB)를 넘으면 분할(split). **최초 부팅 시에만** 참조 |
 | `LOG_MAX_FILES` | `10` | 보관할 분할 로그 파일 최대 개수 — 초과 시 가장 오래된 파일 자동 삭제. **최초 부팅 시에만** 참조 |
+| `SERVER_ID` | (없음 → `os.hostname()`) | 로그 설정을 서버 인스턴스별로 분리하는 키(v1.1) — `DB_TYPE=mongodb`로 여러 서버가 같은 DB를 공유할 때만 의미 있음 |
 
 > `LOG_LEVEL=INFO`(기본) 설정 시 ffmpeg `[hls @ 0x...] Skip` 노이즈가 자동 필터링됩니다.
 > `LOG_LEVEL=DEBUG`로 변경하면 yt-dlp/ffmpeg 전체 verbose 출력을 볼 수 있습니다.
 
-**로그 저장 경로/크기 기반 로테이션 설정**은 Admin Dashboard → System → *Log Storage & Rotation* 패널에서 재시작 없이 변경할 수 있습니다(`GET/PUT /admin/system/logs`, `POST /admin/system/logs/rotate`) — `settings` 테이블에 영속화되며 combined/streaming/analysis 전 모드 공통 동작. `npm run dev*`(개발 모드)에서는 저장만 되고 실제 파일에는 반영되지 않습니다(로거 자체가 프로덕션 전용).
+**로그 저장 경로/크기 기반 로테이션 설정**은 Admin Dashboard → System → *Log Storage & Rotation* 패널에서 재시작 없이 변경할 수 있습니다(`GET/PUT /admin/system/logs`, `POST /admin/system/logs/rotate`) — `settings` 테이블에 **서버 인스턴스별**(`logConfig:<SERVER_ID 또는 hostname>`, v1.1) row로 영속화되며 combined/streaming/analysis 전 모드 공통 동작. `DB_TYPE=mongodb`로 여러 서버가 하나의 DB를 공유해도 서버끼리 로그 경로를 덮어쓰지 않음(2026-08-27 수정 — 이전엔 고정 row id를 공유해 서버 간 상호 덮어쓰기 버그가 있었음). `npm run dev*`(개발 모드)에서는 저장만 되고 실제 파일에는 반영되지 않습니다(로거 자체가 프로덕션 전용).
 
 상세 내용 → [`docs/ops/Logging_Guide.md`](../../../docs/ops/Logging_Guide.md), [`docs/design/Design_Log_Rotation.md`](../../../docs/design/Design_Log_Rotation.md)
 

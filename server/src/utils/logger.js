@@ -44,6 +44,7 @@
 const fs   = require('fs');
 const path = require('path');
 const util = require('util');
+const { getServerId } = require('./serverId');
 
 // ─── Level constants ──────────────────────────────────────────────────────────
 
@@ -329,6 +330,7 @@ function getLogStats() {
     effectiveDir: _logDir || _cfg.dir,
     fallbackActive: _fallback,
     ipcAvailable: !!process.send,
+    serverId: getServerId(),
     currentFile: _logPath
       ? { name: path.basename(_logPath), sizeBytes: _currentSizeBytes }
       : null,

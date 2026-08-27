@@ -266,8 +266,8 @@ loitering_tracking/
 | POST | `/admin/tc-results/run` | TC 테스트 수동 재실행 트리거 (body: { port? }) |
 | GET | `/admin/logs/recent` | 최근 서버 로그 조회 (query: source=server\|ingest\|mediamtx\|build, limit) |
 | PATCH | `/admin/logs/level` | Socket.IO 릴레이 로그 레벨 런타임 변경 (body: { level } — 파일 로깅 불변) |
-| GET | `/admin/system/logs` | 로그 저장 경로/최대 파일 크기/최대 보관 개수 설정 + 현재 활성 파일·아카이브 목록·총 용량·`ipcAvailable`(프로덕션 여부) 조회 |
-| PUT | `/admin/system/logs` | 로그 저장 경로/로테이션 설정 변경 (body: { dir?, maxFileSizeMB?, maxFiles? } — dir은 쓰기 가능 여부 사전 검증, `settings` 테이블에 영속화 + IPC로 startServer.js에 즉시 반영, Design_Log_Rotation.md) |
+| GET | `/admin/system/logs` | 로그 저장 경로/최대 파일 크기/최대 보관 개수 설정 + 현재 활성 파일·아카이브 목록·총 용량·`ipcAvailable`(프로덕션 여부)·`serverId`(이 설정이 적용되는 서버 인스턴스, v1.1) 조회 |
+| PUT | `/admin/system/logs` | 로그 저장 경로/로테이션 설정 변경 (body: { dir?, maxFileSizeMB?, maxFiles? } — dir은 쓰기 가능 여부 사전 검증, `settings` 테이블에 서버 인스턴스별 row(`logConfig:<SERVER_ID 또는 hostname>`, v1.1)로 영속화 + IPC로 startServer.js에 즉시 반영, Design_Log_Rotation.md §3A) |
 | POST | `/admin/system/logs/rotate` | 수동 로그 분할(split) 즉시 실행 — `npm run dev*`(IPC 없음)에서는 501 |
 | POST | `/admin/ingest/start` | ingest-daemon 프로세스 시작 (이미 실행 중이면 no-op) — `CAPTURE_BACKEND=ingest-daemon`이 아니면 501, Design_Ingest_Daemon_Control.md — body: `instance?`(멀티 인스턴스 플릿에서 특정 인스턴스만 타겟, 생략 시 전체, Design_RTSP_Capture_Backend.md §6.45) |
 | POST | `/admin/ingest/stop` | ingest-daemon 프로세스 종료 (좀비 상태 포함 — `/health` 아닌 실제 포트 점유 여부로 판단) — body: `instance?` (§6.45) |
@@ -554,6 +554,9 @@ grep '\[ERROR\]' /var/log/lts/lts-$(date +%Y-%m-%d).log
 #   LOG_DIR=/var/log/lts        저장 경로 (권한 없을 시 server/logs/ 자동 폴백)
 #   LOG_LEVEL=INFO              최소 레벨: DEBUG|INFO|WARNING|ERROR|CRITICAL|NONE
 #   LOG_FILTER_PATTERNS=<csv>   추가 억제 정규식 (쉼표 구분)
+#   SERVER_ID=<임의 문자열>      로그 저장경로/로테이션 설정을 서버 인스턴스별로 분리하는 키(v1.1,
+#                               기본값 os.hostname()) — DB_TYPE=mongodb로 여러 서버가 같은 DB를
+#                               공유할 때만 의미 있음, 같은 머신에 여러 인스턴스를 띄울 때만 설정
 
 # ── MCP 서버 ─────────────────────────────────────────────────────────────────
 cd mcp-server && npm start           # stdio 모드 (Claude Code 연동)

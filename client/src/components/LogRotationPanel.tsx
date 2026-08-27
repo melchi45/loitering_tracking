@@ -14,6 +14,7 @@ interface LogStats {
   effectiveDir: string;
   fallbackActive: boolean;
   ipcAvailable: boolean;
+  serverId: string;
   currentFile: { name: string; sizeBytes: number } | null;
   files: LogFileEntry[];
   totalFiles: number;
@@ -104,7 +105,14 @@ export default function LogRotationPanel({ apiFetch }: LogRotationPanelProps) {
   return (
     <div className="bg-gray-900 border border-gray-800 rounded-xl p-4 mt-4">
       <div className="flex items-center justify-between mb-3">
-        <div className="text-[10px] text-gray-500 uppercase tracking-wider">Log Storage &amp; Rotation</div>
+        <div>
+          <div className="text-[10px] text-gray-500 uppercase tracking-wider">Log Storage &amp; Rotation</div>
+          {stats?.serverId && (
+            <div className="text-[10px] text-gray-600 mt-0.5">
+              Server: <span className="font-mono text-gray-500">{stats.serverId}</span> — settings apply only to this instance
+            </div>
+          )}
+        </div>
         {stats && !stats.ipcAvailable && (
           <span className="text-[10px] text-yellow-500 inline-flex items-center gap-1">
             <AlertTriangle className="w-3 h-3" /> Dev mode — saved but not applied live (production only)

@@ -154,8 +154,38 @@
 
 ---
 
+### TC-LR-013: Two server instances sharing one MongoDB get independent settings (v1.1)
+
+**SRS:** FR-LR-013, NFR-LR-005
+**Precondition:** `DB_TYPE=mongodb`, same `MONGODB_URI` on two server processes (or the same process restarted twice with a different `SERVER_ID`)
+**Steps:**
+1. Start server A with `SERVER_ID=host-a`, `PUT /admin/system/logs { dir: "/data/logs/a" }`
+2. Start server B against the same MongoDB with `SERVER_ID=host-b`, `PUT /admin/system/logs { dir: "/data/logs/b" }`
+3. `GET /admin/system/logs` on server A
+4. `GET /admin/system/logs` on server B
+5. Inspect the `settings` collection directly
+
+**Expected:** Server A's `GET` still reports `dir: "/data/logs/a"` (unaffected by step 2); server B reports `/data/logs/b`; both responses include `serverId` matching their own `SERVER_ID`; the `settings` collection contains two distinct rows (`logConfig:host-a`, `logConfig:host-b`), not one shared `logConfig` row
+
+---
+
+### TC-LR-014: Upgrade migrates the legacy global row (v1.1)
+
+**SRS:** FR-LR-014
+**Precondition:** A `settings` row with `id: 'logConfig'` already exists (simulating a pre-v1.1 deployment), and no `logConfig:<serverId>` row exists yet
+**Steps:**
+1. Seed the DB directly with `{ id: 'logConfig', dir: '/legacy/path', maxFileSizeMB: 80, maxFiles: 5 }`
+2. Start the server (no per-instance row exists yet)
+3. `GET /admin/system/logs`
+4. Inspect the `settings` collection/table
+
+**Expected:** The response reflects the legacy values (`dir: '/legacy/path'`, etc.), not the `server/.env` defaults; a new `logConfig:<serverId>` row now exists with those values; the original `logConfig` row still exists (not deleted)
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-08-26 | 초기 작성 |
+| 1.1 | 2026-08-27 | TC-LR-013/014 추가 — 서버 인스턴스별 설정 분리 및 레거시 row 마이그레이션 검증 |

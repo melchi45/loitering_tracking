@@ -2,8 +2,8 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Admin-Configurable Log Storage Path, Size-Based Rotation (Split), Count-Based Retention
-**Version:** 1.0
-**Date:** 2026-08-26
+**Version:** 1.1
+**Date:** 2026-08-27
 
 ---
 
@@ -77,6 +77,32 @@ function restoreOnBoot()       {
 
 ---
 
+## 3A. Per-Instance Config Scoping (v1.1, 2026-08-27)
+
+**Problem found post-ship:** §3's original design copied `activeModelConfig.js`'s pattern verbatim, including a **fixed** `settings` row id (`logConfig`). For `activeModelConfig.js` that's correct — which AI model a family should run is a value every server sharing a DB is *supposed* to agree on. `logConfig.dir` is the opposite kind of value: it names a path on **this process's own local filesystem**. When `DB_TYPE=json` (the default), each server already has its own local `storage/lts.json`, so the bug is latent. When `DB_TYPE=mongodb` and that MongoDB is intentionally shared across physically distinct servers (a supported, documented deployment shape — `docs/ops/Distributed_AI_Pipeline_Setup.md`), every server sharing it would fight over the same `dir`/`maxFileSizeMB`/`maxFiles` — whichever server's Admin Dashboard was touched last silently rewrites the path every other server's log writer thinks it's using. This is the same class of bug as the 2026-07-15 shared-MongoDB `faceSearchConditions` incident (`Design_Face_Search_Condition_Sync.md`) — a genuinely per-instance value stored under a globally-shared key.
+
+**Fix:** the `settings` row id is now derived per server instance instead of a fixed string:
+
+```javascript
+// server/src/utils/serverId.js — the ONE place this is computed, so
+// logConfigService.js and logger.js (getLogStats()) can never drift apart.
+function getServerId() {
+  return process.env.SERVER_ID || os.hostname();
+}
+```
+
+- **Default:** `os.hostname()` — zero-config; correct for the common case of one server process per physical/virtual machine.
+- **Override:** `SERVER_ID` env var — for the case where two `SERVER_MODE` instances (or two instances of the same mode) run on the *same* host and would otherwise collide on hostname (mirrors the disambiguation need `ingestDaemonPool.js`'s `INGEST_DAEMON_INSTANCES`/instance-index already solves for a different subsystem).
+- **New settings row id:** `` `logConfig:${getServerId()}` `` instead of the fixed `logConfig`.
+
+**Migration (one-time, transparent):** `_getOrInit()` in `logConfigService.js` now checks, in order: (1) does a row already exist under this instance's new id? Use it. (2) Does the pre-fix global row (`id: 'logConfig'`) exist — e.g. from a deployment that ran the v1.0 code before this fix shipped? If so, copy its values into this instance's new row (read-only adoption; the legacy row is left in place, not deleted, so any other instance that already keyed off it during the same migration window sees the same seed). (3) Otherwise seed from `server/.env` as before (§3). This means an operator who had already configured Log Rotation under the old global key does not lose that configuration on upgrade.
+
+**Visibility:** `getLogStats()` (`utils/logger.js`) now includes `serverId` in its response so the Admin Dashboard panel can show *which* server's settings are being displayed/edited — important specifically because this used to be (incorrectly) one shared value; now that it's per-instance, an admin managing multiple servers needs to see which one they're looking at.
+
+**Explicitly not addressed by this fix:** the separate Windows-default-path gap (`LOG_DIR`/`logConfigService.js`'s seed value hardcodes `/var/log/lts` with no `_WINDOWS`/`_LINUX` variant, unlike every other path-like env var in this project). Tracked separately, not part of this change.
+
+---
+
 ## 4. `utils/logger.js` — Rotation Engine
 
 ### 4.1 State
@@ -108,7 +134,7 @@ let _logStream, _logDate, _logDir, _logPath, _fallback, _currentSizeBytes;
 |---|---|
 | `getLogConfig()` | Returns `{ dir, maxFileSizeMB, maxFiles }` |
 | `setLogConfig(partial)` | Merges + applies; reopens the file if `dir` changed |
-| `getLogStats()` | Full snapshot for the Admin API — config, effective dir, fallback flag, `ipcAvailable`, active file, archived files list, totals |
+| `getLogStats()` | Full snapshot for the Admin API — config, effective dir, fallback flag, `ipcAvailable`, `serverId` (§3A), active file, archived files list, totals |
 | `forceRotate()` | Rotates immediately regardless of size; no-op (returns `false`) if file logging is off or not yet open |
 
 ---
@@ -136,6 +162,7 @@ Mounted inside `SystemSection` (`AdminUsersPage.tsx`), below the existing Databa
 - "Rotate Now" button (`POST .../rotate`), disabled when `ipcAvailable === false`.
 - `fallbackActive` warning banner (configured dir unwritable, using `server/logs/`).
 - `ipcAvailable === false` badge ("Dev mode — saved but not applied live").
+- **`serverId` label (v1.1, §3A)** — small subtitle showing which server instance's settings are displayed (e.g. "Server: web-01"), since this became per-instance instead of a single shared value.
 
 ---
 
@@ -149,6 +176,7 @@ Mounted inside `SystemSection` (`AdminUsersPage.tsx`), below the existing Databa
 | Directory changed to a path with existing `lts-*.log` files from a prior run | `openLogFile()` opens in append mode (`fs.openSync(path, 'a')`) — an existing same-day file is appended to, not overwritten; `_currentSizeBytes` is seeded from its real on-disk size |
 | Burst of rotations within the same millisecond | Unique archive filenames via the `_archiveSeq` counter — verified under a synthetic 60,000-line synchronous flood during implementation |
 | Server restart with a previously-configured non-default `dir` | Restored via `restoreOnBoot()` before any camera/pipeline code runs |
+| Two servers share one `DB_TYPE=mongodb` instance (v1.1) | Each resolves its own `settings` row via `logConfig:${SERVER_ID or hostname()}` — no cross-server overwrite. A server upgraded from the pre-fix version adopts its own prior config from the legacy global `logConfig` row on first boot after upgrade (§3A) |
 
 ---
 
@@ -168,3 +196,4 @@ Ad-hoc verification performed during implementation (isolated `node -e` scripts 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-08-26 | 초기 작성 |
+| 1.1 | 2026-08-27 | §3A 신규 — `settings` row id를 고정 `logConfig`에서 `logConfig:${SERVER_ID or hostname()}`로 변경(서버 인스턴스별 분리), 레거시 글로벌 row 자동 마이그레이션, `getLogStats()`에 `serverId` 필드 추가. 공유 MongoDB 배포에서 서버 간 로그 설정 상호 덮어쓰기 버그 수정(Windows 기본 경로 미고려는 별도 이슈로 분리, 이번 변경 범위 아님) |

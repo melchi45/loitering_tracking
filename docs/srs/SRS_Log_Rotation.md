@@ -2,8 +2,8 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Admin-Configurable Log Storage Path, Size-Based Rotation, Count-Based Retention
-**Version:** 1.0
-**Date:** 2026-08-26
+**Version:** 1.1
+**Date:** 2026-08-27
 
 ---
 
@@ -17,7 +17,7 @@ Applies to production log writing (`npm run start|streaming|analysis`, all `SERV
 
 | ID | Requirement |
 |---|---|
-| FR-LR-001 | The system SHALL persist log directory, max file size (MB), and max retained file count in the `settings` table (row id `logConfig`), surviving restarts. |
+| FR-LR-001 | The system SHALL persist log directory, max file size (MB), and max retained file count in the `settings` table under a **per-server-instance** row id `` `logConfig:${SERVER_ID or os.hostname()}` `` (v1.1 — see FR-LR-013), surviving restarts. |
 | FR-LR-002 | On first boot with no persisted `logConfig` row, the system SHALL seed it from `server/.env` (`LOG_DIR`, `LOG_MAX_FILE_SIZE_MB`, `LOG_MAX_FILES`), defaulting to `/var/log/lts` / 50 / 10 respectively when those env vars are absent. |
 | FR-LR-003 | `GET /admin/system/logs` SHALL return the current config, effective directory, fallback status, IPC availability, the active file (name + size), and the list of archived files (name, size, mtime) sorted newest-first, plus total count/bytes. |
 | FR-LR-004 | `PUT /admin/system/logs` SHALL accept a partial body (`dir?`, `maxFileSizeMB?`, `maxFiles?`), validate each provided field, persist the merged config, and apply it to the live log writer when running under `startServer.js`. |
@@ -29,6 +29,9 @@ Applies to production log writing (`npm run start|streaming|analysis`, all `SERV
 | FR-LR-010 | All three endpoints SHALL be reachable only by authenticated users with the `admin` role, consistent with all other `/admin/*` routes. |
 | FR-LR-011 | Configuration changes made via `PUT /admin/system/logs` and manual rotations via `POST /admin/system/logs/rotate` SHALL be recorded in the audit log (`AuditService`) with actor id and the applied change. |
 | FR-LR-012 | On every server boot (`index.js`, all `SERVER_MODE` values), the system SHALL restore the persisted `logConfig` into the process's own logger state and, when an IPC channel to a supervisor process exists, forward it so the supervisor's log writer reflects the persisted configuration without requiring a manual admin action. |
+| FR-LR-013 | (v1.1) The system SHALL derive the `settings` row id for log configuration as `` `logConfig:${SERVER_ID}` `` if the `SERVER_ID` env var is set, else `` `logConfig:${os.hostname()}` ``, so that multiple server instances sharing one `DB_TYPE=mongodb` database each persist independent log settings. |
+| FR-LR-014 | (v1.1) On first read of the per-instance row (FR-LR-013) when it does not yet exist, if a legacy row with id `logConfig` exists (from a pre-v1.1 deployment), the system SHALL seed the new per-instance row from it instead of from `server/.env`, so upgrading does not silently discard an operator's prior configuration. The legacy row MUST NOT be deleted by this migration. |
+| FR-LR-015 | (v1.1) `GET /admin/system/logs` SHALL include a `serverId` field (the value resolved per FR-LR-013) in its response, so the Admin UI can indicate which server instance's configuration is being displayed. |
 
 ---
 
@@ -40,6 +43,7 @@ Applies to production log writing (`npm run start|streaming|analysis`, all `SERV
 | NFR-LR-002 | Log directory changes MUST NOT lose in-flight log lines — any content already handed to the previous file's OS-level file descriptor MUST still land in that (possibly since-renamed) file. |
 | NFR-LR-003 | The Admin UI SHALL clearly indicate when running in a mode where changes are persisted but not live (`ipcAvailable: false`), so operators are not misled into thinking a dev-mode test validated production behavior. |
 | NFR-LR-004 | Directory-writability validation SHALL happen synchronously within the `PUT` request/response cycle (no async job/polling required to learn whether a path is valid). |
+| NFR-LR-005 | (v1.1) When multiple server instances share one `DB_TYPE=mongodb` database, a `PUT /admin/system/logs` on one instance MUST NOT alter another instance's persisted or in-memory log configuration. |
 
 ---
 
@@ -47,7 +51,7 @@ Applies to production log writing (`npm run start|streaming|analysis`, all `SERV
 
 - REST: `GET/PUT /admin/system/logs`, `POST /admin/system/logs/rotate` (see `CLAUDE.md` API table, `docs/design/Design_Log_Rotation.md` §4 for request/response shapes).
 - IPC: `startServer.js` child process message types `lts:logConfig` (payload: `{ dir, maxFileSizeMB, maxFiles }`) and `lts:logRotate` (no payload).
-- Persistence: `settings` table row `{ id: 'logConfig', dir, maxFileSizeMB, maxFiles }`.
+- Persistence: `settings` table row `{ id: 'logConfig:<SERVER_ID or hostname>', dir, maxFileSizeMB, maxFiles }` (v1.1 — was a fixed `id: 'logConfig'` in v1.0).
 
 ---
 
@@ -61,6 +65,7 @@ Applies to production log writing (`npm run start|streaming|analysis`, all `SERV
 | FR-LR-007–008 | US-02, US-03 |
 | FR-LR-009 | US-05 |
 | FR-LR-010–011 | Existing `/admin/*` security baseline (`CLAUDE.md` 보안 규칙) |
+| FR-LR-013–015, NFR-LR-005 | Post-ship gap found 2026-08-27: shared-`DB_TYPE=mongodb` deployments would let one server's log-path change overwrite another's — same bug class as the 2026-07-15 `faceSearchConditions` shared-MongoDB incident (`Design_Face_Search_Condition_Sync.md`) |
 
 ---
 
@@ -69,3 +74,4 @@ Applies to production log writing (`npm run start|streaming|analysis`, all `SERV
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-08-26 | 초기 작성 |
+| 1.1 | 2026-08-27 | FR-LR-001 수정 + FR-LR-013~015, NFR-LR-005 추가 — 서버 인스턴스별 설정 분리(SERVER_ID/hostname), 레거시 row 마이그레이션, `serverId` 응답 필드 |

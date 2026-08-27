@@ -2,8 +2,8 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Admin-Configurable Log Storage Path, Size-Based Rotation (Split), Count-Based Retention
-**Version:** 1.0
-**Date:** 2026-08-26
+**Version:** 1.1
+**Date:** 2026-08-27
 
 ---
 
@@ -43,7 +43,7 @@ Applies uniformly to all three `SERVER_MODE` values (`combined`, `streaming`, `a
 | Max file size | 1–10240 MB | 50 MB (env `LOG_MAX_FILE_SIZE_MB`) |
 | Max retained files | 1–1000 | 10 (env `LOG_MAX_FILES`) |
 
-Settings persist in the `settings` table (row id `logConfig`) and survive restarts — env vars only seed the very first boot, mirroring how `activeModelConfig.js` persists AI Model Active selections (`docs/design/Design_AI_Model_Catalog.md`).
+Settings persist in the `settings` table and survive restarts — env vars only seed the very first boot, mirroring how `activeModelConfig.js` persists AI Model Active selections (`docs/design/Design_AI_Model_Catalog.md`). **(v1.1)** Unlike the AI-model selection it borrowed this pattern from, the log directory is inherently per-server (a local filesystem path), so as of v1.1 the row is keyed per server instance (`logConfig:<SERVER_ID or hostname>`, `docs/design/Design_Log_Rotation.md` §3A) rather than one value shared by every server pointed at the same database — otherwise two servers sharing one `DB_TYPE=mongodb` database would overwrite each other's log path.
 
 ### 3.2 Rotation Behavior
 
@@ -74,3 +74,4 @@ The actual log file handle is owned by the `startServer.js` supervisor process, 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-08-26 | 초기 작성 |
+| 1.1 | 2026-08-27 | §3.1 갱신 — 공유 MongoDB 배포에서 서버 간 로그 경로 상호 덮어쓰기 방지를 위해 설정을 서버 인스턴스별로 분리 |
