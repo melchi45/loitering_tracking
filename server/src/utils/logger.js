@@ -323,6 +323,31 @@ function setLogConfig(partial = {}) {
  * the active file, and the archived files sorted newest-first — used by
  * GET /admin/system/logs.
  */
+/**
+ * Live write-capability probe for `dir` (mkdir + tiny temp-file write/unlink),
+ * mirroring routes/admin.js's `_assertDirWritable()` but returning a result
+ * object instead of throwing. Exists so GET /admin/system/logs can tell an
+ * operator *right now* whether this process can actually write to the
+ * configured directory — added after a real incident (2026-08-27, Windows
+ * instance) where the Admin Dashboard showed no log content and nobody had
+ * console/terminal access to the process to read the `[Logger] Cannot open
+ * ...` diagnostic line that `openLogFile()` already prints on failure. This
+ * makes that same failure visible from the dashboard itself.
+ * @param {string} dir
+ * @returns {{ writable: boolean, error: string|null }}
+ */
+function _probeWritable(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    const probe = path.join(dir, `.lts-write-probe-${process.pid}`);
+    fs.writeFileSync(probe, '');
+    fs.unlinkSync(probe);
+    return { writable: true, error: null };
+  } catch (err) {
+    return { writable: false, error: err.message };
+  }
+}
+
 function getLogStats() {
   // Scan the *effective* directory even when this process never opened a
   // file handle there itself. The Admin API child process only calls
@@ -370,12 +395,18 @@ function getLogStats() {
     } catch (_) { /* not written yet today, or dir unreadable — leave null */ }
   }
 
+  const probe = scanDir
+    ? _probeWritable(scanDir)
+    : { writable: false, error: 'No directory configured' };
+
   return {
     config: getLogConfig(),
     effectiveDir: scanDir,
     fallbackActive: _fallback,
     ipcAvailable: !!process.send,
     serverId: getServerId(),
+    dirWritable: probe.writable,
+    dirWriteError: probe.error,
     currentFile,
     files,
     totalFiles: files.length,

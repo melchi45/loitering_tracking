@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Admin-Configurable Log Storage Path, Size-Based Rotation (Split), Count-Based Retention
-**Version:** 1.3
+**Version:** 1.4
 **Date:** 2026-08-27
 
 ---
@@ -139,6 +139,18 @@ function _resolveDefaultLogDir() {
 
 ---
 
+## 3D. Live Write-Capability Diagnostic (v1.4, 2026-08-27)
+
+**Follow-up incident:** after §3C shipped and was confirmed fixed on a Linux instance (real "Active File"/"Archived Files" data appeared correctly), a Windows instance (`analysis-1`) in the same deployment still showed no data. Direct filesystem check on that machine confirmed the configured directory genuinely had no log file — §3C's fix was working correctly (honestly reporting nothing exists), but *something* is preventing the actual write from happening there on Windows. `openLogFile()` already logs the real OS error on failure (`[Logger] Cannot open ${dir}: ${err.message}`), which would have answered this immediately — but the operator had no access to that process's console/terminal output to read it.
+
+**Fix:** `getLogStats()` now performs a live write-capability probe (`_probeWritable()` — `mkdir` + tiny temp-file write/unlink, mirroring `routes/admin.js`'s `_assertDirWritable()`) against the effective directory on every call, and returns `dirWritable`/`dirWriteError` in the response. The Admin Dashboard panel (`LogRotationPanel.tsx`) now shows:
+- A red banner with the real OS error when `dirWritable === false` — answers "why isn't this working" without needing server console access.
+- A blue informational banner when `dirWritable === true` but no active file exists yet — signals "this process *can* write here, but nothing has, so whatever is actually producing logs (typically the production supervisor) may be pointed at a different directory" — the next diagnostic step for exactly the Windows case that triggered this.
+
+This does not fix the underlying "why can't the Windows supervisor write there" question by itself — it makes that question answerable from the dashboard instead of requiring terminal access, which the operator confirmed they did not have. The probe reflects *this responding process's* (the Admin API child's) capability; on the common deployment shape where the supervisor spawns the child from the same session, this is a reliable proxy, but it is not a direct measurement of the supervisor's own capability (no reverse-IPC channel exists for the supervisor to report its own state back to the child — out of scope for this fix).
+
+---
+
 ## 4. `utils/logger.js` — Rotation Engine
 
 ### 4.1 State
@@ -235,3 +247,4 @@ Ad-hoc verification performed during implementation (isolated `node -e` scripts 
 | 1.1 | 2026-08-27 | §3A 신규 — `settings` row id를 고정 `logConfig`에서 `logConfig:${SERVER_ID or hostname()}`로 변경(서버 인스턴스별 분리), 레거시 글로벌 row 자동 마이그레이션, `getLogStats()`에 `serverId` 필드 추가. 공유 MongoDB 배포에서 서버 간 로그 설정 상호 덮어쓰기 버그 수정(Windows 기본 경로 미고려는 별도 이슈로 분리, 이번 변경 범위 아님) |
 | 1.2 | 2026-08-27 | §3B 신규 — `LOG_DIR` 기본값에 Windows 대응 추가: `LOG_DIR_WINDOWS`/`LOG_DIR_LINUX` env var, Windows 기본값 `C:\ProgramData\lts\logs`, `_resolveDefaultLogDir()`로 `logger.js`/`logConfigService.js` 로직 일원화 |
 | 1.3 | 2026-08-27 | §3C 신규 — 사용자 실사용 보고("Active File/Archived Files가 표시되던 게 안 보임") 기반 실제 버그 발견·수정. `getLogStats()`가 `_logDir`/`_logPath`(이 프로세스가 직접 연 적 있을 때만 채워짐) 대신 `_cfg.dir` 기준으로 항상 실제 디렉토리를 스캔하도록 변경 — Admin API child 프로세스가 자기 생애주기 동안 한 번도 `openLogFile()`을 호출하지 않으면 GET이 영원히 빈 목록을 반환하던 버그. 격리된 샌드박스에서 실제 코드로 재현 후 수정 검증 완료 |
+| 1.4 | 2026-08-27 | §3D 신규 — Windows 인스턴스에서 §3C 수정에도 여전히 데이터가 안 보이는 후속 사례 발생, 콘솔 접근 불가로 원인 확인이 막혀 `getLogStats()`에 실시간 쓰기 가능 여부 진단(`dirWritable`/`dirWriteError`) 추가, Admin Dashboard에 실제 OS 에러 표시 |

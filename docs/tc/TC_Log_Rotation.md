@@ -218,6 +218,17 @@
 
 ---
 
+### TC-LR-018: Live write-capability probe reflects real permission state (v1.4)
+
+**SRS:** FR-LR-018
+**Steps:**
+1. `GET /admin/system/logs` where the effective directory is genuinely writable → confirm `dirWritable: true`, `dirWriteError: null`
+2. Change the effective directory to one this process cannot write to (e.g. a `chmod 000` directory on Linux, or a path on a drive/share this process's account cannot access on Windows), `GET` again
+
+**Expected:** step 2's response has `dirWritable: false` and `dirWriteError` containing the real OS error message (e.g. `EACCES: permission denied, mkdir '...'`); the Admin Dashboard shows a red banner with that exact message, requiring no server console/terminal access to diagnose
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
@@ -226,3 +237,4 @@
 | 1.1 | 2026-08-27 | TC-LR-013/014 추가 — 서버 인스턴스별 설정 분리 및 레거시 row 마이그레이션 검증 |
 | 1.2 | 2026-08-27 | TC-LR-015/016 추가 — 기본 로그 경로 Windows 대응 및 OS별 오버라이드 우선순위 검증 |
 | 1.3 | 2026-08-27 | TC-LR-017 추가 — 실사용 버그(Active File/Archived Files 빈 상태) 회귀 방지 검증 |
+| 1.4 | 2026-08-27 | TC-LR-018 추가 — 실시간 쓰기 가능 여부 진단 검증 |

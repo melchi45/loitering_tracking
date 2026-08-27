@@ -1,6 +1,6 @@
 # LTS-2026 Logging Guide
 
-**Version:** 2.3
+**Version:** 2.4
 **대상 서버:** `npm run start` / `npm run streaming` / `npm run analysis` (프로덕션 모드)
 
 ---
@@ -131,6 +131,7 @@ LOG_FILTER_PATTERNS=EXT-X-DATERANGE.*AD,\[segment @.*\] Opening
 - 분할 시 활성 파일이 `lts-YYYY-MM-DD_HHmmssSSS-N.log`(시:분:초.밀리초 + 순번)로 이름이 바뀌고, 원래 날짜 파일명으로 새 활성 파일이 열립니다. 자정 날짜 롤오버가 일어난 뒤에도 동일하게 보관 개수 정책이 적용됩니다(날짜 롤오버와 크기 롤오버 어느 쪽이든 오래된 파일 삭제 대상은 동일).
 - "지금 분할(Rotate Now)" 버튼으로 크기와 무관하게 즉시 분할을 트리거할 수 있습니다 — 운영/테스트 용도.
 - **(2026-08-27, v2.3 수정)** Admin Dashboard의 Active File/Archived Files가 실제 로그 내용이 있는데도 빈 상태로 보이는 버그가 있었습니다 — Admin API가 자기 프로세스 안에서 파일을 직접 연 적이 없으면(디렉토리를 변경한 적이 이 프로세스 생애주기 동안 한 번도 없으면) 목록이 영원히 비어 보였습니다. 실제 디렉토리를 항상 스캔하도록 수정 완료 — 상세: `Design_Log_Rotation.md` §3C.
+- **(2026-08-27, v2.4 추가)** 위 수정 후에도 Windows 인스턴스에서 여전히 데이터가 안 보이는 사례 발생 — 해당 경로에 실제로 쓰기가 안 되고 있었는데, 서버 콘솔/터미널 접근 권한이 없어 `openLogFile()`이 이미 남기고 있던 `[Logger] Cannot open ...` 에러를 확인할 방법이 없었습니다. Admin Dashboard 자체가 매 조회 시 실시간으로 쓰기 가능 여부를 진단(`dirWritable`/`dirWriteError`)해 화면에 실제 OS 에러를 보여주도록 개선 — 콘솔 접근 없이도 원인 파악 가능. 상세: `Design_Log_Rotation.md` §3D.
 - **기존 cron 기반 삭제 예시(아래)는 이제 선택 사항입니다.** 개수 기반 자동 삭제가 내장되었으므로, 특정 보존 "기간"(예: "무조건 90일 뒤엔 삭제") 정책이 별도로 필요한 경우에만 cron을 보조로 유지하세요.
 
 ### 아키텍처: 왜 부모/자식 프로세스 간 IPC가 필요한가
@@ -254,3 +255,4 @@ startServer.js  (부모/슈퍼바이저 — 실제 파일 writer)
 | 2.1 | 2026-08-27 | 설정 저장 키를 고정 `logConfig`에서 서버 인스턴스별(`logConfig:<SERVER_ID 또는 hostname>`)로 분리 — 공유 MongoDB 배포에서 서버 간 로그 경로 상호 덮어쓰기 방지. `SERVER_ID` env var 추가 |
 | 2.2 | 2026-08-27 | 기본 로그 경로에 Windows 대응 추가 — `LOG_DIR_WINDOWS`/`LOG_DIR_LINUX` env var, Windows 기본값 `C:\ProgramData\lts\logs` |
 | 2.3 | 2026-08-27 | Admin Dashboard가 실제 로그 내용에도 불구하고 빈 상태로 보이던 실사용 버그 수정 — `getLogStats()`가 실제 디렉토리를 항상 스캔하도록 변경 |
+| 2.4 | 2026-08-27 | 서버 콘솔 접근 없이도 원인 파악 가능하도록 실시간 쓰기 가능 여부 진단(`dirWritable`/`dirWriteError`) API/UI 노출 추가 |

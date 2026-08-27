@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Admin-Configurable Log Storage Path, Size-Based Rotation, Count-Based Retention
-**Version:** 1.3
+**Version:** 1.4
 **Date:** 2026-08-27
 
 ---
@@ -34,6 +34,7 @@ Applies to production log writing (`npm run start|streaming|analysis`, all `SERV
 | FR-LR-015 | (v1.1) `GET /admin/system/logs` SHALL include a `serverId` field (the value resolved per FR-LR-013) in its response, so the Admin UI can indicate which server instance's configuration is being displayed. |
 | FR-LR-016 | (v1.2) The default log directory used to seed `dir` (FR-LR-002) SHALL be resolved as: `LOG_DIR_WINDOWS` if set and `process.platform === 'win32'`; else `LOG_DIR_LINUX` if set and not Windows; else the general `LOG_DIR` if set; else `C:\ProgramData\lts\logs` on Windows or `/var/log/lts` otherwise. This mirrors the OS-specific-wins-over-general precedence already used by `YTDLP_BIN_WINDOWS`/`_LINUX` etc. elsewhere in this project. |
 | FR-LR-017 | (v1.3) `getLogStats()` (backing FR-LR-003) SHALL determine the active-file and archived-files data by scanning the effective directory directly, and MUST NOT depend on whether the responding process has itself called `openLogFile()` — the file list and active-file size MUST be accurate even on a process (e.g. the Admin API child) that has never itself opened a log file handle. |
+| FR-LR-018 | (v1.4) `GET /admin/system/logs` SHALL include a live write-capability probe of the effective directory — `dirWritable` (boolean) and `dirWriteError` (string, or null when writable) — performed fresh on every call (mkdir + temp-file write/unlink), so an operator without server console/terminal access can determine from the Admin Dashboard alone why the configured directory isn't receiving log content. |
 
 ---
 
@@ -70,6 +71,7 @@ Applies to production log writing (`npm run start|streaming|analysis`, all `SERV
 | FR-LR-013–015, NFR-LR-005 | Post-ship gap found 2026-08-27: shared-`DB_TYPE=mongodb` deployments would let one server's log-path change overwrite another's — same bug class as the 2026-07-15 `faceSearchConditions` shared-MongoDB incident (`Design_Face_Search_Condition_Sync.md`) |
 | FR-LR-016 | Post-ship gap found 2026-08-27: `LOG_DIR` default was Linux-only (`/var/log/lts`), unlike every other path-like env var in this project which has `_WINDOWS`/`_LINUX` variants |
 | FR-LR-017 | Real production bug reported 2026-08-27 (both streaming and analysis instances) — Admin Dashboard showed no active file/archived files despite real log content; reproduced in an isolated sandbox and root-caused to child-process-local `_logDir`/`_logPath` state |
+| FR-LR-018 | Follow-up 2026-08-27: Windows instance still showed no data after FR-LR-017's fix; operator had no server console/terminal access to read the existing `[Logger] Cannot open ...` diagnostic, so the same diagnostic was surfaced through the Admin API/UI instead |
 
 ---
 
@@ -81,3 +83,4 @@ Applies to production log writing (`npm run start|streaming|analysis`, all `SERV
 | 1.1 | 2026-08-27 | FR-LR-001 수정 + FR-LR-013~015, NFR-LR-005 추가 — 서버 인스턴스별 설정 분리(SERVER_ID/hostname), 레거시 row 마이그레이션, `serverId` 응답 필드 |
 | 1.2 | 2026-08-27 | FR-LR-002 수정 + FR-LR-016 추가 — `LOG_DIR` 기본값에 Windows 대응(`LOG_DIR_WINDOWS`/`LOG_DIR_LINUX`, Windows 기본값 `C:\ProgramData\lts\logs`) |
 | 1.3 | 2026-08-27 | FR-LR-003 수정 + FR-LR-017 추가 — Admin Dashboard가 실제 로그 내용에도 불구하고 빈 상태로 보이던 실사용 버그 수정, `getLogStats()`가 프로세스 로컬 상태 대신 실제 디렉토리를 스캔하도록 변경 |
+| 1.4 | 2026-08-27 | FR-LR-018 추가 — 서버 콘솔 접근이 없어도 진단 가능하도록 실시간 쓰기 가능 여부(`dirWritable`/`dirWriteError`) API/UI 노출 |

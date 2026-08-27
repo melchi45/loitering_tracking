@@ -15,6 +15,8 @@ interface LogStats {
   fallbackActive: boolean;
   ipcAvailable: boolean;
   serverId: string;
+  dirWritable: boolean;
+  dirWriteError: string | null;
   currentFile: { name: string; sizeBytes: number } | null;
   files: LogFileEntry[];
   totalFiles: number;
@@ -128,6 +130,28 @@ export default function LogRotationPanel({ apiFetch }: LogRotationPanelProps) {
         <div className="mb-3 p-3 bg-yellow-900/20 border border-yellow-800 rounded-lg text-yellow-300 text-xs flex items-center gap-1.5">
           <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
           Configured directory isn't writable — falling back to {stats.effectiveDir}
+        </div>
+      )}
+
+      {stats && !stats.dirWritable && (
+        <div className="mb-3 p-3 bg-red-900/20 border border-red-800 rounded-lg text-red-300 text-xs flex items-start gap-1.5">
+          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          <span>
+            This process cannot write to {stats.effectiveDir} right now
+            {stats.dirWriteError ? `: ${stats.dirWriteError}` : ''} — no console/terminal
+            access needed, this is checked live on every load.
+          </span>
+        </div>
+      )}
+
+      {stats && stats.dirWritable && !stats.currentFile && (
+        <div className="mb-3 p-3 bg-blue-900/20 border border-blue-800 rounded-lg text-blue-300 text-xs flex items-start gap-1.5">
+          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          <span>
+            This process CAN write to {stats.effectiveDir}, but no log file exists there yet —
+            if you expect one, the process actually writing logs (the production supervisor)
+            may be using a different directory than what's configured here.
+          </span>
         </div>
       )}
 
