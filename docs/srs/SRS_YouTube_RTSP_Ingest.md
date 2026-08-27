@@ -4,7 +4,7 @@
 | | |
 |---|---|
 | **Document ID** | SRS-LTS-YT-01 |
-| **Version** | 1.3 |
+| **Version** | 1.4 |
 | **Status** | Active |
 | **Date** | 2026-08-26 |
 | **Parent PRD** | prd/PRD_YouTube_RTSP_Ingest.md |
@@ -254,7 +254,7 @@ Server start
 - If the probe succeeds **and** a JS runtime (`NODE_BIN_FOR_YTDLP`) is available, the yt-dlp argument array must additionally include `--extractor-args youtube:player_client=mweb` and `--extractor-args youtubepot-bgutilhttp:base_url=${YTDLP_POT_PROVIDER_URL}`.
 - If the flag is `false` (default), the probe fails, or no JS runtime is detected, the service must fall back to the existing argument set unchanged — this path must never hard-fail a stream start.
 - The PO Token provider itself (`brainicism/bgutil-ytdlp-pot-provider`, port 4416) is deployed as an independent opt-in Docker Compose service and is not managed or health-checked beyond the `/ping` probe above.
-- The yt-dlp plugin (`bgutil-ytdlp-pot-provider` PyPI package) must be installed on the same host that runs the `yt-dlp` binary for the `youtubepot-bgutilhttp` extractor-args key to be recognized; installation is automated in `setup-env.linux.sh` / `setup-env.windows.ps1`.
+- The yt-dlp plugin (`bgutil-ytdlp-pot-provider` PyPI package) must be installed on the same host that runs the `yt-dlp` binary for the `youtubepot-bgutilhttp` extractor-args key to be recognized. Installation is implemented once in `server/src/scripts/installYtdlpPotPlugin.js` (exposed as `npm run install-pot-plugin`) and invoked from both `setup-env.linux.sh` and `setup-env.windows.ps1` — not duplicated inline. Since the package ships no top-level importable module (only `yt_dlp_plugins/extractor/getpot_bgutil*.py`), installation success must be verified via pip metadata (`importlib.metadata.version(...)`), not `import`.
 
 ---
 
@@ -545,3 +545,4 @@ interface StreamPublicRecord {
 | 1.1 | 2026-06-26 | LTS Engineering Team | §2.1-A YouTube 이중 경로 Mermaid 다이어그램 추가 (코드 라인 참조 포함) |
 | 1.2 | 2026-07-28 | LTS Engineering Team | FR-YT-068 추가 — 프로세스 트리 정리(고아 프로세스 금지) 요구사항, 헤더 Version 필드를 실제 최신 테이블 행과 일치하도록 정정 |
 | 1.3 | 2026-08-26 | LTS Engineering Team | FR-YT-016 추가(Proposed) — YouTube PO Token 정책 대응 opt-in PO Token provider 연동 요구사항, C-10 추가 |
+| 1.4 | 2026-08-26 | LTS Engineering Team | FR-YT-016을 Implemented로 갱신, 플러그인 설치를 `installYtdlpPotPlugin.js`/`npm run install-pot-plugin`으로 일원화(setup-env 스크립트 중복 제거)하고 pip 메타데이터 기반 검증으로 수정한 내용 반영 |

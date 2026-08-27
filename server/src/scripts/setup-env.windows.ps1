@@ -186,28 +186,13 @@ if (-not $ytdlpPath) {
 Write-Host "  OK  yt-dlp : $ytdlpPath  ($ytdlpVersion)"
 
 # --- 4b. yt-dlp PO Token plugin (opt-in, bgutil-ytdlp-pot-provider) ----------
+# 로직은 installYtdlpPotPlugin.js(npm run install-pot-plugin)로 일원화 — 여기서
+# 재구현하지 않고 그대로 호출한다 (setup-env.linux.sh와 로직 공유, DRY).
 Write-Host "-- [4b] yt-dlp PO Token plugin (optional)"
-if ($ytdlpPath -and $pythonExe) {
-    try {
-        & $pythonExe -m pip install -q --upgrade bgutil-ytdlp-pot-provider 2>&1 | Out-Null
-    } catch {
-        # optional — fall through to the detection check below
-    }
-    $potPluginInstalled = $false
-    try {
-        & $pythonExe -c "import bgutil_ytdlp_pot_provider" 2>&1 | Out-Null
-        $potPluginInstalled = ($LASTEXITCODE -eq 0)
-    } catch {
-        $potPluginInstalled = $false
-    }
-    if ($potPluginInstalled) {
-        Write-Host "  OK  yt-dlp PO Token plugin installed (pip: bgutil-ytdlp-pot-provider)"
-    } else {
-        Write-Warning "yt-dlp PO Token plugin not installed automatically."
-        Write-Warning "Optional — only needed when YTDLP_POT_PROVIDER_ENABLED=true. Install manually: pip install bgutil-ytdlp-pot-provider"
-    }
-} else {
-    Write-Host "  [SKIP] yt-dlp or Python not found — skipping optional PO Token plugin install"
+try {
+    & node (Join-Path $PSScriptRoot "installYtdlpPotPlugin.js")
+} catch {
+    # optional — never fail the overall setup script over this
 }
 
 # --- 5. Generate .env --------------------------------------------------------

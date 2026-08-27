@@ -27,6 +27,7 @@
     "setup": "npm run install:all && npm run build:client",
     "clean": "rm -rf server/node_modules client/node_modules client/dist",
     "check:gpu": "cd server && npm run check:gpu",
+    "install-pot-plugin": "cd server && npm run install-pot-plugin",
     "build-ort:auto": "cd server && npm run build-ort:auto",
     "build-ort:auto:dry": "cd server && npm run build-ort:auto:dry",
     "ensure-cuda": "cd server && npm run ensure-cuda",

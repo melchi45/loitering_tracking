@@ -240,22 +240,10 @@ fi
 echo "  OK  yt-dlp : ${YTDLP_PATH}  (${YTDLP_VERSION})"
 
 # -- 4b. yt-dlp PO Token plugin (opt-in, bgutil-ytdlp-pot-provider) -----------
+# 로직은 installYtdlpPotPlugin.js(npm run install-pot-plugin)로 일원화 — 여기서
+# 재구현하지 않고 그대로 호출한다 (setup-env.windows.ps1과 로직 공유, DRY).
 echo "-- [4b] yt-dlp PO Token plugin (optional) ---------------------"
-if command -v yt-dlp >/dev/null 2>&1; then
-    if command -v pip3 >/dev/null 2>&1; then
-        pip3 install -q --upgrade bgutil-ytdlp-pot-provider 2>/dev/null || true
-    elif [[ -n "${PYTHON_EXE}" ]]; then
-        "${PYTHON_EXE}" -m pip install -q --upgrade bgutil-ytdlp-pot-provider 2>/dev/null || true
-    fi
-    if python3 -c "import bgutil_ytdlp_pot_provider" 2>/dev/null; then
-        echo "  OK  yt-dlp PO Token plugin installed (pip: bgutil-ytdlp-pot-provider)"
-    else
-        echo "  [WARN] yt-dlp PO Token plugin not installed automatically." >&2
-        echo "  Optional — only needed when YTDLP_POT_PROVIDER_ENABLED=true. Install manually: pip install bgutil-ytdlp-pot-provider" >&2
-    fi
-else
-    echo "  [SKIP] yt-dlp not found — skipping optional PO Token plugin install"
-fi
+node "$(dirname "${BASH_SOURCE[0]}")/installYtdlpPotPlugin.js" || true
 
 # -- 5. Generate .env ---------------------------------------------------------
 echo ""

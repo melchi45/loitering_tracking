@@ -520,6 +520,9 @@ npm run ice-test                # WebRTC ICE 연결 테스트 (ice-test:headless
 npm run turn-test               # TURN 서버 연결 테스트 (turn-test:headless — 헤드리스)
 npm run setup-env:linux         # 초기 환경 설정 스크립트 (setup-env:windows — PowerShell 버전)
 npm run check-capture-backend:linux  # CAPTURE_BACKEND 사전 점검 (check-capture-backend:windows)
+npm run install-pot-plugin      # yt-dlp PO Token 플러그인 설치 (bgutil-ytdlp-pot-provider,
+                                 # setup-env:linux/windows의 [4b] 단계와 동일 로직 — 단독 재실행용,
+                                 # opt-in 기능이므로 실패해도 무해. Design_YouTube_RTSP_Ingest.md §12.6)
 
 # ── MongoDB 원격 서버 초기 설정 ──────────────────────────────────────────────
 cd server && npm run install_db

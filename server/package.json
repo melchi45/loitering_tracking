@@ -48,7 +48,8 @@
     "turn-test:headless": "node src/scripts/turnTest.js --headless",
     "install_db": "node src/scripts/installDb.js",
     "check:gpu": "node src/scripts/checkGpuProviders.js",
-    "build:mediasoup-wrapper": "node src/scripts/buildMediasoupWorkerWrapper.js"
+    "build:mediasoup-wrapper": "node src/scripts/buildMediasoupWorkerWrapper.js",
+    "install-pot-plugin": "node src/scripts/installYtdlpPotPlugin.js"
   },
   "dependencies": {
     "@azure/msal-node": "^5.2.2",
