@@ -162,7 +162,12 @@ async function main() {
   // and, under startServer.js (production), relays to the supervisor process
   // that actually owns the log file handle — see logConfigService.js header.
   try {
-    require('./services/logConfigService').restoreOnBoot();
+    const logConfigService = require('./services/logConfigService');
+    logConfigService.restoreOnBoot();
+    // Reverse IPC — lets GET /admin/system/logs show what the supervisor
+    // (the actual file writer) is really doing, not just what this process
+    // believes/wants. See Design_Log_Rotation.md §3F.
+    logConfigService.listenForSupervisorStatus();
   } catch (err) {
     console.warn('[Server] Failed to restore log rotation config:', err.message);
   }

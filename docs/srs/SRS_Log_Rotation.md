@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Admin-Configurable Log Storage Path, Size-Based Rotation, Count-Based Retention
-**Version:** 1.4
+**Version:** 1.6
 **Date:** 2026-08-27
 
 ---
@@ -35,6 +35,9 @@ Applies to production log writing (`npm run start|streaming|analysis`, all `SERV
 | FR-LR-016 | (v1.2) The default log directory used to seed `dir` (FR-LR-002) SHALL be resolved as: `LOG_DIR_WINDOWS` if set and `process.platform === 'win32'`; else `LOG_DIR_LINUX` if set and not Windows; else the general `LOG_DIR` if set; else `C:\ProgramData\lts\logs` on Windows or `/var/log/lts` otherwise. This mirrors the OS-specific-wins-over-general precedence already used by `YTDLP_BIN_WINDOWS`/`_LINUX` etc. elsewhere in this project. |
 | FR-LR-017 | (v1.3) `getLogStats()` (backing FR-LR-003) SHALL determine the active-file and archived-files data by scanning the effective directory directly, and MUST NOT depend on whether the responding process has itself called `openLogFile()` — the file list and active-file size MUST be accurate even on a process (e.g. the Admin API child) that has never itself opened a log file handle. |
 | FR-LR-018 | (v1.4) `GET /admin/system/logs` SHALL include a live write-capability probe of the effective directory — `dirWritable` (boolean) and `dirWriteError` (string, or null when writable) — performed fresh on every call (mkdir + temp-file write/unlink), so an operator without server console/terminal access can determine from the Admin Dashboard alone why the configured directory isn't receiving log content. |
+| FR-LR-019 | (v1.5) On every boot, the system SHALL log the effective log configuration (`dir`, `maxFileSizeMB`, `maxFiles`) through the normal console/log-file path: once from `startServer.js` reflecting the env-seeded value, and once from `logConfigService.js#restoreOnBoot()` reflecting the value after restoring any persisted per-instance override. |
+| FR-LR-020 | (v1.5) `PUT /admin/system/logs` SHALL log a `[LogConfig] Changed by <actor>: <field>: <before> → <after>` line (for each field present in the request) through the normal console/log-file path, in addition to the existing `AuditService` record; `POST /admin/system/logs/rotate` SHALL similarly log `[LogConfig] Manual rotation requested by <actor>`. |
+| FR-LR-021 | (v1.6) The supervisor process SHALL report its own real log-writing state (effective directory, fallback flag, active file) back to the Admin API child over IPC — on request (`lts:logStatusRequest`) and after processing any `lts:logConfig`/`lts:logRotate` message — and `GET`/`PUT /admin/system/logs` SHALL include this as `supervisorStatus` (`null` when no supervisor exists or no report has arrived yet), so an operator can determine what the actual file writer is doing even when it differs from the child's own configured/believed state. |
 
 ---
 
@@ -72,6 +75,8 @@ Applies to production log writing (`npm run start|streaming|analysis`, all `SERV
 | FR-LR-016 | Post-ship gap found 2026-08-27: `LOG_DIR` default was Linux-only (`/var/log/lts`), unlike every other path-like env var in this project which has `_WINDOWS`/`_LINUX` variants |
 | FR-LR-017 | Real production bug reported 2026-08-27 (both streaming and analysis instances) — Admin Dashboard showed no active file/archived files despite real log content; reproduced in an isolated sandbox and root-caused to child-process-local `_logDir`/`_logPath` state |
 | FR-LR-018 | Follow-up 2026-08-27: Windows instance still showed no data after FR-LR-017's fix; operator had no server console/terminal access to read the existing `[Logger] Cannot open ...` diagnostic, so the same diagnostic was surfaced through the Admin API/UI instead |
+| FR-LR-019–020 | User request 2026-08-27: make boot config and config changes visible in the log content itself, not only in the DB-only `AuditService` audit trail |
+| FR-LR-021 | Follow-up 2026-08-27: user confirmed on the Windows machine directly that the configured directory has no file — `dirWritable: true` alone couldn't explain where the supervisor actually writes, closing the reverse-IPC gap FR-LR-018/§3D explicitly left open |
 
 ---
 
@@ -84,3 +89,5 @@ Applies to production log writing (`npm run start|streaming|analysis`, all `SERV
 | 1.2 | 2026-08-27 | FR-LR-002 수정 + FR-LR-016 추가 — `LOG_DIR` 기본값에 Windows 대응(`LOG_DIR_WINDOWS`/`LOG_DIR_LINUX`, Windows 기본값 `C:\ProgramData\lts\logs`) |
 | 1.3 | 2026-08-27 | FR-LR-003 수정 + FR-LR-017 추가 — Admin Dashboard가 실제 로그 내용에도 불구하고 빈 상태로 보이던 실사용 버그 수정, `getLogStats()`가 프로세스 로컬 상태 대신 실제 디렉토리를 스캔하도록 변경 |
 | 1.4 | 2026-08-27 | FR-LR-018 추가 — 서버 콘솔 접근이 없어도 진단 가능하도록 실시간 쓰기 가능 여부(`dirWritable`/`dirWriteError`) API/UI 노출 |
+| 1.5 | 2026-08-27 | FR-LR-019~020 추가 — 부팅 시 유효 설정 로그 기록 + Admin Dashboard 설정 변경/수동 Rotate를 로그 파일 자체에도 기록 |
+| 1.6 | 2026-08-27 | FR-LR-021 추가 — supervisor→child 역방향 IPC로 실제 supervisor 상태(`supervisorStatus`)를 API/UI에 노출 |

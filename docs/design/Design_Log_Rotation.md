@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Admin-Configurable Log Storage Path, Size-Based Rotation (Split), Count-Based Retention
-**Version:** 1.4
+**Version:** 1.6
 **Date:** 2026-08-27
 
 ---
@@ -151,6 +151,39 @@ This does not fix the underlying "why can't the Windows supervisor write there" 
 
 ---
 
+## 3E. Boot Config + Change Visibility in the Log File Itself (v1.5, 2026-08-27)
+
+**Request:** show the effective log path/size/count at server boot, and record any Admin Dashboard config change (and manual rotation) in the log content itself — not only in `AuditService`'s DB-only audit trail, which requires separate `/admin/audit` access to read and isn't visible to someone simply tailing the log file.
+
+**Boot visibility (two lines, by design — see §2):**
+- `startServer.js`, right after `openLogFile()`/`patchConsole()`: `console.log('[Logger] Boot config (env-seeded) — dir=... maxFileSizeMB=... maxFiles=...')` — the SUPERVISOR's own raw env-seeded value, before any persisted override is restored.
+- `logConfigService.js`'s `restoreOnBoot()`: `console.log('[Logger] Restored config (<serverId>) — dir=... maxFileSizeMB=... maxFiles=...')` — the CHILD's view after restoring the persisted/per-instance config (§3A). Runs on every `SERVER_MODE`, relayed through the supervisor's `makeLineRelay()` into the actual file like any other child console output.
+
+Both lines are intentionally kept — a mismatch between them (e.g. different `dir`) is itself a useful diagnostic signal for exactly the class of Windows issue in §3D.
+
+**Change visibility:** `PUT /admin/system/logs` now logs `[LogConfig] Changed by <actor>: <field>: <before> → <after>` (only the fields actually present in the request body) in addition to the existing `AuditService.log('log_config_changed', ...)` call; `POST /admin/system/logs/rotate` similarly logs `[LogConfig] Manual rotation requested by <actor>`. Both go through the normal `console.log()` path, so they appear in the log file, the real-time Server Logs viewer (Socket.IO relay), and `GET /admin/logs/recent` — anywhere existing log output is already visible — with no new surface to build.
+
+**Verification:** reproduced in the same isolated sandbox as §3C/§3D — confirmed both boot lines appear in the actual log file on startup, and a `PUT` (`dir`+`maxFileSizeMB`+`maxFiles` all changed) followed immediately by a manual rotate correctly produced, in order: the `[LogConfig] Changed by ...` line (in the file active at the moment of the call — which may be the file about to be archived, if a rotation follows quickly), the `[LogConfig] Manual rotation requested by ...` line, and a second `PUT` (single field) correctly logged only that one field's before/after.
+
+---
+
+## 3F. Reverse IPC — Exposing the Supervisor's Real State (v1.6, 2026-08-27)
+
+**Gap:** §3D's live write-probe answers "can THIS process (the Admin API child) write to the configured directory," but the user's Windows report was specifically that the child reported `dirWritable: true` with no active file — meaning the child genuinely *can* write there, yet nothing is being written, which points at the **supervisor** (the actual file writer) using a different directory or otherwise failing silently. §3D explicitly called this out as unaddressed: "no reverse-IPC channel exists for the supervisor to report its own state back to the child."
+
+**Fix:** added exactly that channel.
+
+- `startServer.js`: on receiving `lts:logStatusRequest`, or right after processing `lts:logConfig`/`lts:logRotate`, sends `{ type: 'lts:logStatus', payload: logger.getLogStats() }` back to the child — its own real, current state (effective dir, fallback flag, active file).
+- `logConfigService.js`: new `listenForSupervisorStatus()` (called once from `index.js`, right after `restoreOnBoot()`) registers a `process.on('message', ...)` handler and immediately sends `lts:logStatusRequest` — the request is sent *after* the listener is attached specifically to avoid the message being emitted before anything is listening (Node's IPC `'message'` event has no replay). New `getSupervisorStatus()` returns the last-received report, or `null` under `npm run dev*` (no supervisor exists) or before the first report arrives.
+- `routes/admin.js`: `GET`/`PUT /admin/system/logs` now merge `supervisorStatus: logConfigService.getSupervisorStatus()` into the response.
+- `LogRotationPanel.tsx`: when `supervisorStatus.effectiveDir` differs from the child's own `effectiveDir`, shows an orange banner naming the supervisor's actual directory and active file directly — "this is the real cause when Save/Rotate appear to have no effect." Falls back to a softer blue "no supervisor report yet" banner when `supervisorStatus` is `null` (dev mode, or very early in boot).
+
+**Verification:** reproduced in the same sandbox — `GET /admin/system/logs` now includes a `supervisorStatus` object with real, live-fetched values (`effectiveDir`, `fallbackActive`, `currentFile`) matching what the supervisor process itself is doing, populated on both the initial request/response round-trip and after subsequent config changes/rotations.
+
+This directly gives the Windows operator — who has no server console access — the answer to "where is it actually writing," without guessing further.
+
+---
+
 ## 4. `utils/logger.js` — Rotation Engine
 
 ### 4.1 State
@@ -248,3 +281,5 @@ Ad-hoc verification performed during implementation (isolated `node -e` scripts 
 | 1.2 | 2026-08-27 | §3B 신규 — `LOG_DIR` 기본값에 Windows 대응 추가: `LOG_DIR_WINDOWS`/`LOG_DIR_LINUX` env var, Windows 기본값 `C:\ProgramData\lts\logs`, `_resolveDefaultLogDir()`로 `logger.js`/`logConfigService.js` 로직 일원화 |
 | 1.3 | 2026-08-27 | §3C 신규 — 사용자 실사용 보고("Active File/Archived Files가 표시되던 게 안 보임") 기반 실제 버그 발견·수정. `getLogStats()`가 `_logDir`/`_logPath`(이 프로세스가 직접 연 적 있을 때만 채워짐) 대신 `_cfg.dir` 기준으로 항상 실제 디렉토리를 스캔하도록 변경 — Admin API child 프로세스가 자기 생애주기 동안 한 번도 `openLogFile()`을 호출하지 않으면 GET이 영원히 빈 목록을 반환하던 버그. 격리된 샌드박스에서 실제 코드로 재현 후 수정 검증 완료 |
 | 1.4 | 2026-08-27 | §3D 신규 — Windows 인스턴스에서 §3C 수정에도 여전히 데이터가 안 보이는 후속 사례 발생, 콘솔 접근 불가로 원인 확인이 막혀 `getLogStats()`에 실시간 쓰기 가능 여부 진단(`dirWritable`/`dirWriteError`) 추가, Admin Dashboard에 실제 OS 에러 표시 |
+| 1.5 | 2026-08-27 | §3E 신규 — 부팅 시 유효 로그 설정(경로/최대크기/최대개수) 2줄 기록(`startServer.js` env-seeded 값 + `logConfigService.js` 복원값), Admin Dashboard 설정 변경/수동 Rotate를 AuditService DB 기록과 별개로 로그 파일 자체에도 `[LogConfig]` 라인으로 기록 |
+| 1.6 | 2026-08-27 | §3F 신규 — supervisor→child 역방향 IPC(`lts:logStatusRequest`/`lts:logStatus`) 추가, `GET/PUT /admin/system/logs`에 `supervisorStatus` 노출, 대시보드가 supervisor의 실제 유효 경로가 child 설정과 다르면 직접 표시 — §3D가 명시적으로 범위 밖이라 했던 부분을 해소 |

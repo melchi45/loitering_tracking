@@ -229,6 +229,39 @@
 
 ---
 
+### TC-LR-019: Boot logs the effective config (v1.5)
+
+**SRS:** FR-LR-019
+**Steps:**
+1. Start the server fresh
+2. Read the actual log file written for that boot
+
+**Expected:** the file contains both `[Logger] Boot config (env-seeded) — dir=... maxFileSizeMB=... maxFiles=...` (from `startServer.js`) and `[Logger] Restored config (<serverId>) — dir=... maxFileSizeMB=... maxFiles=...` (from `logConfigService.js`)
+
+### TC-LR-020: Config changes and manual rotation are logged (v1.5)
+
+**SRS:** FR-LR-020
+**Steps:**
+1. `PUT /admin/system/logs` changing `maxFiles` only
+2. `POST /admin/system/logs/rotate`
+3. Read the log content produced by both calls (check both the active file and, if a rotation intervened, the newly-archived one)
+
+**Expected:** a `[LogConfig] Changed by <actor>: maxFiles: <old> → <new>` line appears for step 1 (only the changed field, not `dir`/`maxFileSizeMB`), and a `[LogConfig] Manual rotation requested by <actor>` line appears for step 2 — both present in addition to (not instead of) the existing `AuditService` records
+
+---
+
+### TC-LR-021: supervisorStatus reflects the real supervisor state (v1.6)
+
+**SRS:** FR-LR-021
+**Steps:**
+1. Start the server, `GET /admin/system/logs`
+2. Inspect `supervisorStatus` in the response
+3. `PUT` a genuinely different `dir`, then `GET` again
+
+**Expected:** step 2's `supervisorStatus` is not `null` (production mode) and its `effectiveDir`/`currentFile` reflect the actual supervisor-owned file on disk — verifiable by comparing against the real filesystem. Step 3's `supervisorStatus.effectiveDir` updates to the new directory once the supervisor has processed the change. Under `npm run dev*`, `supervisorStatus` is `null` (no supervisor process exists).
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
@@ -238,3 +271,5 @@
 | 1.2 | 2026-08-27 | TC-LR-015/016 추가 — 기본 로그 경로 Windows 대응 및 OS별 오버라이드 우선순위 검증 |
 | 1.3 | 2026-08-27 | TC-LR-017 추가 — 실사용 버그(Active File/Archived Files 빈 상태) 회귀 방지 검증 |
 | 1.4 | 2026-08-27 | TC-LR-018 추가 — 실시간 쓰기 가능 여부 진단 검증 |
+| 1.5 | 2026-08-27 | TC-LR-019/020 추가 — 부팅 설정 로그 및 변경/Rotate 로그 기록 검증 |
+| 1.6 | 2026-08-27 | TC-LR-021 추가 — supervisor→child 역방향 IPC 상태 노출 검증 |

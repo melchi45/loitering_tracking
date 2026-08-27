@@ -223,9 +223,17 @@ function _assertDirWritable(dir) {
   fs.unlinkSync(probe);
 }
 
+// Merges this process's own log stats with the supervisor's last-known real
+// state (reverse IPC — see logConfigService.js#listenForSupervisorStatus()),
+// when they're different processes (production). `null` under npm run dev*
+// or before the supervisor's first report arrives.
+function _logStatsWithSupervisor() {
+  return { ...getLogStats(), supervisorStatus: logConfigService.getSupervisorStatus() };
+}
+
 // ── GET /admin/system/logs ────────────────────────────────────────────────────
 router.get('/system/logs', (_req, res) => {
-  res.json(getLogStats());
+  res.json(_logStatsWithSupervisor());
 });
 
 // ── PUT /admin/system/logs ────────────────────────────────────────────────────
@@ -264,13 +272,23 @@ router.put('/system/logs', (req, res) => {
     return res.status(400).json({ error: 'Body must include at least one of: dir, maxFileSizeMB, maxFiles' });
 
   try {
+    const before = logConfigService.getLogConfig();
     const saved = logConfigService.setLogConfig(patch);
     setLogConfig(patch); // apply to this process's own logger.js instance (display + tailLogFile)
     if (process.send) process.send({ type: 'lts:logConfig', payload: saved }); // relay to supervisor (production)
 
     AuditService.log({ event: 'log_config_changed', actorId: req.user.sub, detail: patch });
 
-    res.json(getLogStats());
+    // Visible in the log file itself (and the real-time Server Logs viewer) —
+    // not just the AuditService DB record — so an operator reading logs later
+    // (or without Admin UI access) can see exactly what changed and when.
+    const actor = req.user.email || req.user.sub;
+    const changes = Object.keys(patch)
+      .map((k) => `${k}: ${before[k]} → ${patch[k]}`)
+      .join(', ');
+    console.log(`[LogConfig] Changed by ${actor}: ${changes}`);
+
+    res.json(_logStatsWithSupervisor());
   } catch (err) {
     console.error('[admin/system/logs PUT]', err);
     res.status(500).json({ error: 'Internal server error' });
@@ -285,6 +303,7 @@ router.post('/system/logs/rotate', (req, res) => {
   }
   process.send({ type: 'lts:logRotate' });
   AuditService.log({ event: 'log_rotate_requested', actorId: req.user.sub });
+  console.log(`[LogConfig] Manual rotation requested by ${req.user.email || req.user.sub}`);
   res.json({ ok: true });
 });
 

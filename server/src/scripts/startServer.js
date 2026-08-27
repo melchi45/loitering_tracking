@@ -16,6 +16,17 @@ const logger = require('../utils/logger');
 const { openLogFile, patchConsole, makeLineRelay } = logger;
 openLogFile();
 patchConsole();
+// Visible on every boot (through the now-patched console, so it lands in the
+// actual log file too) — the env-seeded config this supervisor process
+// resolved BEFORE the persisted Admin Dashboard config is restored via IPC
+// (see logConfigService.js's restoreOnBoot(), which logs the final value
+// separately once the child sends it). Added after a real incident where an
+// operator had no way to confirm what directory/rotation settings a given
+// boot actually used without server console access.
+{
+  const bootCfg = logger.getLogConfig();
+  console.log(`[Logger] Boot config (env-seeded) — dir=${bootCfg.dir} maxFileSizeMB=${bootCfg.maxFileSizeMB} maxFiles=${bootCfg.maxFiles}`);
+}
 
 const { ensureMongoDB } = require('./ensureMongodb');
 
@@ -489,12 +500,24 @@ async function main() {
   });
   child.stdout.on('data', makeLineRelay('', process.stdout));
   child.stderr.on('data', makeLineRelay('', process.stderr));
+  // lts:logStatus{Request} — reverse channel so the Admin API child (which
+  // never itself calls openLogFile()/patchConsole() — see logger.js header)
+  // can learn what THIS process, the actual file writer, is really doing.
+  // Added after a real incident (Design_Log_Rotation.md §3F) where a Windows
+  // instance's dashboard showed "this process can write here, but no file
+  // exists" and there was no way — with no server console access — to find
+  // out where the supervisor was ACTUALLY writing instead.
+  const _sendLogStatus = () => { try { child.send({ type: 'lts:logStatus', payload: logger.getLogStats() }); } catch (_) { /* child channel closed */ } };
   child.on('message', (msg) => {
     if (!msg || typeof msg !== 'object') return;
     if (msg.type === 'lts:logConfig' && msg.payload) {
       logger.setLogConfig(msg.payload);
+      _sendLogStatus();
     } else if (msg.type === 'lts:logRotate') {
       logger.forceRotate();
+      _sendLogStatus();
+    } else if (msg.type === 'lts:logStatusRequest') {
+      _sendLogStatus();
     }
   });
 

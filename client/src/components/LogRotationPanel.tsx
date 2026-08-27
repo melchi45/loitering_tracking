@@ -9,6 +9,12 @@ interface LogFileEntry {
   mtime: number;
 }
 
+interface SupervisorStatus {
+  effectiveDir: string;
+  fallbackActive: boolean;
+  currentFile: { name: string; sizeBytes: number } | null;
+}
+
 interface LogStats {
   config: { dir: string; maxFileSizeMB: number; maxFiles: number };
   effectiveDir: string;
@@ -21,6 +27,9 @@ interface LogStats {
   files: LogFileEntry[];
   totalFiles: number;
   totalBytes: number;
+  // The supervisor process's own last-reported real state (reverse IPC) —
+  // null under npm run dev* or before its first report arrives.
+  supervisorStatus: SupervisorStatus | null;
 }
 
 interface LogRotationPanelProps {
@@ -144,13 +153,29 @@ export default function LogRotationPanel({ apiFetch }: LogRotationPanelProps) {
         </div>
       )}
 
-      {stats && stats.dirWritable && !stats.currentFile && (
+      {stats?.supervisorStatus && stats.supervisorStatus.effectiveDir !== stats.effectiveDir && (
+        <div className="mb-3 p-3 bg-orange-900/20 border border-orange-800 rounded-lg text-orange-300 text-xs flex items-start gap-1.5">
+          <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+          <span>
+            The actual log writer (production supervisor) is using a <strong>different</strong> directory
+            than what's configured here: <span className="font-mono">{stats.supervisorStatus.effectiveDir}</span>
+            {stats.supervisorStatus.currentFile
+              ? ` — active file: ${stats.supervisorStatus.currentFile.name} (${fmtBytes(stats.supervisorStatus.currentFile.sizeBytes)})`
+              : ' — no active file there either yet'}
+            {stats.supervisorStatus.fallbackActive ? ' (fallback — its configured directory isn’t writable for it)' : ''}.
+            This is the real cause when Save/Rotate appear to have no effect.
+          </span>
+        </div>
+      )}
+
+      {stats && stats.dirWritable && !stats.currentFile && !stats.supervisorStatus && (
         <div className="mb-3 p-3 bg-blue-900/20 border border-blue-800 rounded-lg text-blue-300 text-xs flex items-start gap-1.5">
           <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
           <span>
-            This process CAN write to {stats.effectiveDir}, but no log file exists there yet —
-            if you expect one, the process actually writing logs (the production supervisor)
-            may be using a different directory than what's configured here.
+            This process CAN write to {stats.effectiveDir}, but no log file exists there yet, and no
+            report from the production supervisor has arrived (dev mode, or still starting up) — if
+            you expect a file, wait a few seconds and reload, or check under production (`npm run
+            start`/`streaming`/`analysis`) rather than `npm run dev*`.
           </span>
         </div>
       )}

@@ -111,7 +111,45 @@ function restoreOnBoot() {
   const cfg = getLogConfig();
   logger.setLogConfig(cfg);
   if (process.send) process.send({ type: 'lts:logConfig', payload: cfg });
+  // Visible in the log file itself (this runs on index.js/the child, whose
+  // console output is piped to and written by the supervisor) — the final,
+  // effective config after restoring any persisted Admin Dashboard override,
+  // as opposed to startServer.js's own boot log which only shows its raw
+  // env-seeded value before this restore happens.
+  console.log(`[Logger] Restored config (${getServerId()}) — dir=${cfg.dir} maxFileSizeMB=${cfg.maxFileSizeMB} maxFiles=${cfg.maxFiles}`);
   return cfg;
 }
 
-module.exports = { getLogConfig, setLogConfig, restoreOnBoot };
+// Last-known REAL state reported by the supervisor process (startServer.js)
+// over the reverse IPC channel — null until a report arrives (no supervisor
+// under npm run dev*, or none received yet). This is the only way this
+// process can know what the actual file writer is doing, since this process
+// never itself calls openLogFile() unless a dir change happens to occur
+// during its own lifetime (see logger.js's getLogStats() header comment).
+let _supervisorStatus = null;
+
+function _handleSupervisorMessage(msg) {
+  if (msg && typeof msg === 'object' && msg.type === 'lts:logStatus' && msg.payload) {
+    _supervisorStatus = msg.payload;
+  }
+}
+
+/**
+ * Starts listening for status reports from the supervisor process and
+ * requests an initial one. Call once during boot, after restoreOnBoot() (so
+ * the request always fires after this listener is attached — Node's
+ * IPC 'message' event has no replay for listeners added after the fact).
+ * Harmless no-op under npm run dev* (process.send is undefined, so the
+ * request is never sent and no report will ever arrive).
+ */
+function listenForSupervisorStatus() {
+  process.on('message', _handleSupervisorMessage);
+  if (process.send) process.send({ type: 'lts:logStatusRequest' });
+}
+
+/** Last-known real state reported by the supervisor, or null if none yet (see listenForSupervisorStatus()). */
+function getSupervisorStatus() {
+  return _supervisorStatus;
+}
+
+module.exports = { getLogConfig, setLogConfig, restoreOnBoot, listenForSupervisorStatus, getSupervisorStatus };
