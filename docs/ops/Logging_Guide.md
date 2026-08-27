@@ -1,6 +1,6 @@
 # LTS-2026 Logging Guide
 
-**Version:** 2.1
+**Version:** 2.2
 **대상 서버:** `npm run start` / `npm run streaming` / `npm run analysis` (프로덕션 모드)
 
 ---
@@ -76,7 +76,8 @@
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `LOG_TO_FILE` | `true` | `false`로 설정하면 파일 저장 비활성화 |
-| `LOG_DIR` | `/var/log/lts` | 로그 파일 저장 디렉토리. 폴백: `server/logs/`. **최초 부팅 시에만** 참조되며 이후에는 Admin Dashboard 설정(`settings` 테이블)이 우선함 — §"로그 저장 경로 및 로테이션 설정" 참고 |
+| `LOG_DIR` | (없음 → 플랫폼별 기본값) | 로그 파일 저장 디렉토리. 미설정 시 Linux는 `/var/log/lts`, Windows는 `C:\ProgramData\lts\logs`(v1.2). 폴백: `server/logs/`. **최초 부팅 시에만** 참조되며 이후에는 Admin Dashboard 설정(`settings` 테이블)이 우선함 — §"로그 저장 경로 및 로테이션 설정" 참고 |
+| `LOG_DIR_WINDOWS` / `LOG_DIR_LINUX` | (없음) | `LOG_DIR`보다 우선 적용되는 OS별 오버라이드(v1.2) — `YTDLP_BIN_WINDOWS`/`_LINUX` 등과 동일한 우선순위 규칙(OS별 값이 일반 값보다 우선) |
 | `LOG_LEVEL` | `INFO` | 최소 출력 레벨 (`DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`/`NONE`) |
 | `LOG_FILTER_PATTERNS` | `` (비어 있음) | 쉼표 구분 정규식 — 매칭 줄 강제 억제 |
 | `LOG_MAX_FILE_SIZE_MB` | `50` | 활성 로그 파일이 이 크기(MB)를 넘으면 분할(split). **최초 부팅 시에만** 참조 |
@@ -125,6 +126,7 @@ LOG_FILTER_PATTERNS=EXT-X-DATERANGE.*AD,\[segment @.*\] Opening
 ### 동작 방식
 
 - 값은 `settings` 테이블에 영속화되며, `server/.env`의 `LOG_DIR`/`LOG_MAX_FILE_SIZE_MB`/`LOG_MAX_FILES`는 **테이블에 아무 값도 없는 최초 부팅 시에만** 시드 값으로 쓰입니다. 이후에는 Admin Dashboard 설정이 유일한 소스입니다.
+- **기본 저장 경로가 플랫폼별로 다릅니다(2026-08-27, v1.2)** — `LOG_DIR`/`LOG_DIR_WINDOWS`/`LOG_DIR_LINUX`가 전부 비어 있으면 Linux는 `/var/log/lts`, Windows는 `C:\ProgramData\lts\logs`를 기본값으로 씁니다. 이전에는 Windows에서도 `/var/log/lts`가 시도되어(유효하지 않은 경로) 매번 `server/logs/` 폴백으로 넘어갔습니다 — 동작 자체는 문제없었지만 "기본값"이 사실상 Linux 전용이었던 것을 수정했습니다.
 - **서버 인스턴스별로 분리 저장됩니다(2026-08-27, v1.1)** — row id가 고정된 `logConfig`가 아니라 `logConfig:<SERVER_ID 또는 hostname>`입니다. 로그 저장 경로는 "이 프로세스가 쓰는 로컬 디스크 경로"라서 서버마다 달라야 하는 값인데, 처음에는 `activeModelConfig.js`(어떤 AI 모델을 쓸지 — 서버끼리 같은 게 맞는 값)와 동일한 "고정 row id 공유" 패턴을 그대로 가져다 써서, `DB_TYPE=mongodb`로 여러 서버가 같은 DB를 공유하면 서버끼리 서로의 로그 경로를 덮어쓰는 문제가 있었습니다(수정 완료). 기본값은 `os.hostname()`이며, 같은 머신에 여러 인스턴스를 띄우는 경우에만 `SERVER_ID` env var로 명시적으로 구분하면 됩니다. 기존에 고정 `logConfig` row로 설정해둔 경우 다음 부팅 시 자동으로 서버별 row로 마이그레이션됩니다(기존 row는 삭제되지 않고 남아 있습니다). 상세: `Design_Log_Rotation.md` §3A.
 - 분할 시 활성 파일이 `lts-YYYY-MM-DD_HHmmssSSS-N.log`(시:분:초.밀리초 + 순번)로 이름이 바뀌고, 원래 날짜 파일명으로 새 활성 파일이 열립니다. 자정 날짜 롤오버가 일어난 뒤에도 동일하게 보관 개수 정책이 적용됩니다(날짜 롤오버와 크기 롤오버 어느 쪽이든 오래된 파일 삭제 대상은 동일).
 - "지금 분할(Rotate Now)" 버튼으로 크기와 무관하게 즉시 분할을 트리거할 수 있습니다 — 운영/테스트 용도.
@@ -249,3 +251,4 @@ startServer.js  (부모/슈퍼바이저 — 실제 파일 writer)
 | 1.1 | 2026-06-19 | 로그 레벨 시스템 추가 — DEBUG/INFO/WARNING/ERROR/CRITICAL, ffmpeg 자동 하향, LOG_FILTER_PATTERNS |
 | 2.0 | 2026-08-26 | Admin Dashboard → System에서 로그 저장 경로·최대 파일 크기·최대 보관 개수 설정 기능 추가 (크기 기반 로테이션/split + 개수 기반 자동 삭제). `settings` 테이블 영속화 + startServer.js↔index.js IPC 아키텍처 도입, combined/streaming/analysis 전 모드 공통 동작. 상세: [`Design_Log_Rotation.md`](../design/Design_Log_Rotation.md) |
 | 2.1 | 2026-08-27 | 설정 저장 키를 고정 `logConfig`에서 서버 인스턴스별(`logConfig:<SERVER_ID 또는 hostname>`)로 분리 — 공유 MongoDB 배포에서 서버 간 로그 경로 상호 덮어쓰기 방지. `SERVER_ID` env var 추가 |
+| 2.2 | 2026-08-27 | 기본 로그 경로에 Windows 대응 추가 — `LOG_DIR_WINDOWS`/`LOG_DIR_LINUX` env var, Windows 기본값 `C:\ProgramData\lts\logs` |

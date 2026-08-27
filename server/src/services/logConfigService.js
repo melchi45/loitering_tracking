@@ -46,7 +46,7 @@ let _cached = null; // lazy-initialised on first access
 
 function _seedFromEnv() {
   return {
-    dir:           process.env.LOG_DIR || '/var/log/lts',
+    dir:           logger._resolveDefaultLogDir(),
     maxFileSizeMB: parseInt(process.env.LOG_MAX_FILE_SIZE_MB, 10) || 50,
     maxFiles:      parseInt(process.env.LOG_MAX_FILES, 10) || 10,
   };

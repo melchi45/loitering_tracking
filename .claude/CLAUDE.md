@@ -551,7 +551,9 @@ grep '\[ERROR\]' /var/log/lts/lts-$(date +%Y-%m-%d).log
 
 # server/.env 로그 설정 키 (docs/ops/Logging_Guide.md 참조)
 #   LOG_TO_FILE=true            파일 저장 활성화 (기본 true)
-#   LOG_DIR=/var/log/lts        저장 경로 (권한 없을 시 server/logs/ 자동 폴백)
+#   LOG_DIR=/var/log/lts        저장 경로 (미설정 시 플랫폼별 기본값: Linux /var/log/lts,
+#                               Windows C:\ProgramData\lts\logs, v1.2 — 권한 없을 시 server/logs/ 자동 폴백)
+#   LOG_DIR_WINDOWS / LOG_DIR_LINUX  LOG_DIR보다 우선하는 OS별 오버라이드(v1.2)
 #   LOG_LEVEL=INFO              최소 레벨: DEBUG|INFO|WARNING|ERROR|CRITICAL|NONE
 #   LOG_FILTER_PATTERNS=<csv>   추가 억제 정규식 (쉼표 구분)
 #   SERVER_ID=<임의 문자열>      로그 저장경로/로테이션 설정을 서버 인스턴스별로 분리하는 키(v1.1,

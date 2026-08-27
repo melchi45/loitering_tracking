@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Admin-Configurable Log Storage Path, Size-Based Rotation (Split), Count-Based Retention
-**Version:** 1.1
+**Version:** 1.2
 **Date:** 2026-08-27
 
 ---
@@ -99,7 +99,31 @@ function getServerId() {
 
 **Visibility:** `getLogStats()` (`utils/logger.js`) now includes `serverId` in its response so the Admin Dashboard panel can show *which* server's settings are being displayed/edited — important specifically because this used to be (incorrectly) one shared value; now that it's per-instance, an admin managing multiple servers needs to see which one they're looking at.
 
-**Explicitly not addressed by this fix:** the separate Windows-default-path gap (`LOG_DIR`/`logConfigService.js`'s seed value hardcodes `/var/log/lts` with no `_WINDOWS`/`_LINUX` variant, unlike every other path-like env var in this project). Tracked separately, not part of this change.
+**Explicitly not addressed by this fix:** the separate Windows-default-path gap (`LOG_DIR`/`logConfigService.js`'s seed value hardcodes `/var/log/lts` with no `_WINDOWS`/`_LINUX` variant, unlike every other path-like env var in this project). Fixed separately in §3B (v1.2).
+
+---
+
+## 3B. Windows Default Path (v1.2, 2026-08-27)
+
+**Problem:** the env-seed default for `LOG_DIR` was hardcoded to `/var/log/lts` in both `logger.js` and `logConfigService.js`, with no `_WINDOWS`/`_LINUX` variant — unlike every other path-like env var in this project (`YTDLP_BIN_WINDOWS`/`_LINUX`, `INGEST_DAEMON_BIN_WINDOWS`/`_LINUX`, `MEDIAMTX_BIN_WINDOWS`/`_LINUX`, `PYTHON_EXEC_WINDOWS`/`_LINUX`). On Windows this default is never a valid path, so a fresh Windows deployment always fails the writability probe on first boot and silently lands on the `server/logs/` fallback — not incorrect, but the "default" was Linux-only in a project that otherwise treats Windows as a first-class target.
+
+**Fix:** a new resolver, `_resolveDefaultLogDir()` (added to `utils/logger.js`, the one place both call sites already import from), follows this project's established precedence for OS-specific path env vars — **OS-specific override wins over the general one** (matching `youtubeStreamService.js`'s `findYtDlp()`: `YTDLP_BIN_WINDOWS`/`_LINUX` checked before the general `YTDLP_BIN`):
+
+```javascript
+function _resolveDefaultLogDir() {
+  const isWindows = process.platform === 'win32';
+  const osOverride = isWindows ? process.env.LOG_DIR_WINDOWS : process.env.LOG_DIR_LINUX;
+  if (osOverride) return osOverride;
+  if (process.env.LOG_DIR) return process.env.LOG_DIR;
+  return isWindows ? 'C:\\ProgramData\\lts\\logs' : '/var/log/lts';
+}
+```
+
+- New env vars: `LOG_DIR_WINDOWS` (optional), `LOG_DIR_LINUX` (optional) — both empty by default in `.env.example`, matching the other `_WINDOWS`/`_LINUX` pairs.
+- New built-in Windows default: `C:\ProgramData\lts\logs` (machine-wide app-data location, doesn't require `Program Files` write access) — used only when neither `LOG_DIR_WINDOWS` nor `LOG_DIR`(general) is set.
+- `logConfigService.js`'s `_seedFromEnv()` now calls `logger._resolveDefaultLogDir()` instead of duplicating the `process.env.LOG_DIR || '/var/log/lts'` literal, so the two modules cannot drift apart again.
+- The existing `FALLBACK_DIR` (`server/logs/`, built via `path.resolve()`) is unchanged and still the final safety net on either OS if the resolved primary directory turns out unwritable.
+- Out of scope: this only fixes the *default* used when nothing is configured. An admin who explicitly sets `LOG_DIR`/`dir` (via `.env` or the Admin Dashboard) to a Windows path already worked before this fix — `_assertDirWritable()`'s real write-probe (`fs.mkdirSync`/`fs.writeFileSync`) was always OS-agnostic.
 
 ---
 
@@ -197,3 +221,4 @@ Ad-hoc verification performed during implementation (isolated `node -e` scripts 
 |---|---|---|
 | 1.0 | 2026-08-26 | 초기 작성 |
 | 1.1 | 2026-08-27 | §3A 신규 — `settings` row id를 고정 `logConfig`에서 `logConfig:${SERVER_ID or hostname()}`로 변경(서버 인스턴스별 분리), 레거시 글로벌 row 자동 마이그레이션, `getLogStats()`에 `serverId` 필드 추가. 공유 MongoDB 배포에서 서버 간 로그 설정 상호 덮어쓰기 버그 수정(Windows 기본 경로 미고려는 별도 이슈로 분리, 이번 변경 범위 아님) |
+| 1.2 | 2026-08-27 | §3B 신규 — `LOG_DIR` 기본값에 Windows 대응 추가: `LOG_DIR_WINDOWS`/`LOG_DIR_LINUX` env var, Windows 기본값 `C:\ProgramData\lts\logs`, `_resolveDefaultLogDir()`로 `logger.js`/`logConfigService.js` 로직 일원화 |

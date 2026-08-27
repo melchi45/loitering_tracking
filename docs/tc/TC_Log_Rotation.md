@@ -183,9 +183,32 @@
 
 ---
 
+### TC-LR-015: Default log directory is platform-appropriate (v1.2)
+
+**SRS:** FR-LR-016
+**Precondition:** No `LOG_DIR`/`LOG_DIR_WINDOWS`/`LOG_DIR_LINUX` set, no persisted `logConfig:<serverId>` or legacy `logConfig` row
+**Steps:**
+1. On a Linux host, start the server, `GET /admin/system/logs`
+2. On a Windows host (or simulate via `process.platform` override in a unit test), start the server, `GET /admin/system/logs`
+
+**Expected:** Linux response's `config.dir` is `/var/log/lts`; Windows response's `config.dir` is `C:\ProgramData\lts\logs` — no code changes required to get the platform-correct default on either OS
+
+### TC-LR-016: OS-specific LOG_DIR override wins over the general one (v1.2)
+
+**SRS:** FR-LR-016
+**Precondition:** `LOG_DIR=/some/generic/path` AND `LOG_DIR_WINDOWS=D:\lts-logs` both set, on a Windows host, no persisted row yet
+**Steps:**
+1. Start the server
+2. `GET /admin/system/logs`
+
+**Expected:** `config.dir` is `D:\lts-logs` (the OS-specific override), not `/some/generic/path` — matches the precedence `youtubeStreamService.js`'s `findYtDlp()` already uses for `YTDLP_BIN_WINDOWS`/`_LINUX` vs. `YTDLP_BIN`
+
+---
+
 ## Revision History
 
 | 버전 | 날짜 | 변경 내용 |
 |---|---|---|
 | 1.0 | 2026-08-26 | 초기 작성 |
 | 1.1 | 2026-08-27 | TC-LR-013/014 추가 — 서버 인스턴스별 설정 분리 및 레거시 row 마이그레이션 검증 |
+| 1.2 | 2026-08-27 | TC-LR-015/016 추가 — 기본 로그 경로 Windows 대응 및 OS별 오버라이드 우선순위 검증 |

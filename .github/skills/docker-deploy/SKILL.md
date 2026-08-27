@@ -92,7 +92,8 @@ grep '\[WARNING\]' /var/log/lts/lts-$(date +%Y-%m-%d).log
 | 변수 | 기본값 | 설명 |
 |---|---|---|
 | `LOG_TO_FILE` | `true` | `false`로 설정 시 파일 저장 비활성화 |
-| `LOG_DIR` | `/var/log/lts` | 로그 디렉토리. 권한 없을 시 `server/logs/`로 자동 폴백. **최초 부팅 시에만** 참조(이후는 Admin Dashboard 설정이 우선) |
+| `LOG_DIR` | (없음 → 플랫폼별 기본값) | 로그 디렉토리. 미설정 시 Linux `/var/log/lts`, Windows `C:\ProgramData\lts\logs`(v1.2). 권한 없을 시 `server/logs/`로 자동 폴백. **최초 부팅 시에만** 참조(이후는 Admin Dashboard 설정이 우선) |
+| `LOG_DIR_WINDOWS` / `LOG_DIR_LINUX` | (없음) | `LOG_DIR`보다 우선하는 OS별 오버라이드(v1.2, `YTDLP_BIN_WINDOWS`/`_LINUX`와 동일한 우선순위 규칙) |
 | `LOG_LEVEL` | `INFO` | 최소 레벨: `DEBUG`/`INFO`/`WARNING`/`ERROR`/`CRITICAL`/`NONE` |
 | `LOG_FILTER_PATTERNS` | `` | 쉼표 구분 정규식 — 매칭 줄 강제 억제 |
 | `LOG_MAX_FILE_SIZE_MB` | `50` | 활성 로그 파일이 이 크기(MB)를 넘으면 분할(split). **최초 부팅 시에만** 참조 |

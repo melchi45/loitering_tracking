@@ -65,11 +65,28 @@ const FALLBACK_DIR = path.resolve(__dirname, '..', '..', 'logs');
 const DEFAULT_MAX_FILE_SIZE_MB = 50;
 const DEFAULT_MAX_FILES        = 10;
 
+/**
+ * Resolves the default log directory when no `dir`/`LOG_DIR` has been
+ * configured. Follows this project's established precedence for OS-specific
+ * path env vars — an OS-specific override wins over the general one (see
+ * youtubeStreamService.js's findYtDlp(): YTDLP_BIN_WINDOWS/_LINUX checked
+ * before the general YTDLP_BIN). Exported so logConfigService.js's
+ * _seedFromEnv() uses this exact logic instead of duplicating the literal.
+ * @returns {string}
+ */
+function _resolveDefaultLogDir() {
+  const isWindows  = process.platform === 'win32';
+  const osOverride = isWindows ? process.env.LOG_DIR_WINDOWS : process.env.LOG_DIR_LINUX;
+  if (osOverride) return osOverride;
+  if (process.env.LOG_DIR) return process.env.LOG_DIR;
+  return isWindows ? 'C:\\ProgramData\\lts\\logs' : '/var/log/lts';
+}
+
 // Mutable at runtime via setLogConfig() — env vars only seed the first run.
 // `dir` mirrors the old LOG_DIR constant; `maxFileSizeMB`/`maxFiles` drive
 // size-based rotation (see _rotate()/_enforceMaxFiles() below).
 let _cfg = {
-  dir:           process.env.LOG_DIR || '/var/log/lts',
+  dir:           _resolveDefaultLogDir(),
   maxFileSizeMB: parseInt(process.env.LOG_MAX_FILE_SIZE_MB, 10) || DEFAULT_MAX_FILE_SIZE_MB,
   maxFiles:      parseInt(process.env.LOG_MAX_FILES, 10) || DEFAULT_MAX_FILES,
 };
@@ -544,4 +561,5 @@ module.exports = {
   setLogConfig,
   getLogStats,
   forceRotate,
+  _resolveDefaultLogDir,
 };

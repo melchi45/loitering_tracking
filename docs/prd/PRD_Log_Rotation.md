@@ -2,7 +2,7 @@
 
 **Product:** LTS-2026 Loitering Detection & Tracking System
 **Feature:** Admin-Configurable Log Storage Path, Size-Based Rotation (Split), Count-Based Retention
-**Version:** 1.1
+**Version:** 1.2
 **Date:** 2026-08-27
 
 ---
@@ -39,7 +39,7 @@ Applies uniformly to all three `SERVER_MODE` values (`combined`, `streaming`, `a
 
 | Setting | Range | Default |
 |---|---|---|
-| Directory | any writable absolute/relative path | `/var/log/lts` (env `LOG_DIR` seeds first boot) |
+| Directory | any writable absolute/relative path | `/var/log/lts` on Linux, `C:\ProgramData\lts\logs` on Windows (env `LOG_DIR`/`LOG_DIR_WINDOWS`/`LOG_DIR_LINUX` seeds first boot, v1.2) |
 | Max file size | 1–10240 MB | 50 MB (env `LOG_MAX_FILE_SIZE_MB`) |
 | Max retained files | 1–1000 | 10 (env `LOG_MAX_FILES`) |
 
@@ -75,3 +75,4 @@ The actual log file handle is owned by the `startServer.js` supervisor process, 
 |---|---|---|
 | 1.0 | 2026-08-26 | 초기 작성 |
 | 1.1 | 2026-08-27 | §3.1 갱신 — 공유 MongoDB 배포에서 서버 간 로그 경로 상호 덮어쓰기 방지를 위해 설정을 서버 인스턴스별로 분리 |
+| 1.2 | 2026-08-27 | §3.1 갱신 — 기본 로그 디렉토리에 Windows 대응 추가(`LOG_DIR_WINDOWS`/`LOG_DIR_LINUX`, Windows 기본값 `C:\ProgramData\lts\logs`) |
